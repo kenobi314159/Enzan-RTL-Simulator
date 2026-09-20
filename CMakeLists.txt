@@ -104,6 +104,7 @@ include(EnzanDependencies)
 include(EnzanComponent)
 
 add_subdirectory(src)
+add_subdirectory(tools)
 
 if(ENZAN_BUILD_TESTS)
   enable_testing()
