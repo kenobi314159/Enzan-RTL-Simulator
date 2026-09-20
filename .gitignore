@@ -1,0 +1,34 @@
+# Build directories. CMakePresets.json places all of them under build/.
+/build/
+/out/
+cmake-build-*/
+
+# Compiler and tooling caches.
+.cache/
+compile_commands.json
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Simulation libraries and analysis output. Enzan writes these next to wherever
+# it is run, and they are regenerated from source (DESIGN_GUIDE.md section 4.4).
+/work/
+*.enzanlib/
+
+# Waveform dumps and transcripts. Never committed (DESIGN_GUIDE.md section 17.5).
+*.vcd
+*.fst
+*.fst.hier
+/transcript
+/transcript.*
+
+# External RTL fetched by tests/designs/ scripts (DESIGN_GUIDE.md section 12).
+/tests/designs/checkout/
+
+# Editor and OS droppings.
+*.swp
+*~
+.idea/
+.vscode/
+.DS_Store
