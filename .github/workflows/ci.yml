@@ -1,0 +1,194 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Per-commit continuous integration (DESIGN_GUIDE.md section 16).
+#
+# The default branch must stay green; a red default branch is fixed or reverted
+# before other work continues.
+#
+# The nightly jobs section 16 also describes — conformance suites, the design
+# regression suite and the benchmark run — is deliberately absent until M1,
+# because at M0 there is no simulator to run against a design and a scheduled job
+# that measures nothing is worse than none: it trains people to ignore it.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 400M
+
+jobs:
+  lint:
+    name: Format and license headers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang-format-18
+
+      - name: Check formatting
+        run: |
+          mapfile -t files < <(git ls-files '*.h' '*.cpp')
+          printf 'Checking %d files\n' "${#files[@]}"
+          clang-format-18 --dry-run --Werror "${files[@]}"
+
+      - name: Check SPDX license headers
+        run: ./scripts/check-license-headers.sh
+
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [gcc-debug, gcc-release, clang-debug, clang-release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ matrix.preset }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.preset }}-
+
+      # The SystemVerilog frontend is switched off here and exercised by the
+      # dedicated job below. Nothing at M0 links slang, and building it five
+      # times per commit would spend most of the CI budget on a dependency that
+      # one job proves just as well.
+      - name: Configure
+        run: >
+          cmake --preset ${{ matrix.preset }}
+          -DENZAN_WERROR=ON
+          -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Report cache statistics
+        if: always()
+        run: ccache --show-stats
+
+  sanitize:
+    name: ASan + UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-sanitize-${{ github.sha }}
+          restore-keys: ccache-sanitize-
+
+      - name: Configure
+        run: >
+          cmake --preset clang-sanitize
+          -DENZAN_WERROR=ON
+          -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+
+      - name: Build
+        run: cmake --build --preset clang-sanitize
+
+      # detect_leaks is on, and abort_on_error makes a finding fail the test
+      # rather than print a report that scrolls past in a green log.
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --preset clang-sanitize
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build clang clang-tidy-18 libgtest-dev zlib1g-dev
+
+      # clang-tidy needs the generated headers and compile_commands.json, so the
+      # tree is configured even though it is not built.
+      - name: Configure
+        run: cmake --preset clang-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+
+      # The generated version header is produced at configure time, but
+      # GoogleTest's headers may only appear after a build when they were
+      # fetched, so the test targets are built before linting them.
+      - name: Build
+        run: cmake --build --preset clang-debug
+
+      - name: Run clang-tidy
+        run: |
+          mapfile -t files < <(git ls-files 'src/*.cpp' 'tools/*.cpp' 'tests/*.cpp')
+          printf 'Linting %d files\n' "${#files[@]}"
+          clang-tidy-18 -p build/clang-debug --quiet "${files[@]}"
+
+  slang:
+    name: slang dependency build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ccache libgtest-dev zlib1g-dev python3
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-slang-${{ github.sha }}
+          restore-keys: ccache-slang-
+
+      # slang is not packaged by any distribution, so the FetchContent path is
+      # the one contributors actually take. This job exists to catch a break in
+      # it — an upstream revision that no longer builds, or a CMake option that
+      # was renamed — at the commit that caused it rather than at the start of M1.
+      - name: Configure and build with the SystemVerilog frontend enabled
+        run: |
+          cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON
+          cmake --build --preset gcc-release
+
+      - name: Test
+        run: ctest --preset gcc-release
+
+      - name: Report cache statistics
+        if: always()
+        run: ccache --show-stats
