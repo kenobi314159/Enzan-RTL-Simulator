@@ -26,6 +26,11 @@ compile_commands.json
 # External RTL fetched by tests/designs/ scripts (DESIGN_GUIDE.md section 12).
 /tests/designs/checkout/
 
+# Benchmark results are a per-machine measurement, not a shared artefact: a number taken on one
+# laptop is not comparable with one taken on another, and committing them would make the file a
+# merge conflict on every run. CI publishes its own series (DESIGN_GUIDE.md section 16).
+/bench/results.tsv
+
 # Editor and OS droppings.
 *.swp
 *~

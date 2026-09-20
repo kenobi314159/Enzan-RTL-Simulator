@@ -122,6 +122,24 @@ if(ENZAN_BUILD_TESTS)
 endif()
 
 # ---------------------------------------------------------------------------
+# Benchmarks
+# ---------------------------------------------------------------------------
+
+# A target rather than a test. Section 15.3 puts benchmarks in a nightly job that publishes
+# cycles/sec, and a measurement that runs as part of the ordinary test suite would be both slow
+# and meaningless: a number taken on a loaded machine alongside three hundred other tests is
+# not comparable with anything.
+if(ENZAN_ENABLE_SYSTEMVERILOG)
+  add_custom_target(
+    enzan-bench
+    COMMAND "${PROJECT_SOURCE_DIR}/bench/run-bench.sh" "$<TARGET_FILE:enzan>"
+    DEPENDS enzan
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    COMMENT "Measuring simulated cycles per second"
+    USES_TERMINAL)
+endif()
+
+# ---------------------------------------------------------------------------
 # Configuration summary
 # ---------------------------------------------------------------------------
 

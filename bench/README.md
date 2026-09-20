@@ -8,13 +8,34 @@ regressions are invisible without a baseline.
 
 ## Status
 
-**Empty by design at M0.** There is no simulator yet, so there is nothing to
-measure and no number that would mean anything. Populating this directory with a
-harness that reports zero would create the appearance of measurement without the
-substance, which is worse than an honest gap.
+**Active since M1.** `run-bench.sh` measures simulated clock cycles per second and appends a
+row to `results.tsv`:
 
-The first real content arrives with M1, at the same time as the bytecode VM and
-the scheduler, because M1's exit criteria include a recorded cycles/sec figure.
+```sh
+cmake --preset gcc-release
+cmake --build --preset gcc-release
+./bench/run-bench.sh ./build/gcc-release/bin/enzan
+```
+
+CMake also exposes it as a target: `cmake --build --preset gcc-release --target enzan-bench`.
+
+Each row records the timestamp, the git revision, the design, the cycle count, the elapsed
+seconds, cycles per second, and the instruction and delta counts the kernel reports. A
+measurement taken from a dirty working tree is marked `-dirty`, because a number that cannot be
+attributed to a commit is worse than no number: it makes the history look trustworthy when it
+is not.
+
+The elapsed time covers analysis, elaboration and the run, which is what a user waits for.
+Separating them is worth doing once there is something to tune; conflating them at least never
+flatters the result.
+
+It is a target rather than a test. Section 15.3 puts benchmarks in a nightly job, and a
+measurement taken on a loaded machine alongside three hundred other tests is not comparable
+with anything.
+
+`results.tsv` is not committed: a number from one machine does not compare with one from
+another, and the file would be a merge conflict on every run. CI publishes its own series.
+
 
 ## What goes here, and what the rules are
 
