@@ -105,6 +105,11 @@ include(EnzanComponent)
 
 add_subdirectory(src)
 
+if(ENZAN_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+
 # ---------------------------------------------------------------------------
 # Configuration summary
 # ---------------------------------------------------------------------------

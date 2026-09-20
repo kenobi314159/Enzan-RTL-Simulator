@@ -5,7 +5,8 @@
 # set, kept here so the intended shape of the tree is visible from the build
 # file rather than only from the design guide.
 
-# add_subdirectory(common)    # M0 — diagnostics, source manager
+add_subdirectory(common)
+
 # add_subdirectory(eir)       # M1 — the internal representation
 # add_subdirectory(frontend)  # M1 (sv), M6 (vhdl)
 # add_subdirectory(elab)      # M1 — elaboration and state layout

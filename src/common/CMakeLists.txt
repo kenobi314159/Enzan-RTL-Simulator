@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# The revision is captured at configure time. Making the generated header depend
+# on .git/HEAD would rebuild the world on every commit for the sake of a string
+# nothing but `--version` reads, so the staleness is accepted and documented in
+# Version.h instead.
+set(ENZAN_SOURCE_REVISION "unknown")
+find_package(Git QUIET)
+if(Git_FOUND)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" describe --always --dirty --abbrev=8
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    OUTPUT_VARIABLE _enzan_git_revision
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE _enzan_git_result)
+  if(_enzan_git_result EQUAL 0 AND _enzan_git_revision)
+    set(ENZAN_SOURCE_REVISION "${_enzan_git_revision}")
+  endif()
+endif()
+
+if(CMAKE_BUILD_TYPE)
+  set(ENZAN_BUILD_TYPE_STRING "${CMAKE_BUILD_TYPE}")
+else()
+  set(ENZAN_BUILD_TYPE_STRING "unspecified")
+endif()
+
+set(_enzan_version_info "${PROJECT_BINARY_DIR}/generated/common/VersionInfo.h")
+configure_file(VersionInfo.h.in "${_enzan_version_info}" @ONLY)
+
+enzan_add_component(
+  common
+  SOURCES Version.cpp
+  HEADERS Version.h "${_enzan_version_info}")
