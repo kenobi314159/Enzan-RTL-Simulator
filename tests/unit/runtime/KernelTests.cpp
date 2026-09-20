@@ -704,19 +704,25 @@ TEST(Kernel, WaitEdgeSuspendsUntilTheEdgeArrives) {
 TEST(Kernel, DisplayWritesToTheTranscript) {
     ProcessBuilder builder(ProcessKind::Initial, "talker");
     const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t now = builder.reg(Type::bits(64, false, false));
     const std::uint32_t constant = builder.constant("8'd42");
-    const std::uint32_t format = builder.string("value = %0d at %t in %m");
+    const std::uint32_t format = builder.string("value = %0d at %0t in %m");
 
+    // `%t` formats an argument rather than reading the clock, which is what
+    // `$display("%t", $time)` does, so the time is passed in like any other value.
     SysTaskCall call;
     call.kind = SysTaskKind::Display;
     call.formatIndex = format;
     call.arguments.push_back(
         SysTaskArgument{.value = Operand::reg(value), .type = Type::bits(8, false, true)});
+    call.arguments.push_back(
+        SysTaskArgument{.value = Operand::reg(now), .type = Type::bits(64, false, false)});
     const std::uint32_t descriptor = builder.sysCall(std::move(call));
 
     builder.block("entry");
     builder.emit(
         Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(constant)));
+    builder.emit(Instruction::make(Opcode::ReadTime, Operand::reg(now)));
     builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(descriptor)));
     builder.emit(Instruction::make(Opcode::Return));
 
@@ -909,6 +915,77 @@ TEST(Kernel, ADesignWithNothingToDoIsQuiescentImmediately) {
 // ---------------------------------------------------------------------------
 // Hierarchy
 // ---------------------------------------------------------------------------
+
+TEST(Kernel, ACollapsedPortKeepsTheDeclaredInitialValue) {
+    // Elaboration collapses a connected port onto the parent's slot, so one slot is reached
+    // through two objects — and a child's port declaration carries no initialiser. Initialising
+    // per object rather than per slot let the child's default overwrite the parent's declared
+    // value with X, depending only on which instance came last. The design then simulated and
+    // produced a plausible wrong answer, which is the failure mode section 1.2 ranks above all
+    // others, and it is exactly what happened on the first hierarchical design that was tried.
+    ModuleDefinition child;
+    child.name = "child";
+    child.sourceName = "child";
+    child.addObject(Object{.name = "in", .type = Type::bits(8, false, true)});
+    child.ports.push_back(enzan::eir::Port{
+        .name = "in", .direction = enzan::eir::PortDirection::Input, .objectIndex = 0});
+
+    ModuleDefinition parent;
+    parent.name = "tb";
+    parent.sourceName = "tb";
+    parent.addObject(Object{.name = "drive",
+                            .type = Type::bits(8, false, true),
+                            .initialValue = BitVector::parse("8'h5A")});
+
+    enzan::eir::Instance instance;
+    instance.name = "u_child";
+    instance.definitionName = "child";
+    instance.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0});
+    parent.instances.push_back(std::move(instance));
+
+    Design design;
+    design.addModule(std::move(child));
+    design.addModule(std::move(parent));
+
+    Simulation simulation(std::move(design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.value("/tb/drive", Radix::Hexadecimal), "5a");
+    EXPECT_EQ(simulation.value("/tb/u_child/in", Radix::Hexadecimal), "5a");
+}
+
+TEST(Kernel, AnExplicitInitialiserWinsWhicheverSideDeclaresIt) {
+    // The same slot reached from the child's side: the order instances are elaborated in must
+    // not decide which value the design starts from.
+    ModuleDefinition child;
+    child.name = "child";
+    child.sourceName = "child";
+    child.addObject(Object{.name = "io",
+                           .type = Type::bits(8, false, true),
+                           .initialValue = BitVector::parse("8'h3C")});
+    child.ports.push_back(enzan::eir::Port{
+        .name = "io", .direction = enzan::eir::PortDirection::Output, .objectIndex = 0});
+
+    ModuleDefinition parent;
+    parent.name = "tb";
+    parent.sourceName = "tb";
+    parent.addObject(Object{.name = "wire", .type = Type::bits(8, false, true)});
+
+    enzan::eir::Instance instance;
+    instance.name = "u_child";
+    instance.definitionName = "child";
+    instance.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0});
+    parent.instances.push_back(std::move(instance));
+
+    Design design;
+    design.addModule(std::move(child));
+    design.addModule(std::move(parent));
+
+    Simulation simulation(std::move(design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.value("/tb/wire", Radix::Hexadecimal), "3c");
+}
 
 TEST(Kernel, ACollapsedPortIsOnePieceOfStorage) {
     // Writing the parent's object must be immediately visible through the child's port

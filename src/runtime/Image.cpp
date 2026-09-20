@@ -8,6 +8,7 @@
 #include "eir/Process.h"
 
 #include <format>
+#include <vector>
 
 namespace enzan::runtime {
 
@@ -99,30 +100,53 @@ void Image::buildProcesses() {
 }
 
 void Image::initializeState(Arena& arena) const {
-    for (std::size_t instanceIndex = 0; instanceIndex < elaborated->instances().size();
-         ++instanceIndex) {
-        const elab::Instance& instance = elaborated->instances()[instanceIndex];
-        const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
+    // Initialisation is per **slot**, not per object, and an explicit initialiser always
+    // wins over a type default.
+    //
+    // Elaboration collapses a connected port onto the parent's slot, so one slot is reached
+    // through several objects. A single pass over objects would let whichever instance came
+    // last overwrite the others — and since a child's port declaration carries no
+    // initialiser, that meant a parent's `logic rst_n = 1'b0;` was quietly replaced by X.
+    // The design then simulated and produced a plausible wrong answer, which is the failure
+    // mode section 1.2 ranks above all others.
+    std::vector<bool> initialized(signalList.size(), false);
 
-        for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
-             ++objectIndex) {
-            const eir::Object& object = definition.objects[objectIndex];
-            if (!object.type.isBits()) continue;
+    const auto visit = [&](bool wantExplicit) {
+        for (std::size_t instanceIndex = 0; instanceIndex < elaborated->instances().size();
+             ++instanceIndex) {
+            const elab::Instance& instance = elaborated->instances()[instanceIndex];
+            const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
 
-            const eir::BitRef target =
-                arena.at(instanceObjectOffsets[instanceIndex][objectIndex], object.type.bitWidth());
+            for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
+                 ++objectIndex) {
+                const eir::Object& object = definition.objects[objectIndex];
+                if (!object.type.isBits()) continue;
+                if (object.initialValue.has_value() != wantExplicit) continue;
 
-            if (object.initialValue.has_value()) {
-                eir::bitops::extend(target, object.initialValue->ref(), object.type.isSigned());
-                continue;
+                const std::uint32_t slotIndex = instance.objectSlots[objectIndex];
+                if (initialized[slotIndex]) continue;
+                initialized[slotIndex] = true;
+
+                const eir::BitRef target = arena.at(
+                    instanceObjectOffsets[instanceIndex][objectIndex], object.type.bitWidth());
+
+                if (wantExplicit) {
+                    eir::bitops::extend(target, object.initialValue->ref(), object.type.isSigned());
+                    continue;
+                }
+
+                // No declared initialiser: X for a four-state object, zero for a two-state
+                // one (section 3.9). A four-state object that defaulted to zero would hide
+                // exactly the bugs X exists to reveal.
+                target.fill(object.type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero);
             }
-
-            // No declared initialiser: X for a four-state object, zero for a two-state
-            // one (section 3.9). A four-state object that defaulted to zero would hide
-            // exactly the bugs X exists to reveal.
-            target.fill(object.type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero);
         }
-    }
+    };
+
+    // Explicit initialisers first, so that a collapsed slot takes the declared value
+    // whichever side of the port connection declared it.
+    visit(true);
+    visit(false);
 }
 
 std::uint32_t Image::findSignal(std::string_view path) const {
