@@ -56,6 +56,17 @@ bool isTerminator(Opcode opcode) noexcept {
            || suspends(opcode);
 }
 
+bool allowsAliasedDestination(Opcode opcode) noexcept {
+    switch (opcode) {
+    case Opcode::Move:
+    case Opcode::Extend:
+    case Opcode::Truncate:
+    case Opcode::CoerceTwoState:
+    case Opcode::SplicePart: return true;
+    default: return false;
+    }
+}
+
 std::string_view toString(EdgeKind edge) noexcept {
     switch (edge) {
     case EdgeKind::AnyChange: return "change";

@@ -301,6 +301,22 @@ private:
             }
         }
 
+        // Aliasing the destination onto a source silently corrupts the operations that
+        // write as they go. Caught here rather than by a runtime assertion, so that
+        // malformed EIR is a diagnostic at analysis time instead of an abort mid-run.
+        if (hasResult(opcode) && instruction.dst.kind() == Operand::Kind::Register
+            && !allowsAliasedDestination(opcode)) {
+            for (const Operand source : sources) {
+                if (source == instruction.dst) {
+                    reportProcess(definition, process,
+                                  std::format("{} uses register {} as both its destination and "
+                                              "a source, which this operation does not allow",
+                                              where, instruction.dst.index()));
+                    break;
+                }
+            }
+        }
+
         checkOpcodeSpecifics(definition, process, instruction, where);
     }
 

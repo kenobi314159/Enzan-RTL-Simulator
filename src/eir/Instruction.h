@@ -44,6 +44,20 @@ bool suspends(Opcode opcode) noexcept;
 /// instruction of its basic block.
 bool isTerminator(Opcode opcode) noexcept;
 
+/// True when the opcode's destination register may also be one of its sources.
+///
+/// Most operations forbid it: the four-state implementations in BitOps write the
+/// destination as they go, so an aliased source is read after it has been overwritten,
+/// which silently corrupts carry propagation and shifts. Requiring distinct registers is
+/// cheaper than copying into a temporary, which would allocate on the hot path
+/// (DESIGN_GUIDE.md section 13.4).
+///
+/// The exceptions are the operations that are element-wise or deliberately
+/// read-modify-write: a move, a width change, a two-state coercion, and `SplicePart`,
+/// whose destination is *supposed* to be read — that is how a concatenation and a write
+/// through a part select are built.
+bool allowsAliasedDestination(Opcode opcode) noexcept;
+
 /// Which transition on a signal an event control waits for.
 enum class EdgeKind : std::uint8_t {
     /// Any value change. This is `@(signal)` and the implicit sensitivity of
