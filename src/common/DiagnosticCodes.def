@@ -42,4 +42,5 @@ ENZAN_DIAG(TooManyErrors, 5, Fatal,
 // --- 9000-9999: internal errors and unimplemented features -----------------
 
 ENZAN_DIAG(NotYetImplemented, 9001, Error, "{} is not yet implemented")
+ENZAN_DIAG(InvalidEir, 9003, Error, "invalid EIR: {}")
 ENZAN_DIAG(InternalError, 9002, Fatal, "internal error: {}")

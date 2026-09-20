@@ -7,4 +7,5 @@ enzan_add_unit_test(
           DesignTests.cpp
           InstructionTests.cpp
           TypeTests.cpp
+          VerifierTests.cpp
   DEPENDS enzan::eir)

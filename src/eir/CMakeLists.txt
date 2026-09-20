@@ -9,6 +9,7 @@ enzan_add_component(
           Module.cpp
           Process.cpp
           Type.cpp
+          Verifier.cpp
   HEADERS BitOps.h
           BitVector.h
           Design.h
@@ -17,4 +18,5 @@ enzan_add_component(
           Opcodes.def
           Process.h
           Type.h
+          Verifier.h
   DEPENDS enzan::common)
