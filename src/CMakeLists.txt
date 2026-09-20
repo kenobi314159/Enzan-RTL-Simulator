@@ -11,7 +11,7 @@ add_subdirectory(eir)
 # add_subdirectory(frontend)  # M1 (sv), M6 (vhdl)
 add_subdirectory(elab)
 add_subdirectory(codegen)
-# add_subdirectory(runtime)   # M1 — VM, scheduler, value engine
+add_subdirectory(runtime)
 # add_subdirectory(wavedb)    # M1 — waveform database, VCD and FST
 # add_subdirectory(ipc)       # M2 — kernel/GUI protocol
 # add_subdirectory(gui)       # M2 — Qt 6 application

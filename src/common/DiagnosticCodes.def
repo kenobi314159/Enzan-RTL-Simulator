@@ -62,6 +62,19 @@ ENZAN_DIAG(MixedDriverKinds, 3007, Error,
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 
+// --- 5000-5999: runtime and scheduler ---------------------------------------
+
+ENZAN_DIAG(DeltaLimitExceeded, 5001, Error,
+           "exceeded the delta cycle limit of {} at time {}; the design is not settling. "
+           "Still active: {}")
+ENZAN_DIAG(TimeOverflow, 5002, Error,
+           "a delay at time {} would advance simulated time past the 64-bit range; time is "
+           "counted in units of {}")
+ENZAN_DIAG(UserFatal, 5003, Error, "$fatal: {}")
+ENZAN_DIAG(UserError, 5004, Error, "{}")
+ENZAN_DIAG(UserWarning, 5005, Warning, "{}")
+ENZAN_DIAG(UserInfo, 5006, Note, "{}")
+
 // --- 9000-9999: internal errors and unimplemented features -----------------
 
 ENZAN_DIAG(NotYetImplemented, 9001, Error, "{} is not yet implemented")

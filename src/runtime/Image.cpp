@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include "runtime/Image.h"
+
+#include "common/Assert.h"
+#include "eir/BitOps.h"
+#include "eir/Module.h"
+#include "eir/Process.h"
+
+#include <format>
+
+namespace enzan::runtime {
+
+Image::Image(const eir::Design& analysedDesign, const elab::ElaboratedDesign& elaboratedDesign,
+             const codegen::CompiledDesign& compiledDesign)
+    : design(&analysedDesign), elaborated(&elaboratedDesign), compiled(&compiledDesign) {
+    arenaSize = elaboratedDesign.arenaWords();
+    buildSignals();
+    buildInstanceTables();
+    buildProcesses();
+}
+
+void Image::buildSignals() {
+    signalList.reserve(elaborated->slots().size());
+    for (const elab::Slot& slot : elaborated->slots()) {
+        signalList.push_back(Signal{.wordOffset = slot.wordOffset,
+                                    .bitWidth = slot.type.bitWidth(),
+                                    .path = slot.path,
+                                    .subscribers = {}});
+    }
+}
+
+void Image::buildInstanceTables() {
+    instanceObjectOffsets.resize(elaborated->instances().size());
+    instanceObjectSignals.resize(elaborated->instances().size());
+
+    for (std::size_t instanceIndex = 0; instanceIndex < elaborated->instances().size();
+         ++instanceIndex) {
+        const elab::Instance& instance = elaborated->instances()[instanceIndex];
+        std::vector<std::uint32_t>& offsets = instanceObjectOffsets[instanceIndex];
+        std::vector<std::uint32_t>& signals = instanceObjectSignals[instanceIndex];
+
+        offsets.reserve(instance.objectSlots.size());
+        signals.reserve(instance.objectSlots.size());
+        for (const std::uint32_t slotIndex : instance.objectSlots) {
+            offsets.push_back(elaborated->slots()[slotIndex].wordOffset);
+            signals.push_back(slotIndex);
+        }
+    }
+}
+
+void Image::buildProcesses() {
+    processList.reserve(elaborated->processes().size());
+
+    for (const elab::ProcessInstance& processInstance : elaborated->processes()) {
+        const elab::Instance& instance = elaborated->instances()[processInstance.instanceIndex];
+        const std::uint32_t bodyIndex =
+            compiled->bodyIndex(instance.definitionIndex, processInstance.processIndex);
+        ENZAN_ALWAYS_ASSERT(bodyIndex != codegen::CompiledDesign::NotCompiled,
+                            "every elaborated process must have a compiled body");
+
+        const codegen::CompiledProcess& body = compiled->body(bodyIndex);
+
+        ProcessState state;
+        state.bodyIndex = bodyIndex;
+        state.instanceIndex = processInstance.instanceIndex;
+        state.frameOffset = frameSize;
+        state.objectOffsets = instanceObjectOffsets[processInstance.instanceIndex];
+        state.objectSignals = instanceObjectSignals[processInstance.instanceIndex];
+        state.name = std::format("{} {}", instance.path, body.name);
+        frameSize += body.frameWords;
+
+        const auto processIndex = static_cast<std::uint32_t>(processList.size());
+
+        // Static sensitivity. An explicit list is used as written; a process whose
+        // triggering is implicit — `always_comb`, `always_latch`, a continuous
+        // assignment — is subscribed to everything it reads, which is what the language
+        // means by an inferred sensitivity list.
+        const bool inferred = body.sensitivity.empty()
+                              && (body.kind == eir::ProcessKind::AlwaysComb
+                                  || body.kind == eir::ProcessKind::AlwaysLatch
+                                  || body.kind == eir::ProcessKind::ContinuousAssign);
+
+        if (inferred) {
+            for (const std::uint32_t objectIndex : body.readSet) {
+                signalList[state.objectSignals[objectIndex]].subscribers.push_back(
+                    Signal::Subscriber{.processIndex = processIndex,
+                                       .edge = eir::EdgeKind::AnyChange});
+            }
+        } else {
+            for (const eir::SensitivityEntry& entry : body.sensitivity) {
+                signalList[state.objectSignals[entry.objectIndex]].subscribers.push_back(
+                    Signal::Subscriber{.processIndex = processIndex, .edge = entry.edge});
+            }
+        }
+
+        processList.push_back(std::move(state));
+    }
+}
+
+void Image::initializeState(Arena& arena) const {
+    for (std::size_t instanceIndex = 0; instanceIndex < elaborated->instances().size();
+         ++instanceIndex) {
+        const elab::Instance& instance = elaborated->instances()[instanceIndex];
+        const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
+
+        for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
+             ++objectIndex) {
+            const eir::Object& object = definition.objects[objectIndex];
+            if (!object.type.isBits()) continue;
+
+            const eir::BitRef target =
+                arena.at(instanceObjectOffsets[instanceIndex][objectIndex], object.type.bitWidth());
+
+            if (object.initialValue.has_value()) {
+                eir::bitops::extend(target, object.initialValue->ref(), object.type.isSigned());
+                continue;
+            }
+
+            // No declared initialiser: X for a four-state object, zero for a two-state
+            // one (section 3.9). A four-state object that defaulted to zero would hide
+            // exactly the bugs X exists to reveal.
+            target.fill(object.type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero);
+        }
+    }
+}
+
+std::uint32_t Image::findSignal(std::string_view path) const {
+    const std::optional<std::uint32_t> slot = elaborated->findSlot(path);
+    return slot.has_value() ? *slot : NoSignal;
+}
+
+} // namespace enzan::runtime
