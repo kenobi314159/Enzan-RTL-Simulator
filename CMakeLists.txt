@@ -15,7 +15,11 @@ project(
   VERSION 0.1.0
   DESCRIPTION "Event-driven mixed-language RTL simulator for SystemVerilog and VHDL"
   HOMEPAGE_URL "https://github.com/kenobi314159/Enzan-RTL-Simulator"
-  LANGUAGES CXX)
+  # Enzan itself is C++ only. C is declared because mimalloc, which slang pulls
+  # in, is a C project, and because the presets select a matching C compiler for
+  # it; declaring the language conditionally would leave that cache variable
+  # unused and warned about whenever the frontend is switched off.
+  LANGUAGES CXX C)
 
 # Appended to the version in `enzan --version`. Release builds clear it.
 set(ENZAN_VERSION_SUFFIX
@@ -103,11 +107,17 @@ include(EnzanCompilerOptions)
 include(EnzanDependencies)
 include(EnzanComponent)
 
+# enable_testing() must precede every directory that calls add_test, or CMake
+# generates no CTestTestfile.cmake there and those tests vanish without a word.
+# tools/ registers the command-line tests, so this cannot move below it.
+if(ENZAN_BUILD_TESTS)
+  enable_testing()
+endif()
+
 add_subdirectory(src)
 add_subdirectory(tools)
 
 if(ENZAN_BUILD_TESTS)
-  enable_testing()
   add_subdirectory(tests)
 endif()
 
