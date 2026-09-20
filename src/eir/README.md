@@ -16,8 +16,11 @@ waveform database and the PLI all consume it.
   X-propagation. This is the highest-risk code in the project.
 - **The type system** (`Type.h`) — what an EIR value is, and how much arena storage
   it needs.
-- The structural layer (EIR-S) and the behavioural layer (EIR-B) follow in this
-  component as milestone M1 progresses.
+- **The EIR-B instruction set** (`Instruction.h`, `Opcodes.def`) — three-address
+  operations over typed values, each carrying the sketch of its lowering to LLVM IR
+  that section 6.1 requires.
+- The structural layer (EIR-S) follows in this component as milestone M1
+  progresses.
 
 ## Allowed dependencies
 

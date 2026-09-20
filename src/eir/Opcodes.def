@@ -1,0 +1,188 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The EIR-B instruction set.
+//
+// Included more than once with ENZAN_OPCODE defined differently each time, so
+// there is deliberately no include guard.
+//
+//   ENZAN_OPCODE(Name, mnemonic, hasResult, sourceCount, llvmLowering)
+//
+// `llvmLowering` is not documentation for its own sake. DESIGN_GUIDE.md section
+// 6.1 makes it a standing invariant that **every opcode MUST have an obvious,
+// documented lowering to LLVM IR**, because the JIT backend of M8 is intended to
+// be a mechanical translation of the interpreter, and an opcode that cannot be
+// lowered mechanically blocks it. An opcode added without a lowering sketch is
+// incomplete work, and a unit test enforces that the string is not empty.
+//
+// The lowering sketches assume the arena base address is available as an LLVM
+// value and that a virtual register of 64 bits or fewer lives in an `alloca` that
+// SROA promotes. Wide values stay in memory and lower to calls into the same
+// runtime helpers the interpreter uses, which is what keeps the two backends
+// differentially testable.
+
+// --- Control flow ----------------------------------------------------------
+
+ENZAN_OPCODE(Nop, "nop", false, 0, "nothing is emitted")
+ENZAN_OPCODE(Jump, "jump", false, 1, "br label %target")
+ENZAN_OPCODE(BranchIf, "br", false, 3,
+             "the condition's four-state truth value becomes an i1 by "
+             "`(aval & ~bval) != 0`, then br i1 %c, label %then, label %else; an "
+             "unknown condition is routed by the compiler to the same target as "
+             "false, which is why truth is computed rather than tested bitwise")
+ENZAN_OPCODE(Return, "ret", false, 0, "ret void; the process has run to suspension")
+
+// --- Constants and movement ------------------------------------------------
+
+ENZAN_OPCODE(LoadConstant, "const", true, 1,
+             "an inline i64 pair for widths up to 64, otherwise a load from a "
+             "private unnamed_addr constant global holding both planes")
+ENZAN_OPCODE(Move, "mov", true, 1,
+             "nothing for narrow values once the register allocator coalesces the "
+             "two registers; a memcpy for wide ones")
+ENZAN_OPCODE(Extend, "ext", true, 1,
+             "zext or sext of the aval plane and the same of bval, so that an "
+             "unknown sign bit replicates; a runtime helper call when wide")
+ENZAN_OPCODE(Truncate, "trunc", true, 1, "trunc of both planes")
+ENZAN_OPCODE(CoerceTwoState, "twostate", true, 1,
+             "aval := aval & ~bval, bval := 0, which is the X-to-zero conversion an "
+             "assignment into a two-state object performs")
+
+// --- State access ----------------------------------------------------------
+//
+// Every access names its object by an index that elaboration has already resolved
+// to a byte offset in the state arena (DESIGN_GUIDE.md section 4.3), so a JIT can
+// burn the offset into the generated code as a constant.
+
+ENZAN_OPCODE(ReadObject, "read", true, 1,
+             "getelementptr on the arena base with a constant offset, then a load "
+             "of each plane")
+ENZAN_OPCODE(Store, "store", false, 2,
+             "a call to the runtime update helper, which compares the new value "
+             "against the old and schedules the processes sensitive to it; the "
+             "comparison inlines to an icmp pair for widths up to 64")
+ENZAN_OPCODE(StorePart, "storepart", false, 3,
+             "as Store, with a mask and shift computed from the offset operand so "
+             "that only the selected bits change")
+ENZAN_OPCODE(StoreNonBlocking, "nbstore", false, 2,
+             "a call to the runtime helper that appends a non-blocking update "
+             "record to the NBA region's queue")
+ENZAN_OPCODE(StorePartNonBlocking, "nbstorepart", false, 3,
+             "as StoreNonBlocking, with the bit offset and width carried in the "
+             "update record so that two partial updates in one time slot do not "
+             "overwrite each other")
+
+// --- Bitwise, element by element -------------------------------------------
+
+ENZAN_OPCODE(And, "and", true, 2,
+             "the four-state table as six `and`/`or`/`not` instructions per plane "
+             "pair; a single `and` when both operands are statically two-state")
+ENZAN_OPCODE(Or, "or", true, 2, "as And, with the dual table")
+ENZAN_OPCODE(Xor, "xor", true, 2,
+             "bval := bval_a | bval_b; aval := (aval_a ^ aval_b) | bval")
+ENZAN_OPCODE(Xnor, "xnor", true, 2, "as Xor with the aval expression complemented")
+ENZAN_OPCODE(Not, "not", true, 1, "bval := bval_a; aval := ~aval_a | bval_a")
+
+// --- Reduction and truth ---------------------------------------------------
+
+ENZAN_OPCODE(ReduceAnd, "rand", true, 1,
+             "icmp eq of the aval plane against all-ones, combined with an "
+             "unknown-present test; a llvm.vector.reduce.and for wide values")
+ENZAN_OPCODE(ReduceOr, "ror", true, 1, "as ReduceAnd against zero")
+ENZAN_OPCODE(ReduceXor, "rxor", true, 1,
+             "llvm.ctpop on the aval plane and 1, guarded by an unknown-present "
+             "test that forces X")
+ENZAN_OPCODE(LogicalAnd, "land", true, 2,
+             "the truth values of both operands combined by the three-valued AND "
+             "table; the compiler emits branches for short-circuit evaluation and "
+             "reaches this only when both operands are already available")
+ENZAN_OPCODE(LogicalOr, "lor", true, 2, "as LogicalAnd with the dual table")
+ENZAN_OPCODE(LogicalNot, "lnot", true, 1, "the three-valued negation of the truth value")
+
+// --- Arithmetic ------------------------------------------------------------
+//
+// Every arithmetic opcode is all-or-nothing in its unknown handling: one unknown
+// bit in either operand makes the whole result X, because a carry out of an
+// unknown bit can reach any higher bit. The lowering therefore branches once on
+// "either operand has an unknown bit" rather than tracking unknowns per bit, which
+// is both correct and the faster shape.
+
+ENZAN_OPCODE(Add, "add", true, 2,
+             "a branch on the combined bval planes; the known path is `add` with "
+             "llvm.uadd.with.overflow chaining across limbs, the unknown path stores "
+             "all-ones to both planes")
+ENZAN_OPCODE(Subtract, "sub", true, 2, "as Add with `sub` and borrow chaining")
+ENZAN_OPCODE(Multiply, "mul", true, 2,
+             "as Add with `mul`; wide values call the runtime helper, since LLVM has "
+             "no arbitrary-precision multiply")
+ENZAN_OPCODE(Divide, "div", true, 2,
+             "as Add with `udiv` or `sdiv`, additionally branching on a zero divisor "
+             "to the all-X path, because the language defines division by zero as X "
+             "rather than as undefined behaviour")
+ENZAN_OPCODE(Modulo, "mod", true, 2, "as Divide with `urem` or `srem`")
+ENZAN_OPCODE(Negate, "neg", true, 1, "as Add with `sub` from zero")
+
+// --- Shifts ----------------------------------------------------------------
+
+ENZAN_OPCODE(ShiftLeft, "shl", true, 2,
+             "a branch on the amount's bval plane to the all-X path, a compare "
+             "against the width to the all-zero path, then `shl` on both planes")
+ENZAN_OPCODE(ShiftRightLogical, "shr", true, 2, "as ShiftLeft with `lshr`")
+ENZAN_OPCODE(ShiftRightArithmetic, "sar", true, 2,
+             "as ShiftLeft with `ashr` on aval and on bval, so that an unknown sign "
+             "bit replicates as X rather than as zero")
+
+// --- Comparison ------------------------------------------------------------
+
+ENZAN_OPCODE(Equal, "eq", true, 2,
+             "a branch on the combined bval planes to the X result, then icmp eq on "
+             "the aval planes")
+ENZAN_OPCODE(NotEqual, "ne", true, 2, "as Equal with icmp ne")
+ENZAN_OPCODE(CaseEqual, "ceq", true, 2,
+             "icmp eq on both planes with no unknown check at all; this is `===`, "
+             "which never yields X")
+ENZAN_OPCODE(CaseNotEqual, "cne", true, 2, "as CaseEqual negated")
+ENZAN_OPCODE(LessThan, "lt", true, 2,
+             "as Equal with icmp ult or icmp slt according to the signed flag")
+ENZAN_OPCODE(LessEqual, "le", true, 2, "as LessThan with icmp ule or icmp sle")
+
+// --- Selection and splicing ------------------------------------------------
+
+ENZAN_OPCODE(BitSelect, "bitsel", true, 2,
+             "a range check against the width branching to the X result, then lshr "
+             "by the index and mask to one bit on each plane")
+ENZAN_OPCODE(PartSelect, "partsel", true, 2,
+             "as BitSelect with a mask of the destination width, and the "
+             "out-of-range bits filled with X")
+ENZAN_OPCODE(SplicePart, "splice", true, 2,
+             "a mask-and-merge on both planes of the destination register, which the "
+             "compiler uses to build concatenations and to read-modify-write a part "
+             "select; the destination register is both read and written")
+ENZAN_OPCODE(Conditional, "sel", true, 3,
+             "a branch on the condition's truth value to a plain select, plus a "
+             "merge path for the unknown case that keeps the bits where the arms "
+             "agree")
+
+// --- Time and system tasks -------------------------------------------------
+
+ENZAN_OPCODE(ReadTime, "time", true, 0,
+             "a load of the kernel's current-time field; the JIT keeps the arena "
+             "base and the time field in the same structure so this is one load")
+ENZAN_OPCODE(SysTask, "systask", false, 1,
+             "a call to the runtime with the call descriptor's index; system tasks "
+             "are never inlined, because their cost is dominated by formatting and "
+             "I/O rather than by the call")
+
+// --- Suspension ------------------------------------------------------------
+//
+// A process suspends by returning to the scheduler. The lowering of a suspension
+// point is therefore a store of the resume block's index followed by `ret void`,
+// and the process body becomes a state machine over a switch on that index. This
+// is the standard resumable-coroutine shape and is why the interpreter and the JIT
+// can share the scheduler unchanged.
+
+ENZAN_OPCODE(WaitTime, "waittime", false, 2,
+             "a call to the scheduler to re-arm this process after the given delay, "
+             "a store of the resume index, then ret void")
+ENZAN_OPCODE(WaitEdge, "waitedge", false, 3,
+             "a call to the scheduler to subscribe to the given edge on the given "
+             "object, a store of the resume index, then ret void")
