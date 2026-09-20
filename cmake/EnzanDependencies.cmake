@@ -10,6 +10,30 @@
 
 include(FetchContent)
 
+# ---------------------------------------------------------------------------
+# enzan_mark_includes_system(<target>)
+# ---------------------------------------------------------------------------
+#
+# Re-exports a target's include directories as system includes, so that its headers escape
+# Enzan's warning set.
+#
+# Enzan compiles with a wide warning set and CI turns it into -Werror. A dependency built in
+# the same tree exports its includes as ordinary ones, so slang's headers — which use
+# C-style casts and shadow their own members, as is their prerogative — would fail our build
+# with errors in code we do not own. `add_subdirectory(... SYSTEM)` would be the direct fix
+# but needs CMake 3.25, above the 3.24 floor of section 11.1.
+function(enzan_mark_includes_system target)
+  if(NOT TARGET ${target})
+    return()
+  endif()
+
+  get_target_property(includeDirs ${target} INTERFACE_INCLUDE_DIRECTORIES)
+  if(includeDirs)
+    set_property(TARGET ${target} APPEND PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                                                  "${includeDirs}")
+  endif()
+endfunction()
+
 # FETCHCONTENT_BASE_DIR is deliberately left at its default, one per build
 # directory. Pointing several build trees at a shared base directory would share
 # not only the downloaded sources but also the dependency *build* trees, and two
@@ -172,6 +196,12 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
       EXCLUDE_FROM_ALL
       FIND_PACKAGE_ARGS ${ENZAN_SLANG_VERSION} CONFIG)
     FetchContent_MakeAvailable(slang)
+
+    # slang and the dependencies it brings with it are third-party code; their headers must
+    # not be held to Enzan's warning set.
+    enzan_mark_includes_system(slang_slang)
+    enzan_mark_includes_system(fmt)
+    enzan_mark_includes_system(mimalloc)
   else()
     message(STATUS "Using system slang ${slang_VERSION}")
   endif()
