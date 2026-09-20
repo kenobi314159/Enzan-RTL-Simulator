@@ -2,5 +2,5 @@
 
 enzan_add_unit_test(
   common
-  SOURCES AssertTests.cpp SourceManagerTests.cpp VersionTests.cpp
+  SOURCES AssertTests.cpp DiagnosticsTests.cpp SourceManagerTests.cpp VersionTests.cpp
   DEPENDS enzan::common)

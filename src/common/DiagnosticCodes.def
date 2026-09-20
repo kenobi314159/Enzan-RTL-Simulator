@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The diagnostic catalogue.
+//
+// This file is included more than once, each time with ENZAN_DIAG defined to do
+// something different, so it deliberately has no include guard.
+//
+//   ENZAN_DIAG(Name, number, DefaultSeverity, "std::format format string")
+//
+// **Numbers are permanent.** A code appears in user documentation, in
+// suppression lists in users' scripts, and in bug reports (DESIGN_GUIDE.md
+// section 10.6). Reusing a number for a different meaning silently changes what
+// a user's `-Wno-ENZ0007` suppresses. Retire a code by deleting its line and
+// never reusing the number; do not renumber the ones after it.
+//
+// Number ranges, by the component that emits the diagnostic:
+//
+//   0001-0999  driver, command line, source file handling  (src/common, tools/)
+//   1000-1999  SystemVerilog frontend                      (src/frontend/sv)
+//   2000-2999  VHDL frontend                               (src/frontend/vhdl)
+//   3000-3999  elaboration                                 (src/elab)
+//   4000-4999  bytecode generation                         (src/codegen)
+//   5000-5999  runtime and scheduler                       (src/runtime)
+//   6000-6999  control layer and Tcl commands              (src/control)
+//   7000-7999  waveform database                           (src/wavedb)
+//   8000-8999  VPI, VHPI and plugin loading                (src/pli)
+//   9000-9999  internal errors and unimplemented features  (anywhere)
+//
+// The format string is consumed by std::format, so arguments are `{}` and a
+// literal brace is written `{{`.
+
+// --- 0001-0999: driver, command line and source file handling ---------------
+
+ENZAN_DIAG(CannotOpenFile, 1, Error, "cannot open file '{}': {}")
+ENZAN_DIAG(NotARegularFile, 2, Error, "'{}' is not a regular file")
+ENZAN_DIAG(FileReadFailed, 3, Error, "could not read '{}': {}")
+ENZAN_DIAG(SourceFileTooLarge, 4, Error,
+           "'{}' is too large; a single source file must be smaller than {} bytes")
+ENZAN_DIAG(TooManyErrors, 5, Fatal,
+           "too many errors emitted ({}); no further diagnostics will be reported")
+
+// --- 9000-9999: internal errors and unimplemented features -----------------
+
+ENZAN_DIAG(NotYetImplemented, 9001, Error, "{} is not yet implemented")
+ENZAN_DIAG(InternalError, 9002, Fatal, "internal error: {}")

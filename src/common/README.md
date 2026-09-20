@@ -7,13 +7,13 @@ on nothing inside Enzan themselves.
 
 - **Version information** (`Version.h`) — the version and source revision the
   binary was built from, as reported by `enzan --version`.
-- **Assertions** (`Assert.h`) — internal invariant checks and the failure
-  handler they abort through.
-- **Source management** (`SourceLocation.h`, `SourceManager.h`) — loading source
-  text into buffers and mapping byte offsets back to files, lines and columns.
+- **Source management** (`SourceManager.h`) — loading source text into buffers
+  and mapping byte offsets back to files, lines and columns.
+- **Diagnostics** (`Diagnostics.h`) — the single diagnostic engine that serves
+  the whole tool, per DESIGN_GUIDE.md section 10.6. Frontend diagnostics from
+  slang and NVC are translated into it so that output is uniform regardless of
+  source language.
 - Small shared utilities that genuinely have no better home.
-
-The diagnostic engine belongs here too and arrives with the rest of milestone M0.
 
 ## Allowed dependencies
 

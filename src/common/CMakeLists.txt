@@ -30,8 +30,10 @@ configure_file(VersionInfo.h.in "${_enzan_version_info}" @ONLY)
 
 enzan_add_component(
   common
-  SOURCES Assert.cpp SourceManager.cpp Version.cpp
+  SOURCES Assert.cpp Diagnostics.cpp SourceManager.cpp Version.cpp
   HEADERS Assert.h
+          DiagnosticCodes.def
+          Diagnostics.h
           SourceLocation.h
           SourceManager.h
           Version.h

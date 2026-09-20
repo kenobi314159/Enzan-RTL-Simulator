@@ -726,6 +726,22 @@ referenced in documentation and suppressed selectively. Frontend diagnostics
 from slang and NVC are translated into this engine so that output is uniform
 regardless of source language.
 
+**Error codes are permanent.** A code appears in user documentation, in
+suppression lists in users' scripts, and in bug reports, so reusing a number for
+a different meaning silently changes what a user's suppression suppresses. A code
+is retired by deleting it and never reusing the number; codes are not renumbered.
+Numbers are allocated in ranges by the component that emits the diagnostic — 1–999
+for the driver and source handling, 1000–1999 for the SystemVerilog frontend,
+2000–2999 for VHDL, 3000–3999 for elaboration, 4000–4999 for codegen, 5000–5999
+for the runtime, 6000–6999 for the control layer, 7000–7999 for the waveform
+database, 8000–8999 for the PLI, and 9000–9999 for internal errors. The catalogue
+itself is `src/common/DiagnosticCodes.def`.
+
+A diagnostic whose default severity is `Fatal` MUST NOT be downgradable or
+suppressible. Fatal means continuing is unsafe, and letting a user turn one into
+a warning converts a clean stop into wrong results, which priority 1 of section
+1.2 forbids.
+
 ---
 
 ## 11. Build system and dependencies
@@ -831,7 +847,7 @@ Rules:
   revisions. External designs MUST NOT be committed to this repository: they
   are large, and they carry their own licenses.
 - Each `src/` component has a `README.md` describing its responsibility and its
-  allowed dependencies on other components.
+  allowed dependencies on other components. The build enforces its presence.
 
 ---
 
