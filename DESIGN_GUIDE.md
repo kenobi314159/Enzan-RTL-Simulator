@@ -832,6 +832,7 @@ Enzan-RTL-Simulator/
 │   └── designs/              scripts fetching external RTL — NEVER vendored
 ├── bench/                    performance benchmarks and result tracking
 ├── docs/                     human documentation, derived from this guide
+├── scripts/                  repository checks, runnable locally and by CI
 └── third_party/              vendored dependencies where unavoidable
 ```
 
@@ -848,6 +849,10 @@ Rules:
   are large, and they carry their own licenses.
 - Each `src/` component has a `README.md` describing its responsibility and its
   allowed dependencies on other components. The build enforces its presence.
+- `scripts/` holds checks that CI runs and that a contributor MUST be able to run
+  locally with no arguments. A check that exists only inside a CI workflow cannot
+  be run before pushing, so it gets discovered as a red default branch instead of
+  as a local failure.
 
 ---
 
