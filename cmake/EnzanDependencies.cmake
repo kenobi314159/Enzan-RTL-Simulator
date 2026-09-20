@@ -141,6 +141,20 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
     set(SLANG_INCLUDE_DOCS OFF)
     set(SLANG_INCLUDE_INSTALL OFF)
 
+    # slang must build its own fmt rather than use a system one.
+    #
+    # fmt 12.2 as packaged by distributions exports C++20 module support on its
+    # imported target. CMake then turns on module dependency scanning for every
+    # target that links it, GCC compiles slang's sources with -fmodules-ts, and
+    # slang's header-based `fmt::format` calls stop resolving. The failure is
+    # upstream of Enzan and reported as `'format' is not a member of 'fmt'`, which
+    # gives a contributor no chance of guessing the cause.
+    #
+    # Disabling the find_package lookup makes slang fall back to the version it
+    # pins, which is a small, fast build and removes a variable from ours. Enzan
+    # itself uses std::format and never links fmt, so there is no conflict.
+    set(CMAKE_DISABLE_FIND_PACKAGE_fmt ON)
+
     # mimalloc replaces the global allocator, which defeats AddressSanitizer's
     # interceptors and produces both false negatives and spurious reports. The
     # sanitizer job is a correctness gate, so it wins over slang's allocator
