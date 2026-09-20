@@ -12,7 +12,7 @@ add_subdirectory(eir)
 add_subdirectory(elab)
 add_subdirectory(codegen)
 add_subdirectory(runtime)
-# add_subdirectory(wavedb)    # M1 — waveform database, VCD and FST
+add_subdirectory(wavedb)
 # add_subdirectory(ipc)       # M2 — kernel/GUI protocol
 # add_subdirectory(gui)       # M2 — Qt 6 application
 # add_subdirectory(control)   # M3 — Tcl interpreter and commands
