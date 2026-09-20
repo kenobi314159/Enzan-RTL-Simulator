@@ -158,17 +158,21 @@ jobs:
           printf 'Linting %d files\n' "${#files[@]}"
           clang-tidy-18 -p build/clang-debug --quiet "${files[@]}"
 
-  slang:
-    name: slang dependency build
+  systemverilog:
+    name: SystemVerilog frontend and golden suite
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # iverilog is the reference the golden suite compares against. Running the same design
+      # under two simulators and comparing the result is the single highest-value testing
+      # strategy available (DESIGN_GUIDE.md section 14.3), so it is not optional here even
+      # though the suite skips it gracefully when no reference is installed.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache libgtest-dev zlib1g-dev python3
+            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 iverilog
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -181,18 +185,25 @@ jobs:
       # the one contributors actually take. This job exists to catch a break in
       # it — an upstream revision that no longer builds, or a CMake option that
       # was renamed — at the commit that caused it rather than at the start of M1.
-      # slang is declared EXCLUDE_FROM_ALL so that its tools, tests and docs stay
-      # out of Enzan's default build, which also keeps the library itself out
-      # until a component links it. The target is therefore named explicitly;
-      # without this the job would prove only that slang can be cloned.
+      # This is the only job that builds slang, which is why it is also the only one that runs
+      # the frontend unit tests and the golden suite. The build matrix above configures the
+      # frontend off: nothing outside this job links slang, and compiling it five times per
+      # commit would spend most of the CI budget on one dependency.
       - name: Configure and build with the SystemVerilog frontend enabled
         run: |
-          cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON
+          cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_WERROR=ON
           cmake --build --preset gcc-release
-          cmake --build --preset gcc-release --target slang_slang
 
       - name: Test
         run: ctest --preset gcc-release
+
+      # The benchmark is a target rather than a test, because a measurement taken alongside
+      # three hundred other tests compares with nothing. It runs here so that a change which
+      # breaks the harness is caught, and so that a number is recorded per commit as section
+      # 15.1 requires; section 16 moves the published series to a nightly job once there is
+      # somewhere to publish it.
+      - name: Benchmark
+        run: cmake --build --preset gcc-release --target enzan-bench
 
       - name: Report cache statistics
         if: always()

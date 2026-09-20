@@ -9,10 +9,10 @@ The name is Japanese and carries two readings: *distant peaks* (遠山), for the
 mountain-like horizon of a screen full of waveforms, and *calculation* (演算),
 for the computational work the simulator performs.
 
-**Status: milestone M0 — foundation.** The build system, the diagnostic engine,
-the source manager and the test infrastructure exist. There is no analysis,
-elaboration or simulation capability yet, so `enzan` cannot yet run a design.
-See the roadmap below.
+**Status: milestone M1 in progress.** Enzan simulates a subset of SystemVerilog and writes a
+VCD waveform. A parameterised counter and a synchronous FIFO both run, self-check, and agree
+with Icarus Verilog. The GUI is not part of this milestone — waveforms are viewed in GTKWave or
+Surfer. See [what works today](#what-works-today) and the roadmap below.
 
 ## Building
 
@@ -49,6 +49,40 @@ sudo dnf install gcc-c++ cmake ninja-build zlib-devel gtest-devel ccache
 
 If a dependency is missing, CMake stops with a message naming the package to
 install for your distribution rather than with a link error.
+
+### Running a simulation
+
+```sh
+enzan --top tb --timescale ns --vcd wave.vcd design.sv testbench.sv
+gtkwave wave.vcd
+```
+
+`enzan --help` lists the options. The control language is Tcl with a Questa-style command
+vocabulary, and that arrives with M3; the command line is deliberately minimal until then, so
+that there is not a second control surface to keep compatible with it.
+
+## What works today
+
+| | |
+|---|---|
+| Modules, ports, hierarchy, parameters | yes — each parameterisation becomes its own analysed unit |
+| `initial`, `final`, `always`, `always_comb`, `always_latch`, `always_ff` | yes |
+| `assign`, blocking `=`, non-blocking `<=` | yes |
+| `if`, `case`, `for`, `while`, `do..while`, `repeat`, `forever` | yes |
+| Operators, packed vectors, structs, arrays and enums | yes |
+| Bit and part selects, `+:`/`-:`, concatenation, replication | yes, reading and writing |
+| `#delay`, `@(posedge …)`, event lists on a block header | yes |
+| Four-state values with X and Z propagation | yes, throughout |
+| `$display`, `$write`, `$time`, `$finish`, `$fatal`, `$error`, `$warning`, `$info` | yes |
+| VCD waveform output | yes |
+| `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
+| FST waveform output | not yet |
+| Driver resolution, multiple drivers per signal | not yet — M5 |
+| Tcl control layer, GUI, VHDL, VPI | not yet — M3, M2, M6, M4 |
+
+Anything unsupported is reported with a source location and the construct named, never
+mistranslated: a partially translated design would simulate and give the wrong answer, which is
+the failure mode the project weighs above all others.
 
 ### Configure, build and test
 
@@ -115,6 +149,15 @@ clang-format --dry-run --Werror $(git ls-files '*.h' '*.cpp')
 cmake --preset clang-debug -DENZAN_WERROR=ON && ctest --preset clang-debug
 ```
 
+The test suite includes differential comparisons against Icarus Verilog when `iverilog` is
+installed; running the same design under two simulators and comparing the result is the single
+highest-value testing strategy available. Benchmarks are a separate target, because a
+measurement taken alongside three hundred other tests compares with nothing:
+
+```sh
+cmake --build --preset gcc-release --target enzan-bench
+```
+
 Every source file begins with `// SPDX-License-Identifier: GPL-3.0-or-later`.
 Commit messages carry a category prefix; see section 17.1 of the design guide.
 
@@ -130,11 +173,11 @@ Commit messages carry a category prefix; see section 17.1 of the design guide.
 
 ## Status and roadmap
 
-Development proceeds in gated milestones. M0 (this one) is the build and test
-foundation; M1 brings a SystemVerilog subset simulating to a VCD or FST waveform;
-M2 the interactive GUI; then the Tcl control layer and source debugging, VPI and
-cocotb support, VHDL via NVC, and mixed-language simulation. See
-[`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full roadmap and the
+Development proceeds in gated milestones. M0, the build and test foundation, is complete. M1 —
+a SystemVerilog subset simulating to a waveform — is largely complete: what remains is FST
+output and broader language coverage. Then M2 brings the interactive GUI, M3 the Tcl control
+layer and source debugging, M4 VPI and cocotb, M6 VHDL via NVC, and M7 mixed-language
+simulation. See [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full roadmap and the
 exit criteria of each milestone.
 
 ## License
