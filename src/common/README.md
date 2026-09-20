@@ -9,10 +9,11 @@ on nothing inside Enzan themselves.
   binary was built from, as reported by `enzan --version`.
 - **Assertions** (`Assert.h`) — internal invariant checks and the failure
   handler they abort through.
+- **Source management** (`SourceLocation.h`, `SourceManager.h`) — loading source
+  text into buffers and mapping byte offsets back to files, lines and columns.
 - Small shared utilities that genuinely have no better home.
 
-Source management and the diagnostic engine belong here too and arrive with the
-rest of milestone M0.
+The diagnostic engine belongs here too and arrives with the rest of milestone M0.
 
 ## Allowed dependencies
 
