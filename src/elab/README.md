@@ -51,6 +51,19 @@ a fixed displacement. The interpreter pays one extra load per state access; a JI
 specialises a process per instance and burns the absolute offsets in as constants,
 which is what section 4.3 anticipates.
 
+## Known limitation: the driver check is per signal, not per bit range
+
+Driving disjoint parts of one vector from several continuous assignments — `assign x[7:4] =
+a; assign x[3:0] = b;` — is legal SystemVerilog and needs no resolution at all, because no bit
+has two drivers. Enzan's check counts drivers per *signal*, so it refuses that design.
+
+The check is deliberately conservative: the alternative to refusing is letting the last write
+win, which produces a plausible wrong answer rather than an error, and section 1.2 ranks that
+as the worst outcome available. Making it per bit range is real work that belongs with driver
+resolution at M5, where the same bit-level bookkeeping is needed anyway.
+
+## Port collapsing across a language boundary
+
 Collapsing does **not** apply across a language boundary. Section 3.5 defines a
 cross-language port connection as a zero-delay continuous assignment that consumes one
 delta cycle, and that is a mixed-language matter for M7.

@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Self-checking HDL cases (DESIGN_GUIDE.md section 14.2).
+#
+# Self-checking is strongly preferred over golden output files: a testbench that calls
+# `$fatal` on mismatch needs no golden file to drift out of date. Every case here ends by
+# printing `PASS <name>` and calling `$finish`, so a case that stops early — because a
+# construct is unsupported, or because the kernel aborted — fails on the missing line rather
+# than passing quietly.
+
+# ---------------------------------------------------------------------------
+# enzan_add_golden_test(<name> [NO_DIFFERENTIAL])
+# ---------------------------------------------------------------------------
+#
+# Registers `golden.<name>`, which runs sv/<name>.sv and requires the PASS line, and
+# `golden.<name>.differential`, which compares the transcript against a reference simulator.
+#
+# NO_DIFFERENTIAL marks a case where simulators legitimately differ, which section 14.3
+# warns about. Such a case still runs under Enzan; it simply is not held to another tool's
+# behaviour.
+function(enzan_add_golden_test name)
+  cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL" "" "")
+
+  set(source "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}.sv")
+  if(NOT EXISTS "${source}")
+    message(FATAL_ERROR "golden test '${name}' has no source at ${source}")
+  endif()
+
+  add_test(NAME golden.${name} COMMAND enzan --top tb --timescale ns "${source}")
+  set_tests_properties(
+    golden.${name}
+    PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}"
+               FAIL_REGULAR_EXPRESSION "FAIL"
+               TIMEOUT 60)
+
+  if(arg_NO_DIFFERENTIAL OR NOT ENZAN_REFERENCE_SIMULATOR)
+    return()
+  endif()
+
+  add_test(
+    NAME golden.${name}.differential
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-differential.sh" $<TARGET_FILE:enzan>
+            "${ENZAN_REFERENCE_SIMULATOR}" "${source}" tb)
+  set_tests_properties(golden.${name}.differential PROPERTIES TIMEOUT 120)
+endfunction()
+
+# Differential testing is the single highest-value testing strategy available and must exist
+# from M1 (section 14.3). It is skipped rather than failed when no reference is installed, so
+# that a contributor without one can still run the suite; CI installs one.
+find_program(ENZAN_REFERENCE_SIMULATOR iverilog)
+if(ENZAN_REFERENCE_SIMULATOR)
+  message(STATUS "Differential tests will compare against ${ENZAN_REFERENCE_SIMULATOR}")
+else()
+  message(STATUS "iverilog not found; differential tests are skipped")
+endif()
+
+# M1's exit criteria name these two by name.
+enzan_add_golden_test(counter)
+enzan_add_golden_test(fifo)
+
+enzan_add_golden_test(operators)
+enzan_add_golden_test(control_flow)
+
+# Time zero is where two correct simulators differ most: Icarus Verilog does not evaluate
+# `always_comb` there, where IEEE 1800 says it must.
+enzan_add_golden_test(scheduling NO_DIFFERENTIAL)
