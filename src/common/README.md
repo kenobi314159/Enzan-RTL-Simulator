@@ -7,6 +7,8 @@ on nothing inside Enzan themselves.
 
 - **Version information** (`Version.h`) — the version and source revision the
   binary was built from, as reported by `enzan --version`.
+- **Assertions** (`Assert.h`) — internal invariant checks and the failure
+  handler they abort through.
 - Small shared utilities that genuinely have no better home.
 
 Source management and the diagnostic engine belong here too and arrive with the

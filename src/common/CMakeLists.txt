@@ -30,5 +30,5 @@ configure_file(VersionInfo.h.in "${_enzan_version_info}" @ONLY)
 
 enzan_add_component(
   common
-  SOURCES Version.cpp
-  HEADERS Version.h "${_enzan_version_info}")
+  SOURCES Assert.cpp Version.cpp
+  HEADERS Assert.h Version.h "${_enzan_version_info}")
