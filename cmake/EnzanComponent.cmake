@@ -35,6 +35,14 @@ function(enzan_add_component name)
         "Expected at: ${CMAKE_CURRENT_SOURCE_DIR}/README.md")
   endif()
 
+  # Headers are listed so that they appear in IDE project trees and so that a
+  # generated one creates the right dependency. They must never reach the
+  # compiler or the linker: a `.def` file, for instance, is a module-definition
+  # file to some toolchains rather than a header.
+  if(arg_HEADERS)
+    set_source_files_properties(${arg_HEADERS} PROPERTIES HEADER_FILE_ONLY ON)
+  endif()
+
   add_library(enzan_${name} STATIC ${arg_SOURCES} ${arg_HEADERS})
   add_library(enzan::${name} ALIAS enzan_${name})
 

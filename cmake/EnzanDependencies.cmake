@@ -168,7 +168,11 @@ endif()
 # ---------------------------------------------------------------------------
 
 if(ENZAN_ENABLE_TCL)
-  find_package(TCL 8.6 QUIET)
+  # No version is requested here: CMake's FindTCL module reports no version, so a
+  # version constraint would make the package unfindable rather than
+  # version-checked. The 8.6 requirement is checked in the control layer instead,
+  # against TCL_MAJOR_VERSION and TCL_MINOR_VERSION from tcl.h.
+  find_package(TCL QUIET)
   if(NOT TCL_FOUND)
     enzan_dependency_missing(
       NAME TCL
