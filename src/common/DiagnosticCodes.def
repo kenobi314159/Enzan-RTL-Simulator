@@ -39,6 +39,17 @@ ENZAN_DIAG(SourceFileTooLarge, 4, Error,
 ENZAN_DIAG(TooManyErrors, 5, Fatal,
            "too many errors emitted ({}); no further diagnostics will be reported")
 
+// --- 1000-1999: SystemVerilog frontend --------------------------------------
+
+ENZAN_DIAG(SystemVerilogError, 1001, Error, "{}")
+ENZAN_DIAG(SystemVerilogWarning, 1002, Warning, "{}")
+ENZAN_DIAG(SystemVerilogNote, 1003, Note, "{}")
+ENZAN_DIAG(UnsupportedConstruct, 1004, Error,
+           "{} is not supported by the SystemVerilog frontend yet")
+ENZAN_DIAG(NoInputFiles, 1005, Error, "no source files were given")
+ENZAN_DIAG(NoTopLevelFound, 1006, Error,
+           "the sources contain no module that could serve as a top level")
+
 // --- 3000-3999: elaboration -------------------------------------------------
 
 ENZAN_DIAG(TopModuleNotFound, 3001, Error,

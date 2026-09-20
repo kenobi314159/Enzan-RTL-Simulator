@@ -8,7 +8,7 @@
 add_subdirectory(common)
 
 add_subdirectory(eir)
-# add_subdirectory(frontend)  # M1 (sv), M6 (vhdl)
+add_subdirectory(frontend)
 add_subdirectory(elab)
 add_subdirectory(codegen)
 add_subdirectory(runtime)
