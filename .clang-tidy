@@ -5,6 +5,10 @@
 # configuration that produces thousands of findings gets switched off, and a
 # switched-off linter is worse than a narrow one. Checks are added as the
 # codebase grows and the findings are triaged.
+#
+# readability-braces-around-statements is off because it contradicts the brace
+# style .clang-format enforces, which follows slang's (DESIGN_GUIDE.md section
+# 13.1). Two tools disagreeing about the same line is worse than either rule.
 ---
 Checks: >
   -*,
@@ -27,7 +31,8 @@ Checks: >
   -readability-identifier-length,
   -readability-magic-numbers,
   -readability-function-cognitive-complexity,
-  -readability-else-after-return
+  -readability-else-after-return,
+  -readability-braces-around-statements
 
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/(src|tools|tests)/.*\.h$'
