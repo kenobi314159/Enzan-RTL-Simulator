@@ -5,4 +5,5 @@
 
 add_subdirectory(common)
 add_subdirectory(eir)
+add_subdirectory(codegen)
 add_subdirectory(elab)

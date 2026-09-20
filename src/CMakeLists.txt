@@ -10,7 +10,7 @@ add_subdirectory(common)
 add_subdirectory(eir)
 # add_subdirectory(frontend)  # M1 (sv), M6 (vhdl)
 add_subdirectory(elab)
-# add_subdirectory(codegen)   # M1 — EIR-B to bytecode
+add_subdirectory(codegen)
 # add_subdirectory(runtime)   # M1 — VM, scheduler, value engine
 # add_subdirectory(wavedb)    # M1 — waveform database, VCD and FST
 # add_subdirectory(ipc)       # M2 — kernel/GUI protocol
