@@ -7,6 +7,11 @@
 add_executable(enzan Main.cpp)
 target_link_libraries(enzan PRIVATE enzan::compile_options enzan::common)
 
+if(ENZAN_ENABLE_SYSTEMVERILOG)
+  target_link_libraries(enzan PRIVATE enzan::frontend_sv enzan::elab enzan::codegen
+                                      enzan::runtime enzan::wavedb)
+endif()
+
 if(ENZAN_BUILD_TESTS)
   # End-to-end checks on the executable itself. The unit tests cover the version
   # strings; these cover the thing a user actually invokes, including the error
@@ -30,4 +35,10 @@ if(ENZAN_BUILD_TESTS)
 
   add_test(NAME cli.enzan.no_arguments COMMAND enzan)
   set_tests_properties(cli.enzan.no_arguments PROPERTIES WILL_FAIL TRUE)
+
+  add_test(NAME cli.enzan.no_files COMMAND enzan --top tb)
+  set_tests_properties(cli.enzan.no_files PROPERTIES WILL_FAIL TRUE)
+
+  add_test(NAME cli.enzan.missing_option_value COMMAND enzan --top)
+  set_tests_properties(cli.enzan.missing_option_value PROPERTIES WILL_FAIL TRUE)
 endif()
