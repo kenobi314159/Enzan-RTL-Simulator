@@ -19,8 +19,9 @@ waveform database and the PLI all consume it.
 - **The EIR-B instruction set** (`Instruction.h`, `Opcodes.def`) — three-address
   operations over typed values, each carrying the sketch of its lowering to LLVM IR
   that section 6.1 requires.
-- The structural layer (EIR-S) follows in this component as milestone M1
-  progresses.
+- **The structural layer, EIR-S** (`Process.h`, `Module.h`, `Design.h`) — design
+  units, their objects, ports, instances and processes, and the container that
+  analysis fills and a library stores.
 
 ## Allowed dependencies
 

@@ -2,5 +2,9 @@
 
 enzan_add_unit_test(
   eir
-  SOURCES BitOpsTests.cpp BitVectorTests.cpp InstructionTests.cpp TypeTests.cpp
+  SOURCES BitOpsTests.cpp
+          BitVectorTests.cpp
+          DesignTests.cpp
+          InstructionTests.cpp
+          TypeTests.cpp
   DEPENDS enzan::eir)
