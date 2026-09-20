@@ -89,9 +89,30 @@ TEST(Format, SeveralConversionsConsumeArgumentsInOrder) {
     EXPECT_EQ(render("%0d then %0d", {{first.ref(), false}, {second.ref(), false}}), "1 then 2");
 }
 
-TEST(Format, TimeUsesTheGlobalPrecision) {
+TEST(Format, TimeFormatsItsArgumentWithTheGlobalUnit) {
+    // `%t` renders a value it is given, not the clock: `$display("%t", $time)` passes the
+    // time in. Reading the clock instead would make the conversion consume no argument, and
+    // every later conversion would then take the wrong one.
+    const BitVector value = literal("64'd1234");
+    const std::vector<FormatArgument> arguments{{value.ref(), false}};
+    const FormatContext context{.time = 99, .timeScale = TimeScale(-9), .scopeName = "/tb"};
+
+    EXPECT_EQ(enzan::runtime::formatSystemTask("at %t", arguments, context), "at 1234ns");
+}
+
+TEST(Format, TimeConsumesAnArgumentSoLaterConversionsAreNotShifted) {
+    const BitVector now = literal("64'd40");
+    const BitVector count = literal("8'd7");
+    const std::vector<FormatArgument> arguments{{now.ref(), false}, {count.ref(), false}};
+    const FormatContext context{.time = 40, .timeScale = TimeScale(-9), .scopeName = "/tb"};
+
+    EXPECT_EQ(enzan::runtime::formatSystemTask("[%0t] count = %0d", arguments, context),
+              "[40ns] count = 7");
+}
+
+TEST(Format, TimeWithNoArgumentIsShownRatherThanInventingOne) {
     const FormatContext context{.time = 1234, .timeScale = TimeScale(-9), .scopeName = "/tb"};
-    EXPECT_EQ(enzan::runtime::formatSystemTask("at %t", {}, context), "at 1234ns");
+    EXPECT_EQ(enzan::runtime::formatSystemTask("at %t", {}, context), "at %t");
 }
 
 TEST(Format, ScopeNameExpandsToTheHierarchicalPath) {

@@ -111,7 +111,17 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
         }
 
         if (conversion == 't' || conversion == 'T') {
-            result += context.timeScale.format(context.time);
+            // `%t` formats an argument, it does not read the clock: `$display("%t", $time)`
+            // passes the time in. The current time is used only when the format string asks
+            // for a time that was never supplied, which is a malformed call.
+            if (nextArgument >= arguments.size()) {
+                result.append(format.substr(start, index - start + 1));
+                continue;
+            }
+            const FormatArgument& argument = arguments[nextArgument++];
+            const SimTime value =
+                argument.value.hasUnknown() ? context.time : argument.value.toUInt64();
+            result += context.timeScale.format(value);
             continue;
         }
 

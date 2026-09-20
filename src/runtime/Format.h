@@ -34,9 +34,10 @@ struct FormatContext {
 ///
 /// Supports the conversions the M1 subset needs: `%d`, `%h`/`%x`, `%b`, `%o`, `%s`,
 /// `%t`, `%m` and `%%`, each optionally with a `0` flag meaning "no padding", and each
-/// optionally uppercase. Anything else is copied through literally rather than
-/// swallowed, so a format string Enzan does not understand is visible in the transcript
-/// instead of silently losing output.
+/// optionally uppercase. `%t` consumes an argument and renders it with the global time
+/// unit; `%m` consumes none and expands to the scope name. Anything else is copied through
+/// literally rather than swallowed, so a format string Enzan does not understand is visible in the
+/// transcript instead of silently losing output.
 ///
 /// Without the `0` flag a numeric conversion is padded to the width the value's type can
 /// need — `%d` on an 8-bit value is three characters wide — which is what IEEE 1800
