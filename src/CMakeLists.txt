@@ -7,7 +7,7 @@
 
 add_subdirectory(common)
 
-# add_subdirectory(eir)       # M1 — the internal representation
+add_subdirectory(eir)
 # add_subdirectory(frontend)  # M1 (sv), M6 (vhdl)
 # add_subdirectory(elab)      # M1 — elaboration and state layout
 # add_subdirectory(codegen)   # M1 — EIR-B to bytecode

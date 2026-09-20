@@ -4,3 +4,4 @@
 # corresponding path (DESIGN_GUIDE.md section 12).
 
 add_subdirectory(common)
+add_subdirectory(eir)
