@@ -691,17 +691,28 @@ void bitSelect(BitRef dst, ConstBitRef source, ConstBitRef index) {
     setBit(dst, source.get(static_cast<std::uint32_t>(position)));
 }
 
+void partSelectAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
+    for (std::uint32_t index = 0; index < dst.width(); ++index) {
+        const std::uint64_t position = lowIndex + index;
+        dst.set(index, position < source.width() ? source.get(static_cast<std::uint32_t>(position))
+                                                 : Logic::Unknown);
+    }
+}
+
 void partSelect(BitRef dst, ConstBitRef source, ConstBitRef lowIndex) {
     std::uint64_t low = 0;
     if (!extractCount(lowIndex, low)) {
         setUnknown(dst);
         return;
     }
+    partSelectAt(dst, source, low);
+}
 
-    for (std::uint32_t index = 0; index < dst.width(); ++index) {
-        const std::uint64_t position = low + index;
-        dst.set(index, position < source.width() ? source.get(static_cast<std::uint32_t>(position))
-                                                 : Logic::Unknown);
+void assignPartAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
+    for (std::uint32_t index = 0; index < source.width(); ++index) {
+        const std::uint64_t position = lowIndex + index;
+        if (position < dst.width())
+            dst.set(static_cast<std::uint32_t>(position), source.get(index));
     }
 }
 
@@ -713,12 +724,7 @@ void assignPart(BitRef dst, ConstBitRef source, ConstBitRef lowIndex) {
         // information than dropping the assignment does.
         return;
     }
-
-    for (std::uint32_t index = 0; index < source.width(); ++index) {
-        const std::uint64_t position = low + index;
-        if (position < dst.width())
-            dst.set(static_cast<std::uint32_t>(position), source.get(index));
-    }
+    assignPartAt(dst, source, low);
 }
 
 void conditional(BitRef dst, ConstBitRef condition, ConstBitRef whenTrue, ConstBitRef whenFalse) {

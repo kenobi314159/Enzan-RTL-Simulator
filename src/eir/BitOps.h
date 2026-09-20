@@ -193,6 +193,16 @@ void lessEqual(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned);
 /// aborting would make the simulator unusable.
 void bitSelect(BitRef dst, ConstBitRef source, ConstBitRef index);
 
+/// As `partSelect`, with the index as a plain integer.
+///
+/// The runtime often has the index in hand as a number rather than as a vector, and
+/// wrapping it in a BitVector to pass it would allocate on the hot path (DESIGN_GUIDE.md
+/// section 13.4).
+void partSelectAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex);
+
+/// As `assignPart`, with the index as a plain integer. See `partSelectAt`.
+void assignPartAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex);
+
 /// `dst` receives `dst.width()` bits of `source` starting at bit `lowIndex`.
 ///
 /// Bits of the window that fall outside `source` read as X, and an unknown
