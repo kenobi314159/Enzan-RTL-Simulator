@@ -181,10 +181,15 @@ jobs:
       # the one contributors actually take. This job exists to catch a break in
       # it — an upstream revision that no longer builds, or a CMake option that
       # was renamed — at the commit that caused it rather than at the start of M1.
+      # slang is declared EXCLUDE_FROM_ALL so that its tools, tests and docs stay
+      # out of Enzan's default build, which also keeps the library itself out
+      # until a component links it. The target is therefore named explicitly;
+      # without this the job would prove only that slang can be cloned.
       - name: Configure and build with the SystemVerilog frontend enabled
         run: |
           cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON
           cmake --build --preset gcc-release
+          cmake --build --preset gcc-release --target slang_slang
 
       - name: Test
         run: ctest --preset gcc-release

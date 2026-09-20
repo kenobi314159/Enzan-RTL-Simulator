@@ -10,11 +10,11 @@
 
 include(FetchContent)
 
-# Downloaded dependencies are shared between build directories. Re-cloning
-# slang for every preset would make switching compilers pointlessly expensive.
-set(FETCHCONTENT_BASE_DIR
-    "${PROJECT_SOURCE_DIR}/build/_deps"
-    CACHE PATH "Where downloaded dependency sources are unpacked")
+# FETCHCONTENT_BASE_DIR is deliberately left at its default, one per build
+# directory. Pointing several build trees at a shared base directory would share
+# not only the downloaded sources but also the dependency *build* trees, and two
+# presets writing into one build tree corrupt each other. Re-cloning slang per
+# preset costs a shallow clone; the alternative costs correctness.
 
 # ---------------------------------------------------------------------------
 # enzan_dependency_missing
