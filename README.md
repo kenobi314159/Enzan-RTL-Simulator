@@ -9,26 +9,135 @@ The name is Japanese and carries two readings: *distant peaks* (遠山), for the
 mountain-like horizon of a screen full of waveforms, and *calculation* (演算),
 for the computational work the simulator performs.
 
-**Status:** early design phase. No simulator code exists yet — see the
-roadmap below.
+**Status: milestone M0 — foundation.** The build system, the diagnostic engine,
+the source manager and the test infrastructure exist. There is no analysis,
+elaboration or simulation capability yet, so `enzan` cannot yet run a design.
+See the roadmap below.
+
+## Building
+
+Enzan targets **Linux only**; Windows and macOS support are explicit non-goals.
+
+### Prerequisites
+
+| Requirement | Minimum | Notes |
+|---|---|---|
+| C++ compiler | GCC 13 or Clang 17 | C++20 is required by slang |
+| CMake | 3.24 | presets are used throughout |
+| Ninja | any recent | the presets all use the Ninja generator |
+| zlib | 1.2.11 | FST waveform compression |
+| GoogleTest | 1.12 | built from source automatically if absent |
+| ccache | any | optional; used automatically when present |
+
+On Arch and derivatives:
+
+```sh
+sudo pacman -S --needed base-devel cmake ninja zlib gtest ccache
+```
+
+On Debian and Ubuntu:
+
+```sh
+sudo apt install build-essential cmake ninja-build zlib1g-dev libgtest-dev ccache
+```
+
+On Fedora:
+
+```sh
+sudo dnf install gcc-c++ cmake ninja-build zlib-devel gtest-devel ccache
+```
+
+If a dependency is missing, CMake stops with a message naming the package to
+install for your distribution rather than with a link error.
+
+### Configure, build and test
+
+```sh
+git clone https://github.com/kenobi314159/Enzan-RTL-Simulator.git
+cd Enzan-RTL-Simulator
+
+cmake --preset gcc-debug
+cmake --build --preset gcc-debug
+ctest --preset gcc-debug
+```
+
+The binary lands at `build/gcc-debug/bin/enzan`:
+
+```sh
+./build/gcc-debug/bin/enzan --version
+```
+
+### Presets
+
+`cmake --list-presets` shows them all. There are `gcc-` and `clang-` variants of
+`debug`, `release` and `relwithdebinfo`, plus `clang-sanitize` for the
+AddressSanitizer and UndefinedBehaviorSanitizer configuration that CI runs.
+Each preset builds into its own directory under `build/`, so several can coexist.
+
+### First build takes a while
+
+The SystemVerilog frontend, [slang](https://sv-lang.com/), is not packaged by any
+mainstream distribution, so by default the build downloads and compiles it. That
+dominates a first configure. Nothing at M0 uses it yet, so if you only want to
+work on the current milestone:
+
+```sh
+cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+```
+
+### Useful options
+
+| Option | Default | Effect |
+|---|---|---|
+| `ENZAN_BUILD_TESTS` | `ON` | build the unit test suites |
+| `ENZAN_ENABLE_SYSTEMVERILOG` | `ON` | build the slang-based frontend (M1) |
+| `ENZAN_ENABLE_VHDL` | `OFF` | build the NVC-based frontend (M6) |
+| `ENZAN_ENABLE_TCL` | `OFF` | build the Tcl control layer (M3) |
+| `ENZAN_BUILD_GUI` | `OFF` | build the Qt 6 front end (M2) |
+| `ENZAN_ENABLE_JIT` | `OFF` | build the LLVM JIT backend (M8) |
+| `ENZAN_WERROR` | `OFF` | treat warnings as errors, as CI does |
+| `ENZAN_ALLOW_FETCH` | `ON` | allow missing dependencies to be built from source |
+| `ENZAN_SANITIZERS` | empty | semicolon-separated sanitizer list |
+
+## Contributing
+
+Before changing anything, read [`DESIGN_GUIDE.md`](DESIGN_GUIDE.md). It is the
+normative specification, not background reading: it fixes the simulation
+semantics, the coding standards, the testing requirements and the definition of
+done, and a commit that makes it wrong is a defect regardless of whether the code
+works.
+
+The checks CI runs are all runnable locally:
+
+```sh
+clang-format --dry-run --Werror $(git ls-files '*.h' '*.cpp')
+./scripts/check-license-headers.sh
+cmake --preset clang-debug -DENZAN_WERROR=ON && ctest --preset clang-debug
+```
+
+Every source file begins with `// SPDX-License-Identifier: GPL-3.0-or-later`.
+Commit messages carry a category prefix; see section 17.1 of the design guide.
 
 ## Documentation
 
 - [`DESIGN_GUIDE.md`](DESIGN_GUIDE.md) — the normative specification and
   development guide: architecture, simulation semantics, coding standards,
   testing strategy and roadmap. Start here.
+- [`docs/third_party.md`](docs/third_party.md) — dependencies, their licenses
+  and their pinned revisions.
 - `docs/` — human-facing documentation (user manual, tutorials), to be
   derived from the design guide as the project matures.
 
 ## Status and roadmap
 
-Development proceeds in gated milestones, starting with build system and
-test infrastructure (M0), a SystemVerilog subset simulating to a waveform
-(M1), the interactive GUI (M2), and onward through VPI/cocotb support, VHDL
-via NVC, and mixed-language simulation. See
-[`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full roadmap and
-exit criteria.
+Development proceeds in gated milestones. M0 (this one) is the build and test
+foundation; M1 brings a SystemVerilog subset simulating to a VCD or FST waveform;
+M2 the interactive GUI; then the Tcl control layer and source debugging, VPI and
+cocotb support, VHDL via NVC, and mixed-language simulation. See
+[`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full roadmap and the
+exit criteria of each milestone.
 
 ## License
 
-Enzan is licensed under the [GNU General Public License v3.0](LICENSE).
+Enzan is licensed under the [GNU General Public License v3.0](LICENSE). This is a
+consequence of linking NVC, which is GPLv3, to provide the VHDL frontend.
