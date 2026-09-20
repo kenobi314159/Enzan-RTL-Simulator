@@ -64,3 +64,29 @@ enzan_add_golden_test(control_flow)
 # Time zero is where two correct simulators differ most: Icarus Verilog does not evaluate
 # `always_comb` there, where IEEE 1800 says it must.
 enzan_add_golden_test(scheduling NO_DIFFERENTIAL)
+
+# ---------------------------------------------------------------------------
+# Waveform output
+# ---------------------------------------------------------------------------
+#
+# M1's exit criteria include waveforms opening in GTKWave (section 18). A viewer needs a display
+# and cannot run in CI, so the properties a viewer relies on are checked instead — balanced
+# scopes, declared identifiers, widths that match their declaration, monotonic time. That is both
+# automatable and stricter than "it opened without complaining".
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(
+    NAME golden.counter.vcd
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-vcd-check.sh" $<TARGET_FILE:enzan>
+            "${CMAKE_CURRENT_SOURCE_DIR}/check-vcd.py" "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv"
+            tb)
+  set_tests_properties(golden.counter.vcd PROPERTIES TIMEOUT 60)
+
+  add_test(
+    NAME golden.fifo.vcd
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-vcd-check.sh" $<TARGET_FILE:enzan>
+            "${CMAKE_CURRENT_SOURCE_DIR}/check-vcd.py" "${CMAKE_CURRENT_SOURCE_DIR}/sv/fifo.sv" tb)
+  set_tests_properties(golden.fifo.vcd PROPERTIES TIMEOUT 60)
+else()
+  message(STATUS "Python 3 not found; the VCD structure checks are skipped")
+endif()
