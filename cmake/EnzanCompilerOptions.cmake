@@ -81,7 +81,13 @@ set(_enzan_warnings
     -Wnon-virtual-dtor
     -Wold-style-cast
     -Woverloaded-virtual
-    -Wunused)
+    -Wunused
+    # Part of -Wextra, and in GCC it fires on a C++20 designated initialiser that
+    # omits a member which has a default member initialiser — which is the whole
+    # point of designated initialisers, and which clang correctly does not warn
+    # about. Keeping it would mean either spelling out every default at every
+    # construction site or giving up designated initialisers in aggregates.
+    -Wno-missing-field-initializers)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   list(APPEND _enzan_warnings -Wduplicated-cond -Wduplicated-branches

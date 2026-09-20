@@ -68,7 +68,7 @@ public:
     /// Returns this location moved forward by `delta` bytes within the same
     /// buffer. Used to point at a position derived from a token start.
     [[nodiscard]] constexpr SourceLocation advanced(std::uint32_t delta) const noexcept {
-        return SourceLocation(bufferValue, offsetValue + delta);
+        return {bufferValue, offsetValue + delta};
     }
 
     friend constexpr bool operator==(SourceLocation, SourceLocation) noexcept = default;
