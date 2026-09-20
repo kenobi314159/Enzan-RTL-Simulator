@@ -14,8 +14,10 @@ waveform database and the PLI all consume it.
 - **Four-state operations** (`BitOps.h`) — the arithmetic, logical, bitwise,
   comparison, shift and selection semantics of IEEE 1800, including
   X-propagation. This is the highest-risk code in the project.
-- The type system, the structural layer (EIR-S) and the behavioural layer (EIR-B)
-  follow in this component as milestone M1 progresses.
+- **The type system** (`Type.h`) — what an EIR value is, and how much arena storage
+  it needs.
+- The structural layer (EIR-S) and the behavioural layer (EIR-B) follow in this
+  component as milestone M1 progresses.
 
 ## Allowed dependencies
 
