@@ -11,8 +11,11 @@ waveform database and the PLI all consume it.
   parallel bit planes, the views used to address them inside the state arena, and
   the owning vector used off the hot path. The encoding is deliberately the same as
   VPI's `s_vpi_vecval` (section 3.6).
-- The four-state operations, the type system, the structural layer (EIR-S) and the
-  behavioural layer (EIR-B) follow in this component as milestone M1 progresses.
+- **Four-state operations** (`BitOps.h`) — the arithmetic, logical, bitwise,
+  comparison, shift and selection semantics of IEEE 1800, including
+  X-propagation. This is the highest-risk code in the project.
+- The type system, the structural layer (EIR-S) and the behavioural layer (EIR-B)
+  follow in this component as milestone M1 progresses.
 
 ## Allowed dependencies
 

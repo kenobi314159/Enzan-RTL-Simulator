@@ -2,6 +2,6 @@
 
 enzan_add_component(
   eir
-  SOURCES BitVector.cpp
-  HEADERS BitVector.h
+  SOURCES BitOps.cpp BitVector.cpp
+  HEADERS BitOps.h BitVector.h
   DEPENDS enzan::common)
