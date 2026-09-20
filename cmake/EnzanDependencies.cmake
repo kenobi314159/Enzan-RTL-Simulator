@@ -1,0 +1,215 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Dependency acquisition.
+#
+# The policy (DESIGN_GUIDE.md section 11.2) is: system packages first,
+# FetchContent as a fallback, and a clear actionable error naming the package
+# when neither works. "Clearly recognisable dependencies" from IDEA.md means a
+# user reading the CMake output knows exactly what to install, so the diagnostic
+# text below is a feature and not boilerplate.
+
+include(FetchContent)
+
+# Downloaded dependencies are shared between build directories. Re-cloning
+# slang for every preset would make switching compilers pointlessly expensive.
+set(FETCHCONTENT_BASE_DIR
+    "${PROJECT_SOURCE_DIR}/build/_deps"
+    CACHE PATH "Where downloaded dependency sources are unpacked")
+
+# ---------------------------------------------------------------------------
+# enzan_dependency_missing
+# ---------------------------------------------------------------------------
+#
+# Aborts with an install hint. Called when a dependency is genuinely
+# unobtainable, either because it has no source fallback or because downloading
+# was disabled.
+function(enzan_dependency_missing)
+  cmake_parse_arguments(PARSE_ARGV 0 arg "" "NAME;PURPOSE;ARCH;DEBIAN;FEDORA;FETCHABLE" "")
+
+  set(hint "")
+  if(arg_ARCH)
+    string(APPEND hint "    Arch, Manjaro    : sudo pacman -S --needed ${arg_ARCH}\n")
+  endif()
+  if(arg_DEBIAN)
+    string(APPEND hint "    Debian, Ubuntu   : sudo apt install ${arg_DEBIAN}\n")
+  endif()
+  if(arg_FEDORA)
+    string(APPEND hint "    Fedora, RHEL     : sudo dnf install ${arg_FEDORA}\n")
+  endif()
+
+  set(fallback "")
+  if(arg_FETCHABLE)
+    set(fallback
+        "  Enzan can also build it from source, but that is currently disabled.\n"
+        "  Re-run with -DENZAN_ALLOW_FETCH=ON to download and build it.\n")
+  endif()
+
+  message(
+    FATAL_ERROR
+      "Required dependency not found: ${arg_NAME}\n"
+      "  Enzan needs it for: ${arg_PURPOSE}\n"
+      "  Install it with one of:\n"
+      "${hint}"
+      "  If it is installed somewhere unusual, point CMake at it with\n"
+      "  -DCMAKE_PREFIX_PATH=<prefix> or -D${arg_NAME}_ROOT=<prefix>.\n"
+      "${fallback}"
+      "  Dependencies are listed in DESIGN_GUIDE.md section 11.3.")
+endfunction()
+
+# ---------------------------------------------------------------------------
+# GoogleTest — unit tests (DESIGN_GUIDE.md section 14.1)
+# ---------------------------------------------------------------------------
+
+if(ENZAN_BUILD_TESTS)
+  find_package(GTest 1.12 QUIET)
+  if(NOT GTest_FOUND)
+    if(ENZAN_ALLOW_FETCH)
+      message(STATUS "GoogleTest not found on the system; building it from source")
+      FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.17.0
+        GIT_SHALLOW TRUE
+        EXCLUDE_FROM_ALL
+        FIND_PACKAGE_ARGS NAMES GTest)
+      # GoogleTest's own install and mock targets are not wanted here.
+      set(INSTALL_GTEST OFF)
+      set(BUILD_GMOCK ON)
+      FetchContent_MakeAvailable(googletest)
+    else()
+      enzan_dependency_missing(
+        NAME GTest
+        PURPOSE "the unit test suite; configure with -DENZAN_BUILD_TESTS=OFF to skip it"
+        ARCH gtest
+        DEBIAN libgtest-dev
+        FEDORA gtest-devel
+        FETCHABLE TRUE)
+    endif()
+  else()
+    message(STATUS "Using system GoogleTest ${GTest_VERSION}")
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# zlib — FST waveform compression (DESIGN_GUIDE.md section 7.3)
+# ---------------------------------------------------------------------------
+
+find_package(ZLIB 1.2.11 QUIET)
+if(NOT ZLIB_FOUND)
+  enzan_dependency_missing(
+    NAME ZLIB
+    PURPOSE "compressing FST waveform output"
+    ARCH zlib
+    DEBIAN zlib1g-dev
+    FEDORA zlib-devel)
+endif()
+message(STATUS "Using zlib ${ZLIB_VERSION_STRING}")
+
+# ---------------------------------------------------------------------------
+# slang — SystemVerilog frontend (DESIGN_GUIDE.md section 5.1)
+# ---------------------------------------------------------------------------
+
+# slang is not packaged by any mainstream distribution, so in practice the
+# source build below is the path almost every contributor takes. The
+# find_package attempt is kept first anyway, both because the policy requires it
+# and because distributions may package it later.
+set(ENZAN_SLANG_VERSION
+    "11.0"
+    CACHE STRING "Minimum acceptable slang version")
+set(ENZAN_SLANG_GIT_TAG
+    "v11.0"
+    CACHE STRING "slang revision built when no system package is available")
+
+if(ENZAN_ENABLE_SYSTEMVERILOG)
+  find_package(slang ${ENZAN_SLANG_VERSION} QUIET CONFIG)
+  if(NOT slang_FOUND)
+    if(NOT ENZAN_ALLOW_FETCH)
+      enzan_dependency_missing(
+        NAME slang
+        PURPOSE
+          "parsing and elaborating SystemVerilog; configure with -DENZAN_ENABLE_SYSTEMVERILOG=OFF to skip it"
+        FETCHABLE TRUE)
+    endif()
+
+    message(STATUS "slang not found on the system; building ${ENZAN_SLANG_GIT_TAG} from source")
+
+    # slang builds a command-line tool, a test suite and documentation by
+    # default when it is the top-level project. As a subproject it only needs
+    # to produce the library.
+    set(SLANG_INCLUDE_TOOLS OFF)
+    set(SLANG_INCLUDE_TESTS OFF)
+    set(SLANG_INCLUDE_DOCS OFF)
+    set(SLANG_INCLUDE_INSTALL OFF)
+
+    # mimalloc replaces the global allocator, which defeats AddressSanitizer's
+    # interceptors and produces both false negatives and spurious reports. The
+    # sanitizer job is a correctness gate, so it wins over slang's allocator
+    # speed there.
+    if(ENZAN_SANITIZERS)
+      set(SLANG_USE_MIMALLOC OFF)
+      message(STATUS "slang: mimalloc disabled because sanitizers are enabled")
+    endif()
+
+    FetchContent_Declare(
+      slang
+      GIT_REPOSITORY https://github.com/MikePopoloski/slang.git
+      GIT_TAG ${ENZAN_SLANG_GIT_TAG}
+      GIT_SHALLOW TRUE
+      EXCLUDE_FROM_ALL
+      FIND_PACKAGE_ARGS ${ENZAN_SLANG_VERSION} CONFIG)
+    FetchContent_MakeAvailable(slang)
+  else()
+    message(STATUS "Using system slang ${slang_VERSION}")
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Tcl — control language (DESIGN_GUIDE.md section 8.1), milestone M3
+# ---------------------------------------------------------------------------
+
+if(ENZAN_ENABLE_TCL)
+  find_package(TCL 8.6 QUIET)
+  if(NOT TCL_FOUND)
+    enzan_dependency_missing(
+      NAME TCL
+      PURPOSE "the embedded Tcl control and configuration layer"
+      ARCH tcl
+      DEBIAN tcl-dev
+      FEDORA tcl-devel)
+  endif()
+  message(STATUS "Using Tcl ${TCL_LIBRARY}")
+endif()
+
+# ---------------------------------------------------------------------------
+# Qt 6 — graphical front end (DESIGN_GUIDE.md section 10.1), milestone M2
+# ---------------------------------------------------------------------------
+
+if(ENZAN_BUILD_GUI)
+  find_package(Qt6 6.4 QUIET COMPONENTS Widgets Gui Core)
+  if(NOT Qt6_FOUND)
+    enzan_dependency_missing(
+      NAME Qt6
+      PURPOSE "the Qt 6 Widgets graphical front end"
+      ARCH qt6-base
+      DEBIAN qt6-base-dev
+      FEDORA qt6-qtbase-devel)
+  endif()
+  message(STATUS "Using Qt ${Qt6_VERSION}")
+endif()
+
+# ---------------------------------------------------------------------------
+# LLVM — JIT backend (DESIGN_GUIDE.md section 6.3), milestone M8
+# ---------------------------------------------------------------------------
+
+if(ENZAN_ENABLE_JIT)
+  find_package(LLVM 17 QUIET CONFIG)
+  if(NOT LLVM_FOUND)
+    enzan_dependency_missing(
+      NAME LLVM
+      PURPOSE "the ORC JIT execution backend"
+      ARCH llvm
+      DEBIAN llvm-dev
+      FEDORA llvm-devel)
+  endif()
+  message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION}")
+endif()
