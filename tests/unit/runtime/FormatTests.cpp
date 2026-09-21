@@ -42,7 +42,7 @@ TEST(Format, DecimalIsPaddedUnlessTheZeroFlagIsGiven) {
     // IEEE 1800 pads a %d to the width the type can need, which is what makes columns
     // line up in a transcript. %0d is the minimal form almost everyone wants.
     const BitVector value = literal("8'd7");
-    const std::vector<FormatArgument> arguments{{value.ref(), false}};
+    const std::vector<FormatArgument> arguments{{.value = value.ref(), .isSigned = false}};
 
     EXPECT_EQ(render("%d", arguments), "  7") << "an 8-bit value needs three digits";
     EXPECT_EQ(render("%0d", arguments), "7");
@@ -52,13 +52,13 @@ TEST(Format, SignedDecimalUsesTheArgumentsSignedness) {
     // The format string does not say it: %d prints -1 or 255 for the same bits depending
     // on the argument's declared type.
     const BitVector value = literal("8'hFF");
-    EXPECT_EQ(render("%0d", {{value.ref(), true}}), "-1");
-    EXPECT_EQ(render("%0d", {{value.ref(), false}}), "255");
+    EXPECT_EQ(render("%0d", {{.value = value.ref(), .isSigned = true}}), "-1");
+    EXPECT_EQ(render("%0d", {{.value = value.ref(), .isSigned = false}}), "255");
 }
 
 TEST(Format, HexadecimalBinaryAndOctal) {
     const BitVector value = literal("8'hA5");
-    const std::vector<FormatArgument> arguments{{value.ref(), false}};
+    const std::vector<FormatArgument> arguments{{.value = value.ref(), .isSigned = false}};
 
     EXPECT_EQ(render("%h", arguments), "a5");
     EXPECT_EQ(render("%x", arguments), "a5");
@@ -68,22 +68,24 @@ TEST(Format, HexadecimalBinaryAndOctal) {
 
 TEST(Format, UppercaseConversionsUppercaseTheDigits) {
     const BitVector value = literal("8'hAB");
-    EXPECT_EQ(render("%H", {{value.ref(), false}}), "AB");
-    EXPECT_EQ(render("%X", {{value.ref(), false}}), "AB");
+    EXPECT_EQ(render("%H", {{.value = value.ref(), .isSigned = false}}), "AB");
+    EXPECT_EQ(render("%X", {{.value = value.ref(), .isSigned = false}}), "AB");
 }
 
 TEST(Format, UnknownBitsRenderAsTheValueEngineRendersThem) {
     const BitVector value = literal("8'b1010_xxxx");
-    EXPECT_EQ(render("%b", {{value.ref(), false}}), "1010xxxx");
-    EXPECT_EQ(render("%h", {{value.ref(), false}}), "ax");
-    EXPECT_EQ(render("%0d", {{value.ref(), false}}), "X")
+    EXPECT_EQ(render("%b", {{.value = value.ref(), .isSigned = false}}), "1010xxxx");
+    EXPECT_EQ(render("%h", {{.value = value.ref(), .isSigned = false}}), "ax");
+    EXPECT_EQ(render("%0d", {{.value = value.ref(), .isSigned = false}}), "X")
         << "decimal cannot localise an unknown to a digit";
 }
 
 TEST(Format, SeveralConversionsConsumeArgumentsInOrder) {
     const BitVector first = literal("8'd1");
     const BitVector second = literal("8'd2");
-    EXPECT_EQ(render("%0d then %0d", {{first.ref(), false}, {second.ref(), false}}), "1 then 2");
+    EXPECT_EQ(render("%0d then %0d", {{.value = first.ref(), .isSigned = false},
+                                      {.value = second.ref(), .isSigned = false}}),
+              "1 then 2");
 }
 
 TEST(Format, TimeFormatsItsArgumentWithTheGlobalUnit) {
@@ -91,7 +93,7 @@ TEST(Format, TimeFormatsItsArgumentWithTheGlobalUnit) {
     // time in. Reading the clock instead would make the conversion consume no argument, and
     // every later conversion would then take the wrong one.
     const BitVector value = literal("64'd1234");
-    const std::vector<FormatArgument> arguments{{value.ref(), false}};
+    const std::vector<FormatArgument> arguments{{.value = value.ref(), .isSigned = false}};
     const FormatContext context{.time = 99, .timeScale = TimeScale(-9), .scopeName = "/tb"};
 
     EXPECT_EQ(enzan::runtime::formatSystemTask("at %t", arguments, context), "at 1234ns");
@@ -100,7 +102,8 @@ TEST(Format, TimeFormatsItsArgumentWithTheGlobalUnit) {
 TEST(Format, TimeConsumesAnArgumentSoLaterConversionsAreNotShifted) {
     const BitVector now = literal("64'd40");
     const BitVector count = literal("8'd7");
-    const std::vector<FormatArgument> arguments{{now.ref(), false}, {count.ref(), false}};
+    const std::vector<FormatArgument> arguments{{.value = now.ref(), .isSigned = false},
+                                                {.value = count.ref(), .isSigned = false}};
     const FormatContext context{.time = 40, .timeScale = TimeScale(-9), .scopeName = "/tb"};
 
     EXPECT_EQ(enzan::runtime::formatSystemTask("[%0t] count = %0d", arguments, context),
@@ -121,10 +124,10 @@ TEST(Format, StringConversionRendersAscii) {
     // A string literal is packed most significant byte first, and zero-extension on the
     // left must not put invisible control characters in the transcript.
     const BitVector text = literal("40'h48_65_6C_6C_6F");
-    EXPECT_EQ(render("%s", {{text.ref(), false}}), "Hello");
+    EXPECT_EQ(render("%s", {{.value = text.ref(), .isSigned = false}}), "Hello");
 
     const BitVector padded = literal("64'h0000_0000_4F_4B");
-    EXPECT_EQ(render("%s", {{padded.ref(), false}}), "OK");
+    EXPECT_EQ(render("%s", {{.value = padded.ref(), .isSigned = false}}), "OK");
 }
 
 TEST(Format, AnUnrecognisedConversionIsShownRatherThanSwallowed) {
@@ -149,7 +152,8 @@ TEST(Format, DefaultFormattingConcatenatesInDecimal) {
     // `$display(a, b)` has no separator, which matches every other simulator.
     const BitVector first = literal("8'd12");
     const BitVector second = literal("8'd34");
-    const std::vector<FormatArgument> arguments{{first.ref(), false}, {second.ref(), false}};
+    const std::vector<FormatArgument> arguments{{.value = first.ref(), .isSigned = false},
+                                                {.value = second.ref(), .isSigned = false}};
 
     EXPECT_EQ(enzan::runtime::formatDefault(arguments), "1234");
     EXPECT_EQ(enzan::runtime::formatDefault({}), "");

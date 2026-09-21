@@ -26,7 +26,6 @@ using enzan::SourceManager;
 using enzan::codegen::CompiledDesign;
 using enzan::codegen::Compiler;
 using enzan::eir::BasicBlock;
-using enzan::eir::BitVector;
 using enzan::eir::Design;
 using enzan::eir::Instruction;
 using enzan::eir::Logic;
