@@ -350,7 +350,9 @@ TEST_F(SourceManagerFileTest, ReadsAnEmptyFile) {
 TEST_F(SourceManagerFileTest, PreservesBytesExactly) {
     // No encoding conversion and no line-ending translation: offsets have to
     // correspond to the bytes on disk, or every diagnostic position drifts.
-    const std::string content("a\0b\r\nc\xC3\xA9", 9);
+    // Eight bytes, counted deliberately: an embedded NUL, a CRLF and a two-byte UTF-8
+    // sequence. The length is given because the NUL would otherwise end the literal.
+    const std::string content("a\0b\r\nc\xC3\xA9", 8);
     const std::filesystem::path path = writeFile("bytes.sv", content);
 
     SourceManager sources;
