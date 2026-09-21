@@ -90,3 +90,23 @@ if(Python3_Interpreter_FOUND)
 else()
   message(STATUS "Python 3 not found; the VCD structure checks are skipped")
 endif()
+
+# FST is validated by reading it back with GTKWave's own converter and comparing against the VCD
+# written from the same run. That checks the file is readable, that its hierarchy survives
+# including the aliases a collapsed port needs, and that the two writers agree about every value —
+# which is a far stronger statement than either writer passing a check of its own.
+find_program(ENZAN_FST2VCD fst2vcd)
+if(Python3_Interpreter_FOUND AND ENZAN_FST2VCD)
+  message(STATUS "FST output will be checked against ${ENZAN_FST2VCD}")
+
+  foreach(case IN ITEMS counter fifo)
+    add_test(
+      NAME golden.${case}.fst
+      COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-fst-check.sh" $<TARGET_FILE:enzan>
+              "${ENZAN_FST2VCD}" "${CMAKE_CURRENT_SOURCE_DIR}/check-vcd.py"
+              "${CMAKE_CURRENT_SOURCE_DIR}/sv/${case}.sv" tb)
+    set_tests_properties(golden.${case}.fst PROPERTIES TIMEOUT 60)
+  endforeach()
+else()
+  message(STATUS "fst2vcd not found; the FST round-trip checks are skipped")
+endif()
