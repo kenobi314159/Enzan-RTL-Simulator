@@ -3,6 +3,8 @@
 # Mirrors the src/ layout so that the test for a file is always findable at the
 # corresponding path (DESIGN_GUIDE.md section 12).
 
+add_subdirectory(support)
+
 add_subdirectory(common)
 add_subdirectory(eir)
 add_subdirectory(codegen)

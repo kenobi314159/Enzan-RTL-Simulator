@@ -2,6 +2,8 @@
 
 #include "eir/BitVector.h"
 
+#include "support/Literals.h"
+
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -16,14 +18,7 @@ using enzan::eir::ConstBitRef;
 using enzan::eir::Logic;
 using enzan::eir::Radix;
 using enzan::eir::Word;
-
-/// Parses a literal, failing the test rather than returning nothing, so that a
-/// test that mistypes its own input says so instead of misbehaving silently.
-BitVector literal(std::string_view text) {
-    std::optional<BitVector> parsed = BitVector::parse(text);
-    EXPECT_TRUE(parsed.has_value()) << "failed to parse '" << text << '\'';
-    return parsed.value_or(BitVector::filled(1, Logic::Unknown));
-}
+using enzan::test::literal;
 
 std::string binary(ConstBitRef value) {
     return enzan::eir::toString(value, Radix::Binary);

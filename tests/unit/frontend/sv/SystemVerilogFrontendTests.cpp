@@ -14,6 +14,8 @@
 #include "eir/Process.h"
 #include "eir/Verifier.h"
 
+#include "support/Optionals.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -34,6 +36,7 @@ using enzan::DiagnosticEngine;
 using enzan::SourceManager;
 using enzan::eir::Design;
 using enzan::eir::ModuleDefinition;
+using enzan::test::require;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -116,10 +119,9 @@ TEST_F(FrontendTest, TranslatesAModuleWithItsObjectsAndPorts) {
     EXPECT_EQ(module->processes[0].kind, enzan::eir::ProcessKind::AlwaysFf);
 
     // Declared widths and four-state-ness survive into EIR.
-    const auto q = module->findObject("q");
-    ASSERT_TRUE(q.has_value());
-    EXPECT_EQ(module->objects[*q].type.bitWidth(), 8U);
-    EXPECT_TRUE(module->objects[*q].type.isFourState());
+    const std::uint32_t q = require(module->findObject("q"), "object q");
+    EXPECT_EQ(module->objects[q].type.bitWidth(), 8U);
+    EXPECT_TRUE(module->objects[q].type.isFourState());
 }
 
 TEST_F(FrontendTest, OutputIsAlwaysVerifiableEir) {

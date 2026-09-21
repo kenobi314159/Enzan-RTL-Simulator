@@ -17,6 +17,8 @@
 #include "runtime/Arena.h"
 #include "runtime/Image.h"
 
+#include "support/Literals.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -49,15 +51,8 @@ using enzan::elab::Elaborator;
 using enzan::runtime::Arena;
 using enzan::runtime::Image;
 using enzan::runtime::TimeScale;
+using enzan::test::literal;
 using enzan::wavedb::VcdWriter;
-
-/// Parses a Verilog-style literal, reporting a bad test fixture as a failure rather than letting an
-/// unchecked optional turn it into undefined behaviour.
-BitVector literal(std::string_view text) {
-    const std::optional<BitVector> parsed = BitVector::parse(text);
-    EXPECT_TRUE(parsed.has_value()) << "failed to parse '" << text << '\'';
-    return parsed.value_or(BitVector::filled(1, Logic::Unknown));
-}
 
 class DiscardingConsumer final : public enzan::DiagnosticConsumer {
 public:

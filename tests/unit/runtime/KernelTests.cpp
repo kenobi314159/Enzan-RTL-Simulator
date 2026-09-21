@@ -21,6 +21,8 @@
 #include "elab/Elaborator.h"
 #include "runtime/Image.h"
 
+#include "support/Literals.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -64,6 +66,7 @@ using enzan::runtime::KernelOptions;
 using enzan::runtime::NoTime;
 using enzan::runtime::RunStatus;
 using enzan::runtime::SimTime;
+using enzan::test::literal;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -93,8 +96,8 @@ public:
         return static_cast<std::uint32_t>(process.registerTypes.size() - 1);
     }
 
-    std::uint32_t constant(std::string_view literal) {
-        process.constants.push_back(*BitVector::parse(literal));
+    std::uint32_t constant(std::string_view text) {
+        process.constants.push_back(literal(text));
         return static_cast<std::uint32_t>(process.constants.size() - 1);
     }
 

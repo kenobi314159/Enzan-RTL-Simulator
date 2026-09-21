@@ -10,6 +10,8 @@
 #include "eir/Process.h"
 #include "eir/Type.h"
 
+#include "support/Literals.h"
+
 #include <gtest/gtest.h>
 
 #include <string>
@@ -34,6 +36,7 @@ using enzan::eir::Operand;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
+using enzan::test::literal;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -159,8 +162,8 @@ TEST_F(CompilerTest, NonRegisterOperandsKeepTheirIndexAndHaveNoWidth) {
 
 TEST_F(CompilerTest, ConstantsAreFlattenedIntoOnePoolInTwoPlaneForm) {
     Process process = makeCopyProcess();
-    process.constants.push_back(*BitVector::parse("8'hA5"));
-    process.constants.push_back(*BitVector::parse("100'h1"));
+    process.constants.push_back(literal("8'hA5"));
+    process.constants.push_back(literal("100'h1"));
     process.blocks[0].instructions[0] =
         Instruction::make(Opcode::LoadConstant, Operand::reg(0), Operand::constant(0));
 
@@ -187,7 +190,7 @@ TEST_F(CompilerTest, UnknownBitsSurviveTheConstantPool) {
     // The pool holds both planes, so a literal with X or Z in it must come back
     // unchanged rather than as its aval bits alone.
     Process process = makeCopyProcess();
-    process.constants.push_back(*BitVector::parse("4'b10xz"));
+    process.constants.push_back(literal("4'b10xz"));
     process.blocks[0].instructions[0] =
         Instruction::make(Opcode::LoadConstant, Operand::reg(0), Operand::constant(0));
 
@@ -286,7 +289,7 @@ TEST_F(CompilerTest, ABranchBackwardsResolvesToo) {
 TEST_F(CompilerTest, SystemTaskArgumentsResolveToFrameOffsetsAndConstantIndices) {
     Process process = makeCopyProcess();
     process.strings.push_back("count = %0d");
-    process.constants.push_back(*BitVector::parse("8'd7"));
+    process.constants.push_back(literal("8'd7"));
 
     enzan::eir::SysTaskCall call;
     call.kind = enzan::eir::SysTaskKind::Display;

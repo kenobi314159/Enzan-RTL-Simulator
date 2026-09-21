@@ -10,6 +10,8 @@
 
 #include "eir/BitVector.h"
 
+#include "support/Literals.h"
+
 #include <gtest/gtest.h>
 
 #include <optional>
@@ -23,6 +25,7 @@ using enzan::runtime::NonBlockingUpdate;
 using enzan::runtime::NoTime;
 using enzan::runtime::Region;
 using enzan::runtime::Scheduler;
+using enzan::test::literal;
 
 /// Drains a region into a vector, so that ordering can be asserted directly.
 std::vector<std::uint32_t> drain(Scheduler& scheduler, Region region) {
@@ -148,8 +151,8 @@ TEST(Scheduler, DrainingTheWheelLeavesNoFutureEvents) {
 
 TEST(Scheduler, NonBlockingUpdatesKeepTheirValues) {
     Scheduler scheduler;
-    const BitVector first = *BitVector::parse("8'hA5");
-    const BitVector second = *BitVector::parse("4'b10xz");
+    const BitVector first = literal("8'hA5");
+    const BitVector second = literal("4'b10xz");
 
     scheduler.appendNonBlocking(3, first.ref(), 0, false);
     scheduler.appendNonBlocking(4, second.ref(), 2, true);
@@ -176,8 +179,8 @@ TEST(Scheduler, TwoPartialUpdatesToOneSignalAreBothKept) {
     // Collapsing them at schedule time would let the later one silently discard the
     // earlier one's bits, which is the bug this record shape exists to avoid.
     Scheduler scheduler;
-    const BitVector low = *BitVector::parse("4'hF");
-    const BitVector high = *BitVector::parse("4'h3");
+    const BitVector low = literal("4'hF");
+    const BitVector high = literal("4'h3");
 
     scheduler.appendNonBlocking(1, low.ref(), 0, true);
     scheduler.appendNonBlocking(1, high.ref(), 4, true);
@@ -189,7 +192,7 @@ TEST(Scheduler, TwoPartialUpdatesToOneSignalAreBothKept) {
 
 TEST(Scheduler, ClearingDiscardsEverythingAndCanBeReused) {
     Scheduler scheduler;
-    const BitVector value = *BitVector::parse("8'h01");
+    const BitVector value = literal("8'h01");
     scheduler.appendNonBlocking(1, value.ref(), 0, false);
     scheduler.clearNonBlocking();
 
@@ -197,7 +200,7 @@ TEST(Scheduler, ClearingDiscardsEverythingAndCanBeReused) {
     EXPECT_TRUE(scheduler.nonBlockingUpdates().empty());
 
     // The pool is reused, so an offset from a previous round must not be read back.
-    const BitVector other = *BitVector::parse("8'hFF");
+    const BitVector other = literal("8'hFF");
     scheduler.appendNonBlocking(2, other.ref(), 0, false);
     ASSERT_EQ(scheduler.nonBlockingUpdates().size(), 1U);
     EXPECT_EQ(enzan::eir::toString(scheduler.updateValue(scheduler.nonBlockingUpdates()[0]),
@@ -207,8 +210,8 @@ TEST(Scheduler, ClearingDiscardsEverythingAndCanBeReused) {
 
 TEST(Scheduler, WideUpdatesSurviveThePool) {
     Scheduler scheduler;
-    const BitVector wide = *BitVector::parse("128'hDEAD_BEEF_0000_0000_1234_5678_9ABC_DEF0");
-    const BitVector narrow = *BitVector::parse("8'h42");
+    const BitVector wide = literal("128'hDEAD_BEEF_0000_0000_1234_5678_9ABC_DEF0");
+    const BitVector narrow = literal("8'h42");
 
     scheduler.appendNonBlocking(1, wide.ref(), 0, false);
     scheduler.appendNonBlocking(2, narrow.ref(), 0, false);

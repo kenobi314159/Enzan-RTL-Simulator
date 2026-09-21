@@ -75,8 +75,11 @@ function(enzan_add_unit_test name)
 
   set(target enzan_unittest_${name})
   add_executable(${target} ${arg_SOURCES})
-  target_link_libraries(${target} PRIVATE enzan::compile_options GTest::gtest
-                                          GTest::gtest_main ${arg_DEPENDS})
+  # enzan::test_support is linked unconditionally: it is header-only, and a helper every
+  # fixture may need should not have to be asked for.
+  target_link_libraries(
+    ${target} PRIVATE enzan::compile_options enzan::test_support GTest::gtest GTest::gtest_main
+                      ${arg_DEPENDS})
 
   # A test binary that takes more than a few seconds is a test binary nobody
   # runs; the timeout keeps a hung scheduler from stalling CI indefinitely.

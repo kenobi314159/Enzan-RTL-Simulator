@@ -5,6 +5,8 @@
 #include "eir/BitVector.h"
 #include "runtime/Time.h"
 
+#include "support/Literals.h"
+
 #include <gtest/gtest.h>
 
 #include <optional>
@@ -18,12 +20,7 @@ using enzan::eir::BitVector;
 using enzan::runtime::FormatArgument;
 using enzan::runtime::FormatContext;
 using enzan::runtime::TimeScale;
-
-BitVector literal(std::string_view text) {
-    std::optional<BitVector> parsed = BitVector::parse(text);
-    EXPECT_TRUE(parsed.has_value()) << text;
-    return parsed.value_or(BitVector::filled(1, enzan::eir::Logic::Unknown));
-}
+using enzan::test::literal;
 
 /// Formats with default context, so that the common case reads as one line.
 std::string render(std::string_view format, const std::vector<FormatArgument>& arguments = {}) {

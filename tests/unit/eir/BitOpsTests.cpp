@@ -9,6 +9,8 @@
 
 #include "eir/BitVector.h"
 
+#include "support/Literals.h"
+
 #include <gtest/gtest.h>
 
 #include <optional>
@@ -21,13 +23,8 @@ using enzan::eir::BitVector;
 using enzan::eir::ConstBitRef;
 using enzan::eir::Logic;
 using enzan::eir::Radix;
+using enzan::test::literal;
 namespace bitops = enzan::eir::bitops;
-
-BitVector literal(std::string_view text) {
-    std::optional<BitVector> parsed = BitVector::parse(text);
-    EXPECT_TRUE(parsed.has_value()) << "failed to parse '" << text << '\'';
-    return parsed.value_or(BitVector::filled(1, Logic::Unknown));
-}
 
 std::string binary(ConstBitRef value) {
     return enzan::eir::toString(value, Radix::Binary);

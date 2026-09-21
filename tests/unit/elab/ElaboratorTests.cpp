@@ -10,8 +10,11 @@
 #include "eir/Process.h"
 #include "eir/Type.h"
 
+#include "support/Optionals.h"
+
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -36,6 +39,7 @@ using enzan::eir::Type;
 using enzan::elab::ElaboratedDesign;
 using enzan::elab::Elaborator;
 using enzan::elab::Instance;
+using enzan::test::require;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -207,11 +211,9 @@ TEST_F(ElaboratorTest, TheSameModuleMayAppearManyTimes) {
 
     // Two instances, two distinct slots: instances share code, never storage.
     EXPECT_EQ(elaborated->instances().size(), 3U);
-    const auto first = elaborated->findSlot("/tb/u0/q");
-    const auto second = elaborated->findSlot("/tb/u1/q");
-    ASSERT_TRUE(first.has_value());
-    ASSERT_TRUE(second.has_value());
-    EXPECT_NE(*first, *second);
+    const std::uint32_t first = require(elaborated->findSlot("/tb/u0/q"), "slot for /tb/u0/q");
+    const std::uint32_t second = require(elaborated->findSlot("/tb/u1/q"), "slot for /tb/u1/q");
+    EXPECT_NE(first, second);
 }
 
 TEST_F(ElaboratorTest, RejectsRecursiveInstantiation) {
@@ -274,9 +276,9 @@ TEST_F(ElaboratorTest, SlotsCarryTheirHierarchicalPath) {
     const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
     ASSERT_NE(elaborated, nullptr);
 
-    const auto slot = elaborated->findSlot("/tb/u_dut/count");
-    ASSERT_TRUE(slot.has_value());
-    EXPECT_EQ(elaborated->slots()[*slot].path, "/tb/u_dut/count");
+    const std::uint32_t slot =
+        require(elaborated->findSlot("/tb/u_dut/count"), "slot for /tb/u_dut/count");
+    EXPECT_EQ(elaborated->slots()[slot].path, "/tb/u_dut/count");
 }
 
 // ---------------------------------------------------------------------------
@@ -310,16 +312,16 @@ TEST_F(ElaboratorTest, ACollapsedPortIsOneSlotUnderTwoNames) {
     const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("parent");
     ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
 
-    const auto outer = elaborated->findSlot("/parent/drive");
-    const auto inner = elaborated->findSlot("/parent/u_child/in");
-    ASSERT_TRUE(outer.has_value());
-    ASSERT_TRUE(inner.has_value());
-    EXPECT_EQ(*outer, *inner);
+    const std::uint32_t outer =
+        require(elaborated->findSlot("/parent/drive"), "slot for /parent/drive");
+    const std::uint32_t inner =
+        require(elaborated->findSlot("/parent/u_child/in"), "slot for /parent/u_child/in");
+    EXPECT_EQ(outer, inner);
 
     // One slot, so the arena holds one 8-bit object rather than two.
     EXPECT_EQ(elaborated->arenaWords(), 2U);
 
-    const std::vector<std::string> names = elaborated->slotNames(*outer);
+    const std::vector<std::string> names = elaborated->slotNames(outer);
     EXPECT_EQ(names, std::vector<std::string>({"/parent/drive", "/parent/u_child/in"}));
 }
 
@@ -329,11 +331,12 @@ TEST_F(ElaboratorTest, TheChildsObjectSlotPointsAtTheParentsStorage) {
     const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("parent");
     ASSERT_NE(elaborated, nullptr);
 
-    const auto childIndex = elaborated->findInstance("/parent/u_child");
-    ASSERT_TRUE(childIndex.has_value());
-    const Instance& child = elaborated->instances()[*childIndex];
+    const std::uint32_t childIndex =
+        require(elaborated->findInstance("/parent/u_child"), "instance /parent/u_child");
+    const Instance& child = elaborated->instances()[childIndex];
     ASSERT_EQ(child.objectSlots.size(), 1U);
-    EXPECT_EQ(child.objectSlots[0], *elaborated->findSlot("/parent/drive"));
+    EXPECT_EQ(child.objectSlots[0],
+              require(elaborated->findSlot("/parent/drive"), "slot for /parent/drive"));
 }
 
 TEST_F(ElaboratorTest, RejectsAPortWidthMismatch) {
