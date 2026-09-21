@@ -2,5 +2,5 @@
 
 enzan_add_unit_test(
   ipc
-  SOURCES ProtocolTests.cpp
+  SOURCES ProtocolTests.cpp TransportTests.cpp
   DEPENDS enzan::ipc)

@@ -2,6 +2,6 @@
 
 enzan_add_component(
   ipc
-  SOURCES Codec.cpp Protocol.cpp
-  HEADERS Codec.h Protocol.h
+  SOURCES Codec.cpp Protocol.cpp Transport.cpp
+  HEADERS Codec.h Protocol.h Transport.h
   DEPENDS enzan::common enzan::eir)

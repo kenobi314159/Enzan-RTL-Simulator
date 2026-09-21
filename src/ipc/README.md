@@ -18,6 +18,8 @@ harder is a change in the wrong direction.
   checking that turns a corrupt or mismatched stream into a protocol error rather than an
   allocation the machine cannot satisfy.
 - **The messages** (`Protocol.h`) — every request and event, with one `serialize` function each.
+- **The transport** (`Transport.h`) — the listening Unix domain socket, the connection, and the
+  buffering in both directions.
 
 ## Allowed dependencies
 
@@ -56,6 +58,18 @@ trailing bytes is a failure too: it means the two ends disagree about the messag
 two correct simulators may legitimately differ at delta level; a GUI shown delta-level
 intermediate values would draw transitions that no waveform file contains, and users would
 report them as bugs.
+
+**Nothing blocks.** A blocking write is precisely how a slow GUI stalls a kernel: a client that
+stops reading fills the socket buffer and the kernel sits in `write` until it comes back. Output
+is queued in the connection and drained whenever the socket will take it, so a client that stops
+reading costs the kernel memory and nothing else. Writes use `MSG_NOSIGNAL` for the same reason
+— a peer that vanishes must make the write fail, not raise `SIGPIPE` and take the simulation
+with it.
+
+**A stale socket path is reused; a live one is not.** A path left behind by a kernel that was
+killed has to be reusable or the user is stranded, and a path a running kernel is serving must
+not be unlinked or the next kernel silently steals the session. The two look identical on disk,
+so the listener tells them apart by trying to connect.
 
 **Subscription is per signal.** A design has far more signals than a wave window shows, and
 streaming the ones nobody is looking at would spend the socket on data the client discards. A
