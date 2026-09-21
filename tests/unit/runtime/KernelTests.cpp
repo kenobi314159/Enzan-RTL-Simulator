@@ -63,6 +63,7 @@ using enzan::runtime::Image;
 using enzan::runtime::Kernel;
 using enzan::runtime::KernelOptions;
 using enzan::runtime::NoTime;
+using enzan::runtime::RunInterrupt;
 using enzan::runtime::RunStatus;
 using enzan::runtime::SimTime;
 using enzan::test::literal;
@@ -1114,6 +1115,125 @@ TEST(Kernel, ACollapsedPortIsOnePieceOfStorage) {
     simulation.run();
     EXPECT_EQ(simulation.value("/tb/drive", Radix::Hexadecimal), "77");
     EXPECT_EQ(simulation.value("/tb/u_child/in", Radix::Hexadecimal), "77");
+}
+
+// ---------------------------------------------------------------------------
+// Interruption
+// ---------------------------------------------------------------------------
+
+/// Answers "stop" every `period` times it is asked, and counts the questions.
+class CountingInterrupt final : public RunInterrupt {
+public:
+    explicit CountingInterrupt(unsigned everyNth) : period(everyNth) {}
+
+    bool shouldInterrupt() override {
+        ++asked;
+        return period != 0 && asked % period == 0;
+    }
+
+    unsigned asked = 0;
+
+private:
+    unsigned period;
+};
+
+/// A clock that toggles every five time units and never stops.
+Design freeRunningClock() {
+    ProcessBuilder builder(ProcessKind::Initial, "clock");
+    const std::uint32_t delay = builder.reg(Type::bits(32, false, false));
+    const std::uint32_t value = builder.reg(Type::logic());
+    const std::uint32_t inverted = builder.reg(Type::logic());
+    const std::uint32_t five = builder.constant("32'd5");
+
+    builder.block("wait");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(five)));
+    builder.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    builder.block("toggle");
+    builder.readObject(value, 0);
+    builder.emit(Instruction::make(Opcode::Not, Operand::reg(inverted), Operand::reg(value)));
+    builder.store(0, inverted);
+    builder.emit(Instruction::make(Opcode::Jump, {}, Operand::block(0)));
+
+    return designOf(makeTop(
+        {builder.finish()},
+        {Object{.name = "clk", .type = Type::logic(), .initialValue = BitVector::parse("1'b0")}}));
+}
+
+TEST(Kernel, AnInterruptStopsTheRunWhereItStands) {
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    CountingInterrupt always(1);
+    simulation.simulationKernel().setInterrupt(&always);
+
+    EXPECT_EQ(simulation.run(100), RunStatus::Interrupted);
+    EXPECT_EQ(simulation.time(), 0U) << "the stop was asked for before any slot ran";
+    EXPECT_EQ(always.asked, 1U);
+}
+
+TEST(Kernel, AnInterruptIsAskedOncePerTimeSlot) {
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    CountingInterrupt never(0);
+    simulation.simulationKernel().setInterrupt(&never);
+
+    EXPECT_EQ(simulation.run(100), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.time(), 100U);
+
+    // Twenty toggles plus time zero and the final poll: the exact number matters less than
+    // that the kernel asks often enough for a stop to take effect promptly.
+    EXPECT_GE(never.asked, 20U);
+}
+
+TEST(Kernel, ClearingTheInterruptLetsTheRunFinish) {
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    CountingInterrupt always(1);
+    simulation.simulationKernel().setInterrupt(&always);
+    EXPECT_EQ(simulation.run(100), RunStatus::Interrupted);
+
+    simulation.simulationKernel().setInterrupt(nullptr);
+    EXPECT_EQ(simulation.run(100), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.time(), 100U);
+}
+
+TEST(Kernel, ResumingAfterAnInterruptMatchesAnUninterruptedRun) {
+    // The invariant the interrupt exists to preserve. Section 3.8 requires results to be
+    // bit-identical across runs of the same build on the same inputs, and a GUI that could
+    // change a simulation by pausing it would break that in the least debuggable way
+    // imaginable: the waveform would depend on when the user clicked.
+    Simulation straight(freeRunningClock(), "tb");
+    ASSERT_TRUE(straight.ready()) << straight.messages().front();
+    EXPECT_EQ(straight.run(100), RunStatus::TimeLimitReached);
+
+    Simulation chopped(freeRunningClock(), "tb");
+    ASSERT_TRUE(chopped.ready()) << chopped.messages().front();
+
+    CountingInterrupt everyThird(3);
+    chopped.simulationKernel().setInterrupt(&everyThird);
+
+    RunStatus status = RunStatus::Interrupted;
+    unsigned attempts = 0;
+    while (status == RunStatus::Interrupted && attempts < 1000) {
+        status = chopped.run(100);
+        ++attempts;
+    }
+
+    EXPECT_EQ(status, RunStatus::TimeLimitReached);
+    EXPECT_GT(attempts, 1U) << "the interrupt never fired, so nothing was tested";
+
+    EXPECT_EQ(chopped.time(), straight.time());
+    EXPECT_EQ(chopped.value("/tb/clk"), straight.value("/tb/clk"));
+
+    // Not merely the same final value: the same amount of work, which is what says the run
+    // was continued rather than partly redone or partly skipped.
+    EXPECT_EQ(chopped.simulationKernel().executedInstructions(),
+              straight.simulationKernel().executedInstructions());
+    EXPECT_EQ(chopped.simulationKernel().totalDeltaCycles(),
+              straight.simulationKernel().totalDeltaCycles());
 }
 
 } // namespace

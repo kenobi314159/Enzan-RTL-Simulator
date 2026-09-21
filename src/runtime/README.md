@@ -45,6 +45,15 @@ the region queues reuse their storage.
 **Single-threaded.** That is the plan and not a fallback (section 6.4): a cache-friendly
 single-threaded loop outperforms a naively parallel one, and determinism comes free.
 
+**Pausing must not change the answer.** Section 2.2 requires the GUI to be able to stop a
+running kernel and requires that a stalled GUI never stall it. Both come from polling rather
+than signalling: `RunInterrupt::shouldInterrupt` is asked between time slots, and the kernel
+returns `RunStatus::Interrupted` with everything it holds still in the scheduler and the
+arena, so calling `run` again produces exactly what running straight through would have. The
+boundary is chosen for that reason and not for convenience — an interruption part-way through
+a region would make a waveform depend on when the user clicked, which is the least debuggable
+form section 3.8 could be violated in.
+
 ## Allowed dependencies
 
 `common`, `eir`, `elab` and `codegen`.

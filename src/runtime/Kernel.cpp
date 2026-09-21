@@ -26,6 +26,7 @@ std::string_view toString(RunStatus status) noexcept {
     case RunStatus::Quiescent: return "no events remaining";
     case RunStatus::Finished: return "finished";
     case RunStatus::Error: return "error";
+    case RunStatus::Interrupted: return "interrupted";
     }
     return "error";
 }
@@ -90,6 +91,15 @@ void Kernel::initialize() {
 
 RunStatus Kernel::run(SimTime until) {
     while (true) {
+        // Asked here, between time slots, because that is the only point at which the whole of
+        // the run's state is in the scheduler and the arena and nothing is half-done. Stopping
+        // anywhere else would make resuming produce a different answer from running straight
+        // through, which section 3.8 forbids.
+        if (interrupt != nullptr && interrupt->shouldInterrupt()) {
+            lastStatus = RunStatus::Interrupted;
+            return lastStatus;
+        }
+
         if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates()) {
             if (!runTimeSlot()) {
                 lastStatus = errorRequested ? RunStatus::Error : RunStatus::Finished;

@@ -32,9 +32,39 @@ enum class RunStatus : std::uint8_t {
     Finished,
     /// The run was abandoned: the delta limit was exceeded, or time would overflow.
     Error,
+    /// A registered `RunInterrupt` asked the run to stop. The design is untouched and
+    /// another `run` continues exactly where this one left off.
+    Interrupted,
 };
 
 std::string_view toString(RunStatus status) noexcept;
+
+/// Asked between time slots whether the current run should stop.
+///
+/// Section 2.2 requires the GUI to be able to stop a running kernel, and requires that a
+/// stalled or slow GUI never stall the kernel. Both fall out of polling rather than being
+/// signalled: the kernel asks when it is between time slots and therefore in a state it can
+/// be resumed from, and nothing outside the kernel ever touches its state.
+///
+/// The poll is deliberately at a time-slot boundary and not finer. All the state a run holds
+/// lives in the scheduler and the arena, so stopping there and calling `run` again produces
+/// exactly the results an uninterrupted run would have produced — which is what section 3.8
+/// requires, and which would not be true of an interruption part-way through a region.
+class RunInterrupt {
+public:
+    RunInterrupt() = default;
+    RunInterrupt(const RunInterrupt&) = delete;
+    RunInterrupt& operator=(const RunInterrupt&) = delete;
+    RunInterrupt(RunInterrupt&&) = delete;
+    RunInterrupt& operator=(RunInterrupt&&) = delete;
+    virtual ~RunInterrupt() = default;
+
+    /// Called between time slots. Returning true makes `run` return `Interrupted`.
+    ///
+    /// Must not report diagnostics, touch the arena or schedule anything: it runs in the
+    /// middle of a simulation and its only job is to answer the question.
+    virtual bool shouldInterrupt() = 0;
+};
 
 /// Receives value changes and time advances, for the waveform database.
 ///
@@ -136,6 +166,13 @@ public:
 
     /// Removes the first registration of `listener`. Does nothing if it was never registered.
     void removeListener(ValueChangeListener& listener);
+
+    /// Registers the source polled between time slots, or clears it with a null pointer.
+    ///
+    /// `source` must outlive the kernel or be cleared first. One rather than a list: the
+    /// question has a single answer, and there is exactly one thing — the process driving the
+    /// kernel — entitled to give it.
+    void setInterrupt(RunInterrupt* source) noexcept { interrupt = source; }
 
     /// Total instructions executed, for the benchmark harness.
     [[nodiscard]] std::uint64_t executedInstructions() const noexcept { return instructionCount; }
@@ -254,6 +291,9 @@ private:
     /// Non-owning, in registration order. Ordered rather than hash-based because what a listener
     /// records is observable and section 3.8 makes observable ordering reproducible.
     std::vector<ValueChangeListener*> listeners;
+
+    /// Polled between time slots, or null. Non-owning.
+    RunInterrupt* interrupt = nullptr;
 
     SimTime currentTime = 0;
     RunStatus lastStatus = RunStatus::Quiescent;
