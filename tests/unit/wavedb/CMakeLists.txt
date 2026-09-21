@@ -2,5 +2,5 @@
 
 enzan_add_unit_test(
   wavedb
-  SOURCES VcdWriterTests.cpp WaveformWriterTests.cpp
+  SOURCES FstWriterTests.cpp VcdWriterTests.cpp WaveformWriterTests.cpp
   DEPENDS enzan::wavedb)

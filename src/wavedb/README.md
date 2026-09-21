@@ -5,10 +5,16 @@ Records value changes, and exports them in the formats external viewers understa
 
 ## Responsibility
 
-- **VCD export** (`VcdWriter.h`) — the universal interchange format. Human-readable,
-  understood by every viewer, and required both for interoperability and for the
-  differential testing of section 14.3.
-- FST export and the in-memory database follow; see below.
+- **The shared recording machinery** (`WaveformWriter.h`) — which signals to record, walking the
+  hierarchy to declare them, coalescing the changes within a time slot, and attributing those
+  changes to the right timestamp. All of that is the same problem for both formats, and it is where
+  the subtle mistakes live, so there is one copy of the answer.
+- **VCD export** (`VcdWriter.h`) — the universal interchange format. Human-readable, understood by
+  every viewer, and required both for interoperability and for the differential testing of section
+  14.3.
+- **FST export** (`FstWriter.h`) — compressed and seekable, and what anyone recording a real design
+  will actually use. Produced by GTKWave's own library, vendored in `third_party/fst`.
+- The in-memory database follows; see below.
 
 ## Allowed dependencies
 
@@ -30,11 +36,16 @@ database first and the exporter on top of it would make every batch run pay the 
 memory cost, which is the opposite of what a batch run wants. The two will coexist: the
 database becomes a second listener alongside the writer.
 
-**FST export is not yet implemented.** Section 7.3 lists it alongside VCD for M1 and it
-remains M1 work. It needs GTKWave's `fstapi` vendored into `third_party/` with its license
-recorded in `docs/third_party.md`, which is a separate piece of work from the writer itself.
-Until then, VCD plus `gzip` covers the interchange need, and GTKWave converts with
-`vcd2fst`.
+**Both formats, from one run.** The kernel delivers to every registered listener, so
+`--vcd out.vcd --fst out.fst` records both from a single simulation — which is also how the GUI will
+attach alongside a file writer at M2.
+
+**FST is validated by reading it back with GTKWave's own converter.** `golden.counter.fst` and
+`golden.fifo.fst` put Enzan's FST through `fst2vcd` and compare the result against the VCD written
+from the same run. That checks three things at once: the file is readable by the reader GTKWave
+actually uses; the hierarchy survives including the aliases a collapsed port needs; and the two
+writers agree about every value at every timestamp. The comparison is order-insensitive within a
+timestamp, because VCD does not define an order there and the two paths legitimately differ.
 
 ## Design notes
 
