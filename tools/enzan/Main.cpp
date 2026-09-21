@@ -30,6 +30,7 @@
 #include "eir/Design.h"
 #include "elab/Elaborator.h"
 #include "frontend/sv/SystemVerilogFrontend.h"
+#include "ipc/KernelServer.h"
 #include "runtime/Image.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
@@ -64,6 +65,11 @@ Options:
                           ps or fs. The default is ps.
       --delta-limit <n>   Delta cycles allowed at one timestamp before the run is
                           abandoned. The default is 10000.
+      --listen <socket>   Elaborate the design and then wait on this Unix domain socket for
+                          a graphical front end to attach, instead of running immediately.
+                          The attached client drives the run, and the kernel keeps running
+                          when it detaches, so a long simulation can be looked in on and
+                          left alone again. Attach with `enzan-gui --attach <socket>`.
   -D, --define <NAME[=V]> Define a preprocessor macro.
   -I, --incdir <dir>      Add a directory to the `include search path.
       --dump-stats        Print instruction and delta counts when the run ends.
@@ -94,6 +100,7 @@ struct Invocation {
     std::filesystem::path vcdPath;
     std::filesystem::path fstPath;
     std::string waveformScope;
+    std::filesystem::path listenPath;
     std::int8_t timeExponent = -12;
     std::uint32_t deltaLimit = 10'000;
     bool dumpStatistics = false;
@@ -201,6 +208,13 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
+        if (argument == "--listen") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.listenPath = value;
+            continue;
+        }
+
         if (argument == "--delta-limit") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
@@ -246,6 +260,40 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
 
+/// Serves an elaborated design to a graphical front end instead of running it here.
+///
+/// The client drives the run, so nothing happens until one attaches, and the kernel survives
+/// its departure: section 2.2 requires a GUI to be able to detach from a long simulation on a
+/// compute server without ending it.
+ExitStatus serve(const Invocation& invocation, const enzan::runtime::Image& image,
+                 enzan::DiagnosticEngine& diagnostics) {
+    enzan::ipc::ServerOptions serverOptions;
+    serverOptions.kernelVersion = enzan::versionLine();
+    serverOptions.timeScale = enzan::runtime::TimeScale(invocation.timeExponent);
+    serverOptions.deltaLimit = invocation.deltaLimit;
+    serverOptions.waveformScope = invocation.waveformScope;
+
+    enzan::ipc::KernelServer server(image, diagnostics, serverOptions);
+    server.start();
+
+    std::string error;
+    if (!server.listen(invocation.listenPath, error)) {
+        diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
+                           invocation.listenPath.string(), error);
+        return ExitStatus::Failure;
+    }
+
+    // Printed rather than logged, because it is the one thing the user needs next and they are
+    // looking at this terminal.
+    std::cout << "-- listening on " << server.socketPath().string() << "\n"
+              << "-- attach with: enzan-gui --attach " << server.socketPath().string() << '\n'
+              << std::flush;
+
+    const int status = server.serve();
+    if (status != 0 || diagnostics.hasErrors()) return ExitStatus::Failure;
+    return ExitStatus::Success;
+}
+
 /// Analyses, elaborates, compiles and runs. Returns the process exit status.
 ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                     enzan::DiagnosticEngine& diagnostics) {
@@ -269,6 +317,8 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     if (compiled == nullptr) return ExitStatus::Failure;
 
     const enzan::runtime::Image image(*design, *elaborated, *compiled);
+
+    if (!invocation.listenPath.empty()) return serve(invocation, image, diagnostics);
 
     enzan::runtime::KernelOptions kernelOptions;
     kernelOptions.timeScale = enzan::runtime::TimeScale(invocation.timeExponent);
@@ -358,6 +408,24 @@ int main(int argc, char** argv) {
         std::cerr << "enzan: no source files were given\n"
                   << "Try 'enzan --help' for the available options.\n";
         return static_cast<int>(ExitStatus::Usage);
+    }
+
+    // Refused rather than ignored. A served session is driven entirely by its client, and
+    // silently dropping a `--run` or a `--vcd` the user asked for would be worse than saying
+    // that this combination is not the one to reach for.
+    if (!invocation.listenPath.empty()) {
+        if (invocation.runUntil.has_value()) {
+            std::cerr << "enzan: '--run' and '--listen' cannot be combined; a served session "
+                         "is run from the attached client\n";
+            return static_cast<int>(ExitStatus::Usage);
+        }
+        if (!invocation.vcdPath.empty() || !invocation.fstPath.empty()) {
+            std::cerr << "enzan: '--vcd' and '--fst' cannot be combined with '--listen'; a "
+                         "served session records into the live waveform database, and writing "
+                         "a file from an interactive session arrives with the control layer "
+                         "at milestone M3\n";
+            return static_cast<int>(ExitStatus::Usage);
+        }
     }
 
     enzan::SourceManager sources;

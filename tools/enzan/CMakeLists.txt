@@ -9,7 +9,7 @@ target_link_libraries(enzan PRIVATE enzan::compile_options enzan::common)
 
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   target_link_libraries(enzan PRIVATE enzan::frontend_sv enzan::elab enzan::codegen
-                                      enzan::runtime enzan::wavedb)
+                                      enzan::runtime enzan::wavedb enzan::ipc_server)
 endif()
 
 if(ENZAN_BUILD_TESTS)
@@ -41,4 +41,24 @@ if(ENZAN_BUILD_TESTS)
 
   add_test(NAME cli.enzan.missing_option_value COMMAND enzan --top)
   set_tests_properties(cli.enzan.missing_option_value PROPERTIES WILL_FAIL TRUE)
+
+  # A served session is driven by its attached client, so the switches that would drive it from
+  # here are refused rather than silently dropped. Checking the message and the status
+  # separately because CTest ignores the exit status once a pass regex is set.
+  add_test(NAME cli.enzan.listen_with_run_status COMMAND enzan --listen /tmp/enzan-test.sock
+                                                         --run 10 design.sv)
+  set_tests_properties(cli.enzan.listen_with_run_status PROPERTIES WILL_FAIL TRUE)
+
+  add_test(NAME cli.enzan.listen_with_run_message COMMAND enzan --listen /tmp/enzan-test.sock
+                                                          --run 10 design.sv)
+  set_tests_properties(cli.enzan.listen_with_run_message
+                       PROPERTIES PASS_REGULAR_EXPRESSION "cannot be combined")
+
+  add_test(NAME cli.enzan.listen_with_vcd_status COMMAND enzan --listen /tmp/enzan-test.sock
+                                                         --vcd out.vcd design.sv)
+  set_tests_properties(cli.enzan.listen_with_vcd_status PROPERTIES WILL_FAIL TRUE)
+
+  add_test(NAME cli.enzan.listen_mentioned_in_help COMMAND enzan --help)
+  set_tests_properties(cli.enzan.listen_mentioned_in_help PROPERTIES PASS_REGULAR_EXPRESSION
+                                                                     "--listen <socket>")
 endif()
