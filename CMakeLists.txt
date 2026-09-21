@@ -71,6 +71,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # clang-tidy and editors both need this, and CI depends on it.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Nothing in Enzan or in its dependencies uses C++20 modules, so the module dependency scan
+# CMake enables by default for C++20 targets is pure build-time cost. It is also actively
+# harmful here: the scan generates dyndep files, and reconfiguring a build directory — switching
+# a component on or off, which the presets encourage — leaves ninja 1.13 asserting inside
+# Plan::RefreshDyndepDependents and refusing to build at all. Turning the scan off removes both
+# the cost and the failure, and must be revisited if Enzan ever adopts modules.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 # Keep binaries and libraries in one predictable place per build directory, so
 # that scripts and documentation can name a stable path.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/bin")
