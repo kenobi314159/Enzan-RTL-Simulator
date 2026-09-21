@@ -42,4 +42,20 @@ if(ENZAN_SANITIZERS)
   target_compile_options(enzan_fst PRIVATE -fsanitize=${_enzan_fst_sanitizers}
                                            -fno-omit-frame-pointer)
   target_link_options(enzan_fst PRIVATE -fsanitize=${_enzan_fst_sanitizers})
+
+  # AddressSanitizer stays on, UndefinedBehaviorSanitizer comes off again.
+  #
+  # ASan is worth having here: a heap overflow inside the writer would corrupt Enzan's output,
+  # and finding it needs the vendored code instrumented, not just its callers.
+  #
+  # UBSan is not, because what it finds in these files are deliberate decisions rather than
+  # defects, and there is no way to act on them. fstapi.c stores a uint32_t through an unaligned
+  # pointer whenever FST_DO_MISALIGNED_OPS is set, which it sets unconditionally on x86 and
+  # aarch64 (fstapi.c line 135) precisely because those architectures allow it; lz4.c computes
+  # pointers that wrap, which upstream LZ4 has long acknowledged. Both are undefined behaviour by
+  # the letter of C and safe in practice on the targets Enzan supports. Neither can be silenced
+  # at the source without patching files whose whole value is being byte-identical to upstream,
+  # so the checks are switched off for this one target — and stay in force everywhere else,
+  # including in the FstWriter code that drives this library.
+  target_compile_options(enzan_fst PRIVATE -fno-sanitize=undefined)
 endif()
