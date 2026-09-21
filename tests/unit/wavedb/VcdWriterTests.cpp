@@ -23,8 +23,10 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -48,6 +50,14 @@ using enzan::runtime::Arena;
 using enzan::runtime::Image;
 using enzan::runtime::TimeScale;
 using enzan::wavedb::VcdWriter;
+
+/// Parses a Verilog-style literal, reporting a bad test fixture as a failure rather than letting an
+/// unchecked optional turn it into undefined behaviour.
+BitVector literal(std::string_view text) {
+    const std::optional<BitVector> parsed = BitVector::parse(text);
+    EXPECT_TRUE(parsed.has_value()) << "failed to parse '" << text << '\'';
+    return parsed.value_or(BitVector::filled(1, Logic::Unknown));
+}
 
 class DiscardingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -300,7 +310,7 @@ TEST_F(WriterFixture, SeveralChangesInOneSlotCollapseToTheSettledValue) {
 
     writer.onTimeAdvance(10);
     for (const char* value : {"8'h01", "8'h02", "8'h03"}) {
-        const BitVector intermediate = *BitVector::parse(value);
+        const BitVector intermediate = literal(value);
         enzan::eir::bitops::copy(signal("/tb/count"), intermediate.ref());
         writer.onValueChange(signalIndex("/tb/count"), signal("/tb/count"));
     }

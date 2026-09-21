@@ -2,6 +2,6 @@
 
 enzan_add_component(
   wavedb
-  SOURCES VcdWriter.cpp
-  HEADERS VcdWriter.h
+  SOURCES VcdWriter.cpp WaveformWriter.cpp
+  HEADERS VcdWriter.h WaveformWriter.h
   DEPENDS enzan::common enzan::eir enzan::runtime)
