@@ -143,12 +143,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build clang clang-tidy-18 libgtest-dev zlib1g-dev
+            cmake ninja-build ccache clang clang-tidy-18 libgtest-dev zlib1g-dev
 
-      # clang-tidy needs the generated headers and compile_commands.json, so the
-      # tree is configured even though it is not built.
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-tidy-${{ github.sha }}
+          restore-keys: ccache-tidy-
+
+      # The SystemVerilog frontend is enabled here even though it makes this the second job
+      # that builds slang. Linting a translation unit that the configured build does not
+      # compile does not merely skip it: clang-tidy falls back to default flags, fails to find
+      # the slang headers, and then reports whatever its half-parsed view of the file suggests.
+      # That produced nineteen findings that were not defects, and would have hidden any real
+      # one in the frontend behind them.
       - name: Configure
-        run: cmake --preset clang-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+        run: cmake --preset clang-debug -DENZAN_ENABLE_SYSTEMVERILOG=ON
 
       # The generated version header is produced at configure time, but
       # GoogleTest's headers may only appear after a build when they were
@@ -161,6 +172,10 @@ jobs:
           mapfile -t files < <(git ls-files 'src/*.cpp' 'tools/*.cpp' 'tests/*.cpp')
           printf 'Linting %d files\n' "${#files[@]}"
           clang-tidy-18 -p build/clang-debug --quiet "${files[@]}"
+
+      - name: Report cache statistics
+        if: always()
+        run: ccache --show-stats
 
   systemverilog:
     name: SystemVerilog frontend and golden suite
