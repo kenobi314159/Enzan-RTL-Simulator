@@ -87,10 +87,9 @@ protected:
     }
 
     [[nodiscard]] bool reported(std::string_view fragment) const {
-        for (const std::string& message : consumer.messages) {
-            if (message.find(fragment) != std::string::npos) return true;
-        }
-        return false;
+        return std::ranges::any_of(consumer.messages, [fragment](const std::string& message) {
+            return message.find(fragment) != std::string::npos;
+        });
     }
 
     SourceManager sources;

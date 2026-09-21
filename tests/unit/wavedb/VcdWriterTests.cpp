@@ -114,7 +114,7 @@ protected:
     [[nodiscard]] std::filesystem::path outputPath() const { return directory / "dump.vcd"; }
 
     [[nodiscard]] std::string readOutput() const {
-        std::ifstream file(outputPath());
+        const std::ifstream file(outputPath());
         std::ostringstream contents;
         contents << file.rdbuf();
         return contents.str();

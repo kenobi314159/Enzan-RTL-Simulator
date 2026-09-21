@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -55,10 +56,9 @@ protected:
     }
 
     [[nodiscard]] bool reported(std::string_view fragment) const {
-        for (const std::string& message : consumer.messages) {
-            if (message.find(fragment) != std::string::npos) return true;
-        }
-        return false;
+        return std::ranges::any_of(consumer.messages, [fragment](const std::string& message) {
+            return message.find(fragment) != std::string::npos;
+        });
     }
 
     SourceManager sources;
@@ -288,7 +288,7 @@ TEST_F(CompilerTest, ABranchBackwardsResolvesToo) {
 
 TEST_F(CompilerTest, SystemTaskArgumentsResolveToFrameOffsetsAndConstantIndices) {
     Process process = makeCopyProcess();
-    process.strings.push_back("count = %0d");
+    process.strings.emplace_back("count = %0d");
     process.constants.push_back(literal("8'd7"));
 
     enzan::eir::SysTaskCall call;

@@ -45,7 +45,6 @@ using enzan::eir::BitVector;
 using enzan::eir::Design;
 using enzan::eir::EdgeKind;
 using enzan::eir::Instruction;
-using enzan::eir::Logic;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
 using enzan::eir::Opcode;
@@ -179,7 +178,8 @@ private:
 /// Verifies, elaborates, compiles and runs a one-module design.
 class Simulation {
 public:
-    Simulation(Design design, std::string topName) : engine(sources), analysed(std::move(design)) {
+    Simulation(Design design, std::string_view topName)
+        : engine(sources), analysed(std::move(design)) {
         engine.addConsumer(consumer);
 
         // Verifying here means every kernel test also exercises the verifier, and that a
@@ -283,7 +283,7 @@ TEST(Kernel, FourStateObjectsStartAsXAndTwoStateOnesAsZero) {
         makeTop({}, {Object{.name = "fourstate", .type = Type::bits(4, false, true)},
                      Object{.name = "twostate", .type = Type::bits(4, false, false)}});
 
-    Simulation simulation(designOf(std::move(definition)), "tb");
+    const Simulation simulation(designOf(std::move(definition)), "tb");
     ASSERT_TRUE(simulation.ready());
 
     EXPECT_EQ(simulation.value("/tb/fourstate"), "xxxx");
@@ -295,7 +295,7 @@ TEST(Kernel, ADeclaredInitialValueIsApplied) {
                                                       .type = Type::bits(8, false, true),
                                                       .initialValue = BitVector::parse("8'hA5")}});
 
-    Simulation simulation(designOf(std::move(definition)), "tb");
+    const Simulation simulation(designOf(std::move(definition)), "tb");
     ASSERT_TRUE(simulation.ready());
     EXPECT_EQ(simulation.value("/tb/preset", Radix::Hexadecimal), "a5");
 }
@@ -1033,7 +1033,7 @@ TEST(Kernel, ACollapsedPortKeepsTheDeclaredInitialValue) {
     design.addModule(std::move(child));
     design.addModule(std::move(parent));
 
-    Simulation simulation(std::move(design), "tb");
+    const Simulation simulation(std::move(design), "tb");
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
 
     EXPECT_EQ(simulation.value("/tb/drive", Radix::Hexadecimal), "5a");
@@ -1067,7 +1067,7 @@ TEST(Kernel, AnExplicitInitialiserWinsWhicheverSideDeclaresIt) {
     design.addModule(std::move(child));
     design.addModule(std::move(parent));
 
-    Simulation simulation(std::move(design), "tb");
+    const Simulation simulation(std::move(design), "tb");
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
 
     EXPECT_EQ(simulation.value("/tb/wire", Radix::Hexadecimal), "3c");

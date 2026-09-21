@@ -20,8 +20,6 @@
 namespace {
 
 using enzan::eir::BitVector;
-using enzan::eir::Logic;
-using enzan::runtime::NonBlockingUpdate;
 using enzan::runtime::NoTime;
 using enzan::runtime::Region;
 using enzan::runtime::Scheduler;

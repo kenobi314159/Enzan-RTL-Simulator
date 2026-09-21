@@ -87,10 +87,9 @@ protected:
     }
 
     [[nodiscard]] bool reported(std::string_view fragment) const {
-        for (const std::string& message : consumer.messages) {
-            if (message.find(fragment) != std::string::npos) return true;
-        }
-        return false;
+        return std::ranges::any_of(consumer.messages, [fragment](const std::string& message) {
+            return message.find(fragment) != std::string::npos;
+        });
     }
 
     SourceManager sources;
@@ -301,7 +300,7 @@ TEST_F(FrontendTest, GenerateBlocksAreHoistedWithTheirScopeInTheName) {
 // ---------------------------------------------------------------------------
 
 TEST_F(FrontendTest, ReportsNoInputFiles) {
-    enzan::frontend::sv::Options options;
+    const enzan::frontend::sv::Options options;
     EXPECT_EQ(enzan::frontend::sv::analyse(options, sources, engine), nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::NoInputFiles));
 }
@@ -404,12 +403,7 @@ TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {
     // message with no snippet and the quality that section 10.6 is about is lost.
     EXPECT_EQ(analyse("module m; initial $random(); endmodule"), nullptr);
 
-    bool located = false;
-    for (std::size_t index = 0; index < consumer.codes.size(); ++index) {
-        if (consumer.codes[index] != DiagCode::UnsupportedConstruct) continue;
-        located = true;
-    }
-    ASSERT_TRUE(located);
+    ASSERT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
 
     // The buffer the frontend read is the one diagnostics resolve against.
     EXPECT_GE(sources.bufferCount(), 1U);

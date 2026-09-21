@@ -14,12 +14,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
 namespace {
 
-using enzan::DiagCode;
 using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
@@ -83,10 +83,9 @@ protected:
 
     /// True when any reported message contains `fragment`.
     [[nodiscard]] bool reported(std::string_view fragment) const {
-        for (const std::string& message : consumer.messages) {
-            if (message.find(fragment) != std::string::npos) return true;
-        }
-        return false;
+        return std::ranges::any_of(consumer.messages, [fragment](const std::string& message) {
+            return message.find(fragment) != std::string::npos;
+        });
     }
 
     SourceManager sources;
