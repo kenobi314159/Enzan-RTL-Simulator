@@ -277,7 +277,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                                invocation.vcdPath.string(), error);
             return ExitStatus::Failure;
         }
-        kernel.setListener(writer.get());
+        kernel.addListener(*writer);
     }
 
     const enzan::runtime::RunStatus status =

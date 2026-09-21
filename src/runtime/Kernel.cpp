@@ -10,6 +10,7 @@
 #include "runtime/Format.h"
 #include "runtime/Interpreter.h"
 
+#include <algorithm>
 #include <format>
 #include <iostream>
 #include <string>
@@ -223,7 +224,7 @@ bool Kernel::advanceTime(SimTime until) {
     currentTime = next;
     scheduler.resetDeltaCount();
 
-    if (listener != nullptr) listener->onTimeAdvance(currentTime);
+    for (ValueChangeListener* listener : listeners) listener->onTimeAdvance(currentTime);
 
     scheduler.releaseTime(next);
     return true;
@@ -292,7 +293,7 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     bitops::extend(target, value, false);
     const eir::Logic after = target.get(0);
 
-    if (listener != nullptr) listener->onValueChange(signalIndex, target);
+    for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
     notifyChange(signalIndex, before, after);
 }
@@ -320,7 +321,7 @@ void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
     bitops::assignPartAt(target, value, lowBit);
     const eir::Logic after = target.get(0);
 
-    if (listener != nullptr) listener->onValueChange(signalIndex, target);
+    for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
     notifyChange(signalIndex, before, after);
 }
@@ -332,6 +333,15 @@ void Kernel::scheduleNonBlocking(std::uint32_t signalIndex, eir::ConstBitRef val
 void Kernel::scheduleNonBlockingPart(std::uint32_t signalIndex, eir::ConstBitRef value,
                                      std::uint64_t lowBit) {
     scheduler.appendNonBlocking(signalIndex, value, static_cast<std::uint32_t>(lowBit), true);
+}
+
+void Kernel::addListener(ValueChangeListener& newListener) {
+    listeners.push_back(&newListener);
+}
+
+void Kernel::removeListener(ValueChangeListener& listener) {
+    const auto position = std::ranges::find(listeners, &listener);
+    if (position != listeners.end()) listeners.erase(position);
 }
 
 void Kernel::notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after) {
@@ -436,11 +446,11 @@ void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallInde
         return;
 
     case eir::SysTaskKind::DumpFile:
-        if (listener != nullptr) listener->onDumpFile(text);
+        for (ValueChangeListener* listener : listeners) listener->onDumpFile(text);
         return;
 
     case eir::SysTaskKind::DumpVars:
-        if (listener != nullptr) listener->onDumpVars();
+        for (ValueChangeListener* listener : listeners) listener->onDumpVars();
         return;
     }
 }

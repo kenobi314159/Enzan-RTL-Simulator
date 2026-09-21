@@ -126,7 +126,16 @@ public:
 
     [[nodiscard]] const Image& image() const noexcept { return *designImage; }
 
-    void setListener(ValueChangeListener* newListener) noexcept { listener = newListener; }
+    /// Registers a listener, which must outlive the kernel or be removed first.
+    ///
+    /// More than one is supported, and delivered to in registration order, because that is what
+    /// the design calls for rather than a generalisation for its own sake: a batch run writes a
+    /// VCD and an FST at once, and section 2.2 requires the GUI to attach and detach while a
+    /// simulation is running.
+    void addListener(ValueChangeListener& newListener);
+
+    /// Removes the first registration of `listener`. Does nothing if it was never registered.
+    void removeListener(ValueChangeListener& listener);
 
     /// Total instructions executed, for the benchmark harness.
     [[nodiscard]] std::uint64_t executedInstructions() const noexcept { return instructionCount; }
@@ -242,7 +251,9 @@ private:
 
     std::vector<std::vector<EdgeWaiter>> edgeWaiters;
 
-    ValueChangeListener* listener = nullptr;
+    /// Non-owning, in registration order. Ordered rather than hash-based because what a listener
+    /// records is observable and section 3.8 makes observable ordering reproducible.
+    std::vector<ValueChangeListener*> listeners;
 
     SimTime currentTime = 0;
     RunStatus lastStatus = RunStatus::Quiescent;

@@ -913,6 +913,89 @@ TEST(Kernel, ADesignWithNothingToDoIsQuiescentImmediately) {
 }
 
 // ---------------------------------------------------------------------------
+// Listeners
+// ---------------------------------------------------------------------------
+
+/// Records what it is told, so that delivery can be asserted without a waveform file.
+class RecordingListener final : public enzan::runtime::ValueChangeListener {
+public:
+    void onValueChange(std::uint32_t signalIndex, enzan::eir::ConstBitRef /*value*/) override {
+        changes.push_back(signalIndex);
+    }
+
+    void onTimeAdvance(enzan::runtime::SimTime time) override { times.push_back(time); }
+
+    std::vector<std::uint32_t> changes;
+    std::vector<enzan::runtime::SimTime> times;
+};
+
+TEST(Kernel, EveryRegisteredListenerIsNotified) {
+    // A batch run writes a VCD and an FST from one simulation, and section 2.2 requires the GUI to
+    // attach while a run is in progress. Both need more than one listener.
+    ProcessBuilder builder(ProcessKind::Initial, "writer");
+    const std::uint32_t delay = builder.reg(Type::bits(32, false, false));
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t ten = builder.constant("32'd10");
+    const std::uint32_t one = builder.constant("8'h01");
+
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(ten)));
+    builder.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    builder.block("after");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(one)));
+    builder.store(0, value);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    RecordingListener first;
+    RecordingListener second;
+    simulation.simulationKernel().addListener(first);
+    simulation.simulationKernel().addListener(second);
+
+    simulation.run();
+
+    EXPECT_FALSE(first.changes.empty());
+    EXPECT_EQ(first.changes, second.changes) << "both listeners must see the same changes";
+    EXPECT_EQ(first.times, second.times);
+    EXPECT_FALSE(first.times.empty()) << "time advanced, so it must have been reported";
+}
+
+TEST(Kernel, ARemovedListenerStopsBeingNotified) {
+    ProcessBuilder builder(ProcessKind::Initial, "writer");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t one = builder.constant("8'h01");
+
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(one)));
+    builder.store(0, value);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    RecordingListener listener;
+    simulation.simulationKernel().addListener(listener);
+    simulation.simulationKernel().removeListener(listener);
+
+    simulation.run();
+    EXPECT_TRUE(listener.changes.empty());
+}
+
+TEST(Kernel, RemovingAListenerThatWasNeverAddedIsHarmless) {
+    Simulation simulation(designOf(makeTop({})), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    RecordingListener stranger;
+    simulation.simulationKernel().removeListener(stranger);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+}
+
+// ---------------------------------------------------------------------------
 // Hierarchy
 // ---------------------------------------------------------------------------
 
