@@ -166,6 +166,10 @@ void WaveformWriter::flushPendingTime() {
     dirty.clear();
 }
 
+void WaveformWriter::flush() {
+    flushPendingTime();
+}
+
 void WaveformWriter::close() {
     if (!opened) return;
 

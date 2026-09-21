@@ -287,6 +287,37 @@ TEST_F(WaveformWriterTest, AFailedOpenLeavesTheWriterClosed) {
     EXPECT_TRUE(writer->events.empty());
 }
 
+TEST_F(WaveformWriterTest, FlushWritesThePendingSlotWithoutClosing) {
+    // A slot is normally written when the next time advance arrives, which is right for a file
+    // being streamed and wrong the moment a run pauses: the last thing the design did would be
+    // missing from the view until the kernel was told to carry on, which looks exactly like the
+    // simulator having lost an event.
+    build(flatDesign(), "tb");
+    ASSERT_TRUE(opened());
+
+    writer->onTimeAdvance(10);
+    signal("/tb/count").fill(enzan::eir::Logic::One);
+    report("/tb/count");
+
+    EXPECT_EQ(countOf("time:10"), 0U) << "nothing is owed to the file until the slot ends";
+
+    writer->flush();
+    EXPECT_EQ(countOf("time:10"), 1U);
+    EXPECT_NE(indexOf("change:1=11111111"), writer->events.size());
+    EXPECT_TRUE(writer->isOpen()) << "flushing must not end the recording";
+
+    // Flushing again writes nothing: the slot has already been accounted for.
+    writer->flush();
+    EXPECT_EQ(countOf("time:10"), 1U);
+
+    // And the writer carries on normally afterwards.
+    writer->onTimeAdvance(20);
+    signal("/tb/count").fill(enzan::eir::Logic::Zero);
+    report("/tb/count");
+    writer->close();
+    EXPECT_EQ(countOf("time:20"), 1U);
+}
+
 TEST_F(WaveformWriterTest, ChangesBeforeOpenAreIgnored) {
     build(flatDesign(), "tb");
     report("/tb/clk");

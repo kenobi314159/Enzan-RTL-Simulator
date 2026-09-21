@@ -52,6 +52,16 @@ public:
     /// design starts from rather than an empty arena. Returns false having filled `error`.
     bool open(const std::filesystem::path& path, std::string& error);
 
+    /// Writes out the time slot accumulated so far without closing.
+    ///
+    /// A slot's changes are normally written when the *next* time advance arrives, which is
+    /// right for a file being streamed and wrong the moment a run pauses: the last thing the
+    /// design did would be missing from the view until it was told to carry on. A caller that
+    /// has stopped the kernel calls this so that what it shows is what has happened.
+    ///
+    /// Safe at any point between time slots, and a no-op when nothing is pending.
+    void flush();
+
     /// Flushes the last time slot and closes the file.
     ///
     /// Safe to call more than once. Each concrete writer's destructor must call it: a base-class
