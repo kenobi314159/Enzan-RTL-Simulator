@@ -11,11 +11,22 @@ dependency below is compatible with that.
 
 ## Vendored (`third_party/`)
 
-**Nothing is vendored yet.**
+| Dependency | Version / revision | License | Purpose | Notes |
+|---|---|---|---|---|
+| [FST](https://github.com/gtkwave/gtkwave) (`fstapi`) | tag `v3.3.116`, from `gtkwave3-gtk3/src/helpers/fst/` | MIT | FST waveform output | see `third_party/fst/README.md` |
+| [FastLZ](https://github.com/ariya/FastLZ) | as shipped with the above | MIT | FST block compression | vendored by GTKWave, kept with it |
+| [LZ4](https://github.com/lz4/lz4) | as shipped with the above | BSD-2-Clause | FST block compression | vendored by GTKWave, kept with it |
 
-Vendoring is reserved for cases where it is unavoidable. NVC is the expected
-case, since it is consumed as a pinned fork of internal APIs rather than as a
-released library (DESIGN_GUIDE.md section 5.2); it arrives at M6.
+Vendoring is reserved for cases where it is unavoidable. FST qualifies because it is not released
+as a library: no distribution packages a `libfst` with headers, and GTKWave ships it as source
+inside its own tree. Verilator vendors the same files for the same reason.
+
+`third_party/fst/fst_config.h` is **Enzan's own** file, standing in for GTKWave's autoconf
+`config.h`, and carries Enzan's GPLv3 licence. Everything else in that directory is byte-identical
+to upstream, which is what makes the next update a replacement rather than a merge.
+
+NVC is the other expected case, since it is consumed as a pinned fork of internal APIs rather than
+as a released library (DESIGN_GUIDE.md section 5.2); it arrives at M6.
 
 ## Acquired at configure time
 
@@ -27,6 +38,7 @@ The build prefers a system package and falls back to building from source. See
 | [slang](https://github.com/MikePopoloski/slang) | `v11.0` | MIT | SystemVerilog frontend (M1) | source build; not packaged by any distribution |
 | [GoogleTest](https://github.com/google/googletest) | 1.12 or later, `v1.17.0` when fetched | BSD-3-Clause | unit tests | system package, source fallback |
 | [zlib](https://zlib.net/) | 1.2.11 or later | zlib | FST waveform compression | system package |
+| [LZ4](https://github.com/lz4/lz4) | as vendored with FST | BSD-2-Clause | FST waveform compression | vendored, see above |
 | [Tcl](https://www.tcl-lang.org/) | 8.6 or later | BSD-style | control and configuration language (M3) | system package |
 | [Qt](https://www.qt.io/) | 6.4 or later | LGPLv3 | graphical front end (M2) | system package, dynamically linked |
 | [LLVM](https://llvm.org/) | 17 or later | Apache-2.0 with LLVM exception | JIT backend (M8, optional) | system package, off by default |

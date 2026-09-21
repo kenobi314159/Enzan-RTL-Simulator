@@ -122,6 +122,9 @@ if(ENZAN_BUILD_TESTS)
   enable_testing()
 endif()
 
+# Vendored dependencies come first: components link against them.
+add_subdirectory(third_party)
+
 add_subdirectory(src)
 add_subdirectory(tools)
 
