@@ -33,6 +33,7 @@
 #include "runtime/Image.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
+#include "wavedb/FstWriter.h"
 #include "wavedb/VcdWriter.h"
 #endif
 
@@ -55,7 +56,10 @@ Options:
   -r, --run <time>        Stop after this many time units. The default runs until the
                           design finishes or runs out of events.
       --vcd <file>        Write a VCD waveform to this file.
-      --vcd-scope <path>  Record only this subtree, for example /tb/u_dut.
+      --fst <file>        Write an FST waveform to this file. Far smaller than a VCD on a
+                          real design, and seekable, so prefer it unless you need to diff or
+                          read the file yourself. Both may be given at once.
+      --wave-scope <path> Record only this subtree, for example /tb/u_dut.
       --timescale <unit>  Time unit used for delays and reported times: s, ms, us, ns,
                           ps or fs. The default is ps.
       --delta-limit <n>   Delta cycles allowed at one timestamp before the run is
@@ -88,7 +92,8 @@ struct Invocation {
     std::string topModule;
     std::optional<std::uint64_t> runUntil;
     std::filesystem::path vcdPath;
-    std::string vcdScope;
+    std::filesystem::path fstPath;
+    std::string waveformScope;
     std::int8_t timeExponent = -12;
     std::uint32_t deltaLimit = 10'000;
     bool dumpStatistics = false;
@@ -167,10 +172,19 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
-        if (argument == "--vcd-scope") {
+        if (argument == "--fst") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
-            invocation.vcdScope = value;
+            invocation.fstPath = value;
+            continue;
+        }
+
+        // `--vcd-scope` stays as an alias: the filter was never specific to VCD, and a script
+        // written against the earlier name should keep working.
+        if (argument == "--wave-scope" || argument == "--vcd-scope") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.waveformScope = value;
             continue;
         }
 
@@ -263,27 +277,45 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     enzan::runtime::Kernel kernel(image, diagnostics, kernelOptions);
     kernel.initialize();
 
-    // The writer is created after `initialize` so that the values it dumps at time zero are
-    // the ones the design actually starts from.
-    std::unique_ptr<enzan::wavedb::VcdWriter> writer;
-    if (!invocation.vcdPath.empty()) {
-        writer = std::make_unique<enzan::wavedb::VcdWriter>(image, kernel.arena(),
-                                                            kernelOptions.timeScale);
-        writer->setScope(invocation.vcdScope);
+    // The writers are created after `initialize` so that the values they dump at time zero are the
+    // ones the design actually starts from rather than an empty arena.
+    std::vector<std::unique_ptr<enzan::wavedb::WaveformWriter>> writers;
+    const auto openWriter = [&](std::unique_ptr<enzan::wavedb::WaveformWriter> writer,
+                                const std::filesystem::path& path) {
+        writer->setScope(invocation.waveformScope);
 
         std::string error;
-        if (!writer->open(invocation.vcdPath, error)) {
+        if (!writer->open(path, error)) {
             diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
-                               invocation.vcdPath.string(), error);
-            return ExitStatus::Failure;
+                               path.string(), error);
+            return false;
         }
+
         kernel.addListener(*writer);
+        writers.push_back(std::move(writer));
+        return true;
+    };
+
+    if (!invocation.vcdPath.empty()
+        && !openWriter(std::make_unique<enzan::wavedb::VcdWriter>(image, kernel.arena(),
+                                                                  kernelOptions.timeScale),
+                       invocation.vcdPath)) {
+        return ExitStatus::Failure;
+    }
+
+    if (!invocation.fstPath.empty()
+        && !openWriter(std::make_unique<enzan::wavedb::FstWriter>(image, kernel.arena(),
+                                                                  kernelOptions.timeScale),
+                       invocation.fstPath)) {
+        return ExitStatus::Failure;
     }
 
     const enzan::runtime::RunStatus status =
         kernel.run(invocation.runUntil.value_or(enzan::runtime::NoTime));
 
-    if (writer != nullptr) writer->close();
+    // Closed before the statistics are printed, so that a writer failing to finish its file says
+    // so before the run looks successful.
+    for (const std::unique_ptr<enzan::wavedb::WaveformWriter>& writer : writers) writer->close();
 
     if (invocation.dumpStatistics) {
         std::cout << "-- " << kernel.executedInstructions() << " instructions, "
