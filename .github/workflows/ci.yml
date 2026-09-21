@@ -41,9 +41,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y clang-format-18
 
+      # third_party/ is excluded for the same reason it is excluded from the
+      # license check: those files are byte-identical copies of upstream, and
+      # reformatting them to Enzan's style would turn the next update from a
+      # straight re-copy into a merge.
       - name: Check formatting
         run: |
-          mapfile -t files < <(git ls-files '*.h' '*.cpp')
+          mapfile -t files < <(git ls-files '*.h' '*.cpp' | grep -v '^third_party/')
           printf 'Checking %d files\n' "${#files[@]}"
           clang-format-18 --dry-run --Werror "${files[@]}"
 
@@ -168,11 +172,15 @@ jobs:
       # under two simulators and comparing the result is the single highest-value testing
       # strategy available (DESIGN_GUIDE.md section 14.3), so it is not optional here even
       # though the suite skips it gracefully when no reference is installed.
+      #
+      # gtkwave is installed for one program: fst2vcd, which is how the suite checks that a
+      # reader other than ours can get the design back out of an FST. Without it the FST cases
+      # skip, and a writer that produced an unreadable file would go unnoticed here.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 iverilog
+            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 iverilog gtkwave
 
       - name: Restore compiler cache
         uses: actions/cache@v4
