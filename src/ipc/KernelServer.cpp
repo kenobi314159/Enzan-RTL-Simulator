@@ -1,0 +1,674 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include "ipc/KernelServer.h"
+
+#include "common/SourceManager.h"
+#include "elab/ElaboratedDesign.h"
+
+#include <algorithm>
+#include <array>
+#include <format>
+#include <iostream>
+#include <string_view>
+#include <utility>
+
+#include <poll.h>
+
+namespace enzan::ipc {
+
+namespace {
+
+/// Returns the scope part of a hierarchical name: everything before the last separator.
+std::string_view scopeOf(std::string_view path) {
+    const std::size_t separator = path.rfind('/');
+    return separator == std::string_view::npos ? std::string_view() : path.substr(0, separator);
+}
+
+/// Returns the leaf part of a hierarchical name.
+std::string_view leafOf(std::string_view path) {
+    const std::size_t separator = path.rfind('/');
+    return separator == std::string_view::npos ? path : path.substr(separator + 1);
+}
+
+/// Maps a finished run onto what the client is told the kernel is now doing.
+SimulationState stateAfter(runtime::RunStatus status) {
+    switch (status) {
+    // Both mean the kernel stopped where it was asked to and can be told to carry on.
+    case runtime::RunStatus::TimeLimitReached:
+    case runtime::RunStatus::Interrupted: return SimulationState::Idle;
+
+    // `$finish` and running out of events are both ends of the simulation; only a restart
+    // brings the design back.
+    case runtime::RunStatus::Quiescent:
+    case runtime::RunStatus::Finished: return SimulationState::Finished;
+
+    case runtime::RunStatus::Error: return SimulationState::Failed;
+    }
+    return SimulationState::Failed;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Relays
+// ---------------------------------------------------------------------------
+
+std::string KernelServer::TranscriptRelay::take() {
+    echoTo->flush();
+    return std::exchange(pending, {});
+}
+
+std::streambuf::int_type KernelServer::TranscriptRelay::overflow(int_type character) {
+    if (traits_type::eq_int_type(character, traits_type::eof())) {
+        return traits_type::not_eof(character);
+    }
+
+    const char text = traits_type::to_char_type(character);
+    pending.push_back(text);
+    echoTo->put(text);
+    return character;
+}
+
+std::streamsize KernelServer::TranscriptRelay::xsputn(const char* text, std::streamsize count) {
+    pending.append(text, static_cast<std::size_t>(count));
+    echoTo->write(text, count);
+    return count;
+}
+
+void KernelServer::DiagnosticRelay::consume(const Diagnostic& diagnostic) {
+    DiagnosticMessage message;
+    message.code = static_cast<std::uint16_t>(diagnostic.code);
+    message.severity = static_cast<std::uint8_t>(diagnostic.severity);
+    message.message = diagnostic.message;
+
+    // The parts travel separately rather than as rendered text, so that the GUI can show a
+    // diagnostic the way its own windows want to — clicking through to the source line, for
+    // instance — which is the point of section 10.6's single engine.
+    if (diagnostic.location.valid()) {
+        message.file = std::string(sources->bufferName(diagnostic.location.buffer()));
+        message.line = sources->lineNumber(diagnostic.location);
+        message.column = sources->columnNumber(diagnostic.location);
+    }
+
+    for (const DiagnosticNote& note : diagnostic.notes) message.notes.push_back(note.message);
+
+    pending.push_back(std::move(message));
+}
+
+std::vector<DiagnosticMessage> KernelServer::DiagnosticRelay::take() {
+    return std::exchange(pending, {});
+}
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
+KernelServer::KernelServer(const runtime::Image& imageToServe, DiagnosticEngine& diagnosticEngine,
+                           ServerOptions serverOptions)
+    : image(&imageToServe),
+      diagnostics(&diagnosticEngine),
+      options(std::move(serverOptions)),
+      transcriptRelay(options.localTranscript != nullptr ? *options.localTranscript : std::cout),
+      transcriptStream(&transcriptRelay),
+      diagnosticRelay(diagnosticEngine.sourceManager()) {
+    diagnostics->addConsumer(diagnosticRelay);
+}
+
+KernelServer::~KernelServer() {
+    diagnostics->removeConsumer(diagnosticRelay);
+
+    // The kernel must not outlive its listeners, and the recorder flushes into the database as
+    // it closes, so the order is spelled out rather than left to the member declarations.
+    publisher.reset();
+    recorder.reset();
+    database.reset();
+    simulationKernel.reset();
+}
+
+void KernelServer::start() {
+    // A restart keeps what the user asked to watch. Losing the wave window's contents because
+    // the design was reset would make the button useless for the thing it is used for, which
+    // is watching the same signals from the beginning again.
+    std::vector<std::uint32_t> keepSubscribed;
+    if (publisher != nullptr) keepSubscribed = publisher->subscribedSignals();
+
+    publisher.reset();
+    recorder.reset();
+    database.reset();
+    simulationKernel.reset();
+
+    runtime::KernelOptions kernelOptions;
+    kernelOptions.timeScale = options.timeScale;
+    kernelOptions.deltaLimit = options.deltaLimit;
+    kernelOptions.transcript = &transcriptStream;
+
+    simulationKernel = std::make_unique<runtime::Kernel>(*image, *diagnostics, kernelOptions);
+    simulationKernel->setInterrupt(this);
+    simulationKernel->initialize();
+
+    // Recorder and publisher are both started after `initialize`, so that the values they see
+    // at time zero are the ones the design begins from rather than an empty arena.
+    database = std::make_unique<wavedb::WaveformDatabase>(options.database);
+    recorder = std::make_unique<wavedb::WaveformRecorder>(*image, simulationKernel->arena(),
+                                                          options.timeScale, *database);
+    recorder->setScope(options.waveformScope);
+    recorder->start();
+    simulationKernel->addListener(*recorder);
+
+    publisher =
+        std::make_unique<ChangePublisher>(*image, simulationKernel->arena(), options.timeScale);
+    publisher->start();
+    publisher->subscribe(keepSubscribed);
+    simulationKernel->addListener(*publisher);
+
+    simulationState = SimulationState::Idle;
+    processExitStatus = 0;
+    runRequested = false;
+    stopRequested = false;
+}
+
+// ---------------------------------------------------------------------------
+// Attaching
+// ---------------------------------------------------------------------------
+
+bool KernelServer::listen(const std::filesystem::path& socketPath, std::string& error) {
+    return listener.listen(socketPath, error);
+}
+
+void KernelServer::attach(Connection client) {
+    connection = std::move(client);
+    greeted = false;
+
+    // A new client starts from nothing: it has not asked for any signal yet, and it must not
+    // be handed the transcript or the changes the previous one had not collected.
+    if (publisher != nullptr) {
+        publisher->clearSubscriptions();
+        static_cast<void>(publisher->takeBatches());
+    }
+    static_cast<void>(transcriptRelay.take());
+    static_cast<void>(diagnosticRelay.take());
+}
+
+void KernelServer::closeClient(std::string reason) {
+    if (connection.isOpen()) {
+        ByeMessage bye;
+        bye.reason = reason;
+        connection.send(MessageType::Bye, bye);
+
+        // Blocking here is acceptable and nowhere else: the farewell is the last thing this
+        // connection will ever carry, and a client that never learns why it was dropped has
+        // nothing to show the user but a dead window.
+        static_cast<void>(connection.flushBlocking());
+    }
+
+    connection.close();
+    greeted = false;
+    if (publisher != nullptr) publisher->clearSubscriptions();
+
+    // Nothing else happens here, and that is the point. A kernel with a socket to listen on
+    // carries on with its simulation and waits for the next client, which is what `detach`
+    // means in section 2.2; one that was handed its client directly has nowhere for another to
+    // come from, and `step` stops for that reason rather than because leaving is fatal.
+}
+
+// ---------------------------------------------------------------------------
+// The serving loop
+// ---------------------------------------------------------------------------
+
+bool KernelServer::step(int timeoutMilliseconds) {
+    if (exitRequested) return false;
+    if (!listener.isListening() && !connection.isOpen()) return false;
+
+    // Waiting is skipped when there is already work queued, so that a run asked for in the
+    // same round starts immediately rather than after the timeout.
+    if (!runRequested) {
+        std::array<pollfd, 2> waiting{};
+        nfds_t count = 0;
+
+        if (listener.isListening()) {
+            waiting[count++] = pollfd{.fd = listener.descriptor(), .events = POLLIN, .revents = 0};
+        }
+        if (connection.isOpen()) {
+            short events = POLLIN;
+            if (connection.hasPendingOutput()) events |= POLLOUT;
+            waiting[count++] =
+                pollfd{.fd = connection.descriptor(), .events = events, .revents = 0};
+        }
+        if (count > 0) static_cast<void>(::poll(waiting.data(), count, timeoutMilliseconds));
+    }
+
+    if (listener.isListening()) {
+        Connection accepted;
+        std::string error;
+        if (listener.accept(accepted, error)) {
+            if (connection.isOpen()) {
+                // Refused with a reason rather than queued. Two clients would need the kernel
+                // to serve two logging scopes and two subscription sets over one run, and
+                // nothing asks for that yet.
+                ByeMessage bye;
+                bye.reason = "another client is already attached to this kernel";
+                accepted.send(MessageType::Bye, bye);
+                static_cast<void>(accepted.flushBlocking());
+                accepted.close();
+            } else {
+                attach(std::move(accepted));
+            }
+        }
+    }
+
+    readRequests();
+    if (runRequested && !exitRequested) performRun();
+    pump();
+
+    return !exitRequested;
+}
+
+int KernelServer::serve() {
+    // No timeout: with nothing to do there is nothing to wake up for, and a kernel spinning on
+    // an idle socket would burn a core on a compute server for no reason at all.
+    while (step(-1)) {}
+    return processExitStatus;
+}
+
+// ---------------------------------------------------------------------------
+// Requests
+// ---------------------------------------------------------------------------
+
+void KernelServer::readRequests() {
+    if (!connection.isOpen()) return;
+
+    if (!connection.receive()) {
+        closeClient(connection.error());
+        return;
+    }
+
+    while (connection.isOpen()) {
+        Frame frame;
+        const ReceiveStatus status = connection.next(frame);
+        if (status == ReceiveStatus::Empty) return;
+        if (status == ReceiveStatus::Malformed) {
+            closeClient("the client sent a frame this kernel cannot parse");
+            return;
+        }
+        handle(frame);
+    }
+}
+
+void KernelServer::handle(const Frame& frame) {
+    const auto type = static_cast<MessageType>(frame.type);
+
+    // Nothing is answered before the handshake. A peer that starts talking without one is
+    // either a different protocol or a different version, and guessing which would mean
+    // acting on a message that may not mean what it appears to.
+    if (!greeted && type != MessageType::Hello) {
+        closeClient(std::format("'{}' arrived before the handshake", toString(type)));
+        return;
+    }
+
+    switch (type) {
+    case MessageType::Hello: onHello(frame); return;
+    case MessageType::QueryDesign: onQueryDesign(); return;
+    case MessageType::QueryObjects: onQueryObjects(frame); return;
+    case MessageType::Subscribe: onSubscribe(frame); return;
+    case MessageType::Unsubscribe: onUnsubscribe(frame); return;
+    case MessageType::QueryHistory: onQueryHistory(frame); return;
+    case MessageType::Run: onRun(frame); return;
+
+    case MessageType::Stop:
+        // Latched rather than acted on, so that a stop which arrives between a run being asked
+        // for and the run beginning is not lost. The latch is cleared when the *next* run is
+        // requested, not when one starts, which is the difference between "stop what is
+        // happening" and "stop whatever happens next".
+        stopRequested = true;
+        if (!running) sendRunState("stopped");
+        return;
+
+    case MessageType::Restart: onRestart(); return;
+
+    case MessageType::Quit:
+        stopRequested = true;
+        exitRequested = true;
+        return;
+
+    case MessageType::Detach: closeClient("the client detached"); return;
+
+    default:
+        // An event arriving from the client, or a request from a newer build. Saying so beats
+        // ignoring it: the client is waiting for an answer that would never come.
+        sendFailure(std::format("'{}' is not a request this kernel answers", toString(type)));
+        return;
+    }
+}
+
+void KernelServer::onHello(const Frame& frame) {
+    HelloMessage hello;
+    if (!decodePayload(frame.payload, hello)) {
+        closeClient("the handshake could not be decoded");
+        return;
+    }
+
+    if (hello.protocolVersion != ProtocolVersion) {
+        sendFailure(std::format(
+            "this kernel speaks protocol version {} and the client speaks {}; both ends must "
+            "come from the same build",
+            ProtocolVersion, hello.protocolVersion));
+        closeClient("protocol version mismatch");
+        return;
+    }
+
+    greeted = true;
+
+    WelcomeMessage welcome;
+    welcome.protocolVersion = ProtocolVersion;
+    welcome.kernelVersion = options.kernelVersion;
+    welcome.topModule = image->elaboratedDesign().topModuleName();
+    welcome.timeExponent = options.timeScale.precisionExponent();
+    welcome.currentTime = simulationKernel->time();
+    welcome.latestRecordedTime = latestRecordedTime();
+    welcome.state = simulationState;
+    connection.send(MessageType::Welcome, welcome);
+
+    transcriptStream << "-- " << (hello.clientName.empty() ? "a client" : hello.clientName)
+                     << " attached\n";
+}
+
+void KernelServer::onQueryDesign() {
+    DesignMessage message;
+    const std::span<const elab::Instance> instances = image->elaboratedDesign().instances();
+    message.instances.reserve(instances.size());
+
+    for (const elab::Instance& instance : instances) {
+        message.instances.push_back(
+            InstanceEntry{.path = instance.path, .name = instance.name, .parent = instance.parent});
+    }
+
+    connection.send(MessageType::Design, message);
+}
+
+void KernelServer::onQueryObjects(const Frame& frame) {
+    QueryObjectsMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a query for a scope's objects could not be decoded");
+        return;
+    }
+
+    if (!image->elaboratedDesign().findInstance(request.instancePath).has_value()) {
+        sendFailure(std::format("'{}' is not a scope in this design", request.instancePath));
+        return;
+    }
+
+    ObjectsMessage message;
+    message.instancePath = request.instancePath;
+
+    // Every name a slot has is offered, not only its canonical one. A collapsed port makes one
+    // slot visible in two scopes and both names are real, so a user looking inside a DUT finds
+    // its ports where they expect them.
+    for (std::uint32_t signalIndex = 0; signalIndex < image->signals().size(); ++signalIndex) {
+        const std::uint32_t width = image->signals()[signalIndex].bitWidth;
+        const bool recorded =
+            database != nullptr
+            && database->recordIndexOf(signalIndex) != wavedb::WaveformDatabase::NotRecorded;
+
+        for (const std::string& name : image->elaboratedDesign().slotNames(signalIndex)) {
+            if (scopeOf(name) != request.instancePath) continue;
+            message.objects.push_back(ObjectEntry{.signalIndex = signalIndex,
+                                                  .name = std::string(leafOf(name)),
+                                                  .path = name,
+                                                  .width = width,
+                                                  .recorded = recorded});
+        }
+    }
+
+    connection.send(MessageType::Objects, message);
+}
+
+void KernelServer::onSubscribe(const Frame& frame) {
+    SubscribeMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a subscription request could not be decoded");
+        return;
+    }
+
+    publisher->subscribe(request.signals);
+
+    // Catching up is part of subscribing. A signal dragged into the wave window halfway
+    // through a run must show what it has been doing, not start from a blank trace.
+    for (const std::uint32_t signalIndex : request.signals) {
+        if (signalIndex >= image->signals().size()) continue;
+        sendHistory(signalIndex, 0, runtime::NoTime);
+    }
+}
+
+void KernelServer::onUnsubscribe(const Frame& frame) {
+    UnsubscribeMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("an unsubscribe request could not be decoded");
+        return;
+    }
+    publisher->unsubscribe(request.signals);
+}
+
+void KernelServer::onQueryHistory(const Frame& frame) {
+    QueryHistoryMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a history request could not be decoded");
+        return;
+    }
+
+    if (request.signalIndex >= image->signals().size()) {
+        sendFailure(std::format("there is no signal {} in this design", request.signalIndex));
+        return;
+    }
+
+    sendHistory(request.signalIndex, request.fromTime, request.toTime);
+}
+
+void KernelServer::onRun(const Frame& frame) {
+    RunMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a run request could not be decoded");
+        return;
+    }
+
+    if (running) {
+        sendFailure("a run is already in progress; stop it first");
+        return;
+    }
+    if (simulationState == SimulationState::Finished
+        || simulationState == SimulationState::Failed) {
+        sendFailure("the design has finished; restart it to run again");
+        return;
+    }
+
+    requestedRun = request;
+    runRequested = true;
+
+    // Asking to run clears a stop from an earlier one, so that a latch nobody consumed cannot
+    // kill a run the user asked for afterwards.
+    stopRequested = false;
+}
+
+void KernelServer::onRestart() {
+    if (running) {
+        sendFailure("a run is in progress; stop it before restarting");
+        return;
+    }
+
+    start();
+
+    // The client learns from the time going backwards that everything it holds is stale, so
+    // the state comes first and the fresh traces follow it.
+    sendRunState("restarted");
+    for (const std::uint32_t signalIndex : publisher->subscribedSignals()) {
+        sendHistory(signalIndex, 0, runtime::NoTime);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Running
+// ---------------------------------------------------------------------------
+
+void KernelServer::performRun() {
+    runRequested = false;
+
+    runtime::SimTime until = runtime::NoTime;
+    if (!requestedRun.untilFinished) {
+        const runtime::SimTime now = simulationKernel->time();
+        if (requestedRun.duration > runtime::NoTime - now) {
+            sendFailure("the requested run would advance simulated time past the 64-bit range");
+            return;
+        }
+        until = now + requestedRun.duration;
+    }
+
+    // Announced before it starts, so that a client's Run button changes the moment the kernel
+    // begins rather than when it next has something to say.
+    simulationState = SimulationState::Running;
+    sendRunState({});
+    pump();
+
+    running = true;
+    lastPump = std::chrono::steady_clock::now();
+    const runtime::RunStatus status = simulationKernel->run(until);
+    running = false;
+
+    simulationState = stateAfter(status);
+    if (status == runtime::RunStatus::Error) {
+        processExitStatus = 2;
+    } else {
+        processExitStatus = simulationKernel->exitStatus();
+    }
+
+    // The slot the run ended on is written out before anyone is told the run is over. A slot
+    // is otherwise recorded when the *next* one begins, so without this the last thing the
+    // design did would be missing from the view until it was told to carry on — which looks
+    // exactly like the simulator having lost an event.
+    recorder->flush();
+    publisher->flush();
+
+    // The time axis extends to where the run reached, whether or not anything changed there —
+    // and to where it was *asked* to reach when it got there with time to spare. A design whose
+    // next event is beyond the limit leaves simulated time where it was, which is correct and
+    // would make a `run 100ns` look on screen as though nothing had happened.
+    runtime::SimTime reached = simulationKernel->time();
+    if (status == runtime::RunStatus::TimeLimitReached) reached = std::max(reached, until);
+    database->setLatestTime(reached);
+
+    sendRunState(std::string(runtime::toString(status)));
+}
+
+bool KernelServer::shouldInterrupt() {
+    // Throttled rather than answered at every time slot. A design with many short slots would
+    // otherwise spend a system call on each one, and a hundredth of a second is far below
+    // anything a user can perceive in a Stop button.
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastPump >= PumpInterval) {
+        lastPump = now;
+        readRequests();
+        pump();
+    }
+
+    return stopRequested || exitRequested;
+}
+
+// ---------------------------------------------------------------------------
+// Sending
+// ---------------------------------------------------------------------------
+
+void KernelServer::pump() {
+    std::string transcript = transcriptRelay.take();
+    std::vector<DiagnosticMessage> reported = diagnosticRelay.take();
+    std::vector<ValueChangesMessage> batches;
+    if (publisher != nullptr) batches = publisher->takeBatches();
+
+    // Everything is drained whether or not anyone is listening, because a kernel running with
+    // no client attached must not accumulate a session's worth of output against the chance
+    // that one turns up.
+    if (!connection.isOpen() || !greeted) return;
+
+    if (!transcript.empty()) {
+        TranscriptMessage message;
+        message.text = std::move(transcript);
+        connection.send(MessageType::Transcript, message);
+    }
+
+    for (DiagnosticMessage& message : reported) {
+        connection.send(MessageType::Diagnostic, message);
+    }
+
+    for (ValueChangesMessage& message : batches) {
+        connection.send(MessageType::ValueChanges, message);
+    }
+
+    if (!connection.flush()) closeClient(connection.error());
+}
+
+void KernelServer::sendRunState(std::string reason) {
+    if (!connection.isOpen() || !greeted) return;
+
+    RunStateMessage message;
+    message.state = simulationState;
+    message.time = simulationKernel->time();
+    message.latestRecordedTime = latestRecordedTime();
+    message.reason = std::move(reason);
+    connection.send(MessageType::RunState, message);
+}
+
+void KernelServer::sendFailure(std::string reason) {
+    if (!connection.isOpen()) return;
+
+    FailureMessage message;
+    message.reason = std::move(reason);
+    connection.send(MessageType::Failure, message);
+}
+
+void KernelServer::sendHistory(std::uint32_t signalIndex, runtime::SimTime from,
+                               runtime::SimTime to) {
+    if (!connection.isOpen() || !greeted) return;
+
+    HistoryMessage message;
+    message.signalIndex = signalIndex;
+    message.width = image->signals()[signalIndex].bitWidth;
+    message.latestTime = latestRecordedTime();
+
+    const std::uint32_t record = database != nullptr ? database->recordIndexOf(signalIndex)
+                                                     : wavedb::WaveformDatabase::NotRecorded;
+
+    if (record == wavedb::WaveformDatabase::NotRecorded) {
+        // Outside the logging scope: there is no past to send, only what the signal holds
+        // right now. The client already knows from the object listing that it is not being
+        // recorded, so an empty trace and an unrecorded one do not look the same.
+        message.entries.push_back(HistoryEntry{.time = simulationKernel->time(),
+                                               .value = publisher->currentValue(signalIndex)});
+        connection.send(MessageType::History, message);
+        return;
+    }
+
+    std::vector<wavedb::Change> changes;
+    database->changesIn(record, from, to, changes);
+
+    if (changes.size() > MaxHistoryEntries) {
+        // Truncated rather than split across an unbounded number of messages. `latestTime`
+        // then says where the answer stops, and the client asks again from there.
+        changes.erase(changes.begin() + static_cast<std::ptrdiff_t>(MaxHistoryEntries),
+                      changes.end());
+        message.complete = false;
+        message.latestTime = changes.back().time;
+    }
+
+    message.entries.reserve(changes.size());
+    for (wavedb::Change& change : changes) {
+        message.entries.push_back(
+            HistoryEntry{.time = change.time, .value = std::move(change.value)});
+    }
+
+    connection.send(MessageType::History, message);
+}
+
+runtime::SimTime KernelServer::latestRecordedTime() const noexcept {
+    const runtime::SimTime recorded = database != nullptr ? database->latestTime() : 0;
+    const runtime::SimTime now = simulationKernel != nullptr ? simulationKernel->time() : 0;
+    return std::max(recorded, now);
+}
+
+} // namespace enzan::ipc

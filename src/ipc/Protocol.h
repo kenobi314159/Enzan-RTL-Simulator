@@ -262,6 +262,11 @@ struct DiagnosticMessage {
 };
 
 /// Sent whenever the kernel starts, stops or finishes a run.
+///
+/// **A `time` earlier than the last one reported means the design was restarted**, and the
+/// client must discard the traces it holds and ask for them again. That is deliberately carried
+/// by the time rather than by a flag: simulated time never moves backwards during a run, so
+/// there is one rule to get right rather than two things that could disagree.
 struct RunStateMessage {
     SimulationState state = SimulationState::Idle;
     std::uint64_t time = 0;
