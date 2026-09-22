@@ -33,6 +33,11 @@ struct WaveCursor {
     /// to the edge they are measuring from and then moves another one around without having to
     /// be careful where they click.
     bool locked = false;
+
+    /// Where the cursor's label was last drawn, for hit testing. Filled by painting rather
+    /// than computed twice: the label's width depends on the font and on the time in it, and
+    /// two answers to where it is would eventually disagree.
+    QRect labelRect;
 };
 
 /// The waveform canvas.
@@ -99,6 +104,23 @@ public:
     /// The active cursor's time, which is what the value columns read at.
     [[nodiscard]] runtime::SimTime activeCursorTime() const;
 
+    /// Moves the active cursor to the next transition of the selected signal, or to the
+    /// previous one. Does nothing without a selected signal, or past its last edge.
+    void stepActiveCursorToEdge(bool forward);
+
+    /// The wave row the signal list has selected, or -1.
+    [[nodiscard]] int selectedRow() const;
+
+    /// Pixels a click may miss an edge by and still snap to it.
+    ///
+    /// In pixels rather than time units so that the gesture behaves the same at every zoom:
+    /// close enough to click is close enough to snap (section 10.7).
+    static constexpr double SnapPixels = 6.0;
+
+    /// Pixels a right-button drag must cover before it counts as a gesture at all. Below it a
+    /// right-click is a right-click, and must not throw away the reader's zoom.
+    static constexpr int MinimumDragPixels = 5;
+
 Q_SIGNALS:
     /// A cursor moved, or the active one changed.
     void cursorsChanged();
@@ -110,10 +132,17 @@ protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+
+    /// Consumes Tab and Shift+Tab, which Qt would otherwise spend on focus navigation.
+    ///
+    /// Overridden here rather than handled in `keyPressEvent`, which never sees them: a widget
+    /// that wants Tab for itself has to say so at this level.
+    bool focusNextPrevChild(bool next) override;
 
 private:
     /// Where one model row sits on this canvas.
@@ -139,6 +168,8 @@ private:
                        std::uint32_t record);
     void paintCursors(QPainter& painter);
     void paintBeyondExtent(QPainter& painter);
+    void paintRowBackground(QPainter& painter, const RowGeometry& geometry, const QRect& area);
+    void paintZoomBand(QPainter& painter);
 
     /// Fills `samples` with one entry per column of `area`. Returns false when there is
     /// nothing to draw.
@@ -149,6 +180,21 @@ private:
 
     /// Moves the active cursor to the time under `x`, if it is not locked.
     void moveActiveCursorTo(double x);
+
+    /// Index of the cursor whose label covers `point`, or -1.
+    [[nodiscard]] int cursorLabelAt(const QPoint& point) const;
+
+    /// The model row drawn at `y`, or -1.
+    [[nodiscard]] int rowAt(int y) const;
+
+    /// Handles a click in the trace area: selects the row, moves the cursor and snaps it.
+    void pickAt(const QPoint& point);
+
+    /// Snaps `time` to a transition of `rowId` within `SnapPixels`, or returns it unchanged.
+    [[nodiscard]] runtime::SimTime snapToEdge(int rowId, runtime::SimTime time) const;
+
+    /// Asks the reader for a new name for a cursor.
+    void renameCursor(int index);
 
     const KernelSession* kernelSession;
     const WaveformModel* waveModel;
@@ -169,6 +215,12 @@ private:
 
     bool panning = false;
     QPoint panFrom;
+
+    /// Set while the right button is down. The two x coordinates are the whole gesture: their
+    /// order decides whether the release zooms to a range or to fit.
+    bool zoomDragging = false;
+    int zoomFromX = 0;
+    int zoomToX = 0;
 };
 
 } // namespace enzan::gui

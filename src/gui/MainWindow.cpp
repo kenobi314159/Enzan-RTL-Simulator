@@ -6,11 +6,13 @@
 #include <QCloseEvent>
 #include <QDockWidget>
 #include <QHeaderView>
+#include <QIcon>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QPixmap>
 #include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
@@ -52,7 +54,7 @@ MainWindow::MainWindow(KernelSession& kernelSession, const Theme& themeToUse, QW
 
     designModel = new DesignTreeModel(this);
     objectsModel = new ObjectsModel(*session, this);
-    waveModel = new WaveformModel(*session, this);
+    waveModel = new WaveformModel(*session, *theme, this);
 
     buildDocks();
     buildToolBar();
@@ -147,6 +149,20 @@ void MainWindow::buildDocks() {
                                   | QAbstractItemView::SelectedClicked);
     waveRowsView->header()->setStretchLastSection(true);
 
+    // A name column wide enough for a name. Unpacking a bus indents its bits, and a tree that
+    // elided `count[7]` to `count…` would make the one thing those rows exist to say the first
+    // thing it dropped; the shallow indent buys back most of the same width.
+    waveRowsView->setIndentation(12);
+    waveRowsView->setColumnWidth(WaveformModel::NameColumn, 220);
+
+    // Rows are reordered by dragging them, including into and out of groups. The order is the
+    // reader's and nothing re-sorts it behind them (section 10.7).
+    waveRowsView->setDragEnabled(true);
+    waveRowsView->setAcceptDrops(true);
+    waveRowsView->setDropIndicatorShown(true);
+    waveRowsView->setDragDropMode(QAbstractItemView::InternalMove);
+    waveRowsView->setDefaultDropAction(Qt::MoveAction);
+
     waveView = new WaveformView(*session, *waveModel, *theme, this);
     waveView->setRowView(waveRowsView);
     connect(waveView, &WaveformView::cursorsChanged, this, &MainWindow::onCursorsChanged);
@@ -160,7 +176,7 @@ void MainWindow::buildDocks() {
     waveSplitter->addWidget(waveView);
     waveSplitter->setStretchFactor(0, 0);
     waveSplitter->setStretchFactor(1, 1);
-    waveSplitter->setSizes({260, 900});
+    waveSplitter->setSizes({340, 900});
 
     setCentralWidget(waveSplitter);
 
@@ -189,6 +205,27 @@ void MainWindow::buildDocks() {
         connect(action, &QAction::triggered, this, [this, radix] { setSelectedWaveRadix(radix); });
         waveRowsView->addAction(action);
     }
+
+    auto* highlightSeparator = new QAction(waveRowsView);
+    highlightSeparator->setSeparator(true);
+    waveRowsView->addAction(highlightSeparator);
+
+    // The palette is the theme's (section 10.5), so each entry carries its actual colour: five
+    // menu items called "Highlight 3" would tell a reader nothing about what they would get.
+    for (int slot = 1; slot <= HighlightSlots; ++slot) {
+        auto* action = new QAction(tr("Highlight %1").arg(slot), waveRowsView);
+
+        QPixmap swatch(12, 12);
+        swatch.fill(theme->color(highlightColor(slot)));
+        action->setIcon(QIcon(swatch));
+
+        connect(action, &QAction::triggered, this, [this, slot] { setSelectedHighlight(slot); });
+        waveRowsView->addAction(action);
+    }
+
+    auto* unhighlight = new QAction(tr("Unhighlight"), waveRowsView);
+    connect(unhighlight, &QAction::triggered, this, [this] { setSelectedHighlight(0); });
+    waveRowsView->addAction(unhighlight);
 
     // --- Transcript --------------------------------------------------------
 
@@ -443,6 +480,11 @@ void MainWindow::removeSelectedWaves() {
 
 void MainWindow::setSelectedWaveRadix(eir::Radix radix) {
     for (const int rowId : selectedWaveRows()) waveModel->setRadixRecursive(rowId, radix);
+    waveView->update();
+}
+
+void MainWindow::setSelectedHighlight(int slot) {
+    for (const int rowId : selectedWaveRows()) waveModel->setHighlight(rowId, slot);
     waveView->update();
 }
 

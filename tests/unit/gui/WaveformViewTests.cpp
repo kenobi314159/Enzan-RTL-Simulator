@@ -57,7 +57,8 @@ class WaveformModelTest : public SessionFixture {
 protected:
     void SetUp() override {
         SessionFixture::SetUp();
-        model = std::make_unique<WaveformModel>(*session);
+        theme.loadBuiltIn();
+        model = std::make_unique<WaveformModel>(*session, theme);
     }
 
     SignalInfo infoFor(const QString& scope, const QString& name) {
@@ -68,6 +69,7 @@ protected:
         return {};
     }
 
+    Theme theme;
     std::unique_ptr<WaveformModel> model;
 };
 
@@ -209,7 +211,7 @@ protected:
         SessionFixture::SetUp();
 
         theme.loadBuiltIn();
-        model = std::make_unique<WaveformModel>(*session);
+        model = std::make_unique<WaveformModel>(*session, theme);
 
         treeView = std::make_unique<QTreeView>();
         treeView->setModel(model.get());

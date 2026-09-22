@@ -24,6 +24,15 @@ enum class ThemeColor : std::uint8_t {
 /// Returns the theme-script key for `color`, for example `"wave.trace"`.
 [[nodiscard]] const char* themeKey(ThemeColor color) noexcept;
 
+/// How many backgrounds a wave row may be highlighted with (section 10.7).
+constexpr int HighlightSlots = 5;
+
+/// Returns the colour of highlight slot `slot`, which must be 1 through `HighlightSlots`.
+///
+/// Reached by adding to the first slot rather than through a table, which is why the catalogue
+/// requires the five to stay adjacent and in order.
+[[nodiscard]] ThemeColor highlightColor(int slot) noexcept;
+
 /// The colours the GUI paints with, loaded from a Tcl script.
 ///
 /// **No colour literal appears in widget code** (DESIGN_GUIDE.md section 10.5), and none

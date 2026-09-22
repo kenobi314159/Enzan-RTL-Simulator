@@ -67,6 +67,7 @@ private:
     void extractBitRange();
     void removeSelectedWaves();
     void setSelectedWaveRadix(eir::Radix radix);
+    void setSelectedHighlight(int slot);
 
     void runForRequestedTime();
     void runUntilFinished();

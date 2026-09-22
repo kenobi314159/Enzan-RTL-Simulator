@@ -98,6 +98,11 @@ const char* themeKey(ThemeColor color) noexcept {
     return KeyNames[index];
 }
 
+ThemeColor highlightColor(int slot) noexcept {
+    ENZAN_ASSERT(slot >= 1 && slot <= HighlightSlots, "no such highlight slot");
+    return static_cast<ThemeColor>(static_cast<int>(ThemeColor::WaveHighlight1) + slot - 1);
+}
+
 Theme::Theme() {
     colors.fill(QColor());
 }

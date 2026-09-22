@@ -4,6 +4,7 @@
 
 #include "eir/BitVector.h"
 #include "gui/KernelSession.h"
+#include "gui/Theme.h"
 #include "runtime/Time.h"
 
 #include <QAbstractItemModel>
@@ -12,6 +13,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 namespace enzan::gui {
 
@@ -41,6 +43,12 @@ struct WaveRow {
     bool sliced = false;
     std::uint32_t highBit = 0;
     std::uint32_t lowBit = 0;
+
+    /// Background slot 1 through `HighlightSlots`, or 0 for the default (section 10.7).
+    int highlight = 0;
+
+    /// True once a signal row's bits have been created as children below it.
+    bool unpacked = false;
 
     int parent = -1;
     QVector<int> children;
@@ -72,8 +80,14 @@ public:
     /// The row number behind an index, for `data(..., RowIdRole)`.
     static constexpr int RowIdRole = Qt::UserRole + 1;
 
-    /// `session` must outlive the model.
-    explicit WaveformModel(const KernelSession& session, QObject* parent = nullptr);
+    /// The row's highlight slot, for `data(..., HighlightRole)`.
+    static constexpr int HighlightRole = Qt::UserRole + 2;
+
+    /// `session` and `theme` must both outlive the model.
+    ///
+    /// The theme is here because Qt asks a model for `Qt::BackgroundRole`, and section 10.5
+    /// allows exactly one place for a colour to come from.
+    WaveformModel(const KernelSession& session, const Theme& theme, QObject* parent = nullptr);
 
     // --- editing -----------------------------------------------------------
 
@@ -100,8 +114,30 @@ public:
 
     void setLabel(int rowId, const QString& label);
 
+    /// Sets a row's background to highlight slot `slot`, or to the default with 0.
+    void setHighlight(int rowId, int slot);
+
+    /// True when a row shows more than one bit and has not been unpacked yet.
+    [[nodiscard]] bool canUnpack(int rowId) const;
+
+    /// Creates one child row per bit of `rowId`, most significant first.
+    ///
+    /// Unpacking is a property of the display: the bits are rows over the same signal, so the
+    /// kernel still streams it once however many of them are on screen. Arrays gain further
+    /// levels later, which is why this hangs children off a row rather than being a special
+    /// case of the top level.
+    void unpack(int rowId);
+
+    /// Moves rows to `targetGroup` — -1 for the top level — inserting at `position`, or at the
+    /// end when `position` is negative. Returns false when the move would make a cycle.
+    bool moveRowsTo(const QVector<int>& rowIds, int targetGroup, int position);
+
     /// Moves `rowId` into `group`, or to the top level when `group` is -1.
     void moveToGroup(int rowId, int group);
+
+    /// The bits a row shows, high first. Equal for a single bit, and the whole signal for a
+    /// row that has not been sliced.
+    [[nodiscard]] static std::pair<std::uint32_t, std::uint32_t> bitRange(const WaveRow& waveRow);
 
     // --- reading -----------------------------------------------------------
 
@@ -142,6 +178,16 @@ public:
     [[nodiscard]] QVariant headerData(int section, Qt::Orientation orientation,
                                       int role) const override;
 
+    [[nodiscard]] bool hasChildren(const QModelIndex& parent = {}) const override;
+    [[nodiscard]] bool canFetchMore(const QModelIndex& parent) const override;
+    void fetchMore(const QModelIndex& parent) override;
+
+    [[nodiscard]] Qt::DropActions supportedDropActions() const override;
+    [[nodiscard]] QStringList mimeTypes() const override;
+    [[nodiscard]] QMimeData* mimeData(const QModelIndexList& indexes) const override;
+    bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column,
+                      const QModelIndex& parent) override;
+
 Q_SIGNALS:
     /// The set of displayed signals changed, so the subscription should be brought up to date.
     void displayedSignalsChanged();
@@ -156,7 +202,11 @@ private:
     /// Marks a row and its descendants dead and takes them out of the tree.
     void killSubtree(int rowId);
 
+    /// True when `candidate` is `rowId` or lies below it.
+    [[nodiscard]] bool isDescendantOf(int candidate, int rowId) const;
+
     const KernelSession* kernelSession;
+    const Theme* theme;
     QVector<WaveRow> rows;
     QVector<int> roots;
     runtime::SimTime cursorTime = 0;

@@ -834,9 +834,11 @@ it would sit beside is how a tool acquires a number nobody reads.
 
 **What this does not change.** Panning with the middle button, the keyboard zoom
 and pan, cursor locking, grouping, per-row radix and bit-range extraction all
-stay as they are. Ctrl now means *zoom* on the wheel, so whether Ctrl+drag should
-go on meaning *pan* is settled when this is implemented rather than left to
-accumulate.
+stay as they are.
+
+Panning is the middle button's alone. Ctrl+drag used to pan as well, and no
+longer does: Ctrl means *zoom* on the wheel, and a modifier that meant zoom under
+one hand and pan under the other is a coin toss every time it is reached for.
 
 ---
 

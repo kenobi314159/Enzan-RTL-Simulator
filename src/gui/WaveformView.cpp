@@ -2,8 +2,10 @@
 
 #include "gui/WaveformView.h"
 
+#include <QApplication>
 #include <QFontMetrics>
 #include <QHeaderView>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -251,6 +253,116 @@ void WaveformView::setCursorLocked(int index, bool locked) {
     Q_EMIT cursorsChanged();
 }
 
+int WaveformView::selectedRow() const {
+    if (rows == nullptr) return -1;
+    return waveModel->rowIdOf(rows->currentIndex());
+}
+
+int WaveformView::rowAt(int y) const {
+    for (const RowGeometry& geometry : visibleRows()) {
+        if (y >= geometry.top && y < geometry.top + geometry.height) return geometry.rowId;
+    }
+    return -1;
+}
+
+int WaveformView::cursorLabelAt(const QPoint& point) const {
+    // Walked backwards so that the label drawn last — and so on top — is the one a click on
+    // two overlapping labels picks.
+    for (int index = static_cast<int>(cursorList.size()); index-- > 0;) {
+        if (cursorList[index].labelRect.contains(point)) return index;
+    }
+    return -1;
+}
+
+runtime::SimTime WaveformView::snapToEdge(int rowId, runtime::SimTime time) const {
+    const WaveRow* waveRow = waveModel->row(rowId);
+    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return time;
+
+    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
+    const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
+    if (record == wavedb::WaveformDatabase::NotRecorded) return time;
+
+    const std::uint64_t nearest = database.nearestChange(record, time);
+    if (nearest == wavedb::NoChange) return time;
+
+    // The radius is a pixel distance, so it is compared as one. A window of time units would
+    // snap from further and further away as the view zoomed out.
+    const runtime::SimTime edge = database.timeOfChange(record, nearest);
+    if (std::abs(timeAxis.xOf(edge) - timeAxis.xOf(time)) > SnapPixels) return time;
+
+    return edge;
+}
+
+void WaveformView::stepActiveCursorToEdge(bool forward) {
+    const int rowId = selectedRow();
+    const WaveRow* waveRow = waveModel->row(rowId);
+    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return;
+    if (cursorList.isEmpty()) return;
+
+    const int index = std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1);
+    if (cursorList[index].locked) return;
+
+    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
+    const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
+    if (record == wavedb::WaveformDatabase::NotRecorded) return;
+
+    const runtime::SimTime from = cursorList[index].time;
+    const std::uint64_t change = forward ? database.nextChangeAfter(record, from)
+                                         : database.previousChangeBefore(record, from);
+    if (change == wavedb::NoChange) return;
+
+    cursorList[index].time = database.timeOfChange(record, change);
+
+    // The reader is stepping towards something they want to look at, so the view goes with
+    // them rather than leaving the cursor off the side of the window.
+    if (cursorList[index].time < timeAxis.start() || cursorList[index].time > timeAxis.end()) {
+        timeAxis.setRange(cursorList[index].time > timeAxis.span() / 2
+                              ? cursorList[index].time - (timeAxis.span() / 2)
+                              : 0,
+                          timeAxis.span());
+        following = false;
+        syncScrollBar();
+        Q_EMIT rangeChanged();
+    }
+
+    update();
+    Q_EMIT cursorsChanged();
+}
+
+void WaveformView::pickAt(const QPoint& point) {
+    const int rowId = rowAt(point.y());
+
+    // Selecting through the tree rather than keeping a selection of our own: the names and the
+    // traces are one row to the reader, and two ideas of which row is current would drift.
+    if (rowId >= 0 && rows != nullptr) {
+        const QModelIndex index = waveModel->indexOfRow(rowId);
+        if (index.isValid()) rows->setCurrentIndex(index);
+    }
+
+    if (cursorList.isEmpty()) return;
+
+    const int index = std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1);
+    if (cursorList[index].locked) return;
+
+    cursorList[index].time = snapToEdge(rowId, timeAxis.timeAt(point.x()));
+    update();
+    Q_EMIT cursorsChanged();
+}
+
+void WaveformView::renameCursor(int index) {
+    if (index < 0 || index >= cursorList.size()) return;
+
+    bool accepted = false;
+    const QString name =
+        QInputDialog::getText(this, tr("Rename Cursor"), tr("Cursor name:"), QLineEdit::Normal,
+                              cursorList[index].name, &accepted);
+    if (!accepted || name.isEmpty()) return;
+
+    cursorList[index].name = name;
+    update();
+    Q_EMIT cursorsChanged();
+}
+
 runtime::SimTime WaveformView::activeCursorTime() const {
     if (cursorList.isEmpty()) return 0;
     return cursorList[std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1)].time;
@@ -298,12 +410,67 @@ void WaveformView::paintEvent(QPaintEvent* /*event*/) {
         drawable.setRight(std::max(drawable.left(), static_cast<int>(std::ceil(extentX))));
     }
 
+    // Backgrounds first and unclipped: a highlight marks the whole row, including the part of
+    // it the design has not been simulated to yet.
+    const QRect area = traceArea();
+    painter.save();
+    painter.setClipRect(area);
+    for (const RowGeometry& geometry : visibleRows()) paintRowBackground(painter, geometry, area);
+    painter.restore();
+
     painter.save();
     painter.setClipRect(drawable);
     for (const RowGeometry& geometry : visibleRows()) paintRow(painter, geometry);
     painter.restore();
 
+    paintZoomBand(painter);
     paintCursors(painter);
+}
+
+void WaveformView::paintRowBackground(QPainter& painter, const RowGeometry& geometry,
+                                      const QRect& area) {
+    const WaveRow* waveRow = waveModel->row(geometry.rowId);
+    if (waveRow == nullptr) return;
+
+    const QRect rowRect(area.left(), geometry.top, area.width(), geometry.height);
+    if (rowRect.bottom() < area.top() || rowRect.top() > area.bottom()) return;
+
+    if (waveRow->highlight > 0) {
+        painter.fillRect(rowRect, theme->color(highlightColor(waveRow->highlight)));
+    }
+
+    // The selected row is tinted too, because it is what Tab steps along and what a click just
+    // picked: a reader has to be able to see which one that is.
+    if (geometry.rowId == selectedRow()) {
+        painter.fillRect(rowRect, theme->color(ThemeColor::WaveSelectedRow));
+    }
+}
+
+void WaveformView::paintZoomBand(QPainter& painter) {
+    if (!zoomDragging) return;
+
+    const int travelled = zoomToX - zoomFromX;
+    if (std::abs(travelled) < MinimumDragPixels) return;
+
+    const QRect area = traceArea();
+
+    // Only a backwards drag has a range to show. A forwards one is about to zoom to fit, and
+    // shading the part of the window it swept over would suggest it was going to frame that.
+    if (travelled < 0) {
+        const QRect band(zoomToX, area.top(), -travelled, area.height());
+        painter.fillRect(band, theme->color(ThemeColor::WaveZoomBand));
+
+        const runtime::SimTime from = timeAxis.timeAt(zoomToX);
+        const runtime::SimTime to = timeAxis.timeAt(zoomFromX);
+        painter.setPen(theme->color(ThemeColor::WaveRulerForeground));
+        painter.drawText(band, Qt::AlignCenter,
+                         TimeAxis::format(to - from, kernelSession->timeScale()));
+        return;
+    }
+
+    painter.setPen(theme->color(ThemeColor::WaveRulerForeground));
+    painter.drawText(QRect(zoomFromX, area.top(), travelled, area.height()), Qt::AlignCenter,
+                     tr("zoom to fit"));
 }
 
 void WaveformView::paintBeyondExtent(QPainter& painter) {
@@ -419,7 +586,7 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, const 
             continue;
         }
 
-        if (sample.changeIndex == wavedb::Sample::NoChange) {
+        if (sample.changeIndex == wavedb::NoChange) {
             previousY = -1;
             continue;
         }
@@ -485,7 +652,7 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, const Wav
             continue;
         }
 
-        if (sample.changeIndex == wavedb::Sample::NoChange) {
+        if (sample.changeIndex == wavedb::NoChange) {
             ++column;
             continue;
         }
@@ -539,14 +706,20 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, const Wav
     }
 }
 
+// Fills in each cursor's label rectangle as it draws, which is what `cursorLabelAt` then hits
+// against; see the comment on `WaveCursor::labelRect`.
 void WaveformView::paintCursors(QPainter& painter) {
     const QRect area = traceArea();
     const QFontMetrics metrics(font());
 
     for (int index = 0; index < cursorList.size(); ++index) {
-        const WaveCursor& cursor = cursorList[index];
+        WaveCursor& cursor = cursorList[index];
+
         const double x = timeAxis.xOf(cursor.time);
-        if (x < 0.0 || x > width()) continue;
+        if (x < 0.0 || x > width()) {
+            cursor.labelRect = QRect();
+            continue;
+        }
 
         const QColor colour = cursor.locked ? theme->color(ThemeColor::WaveCursorLocked)
                                             : theme->color(ThemeColor::WaveCursor);
@@ -556,12 +729,22 @@ void WaveformView::paintCursors(QPainter& painter) {
         painter.setPen(QPen(colour, index == active ? 2 : 1));
         painter.drawLine(static_cast<int>(x), 0, static_cast<int>(x), area.bottom());
 
-        const QString label = cursor.name;
-        const int textWidth = metrics.horizontalAdvance(label) + 8;
-        const QRect tag(static_cast<int>(x) + 1, 0, textWidth, rulerHeight());
-        painter.fillRect(tag, colour);
+        // The time goes on the label rather than in a status bar, where only the active
+        // cursor's would fit. Reading two of them at once is the whole point of locking one.
+        const QString label = QStringLiteral("%1  %2").arg(
+            cursor.name, TimeAxis::format(cursor.time, kernelSession->timeScale()));
+
+        // Tucked to the left of the line when a label at the right would run off the edge, so
+        // that a cursor near the end of the window can still be read and clicked.
+        const int textWidth = metrics.horizontalAdvance(label) + 10;
+        const int left = static_cast<int>(x) + 1 + textWidth <= width()
+                             ? static_cast<int>(x) + 1
+                             : static_cast<int>(x) - textWidth;
+
+        cursor.labelRect = QRect(std::max(0, left), 0, textWidth, rulerHeight());
+        painter.fillRect(cursor.labelRect, colour);
         painter.setPen(theme->color(ThemeColor::WaveCursorText));
-        painter.drawText(tag, Qt::AlignCenter, label);
+        painter.drawText(cursor.labelRect, Qt::AlignCenter, label);
     }
 }
 
@@ -572,24 +755,60 @@ void WaveformView::paintCursors(QPainter& painter) {
 void WaveformView::mousePressEvent(QMouseEvent* event) {
     setFocus(Qt::MouseFocusReason);
 
-    // Panning on the middle button and on Ctrl+drag, so that a plain drag stays available for
-    // scrubbing the cursor, which is what a reader does far more often.
-    if (event->button() == Qt::MiddleButton
-        || (event->button() == Qt::LeftButton
-            && event->modifiers().testFlag(Qt::ControlModifier))) {
+    // Panning is the middle button's, and only the middle button's. Ctrl means *zoom* on the
+    // wheel (section 10.7), and a modifier that meant zoom in one hand and pan in the other
+    // would be a coin toss every time.
+    if (event->button() == Qt::MiddleButton) {
         panning = true;
         panFrom = event->pos();
         setCursor(Qt::ClosedHandCursor);
         return;
     }
 
-    if (event->button() == Qt::LeftButton) {
-        following = false;
-        moveActiveCursorTo(event->position().x());
+    if (event->button() == Qt::RightButton) {
+        zoomDragging = true;
+        zoomFromX = event->pos().x();
+        zoomToX = zoomFromX;
+        return;
     }
+
+    if (event->button() != Qt::LeftButton) return;
+
+    // A click on a cursor's label picks that cursor rather than moving the current one, which
+    // is how a reader swaps between them without reaching for a menu.
+    const int label = cursorLabelAt(event->pos());
+    if (label >= 0) {
+        setActiveCursor(label);
+        return;
+    }
+
+    following = false;
+    pickAt(event->pos());
+}
+
+void WaveformView::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mouseDoubleClickEvent(event);
+        return;
+    }
+
+    const int label = cursorLabelAt(event->pos());
+    if (label < 0) {
+        QWidget::mouseDoubleClickEvent(event);
+        return;
+    }
+
+    setActiveCursor(label);
+    renameCursor(label);
 }
 
 void WaveformView::mouseMoveEvent(QMouseEvent* event) {
+    if (zoomDragging) {
+        zoomToX = event->pos().x();
+        update();
+        return;
+    }
+
     if (panning) {
         const int delta = panFrom.x() - event->pos().x();
         timeAxis.pan(delta);
@@ -600,14 +819,41 @@ void WaveformView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
-    if (event->buttons().testFlag(Qt::LeftButton)) moveActiveCursorTo(event->position().x());
+    // Scrubbing: the cursor follows the pointer, snapping as it goes, so that dragging along
+    // a trace stops on its edges rather than between them.
+    if (event->buttons().testFlag(Qt::LeftButton)) pickAt(event->pos());
 }
 
 void WaveformView::mouseReleaseEvent(QMouseEvent* event) {
-    if (panning && (event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton)) {
+    if (panning && event->button() == Qt::MiddleButton) {
         panning = false;
         unsetCursor();
+        return;
     }
+
+    if (!zoomDragging || event->button() != Qt::RightButton) return;
+
+    zoomDragging = false;
+    zoomToX = event->pos().x();
+    const int travelled = zoomToX - zoomFromX;
+    update();
+
+    // A right-click is not a gesture. Without this, every mis-click while reaching for the
+    // context menu would throw away the range the reader had zoomed to.
+    if (std::abs(travelled) < MinimumDragPixels) return;
+
+    if (travelled < 0) {
+        // Swept back across what was just looked at: frame it.
+        timeAxis.showRange(timeAxis.timeAt(zoomToX), timeAxis.timeAt(zoomFromX));
+        following = false;
+        syncScrollBar();
+        update();
+        Q_EMIT rangeChanged();
+        return;
+    }
+
+    // Swept forward past the end: show everything.
+    zoomFit();
 }
 
 void WaveformView::wheelEvent(QWheelEvent* event) {
@@ -617,10 +863,17 @@ void WaveformView::wheelEvent(QWheelEvent* event) {
         return;
     }
 
-    if (event->modifiers().testFlag(Qt::ShiftModifier)) {
+    if (event->modifiers().testFlag(Qt::ControlModifier)) {
+        timeAxis.zoom(notches > 0 ? 1.0 / ZoomStep : ZoomStep, event->position().x());
+    } else if (event->modifiers().testFlag(Qt::ShiftModifier)) {
         timeAxis.pan(notches > 0 ? -60.0 : 60.0);
     } else {
-        timeAxis.zoom(notches > 0 ? 1.0 / ZoomStep : ZoomStep, event->position().x());
+        // A bare wheel scrolls the list, wherever the pointer is. The names and the traces are
+        // two widgets and one window, and a wheel that meant different things on either side
+        // of the splitter would make an internal boundary decide what it did (section 10.7).
+        // The event is handed to the tree so that it scrolls exactly as the tree does.
+        if (rows != nullptr) QCoreApplication::sendEvent(rows->viewport(), event);
+        return;
     }
 
     following = false;
@@ -636,6 +889,7 @@ void WaveformView::keyPressEvent(QKeyEvent* event) {
     case Qt::Key_Equal: zoomIn(); return;
     case Qt::Key_Minus: zoomOut(); return;
     case Qt::Key_F: zoomFit(); return;
+    case Qt::Key_Home: setCursorTime(active, 0); return;
     case Qt::Key_Left:
         timeAxis.pan(-60.0);
         following = false;
@@ -652,6 +906,13 @@ void WaveformView::keyPressEvent(QKeyEvent* event) {
         return;
     default: QWidget::keyPressEvent(event); return;
     }
+}
+
+bool WaveformView::focusNextPrevChild(bool next) {
+    // Tab measures rather than navigating. A wave window is read by pinning one cursor and
+    // walking another along a signal's edges, and that is worth a key you can hold down.
+    stepActiveCursorToEdge(next);
+    return true;
 }
 
 } // namespace enzan::gui

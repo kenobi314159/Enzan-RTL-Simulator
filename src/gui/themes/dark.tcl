@@ -77,3 +77,16 @@ theme wave.cursor.text             #1a1300
 # Past the point the kernel has simulated to. Distinct from the background so that "the design
 # has not got there yet" does not read as "this signal is flat".
 theme wave.beyond.recorded         #090c12
+
+# The band drawn over the range a right-button drag is about to zoom to.
+theme wave.zoom.band               #40ffd866
+
+# The five backgrounds a row can be highlighted with. Dark on purpose: a highlight marks a row
+# for the reader's own benefit and must not out-shout the trace drawn on top of it, which is the
+# thing they are actually looking at. They differ in hue rather than in brightness so that five
+# highlighted rows are told apart at a glance without any of them dominating.
+theme wave.highlight.1             #17222e
+theme wave.highlight.2             #1c2418
+theme wave.highlight.3             #2a2118
+theme wave.highlight.4             #261a24
+theme wave.highlight.5             #16252a

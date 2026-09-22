@@ -4,13 +4,25 @@
 
 #include "wavedb/WaveformDatabase.h"
 
+#include <QDataStream>
+#include <QIODevice>
+#include <QMimeData>
+
 #include <algorithm>
 #include <utility>
 
 namespace enzan::gui {
 
-WaveformModel::WaveformModel(const KernelSession& session, QObject* parent)
-    : QAbstractItemModel(parent), kernelSession(&session) {}
+namespace {
+
+/// The drag payload a wave row travels in. Private to this model: rows are moved within one
+/// window, and a format another application could parse would be a promise to keep it stable.
+constexpr const char* RowMimeType = "application/x-enzan-wave-rows";
+
+} // namespace
+
+WaveformModel::WaveformModel(const KernelSession& session, const Theme& themeToUse, QObject* parent)
+    : QAbstractItemModel(parent), kernelSession(&session), theme(&themeToUse) {}
 
 // ---------------------------------------------------------------------------
 // Tree bookkeeping
@@ -178,6 +190,111 @@ void WaveformModel::setLabel(int rowId, const QString& label) {
     Q_EMIT dataChanged(changed, changed, {Qt::DisplayRole, Qt::EditRole});
 }
 
+void WaveformModel::setHighlight(int rowId, int slot) {
+    if (row(rowId) == nullptr) return;
+
+    rows[rowId].highlight = std::clamp(slot, 0, HighlightSlots);
+    const QModelIndex changed = indexOfRow(rowId);
+    Q_EMIT dataChanged(changed, changed.siblingAtColumn(ColumnCount - 1),
+                       {Qt::BackgroundRole, HighlightRole});
+}
+
+std::pair<std::uint32_t, std::uint32_t> WaveformModel::bitRange(const WaveRow& waveRow) {
+    if (waveRow.sliced) return {waveRow.highBit, waveRow.lowBit};
+    return {waveRow.signalWidth == 0 ? 0 : waveRow.signalWidth - 1, 0};
+}
+
+bool WaveformModel::canUnpack(int rowId) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return false;
+    if (waveRow->unpacked) return false;
+
+    const auto [high, low] = bitRange(*waveRow);
+    return high > low;
+}
+
+void WaveformModel::unpack(int rowId) {
+    if (!canUnpack(rowId)) return;
+
+    const auto [high, low] = bitRange(rows[rowId]);
+    const auto count = static_cast<int>(high - low + 1);
+
+    beginInsertRows(indexOfRow(rowId), 0, count - 1);
+
+    rows[rowId].unpacked = true;
+    for (std::uint32_t bit = high + 1; bit-- > low;) {
+        WaveRow child;
+        child.kind = WaveRow::Kind::Signal;
+        child.signalIndex = rows[rowId].signalIndex;
+        child.signalWidth = rows[rowId].signalWidth;
+        child.radix = rows[rowId].radix;
+        child.highlight = rows[rowId].highlight;
+        child.sliced = true;
+        child.highBit = bit;
+        child.lowBit = bit;
+        child.label = QStringLiteral("%1[%2]").arg(rows[rowId].label).arg(bit);
+        child.parent = rowId;
+
+        const int childId = static_cast<int>(rows.size());
+        rows.push_back(child);
+        rows[rowId].children.push_back(childId);
+    }
+
+    endInsertRows();
+}
+
+bool WaveformModel::isDescendantOf(int candidate, int rowId) const {
+    for (int walk = candidate; walk >= 0; walk = rows[walk].parent) {
+        if (walk == rowId) return true;
+    }
+    return false;
+}
+
+bool WaveformModel::moveRowsTo(const QVector<int>& rowIds, int targetGroup, int position) {
+    if (targetGroup >= 0
+        && (row(targetGroup) == nullptr || rows[targetGroup].kind != WaveRow::Kind::Group)) {
+        return false;
+    }
+
+    // A group dropped inside itself would make the tree a cycle and the view an unbounded
+    // recursion, so the whole move is refused rather than half-performed.
+    for (const int rowId : rowIds) {
+        if (row(rowId) == nullptr) return false;
+        if (targetGroup >= 0 && isDescendantOf(targetGroup, rowId)) return false;
+    }
+
+    int at = position;
+    for (const int rowId : rowIds) {
+        const int sourceParent = rows[rowId].parent;
+        const int sourceRow = rowOf(rowId);
+        if (sourceRow < 0) continue;
+
+        const QModelIndex sourceIndex = sourceParent < 0 ? QModelIndex() : indexOfRow(sourceParent);
+        beginRemoveRows(sourceIndex, sourceRow, sourceRow);
+        siblingsOf(rowId).removeAt(sourceRow);
+        endRemoveRows();
+
+        // Taking a row out from before the insertion point moves that point up by one; not
+        // accounting for it turns "drop between these two" into "drop one further down" every
+        // time a row is dragged downwards within its own parent.
+        if (sourceParent == targetGroup && at > sourceRow) --at;
+
+        QVector<int>& destination = targetGroup < 0 ? roots : rows[targetGroup].children;
+        const int insertAt =
+            at < 0 || at > destination.size() ? static_cast<int>(destination.size()) : at;
+
+        const QModelIndex targetIndex = targetGroup < 0 ? QModelIndex() : indexOfRow(targetGroup);
+        beginInsertRows(targetIndex, insertAt, insertAt);
+        rows[rowId].parent = targetGroup;
+        destination.insert(insertAt, rowId);
+        endInsertRows();
+
+        at = insertAt + 1;
+    }
+
+    return true;
+}
+
 void WaveformModel::detach(int rowId) {
     const int position = rowOf(rowId);
     if (position >= 0) siblingsOf(rowId).removeAt(position);
@@ -310,6 +427,13 @@ QVariant WaveformModel::data(const QModelIndex& index, int role) const {
 
     if (role == RowIdRole) return rowId;
 
+    if (role == HighlightRole) return waveRow.highlight;
+
+    if (role == Qt::BackgroundRole) {
+        if (waveRow.highlight == 0) return {};
+        return theme->color(highlightColor(waveRow.highlight));
+    }
+
     if (role == Qt::EditRole && index.column() == NameColumn) return waveRow.label;
 
     if (role == Qt::ToolTipRole && waveRow.kind == WaveRow::Kind::Signal) {
@@ -339,11 +463,85 @@ bool WaveformModel::setData(const QModelIndex& index, const QVariant& value, int
 }
 
 Qt::ItemFlags WaveformModel::flags(const QModelIndex& index) const {
-    if (!index.isValid()) return Qt::NoItemFlags;
+    // The root accepts drops, which is what makes a row draggable back out to the top level.
+    if (!index.isValid()) return Qt::ItemIsDropEnabled;
 
-    Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+    Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
     if (index.column() == NameColumn) result |= Qt::ItemIsEditable;
+
+    // Only a group accepts a drop *onto* it. Dropping *between* rows is a drop on their
+    // parent, which is why the root is drop-enabled above and a signal row is not: without
+    // that, dragging a row onto another signal would silently do nothing.
+    const int rowId = rowIdOf(index);
+    if (rowId >= 0 && rows[rowId].kind == WaveRow::Kind::Group) result |= Qt::ItemIsDropEnabled;
+
     return result;
+}
+
+bool WaveformModel::hasChildren(const QModelIndex& parent) const {
+    if (rowCount(parent) > 0) return true;
+
+    // A row that can still be unpacked reports children it has not made yet, which is what
+    // puts the expander in front of a multi-bit signal before anybody has clicked it.
+    return canFetchMore(parent);
+}
+
+bool WaveformModel::canFetchMore(const QModelIndex& parent) const {
+    return canUnpack(rowIdOf(parent));
+}
+
+void WaveformModel::fetchMore(const QModelIndex& parent) {
+    unpack(rowIdOf(parent));
+}
+
+Qt::DropActions WaveformModel::supportedDropActions() const {
+    // Move only. A copy would put two rows over one signal with no way to tell them apart,
+    // which is what the bit-range extraction of section 10.3 is for and does properly.
+    return Qt::MoveAction;
+}
+
+QStringList WaveformModel::mimeTypes() const {
+    return {QString::fromUtf8(RowMimeType)};
+}
+
+QMimeData* WaveformModel::mimeData(const QModelIndexList& indexes) const {
+    QVector<int> rowIds;
+    for (const QModelIndex& index : indexes) {
+        if (index.column() != NameColumn) continue;
+
+        const int rowId = rowIdOf(index);
+        if (rowId >= 0 && !rowIds.contains(rowId)) rowIds.push_back(rowId);
+    }
+    if (rowIds.isEmpty()) return nullptr;
+
+    QByteArray encoded;
+    QDataStream stream(&encoded, QIODevice::WriteOnly);
+    for (const int rowId : rowIds) stream << rowId;
+
+    auto* data = new QMimeData;
+    data->setData(QString::fromUtf8(RowMimeType), encoded);
+    return data;
+}
+
+bool WaveformModel::dropMimeData(const QMimeData* data, Qt::DropAction action, int row,
+                                 int /*column*/, const QModelIndex& parent) {
+    if (action == Qt::IgnoreAction) return true;
+    if (data == nullptr || !data->hasFormat(QString::fromUtf8(RowMimeType))) return false;
+
+    QByteArray encoded = data->data(QString::fromUtf8(RowMimeType));
+    QDataStream stream(&encoded, QIODevice::ReadOnly);
+
+    QVector<int> rowIds;
+    while (!stream.atEnd()) {
+        int rowId = -1;
+        stream >> rowId;
+        if (rowId >= 0) rowIds.push_back(rowId);
+    }
+    if (rowIds.isEmpty()) return false;
+
+    // A drop *onto* a row arrives with a negative row number, meaning "inside, position
+    // unspecified"; a drop *between* rows carries the position it landed at.
+    return moveRowsTo(rowIds, rowIdOf(parent), row);
 }
 
 QVariant WaveformModel::headerData(int section, Qt::Orientation orientation, int role) const {

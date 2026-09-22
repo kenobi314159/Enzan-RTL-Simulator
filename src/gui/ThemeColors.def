@@ -60,3 +60,13 @@ ENZAN_THEME_COLOR(WaveCursor, "wave.cursor")
 ENZAN_THEME_COLOR(WaveCursorLocked, "wave.cursor.locked")
 ENZAN_THEME_COLOR(WaveCursorText, "wave.cursor.text")
 ENZAN_THEME_COLOR(WaveBeyondRecorded, "wave.beyond.recorded")
+ENZAN_THEME_COLOR(WaveZoomBand, "wave.zoom.band")
+
+// The five backgrounds a row may be highlighted with (section 10.7). **These five MUST stay
+// adjacent and in order**: `highlightColor` reaches them by adding to the first, which is what
+// lets a menu offer "highlight 3" without a table mapping numbers to enumerators.
+ENZAN_THEME_COLOR(WaveHighlight1, "wave.highlight.1")
+ENZAN_THEME_COLOR(WaveHighlight2, "wave.highlight.2")
+ENZAN_THEME_COLOR(WaveHighlight3, "wave.highlight.3")
+ENZAN_THEME_COLOR(WaveHighlight4, "wave.highlight.4")
+ENZAN_THEME_COLOR(WaveHighlight5, "wave.highlight.5")
