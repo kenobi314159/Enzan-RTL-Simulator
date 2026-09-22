@@ -1043,6 +1043,10 @@ Per-commit jobs:
 - Unit and golden test suites.
 - Sanitiser build (ASan+UBSan) over unit and golden suites.
 - `clang-format` and `clang-tidy` checks.
+- Graphical front end: built against Qt 6 and Tcl, with its tests run. They need
+  no display — they select Qt's offscreen platform from inside the test binary
+  rather than trusting the environment, so a GUI test that passed only when
+  somebody happened to be logged in cannot creep in.
 
 Nightly jobs:
 
