@@ -49,6 +49,9 @@ struct DatabaseOptions {
     std::filesystem::path spillDirectory;
 };
 
+/// The absence of a value change, where an index into a signal's changes is expected.
+inline constexpr std::uint64_t NoChange = ~std::uint64_t{0};
+
 /// What the waveform view needs to draw one pixel column.
 ///
 /// Deliberately not a value: `sample` fills an array of these without allocating, and the
@@ -68,8 +71,6 @@ struct Sample {
 
     /// True when the value in effect anywhere in the column has an X or Z bit.
     bool anyUnknown = false;
-
-    static constexpr std::uint64_t NoChange = ~std::uint64_t{0};
 };
 
 /// One recorded value change, as `changesIn` returns it.
@@ -154,6 +155,25 @@ public:
     /// The value in effect at `time`, or nothing when `time` precedes the first change.
     [[nodiscard]] std::optional<eir::BitVector> valueAt(std::uint32_t recordIndex,
                                                         runtime::SimTime time) const;
+
+    /// Index of the first change strictly after `time`, or `NoChange`.
+    ///
+    /// Edge navigation is a query rather than a scan because it is what a reader does most in
+    /// a wave window: snapping a cursor to the edge under the pointer, and stepping a cursor
+    /// from edge to edge along a signal (DESIGN_GUIDE.md sections 7.1 and 10.7). Both happen
+    /// per keystroke and per click, on traces with millions of transitions.
+    [[nodiscard]] std::uint64_t nextChangeAfter(std::uint32_t recordIndex,
+                                                runtime::SimTime time) const;
+
+    /// Index of the last change strictly before `time`, or `NoChange`.
+    [[nodiscard]] std::uint64_t previousChangeBefore(std::uint32_t recordIndex,
+                                                     runtime::SimTime time) const;
+
+    /// Index of the change whose time is closest to `time`, or `NoChange` when the signal has
+    /// none. A tie goes to the earlier change, so that the answer does not depend on which
+    /// side of an edge a click landed by a rounding.
+    [[nodiscard]] std::uint64_t nearestChange(std::uint32_t recordIndex,
+                                              runtime::SimTime time) const;
 
     /// Appends every change with a time in `[from, to)` to `out`.
     ///

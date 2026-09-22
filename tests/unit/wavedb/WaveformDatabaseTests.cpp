@@ -130,7 +130,7 @@ TEST(WaveformDatabaseTests, SampleGivesOneConstantColumnPerChange) {
 
     EXPECT_EQ(columns[0].startTime, 0U);
     EXPECT_EQ(columns[0].transitions, 0U);
-    EXPECT_EQ(columns[0].changeIndex, Sample::NoChange);
+    EXPECT_EQ(columns[0].changeIndex, enzan::wavedb::NoChange);
 
     EXPECT_EQ(columns[1].startTime, 10U);
     EXPECT_EQ(columns[1].transitions, 0U);
@@ -309,6 +309,57 @@ TEST(WaveformDatabaseTests, AnUnwritableSpillDirectoryKeepsTheDataInMemory) {
     for (std::uint64_t index = 0; index < 100; ++index) {
         EXPECT_EQ(database.valueOfChange(signal, index), BitVector::fromUInt64(index, 8));
     }
+}
+
+TEST(WaveformDatabaseTests, EdgeNavigationFindsTheNeighbouringChanges) {
+    // What a cursor snaps to and what Tab steps along (DESIGN_GUIDE.md 10.7). Both happen per
+    // click and per keystroke, so both are one query rather than a scan.
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/clk", 1);
+
+    for (std::uint64_t time = 10; time <= 50; time += 10) {
+        appendLiteral(database, signal, time, "1'b1");
+    }
+
+    EXPECT_EQ(database.nextChangeAfter(signal, 0), 0U);
+    EXPECT_EQ(database.nextChangeAfter(signal, 10), 1U) << "strictly after, so 10 is behind us";
+    EXPECT_EQ(database.nextChangeAfter(signal, 45), 4U);
+    EXPECT_EQ(database.nextChangeAfter(signal, 50), enzan::wavedb::NoChange)
+        << "stepping past the last edge must stop rather than wrap";
+
+    EXPECT_EQ(database.previousChangeBefore(signal, 50), 3U);
+    EXPECT_EQ(database.previousChangeBefore(signal, 11), 0U);
+    EXPECT_EQ(database.previousChangeBefore(signal, 10), enzan::wavedb::NoChange)
+        << "strictly before, so 10 is ahead of us";
+    EXPECT_EQ(database.previousChangeBefore(signal, 0), enzan::wavedb::NoChange);
+}
+
+TEST(WaveformDatabaseTests, TheNearestChangeIsFoundFromEitherSide) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/clk", 1);
+
+    for (std::uint64_t time = 10; time <= 50; time += 10) {
+        appendLiteral(database, signal, time, "1'b1");
+    }
+
+    EXPECT_EQ(database.nearestChange(signal, 21), 1U);
+    EXPECT_EQ(database.nearestChange(signal, 29), 2U);
+    EXPECT_EQ(database.nearestChange(signal, 30), 2U) << "a change exactly at the time is it";
+    EXPECT_EQ(database.nearestChange(signal, 0), 0U);
+    EXPECT_EQ(database.nearestChange(signal, 1'000), 4U);
+
+    // A tie goes to the earlier change, so that which side of an edge a click rounded to does
+    // not decide the answer.
+    EXPECT_EQ(database.nearestChange(signal, 25), 1U);
+}
+
+TEST(WaveformDatabaseTests, EdgeNavigationOnATraceWithNothingInItSaysSo) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/x", 1);
+
+    EXPECT_EQ(database.nearestChange(signal, 10), enzan::wavedb::NoChange);
+    EXPECT_EQ(database.nextChangeAfter(signal, 10), enzan::wavedb::NoChange);
+    EXPECT_EQ(database.previousChangeBefore(signal, 10), enzan::wavedb::NoChange);
 }
 
 TEST(WaveformDatabaseTests, IndexBytesGrowWithTheTrace) {

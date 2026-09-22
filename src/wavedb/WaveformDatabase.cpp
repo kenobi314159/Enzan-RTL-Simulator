@@ -150,6 +150,47 @@ std::optional<eir::BitVector> WaveformDatabase::valueAt(std::uint32_t recordInde
     return valueOfChange(recordIndex, changeIndex);
 }
 
+std::uint64_t WaveformDatabase::nextChangeAfter(std::uint32_t recordIndex,
+                                                runtime::SimTime time) const {
+    const SignalStore& store = storeAt(recordIndex);
+
+    const auto after = std::ranges::upper_bound(store.times, time);
+    if (after == store.times.end()) return NoChange;
+    return static_cast<std::uint64_t>(after - store.times.begin());
+}
+
+std::uint64_t WaveformDatabase::previousChangeBefore(std::uint32_t recordIndex,
+                                                     runtime::SimTime time) const {
+    const SignalStore& store = storeAt(recordIndex);
+
+    const auto notBefore = std::ranges::lower_bound(store.times, time);
+    if (notBefore == store.times.begin()) return NoChange;
+    return static_cast<std::uint64_t>(notBefore - store.times.begin()) - 1;
+}
+
+std::uint64_t WaveformDatabase::nearestChange(std::uint32_t recordIndex,
+                                              runtime::SimTime time) const {
+    const SignalStore& store = storeAt(recordIndex);
+    if (store.times.empty()) return NoChange;
+
+    const std::uint64_t later = nextChangeAfter(recordIndex, time);
+    const std::uint64_t earlier = previousChangeBefore(recordIndex, time);
+
+    // A change exactly at `time` is neither strictly before nor strictly after it, so it is
+    // looked for separately rather than being missed by both.
+    const auto atTime = std::ranges::lower_bound(store.times, time);
+    if (atTime != store.times.end() && *atTime == time) {
+        return static_cast<std::uint64_t>(atTime - store.times.begin());
+    }
+
+    if (later == NoChange) return earlier;
+    if (earlier == NoChange) return later;
+
+    const runtime::SimTime forward = store.times[static_cast<std::size_t>(later)] - time;
+    const runtime::SimTime backward = time - store.times[static_cast<std::size_t>(earlier)];
+    return backward <= forward ? earlier : later;
+}
+
 void WaveformDatabase::changesIn(std::uint32_t recordIndex, runtime::SimTime from,
                                  runtime::SimTime to, std::vector<Change>& out) const {
     const SignalStore& store = storeAt(recordIndex);
@@ -204,7 +245,7 @@ void WaveformDatabase::sample(std::uint32_t recordIndex, runtime::SimTime from, 
         out[column] = Sample{
             .startTime = start,
             .transitions = high - low,
-            .changeIndex = low > 0 ? low - 1 : Sample::NoChange,
+            .changeIndex = low > 0 ? low - 1 : NoChange,
             .anyUnknown = store.unknownPrefix[static_cast<std::size_t>(high)]
                           > store.unknownPrefix[static_cast<std::size_t>(base)],
         };
