@@ -9,7 +9,7 @@ The name is Japanese and carries two readings: *distant peaks* (遠山), for the
 mountain-like horizon of a screen full of waveforms, and *calculation* (演算),
 for the computational work the simulator performs.
 
-**Status: milestone M2 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and FST
+**Status: milestone M2.1 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and FST
 waveforms, and has an interactive graphical debugging environment: a design runs under the GUI with
 signals added from the window and the waveform progressing live. A parameterised counter and a
 synchronous FIFO both run, self-check, and agree with Icarus Verilog. See
@@ -87,6 +87,14 @@ which starts a kernel for the design and attaches to it. Press **Run**, click a 
 **Structure**, select signals in **Objects** and press Ctrl+W to put them in the wave window;
 the traces fill in as the simulation advances.
 
+In the wave window: the wheel scrolls, **Ctrl+wheel** zooms about the pointer and **Shift+wheel**
+pans. Dragging the **right button** right-to-left frames the range you swept; left-to-right zooms
+to fit. A **left click** selects the signal you clicked and puts the cursor on the nearest edge,
+and **Tab** and **Shift+Tab** then walk that cursor from edge to edge — lock a second cursor and
+read both times off their labels to measure. Rows drag to reorder, a bus expands into its bits,
+and the context menu offers a radix and one of five highlight colours. The full model is
+[`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
+
 The kernel and the GUI are separate processes and talk over a Unix domain socket, so a window on
 your machine can drive a simulation on another one:
 
@@ -122,6 +130,7 @@ three colours.
 | `$display`, `$write`, `$time`, `$finish`, `$fatal`, `$error`, `$warning`, `$info` | yes |
 | VCD and FST waveform output | yes, both from one run |
 | Interactive GUI: hierarchy, objects, live waveform, cursors, zoom, grouping, radix | yes |
+| Wave window: edge snapping, Tab between edges, drag to reorder, unpack a bus into bits, highlight a row | yes |
 | Attaching a local GUI to a kernel running elsewhere | yes, over a forwarded socket |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
@@ -234,10 +243,10 @@ Commit messages carry a category prefix; see section 17.1 of the design guide.
 Development proceeds in gated milestones. M0, the build and test foundation, is complete; so is
 M1 — a SystemVerilog subset simulating to a VCD or FST waveform, with a counter and a FIFO that
 self-check and agree with a reference simulator, and cycles/sec recorded per commit — and so is
-M2, the interactive GUI. Broader language coverage is M5's job rather than a gap in either.
+M2, the interactive GUI. Broader language coverage is M5's job rather than a gap in any of them.
 
-Next is M2.1, the wave window's mouse and keyboard model, then M3 the Tcl control layer and source
-debugging, M4 VPI and cocotb, M6 VHDL via NVC, and M7 mixed-language simulation. See
+M2.1, the wave window's mouse and keyboard model, followed. Next is M3, the Tcl control layer and
+source debugging, then M4 VPI and cocotb, M6 VHDL via NVC, and M7 mixed-language simulation. See
 [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full roadmap and the exit criteria of
 each milestone.
 
