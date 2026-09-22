@@ -30,6 +30,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -247,7 +248,8 @@ protected:
             const ReceiveStatus status = client.next(frame);
             if (status != ReceiveStatus::Message) return;
             received.push_back(Captured{
-                frame.type, std::vector<std::byte>(frame.payload.begin(), frame.payload.end())});
+                .type = frame.type,
+                .payload = std::vector<std::byte>(frame.payload.begin(), frame.payload.end())});
         }
     }
 
@@ -284,10 +286,9 @@ protected:
     }
 
     [[nodiscard]] bool sawAny(MessageType type) const {
-        for (const Captured& captured : received) {
-            if (captured.type == static_cast<std::uint16_t>(type)) return true;
-        }
-        return false;
+        return std::ranges::any_of(received, [type](const Captured& captured) {
+            return captured.type == static_cast<std::uint16_t>(type);
+        });
     }
 
     /// The kernel signal index for a hierarchical path.
@@ -342,10 +343,10 @@ TEST_F(ServerFixture, AVersionMismatchIsRefusedRatherThanNegotiated) {
     hello.protocolVersion = ProtocolVersion + 1;
     request(MessageType::Hello, hello);
 
-    const FailureMessage failure = expect<FailureMessage>(MessageType::Failure);
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
     EXPECT_NE(failure.reason.find("protocol version"), std::string::npos) << failure.reason;
 
-    const ByeMessage bye = expect<ByeMessage>(MessageType::Bye);
+    const auto bye = expect<ByeMessage>(MessageType::Bye);
     EXPECT_NE(bye.reason.find("version mismatch"), std::string::npos) << bye.reason;
     EXPECT_FALSE(server->hasClient());
 }
@@ -375,7 +376,7 @@ TEST_F(ServerFixture, TheHierarchyIsSentWholeAndKeepsItsShape) {
     enzan::ipc::QueryDesignMessage query;
     request(MessageType::QueryDesign, query);
 
-    const DesignMessage design = expect<DesignMessage>(MessageType::Design);
+    const auto design = expect<DesignMessage>(MessageType::Design);
     ASSERT_EQ(design.instances.size(), 2U);
     EXPECT_EQ(design.instances[0].path, "/tb");
     EXPECT_EQ(design.instances[0].parent, enzan::ipc::InstanceEntry::NoParent);
@@ -390,7 +391,7 @@ TEST_F(ServerFixture, AScopeListsItsOwnObjects) {
     query.instancePath = "/tb";
     request(MessageType::QueryObjects, query);
 
-    const ObjectsMessage objects = expect<ObjectsMessage>(MessageType::Objects);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
     EXPECT_EQ(objects.instancePath, "/tb");
     ASSERT_EQ(objects.objects.size(), 1U);
     EXPECT_EQ(objects.objects[0].name, "clk");
@@ -408,7 +409,7 @@ TEST_F(ServerFixture, AnUnknownScopeIsAFailureRatherThanAnEmptyAnswer) {
     query.instancePath = "/tb/nowhere";
     request(MessageType::QueryObjects, query);
 
-    const FailureMessage failure = expect<FailureMessage>(MessageType::Failure);
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
     EXPECT_NE(failure.reason.find("not a scope"), std::string::npos) << failure.reason;
 }
 
@@ -423,7 +424,7 @@ TEST_F(ServerFixture, ARunAdvancesTimeAndIsAnnouncedAtBothEnds) {
     run.duration = 100;
     request(MessageType::Run, run);
 
-    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
+    const auto states = expectAll<RunStateMessage>(MessageType::RunState);
     ASSERT_GE(states.size(), 2U)
         << "the client must learn when a run starts, not only when it ends";
     EXPECT_EQ(states.front().state, SimulationState::Running);
@@ -436,11 +437,11 @@ TEST_F(ServerFixture, SubscribedSignalsStreamAsTheRunProgresses) {
     connectClient();
 
     SubscribeMessage subscribe;
-    subscribe.signals = {signalIndex("/tb/clk")};
+    subscribe.signalIndices = {signalIndex("/tb/clk")};
     request(MessageType::Subscribe, subscribe);
 
     // Subscribing catches the client up, so the history arrives before anything is run.
-    const HistoryMessage caughtUp = expect<HistoryMessage>(MessageType::History);
+    const auto caughtUp = expect<HistoryMessage>(MessageType::History);
     EXPECT_EQ(caughtUp.signalIndex, signalIndex("/tb/clk"));
     ASSERT_FALSE(caughtUp.entries.empty());
     EXPECT_EQ(caughtUp.entries.front().time, 0U);
@@ -499,7 +500,7 @@ TEST_F(ServerFixture, StopEndsARunThatIsAlreadyInProgress) {
     stopper.join();
     collect();
 
-    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
+    const auto states = expectAll<RunStateMessage>(MessageType::RunState);
     ASSERT_FALSE(states.empty());
     EXPECT_EQ(states.back().state, SimulationState::Idle);
     EXPECT_EQ(states.back().reason, "interrupted");
@@ -528,7 +529,7 @@ TEST_F(ServerFixture, AStopAskedForBeforeARunStartsIsNotLost) {
 
     pumpServer();
 
-    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
+    const auto states = expectAll<RunStateMessage>(MessageType::RunState);
     ASSERT_FALSE(states.empty());
     EXPECT_EQ(states.back().state, SimulationState::Idle);
     EXPECT_EQ(server->kernel().time(), 0U);
@@ -558,14 +559,14 @@ TEST_F(ServerFixture, RunningAFinishedDesignIsRefusedUntilItIsRestarted) {
     run.untilFinished = true;
     request(MessageType::Run, run);
 
-    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
+    const auto states = expectAll<RunStateMessage>(MessageType::RunState);
     ASSERT_FALSE(states.empty());
     EXPECT_EQ(states.back().state, SimulationState::Finished);
 
     RunMessage again;
     again.duration = 10;
     request(MessageType::Run, again);
-    const FailureMessage failure = expect<FailureMessage>(MessageType::Failure);
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
     EXPECT_NE(failure.reason.find("restart"), std::string::npos) << failure.reason;
 
     enzan::ipc::RestartMessage restart;
@@ -591,7 +592,7 @@ TEST_F(ServerFixture, ARunPastTheEndOfTimeIsRefused) {
     tooFar.duration = enzan::runtime::NoTime;
     request(MessageType::Run, tooFar);
 
-    const FailureMessage failure = expect<FailureMessage>(MessageType::Failure);
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
     EXPECT_NE(failure.reason.find("64-bit range"), std::string::npos) << failure.reason;
     EXPECT_EQ(server->kernel().time(), 50U);
 }
@@ -618,10 +619,10 @@ TEST_F(ServerFixture, AClientAttachingMidRunSeesWhatItMissed) {
     EXPECT_GE(welcome.latestRecordedTime, 100U);
 
     SubscribeMessage subscribe;
-    subscribe.signals = {signalIndex("/tb/clk")};
+    subscribe.signalIndices = {signalIndex("/tb/clk")};
     request(MessageType::Subscribe, subscribe);
 
-    const HistoryMessage history = expect<HistoryMessage>(MessageType::History);
+    const auto history = expect<HistoryMessage>(MessageType::History);
     EXPECT_TRUE(history.complete);
     EXPECT_GE(history.entries.size(), 20U) << "a clock that toggled twenty times has a past";
     EXPECT_EQ(history.entries.front().time, 0U);
@@ -666,7 +667,7 @@ TEST_F(ServerFixture, RestartReturnsToTimeZeroAndKeepsTheSubscriptions) {
     connectClient();
 
     SubscribeMessage subscribe;
-    subscribe.signals = {signalIndex("/tb/clk")};
+    subscribe.signalIndices = {signalIndex("/tb/clk")};
     request(MessageType::Subscribe, subscribe);
 
     RunMessage run;
@@ -678,14 +679,14 @@ TEST_F(ServerFixture, RestartReturnsToTimeZeroAndKeepsTheSubscriptions) {
     enzan::ipc::RestartMessage restart;
     request(MessageType::Restart, restart);
 
-    const RunStateMessage state = expect<RunStateMessage>(MessageType::RunState);
+    const auto state = expect<RunStateMessage>(MessageType::RunState);
     EXPECT_EQ(state.time, 0U) << "time going backwards is how the client learns to discard";
     EXPECT_EQ(state.state, SimulationState::Idle);
     EXPECT_EQ(server->kernel().time(), 0U);
 
     // The subscription survives, and the fresh trace is sent without being asked for: losing
     // the wave window's contents would make the button useless for what it is used for.
-    const HistoryMessage history = expect<HistoryMessage>(MessageType::History);
+    const auto history = expect<HistoryMessage>(MessageType::History);
     EXPECT_EQ(history.signalIndex, signalIndex("/tb/clk"));
     ASSERT_EQ(history.entries.size(), 1U);
     EXPECT_EQ(history.entries.front().time, 0U);
@@ -706,7 +707,7 @@ TEST_F(ServerFixture, TheTranscriptGoesToTheClientAndToTheTerminal) {
     // its output because a GUI happened to be attached would be surprising.
     connectClient();
 
-    const TranscriptMessage transcript = expect<TranscriptMessage>(MessageType::Transcript);
+    const auto transcript = expect<TranscriptMessage>(MessageType::Transcript);
     EXPECT_NE(transcript.text.find("attached"), std::string::npos) << transcript.text;
     EXPECT_NE(localTranscript.str().find("attached"), std::string::npos) << localTranscript.str();
 }
@@ -729,7 +730,7 @@ TEST_F(ServerFixture, HistoryHonoursTheRequestedRange) {
     query.toTime = 60;
     request(MessageType::QueryHistory, query);
 
-    const HistoryMessage history = expect<HistoryMessage>(MessageType::History);
+    const auto history = expect<HistoryMessage>(MessageType::History);
     ASSERT_FALSE(history.entries.empty());
     for (const enzan::ipc::HistoryEntry& entry : history.entries) {
         EXPECT_GE(entry.time, 30U);
@@ -744,7 +745,7 @@ TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {
     query.signalIndex = 9999;
     request(MessageType::QueryHistory, query);
 
-    const FailureMessage failure = expect<FailureMessage>(MessageType::Failure);
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
     EXPECT_NE(failure.reason.find("no signal"), std::string::npos) << failure.reason;
 }
 

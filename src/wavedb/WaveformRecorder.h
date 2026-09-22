@@ -46,6 +46,9 @@ private:
     // caller cannot ask a recorder to open a path and quietly get a recorder that ignored it.
     using WaveformWriter::open;
 
+    // Protected, matching the base class. Narrowing an override's visibility is legal and
+    // confusing: a caller holding a `WaveformWriter&` can reach them either way.
+protected:
     bool openOutput(const std::filesystem::path& path, std::string& error) override;
     void writeHeader() override;
     void enterScope(std::string_view name) override;
@@ -56,6 +59,7 @@ private:
     void writeChange(std::uint32_t signalIndex) override;
     void closeOutput() override;
 
+private:
     WaveformDatabase* database;
 
     /// The timestamp the changes now being written belong to.

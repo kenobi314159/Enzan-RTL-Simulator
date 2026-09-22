@@ -192,7 +192,7 @@ void KernelServer::attach(Connection client) {
 void KernelServer::closeClient(std::string reason) {
     if (connection.isOpen()) {
         ByeMessage bye;
-        bye.reason = reason;
+        bye.reason = std::move(reason);
         connection.send(MessageType::Bye, bye);
 
         // Blocking here is acceptable and nowhere else: the farewell is the last thing this
@@ -429,11 +429,11 @@ void KernelServer::onSubscribe(const Frame& frame) {
         return;
     }
 
-    publisher->subscribe(request.signals);
+    publisher->subscribe(request.signalIndices);
 
     // Catching up is part of subscribing. A signal dragged into the wave window halfway
     // through a run must show what it has been doing, not start from a blank trace.
-    for (const std::uint32_t signalIndex : request.signals) {
+    for (const std::uint32_t signalIndex : request.signalIndices) {
         if (signalIndex >= image->signals().size()) continue;
         sendHistory(signalIndex, 0, runtime::NoTime);
     }
@@ -445,7 +445,7 @@ void KernelServer::onUnsubscribe(const Frame& frame) {
         sendFailure("an unsubscribe request could not be decoded");
         return;
     }
-    publisher->unsubscribe(request.signals);
+    publisher->unsubscribe(request.signalIndices);
 }
 
 void KernelServer::onQueryHistory(const Frame& frame) {

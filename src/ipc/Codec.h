@@ -66,7 +66,9 @@ public:
         for (Element& item : items) serialize(*this, item);
     }
 
-    [[nodiscard]] bool failed() const noexcept { return false; }
+    /// Always false: writing into a growing buffer cannot fail. Present so that a shared
+    /// `serialize` can ask either archive the same question.
+    [[nodiscard]] static bool failed() noexcept { return false; }
 
 private:
     std::vector<std::byte>* out;

@@ -70,6 +70,9 @@ private:
     // The database is the output, so the base class's file-shaped entry point is hidden.
     using wavedb::WaveformWriter::open;
 
+    // Protected, matching the base class. Narrowing an override's visibility is legal and
+    // confusing: a caller holding a `WaveformWriter&` can reach them either way.
+protected:
     bool openOutput(const std::filesystem::path& path, std::string& error) override;
     void writeHeader() override;
     void enterScope(std::string_view name) override;
@@ -80,6 +83,7 @@ private:
     void writeChange(std::uint32_t signalIndex) override;
     void closeOutput() override;
 
+private:
     /// Moves the batch being built into `ready`, if it holds anything.
     void sealBatch();
 

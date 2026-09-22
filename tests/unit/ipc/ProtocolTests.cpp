@@ -34,7 +34,6 @@ using enzan::ipc::FrameStatus;
 using enzan::ipc::HistoryEntry;
 using enzan::ipc::HistoryMessage;
 using enzan::ipc::InstanceEntry;
-using enzan::ipc::MessageReader;
 using enzan::ipc::MessageType;
 using enzan::ipc::MessageWriter;
 using enzan::ipc::ObjectEntry;
@@ -211,8 +210,8 @@ TEST(Protocol, DiagnosticsSurviveTheRoundTripWithTheirNotes) {
 
 TEST(Protocol, SmallMessagesSurviveTheRoundTrip) {
     SubscribeMessage subscribe;
-    subscribe.signals = {1, 2, 3, 99};
-    EXPECT_EQ(roundTrip(MessageType::Subscribe, subscribe).signals, subscribe.signals);
+    subscribe.signalIndices = {1, 2, 3, 99};
+    EXPECT_EQ(roundTrip(MessageType::Subscribe, subscribe).signalIndices, subscribe.signalIndices);
 
     RunMessage run;
     run.duration = 100'000;
@@ -361,8 +360,7 @@ TEST(Protocol, TrailingBytesFailToDecode) {
 }
 
 TEST(Protocol, AnImpossibleStringLengthFailsToDecode) {
-    std::vector<std::byte> payload;
-    for (int byte = 0; byte < 4; ++byte) payload.push_back(std::byte{0xFF});
+    const std::vector<std::byte> payload(4, std::byte{0xFF});
 
     TranscriptMessage decoded;
     EXPECT_FALSE(enzan::ipc::decodePayload(payload, decoded));
@@ -370,8 +368,7 @@ TEST(Protocol, AnImpossibleStringLengthFailsToDecode) {
 }
 
 TEST(Protocol, AnImpossibleListCountFailsToDecode) {
-    std::vector<std::byte> payload;
-    for (int byte = 0; byte < 4; ++byte) payload.push_back(std::byte{0xFF});
+    const std::vector<std::byte> payload(4, std::byte{0xFF});
 
     DesignMessage decoded;
     EXPECT_FALSE(enzan::ipc::decodePayload(payload, decoded));
@@ -430,6 +427,7 @@ TEST(Protocol, AnUnknownStateDecodesAsFailedRatherThanOutOfRange) {
 TEST(Protocol, MessageNamesAreStableAndUnknownOnesSayTheirNumber) {
     EXPECT_EQ(enzan::ipc::toString(MessageType::Hello), "hello");
     EXPECT_EQ(enzan::ipc::toString(MessageType::ValueChanges), "value-changes");
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) — the point of the test
     EXPECT_EQ(enzan::ipc::toString(static_cast<MessageType>(4242)), "message(4242)");
     EXPECT_EQ(enzan::ipc::toString(SimulationState::Idle), "idle");
 }

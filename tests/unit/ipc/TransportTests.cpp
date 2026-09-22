@@ -127,8 +127,11 @@ TEST(Descriptor, MovingTransfersOwnership) {
     ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors.data()), 0);
 
     Descriptor first(descriptors[0]);
-    Descriptor second(std::move(first));
+    const Descriptor second(std::move(first));
 
+    // Reading the moved-from object is the point: a descriptor that kept its value after being
+    // moved out of would be closed twice.
+    // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move) — see above
     EXPECT_FALSE(first.valid());
     EXPECT_EQ(second.get(), descriptors[0]);
     ::close(descriptors[1]);
@@ -294,7 +297,7 @@ TEST(Connection, AMalformedFrameIsRefused) {
 // ---------------------------------------------------------------------------
 
 TEST(Listener, AClientConnectsAndTalksToTheServer) {
-    ScratchDirectory scratch;
+    const ScratchDirectory scratch;
     Listener listener;
     std::string error;
     ASSERT_TRUE(listener.listen(scratch.socketPath(), error)) << error;
@@ -321,7 +324,7 @@ TEST(Listener, AClientConnectsAndTalksToTheServer) {
 }
 
 TEST(Listener, AcceptingWithNobodyWaitingIsNotAnError) {
-    ScratchDirectory scratch;
+    const ScratchDirectory scratch;
     Listener listener;
     std::string error;
     ASSERT_TRUE(listener.listen(scratch.socketPath(), error)) << error;
@@ -333,7 +336,7 @@ TEST(Listener, AcceptingWithNobodyWaitingIsNotAnError) {
 }
 
 TEST(Listener, ClosingRemovesTheSocketPath) {
-    ScratchDirectory scratch;
+    const ScratchDirectory scratch;
     {
         Listener listener;
         std::string error;
@@ -345,12 +348,12 @@ TEST(Listener, ClosingRemovesTheSocketPath) {
 }
 
 TEST(Listener, ASocketLeftByADeadKernelIsReused) {
-    ScratchDirectory scratch;
+    const ScratchDirectory scratch;
 
     // A plain file standing in for what a kernel that was killed leaves behind: the path
     // exists and nothing is serving it.
     {
-        std::ofstream stale(scratch.socketPath());
+        const std::ofstream stale(scratch.socketPath());
         ASSERT_TRUE(stale.good());
     }
     ASSERT_TRUE(std::filesystem::exists(scratch.socketPath()));
@@ -364,7 +367,7 @@ TEST(Listener, ASocketAnotherKernelIsServingIsRefused) {
     // The other half of the same decision. Unlinking without checking would let a second
     // kernel silently steal a socket a running one is serving, and the user would see a GUI
     // attach to a simulation that is not the one they started.
-    ScratchDirectory scratch;
+    const ScratchDirectory scratch;
 
     Listener first;
     std::string error;
@@ -381,7 +384,7 @@ TEST(Listener, ASocketAnotherKernelIsServingIsRefused) {
 }
 
 TEST(Listener, ConnectingToNothingFailsWithTheReason) {
-    ScratchDirectory scratch;
+    const ScratchDirectory scratch;
 
     Connection client;
     std::string error;

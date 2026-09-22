@@ -103,12 +103,12 @@ void WaveformDatabase::append(std::uint32_t recordIndex, runtime::SimTime time,
     store.times.push_back(time);
     store.unknownPrefix.push_back(store.unknownPrefix.back() + (value.hasUnknown() ? 1U : 0U));
 
-    if (time > latest) latest = time;
+    latest = std::max(time, latest);
 
     // Sealing the chunk is what makes it a candidate for eviction, so it is also the moment
     // the budget can first be met by spilling something.
     if (chunk.values.size() == std::size_t{options.chunkCapacity} * store.valueWords) {
-        residentChunks.push_front({recordIndex, chunkIndex});
+        residentChunks.emplace_front(recordIndex, chunkIndex);
         chunk.lruPosition = residentChunks.begin();
         chunk.evictable = true;
         enforceBudget();
@@ -116,7 +116,7 @@ void WaveformDatabase::append(std::uint32_t recordIndex, runtime::SimTime time,
 }
 
 void WaveformDatabase::setLatestTime(runtime::SimTime time) noexcept {
-    if (time > latest) latest = time;
+    latest = std::max(time, latest);
 }
 
 std::uint64_t WaveformDatabase::changeCount(std::uint32_t recordIndex) const {
@@ -143,7 +143,7 @@ std::optional<eir::BitVector> WaveformDatabase::valueAt(std::uint32_t recordInde
                                                         runtime::SimTime time) const {
     const SignalStore& store = storeAt(recordIndex);
 
-    const auto after = std::upper_bound(store.times.begin(), store.times.end(), time);
+    const auto after = std::ranges::upper_bound(store.times, time);
     if (after == store.times.begin()) return std::nullopt;
 
     const auto changeIndex = static_cast<std::uint64_t>(std::prev(after) - store.times.begin());
@@ -155,7 +155,7 @@ void WaveformDatabase::changesIn(std::uint32_t recordIndex, runtime::SimTime fro
     const SignalStore& store = storeAt(recordIndex);
     if (from >= to) return;
 
-    const auto first = std::lower_bound(store.times.begin(), store.times.end(), from);
+    const auto first = std::ranges::lower_bound(store.times, from);
     const auto last = std::lower_bound(first, store.times.end(), to);
 
     for (auto position = first; position != last; ++position) {
@@ -267,13 +267,13 @@ void WaveformDatabase::reload(std::uint32_t recordIndex, std::uint32_t chunkInde
 
     const ssize_t read =
         ::pread(scratchFd, chunk.values.data(), bytes, static_cast<off_t>(chunk.fileOffset));
-    ENZAN_ASSERT(read >= 0 && static_cast<std::uint64_t>(read) == bytes,
+    ENZAN_ASSERT(read >= 0 && std::cmp_equal(read, bytes),
                  "the waveform scratch file could not be read back");
     (void)read;
 
     chunk.resident = true;
     residentBytes += bytes;
-    residentChunks.push_front({recordIndex, chunkIndex});
+    residentChunks.emplace_front(recordIndex, chunkIndex);
     chunk.lruPosition = residentChunks.begin();
     chunk.evictable = true;
 }
@@ -310,7 +310,7 @@ void WaveformDatabase::spill(std::uint32_t recordIndex, std::uint32_t chunkIndex
 
         const ssize_t written =
             ::pwrite(scratchFd, chunk.values.data(), bytes, static_cast<off_t>(chunk.fileOffset));
-        if (written < 0 || static_cast<std::uint64_t>(written) != bytes) {
+        if (written < 0 || std::cmp_not_equal(written, bytes)) {
             // The write failed — a full filesystem is the usual reason. Keep the chunk in
             // memory and forget the region, rather than freeing data that cannot be read back.
             chunk.fileOffset = Chunk::NotSpilled;

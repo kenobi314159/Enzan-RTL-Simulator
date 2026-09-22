@@ -6,6 +6,7 @@
 #include <cstring>
 #include <format>
 #include <system_error>
+#include <utility>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -19,11 +20,11 @@ namespace {
 
 /// Bytes read from the socket in one call. Large enough that a burst of value changes arrives
 /// in a handful of reads, small enough to be a stack-free heap buffer per connection.
-constexpr std::size_t ReadChunkBytes = 64U * 1024U;
+constexpr std::size_t ReadChunkBytes = std::size_t{64} * 1024;
 
 /// Consumed output is dropped from the front of the queue only once this much has piled up,
 /// so that a busy connection does not memmove its whole queue after every write.
-constexpr std::size_t OutputCompactionThreshold = 64U * 1024U;
+constexpr std::size_t OutputCompactionThreshold = std::size_t{64} * 1024;
 
 /// True when an errno means "nothing to do right now, try again later".
 ///
@@ -149,6 +150,10 @@ bool Connection::flush() {
             continue;
         }
 
+        // `errno` only means anything after a negative return, so it is read only there. A
+        // zero-length write on a stream socket with bytes to send does not happen; treating it
+        // as "nothing more will go out now" is the safe reading if it ever did.
+        if (written == 0) break;
         if (errno == EINTR) continue;
         if (wouldBlock(errno)) break;
 
@@ -199,7 +204,7 @@ bool Connection::receive() {
         if (read > 0) {
             incoming.resize(at + static_cast<std::size_t>(read));
             // A short read means the socket is drained; asking again would only return EAGAIN.
-            if (static_cast<std::size_t>(read) < ReadChunkBytes) return true;
+            if (std::cmp_less(read, ReadChunkBytes)) return true;
             continue;
         }
 

@@ -65,7 +65,7 @@ struct ServerOptions {
 class KernelServer final : public runtime::RunInterrupt {
 public:
     /// `imageToServe` and `diagnostics` must outlive the server.
-    KernelServer(const runtime::Image& imageToServe, DiagnosticEngine& diagnostics,
+    KernelServer(const runtime::Image& imageToServe, DiagnosticEngine& diagnosticEngine,
                  ServerOptions serverOptions);
 
     KernelServer(const KernelServer&) = delete;
@@ -120,11 +120,11 @@ public:
     /// Entries a single History message will carry before it is marked incomplete.
     static constexpr std::size_t MaxHistoryEntries = 200'000;
 
-private:
-    // --- the kernel's interrupt -------------------------------------------
-
+    // Public, matching `RunInterrupt`. Narrowing an override's visibility is legal and
+    // confusing: the kernel calls it through the base class either way.
     bool shouldInterrupt() override;
 
+private:
     // --- plumbing ----------------------------------------------------------
 
     /// Forwards `$display` output to the client while echoing it locally.
@@ -229,7 +229,7 @@ private:
     /// The poll is throttled rather than performed at every time slot: a design with many short
     /// slots would otherwise spend a system call on each one, and a tenth of a frame is far
     /// below what anyone can see.
-    std::chrono::steady_clock::time_point lastPump{};
+    std::chrono::steady_clock::time_point lastPump;
 
     static constexpr std::chrono::milliseconds PumpInterval{10};
 };

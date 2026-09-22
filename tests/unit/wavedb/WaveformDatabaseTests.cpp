@@ -25,7 +25,6 @@
 namespace {
 
 using enzan::eir::BitVector;
-using enzan::eir::Logic;
 using enzan::test::literal;
 using enzan::wavedb::Change;
 using enzan::wavedb::DatabaseOptions;

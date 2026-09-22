@@ -26,6 +26,7 @@ constexpr std::uint32_t ProtocolVersion = 1;
 /// an older header decodes by number. Requests are numbered from 1 and events from 128, so
 /// that a message arriving in the wrong direction is obvious in a trace rather than being
 /// silently misinterpreted.
+// NOLINTNEXTLINE(performance-enum-size) — the width is the wire format's, not a size choice
 enum class MessageType : std::uint16_t {
     // --- client to kernel ---------------------------------------------------
     Hello = 1,
@@ -97,11 +98,11 @@ struct QueryObjectsMessage {
 /// signals than a wave window shows, and streaming the ones nobody is looking at would spend
 /// the socket's bandwidth on data the client throws away.
 struct SubscribeMessage {
-    std::vector<std::uint32_t> signals;
+    std::vector<std::uint32_t> signalIndices;
 };
 
 struct UnsubscribeMessage {
-    std::vector<std::uint32_t> signals;
+    std::vector<std::uint32_t> signalIndices;
 };
 
 /// Asks for what the kernel already recorded for a signal. Answered with History.
@@ -310,12 +311,12 @@ void serialize(Archive& archive, QueryObjectsMessage& message) {
 
 template<typename Archive>
 void serialize(Archive& archive, SubscribeMessage& message) {
-    archive.u32List(message.signals);
+    archive.u32List(message.signalIndices);
 }
 
 template<typename Archive>
 void serialize(Archive& archive, UnsubscribeMessage& message) {
-    archive.u32List(message.signals);
+    archive.u32List(message.signalIndices);
 }
 
 template<typename Archive>
