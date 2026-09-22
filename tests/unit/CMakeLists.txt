@@ -13,3 +13,7 @@ add_subdirectory(frontend)
 add_subdirectory(runtime)
 add_subdirectory(wavedb)
 add_subdirectory(ipc)
+
+if(ENZAN_BUILD_GUI)
+  add_subdirectory(gui)
+endif()

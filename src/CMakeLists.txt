@@ -14,6 +14,8 @@ add_subdirectory(codegen)
 add_subdirectory(runtime)
 add_subdirectory(wavedb)
 add_subdirectory(ipc)
-# add_subdirectory(gui)       # M2 — Qt 6 application
+if(ENZAN_BUILD_GUI)
+  add_subdirectory(gui)
+endif()
 # add_subdirectory(control)   # M3 — Tcl interpreter and commands
 # add_subdirectory(pli)       # M4 — VPI and VHPI

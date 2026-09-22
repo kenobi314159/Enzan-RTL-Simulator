@@ -208,19 +208,23 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
 endif()
 
 # ---------------------------------------------------------------------------
-# Tcl — control language (DESIGN_GUIDE.md section 8.1), milestone M3
+# Tcl — control and configuration language (DESIGN_GUIDE.md section 8.1)
 # ---------------------------------------------------------------------------
 
-if(ENZAN_ENABLE_TCL)
+# Needed by the GUI as well as by the control layer, and that is not an accident of the
+# implementation. Section 8.1 makes Tcl *the* configuration language with no second format, and
+# names the GUI theme as a Tcl script setting colour variables. The control layer's command
+# vocabulary is M3; the theme is M2, and it needs an interpreter to evaluate.
+if(ENZAN_ENABLE_TCL OR ENZAN_BUILD_GUI)
   # No version is requested here: CMake's FindTCL module reports no version, so a
   # version constraint would make the package unfindable rather than
-  # version-checked. The 8.6 requirement is checked in the control layer instead,
-  # against TCL_MAJOR_VERSION and TCL_MINOR_VERSION from tcl.h.
+  # version-checked. The 8.6 requirement is checked in the code that embeds the
+  # interpreter instead, against TCL_MAJOR_VERSION and TCL_MINOR_VERSION from tcl.h.
   find_package(TCL QUIET)
   if(NOT TCL_FOUND)
     enzan_dependency_missing(
       NAME TCL
-      PURPOSE "the embedded Tcl control and configuration layer"
+      PURPOSE "the embedded Tcl control and configuration layer, including the GUI theme"
       ARCH tcl
       DEBIAN tcl-dev
       FEDORA tcl-devel)
@@ -233,7 +237,14 @@ endif()
 # ---------------------------------------------------------------------------
 
 if(ENZAN_BUILD_GUI)
-  find_package(Qt6 6.4 QUIET COMPONENTS Widgets Gui Core)
+  # Qt Test is asked for only when the unit tests are being built: it supplies QSignalSpy,
+  # which is how a test waits for a signal that a real socket will deliver whenever it does.
+  set(_enzan_qt_components Widgets Gui Core)
+  if(ENZAN_BUILD_TESTS)
+    list(APPEND _enzan_qt_components Test)
+  endif()
+
+  find_package(Qt6 6.4 QUIET COMPONENTS ${_enzan_qt_components})
   if(NOT Qt6_FOUND)
     enzan_dependency_missing(
       NAME Qt6

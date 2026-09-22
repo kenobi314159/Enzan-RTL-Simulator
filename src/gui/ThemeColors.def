@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The colours the GUI asks the theme for.
+//
+// This file is included more than once with ENZAN_THEME_COLOR defined to do something
+// different, so it deliberately has no include guard.
+//
+//   ENZAN_THEME_COLOR(Name, "key.in.the.theme.script")
+//
+// **There are no colour values here.** DESIGN_GUIDE.md section 10.5 requires every colour to
+// come from the theme configuration file, and a default written in C++ would be exactly the
+// literal that rule forbids — it would also mean a theme could be half-applied without anyone
+// noticing. The shipped dark theme (themes/dark.tcl) defines every key below, and loading it is
+// what supplies the defaults; a user theme is layered on top of it.
+//
+// Adding a key here means adding it to themes/dark.tcl in the same commit, or the theme test
+// fails. That is the point of the test.
+
+// --- Chrome ----------------------------------------------------------------
+
+ENZAN_THEME_COLOR(WindowBackground, "window.background")
+ENZAN_THEME_COLOR(WindowForeground, "window.foreground")
+ENZAN_THEME_COLOR(PanelBackground, "panel.background")
+ENZAN_THEME_COLOR(PanelForeground, "panel.foreground")
+ENZAN_THEME_COLOR(PanelAlternateBackground, "panel.alternate.background")
+ENZAN_THEME_COLOR(PanelBorder, "panel.border")
+ENZAN_THEME_COLOR(HeaderBackground, "header.background")
+ENZAN_THEME_COLOR(HeaderForeground, "header.foreground")
+ENZAN_THEME_COLOR(SelectionBackground, "selection.background")
+ENZAN_THEME_COLOR(SelectionForeground, "selection.foreground")
+ENZAN_THEME_COLOR(ControlBackground, "control.background")
+ENZAN_THEME_COLOR(ControlForeground, "control.foreground")
+ENZAN_THEME_COLOR(ControlBorder, "control.border")
+ENZAN_THEME_COLOR(Accent, "accent")
+
+// --- Transcript ------------------------------------------------------------
+
+ENZAN_THEME_COLOR(TranscriptBackground, "transcript.background")
+ENZAN_THEME_COLOR(TranscriptForeground, "transcript.foreground")
+ENZAN_THEME_COLOR(TranscriptNote, "transcript.note")
+ENZAN_THEME_COLOR(TranscriptWarning, "transcript.warning")
+ENZAN_THEME_COLOR(TranscriptError, "transcript.error")
+
+// --- Waveform view ---------------------------------------------------------
+//
+// Section 10.5 fixes two of these: a high-contrast black background and light green traces.
+
+ENZAN_THEME_COLOR(WaveBackground, "wave.background")
+ENZAN_THEME_COLOR(WaveTrace, "wave.trace")
+ENZAN_THEME_COLOR(WaveTraceFill, "wave.trace.fill")
+ENZAN_THEME_COLOR(WaveText, "wave.text")
+ENZAN_THEME_COLOR(WaveUnknown, "wave.unknown")
+ENZAN_THEME_COLOR(WaveHighImpedance, "wave.highimpedance")
+ENZAN_THEME_COLOR(WaveGrid, "wave.grid")
+ENZAN_THEME_COLOR(WaveRowSeparator, "wave.row.separator")
+ENZAN_THEME_COLOR(WaveSelectedRow, "wave.row.selected")
+ENZAN_THEME_COLOR(WaveRulerBackground, "wave.ruler.background")
+ENZAN_THEME_COLOR(WaveRulerForeground, "wave.ruler.foreground")
+ENZAN_THEME_COLOR(WaveCursor, "wave.cursor")
+ENZAN_THEME_COLOR(WaveCursorLocked, "wave.cursor.locked")
+ENZAN_THEME_COLOR(WaveCursorText, "wave.cursor.text")
+ENZAN_THEME_COLOR(WaveBeyondRecorded, "wave.beyond.recorded")

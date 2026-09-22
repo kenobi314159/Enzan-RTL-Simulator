@@ -1,0 +1,552 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include "gui/MainWindow.h"
+
+#include <QAction>
+#include <QCloseEvent>
+#include <QDockWidget>
+#include <QHeaderView>
+#include <QInputDialog>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMenu>
+#include <QMenuBar>
+#include <QSettings>
+#include <QSplitter>
+#include <QStatusBar>
+#include <QTableView>
+#include <QToolBar>
+#include <QTreeView>
+#include <QVBoxLayout>
+
+#include <algorithm>
+#include <functional>
+
+namespace enzan::gui {
+
+namespace {
+
+/// Settings keys for the remembered layout.
+constexpr const char* GeometryKey = "layout/geometry";
+constexpr const char* WindowStateKey = "layout/state";
+
+/// Radix names, in the order the menus offer them. Hexadecimal is first because it is the
+/// default for multi-bit values (section 10.3).
+struct RadixChoice {
+    const char* name;
+    eir::Radix radix;
+};
+
+constexpr RadixChoice RadixChoices[] = {
+    {.name = "Hexadecimal", .radix = eir::Radix::Hexadecimal},
+    {.name = "Decimal", .radix = eir::Radix::Decimal},
+    {.name = "Octal", .radix = eir::Radix::Octal},
+    {.name = "Binary", .radix = eir::Radix::Binary},
+};
+
+} // namespace
+
+MainWindow::MainWindow(KernelSession& kernelSession, const Theme& themeToUse, QWidget* parent)
+    : QMainWindow(parent), session(&kernelSession), theme(&themeToUse) {
+    setWindowTitle(tr("Enzan"));
+
+    designModel = new DesignTreeModel(this);
+    objectsModel = new ObjectsModel(*session, this);
+    waveModel = new WaveformModel(*session, this);
+
+    buildDocks();
+    buildToolBar();
+    buildMenus();
+
+    statusTime = new QLabel(this);
+    statusState = new QLabel(this);
+    statusCursor = new QLabel(this);
+    statusBar()->addWidget(statusState, 1);
+    statusBar()->addPermanentWidget(statusCursor);
+    statusBar()->addPermanentWidget(statusTime);
+
+    connect(session, &KernelSession::welcomed, this, &MainWindow::onWelcomed);
+    connect(session, &KernelSession::designChanged, this, &MainWindow::onDesignChanged);
+    connect(session, &KernelSession::objectsReceived, this, &MainWindow::onObjectsReceived);
+    connect(session, &KernelSession::runStateChanged, this, &MainWindow::onRunStateChanged);
+    connect(session, &KernelSession::wavesChanged, this, &MainWindow::onWavesChanged);
+    connect(session, &KernelSession::wavesCleared, this, &MainWindow::onWavesCleared);
+    connect(session, &KernelSession::detached, this, &MainWindow::onDetached);
+    connect(session, &KernelSession::requestFailed, this, &MainWindow::onRequestFailed);
+    connect(session, &KernelSession::transcriptReceived, transcriptView,
+            &TranscriptView::appendOutput);
+    connect(session, &KernelSession::diagnosticReceived, transcriptView,
+            &TranscriptView::appendDiagnostic);
+
+    connect(waveModel, &WaveformModel::displayedSignalsChanged, this,
+            &MainWindow::updateSubscription);
+
+    restoreLayout();
+
+    // The window may be created before the session connects or after it already has. Which of
+    // those happens is an accident of how the program was started, and it must not decide
+    // whether anything is on screen, so whatever the session already knows is taken now.
+    if (session->isAttached()) onWelcomed();
+    if (!session->instances().isEmpty()) onDesignChanged();
+    onRunStateChanged();
+}
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
+void MainWindow::buildDocks() {
+    // --- Structure ---------------------------------------------------------
+
+    structureView = new QTreeView(this);
+    structureView->setModel(designModel);
+    structureView->setHeaderHidden(false);
+    structureView->setUniformRowHeights(true);
+    connect(structureView, &QTreeView::clicked, this, &MainWindow::onScopeSelected);
+
+    auto* structureDock = new QDockWidget(tr("Structure"), this);
+    structureDock->setObjectName(QStringLiteral("structure"));
+    structureDock->setWidget(structureView);
+    addDockWidget(Qt::LeftDockWidgetArea, structureDock);
+
+    // --- Objects -----------------------------------------------------------
+
+    objectsView = new QTableView(this);
+    objectsView->setModel(objectsModel);
+    objectsView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    objectsView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    objectsView->verticalHeader()->setVisible(false);
+    objectsView->horizontalHeader()->setStretchLastSection(true);
+    objectsView->setContextMenuPolicy(Qt::ActionsContextMenu);
+    connect(objectsView, &QTableView::doubleClicked, this,
+            [this](const QModelIndex&) { addSelectedObjectsToWave(); });
+
+    auto* addToWave = new QAction(tr("Add to Wave"), objectsView);
+    addToWave->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_W));
+    connect(addToWave, &QAction::triggered, this, &MainWindow::addSelectedObjectsToWave);
+    objectsView->addAction(addToWave);
+
+    auto* objectsDock = new QDockWidget(tr("Objects"), this);
+    objectsDock->setObjectName(QStringLiteral("objects"));
+    objectsDock->setWidget(objectsView);
+    addDockWidget(Qt::LeftDockWidgetArea, objectsDock);
+
+    // --- Wave --------------------------------------------------------------
+    //
+    // The names and the traces are two widgets in a splitter rather than one widget painting
+    // both. The tree then supplies the row geometry — through scrolling, through collapsing a
+    // group and through a change of font — and the canvas never has to know about any of it.
+
+    waveRowsView = new QTreeView(this);
+    waveRowsView->setModel(waveModel);
+    waveRowsView->setUniformRowHeights(true);
+    waveRowsView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    waveRowsView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    waveRowsView->setContextMenuPolicy(Qt::ActionsContextMenu);
+    waveRowsView->setEditTriggers(QAbstractItemView::EditKeyPressed
+                                  | QAbstractItemView::SelectedClicked);
+    waveRowsView->header()->setStretchLastSection(true);
+
+    waveView = new WaveformView(*session, *waveModel, *theme, this);
+    waveView->setRowView(waveRowsView);
+    connect(waveView, &WaveformView::cursorsChanged, this, &MainWindow::onCursorsChanged);
+
+    // The canvas has no vertical scroll bar of its own; the tree's is the one that matters, so
+    // the tree keeps it and the canvas follows.
+    waveRowsView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+
+    auto* waveSplitter = new QSplitter(Qt::Horizontal, this);
+    waveSplitter->addWidget(waveRowsView);
+    waveSplitter->addWidget(waveView);
+    waveSplitter->setStretchFactor(0, 0);
+    waveSplitter->setStretchFactor(1, 1);
+    waveSplitter->setSizes({260, 900});
+
+    setCentralWidget(waveSplitter);
+
+    const auto addWaveAction = [this](const QString& text, const QKeySequence& shortcut,
+                                      auto slot) {
+        auto* action = new QAction(text, waveRowsView);
+        if (!shortcut.isEmpty()) action->setShortcut(shortcut);
+        connect(action, &QAction::triggered, this, slot);
+        waveRowsView->addAction(action);
+        return action;
+    };
+
+    addWaveAction(tr("New Group"), QKeySequence(Qt::CTRL | Qt::Key_G),
+                  &MainWindow::groupSelectedWaves);
+    addWaveAction(tr("Extract Bit Range…"), QKeySequence(Qt::CTRL | Qt::Key_B),
+                  &MainWindow::extractBitRange);
+    addWaveAction(tr("Remove"), QKeySequence(Qt::Key_Delete), &MainWindow::removeSelectedWaves);
+
+    auto* radixSeparator = new QAction(waveRowsView);
+    radixSeparator->setSeparator(true);
+    waveRowsView->addAction(radixSeparator);
+
+    for (const RadixChoice& choice : RadixChoices) {
+        auto* action = new QAction(tr("Radix: %1").arg(tr(choice.name)), waveRowsView);
+        const eir::Radix radix = choice.radix;
+        connect(action, &QAction::triggered, this, [this, radix] { setSelectedWaveRadix(radix); });
+        waveRowsView->addAction(action);
+    }
+
+    // --- Transcript --------------------------------------------------------
+
+    transcriptView = new TranscriptView(*theme, this);
+
+    auto* transcriptDock = new QDockWidget(tr("Transcript"), this);
+    transcriptDock->setObjectName(QStringLiteral("transcript"));
+    transcriptDock->setWidget(transcriptView);
+    addDockWidget(Qt::BottomDockWidgetArea, transcriptDock);
+}
+
+void MainWindow::buildToolBar() {
+    auto* bar = addToolBar(tr("Simulation"));
+    bar->setObjectName(QStringLiteral("simulation"));
+    bar->setMovable(true);
+
+    runAction = bar->addAction(tr("Run"), this, &MainWindow::runForRequestedTime);
+    runAction->setShortcut(QKeySequence(Qt::Key_F5));
+
+    runLengthEdit = new QLineEdit(QStringLiteral("100"), bar);
+    runLengthEdit->setFixedWidth(80);
+    runLengthEdit->setToolTip(tr("How long each Run advances the simulation, in time units"));
+    bar->addWidget(runLengthEdit);
+
+    runAllAction = bar->addAction(tr("Run All"), this, &MainWindow::runUntilFinished);
+    stopAction = bar->addAction(tr("Stop"), this, &MainWindow::stopRun);
+    restartAction = bar->addAction(tr("Restart"), this, &MainWindow::restartRun);
+
+    bar->addSeparator();
+    bar->addAction(tr("Zoom Fit"), waveView, &WaveformView::zoomFit);
+    bar->addAction(tr("Zoom In"), waveView, &WaveformView::zoomIn);
+    bar->addAction(tr("Zoom Out"), waveView, &WaveformView::zoomOut);
+    bar->addAction(tr("Zoom Cursors"), waveView, &WaveformView::zoomToCursors);
+
+    followAction = bar->addAction(tr("Follow"));
+    followAction->setCheckable(true);
+    followAction->setChecked(true);
+    followAction->setToolTip(tr("Keep the right-hand edge at the latest simulated time"));
+    connect(followAction, &QAction::toggled, waveView, &WaveformView::setFollowTail);
+}
+
+void MainWindow::buildMenus() {
+    QMenu* simulation = menuBar()->addMenu(tr("&Simulation"));
+    simulation->addAction(runAction);
+    simulation->addAction(runAllAction);
+    simulation->addAction(stopAction);
+    simulation->addAction(restartAction);
+    simulation->addSeparator();
+
+    // Detaching and quitting are separate on purpose: section 2.2 requires a front end to be
+    // able to leave a kernel running, and a single Quit that always killed it would make a
+    // long run on a compute server impossible to look in on safely.
+    simulation->addAction(tr("Detach from Kernel"), this, [this] {
+        session->detach();
+        close();
+    });
+    simulation->addAction(tr("Quit Kernel and Exit"), this, [this] {
+        session->quitKernel();
+        close();
+    });
+
+    QMenu* wave = menuBar()->addMenu(tr("&Wave"));
+    wave->addAction(tr("Add Cursor"), this, [this] {
+        waveView->addCursor(tr("Cursor %1").arg(waveView->cursors().size() + 1),
+                            waveView->activeCursorTime());
+    });
+    wave->addAction(tr("Lock Active Cursor"), this, [this] {
+        const int index = waveView->activeCursor();
+        if (index < 0 || index >= waveView->cursors().size()) return;
+        waveView->setCursorLocked(index, !waveView->cursors()[index].locked);
+    });
+    wave->addAction(tr("Remove Active Cursor"), this,
+                    [this] { waveView->removeCursor(waveView->activeCursor()); });
+    wave->addSeparator();
+    wave->addAction(tr("Clear Wave Window"), this, [this] { waveModel->clear(); });
+
+    QMenu* view = menuBar()->addMenu(tr("&View"));
+    for (const QDockWidget* dock : findChildren<QDockWidget*>()) {
+        view->addAction(dock->toggleViewAction());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session events
+// ---------------------------------------------------------------------------
+
+void MainWindow::onWelcomed() {
+    setWindowTitle(tr("Enzan — %1").arg(session->topModule()));
+    note(tr("Attached to %1, top level %2").arg(session->kernelVersion(), session->topModule()));
+    updateActions();
+}
+
+void MainWindow::onDesignChanged() {
+    designModel->setInstances(session->instances());
+    structureView->expandToDepth(1);
+
+    // The top level is selected for the user, because opening a window onto an empty Objects
+    // pane and expecting them to guess the first click is a poor greeting.
+    if (!session->instances().isEmpty()) {
+        const QString top = QString::fromStdString(session->instances().front().path);
+        const QModelIndex index = designModel->indexOfPath(top);
+        if (index.isValid()) {
+            structureView->setCurrentIndex(index);
+            onScopeSelected(index);
+        }
+    }
+}
+
+void MainWindow::onScopeSelected(const QModelIndex& index) {
+    const QString path = designModel->pathAt(index);
+    if (!path.isEmpty()) session->queryObjects(path);
+}
+
+void MainWindow::onObjectsReceived(const QString& instancePath,
+                                   const QVector<SignalInfo>& objects) {
+    objectsModel->setObjects(instancePath, objects);
+    objectsModel->setCursorTime(waveView->activeCursorTime());
+    objectsView->resizeColumnsToContents();
+}
+
+void MainWindow::onRunStateChanged() {
+    waveView->extentChanged();
+    updateActions();
+
+    statusTime->setText(
+        tr("Now: %1").arg(TimeAxis::format(session->currentTime(), session->timeScale())));
+
+    switch (session->state()) {
+    case ipc::SimulationState::Idle: statusState->setText(tr("Ready")); break;
+    case ipc::SimulationState::Running: statusState->setText(tr("Running…")); break;
+    case ipc::SimulationState::Finished: statusState->setText(tr("Finished")); break;
+    case ipc::SimulationState::Failed: statusState->setText(tr("Failed")); break;
+    }
+}
+
+void MainWindow::onWavesChanged() {
+    waveView->extentChanged();
+    waveModel->refreshValues();
+    objectsModel->refreshValues();
+}
+
+void MainWindow::onWavesCleared() {
+    // The rows stay: the user asked to watch these signals, and a restart is them asking to
+    // watch the same ones again from the beginning. Only the values are gone.
+    note(tr("The design was restarted; the recorded waveform was discarded"));
+    waveModel->refreshValues();
+    objectsModel->refreshValues();
+    waveView->extentChanged();
+}
+
+void MainWindow::onDetached(const QString& reason) {
+    note(reason.isEmpty() ? tr("Disconnected from the kernel")
+                          : tr("Disconnected from the kernel: %1").arg(reason));
+    updateActions();
+}
+
+void MainWindow::onRequestFailed(const QString& reason) {
+    note(tr("The kernel refused a request: %1").arg(reason));
+}
+
+void MainWindow::onCursorsChanged() {
+    const runtime::SimTime time = waveView->activeCursorTime();
+    waveModel->setCursorTime(time);
+    objectsModel->setCursorTime(time);
+    statusCursor->setText(tr("Cursor: %1").arg(TimeAxis::format(time, session->timeScale())));
+}
+
+void MainWindow::note(const QString& text) {
+    transcriptView->appendNote(QStringLiteral("-- ") + text);
+}
+
+// ---------------------------------------------------------------------------
+// Wave window editing
+// ---------------------------------------------------------------------------
+
+QVector<int> MainWindow::selectedWaveRows() const {
+    QVector<int> selected;
+    for (const QModelIndex& index : waveRowsView->selectionModel()->selectedRows()) {
+        const int rowId = waveModel->rowIdOf(index);
+        if (rowId >= 0) selected.push_back(rowId);
+    }
+    return selected;
+}
+
+void MainWindow::addSelectedObjectsToWave() {
+    const QModelIndexList selected = objectsView->selectionModel()->selectedRows();
+    if (selected.isEmpty()) return;
+
+    for (const QModelIndex& index : selected) {
+        const SignalInfo* info = objectsModel->objectAt(index.row());
+        if (info != nullptr) waveModel->addSignal(*info);
+    }
+
+    waveRowsView->expandAll();
+}
+
+void MainWindow::groupSelectedWaves() {
+    const QVector<int> selected = selectedWaveRows();
+    if (selected.isEmpty()) return;
+
+    bool accepted = false;
+    const QString name = QInputDialog::getText(this, tr("New Group"), tr("Group name:"),
+                                               QLineEdit::Normal, tr("Group"), &accepted);
+    if (!accepted || name.isEmpty()) return;
+
+    const int group = waveModel->addGroup(name);
+    for (const int rowId : selected) waveModel->moveToGroup(rowId, group);
+    waveRowsView->expandAll();
+}
+
+void MainWindow::extractBitRange() {
+    const QVector<int> selected = selectedWaveRows();
+    if (selected.size() != 1) {
+        note(tr("Select exactly one signal to extract a bit range from"));
+        return;
+    }
+
+    const WaveRow* waveRow = waveModel->row(selected.front());
+    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return;
+
+    bool accepted = false;
+    const QString text = QInputDialog::getText(
+        this, tr("Extract Bit Range"),
+        tr("Bits of %1 to show, as high:low or a single bit:").arg(waveRow->label),
+        QLineEdit::Normal, QStringLiteral("%1:0").arg(waveRow->signalWidth - 1), &accepted);
+    if (!accepted || text.isEmpty()) return;
+
+    const QStringList parts = text.split(u':');
+    bool highOk = false;
+    bool lowOk = false;
+    const std::uint32_t high = parts.value(0).trimmed().toUInt(&highOk);
+    const std::uint32_t low = parts.size() > 1 ? parts.value(1).trimmed().toUInt(&lowOk) : high;
+    if (!highOk || (parts.size() > 1 && !lowOk)) {
+        note(tr("'%1' is not a bit range; expected high:low or a single bit number").arg(text));
+        return;
+    }
+
+    if (waveModel->addSlice(selected.front(), high, low) < 0) {
+        note(tr("Bits %1 are outside %2, which is %3 bits wide")
+                 .arg(text, waveRow->label)
+                 .arg(waveRow->signalWidth));
+    }
+}
+
+void MainWindow::removeSelectedWaves() {
+    // Removed back to front, because removing a row renumbers nothing but does change what is
+    // selected, and working forwards through a shrinking selection drops every other row.
+    QVector<int> selected = selectedWaveRows();
+    std::ranges::sort(selected, std::greater<>());
+    for (const int rowId : selected) waveModel->removeRow(rowId);
+}
+
+void MainWindow::setSelectedWaveRadix(eir::Radix radix) {
+    for (const int rowId : selectedWaveRows()) waveModel->setRadixRecursive(rowId, radix);
+    waveView->update();
+}
+
+void MainWindow::updateSubscription() {
+    const QVector<std::uint32_t> wanted = waveModel->displayedSignals();
+
+    QVector<std::uint32_t> added;
+    for (const std::uint32_t signalIndex : wanted) {
+        if (!subscribed.contains(signalIndex)) added.push_back(signalIndex);
+    }
+
+    QVector<std::uint32_t> removed;
+    for (const std::uint32_t signalIndex : subscribed) {
+        if (!wanted.contains(signalIndex)) removed.push_back(signalIndex);
+    }
+
+    // Only the difference is sent. Resubscribing to everything whenever a row is added would
+    // make the kernel resend every trace's history each time, which on a long run is the most
+    // expensive thing the protocol can be asked to do.
+    session->subscribe(added);
+    session->unsubscribe(removed);
+    subscribed = wanted;
+}
+
+// ---------------------------------------------------------------------------
+// Running
+// ---------------------------------------------------------------------------
+
+void MainWindow::runForRequestedTime() {
+    bool valid = false;
+    const quint64 duration = runLengthEdit->text().trimmed().toULongLong(&valid);
+    if (!valid || duration == 0) {
+        note(tr("'%1' is not a run length in whole time units").arg(runLengthEdit->text()));
+        return;
+    }
+
+    followAction->setChecked(true);
+    session->run(duration);
+}
+
+void MainWindow::runUntilFinished() {
+    followAction->setChecked(true);
+    session->runUntilFinished();
+}
+
+void MainWindow::stopRun() {
+    session->stop();
+}
+
+void MainWindow::restartRun() {
+    session->restart();
+}
+
+void MainWindow::updateActions() {
+    const bool attached = session->isAttached();
+    const bool running = session->state() == ipc::SimulationState::Running;
+    const bool over = session->state() == ipc::SimulationState::Finished
+                      || session->state() == ipc::SimulationState::Failed;
+
+    runAction->setEnabled(attached && !running && !over);
+    runAllAction->setEnabled(attached && !running && !over);
+    stopAction->setEnabled(attached && running);
+    restartAction->setEnabled(attached && !running);
+    runLengthEdit->setEnabled(attached && !running && !over);
+}
+
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+void MainWindow::restoreLayout() {
+    const QSettings settings;
+    const QByteArray geometry = settings.value(QLatin1StringView(GeometryKey)).toByteArray();
+    const QByteArray state = settings.value(QLatin1StringView(WindowStateKey)).toByteArray();
+
+    if (!geometry.isEmpty())
+        restoreGeometry(geometry);
+    else
+        resize(1400, 900);
+
+    if (!state.isEmpty()) restoreState(state);
+}
+
+void MainWindow::saveLayout() {
+    QSettings settings;
+    settings.setValue(QLatin1StringView(GeometryKey), saveGeometry());
+    settings.setValue(QLatin1StringView(WindowStateKey), saveState());
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    saveLayout();
+
+    // A kernel this front end started has no reason to outlive it; one the user attached to is
+    // theirs, and is left running. Getting this backwards would either orphan a process on
+    // every exit or kill a simulation somebody was in the middle of.
+    if (session->isAttached()) {
+        if (session->ownsKernel()) {
+            session->quitKernel();
+        } else {
+            session->detach();
+        }
+    }
+
+    QMainWindow::closeEvent(event);
+}
+
+} // namespace enzan::gui

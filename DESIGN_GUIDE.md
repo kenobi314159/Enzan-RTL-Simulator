@@ -568,6 +568,14 @@ not to justify threading the kernel now.
 Per-signal append-only chunks of value changes, plus a time index for random
 access. Values are read from the state arena (4.3) at capture time.
 
+**The index is resident; the values spill.** Per signal the database keeps the
+change times and a prefix count of changes to an unknown value in memory always,
+and the value payload in fixed-size chunks that are written to a scratch file and
+freed once the memory budget of 7.1 is exceeded. That puts the budget on the part
+that grows, but the reason the split falls here is 10.3: every question the
+waveform view asks per pixel column is answered from the resident index by a
+binary search and a subtraction, touching no values at all.
+
 ### 7.3 Export formats
 
 - **VCD** — universal interchange, human-readable, required for interoperability
@@ -594,7 +602,7 @@ friction: `vlog`, `vcom`, `vsim`, `run`, `restart`, `add wave`, `log`, `force`,
 `examine`, `radix`, `find`, `when`, `quit`.
 
 **All user configuration is Tcl.** There is no second configuration format. The
-GUI theme is a Tcl script setting colour variables; the window layout is a Tcl
+GUI theme is a Tcl script naming its colours; the window layout is a Tcl
 script. This keeps one configuration language across the whole tool and adds no
 dependency, and it is what commercial EDA tools do.
 
@@ -681,16 +689,33 @@ The layout follows Modelsim, which is what users expect:
 Docking uses `QDockWidget`. Layout is persisted and is definable from a Tcl
 configuration script.
 
+Source and Processes arrive with M3. A Source window is only useful with the
+breakpoints and stepping that make it a debugger rather than a file viewer, and
+those are M3's; a window that showed source and could do nothing with it would be
+a worse answer than the editor the user already has. The Transcript's command
+entry is the same story: section 8.1 commits to Tcl as *the* control language,
+and commands invented to fill the gap before it arrives would be a second control
+surface to stay compatible with.
+
 ### 10.3 Waveform view
 
 A custom `QWidget` with manual painting.
 
 **The rendering cost MUST be a function of visible pixels, not of the number of
-value changes in the visible time range.** When zoomed out, a single pixel
-column may span millions of transitions; the renderer MUST use per-signal
-downsampling with min/max bucketing rather than iterating transitions. Getting
-this wrong makes the viewer unusable on exactly the large designs Enzan targets,
-and it is difficult to retrofit.
+value changes in the visible time range.** When zoomed out, a single pixel column
+may span millions of transitions; the renderer MUST summarise each column rather
+than iterating the transitions in it. Getting this wrong makes the viewer
+unusable on exactly the large designs Enzan targets, and it is difficult to
+retrofit.
+
+Enzan summarises a column as the number of transitions strictly inside it,
+whether anything in it was unknown, and which change is in effect at its left
+edge. All three come from the waveform database's resident time index (7.2) by
+binary search and subtraction, so a column spanning a million transitions costs
+what an empty one costs. A column with transitions in it is drawn as a band; a
+column without them is drawn as a level or a bus segment, and only then is a
+value read — which bounds value reads, and so reads of spilled data, by the pixel
+count too.
 
 Required features: multiple named cursors, cursor locking, zoom and pan, signal
 grouping, extracting a bit range of a signal into a separate displayed signal,
@@ -777,8 +802,8 @@ license check against section 1.4.
 |---|---|---|
 | slang | SystemVerilog frontend | system, FetchContent fallback |
 | NVC | VHDL frontend (M6) | vendored submodule, pinned |
-| Tcl 8.6+ | control language | system |
-| Qt 6 | GUI (M2) | system |
+| Tcl 8.6+ | control language (M3), and the GUI theme | system |
+| Qt 6 | GUI | system |
 | GoogleTest | unit tests | system, FetchContent fallback |
 | LLVM | JIT backend (M8, optional) | system, off by default |
 | zlib | FST compression | system |
