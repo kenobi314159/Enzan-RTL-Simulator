@@ -562,19 +562,15 @@ not to justify threading the kernel now.
   replaying from the start.
 - **A configurable memory budget**, with spill to disk when exceeded rather than
   unbounded growth.
+- **Edge navigation.** Given a signal and a time, the next and the previous
+  transition. Snapping a cursor to an edge and stepping it from edge to edge
+  (10.7) are the two things a reader does most in a wave window, and both have
+  to be one query rather than a scan.
 
 ### 7.2 Structure
 
 Per-signal append-only chunks of value changes, plus a time index for random
 access. Values are read from the state arena (4.3) at capture time.
-
-**The index is resident; the values spill.** Per signal the database keeps the
-change times and a prefix count of changes to an unknown value in memory always,
-and the value payload in fixed-size chunks that are written to a scratch file and
-freed once the memory budget of 7.1 is exceeded. That puts the budget on the part
-that grows, but the reason the split falls here is 10.3: every question the
-waveform view asks per pixel column is answered from the resident index by a
-binary search and a subtraction, touching no values at all.
 
 ### 7.3 Export formats
 
@@ -602,7 +598,7 @@ friction: `vlog`, `vcom`, `vsim`, `run`, `restart`, `add wave`, `log`, `force`,
 `examine`, `radix`, `find`, `when`, `quit`.
 
 **All user configuration is Tcl.** There is no second configuration format. The
-GUI theme is a Tcl script naming its colours; the window layout is a Tcl
+GUI theme is a Tcl script setting colour variables; the window layout is a Tcl
 script. This keeps one configuration language across the whole tool and adds no
 dependency, and it is what commercial EDA tools do.
 
@@ -689,33 +685,16 @@ The layout follows Modelsim, which is what users expect:
 Docking uses `QDockWidget`. Layout is persisted and is definable from a Tcl
 configuration script.
 
-Source and Processes arrive with M3. A Source window is only useful with the
-breakpoints and stepping that make it a debugger rather than a file viewer, and
-those are M3's; a window that showed source and could do nothing with it would be
-a worse answer than the editor the user already has. The Transcript's command
-entry is the same story: section 8.1 commits to Tcl as *the* control language,
-and commands invented to fill the gap before it arrives would be a second control
-surface to stay compatible with.
-
 ### 10.3 Waveform view
 
 A custom `QWidget` with manual painting.
 
 **The rendering cost MUST be a function of visible pixels, not of the number of
-value changes in the visible time range.** When zoomed out, a single pixel column
-may span millions of transitions; the renderer MUST summarise each column rather
-than iterating the transitions in it. Getting this wrong makes the viewer
-unusable on exactly the large designs Enzan targets, and it is difficult to
-retrofit.
-
-Enzan summarises a column as the number of transitions strictly inside it,
-whether anything in it was unknown, and which change is in effect at its left
-edge. All three come from the waveform database's resident time index (7.2) by
-binary search and subtraction, so a column spanning a million transitions costs
-what an empty one costs. A column with transitions in it is drawn as a band; a
-column without them is drawn as a level or a bus segment, and only then is a
-value read — which bounds value reads, and so reads of spilled data, by the pixel
-count too.
+value changes in the visible time range.** When zoomed out, a single pixel
+column may span millions of transitions; the renderer MUST use per-signal
+downsampling with min/max bucketing rather than iterating transitions. Getting
+this wrong makes the viewer unusable on exactly the large designs Enzan targets,
+and it is difficult to retrofit.
 
 Required features: multiple named cursors, cursor locking, zoom and pan, signal
 grouping, extracting a bit range of a signal into a separate displayed signal,
@@ -723,6 +702,8 @@ and per-signal value radix selection.
 
 Defaults, as specified: multi-bit values display in **hexadecimal**; single-bit
 values display as a line high or low.
+
+What the mouse and the keyboard do with all of this is section 10.7.
 
 ### 10.4 Debugging features
 
@@ -767,6 +748,96 @@ suppressible. Fatal means continuing is unsafe, and letting a user turn one into
 a warning converts a clean stop into wrong results, which priority 1 of section
 1.2 forbids.
 
+### 10.7 Waveform view interaction
+
+The gestures below are normative. A wave window is read for hours at a time and
+driven almost entirely by hand, so what the mouse and the keyboard do is part of
+the product rather than a detail of the widget. They are written down so that
+they are decided once, and so that the next person to touch the view does not
+quietly swap two of them for the pair that feel more natural to them — both pairs
+feel natural, and a tool that changes which is which between releases is worse
+than either choice. They arrive with M2.1 (section 18).
+
+**The wheel.**
+
+- **Wheel** scrolls the signal list vertically, wherever the pointer is.
+- **Ctrl+wheel** zooms the time axis about the pointer.
+- **Shift+wheel** pans the time axis.
+
+The names and the traces are two widgets and one window. A wheel that scrolled
+over the names and zoomed over the traces would make an internal boundary the
+reader has no reason to think about decide what their wheel does; one wheel, one
+meaning, across the whole window.
+
+**The right button.** Dragging with the right button is two gestures told apart
+by their direction, with no mode to select first:
+
+- **Right to left** — zoom to the time range the drag covered.
+- **Left to right** — zoom to fit the whole run.
+
+While a drag is in progress the range it covers is shown, so that the reader sees
+what they are about to get. A drag of only a few pixels is not a gesture at all:
+a plain right-click must not zoom anywhere, or every mis-click costs the reader
+their place.
+
+**The left button.** A click on the trace area does three things at once:
+
+- moves the active cursor, unless it is locked;
+- selects the signal whose row was clicked;
+- snaps the cursor to a transition of that signal when one is close to the click.
+
+The snap radius is measured in **pixels, not in time units**, so the gesture
+behaves the same at every zoom: close enough to click is close enough to snap.
+With no transition in range the cursor goes exactly where it was put, because a
+cursor that jumped to a distant edge would be worse than one that did not snap at
+all.
+
+Which signal is selected is not decoration: it is what Tab steps along below.
+
+**Cursors.**
+
+- Every cursor shows its time beside its name.
+- Clicking a cursor's label makes it the active cursor.
+- Double-clicking a label renames it.
+- **Tab** moves the active cursor to the next transition of the selected signal,
+  **Shift+Tab** to the previous one.
+
+Together these are the measuring workflow, and the reason cursor locking (10.3)
+exists: pin a cursor on the edge you are measuring from, select the signal, and
+step the active cursor along it. Reading both times off the labels is what makes
+that worth doing, which is why the times are on the labels and not in a status
+bar where only one of them would fit.
+
+A readout of the interval between two cursors is the obvious companion and is
+deliberately **not** part of this. It needs a decision about which pair of
+cursors it measures, and making that decision before anyone has used the stepping
+it would sit beside is how a tool acquires a number nobody reads.
+
+**The signal list.**
+
+- **Reordering.** Selected rows move by being dragged, including into and out of
+  groups. The order is the reader's, and nothing may re-sort it behind them.
+- **Unpacking.** A multi-bit signal carries an expander that shows its bits as
+  rows of their own, which then behave like any other row — radix, highlight,
+  removal and all. Unpacking is a property of the display and creates no new
+  subscription: the kernel streams the signal once however many of its bits are
+  on screen, exactly as it already does for an extracted bit range (10.3). Arrays
+  gain further levels of unpacking later, and the mechanism is built for that now
+  so that it does not have to be built twice.
+- **Highlighting.** A row may be given a background colour from a palette of
+  five, or returned to the default. **The palette lives in the theme file**
+  (10.5), as `wave.highlight.1` through `wave.highlight.5`; five colour literals
+  in widget code would be five violations of the same rule. A highlight covers
+  the whole row in both panes, the name and the trace, because they are one row
+  to the reader and a highlight that stopped at the splitter would read as a
+  rendering fault.
+
+**What this does not change.** Panning with the middle button, the keyboard zoom
+and pan, cursor locking, grouping, per-row radix and bit-range extraction all
+stay as they are. Ctrl now means *zoom* on the wheel, so whether Ctrl+drag should
+go on meaning *pan* is settled when this is implemented rather than left to
+accumulate.
+
 ---
 
 ## 11. Build system and dependencies
@@ -802,8 +873,8 @@ license check against section 1.4.
 |---|---|---|
 | slang | SystemVerilog frontend | system, FetchContent fallback |
 | NVC | VHDL frontend (M6) | vendored submodule, pinned |
-| Tcl 8.6+ | control language (M3), and the GUI theme | system |
-| Qt 6 | GUI | system |
+| Tcl 8.6+ | control language | system |
+| Qt 6 | GUI (M2) | system |
 | GoogleTest | unit tests | system, FetchContent fallback |
 | LLVM | JIT backend (M8, optional) | system, off by default |
 | zlib | FST compression | system |
@@ -1043,10 +1114,6 @@ Per-commit jobs:
 - Unit and golden test suites.
 - Sanitiser build (ASan+UBSan) over unit and golden suites.
 - `clang-format` and `clang-tidy` checks.
-- Graphical front end: built against Qt 6 and Tcl, with its tests run. They need
-  no display — they select Qt's offscreen platform from inside the test binary
-  rather than trusting the environment, so a GUI test that passed only when
-  somebody happened to be logged in cannot creep in.
 
 Nightly jobs:
 
@@ -1198,6 +1265,34 @@ Tcl configuration.
 
 **Exit:** a design runs interactively with signals added from the GUI and the
 waveform progressing live.
+
+### M2.1 — Waveform interaction
+
+The mouse and keyboard model of section 10.7: the wheel scrolling with Ctrl to
+zoom, right-drag to zoom to a range or to fit, left-click selecting a signal and
+snapping the cursor to a nearby edge, cursors that carry their time and can be
+renamed and stepped from edge to edge, and a signal list whose rows can be
+reordered, unpacked into their bits and highlighted. With the database query the
+last of those needs (7.1).
+
+Placed here, between the GUI and the control layer, for three reasons. It is
+contained entirely in the components M2 has just built, while that code is still
+warm. Nothing later blocks on it, so putting it first costs no other milestone
+anything — while M3's command vocabulary will want a settled notion of the
+active cursor and the selected signal, which is an argument for fixing them
+before the commands are written against them rather than after. And design
+priority 1.2 puts usability above both performance and language breadth: the
+wave window is the part of Enzan a user touches most, and leaving its controls
+until after the VHDL frontend would be ordering the work for everything except
+the person using it.
+
+It is a point release rather than a milestone of its own because none of it
+changes what Enzan can simulate, record or export. Every item is about how the
+window is driven.
+
+**Exit:** every gesture in section 10.7 works and is covered by a test; a reader
+can lock one cursor on an edge, step a second along the same signal with Tab, and
+read both times off their labels without touching the mouse.
 
 ### M3 — Control layer and source debugging
 

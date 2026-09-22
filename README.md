@@ -236,8 +236,8 @@ M1 — a SystemVerilog subset simulating to a VCD or FST waveform, with a counte
 self-check and agree with a reference simulator, and cycles/sec recorded per commit — and so is
 M2, the interactive GUI. Broader language coverage is M5's job rather than a gap in either.
 
-Next is M3, the Tcl control layer and source debugging, then M4 VPI and cocotb, M6 VHDL via NVC,
-and M7 mixed-language simulation. See
+Next is M2.1, the wave window's mouse and keyboard model, then M3 the Tcl control layer and source
+debugging, M4 VPI and cocotb, M6 VHDL via NVC, and M7 mixed-language simulation. See
 [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full roadmap and the exit criteria of
 each milestone.
 
