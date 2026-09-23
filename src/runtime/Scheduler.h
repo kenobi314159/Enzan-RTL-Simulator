@@ -135,6 +135,16 @@ public:
     /// Resets the delta counter, which the kernel does whenever time advances.
     void resetDeltaCount() noexcept { deltas = 0; }
 
+    /// Empties every region, the time wheel and the pending updates.
+    ///
+    /// What `restart` needs (DESIGN_GUIDE.md section 8.1): a design put back to time zero
+    /// with a clock event still in the wheel from the previous run would resume at a
+    /// timestamp the design has not reached, and a process still queued would run from a
+    /// resume point belonging to a simulation that no longer exists.
+    ///
+    /// Capacity is kept, so a restarted simulation does not pay for its queues twice.
+    void clear() noexcept;
+
 private:
     /// A FIFO that reuses its storage.
     ///

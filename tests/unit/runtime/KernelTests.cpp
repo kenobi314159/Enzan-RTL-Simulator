@@ -1313,4 +1313,60 @@ TEST(Kernel, AForcedSignalIgnoresANonBlockingUpdate) {
     EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "99");
 }
 
+// ---------------------------------------------------------------------------
+// restart (section 8.1)
+// ---------------------------------------------------------------------------
+
+TEST(Kernel, ReinitialisingRunsTheDesignAgainIdentically) {
+    // `restart` is `initialize` called a second time. A design put back to time zero must
+    // behave exactly as it did the first time, which means nothing the first run left in the
+    // time wheel, in a process's resume point or in an edge subscription may survive.
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ASSERT_EQ(simulation.run(12), RunStatus::TimeLimitReached);
+    const std::string afterFirst = simulation.value("/tb/clk");
+
+    simulation.simulationKernel().initialize();
+    EXPECT_EQ(simulation.time(), 0U);
+    EXPECT_EQ(simulation.value("/tb/clk"), "0") << "the declared initial value came back";
+
+    ASSERT_EQ(simulation.run(12), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), afterFirst);
+}
+
+TEST(Kernel, ReinitialisingClearsAFinishedRun) {
+    ProcessBuilder builder(ProcessKind::Initial, "stopper");
+    SysTaskCall call;
+    call.kind = SysTaskKind::Finish;
+    const std::uint32_t descriptor = builder.sysCall(std::move(call));
+
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(descriptor)));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready());
+    ASSERT_EQ(simulation.run(), RunStatus::Finished);
+
+    simulation.simulationKernel().initialize();
+    EXPECT_EQ(simulation.run(), RunStatus::Finished) << "the design stopped a second time";
+}
+
+TEST(Kernel, ReinitialisingAfterASuspensionDoesNotResumeTheOldRun) {
+    // The clock generator suspends inside `WaitTime`. If its resume point survived the
+    // restart it would continue mid-body, toggling on a schedule the new run never set up.
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ASSERT_EQ(simulation.run(7), RunStatus::TimeLimitReached);
+    simulation.simulationKernel().initialize();
+
+    // The first edge is at five, not at whatever was left over from before.
+    ASSERT_EQ(simulation.run(4), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), "0");
+    ASSERT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
 } // namespace

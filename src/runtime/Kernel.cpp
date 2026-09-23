@@ -79,12 +79,29 @@ std::ostream& Kernel::transcriptStream() const {
 void Kernel::initialize() {
     designImage->initializeState(stateArena);
 
-    // A force does not survive a restart: `restart` puts the design back to time zero, and a
-    // signal still pinned from the last run would be state the user did not ask to keep.
+    // Everything a previous run left behind goes with it, because `restart` (section 8.1) is
+    // this method called a second time and a design put back to time zero must behave exactly
+    // as it did the first time. A clock event still in the time wheel would resume at a
+    // timestamp the design has not reached; a process still holding a resume point would
+    // continue a simulation that no longer exists; an edge subscription would fire for an
+    // edge nothing is waiting for any more. Each of those produces a design that runs and
+    // gives a different answer, which section 1.2 ranks as the worst possible outcome.
+    scheduler.clear();
+    processes.assign(designImage->processes().begin(), designImage->processes().end());
+    for (std::vector<EdgeWaiter>& waiters : edgeWaiters) waiters.clear();
+    std::ranges::fill(frameStorage, eir::Word{});
+
+    // A force does not survive a restart either: a signal still pinned from the last run would
+    // be state the user did not ask to keep.
     forcedSignals.clear();
 
+    finishRequested = false;
+    errorRequested = false;
+    finishStatus = 0;
+    finalProcessesRun = false;
+    lastStatus = RunStatus::Quiescent;
+
     currentTime = 0;
-    scheduler.resetDeltaCount();
 
     for (std::uint32_t processIndex = 0; processIndex < processes.size(); ++processIndex) {
         const codegen::CompiledProcess& body =
