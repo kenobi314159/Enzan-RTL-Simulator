@@ -739,29 +739,6 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
     return name;
 }
 
-/// Reports a file that could not be read, with the reason the source manager gave.
-void reportFileFailure(DiagnosticEngine& diagnostics, const std::filesystem::path& path,
-                       const FileReadResult& result) {
-    const std::string name = path.string();
-    switch (result.status) {
-    case FileReadStatus::NotFound:
-        diagnostics.report(DiagCode::CannotOpenFile, SourceLocation(), name, result.systemMessage);
-        return;
-    case FileReadStatus::NotARegularFile:
-        diagnostics.report(DiagCode::NotARegularFile, SourceLocation(), name);
-        return;
-    case FileReadStatus::TooLarge:
-        diagnostics.report(DiagCode::SourceFileTooLarge, SourceLocation(), name,
-                           SourceManager::MaxBufferSize);
-        return;
-    case FileReadStatus::PermissionDenied:
-    case FileReadStatus::ReadFailed:
-    case FileReadStatus::Success:
-        diagnostics.report(DiagCode::FileReadFailed, SourceLocation(), name, result.systemMessage);
-        return;
-    }
-}
-
 } // namespace
 
 std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sources,
@@ -781,7 +758,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     for (const std::filesystem::path& path : options.files) {
         const FileReadResult result = sources.readFile(path);
         if (!result.ok()) {
-            reportFileFailure(diagnostics, path, result);
+            reportFileReadFailure(diagnostics, path, result);
             return nullptr;
         }
 

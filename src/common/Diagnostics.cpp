@@ -220,6 +220,30 @@ std::string expandTabs(std::string_view line, std::uint32_t byteColumn, unsigned
 
 } // namespace
 
+void reportFileReadFailure(DiagnosticEngine& diagnostics, const std::filesystem::path& path,
+                           const FileReadResult& result) {
+    const std::string name = path.string();
+    switch (result.status) {
+    case FileReadStatus::NotFound:
+        diagnostics.report(DiagCode::CannotOpenFile, SourceLocation(), name, result.systemMessage);
+        return;
+    case FileReadStatus::NotARegularFile:
+        diagnostics.report(DiagCode::NotARegularFile, SourceLocation(), name);
+        return;
+    case FileReadStatus::TooLarge:
+        diagnostics.report(DiagCode::SourceFileTooLarge, SourceLocation(), name,
+                           SourceManager::MaxBufferSize);
+        return;
+    case FileReadStatus::PermissionDenied:
+    case FileReadStatus::ReadFailed:
+    // Success is not reachable through a caller that checked `ok()`, but a switch that
+    // omitted it would warn, and reporting a generic failure beats reporting nothing.
+    case FileReadStatus::Success:
+        diagnostics.report(DiagCode::FileReadFailed, SourceLocation(), name, result.systemMessage);
+        return;
+    }
+}
+
 TextDiagnosticConsumer::TextDiagnosticConsumer(const SourceManager& sourceManager,
                                                std::ostream& stream) noexcept
     : sources(sourceManager), output(stream) {}
