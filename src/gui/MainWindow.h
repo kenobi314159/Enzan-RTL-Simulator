@@ -64,7 +64,22 @@ private:
 
     void addSelectedObjectsToWave();
     void groupSelectedWaves();
-    void extractBitRange();
+
+    /// Opens the name editor on the row the reader is on.
+    ///
+    /// The same editor `F2` opens, rather than a dialog of its own: renaming is an edit of the
+    /// name column, and offering it twice in two different shapes would be two things to keep
+    /// in step for no gain.
+    void renameCurrentWave();
+
+    /// Shows or hides the contents of every selected row that has contents to show.
+    ///
+    /// One action rather than two, because a row is either packed or unpacked and a menu
+    /// offering both would always have one entry that did nothing. Unpacking a vector for the
+    /// first time creates its bits; after that this is the same expand and collapse the
+    /// disclosure arrow does (DESIGN_GUIDE.md section 10.7).
+    void togglePackSelectedWaves();
+
     void removeSelectedWaves();
     void setSelectedWaveRadix(eir::Radix radix);
     void setSelectedHighlight(int slot);

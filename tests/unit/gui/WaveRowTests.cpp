@@ -20,6 +20,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QLineEdit>
 #include <QTableView>
 #include <QTreeView>
 
@@ -526,12 +527,75 @@ protected:
         pump(2);
     }
 
+    /// Triggers the wave list's action whose text contains `name`. Returns false when the
+    /// window has no such action, which is how a test says a menu entry is missing.
+    bool triggerWaveAction(const QString& name) {
+        for (QAction* action : waveRows->actions()) {
+            if (!action->text().contains(name)) continue;
+            action->trigger();
+            pump(2);
+            return true;
+        }
+        return false;
+    }
+
     Theme theme;
     std::unique_ptr<MainWindow> window;
     QTreeView* waveRows = nullptr;
     QTableView* objects = nullptr;
     WaveformModel* waveModel = nullptr;
 };
+
+// ---------------------------------------------------------------------------
+// The row's own menu
+// ---------------------------------------------------------------------------
+
+TEST_F(WaveWindowTest, PackAndUnpackAreOneEntryThatToggles) {
+    addToWave(QStringLiteral("count"));
+    ASSERT_EQ(waveModel->rowCount(), 1);
+
+    const int bus = waveModel->rowIdOf(waveModel->index(0, 0));
+    waveRows->setCurrentIndex(waveModel->indexOfRow(bus));
+    ASSERT_FALSE(waveRows->isExpanded(waveModel->indexOfRow(bus)));
+
+    // Unpacking through the menu is the same act as the disclosure arrow, so it is what
+    // creates the bits the first time round.
+    ASSERT_TRUE(triggerWaveAction(QStringLiteral("Pack/Unpack")));
+    EXPECT_TRUE(waveRows->isExpanded(waveModel->indexOfRow(bus)));
+    EXPECT_EQ(waveModel->rowCount(waveModel->indexOfRow(bus)), 8);
+
+    ASSERT_TRUE(triggerWaveAction(QStringLiteral("Pack/Unpack")));
+    EXPECT_FALSE(waveRows->isExpanded(waveModel->indexOfRow(bus)))
+        << "one entry has to pack what it unpacked";
+}
+
+TEST_F(WaveWindowTest, RenameOpensTheEditorOnTheName) {
+    addToWave(QStringLiteral("count"));
+    ASSERT_EQ(waveModel->rowCount(), 1);
+
+    // Deliberately on the value column, which is not editable: the action has to move to the
+    // name whichever column the reader was on, rather than quietly doing nothing.
+    const int bus = waveModel->rowIdOf(waveModel->index(0, 0));
+    waveRows->setCurrentIndex(waveModel->index(0, WaveformModel::ValueColumn));
+
+    ASSERT_TRUE(triggerWaveAction(QStringLiteral("Rename")));
+
+    // An editor appearing at all is the assertion that it moved: the value column is not
+    // editable, so an action that stayed where the reader was would have opened nothing.
+    EXPECT_NE(waveRows->viewport()->findChild<QLineEdit*>(), nullptr)
+        << "the name editor has to be open";
+
+    // And the editor edits the label, which is what `setData` is for.
+    waveModel->setData(waveModel->indexOfRow(bus), QStringLiteral("tally"), Qt::EditRole);
+    EXPECT_EQ(waveModel->indexOfRow(bus).data().toString(), QStringLiteral("tally"));
+}
+
+TEST_F(WaveWindowTest, TheBitRangeDialogIsGone) {
+    // Section 10.3: a range is reached by unpacking and removing what is not wanted, not by
+    // typing `high:low` into a box. The entry that did is not there to be found.
+    addToWave(QStringLiteral("count"));
+    EXPECT_FALSE(triggerWaveAction(QStringLiteral("Extract")));
+}
 
 TEST_F(WaveWindowTest, ANewSignalArrivesPackedAndLeavesTheOthersAlone) {
     // Adding a signal used to expand the whole window, which unpacked every bus in it and threw

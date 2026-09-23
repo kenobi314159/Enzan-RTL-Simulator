@@ -191,8 +191,9 @@ void MainWindow::buildDocks() {
 
     addWaveAction(tr("New Group"), QKeySequence(Qt::CTRL | Qt::Key_G),
                   &MainWindow::groupSelectedWaves);
-    addWaveAction(tr("Extract Bit Range…"), QKeySequence(Qt::CTRL | Qt::Key_B),
-                  &MainWindow::extractBitRange);
+    addWaveAction(tr("Rename…"), QKeySequence(Qt::Key_F2), &MainWindow::renameCurrentWave);
+    addWaveAction(tr("Pack/Unpack"), QKeySequence(Qt::CTRL | Qt::Key_U),
+                  &MainWindow::togglePackSelectedWaves);
     addWaveAction(tr("Remove"), QKeySequence(Qt::Key_Delete), &MainWindow::removeSelectedWaves);
 
     auto* clipboardSeparator = new QAction(waveRowsView);
@@ -458,38 +459,44 @@ void MainWindow::groupSelectedWaves() {
     for (const int rowId : wereExpanded) waveRowsView->expand(waveModel->indexOfRow(rowId));
 }
 
-void MainWindow::extractBitRange() {
+void MainWindow::renameCurrentWave() {
+    const QModelIndex current = waveRowsView->currentIndex();
+    if (!current.isValid()) {
+        note(tr("Select a row to rename"));
+        return;
+    }
+
+    // Always the name column, whichever one the reader happened to click: the value column is
+    // not editable, and an action that silently did nothing there would read as a bug.
+    waveRowsView->edit(current.siblingAtColumn(WaveformModel::NameColumn));
+}
+
+void MainWindow::togglePackSelectedWaves() {
     const QVector<int> selected = selectedWaveRows();
-    if (selected.size() != 1) {
-        note(tr("Select exactly one signal to extract a bit range from"));
+    if (selected.isEmpty()) {
+        note(tr("Select a row to pack or unpack"));
         return;
     }
 
-    const WaveRow* waveRow = waveModel->row(selected.front());
-    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return;
+    bool acted = false;
+    for (const int rowId : selected) {
+        // A row that has neither children nor bits to make them from has nothing to pack.
+        if (!waveModel->showsChildren(rowId) && !waveModel->canUnpack(rowId)) continue;
 
-    bool accepted = false;
-    const QString text = QInputDialog::getText(
-        this, tr("Extract Bit Range"),
-        tr("Bits of %1 to show, as high:low or a single bit:").arg(waveRow->label),
-        QLineEdit::Normal, QStringLiteral("%1:0").arg(waveRow->signalWidth - 1), &accepted);
-    if (!accepted || text.isEmpty()) return;
+        const QModelIndex index = waveModel->indexOfRow(rowId);
+        if (!index.isValid()) continue;
 
-    const QStringList parts = text.split(u':');
-    bool highOk = false;
-    bool lowOk = false;
-    const std::uint32_t high = parts.value(0).trimmed().toUInt(&highOk);
-    const std::uint32_t low = parts.size() > 1 ? parts.value(1).trimmed().toUInt(&lowOk) : high;
-    if (!highOk || (parts.size() > 1 && !lowOk)) {
-        note(tr("'%1' is not a bit range; expected high:low or a single bit number").arg(text));
-        return;
+        // Expanding is what creates a vector's bits the first time, through `fetchMore`, so
+        // unpacking and showing are the same act rather than two that have to agree.
+        if (waveRowsView->isExpanded(index)) {
+            waveRowsView->collapse(index);
+        } else {
+            waveRowsView->expand(index);
+        }
+        acted = true;
     }
 
-    if (waveModel->addSlice(selected.front(), high, low) < 0) {
-        note(tr("Bits %1 are outside %2, which is %3 bits wide")
-                 .arg(text, waveRow->label)
-                 .arg(waveRow->signalWidth));
-    }
+    if (!acted) note(tr("Nothing in the selection can be packed or unpacked"));
 }
 
 void MainWindow::removeSelectedWaves() {

@@ -98,8 +98,9 @@ remove it.
 Selecting a signal in the list does the same thing as clicking its trace, so Tab works whichever
 way you picked it — and it works on a group too.
 
-Rows drag to reorder, copy and paste with **Ctrl+C** and **Ctrl+V**, and the context menu offers a
-radix and one of five highlight colours. An unpacked vector is a group like any other: bits drag
+Rows drag to reorder, rename in place with **F2**, copy and paste with **Ctrl+C** and **Ctrl+V**,
+and the context menu offers those, a pack/unpack toggle, a radix and one of five highlight
+colours. An unpacked vector is a group like any other: bits drag
 out of it and back into it, and anything else can be dragged in too. A bus expands into its bits, and a row showing bits shows
 what is left of them: delete one and its bus narrows to the rest. The same rule works the other
 way round, so a group of one-bit signals reads and draws as a vector; a group of wider things

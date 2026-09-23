@@ -700,6 +700,16 @@ Required features: multiple named cursors, cursor locking, zoom and pan, signal
 grouping, extracting a bit range of a signal into a separate displayed signal,
 and per-signal value radix selection.
 
+A bit range is *extracted* rather than dialled in. The window reaches one by
+unpacking the signal, removing the bits that are not wanted and, when the range
+should read as one value, grouping what is left — each step being a thing the
+reader can already do to any row, and the result being a row that shows the
+range on its own line (10.7). A dialog asking for `high:low` was the first way
+this worked and has been withdrawn: it was a second way to reach the same place,
+it could only ever produce a contiguous range, and it put a number between the
+reader and a thing they can point at. The model keeps the operation, because the
+control language's `add wave` takes a range as text (8.1) and will call it.
+
 Defaults, as specified: multi-bit values display in **hexadecimal**; single-bit
 values display as a line high or low.
 
@@ -837,6 +847,15 @@ it would sit beside is how a tool acquires a number nobody reads.
 
 - **Reordering.** Selected rows move by being dragged, including into and out of
   groups. The order is the reader's, and nothing may re-sort it behind them.
+- **Renaming.** A row is renamed in place, by editing its name. The row's own
+  menu offers it as well, and opens the same editor rather than a dialog of its
+  own: a name is the contents of a cell, and offering it twice in two shapes
+  would be two things to keep in step for nothing.
+- **Packing and unpacking from the menu.** One entry, not two. A row is either
+  packed or unpacked, so a menu offering both would always have one entry that
+  did nothing; the entry toggles every selected row that has contents to show.
+  It is the same act as the disclosure arrow, which is what creates a vector's
+  bits the first time, so the two can never disagree about what a row is showing.
 - **Copy and paste.** Ctrl+C copies the selected rows, with everything below
   them, and Ctrl+V pastes them beside whatever is current — inside it when that
   is a group. A copy keeps its radix, its highlight and how far it was unpacked,
@@ -918,8 +937,7 @@ it would sit beside is how a tool acquires a number nobody reads.
   rendering fault.
 
 **What this does not change.** Panning with the middle button, the keyboard zoom
-and pan, cursor locking, grouping, per-row radix and bit-range extraction all
-stay as they are.
+and pan, cursor locking, grouping and per-row radix all stay as they are.
 
 Panning is the middle button's alone. Ctrl+drag used to pan as well, and no
 longer does: Ctrl means *zoom* on the wheel, and a modifier that meant zoom under
