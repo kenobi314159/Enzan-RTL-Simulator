@@ -193,6 +193,9 @@ private:
     /// draw. The result belongs to the cache and is valid until the next call.
     [[nodiscard]] std::span<const wavedb::Sample> sampleRow(int rowId, const QRect& area);
 
+    /// True for a row whose value is a constant of the elaborated design rather than a trace.
+    [[nodiscard]] bool isParameterRow(int rowId) const;
+
     /// Throws away every cached summary.
     ///
     /// Called when the rows themselves change. A change to what a row *shows* — its radix, its

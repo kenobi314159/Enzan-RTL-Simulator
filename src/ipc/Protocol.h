@@ -18,7 +18,7 @@ namespace enzan::ipc {
 /// handshake compares it and refuses rather than negotiating: a GUI and a kernel from
 /// different builds that half-understand each other would show wrong values, and section 1.2
 /// puts correctness above convenience.
-constexpr std::uint32_t ProtocolVersion = 2;
+constexpr std::uint32_t ProtocolVersion = 3;
 
 /// What a message is.
 ///
@@ -223,9 +223,29 @@ struct EnumEntry {
     std::vector<EnumMemberEntry> members;
 };
 
+/// One parameter or localparam of the queried scope.
+///
+/// Separate from `ObjectEntry` because a parameter has no signal index, no trace and nothing
+/// to subscribe to: it is a fact about the elaborated design that holds at every time. What it
+/// does have is a name and a value, which is what a reader wants beside the signals they are
+/// watching (DESIGN_GUIDE.md section 10.7).
+struct ParameterEntry {
+    std::string name;
+    std::string path;
+
+    eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
+
+    /// True for `localparam`.
+    bool isLocal = false;
+};
+
 struct ObjectsMessage {
     std::string instancePath;
     std::vector<ObjectEntry> objects;
+
+    /// The scope's parameters, which are the same for every instance of one parameterisation
+    /// and differ between parameterisations of the same module.
+    std::vector<ParameterEntry> parameters;
 
     /// The enumerations the objects above refer to by index.
     ///
@@ -435,10 +455,19 @@ void serialize(Archive& archive, EnumEntry& entry) {
 }
 
 template<typename Archive>
+void serialize(Archive& archive, ParameterEntry& entry) {
+    archive.str(entry.name);
+    archive.str(entry.path);
+    archive.bits(entry.value);
+    archive.boolean(entry.isLocal);
+}
+
+template<typename Archive>
 void serialize(Archive& archive, ObjectsMessage& message) {
     archive.str(message.instancePath);
     archive.list(message.objects);
     archive.list(message.enums);
+    archive.list(message.parameters);
 }
 
 template<typename Archive>

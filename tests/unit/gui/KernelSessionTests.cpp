@@ -73,6 +73,31 @@ TEST_F(SessionFixture, AnEnumeratedSignalArrivesWithTheNamesOfItsValues) {
     EXPECT_EQ(objects[1].enumeration, nullptr);
 }
 
+TEST_F(SessionFixture, AScopeListsItsParametersAfterItsSignals) {
+    const QVector<SignalInfo> objects = objectsOf(QStringLiteral("/tb/u_dut"));
+
+    // The child's one signal, then its parameter and its localparam in declaration order.
+    ASSERT_EQ(objects.size(), 3);
+    EXPECT_EQ(objects[0].name, QStringLiteral("q"));
+    EXPECT_FALSE(objects[0].isParameter());
+
+    EXPECT_EQ(objects[1].name, QStringLiteral("WIDTH"));
+    ASSERT_TRUE(objects[1].isParameter());
+    EXPECT_FALSE(objects[1].isLocalParameter);
+    EXPECT_EQ(objects[1].constantValue->ref().toUInt64(), 4U);
+    EXPECT_EQ(objects[1].path, QStringLiteral("/tb/u_dut/WIDTH"));
+
+    EXPECT_EQ(objects[2].name, QStringLiteral("DEPTH"));
+    ASSERT_TRUE(objects[2].isParameter());
+    EXPECT_TRUE(objects[2].isLocalParameter) << "a localparam is told apart from a parameter";
+    EXPECT_EQ(objects[2].constantValue->ref().toUInt64(), 16U);
+
+    // A parameter belongs to the scope that declared it, and the top level declared none.
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+        EXPECT_FALSE(info.isParameter()) << info.name.toStdString();
+    }
+}
+
 TEST_F(SessionFixture, SubscribingBringsTheSignalsPastWithIt) {
     // A signal dragged into the wave window halfway through a run has to show what it has been
     // doing, not start from a blank trace.

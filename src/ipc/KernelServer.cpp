@@ -449,6 +449,23 @@ void KernelServer::onQueryObjects(const Frame& frame) {
         }
     }
 
+    // The scope's parameters come from its definition rather than from any slot: they have no
+    // storage, and their value is the same at every time. Which definition matters — a module
+    // instantiated three times at three settings is three definitions, and each carries what
+    // its own parameters were resolved to.
+    const std::uint32_t instanceIndex = *elaborated.findInstance(
+        request.instancePath); // NOLINT(bugprone-unchecked-optional-access)
+    const eir::ModuleDefinition& definition =
+        image->analysedDesign().module(elaborated.instances()[instanceIndex].definitionIndex);
+
+    for (const eir::Parameter& parameter : definition.parameters) {
+        message.parameters.push_back(
+            ParameterEntry{.name = parameter.name,
+                           .path = request.instancePath + '/' + parameter.name,
+                           .value = parameter.value,
+                           .isLocal = parameter.isLocal});
+    }
+
     connection.send(MessageType::Objects, message);
 }
 

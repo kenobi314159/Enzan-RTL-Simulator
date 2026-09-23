@@ -100,6 +100,10 @@ public:
         return *elaborated;
     }
 
+    /// The analysed design the elaboration was built from, for the facts that live on a
+    /// definition rather than on a slot — a module's parameters, and what they resolved to.
+    [[nodiscard]] const eir::Design& analysedDesign() const noexcept { return *design; }
+
     [[nodiscard]] std::uint32_t arenaWords() const noexcept { return arenaSize; }
 
     [[nodiscard]] std::uint32_t frameWords() const noexcept { return frameSize; }

@@ -22,6 +22,7 @@
 #include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/PortSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
@@ -312,6 +313,27 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             break;
         }
 
+        case slang::ast::SymbolKind::Parameter: {
+            // Recorded for display only: a parameterised module is already one definition per
+            // parameterisation, so nothing here is used to *simulate* anything.
+            //
+            // A parameter whose value is not an integer — a `real`, a `string`, an unpacked
+            // array — is skipped rather than reported. It is not being translated, so nothing
+            // can be mistranslated; refusing the design over a `parameter string NAME` that
+            // only names a log file would fail a design that simulates perfectly well today.
+            // The cost of skipping it is that it is absent from a list, which is visible.
+            const auto& parameter = member.as<ast::ParameterSymbol>();
+            const slang::ConstantValue& value = parameter.getValue();
+            if (!value.isInteger()) break;
+
+            definitionValue.parameters.push_back(
+                eir::Parameter{.name = prefix + std::string(parameter.name),
+                               .value = toBitVector(value.integer()),
+                               .isLocal = parameter.isLocalParam(),
+                               .location = convertLocation(parameter.location)});
+            break;
+        }
+
         case slang::ast::SymbolKind::ProceduralBlock:
             proceduralBlocks.emplace_back(prefix, &member.as<ast::ProceduralBlockSymbol>());
             break;
@@ -350,7 +372,7 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             break;
 
         default:
-            // Parameters, type aliases, genvars, modports and the rest carry no state.
+            // Type aliases, genvars, modports and the rest carry no state.
             // A construct that does carry state and is not handled — a task, a class —
             // is reported when something uses it, which puts the diagnostic on the
             // user's line rather than on a declaration they may not have written.

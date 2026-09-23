@@ -340,6 +340,22 @@ void KernelSession::onObjects(const ipc::Frame& frame) {
         objects.push_back(info);
     }
 
+    // Parameters come after the signals, in declaration order. After, because a reader opens a
+    // scope looking for its signals; in the list rather than beside it, because a parameter is
+    // a row in the wave window like anything else once it is put there.
+    for (const ipc::ParameterEntry& entry : message.parameters) {
+        SignalInfo info;
+        info.name = QString::fromStdString(entry.name);
+        info.path = QString::fromStdString(entry.path);
+        info.width = entry.value.width();
+        info.constantValue = entry.value;
+        info.isLocalParameter = entry.isLocal;
+
+        // Deliberately not put in `knownSignals`: a parameter has no signal index, and every
+        // one of them would claim index zero.
+        objects.push_back(std::move(info));
+    }
+
     Q_EMIT objectsReceived(QString::fromStdString(message.instancePath), objects);
 }
 

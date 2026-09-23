@@ -12,6 +12,7 @@
 #include "gui/DesignTreeModel.h"
 #include "gui/Theme.h"
 #include "gui/WaveformModel.h"
+#include "runtime/Time.h"
 
 #include "SessionFixture.h"
 
@@ -311,6 +312,99 @@ TEST_F(EnumeratedRowTest, AGroupHoldingItIsNotNamed) {
 }
 
 // ---------------------------------------------------------------------------
+// Parameters
+// ---------------------------------------------------------------------------
+//
+// A parameter is a constant the elaborated design settled on, not a piece of its state. It has
+// no slot, nothing to subscribe to and the same value at every time, and section 10.7 has it
+// show that value across the whole window — including the part the kernel has not reached,
+// where a trace would stop.
+
+class ParameterRowTest : public WaveformModelTest {
+protected:
+    /// The child scope's `WIDTH` parameter, which is 4.
+    SignalInfo width() { return infoFor(QStringLiteral("/tb/u_dut"), QStringLiteral("WIDTH")); }
+};
+
+TEST_F(ParameterRowTest, ShowsItsConstantValueAtEveryTime) {
+    const int rowId = model->addSignal(width());
+
+    const WaveRow* row = model->row(rowId);
+    ASSERT_NE(row, nullptr);
+    EXPECT_EQ(row->kind, WaveRow::Kind::Parameter);
+
+    // Before any run at all, and at any time after it. A signal would show a dash here.
+    EXPECT_EQ(model->renderValue(rowId, 0), QStringLiteral("00000004"));
+    EXPECT_EQ(model->renderValue(rowId, 1'000'000), QStringLiteral("00000004"));
+
+    model->setRadixRecursive(rowId, Radix::Decimal);
+    EXPECT_EQ(model->renderValue(rowId, 0), QStringLiteral("4"));
+}
+
+TEST_F(ParameterRowTest, IsSubscribedToNothingAndCannotBeTakenApart) {
+    const int rowId = model->addSignal(width());
+
+    EXPECT_TRUE(model->displayedSignals().isEmpty())
+        << "a parameter has no signal index, so there is nothing to ask the kernel for";
+
+    // Immutable: there is nothing behind it to unpack into, and a `+` that did nothing would
+    // be worse than no `+`.
+    EXPECT_FALSE(model->canUnpack(rowId));
+    EXPECT_FALSE(model->hasChildren(model->indexOfRow(rowId)));
+    EXPECT_FALSE(model->showsChildren(rowId));
+}
+
+TEST_F(ParameterRowTest, NeverHasAnEdgeToStepTo) {
+    const int rowId = model->addSignal(width());
+
+    // Tab walks the active cursor from edge to edge, and a constant has none. Answering with a
+    // time anyway would move the cursor somewhere arbitrary.
+    EXPECT_EQ(model->nextEdgeAfter(rowId, 0), enzan::runtime::NoTime);
+    EXPECT_EQ(model->previousEdgeBefore(rowId, 1000), enzan::runtime::NoTime);
+    EXPECT_EQ(model->nearestEdge(rowId, 500), enzan::runtime::NoTime);
+}
+
+TEST_F(ParameterRowTest, SurvivesTheClipboardWithItsValue) {
+    const int rowId = model->addSignal(width());
+    model->copyRows({rowId});
+
+    const QVector<int> pasted = model->pasteRows(-1, -1);
+    ASSERT_EQ(pasted.size(), 1);
+
+    // The value travels with it: there is nowhere for the other end to look it up, since a
+    // parameter has no signal index.
+    const WaveRow* copy = model->row(pasted.front());
+    ASSERT_NE(copy, nullptr);
+    EXPECT_EQ(copy->kind, WaveRow::Kind::Parameter);
+    EXPECT_EQ(model->renderValue(pasted.front(), 0), QStringLiteral("00000004"));
+}
+
+TEST_F(ParameterRowTest, IsDrawnBeforeTheKernelHasRunAtAll) {
+    // The clip that stops a trace at the recorded extent would hide a parameter completely at
+    // time zero, and "nothing has happened here yet" is not true of one.
+    const int rowId = model->addSignal(width());
+    ASSERT_GE(rowId, 0);
+
+    WaveformView view(*session, *model, theme);
+    QTreeView tree;
+    tree.setModel(model.get());
+    tree.setUniformRowHeights(true);
+    tree.resize(200, 200);
+    view.setRowView(&tree);
+    view.resize(600, 200);
+    tree.show();
+    view.show();
+    QCoreApplication::processEvents();
+
+    ASSERT_EQ(session->latestTime(), 0U) << "nothing has been run";
+
+    const std::map<QRgb, int> counts =
+        colourHistogram(view.grab().toImage().convertToFormat(QImage::Format_RGB32));
+    EXPECT_GT(countOf(counts, theme.color(enzan::gui::ThemeColor::WaveTrace)), 20)
+        << "the parameter has to be drawn across a window the design has not been run in";
+}
+
+// ---------------------------------------------------------------------------
 // The canvas
 // ---------------------------------------------------------------------------
 
@@ -498,20 +592,20 @@ TEST_F(WaveformViewTest, FollowingTheTailKeepsTheEndInView) {
 
 TEST_F(WaveformViewTest, ScrollingReusesTheSummariesAlreadyComputed) {
     showEverythingAndRun(20'000);
-    render();
+    static_cast<void>(render());
 
     const std::uint64_t afterFirstPaint = view->summariesComputed();
     ASSERT_GT(afterFirstPaint, 0U) << "the first repaint has to summarise something";
 
     // Nothing changed, so nothing has to be summarised again. This is the repaint a moving
     // cursor, a highlight or a change of radix asks for.
-    render();
+    static_cast<void>(render());
     EXPECT_EQ(view->summariesComputed(), afterFirstPaint);
 
     // And scrolling moves the rows without changing what any of them shows.
     QScrollBar* bar = treeView->verticalScrollBar();
     bar->setValue(bar->value() + 1);
-    render();
+    static_cast<void>(render());
 
     EXPECT_LE(view->summariesComputed() - afterFirstPaint, 2U)
         << "scrolling one line must summarise the row that came into view, not every row";
@@ -519,12 +613,12 @@ TEST_F(WaveformViewTest, ScrollingReusesTheSummariesAlreadyComputed) {
 
 TEST_F(WaveformViewTest, ZoomingSummarisesAgain) {
     showEverythingAndRun(20'000);
-    render();
+    static_cast<void>(render());
 
     const std::uint64_t afterFirstPaint = view->summariesComputed();
 
     view->axis().setRange(0, 200);
-    render();
+    static_cast<void>(render());
 
     EXPECT_GT(view->summariesComputed(), afterFirstPaint)
         << "a summary is per pixel column of a time range, so a new range needs new summaries";
@@ -538,7 +632,7 @@ TEST_F(WaveformViewTest, RunningFurtherSummarisesAgain) {
     // and hide it if the recorded extent were not a key of its own.
     view->setFollowTail(false);
     view->axis().setRange(0, 2000);
-    render();
+    static_cast<void>(render());
 
     const std::uint64_t afterFirstPaint = view->summariesComputed();
     const auto rangeStart = view->axis().start();
@@ -547,7 +641,7 @@ TEST_F(WaveformViewTest, RunningFurtherSummarisesAgain) {
     session->run(1800);
     ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 2000; }));
     view->extentChanged();
-    render();
+    static_cast<void>(render());
 
     ASSERT_EQ(view->axis().start(), rangeStart) << "the range must not have moved";
     ASSERT_EQ(view->axis().end(), rangeEnd);
@@ -573,7 +667,7 @@ TEST_F(WaveformViewTest, RemovingABitSummarisesItsBusAgain) {
     model->unpack(bus);
     treeView->expandAll();
     view->zoomFit();
-    render();
+    static_cast<void>(render());
 
     const std::uint64_t afterFirstPaint = view->summariesComputed();
 
@@ -584,7 +678,7 @@ TEST_F(WaveformViewTest, RemovingABitSummarisesItsBusAgain) {
     ASSERT_NE(row, nullptr);
     ASSERT_FALSE(row->children.isEmpty());
     model->removeRow(row->children.front());
-    render();
+    static_cast<void>(render());
 
     EXPECT_GT(view->summariesComputed(), afterFirstPaint)
         << "the bus has to be summarised again without the bit that was removed";

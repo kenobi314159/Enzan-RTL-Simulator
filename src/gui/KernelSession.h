@@ -13,6 +13,7 @@
 #include <QVector>
 
 #include <memory>
+#include <optional>
 
 #include <cstdint>
 #include <map>
@@ -43,11 +44,32 @@ struct EnumInfo {
     [[nodiscard]] QString nameOf(const eir::BitVector& value) const;
 };
 
+/// One thing a scope contains, which is a signal or a parameter.
+///
+/// One type rather than two. A row in the objects window, a row in the wave list and an entry
+/// on the clipboard all want the same things from it — a name, a path, a width and a value —
+/// and the only difference is where the value comes from. Carrying that difference as a field
+/// means the two places that actually read a value have to know about it and nothing else
+/// does. `constantValue` is the discriminator: a parameter has one, a signal never does, and
+/// `signalIndex` and `recorded` mean nothing on a parameter.
 struct SignalInfo {
     std::uint32_t signalIndex = 0;
     QString name;
     QString path;
     std::uint32_t width = 1;
+
+    /// A parameter's value, which is what it is at every time. Absent for a signal.
+    ///
+    /// A parameter has no slot, no trace and nothing to subscribe to: it is a fact about the
+    /// elaborated design rather than a piece of its state (DESIGN_GUIDE.md section 10.7).
+    std::optional<eir::BitVector> constantValue;
+
+    /// True for a `localparam`, which is set inside the module rather than from outside it.
+    /// Meaningless unless `constantValue` is set.
+    bool isLocalParameter = false;
+
+    /// True when this describes a parameter rather than a signal.
+    [[nodiscard]] bool isParameter() const noexcept { return constantValue.has_value(); }
 
     /// False when the kernel is not recording this signal, so that "nothing has happened yet"
     /// and "nothing is being kept" can be told apart on screen.

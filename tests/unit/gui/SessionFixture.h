@@ -86,6 +86,14 @@ inline eir::Design guiTestDesign() {
     child.sourceName = "child";
     child.addObject(eir::Object{.name = "q", .type = eir::Type::bits(4, false, true)});
 
+    // A parameter and a localparam, so that the path from a definition through the protocol to
+    // a row of the wave window has something to carry. They belong to the child, which is what
+    // makes them a different scope's from the signals above.
+    child.parameters.push_back(eir::Parameter{
+        .name = "WIDTH", .value = *eir::BitVector::parse("32'd4"), .isLocal = false});
+    child.parameters.push_back(eir::Parameter{
+        .name = "DEPTH", .value = *eir::BitVector::parse("32'd16"), .isLocal = true});
+
     eir::ModuleDefinition top;
     top.name = "tb";
     top.sourceName = "tb";

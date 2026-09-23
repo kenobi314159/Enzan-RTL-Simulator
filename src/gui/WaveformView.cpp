@@ -540,17 +540,34 @@ void WaveformView::paintEvent(QPaintEvent* /*event*/) {
         drawable.setRight(std::max(drawable.left(), static_cast<int>(std::ceil(extentX))));
     }
 
+    // Worked out once. The tree is asked where each of its rows is, and asking it twice over
+    // for the same answer is work for nothing.
+    const std::vector<RowGeometry> visible = visibleRows();
+
     // Backgrounds first and unclipped: a highlight marks the whole row, including the part of
     // it the design has not been simulated to yet.
     const QRect area = traceArea();
     painter.save();
     painter.setClipRect(area);
-    for (const RowGeometry& geometry : visibleRows()) paintRowBackground(painter, geometry, area);
+    for (const RowGeometry& geometry : visible) paintRowBackground(painter, geometry, area);
+    painter.restore();
+
+    // A parameter is not clipped at the recorded extent the way a trace is. A trace stopping
+    // there says "nothing has happened here yet", which is true of a signal and false of a
+    // parameter: its value is settled by elaboration and holds at every time, including before
+    // the kernel has run at all — when the extent is zero and the clip would hide it entirely.
+    painter.save();
+    painter.setClipRect(area);
+    for (const RowGeometry& geometry : visible) {
+        if (isParameterRow(geometry.rowId)) paintRow(painter, geometry);
+    }
     painter.restore();
 
     painter.save();
     painter.setClipRect(drawable);
-    for (const RowGeometry& geometry : visibleRows()) paintRow(painter, geometry);
+    for (const RowGeometry& geometry : visible) {
+        if (!isParameterRow(geometry.rowId)) paintRow(painter, geometry);
+    }
     painter.restore();
 
     paintZoomBand(painter);
@@ -667,6 +684,20 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
         !waveRow->children.isEmpty() && !waveModel->childrenReconstituteParent(rowId);
 
     if (!merged) {
+        // A parameter is one value from the beginning of time to the end of it, so every
+        // column shows the same change and the bus painter draws the lot as one segment with
+        // the value written on it. There is no trace to summarise and nothing to look up.
+        if (waveRow->kind == WaveRow::Kind::Parameter) {
+            if (!waveRow->constantValue.has_value()) return false;
+
+            out.assign(static_cast<std::size_t>(columns),
+                       wavedb::Sample{.startTime = timeAxis.start(),
+                                      .transitions = 0,
+                                      .changeIndex = 0,
+                                      .anyUnknown = waveRow->constantValue->ref().hasUnknown()});
+            return true;
+        }
+
         if (waveRow->kind != WaveRow::Kind::Signal) return false;
 
         const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
@@ -716,6 +747,11 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
     }
 
     return true;
+}
+
+bool WaveformView::isParameterRow(int rowId) const {
+    const WaveRow* waveRow = waveModel->row(rowId);
+    return waveRow != nullptr && waveRow->kind == WaveRow::Kind::Parameter;
 }
 
 void WaveformView::invalidateSamples() {

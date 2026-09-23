@@ -50,6 +50,11 @@ int ObjectsModel::columnCount(const QModelIndex& parent) const {
 }
 
 QString ObjectsModel::valueOf(const SignalInfo& info) const {
+    // A parameter is the same at every time, so the cursor does not come into it.
+    if (info.isParameter()) {
+        return QString::fromStdString(eir::toString(info.constantValue->ref(), valueRadix));
+    }
+
     const wavedb::WaveformDatabase& database = kernelSession->waveforms();
 
     const std::uint32_t record = database.recordIndexOf(info.signalIndex);
@@ -80,7 +85,11 @@ QVariant ObjectsModel::data(const QModelIndex& index, int role) const {
     switch (index.column()) {
     case NameColumn: return info.name;
     case ValueColumn: return valueOf(info);
-    case TypeColumn: return info.width == 1 ? tr("logic") : tr("logic [%1:0]").arg(info.width - 1);
+    case TypeColumn:
+        // A parameter says which it is rather than how wide it is. Its width is whatever the
+        // value needed, which is not something the reader wrote and not worth showing them.
+        if (info.isParameter()) return info.isLocalParameter ? tr("localparam") : tr("parameter");
+        return info.width == 1 ? tr("logic") : tr("logic [%1:0]").arg(info.width - 1);
     default: return {};
     }
 }

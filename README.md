@@ -106,7 +106,9 @@ what is left of them: delete one and its bus narrows to the rest. The same rule 
 way round, so a group of one-bit signals reads and draws as a vector; a group of wider things
 reads as the list of them, `{001122}{112233}`, nesting as `{{11}{22}}{{22}{33}}`. A signal whose
 type is an `enum` shows the name of its value — `S_SEND`, not `3'h2` — and picking a radix shows
-the number instead. The full model is [`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
+the number instead. A scope's parameters and localparams are listed in **Objects** after its
+signals and drop into the wave window as constant rows, so `ACK_DELAY` can sit beside the traces
+it explains. The full model is [`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
 
 The kernel and the GUI are separate processes and talk over a Unix domain socket, so a window on
 your machine can drive a simulation on another one:
@@ -145,6 +147,7 @@ three colours.
 | Interactive GUI: hierarchy, objects, live waveform, cursors, zoom, grouping, radix | yes |
 | Wave window: edge snapping, Tab between edges, drag to reorder, unpack a bus into bits, highlight a row | yes |
 | Wave window: `enum` values shown by name | yes, with the radix menu to see the encoding |
+| Wave window: parameters and localparams as constant rows | yes, listed in Objects beside the signals |
 | Attaching a local GUI to a kernel running elsewhere | yes, over a forwarded socket |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |

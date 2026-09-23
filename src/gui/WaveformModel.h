@@ -22,7 +22,14 @@ namespace enzan::gui {
 
 /// One row of the wave window: a trace, or a group holding traces.
 struct WaveRow {
-    enum class Kind : std::uint8_t { Group, Signal };
+    /// What a row's value comes from.
+    ///
+    /// A `Parameter` is a constant the elaborated design settled on, not a piece of its state:
+    /// it has no signal index, nothing to subscribe to, and the same value at every time. It
+    /// earns a kind of its own rather than a flag because every question the window asks a row
+    /// — what does it show, when does it change, can it be taken apart — has a different and
+    /// simpler answer for one (DESIGN_GUIDE.md section 10.7).
+    enum class Kind : std::uint8_t { Group, Signal, Parameter };
 
     Kind kind = Kind::Signal;
 
@@ -61,6 +68,15 @@ struct WaveRow {
 
     /// True once a signal row's bits have been created as children below it.
     bool unpacked = false;
+
+    /// A `Parameter` row's value, which is its value at every time. Empty otherwise.
+    ///
+    /// Copied into the row rather than looked up, because a parameter has no signal index to
+    /// look it up by and because it cannot change: a copy can never be stale.
+    std::optional<eir::BitVector> constantValue;
+
+    /// True when a `Parameter` row is a `localparam`, for the tooltip.
+    bool localParameter = false;
 
     int parent = -1;
     QVector<int> children;
@@ -111,7 +127,11 @@ public:
 
     // --- editing -----------------------------------------------------------
 
-    /// Adds a trace, inside `parentGroup` when it names one. Returns its row number.
+    /// Adds a row for `info`, inside `parentGroup` when it names one. Returns its row number.
+    ///
+    /// A parameter becomes a `Parameter` row and a signal a `Signal` one, which is the single
+    /// place the difference is decided: the objects window, the clipboard and the wave list
+    /// all hand this the same kind of thing.
     int addSignal(const SignalInfo& info, int parentGroup = -1);
 
     /// Adds an empty group. Returns its row number.

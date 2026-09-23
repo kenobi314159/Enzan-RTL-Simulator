@@ -194,6 +194,70 @@ TEST_F(FrontendTest, OneEnumerationIsRecordedOnceHoweverManyObjectsHaveIt) {
     EXPECT_EQ(module->objects[require(module->findObject("third"))].enumIndex, first);
 }
 
+TEST_F(FrontendTest, ParametersAreRecordedWithWhatTheyResolvedTo) {
+    // A parameterised module is already one definition per parameterisation, so nothing here
+    // is used to simulate anything. It is recorded so that a reader looking at one of three
+    // differently-configured copies of a module can see which copy they are looking at
+    // (DESIGN_GUIDE.md section 10.7).
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf #(parameter int WIDTH = 8) ();
+            localparam int BYTES = WIDTH / 8;
+            logic [WIDTH-1:0] q;
+        endmodule
+
+        module m;
+            leaf #(.WIDTH(16)) u_wide ();
+            leaf #(.WIDTH(8))  u_narrow ();
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr);
+
+    // Two parameterisations, two definitions, each carrying its own values.
+    std::vector<int> widths;
+    std::vector<int> byteCounts;
+    for (const ModuleDefinition& module : design->modules()) {
+        if (module.sourceName != "leaf") continue;
+
+        for (const enzan::eir::Parameter& parameter : module.parameters) {
+            const auto value = static_cast<int>(parameter.value.ref().toUInt64());
+
+            if (parameter.name == "WIDTH") {
+                EXPECT_FALSE(parameter.isLocal);
+                widths.push_back(value);
+            } else if (parameter.name == "BYTES") {
+                EXPECT_TRUE(parameter.isLocal) << "a localparam is told apart from a parameter";
+                byteCounts.push_back(value);
+            }
+        }
+    }
+
+    std::ranges::sort(widths);
+    std::ranges::sort(byteCounts);
+    EXPECT_EQ(widths, (std::vector<int>{8, 16}));
+    EXPECT_EQ(byteCounts, (std::vector<int>{1, 2})) << "a localparam derived from the parameter";
+}
+
+TEST_F(FrontendTest, AParameterThatIsNotAnIntegerIsSkippedRatherThanRefused) {
+    // Nothing is being translated, so nothing can be mistranslated. Refusing the design over a
+    // `parameter string` that only names a log file would fail a design that simulates
+    // perfectly well; the cost of leaving it out of a list is visible, which is the point.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            parameter string NAME = "run";
+            parameter int    SIZE = 4;
+            logic q;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << "a string parameter must not fail the analysis";
+
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+
+    ASSERT_EQ(module->parameters.size(), 1U);
+    EXPECT_EQ(module->parameters[0].name, "SIZE");
+}
+
 TEST_F(FrontendTest, OutputIsAlwaysVerifiableEir) {
     // The frontend verifies its own output before returning it, so a design that comes back at
     // all satisfies the core invariant of section 4.2. Checking again here makes that contract

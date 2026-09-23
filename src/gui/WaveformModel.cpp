@@ -68,10 +68,12 @@ QModelIndex WaveformModel::indexOfRow(int rowId) const {
 
 int WaveformModel::addSignal(const SignalInfo& info, int parentGroup) {
     WaveRow added;
-    added.kind = WaveRow::Kind::Signal;
+    added.kind = info.isParameter() ? WaveRow::Kind::Parameter : WaveRow::Kind::Signal;
     added.label = info.name.isEmpty() ? info.path : info.name;
     added.signalIndex = info.signalIndex;
     added.signalWidth = info.width;
+    added.constantValue = info.constantValue;
+    added.localParameter = info.isLocalParameter;
     added.parent = showsChildren(parentGroup) ? parentGroup : -1;
 
     const int rowId = static_cast<int>(rows.size());
@@ -333,8 +335,19 @@ void WaveformModel::writeRow(QDataStream& stream, int rowId) const {
            << static_cast<quint32>(waveRow.signalIndex) << static_cast<quint32>(waveRow.signalWidth)
            << static_cast<quint8>(waveRow.radix) << waveRow.symbolic << waveRow.sliced
            << static_cast<quint32>(waveRow.highBit) << static_cast<quint32>(waveRow.lowBit)
-           << static_cast<qint32>(waveRow.highlight) << waveRow.unpacked
-           << static_cast<quint32>(waveRow.children.size());
+           << static_cast<qint32>(waveRow.highlight) << waveRow.unpacked << waveRow.localParameter;
+
+    // A parameter's value travels with it, because there is nowhere for the other end to look
+    // it up: it has no signal index, and the scope it came from may not even be the one the
+    // reader is looking at by then.
+    stream << waveRow.constantValue.has_value();
+    if (waveRow.constantValue.has_value()) {
+        stream << QString::fromStdString(
+            eir::toString(waveRow.constantValue->ref(), eir::Radix::Binary))
+               << waveRow.constantValue->width();
+    }
+
+    stream << static_cast<quint32>(waveRow.children.size());
 
     for (const int child : waveRow.children) writeRow(stream, child);
 }
@@ -349,13 +362,39 @@ bool WaveformModel::readPending(QDataStream& stream, PendingRow& pending) {
     qint32 highlight = 0;
     quint32 childCount = 0;
 
+    bool hasConstant = false;
+    QString constantBits;
+    quint32 constantWidth = 0;
+
     stream >> kind >> pending.row.label >> signalIndex >> signalWidth >> radix
         >> pending.row.symbolic >> pending.row.sliced >> highBit >> lowBit >> highlight
-        >> pending.row.unpacked >> childCount;
+        >> pending.row.unpacked >> pending.row.localParameter >> hasConstant;
     if (stream.status() != QDataStream::Ok) return false;
 
-    pending.row.kind = kind == static_cast<quint8>(WaveRow::Kind::Group) ? WaveRow::Kind::Group
-                                                                         : WaveRow::Kind::Signal;
+    if (hasConstant) {
+        stream >> constantBits >> constantWidth;
+        if (stream.status() != QDataStream::Ok) return false;
+
+        pending.row.constantValue = eir::BitVector::parse(
+            QStringLiteral("%1'b%2").arg(constantWidth).arg(constantBits).toStdString());
+    }
+
+    stream >> childCount;
+    if (stream.status() != QDataStream::Ok) return false;
+
+    switch (static_cast<WaveRow::Kind>(kind)) {
+    case WaveRow::Kind::Group: pending.row.kind = WaveRow::Kind::Group; break;
+
+    // A parameter that arrived without its value is not one, whatever the clipboard said. It
+    // becomes a signal row over signal index zero, which shows a dash rather than a wrong
+    // number — the same thing any row with nothing behind it shows.
+    case WaveRow::Kind::Parameter:
+        pending.row.kind = pending.row.constantValue.has_value() ? WaveRow::Kind::Parameter
+                                                                 : WaveRow::Kind::Signal;
+        break;
+
+    default: pending.row.kind = WaveRow::Kind::Signal; break;
+    }
     pending.row.signalIndex = signalIndex;
     pending.row.signalWidth = signalWidth;
     pending.row.radix = radix <= static_cast<quint8>(eir::Radix::Hexadecimal)
@@ -528,6 +567,10 @@ std::uint32_t WaveformModel::displayedWidth(int rowId) const {
         return total;
     }
 
+    if (waveRow->kind == WaveRow::Kind::Parameter) {
+        return waveRow->constantValue.has_value() ? waveRow->constantValue->width() : 0;
+    }
+
     if (waveRow->kind != WaveRow::Kind::Signal) return 0;
 
     const auto [high, low] = bitRange(*waveRow);
@@ -604,6 +647,9 @@ std::optional<eir::BitVector> WaveformModel::valueAt(int rowId, runtime::SimTime
         return combinedValueAt(rowId, time);
     }
 
+    // A parameter is the same at every time, which is the whole of what makes it one.
+    if (waveRow->kind == WaveRow::Kind::Parameter) return waveRow->constantValue;
+
     if (waveRow->kind != WaveRow::Kind::Signal) return std::nullopt;
 
     const wavedb::WaveformDatabase& database = kernelSession->waveforms();
@@ -643,7 +689,8 @@ QString WaveformModel::renderValue(int rowId, runtime::SimTime time) const {
     const std::optional<eir::BitVector> value = valueAt(rowId, time);
     if (!value.has_value()) {
         // A group with nothing joinable in it shows nothing at all, rather than the dash that
-        // means "this signal has no value yet": they are different situations.
+        // means "this signal has no value yet": they are different situations. A parameter
+        // always has a value, so it reaches neither.
         return waveRow->kind == WaveRow::Kind::Group ? QString() : QStringLiteral("—");
     }
 
@@ -847,6 +894,13 @@ QVariant WaveformModel::data(const QModelIndex& index, int role) const {
     if (role == Qt::ToolTipRole && waveRow.kind == WaveRow::Kind::Signal) {
         const SignalInfo* info = kernelSession->signalInfo(waveRow.signalIndex);
         return info != nullptr ? info->path : waveRow.label;
+    }
+
+    // A parameter says which kind it is, because a row that never changes looks like a signal
+    // nobody has driven until something tells the reader otherwise.
+    if (role == Qt::ToolTipRole && waveRow.kind == WaveRow::Kind::Parameter) {
+        return waveRow.localParameter ? tr("localparam %1").arg(waveRow.label)
+                                      : tr("parameter %1").arg(waveRow.label);
     }
 
     if (role != Qt::DisplayRole) return {};

@@ -88,6 +88,27 @@ struct Object {
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
 };
 
+/// A parameter or localparam of a module definition, kept for display.
+///
+/// Parameters are resolved away before EIR exists: a parameterised module becomes one
+/// definition per parameterisation, which is what keeps an analysed unit free of them and
+/// reusable without re-evaluating anything (DESIGN_GUIDE.md section 4.4). What is kept here is
+/// the *record* of what each was resolved to, because a reader debugging a design built out of
+/// three differently-parameterised copies of one module needs to see which copy they are
+/// looking at, and nothing downstream of the frontend could work that out.
+struct Parameter {
+    std::string name;
+
+    BitVector value;
+
+    /// True for `localparam`. Worth distinguishing on screen: one is set from outside the
+    /// module and the other is derived inside it, which is the difference between "why is this
+    /// instance configured like that" and "what did that work out to".
+    bool isLocal = false;
+
+    SourceLocation location;
+};
+
 /// Direction of a module port.
 enum class PortDirection : std::uint8_t { Input, Output, InOut };
 
@@ -172,6 +193,9 @@ struct ModuleDefinition {
 
     /// The enumerations objects here refer to by index.
     std::vector<EnumDefinition> enums;
+
+    /// What this parameterisation's parameters were resolved to, in declaration order.
+    std::vector<Parameter> parameters;
 
     /// Returns the index of the object called `name`, or nothing.
     ///

@@ -933,6 +933,27 @@ it would sit beside is how a tool acquires a number nobody reads.
   rather than as a choice. The way back is a `Symbolic` entry in the same menu,
   listed first, since it is where an enumerated row starts.
 
+- **Parameters and localparams are rows like any other.** The objects window
+  lists a scope's parameters after its signals, and one dropped into the wave
+  window shows its value across the whole width of it. A design built out of
+  three differently-configured copies of one module is a thing a reader has to
+  be able to tell apart, and the way they do that is by putting `ACK_DELAY`
+  beside the traces it explains.
+
+  A parameter is **immutable and constant**, and those are two statements rather
+  than one. Constant: its value is the same at every time, so it has no edges to
+  step between and it is *not* clipped at the recorded extent the way a trace is
+  — a trace stopping there says "nothing has happened here yet", which is true of
+  a signal and false of a parameter, and before the first run the clip would hide
+  it altogether. Immutable: it has nothing behind it to unpack into, so it offers
+  no expander; a `+` that did nothing would be worse than no `+`.
+
+  It has no slot, no trace and nothing to subscribe to, so its value travels with
+  the row — including onto the clipboard, because there is nowhere for the other
+  end to look it up. A parameterised module is already one analysed definition
+  per parameterisation (4.4), so what each one resolved to is a fact the frontend
+  records about that definition and nothing else could reconstruct.
+
 - **An unpacked vector is a group in every respect, including what may be put in
   it.** Rows may be dragged out of one and back into it, and rows from elsewhere
   may be dragged in. Half a container — one that lets a bit be taken out but
