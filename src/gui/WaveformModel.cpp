@@ -331,7 +331,7 @@ void WaveformModel::writeRow(QDataStream& stream, int rowId) const {
     for (const int child : waveRow.children) writeRow(stream, child);
 }
 
-int WaveformModel::readRow(QDataStream& stream, int parentRow) {
+bool WaveformModel::readPending(QDataStream& stream, PendingRow& pending) {
     quint8 kind = 0;
     quint32 signalIndex = 0;
     quint32 signalWidth = 1;
@@ -341,31 +341,49 @@ int WaveformModel::readRow(QDataStream& stream, int parentRow) {
     qint32 highlight = 0;
     quint32 childCount = 0;
 
-    WaveRow added;
-    stream >> kind >> added.label >> signalIndex >> signalWidth >> radix >> added.sliced >> highBit
-        >> lowBit >> highlight >> added.unpacked >> childCount;
-    if (stream.status() != QDataStream::Ok) return -1;
+    stream >> kind >> pending.row.label >> signalIndex >> signalWidth >> radix >> pending.row.sliced
+        >> highBit >> lowBit >> highlight >> pending.row.unpacked >> childCount;
+    if (stream.status() != QDataStream::Ok) return false;
 
-    added.kind = kind == static_cast<quint8>(WaveRow::Kind::Group) ? WaveRow::Kind::Group
-                                                                   : WaveRow::Kind::Signal;
-    added.signalIndex = signalIndex;
-    added.signalWidth = signalWidth;
-    added.radix = radix <= static_cast<quint8>(eir::Radix::Hexadecimal)
-                      ? static_cast<eir::Radix>(radix)
-                      : eir::Radix::Hexadecimal;
-    added.highBit = highBit;
-    added.lowBit = lowBit;
-    added.highlight = std::clamp(static_cast<int>(highlight), 0, HighlightSlots);
+    pending.row.kind = kind == static_cast<quint8>(WaveRow::Kind::Group) ? WaveRow::Kind::Group
+                                                                         : WaveRow::Kind::Signal;
+    pending.row.signalIndex = signalIndex;
+    pending.row.signalWidth = signalWidth;
+    pending.row.radix = radix <= static_cast<quint8>(eir::Radix::Hexadecimal)
+                            ? static_cast<eir::Radix>(radix)
+                            : eir::Radix::Hexadecimal;
+    pending.row.highBit = highBit;
+    pending.row.lowBit = lowBit;
+    pending.row.highlight = std::clamp(static_cast<int>(highlight), 0, HighlightSlots);
+
+    // A count off a clipboard is untrusted in the same way a count off a socket is: every
+    // child costs bytes to describe, so one larger than what is left cannot be honest.
+    if (std::cmp_greater(childCount, stream.device()->bytesAvailable())) return false;
+
+    pending.children.resize(childCount);
+    for (PendingRow& child : pending.children) {
+        if (!readPending(stream, child)) return false;
+    }
+
+    return true;
+}
+
+int WaveformModel::materialise(const PendingRow& pending, int parentRow, int position) {
+    WaveRow added = pending.row;
+    added.children.clear();
     added.parent = parentRow;
 
     const int rowId = static_cast<int>(rows.size());
     rows.push_back(added);
-    (parentRow < 0 ? roots : rows[parentRow].children).push_back(rowId);
 
-    for (quint32 index = 0; index < childCount; ++index) {
-        if (readRow(stream, rowId) < 0) return rowId;
+    QVector<int>& siblings = parentRow < 0 ? roots : rows[parentRow].children;
+    if (position >= 0 && position <= siblings.size()) {
+        siblings.insert(position, rowId);
+    } else {
+        siblings.push_back(rowId);
     }
 
+    for (const PendingRow& child : pending.children) materialise(child, rowId, -1);
     return rowId;
 }
 
@@ -425,28 +443,33 @@ QVector<int> WaveformModel::pasteRows(int targetGroup, int position) {
     stream >> count;
     if (stream.status() != QDataStream::Ok || count == 0) return pasted;
 
-    // A reset rather than a run of insertions: whole subtrees arrive at once, and the reader
-    // is about to look at where they landed rather than at what moved to make room.
-    beginResetModel();
-    for (quint32 index = 0; index < count; ++index) {
-        const int rowId = readRow(stream, targetGroup);
-        if (rowId < 0) break;
-        pasted.push_back(rowId);
+    // Read first, insert second. A truncated clipboard then changes nothing — and, the reason
+    // this is not one `beginResetModel`, the rows already in the window are never torn down,
+    // so the view keeps every expansion the reader had open. Pasting one signal should not
+    // cost them the arrangement they had built.
+    std::vector<PendingRow> arriving(count);
+    for (PendingRow& pending : arriving) {
+        if (!readPending(stream, pending)) return pasted;
     }
 
-    // Put where the paste was aimed rather than at the end, which is what makes pasting beside
-    // the row you copied do the obvious thing.
-    if (position >= 0 && !pasted.isEmpty()) {
-        QVector<int>& siblings = targetGroup < 0 ? roots : rows[targetGroup].children;
-        for (const int rowId : pasted) siblings.removeAll(rowId);
+    const QModelIndex parentIndex = targetGroup < 0 ? QModelIndex() : indexOfRow(targetGroup);
+    for (const PendingRow& pending : arriving) {
+        const int siblingCount = targetGroup < 0
+                                     ? static_cast<int>(roots.size())
+                                     : static_cast<int>(rows[targetGroup].children.size());
 
-        const int at = std::min(position, static_cast<int>(siblings.size()));
-        for (int offset = 0; offset < pasted.size(); ++offset) {
-            siblings.insert(at + offset, pasted[offset]);
-        }
+        // Put where the paste was aimed rather than at the end, which is what makes pasting
+        // beside the row you copied do the obvious thing.
+        const int at = position >= 0
+                           ? std::min(position + static_cast<int>(pasted.size()), siblingCount)
+                           : siblingCount;
+
+        beginInsertRows(parentIndex, at, at);
+        pasted.push_back(materialise(pending, targetGroup, at));
+        endInsertRows();
     }
-    endResetModel();
 
+    notifyValueChangedUpwards(targetGroup);
     Q_EMIT displayedSignalsChanged();
     return pasted;
 }
@@ -544,22 +567,18 @@ std::optional<eir::BitVector> WaveformModel::combinedValueAt(int rowId,
                                                              runtime::SimTime time) const {
     const WaveRow& waveRow = rows[rowId];
 
-    // Every child has to be the same width, which is what "all children have the same type"
-    // amounts to for a vector. A group of unrelated signals stays blank rather than showing a
-    // number joined out of things that have nothing to do with each other.
-    std::uint32_t childWidth = 0;
+    // Children of any width join. Whether the result *reads* as one number or as a list of
+    // them is `renderValue`'s business; here it is simply all of their bits in order, which is
+    // what the trace needs in order to know whether anything in the row is unknown.
     QVector<eir::BitVector> parts;
     parts.reserve(waveRow.children.size());
 
+    std::uint32_t total = 0;
     for (const int child : waveRow.children) {
         const std::optional<eir::BitVector> value = valueAt(child, time);
         if (!value.has_value()) return std::nullopt;
 
-        if (parts.isEmpty()) {
-            childWidth = value.value().width();
-        } else if (value.value().width() != childWidth) {
-            return std::nullopt;
-        }
+        total += value.value().width();
         parts.push_back(value.value());
     }
 
@@ -567,7 +586,6 @@ std::optional<eir::BitVector> WaveformModel::combinedValueAt(int rowId,
 
     // The first child is the most significant, which is the order the list shows them in and
     // the order unpacking creates them in.
-    const std::uint32_t total = childWidth * static_cast<std::uint32_t>(parts.size());
     eir::BitVector joined = eir::BitVector::filled(total, eir::Logic::Zero);
 
     std::uint32_t bit = total;
@@ -603,9 +621,29 @@ std::optional<eir::BitVector> WaveformModel::valueAt(int rowId, runtime::SimTime
     return slice(*waveRow, *whole);
 }
 
+bool WaveformModel::childrenAreBits(int rowId) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr || waveRow->children.isEmpty()) return false;
+
+    return std::ranges::all_of(waveRow->children,
+                               [this](int child) { return displayedWidth(child) == 1; });
+}
+
 QString WaveformModel::renderValue(int rowId, runtime::SimTime time) const {
     const WaveRow* waveRow = row(rowId);
     if (waveRow == nullptr) return {};
+
+    // A row whose children are wider than a bit reads as the list of them. Joining a vector of
+    // vectors into one number files off the boundaries that are the whole reason it has that
+    // shape; a list keeps them, and nests when the children are lists themselves.
+    if (showsChildren(rowId) && !childrenReconstituteParent(rowId) && !childrenAreBits(rowId)
+        && !waveRow->children.isEmpty()) {
+        QString rendered;
+        for (const int child : waveRow->children) {
+            rendered += u'{' + renderValue(child, time) + u'}';
+        }
+        return rendered;
+    }
 
     const std::optional<eir::BitVector> value = valueAt(rowId, time);
     if (!value.has_value()) {
@@ -615,6 +653,101 @@ QString WaveformModel::renderValue(int rowId, runtime::SimTime time) const {
     }
 
     return QString::fromStdString(eir::toString(value.value().ref(), waveRow->radix));
+}
+
+// ---------------------------------------------------------------------------
+// Edges
+// ---------------------------------------------------------------------------
+
+runtime::SimTime WaveformModel::nextRawEdgeAfter(int rowId, runtime::SimTime time) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr) return runtime::NoTime;
+
+    if (showsChildren(rowId)) {
+        runtime::SimTime soonest = runtime::NoTime;
+        for (const int child : waveRow->children) {
+            soonest = std::min(soonest, nextRawEdgeAfter(child, time));
+        }
+        return soonest;
+    }
+
+    if (waveRow->kind != WaveRow::Kind::Signal) return runtime::NoTime;
+
+    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
+    const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
+    if (record == wavedb::WaveformDatabase::NotRecorded) return runtime::NoTime;
+
+    const std::uint64_t change = database.nextChangeAfter(record, time);
+    return change == wavedb::NoChange ? runtime::NoTime : database.timeOfChange(record, change);
+}
+
+runtime::SimTime WaveformModel::previousRawEdgeBefore(int rowId, runtime::SimTime time) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr) return runtime::NoTime;
+
+    if (showsChildren(rowId)) {
+        runtime::SimTime latest = runtime::NoTime;
+        for (const int child : waveRow->children) {
+            const runtime::SimTime edge = previousRawEdgeBefore(child, time);
+            if (edge != runtime::NoTime && (latest == runtime::NoTime || edge > latest)) {
+                latest = edge;
+            }
+        }
+        return latest;
+    }
+
+    if (waveRow->kind != WaveRow::Kind::Signal) return runtime::NoTime;
+
+    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
+    const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
+    if (record == wavedb::WaveformDatabase::NotRecorded) return runtime::NoTime;
+
+    const std::uint64_t change = database.previousChangeBefore(record, time);
+    return change == wavedb::NoChange ? runtime::NoTime : database.timeOfChange(record, change);
+}
+
+bool WaveformModel::isEdgeAt(int rowId, runtime::SimTime time) const {
+    // An edge is a time at which the row's value differs from the value an instant earlier —
+    // not one at which it differs from wherever the cursor happens to be. Asking the second
+    // question makes stepping backwards skip the transition the cursor is standing just after,
+    // because the value there is the one that transition produced.
+    if (time == 0) return valueAt(rowId, 0).has_value();
+
+    return valueAt(rowId, time) != valueAt(rowId, time - 1);
+}
+
+runtime::SimTime WaveformModel::nextEdgeAfter(int rowId, runtime::SimTime time) const {
+    runtime::SimTime candidate = nextRawEdgeAfter(rowId, time);
+    for (int examined = 0; candidate != runtime::NoTime && examined < EdgeSearchBudget;
+         ++examined) {
+        if (isEdgeAt(rowId, candidate)) return candidate;
+        candidate = nextRawEdgeAfter(rowId, candidate);
+    }
+
+    return candidate;
+}
+
+runtime::SimTime WaveformModel::previousEdgeBefore(int rowId, runtime::SimTime time) const {
+    runtime::SimTime candidate = previousRawEdgeBefore(rowId, time);
+    for (int examined = 0; candidate != runtime::NoTime && examined < EdgeSearchBudget;
+         ++examined) {
+        if (isEdgeAt(rowId, candidate)) return candidate;
+        candidate = previousRawEdgeBefore(rowId, candidate);
+    }
+
+    return candidate;
+}
+
+runtime::SimTime WaveformModel::nearestEdge(int rowId, runtime::SimTime time) const {
+    const runtime::SimTime later = nextEdgeAfter(rowId, time);
+    const runtime::SimTime earlier = previousEdgeBefore(rowId, time);
+
+    if (later == runtime::NoTime) return earlier;
+    if (earlier == runtime::NoTime) return later;
+
+    // A tie goes to the earlier one, so that which side of an edge a click rounded to does not
+    // decide the answer.
+    return time - earlier <= later - time ? earlier : later;
 }
 
 void WaveformModel::setCursorTime(runtime::SimTime time) {

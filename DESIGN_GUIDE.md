@@ -786,6 +786,11 @@ their place.
 - selects the signal whose row was clicked;
 - snaps the cursor to a transition of that signal when one is close to the click.
 
+Selecting a row **in the list** means the same thing, with the cursor's own time
+standing in for where the click landed. Picking a signal by name and picking it
+by trace are the same act, and a reader who did the first and found that Tab did
+nothing would reasonably conclude the key was broken.
+
 The snap radius is measured in **pixels, not in time units**, so the gesture
 behaves the same at every zoom: close enough to click is close enough to snap.
 With no transition in range the cursor goes exactly where it was put, because a
@@ -805,8 +810,17 @@ Which signal is selected is not decoration: it is what Tab steps along below.
   would need the reader to make it active first and then remember that they had.
 - A cursor is added from the toolbar, beside the zoom controls, because adding
   one is part of measuring rather than part of configuring the window.
-- **Tab** moves the active cursor to the next transition of the selected signal,
-  **Shift+Tab** to the previous one.
+- **Tab** moves the active cursor to the next transition of the selected row,
+  **Shift+Tab** to the previous one. It does so wherever the focus is — the
+  signal list must not spend the key on its own focus navigation.
+- A *transition of the row* means a time at which what the row displays differs
+  from what it displayed an instant earlier. Not every change of the underlying
+  signal: a row showing one bit of a counter must not stop at every count, and a
+  group's transitions are its children's put together. There is no index of when
+  a single bit turns over, so the search walks the signal's transitions and gives
+  up after a bounded number of them; past that the cursor lands on a real
+  transition of something in the row, which is worse than the exact answer and
+  far better than a frozen window.
 
 Together these are the measuring workflow, and the reason cursor locking (10.3)
 exists: pin a cursor on the edge you are measuring from, select the signal, and
@@ -830,11 +844,16 @@ it would sit beside is how a tool acquires a number nobody reads.
   would be a worse answer than copying nothing. The clipboard also carries the
   hierarchical paths as plain text, so that a copy is worth something outside
   this window.
-- **Adding a signal changes nothing else.** A new row arrives packed, and
-  whatever was unpacked or collapsed stays as it was. This is worth stating
-  because the obvious implementation — expand the tree so the new row is
-  visible — throws away the arrangement the reader has built up, every time
-  they add a signal.
+- **Adding or pasting a row changes nothing else.** A new row arrives packed,
+  and whatever was unpacked or collapsed stays as it was. Worth stating twice
+  over, because both obvious implementations get it wrong: expanding the tree so
+  the new row is visible unpacks every bus in the window, and rebuilding the
+  model to insert a pasted subtree makes the view forget every expansion in it.
+  Either way the reader loses the arrangement they had built, every time they
+  add a signal.
+- **Anything that changes which rows are on screen redraws the traces.**
+  Expanding, collapsing, pasting, deleting. The names and the traces are two
+  widgets, and only one of them is told by Qt.
 - **Unpacking.** A multi-bit signal carries an expander that shows its bits as
   rows of their own, which then behave like any other row — radix, highlight,
   removal and all. Unpacking is a property of the display and creates no new
@@ -852,11 +871,18 @@ it would sit beside is how a tool acquires a number nobody reads.
   arrays fall out of nesting rather than needing a mechanism of their own.
 
   The first child is the most significant, which is the order the list shows
-  them in and the order unpacking creates them in. Every child must be the same
-  width: a number joined out of signals that have nothing to do with each other
-  is noise, so a group of mixed widths shows nothing rather than inventing a
-  value for itself. A bus whose bits have *all* been deleted shows nothing
-  either, rather than quietly reverting to the value the reader just took apart.
+  them in and the order unpacking creates them in. A bus whose bits have *all*
+  been deleted shows nothing, rather than quietly reverting to the value the
+  reader just took apart.
+
+  **How it reads depends on what is in it.** Children that are single bits make
+  one number, which is what lets an unpacked bus read as the bus. Children wider
+  than a bit make a *list* of them — `{001122}{112233}` — and because that
+  recurses, a group of such groups reads `{{11}{22}}{{22}{33}}`. Joining a vector
+  of vectors into one number files off exactly the boundaries that are the reason
+  it has that shape. The list form also means a group of unlike signals is
+  readable rather than being either nonsense or nothing, so no group is refused a
+  value for the widths it happens to contain.
 
   A multi-bit signal is therefore a group whose children happen to be its own
   bits, and the only thing that distinguishes it is that those children are made

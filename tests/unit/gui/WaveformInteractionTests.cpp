@@ -390,6 +390,129 @@ TEST_F(InteractionTest, ACursorsLabelCarriesItsTime) {
     EXPECT_GT(view->cursors()[0].labelRect.width(), shortTime);
 }
 
+TEST_F(InteractionTest, SelectingARowInTheListIsTheSameAsClickingItsTrace) {
+    // Picking a signal by name has to mean what picking it by trace means, or Tab appears to
+    // do nothing to a reader who chose their signal from the list.
+    populate();
+    view->axis().setRange(0, 400);
+    view->setCursorTime(0, 201);
+
+    const QModelIndex clockRow = model->indexOfRow(rowOf.value(QStringLiteral("clk")));
+    treeView->setCurrentIndex(clockRow);
+    QCoreApplication::processEvents();
+
+    EXPECT_EQ(view->selectedRow(), rowOf.value(QStringLiteral("clk")));
+    EXPECT_EQ(view->activeCursorTime(), 200U)
+        << "the cursor should have snapped to that signal's nearest edge";
+}
+
+TEST_F(InteractionTest, ARowSelectedWithoutBecomingCurrentIsStillTheSelectedSignal) {
+    // A Ctrl+click, or a selection left over after the model changed, leaves the current index
+    // somewhere else. "The selected signal" has to mean what the reader sees highlighted.
+    populate();
+
+    const QModelIndex counterRow = model->indexOfRow(rowOf.value(QStringLiteral("count")));
+    treeView->selectionModel()->clearCurrentIndex();
+    treeView->selectionModel()->select(counterRow,
+                                       QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    QCoreApplication::processEvents();
+
+    EXPECT_EQ(view->selectedRow(), rowOf.value(QStringLiteral("count")));
+}
+
+TEST_F(InteractionTest, TabWorksWhileTheListHasFocus) {
+    // Tab means the cursor wherever the reader is looking. Left to the tree it would be spent
+    // on focus navigation, and a reader who had just picked a signal by name would lose it.
+    populate();
+    view->axis().setRange(0, 400);
+
+    treeView->setCurrentIndex(model->indexOfRow(rowOf.value(QStringLiteral("clk"))));
+    QCoreApplication::processEvents();
+    view->setCursorTime(0, 100);
+
+    QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(treeView.get(), &tab);
+    EXPECT_EQ(view->activeCursorTime(), 105U);
+
+    QKeyEvent back(QEvent::KeyPress, Qt::Key_Backtab, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(treeView.get(), &back);
+    EXPECT_EQ(view->activeCursorTime(), 100U);
+}
+
+TEST_F(InteractionTest, AGroupCanBeSteppedAlongLikeASignal) {
+    // Section 10.7: a group shows a value on its line, so it has edges.
+    populate();
+
+    const int group = model->addGroup(QStringLiteral("both"));
+    ASSERT_TRUE(model->moveRowsTo({rowOf.value(QStringLiteral("clk"))}, group, 0));
+
+    treeView->setCurrentIndex(model->indexOfRow(group));
+    QCoreApplication::processEvents();
+    view->setCursorTime(0, 100);
+
+    key(Qt::Key_Tab);
+    EXPECT_EQ(view->activeCursorTime(), 105U);
+}
+
+// ---------------------------------------------------------------------------
+// Keeping the canvas up to date
+// ---------------------------------------------------------------------------
+
+/// Counts the paint events a widget is asked for.
+class PaintCounter : public QObject {
+public:
+    int painted = 0;
+
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::Paint) ++painted;
+        return QObject::eventFilter(watched, event);
+    }
+};
+
+TEST_F(InteractionTest, UnpackingAndPackingRedrawTheCanvas) {
+    // Expanding a bus changes which rows are on screen. Without the canvas being told, the
+    // traces stayed as they were until something else happened to force a repaint.
+    populate();
+
+    PaintCounter counter;
+    view->installEventFilter(&counter);
+
+    const QModelIndex bus = model->indexOfRow(rowOf.value(QStringLiteral("count")));
+    treeView->expand(bus);
+    QCoreApplication::processEvents();
+    EXPECT_GT(counter.painted, 0) << "unpacking did not ask the canvas to redraw";
+
+    counter.painted = 0;
+    treeView->collapse(bus);
+    QCoreApplication::processEvents();
+    EXPECT_GT(counter.painted, 0) << "packing did not ask the canvas to redraw";
+
+    view->removeEventFilter(&counter);
+}
+
+TEST_F(InteractionTest, PastingRedrawsTheCanvasAndKeepsWhatWasOpen) {
+    populate();
+
+    const int bus = rowOf.value(QStringLiteral("count"));
+    treeView->expand(model->indexOfRow(bus));
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(treeView->isExpanded(model->indexOfRow(bus)));
+
+    PaintCounter counter;
+    view->installEventFilter(&counter);
+
+    model->copyRows({rowOf.value(QStringLiteral("clk"))});
+    const QVector<int> pasted = model->pasteRows(-1, -1);
+    QCoreApplication::processEvents();
+
+    ASSERT_EQ(pasted.size(), 1);
+    EXPECT_GT(counter.painted, 0) << "pasting did not ask the canvas to redraw";
+    EXPECT_TRUE(treeView->isExpanded(model->indexOfRow(bus)))
+        << "pasting must not pack what the reader had open";
+
+    view->removeEventFilter(&counter);
+}
+
 // ---------------------------------------------------------------------------
 // The signal list
 // ---------------------------------------------------------------------------

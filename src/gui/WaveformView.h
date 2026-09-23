@@ -144,6 +144,13 @@ protected:
     /// that wants Tab for itself has to say so at this level.
     bool focusNextPrevChild(bool next) override;
 
+public:
+    /// Takes Tab from the signal list, so the key means the same thing on either side of the
+    /// window. Public because `QObject` declares it so, and narrowing an override's visibility
+    /// is legal and confusing.
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+protected:
 private:
     /// Where one model row sits on this canvas.
     struct RowGeometry {
@@ -186,6 +193,9 @@ private:
 
     /// Moves the active cursor to the time under `x`, if it is not locked.
     void moveActiveCursorTo(double x);
+
+    /// Applies a change of selection in the list, which means the same as a click on the row.
+    void onRowSelected();
 
     /// Index of the cursor whose label covers `point`, or -1.
     [[nodiscard]] int cursorLabelAt(const QPoint& point) const;
@@ -230,6 +240,10 @@ private:
     bool zoomDragging = false;
     int zoomFromX = 0;
     int zoomToX = 0;
+
+    /// True while this view is the one changing the list's selection, so that the change does
+    /// not come back round and act a second time.
+    bool applyingSelection = false;
 };
 
 } // namespace enzan::gui

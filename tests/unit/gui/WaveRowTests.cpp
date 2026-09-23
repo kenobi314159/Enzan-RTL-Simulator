@@ -138,17 +138,16 @@ TEST_F(WaveRowTest, AGroupOfOneBitSignalsBehavesAsAVector) {
     EXPECT_EQ(model->renderValue(group, 400), QStringLiteral("0010"));
 }
 
-TEST_F(WaveRowTest, AGroupOfMixedWidthsShowsNothing) {
-    // A number joined out of signals that have nothing to do with each other is noise, so a
-    // grab-bag group stays blank rather than inventing a value for itself.
+TEST_F(WaveRowTest, AGroupOfDifferingWidthsReadsAsAList) {
+    // Joining unlike signals into one number would file off the boundaries that say which bits
+    // belong to what. The list keeps them, so a group of a clock and a counter is readable
+    // rather than being either noise or nothing.
     const int group = model->addGroup(QStringLiteral("odds and ends"));
-    const int oneBit = model->addSignal(clock, group);
-    const int eightBit = model->addSignal(counter, group);
+    model->addSignal(clock, group);
+    model->addSignal(counter, group);
 
-    ASSERT_NE(model->row(oneBit), nullptr);
-    ASSERT_NE(model->row(eightBit), nullptr);
-
-    EXPECT_TRUE(model->renderValue(group, 400).isEmpty());
+    EXPECT_EQ(model->renderValue(group, 400), QStringLiteral("{0}{28}"));
+    EXPECT_EQ(model->displayedWidth(group), 9U);
 }
 
 TEST_F(WaveRowTest, AnEmptyGroupShowsNothing) {
@@ -177,8 +176,13 @@ TEST_F(WaveRowTest, GroupsNestIntoSomethingWider) {
     EXPECT_EQ(model->displayedWidth(high), 4U);
     EXPECT_EQ(model->displayedWidth(low), 4U);
     EXPECT_EQ(model->displayedWidth(outer), 8U);
-    EXPECT_EQ(model->renderValue(outer, 400), QStringLiteral("28"))
-        << "the two halves put back together are the counter again";
+
+    // Each half is a group of bits, so each reads as a number; the group of those two reads as
+    // the list of them. Joining them back into `28` would lose the shape that is the only
+    // reason for arranging them this way.
+    EXPECT_EQ(model->renderValue(high, 400), QStringLiteral("2"));
+    EXPECT_EQ(model->renderValue(low, 400), QStringLiteral("8"));
+    EXPECT_EQ(model->renderValue(outer, 400), QStringLiteral("{2}{8}"));
 }
 
 TEST_F(WaveRowTest, TheFirstChildIsTheMostSignificant) {
@@ -203,6 +207,85 @@ TEST_F(WaveRowTest, AJoinedValueTracksTheCursorLikeAnyOther) {
     // The counter reaches 20 at 200ns and 40 at 400ns; dropping the top bit changes neither.
     EXPECT_EQ(model->renderValue(bus, 200), QStringLiteral("14"));
     EXPECT_EQ(model->renderValue(bus, 400), QStringLiteral("28"));
+}
+
+TEST_F(WaveRowTest, AVectorOfVectorsReadsAsNestedLists) {
+    // The shape the notation exists for: a group of groups of vectors reads
+    // `{{11}{22}}{{22}{33}}` rather than as one long number.
+    const int bus = model->addSignal(counter);
+    model->unpack(bus);
+
+    const int outer = model->addGroup(QStringLiteral("array"));
+    for (int half = 0; half < 2; ++half) {
+        const int inner = model->addGroup(QStringLiteral("pair %1").arg(half), outer);
+        for (int pair = 0; pair < 2; ++pair) {
+            const int slot = model->addGroup(QStringLiteral("slot"), inner);
+            for (int bit = 0; bit < 2; ++bit) {
+                ASSERT_TRUE(model->moveRowsTo({childOf(bus, 0)}, slot, bit));
+            }
+        }
+    }
+
+    // 40 is 0b00101000, taken two bits at a time: 00 10 10 00.
+    EXPECT_EQ(model->renderValue(outer, 400), QStringLiteral("{{0}{2}}{{2}{0}}"));
+}
+
+// ---------------------------------------------------------------------------
+// Edges
+// ---------------------------------------------------------------------------
+
+TEST_F(WaveRowTest, AGroupHasTheEdgesOfEverythingInIt) {
+    // Section 10.7: a group shows a value on its line, so it has edges to step between. They
+    // are its children's put together.
+    const int group = model->addGroup(QStringLiteral("both"));
+    model->addSignal(clock, group);
+    model->addSignal(counter, group);
+
+    // The clock toggles every five units and the counter every ten, so the group changes every
+    // five — and the counter's changes coincide with the clock's rising edges.
+    EXPECT_EQ(model->nextEdgeAfter(group, 100), 105U);
+    EXPECT_EQ(model->nextEdgeAfter(group, 105), 110U);
+    EXPECT_EQ(model->previousEdgeBefore(group, 105), 100U);
+}
+
+TEST_F(WaveRowTest, SteppingBackwardsLandsOnTheEdgeJustPassed) {
+    // The cursor sits at 101, one unit after the clock changed at 100. Stepping back must find
+    // 100, not skip it because the value there is the value the cursor already has.
+    const int row = model->addSignal(clock);
+
+    EXPECT_EQ(model->previousEdgeBefore(row, 101), 100U);
+    EXPECT_EQ(model->previousEdgeBefore(row, 100), 95U);
+}
+
+TEST_F(WaveRowTest, AnUnpackedBitStepsOnlyWhereThatBitChanges) {
+    // The counter changes every ten units, but its top bits do not. Stepping along bit 4 must
+    // walk the sixteen-count boundaries rather than stopping at every increment.
+    const int bus = model->addSignal(counter);
+    model->unpack(bus);
+
+    const int bit4 = childOf(bus, 3);
+    ASSERT_NE(model->row(bit4), nullptr);
+    ASSERT_EQ(model->row(bit4)->label, QStringLiteral("count[4]"));
+
+    // The clock's first rising edge is at 5 and they are ten apart, so the counter reaches n
+    // at 10n-5: bit 4 is first set at 155, when the count reaches 16, and clears at 315.
+    EXPECT_EQ(model->nextEdgeAfter(bit4, 0), 155U);
+    EXPECT_EQ(model->nextEdgeAfter(bit4, 155), 315U);
+    EXPECT_EQ(model->previousEdgeBefore(bit4, 300), 155U);
+}
+
+TEST_F(WaveRowTest, EdgesRunOutRatherThanWrapping) {
+    const int row = model->addSignal(clock);
+
+    EXPECT_EQ(model->nextEdgeAfter(row, 100'000), enzan::runtime::NoTime);
+    EXPECT_EQ(model->previousEdgeBefore(row, 0), enzan::runtime::NoTime);
+}
+
+TEST_F(WaveRowTest, TheNearestEdgeIsFoundFromEitherSide) {
+    const int row = model->addSignal(clock);
+
+    EXPECT_EQ(model->nearestEdge(row, 101), 100U);
+    EXPECT_EQ(model->nearestEdge(row, 104), 105U);
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +373,24 @@ TEST_F(WaveRowTest, PastingSubscribesToWhatArrived) {
 
     model->pasteRows(-1, -1);
     EXPECT_EQ(model->displayedSignals(), QVector<std::uint32_t>{counter.signalIndex});
+}
+
+TEST_F(WaveRowTest, PastingKeepsTheRowsThatWereAlreadyThere) {
+    // A paste used to reset the model, which made the view forget every expansion in the
+    // window. The rows themselves have to survive it untouched.
+    const int first = model->addSignal(counter);
+    model->unpack(first);
+    model->setHighlight(first, 2);
+
+    model->copyRows({first});
+    const QVector<int> pasted = model->pasteRows(-1, -1);
+    ASSERT_EQ(pasted.size(), 1);
+
+    ASSERT_NE(model->row(first), nullptr);
+    EXPECT_TRUE(model->row(first)->unpacked);
+    EXPECT_EQ(model->rowCount(model->indexOfRow(first)), 8);
+    EXPECT_EQ(model->row(first)->highlight, 2);
+    EXPECT_EQ(model->indexOfRow(first).row(), 0) << "and stays where it was";
 }
 
 TEST_F(WaveRowTest, PastingAnEmptyClipboardDoesNothing) {

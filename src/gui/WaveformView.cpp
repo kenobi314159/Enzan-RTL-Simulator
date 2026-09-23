@@ -79,6 +79,73 @@ void WaveformView::setRowView(QTreeView* rowView) {
     connect(rows->verticalScrollBar(), &QScrollBar::valueChanged, this,
             qOverload<>(&QWidget::update));
     connect(rows->header(), &QHeaderView::geometriesChanged, this, qOverload<>(&QWidget::update));
+
+    // Anything that changes which rows are on screen, or where they are, changes what the
+    // canvas should be drawing. Expanding a bus, pasting, deleting a bit: each of these used
+    // to leave the traces as they were until something else happened to force a repaint.
+    connect(rows, &QTreeView::expanded, this, [this](const QModelIndex&) { update(); });
+    connect(rows, &QTreeView::collapsed, this, [this](const QModelIndex&) { update(); });
+
+    if (const QAbstractItemModel* model = rows->model(); model != nullptr) {
+        const auto repaint = [this] { update(); };
+        connect(model, &QAbstractItemModel::rowsInserted, this, repaint);
+        connect(model, &QAbstractItemModel::rowsRemoved, this, repaint);
+        connect(model, &QAbstractItemModel::rowsMoved, this, repaint);
+        connect(model, &QAbstractItemModel::modelReset, this, repaint);
+        connect(model, &QAbstractItemModel::layoutChanged, this, repaint);
+        connect(model, &QAbstractItemModel::dataChanged, this, repaint);
+    }
+
+    // Selecting a row in the list means the same thing as clicking its trace: it is the row
+    // Tab steps along, and the cursor goes to its nearest edge. Without this, picking a signal
+    // by name left the cursor behind and Tab appeared to do nothing.
+    if (const QItemSelectionModel* selection = rows->selectionModel(); selection != nullptr) {
+        connect(selection, &QItemSelectionModel::currentRowChanged, this,
+                [this](const QModelIndex&, const QModelIndex&) { onRowSelected(); });
+        connect(selection, &QItemSelectionModel::selectionChanged, this,
+                [this](const QItemSelection&, const QItemSelection&) { onRowSelected(); });
+    }
+
+    // Tab belongs to the cursor wherever the reader is looking. The list would otherwise spend
+    // it on its own focus navigation, and a reader who had just picked a signal by name would
+    // find the key did nothing.
+    rows->installEventFilter(this);
+}
+
+bool WaveformView::eventFilter(QObject* watched, QEvent* event) {
+    if (watched != rows || event->type() != QEvent::KeyPress) {
+        return QWidget::eventFilter(watched, event);
+    }
+
+    const auto* key = dynamic_cast<QKeyEvent*>(event);
+    if (key == nullptr || (key->key() != Qt::Key_Tab && key->key() != Qt::Key_Backtab)) {
+        return QWidget::eventFilter(watched, event);
+    }
+
+    stepActiveCursorToEdge(key->key() == Qt::Key_Tab);
+    return true;
+}
+
+void WaveformView::onRowSelected() {
+    if (applyingSelection) return;
+
+    const int rowId = selectedRow();
+    if (rowId < 0) return;
+
+    // Exactly what a click on that row's trace would do, with the cursor's own time standing
+    // in for where the click landed.
+    if (!cursorList.isEmpty()) {
+        const int index = std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1);
+        if (!cursorList[index].locked) {
+            const runtime::SimTime snapped = snapToEdge(rowId, cursorList[index].time);
+            if (snapped != cursorList[index].time) {
+                cursorList[index].time = snapped;
+                Q_EMIT cursorsChanged();
+            }
+        }
+    }
+
+    update();
 }
 
 int WaveformView::rulerHeight() const {
@@ -256,7 +323,17 @@ void WaveformView::setCursorLocked(int index, bool locked) {
 
 int WaveformView::selectedRow() const {
     if (rows == nullptr) return -1;
-    return waveModel->rowIdOf(rows->currentIndex());
+
+    const int current = waveModel->rowIdOf(rows->currentIndex());
+    if (current >= 0) return current;
+
+    // A row can be selected without becoming current — a Ctrl+click, or a selection restored
+    // after the model was reset. Falling back keeps "the selected signal" meaning what the
+    // reader sees highlighted rather than an index that happens to be stale.
+    if (rows->selectionModel() == nullptr) return -1;
+
+    const QModelIndexList selected = rows->selectionModel()->selectedRows();
+    return selected.isEmpty() ? -1 : waveModel->rowIdOf(selected.front());
 }
 
 int WaveformView::rowAt(int y) const {
@@ -276,19 +353,13 @@ int WaveformView::cursorLabelAt(const QPoint& point) const {
 }
 
 runtime::SimTime WaveformView::snapToEdge(int rowId, runtime::SimTime time) const {
-    const WaveRow* waveRow = waveModel->row(rowId);
-    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return time;
+    if (waveModel->row(rowId) == nullptr) return time;
 
-    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
-    const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
-    if (record == wavedb::WaveformDatabase::NotRecorded) return time;
-
-    const std::uint64_t nearest = database.nearestChange(record, time);
-    if (nearest == wavedb::NoChange) return time;
+    const runtime::SimTime edge = waveModel->nearestEdge(rowId, time);
+    if (edge == runtime::NoTime) return time;
 
     // The radius is a pixel distance, so it is compared as one. A window of time units would
     // snap from further and further away as the view zoomed out.
-    const runtime::SimTime edge = database.timeOfChange(record, nearest);
     if (std::abs(timeAxis.xOf(edge) - timeAxis.xOf(time)) > SnapPixels) return time;
 
     return edge;
@@ -296,23 +367,18 @@ runtime::SimTime WaveformView::snapToEdge(int rowId, runtime::SimTime time) cons
 
 void WaveformView::stepActiveCursorToEdge(bool forward) {
     const int rowId = selectedRow();
-    const WaveRow* waveRow = waveModel->row(rowId);
-    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return;
+    if (waveModel->row(rowId) == nullptr) return;
     if (cursorList.isEmpty()) return;
 
     const int index = std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1);
     if (cursorList[index].locked) return;
 
-    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
-    const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
-    if (record == wavedb::WaveformDatabase::NotRecorded) return;
-
     const runtime::SimTime from = cursorList[index].time;
-    const std::uint64_t change = forward ? database.nextChangeAfter(record, from)
-                                         : database.previousChangeBefore(record, from);
-    if (change == wavedb::NoChange) return;
+    const runtime::SimTime edge = forward ? waveModel->nextEdgeAfter(rowId, from)
+                                          : waveModel->previousEdgeBefore(rowId, from);
+    if (edge == runtime::NoTime) return;
 
-    cursorList[index].time = database.timeOfChange(record, change);
+    cursorList[index].time = edge;
 
     // The reader is stepping towards something they want to look at, so the view goes with
     // them rather than leaving the cursor off the side of the window.
@@ -337,7 +403,14 @@ void WaveformView::pickAt(const QPoint& point) {
     // traces are one row to the reader, and two ideas of which row is current would drift.
     if (rowId >= 0 && rows != nullptr) {
         const QModelIndex index = waveModel->indexOfRow(rowId);
-        if (index.isValid()) rows->setCurrentIndex(index);
+        if (index.isValid()) {
+            // Guarded, because setting the current row sends the selection back here and the
+            // cursor would be snapped twice — once to where the click landed and once to
+            // wherever the row's nearest edge happened to be.
+            applyingSelection = true;
+            rows->setCurrentIndex(index);
+            applyingSelection = false;
+        }
     }
 
     if (cursorList.isEmpty()) return;
@@ -785,8 +858,10 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId
         }
 
         if (runWidth >= MinimumLabelPixels) {
-            const QString text =
-                QString::fromStdString(eir::toString(value.value().ref(), waveRow->radix));
+            // The model renders it, not this code: a row whose children are vectors reads as
+            // the list of them, and a trace that printed the joined number while the value
+            // column beside it printed the list would be two answers to one question.
+            const QString text = waveModel->renderValue(rowId, sample.startTime);
             const QRect textRect(left + shoulder + 2, top, runWidth - (2 * shoulder) - 4,
                                  bottom - top + 1);
             painter.setPen(theme->color(ThemeColor::WaveText));

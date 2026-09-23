@@ -16,6 +16,7 @@ class QDataStream;
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace enzan::gui {
 
@@ -188,8 +189,27 @@ public:
     /// The value a row shows at `time`, already narrowed to its bit range.
     [[nodiscard]] std::optional<eir::BitVector> valueAt(int rowId, runtime::SimTime time) const;
 
-    /// Renders what `valueAt` returns, or a dash when there is nothing to show.
+    /// Renders what a row shows at `time`, or a dash when there is nothing to show.
+    ///
+    /// A row whose children are single bits renders as one number, which is what makes an
+    /// unpacked bus read as the bus. A row whose children are wider than a bit renders as the
+    /// list of them, `{001122}{112233}`, and because that recurses a group of such groups
+    /// reads `{{11}{22}}{{22}{33}}` — the shape of the thing rather than a number with the
+    /// boundaries filed off (DESIGN_GUIDE.md section 10.7).
     [[nodiscard]] QString renderValue(int rowId, runtime::SimTime time) const;
+
+    /// The next time after `time` at which anything the row shows changes, or `NoTime`.
+    ///
+    /// Defined for every row, not only for one backed by a signal: a group shows a value on
+    /// its line, so it has edges to step between like anything else. A row's edges are its
+    /// children's put together, and a candidate at which the row's *displayed* value did not
+    /// actually change is skipped — a bit of a counter must not stop at every count.
+    [[nodiscard]] runtime::SimTime nextEdgeAfter(int rowId, runtime::SimTime time) const;
+
+    [[nodiscard]] runtime::SimTime previousEdgeBefore(int rowId, runtime::SimTime time) const;
+
+    /// The row's edge closest to `time`, or `NoTime` when it has none.
+    [[nodiscard]] runtime::SimTime nearestEdge(int rowId, runtime::SimTime time) const;
 
     /// Narrows a whole-signal value to the row's bit range. Returns it unchanged when the row
     /// shows the whole signal.
@@ -242,6 +262,29 @@ private:
     [[nodiscard]] std::optional<eir::BitVector> combinedValueAt(int rowId,
                                                                 runtime::SimTime time) const;
 
+    /// True when every child of `rowId` shows exactly one bit, which is when the row reads as
+    /// a number rather than as a list.
+    [[nodiscard]] bool childrenAreBits(int rowId) const;
+
+    /// True when the row's value at `time` differs from its value an instant earlier.
+    [[nodiscard]] bool isEdgeAt(int rowId, runtime::SimTime time) const;
+
+    /// The next or previous time at which *something* in the row changes, without checking
+    /// whether what the row displays changed with it.
+    [[nodiscard]] runtime::SimTime nextRawEdgeAfter(int rowId, runtime::SimTime time) const;
+
+    [[nodiscard]] runtime::SimTime previousRawEdgeBefore(int rowId, runtime::SimTime time) const;
+
+    /// How many candidate edges are examined before the search gives up and stops at the last
+    /// one it looked at.
+    ///
+    /// A row showing a slice of a signal changes less often than the signal does, and there is
+    /// no index of when a single bit turns over — so the search walks the signal's transitions.
+    /// The budget keeps one keypress bounded on a trace with millions of them; past it the
+    /// cursor lands on a real transition of something in the row, which is a worse answer than
+    /// the exact one and a far better answer than a frozen window.
+    static constexpr int EdgeSearchBudget = 512;
+
     /// Tells `fromRow` and everything above it that the value they show has changed.
     ///
     /// A row's value is part of every value above it (section 10.7), so a structural change
@@ -249,11 +292,24 @@ private:
     /// showing the value it had while the bit was still there.
     void notifyValueChangedUpwards(int fromRow);
 
+    /// A subtree read off the clipboard and not yet in the model.
+    ///
+    /// Reading and inserting are separate so that a truncated clipboard changes nothing, and
+    /// so that inserting can be done row by row: a reset would make the view forget every
+    /// expansion in the window, which is not what pasting one signal should cost.
+    struct PendingRow {
+        WaveRow row;
+        std::vector<PendingRow> children;
+    };
+
     void writeRow(QDataStream& stream, int rowId) const;
 
-    /// Reads one row and its descendants, appending to `parentRow`'s children. Returns the
-    /// row created, or -1.
-    int readRow(QDataStream& stream, int parentRow);
+    /// Reads one subtree. Returns false when the clipboard ran out or made no sense.
+    static bool readPending(QDataStream& stream, PendingRow& pending);
+
+    /// Puts a subtree into the model under `parentRow` at `position`, or at the end when that
+    /// is negative. Returns the row created.
+    int materialise(const PendingRow& pending, int parentRow, int position);
 
     const KernelSession* kernelSession;
     const Theme* theme;

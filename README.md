@@ -94,11 +94,15 @@ and **Tab** and **Shift+Tab** then walk that cursor from edge to edge — lock a
 read both times off their labels to measure. Right-click a cursor's label to rename, lock or
 remove it.
 
+Selecting a signal in the list does the same thing as clicking its trace, so Tab works whichever
+way you picked it — and it works on a group too.
+
 Rows drag to reorder, copy and paste with **Ctrl+C** and **Ctrl+V**, and the context menu offers a
 radix and one of five highlight colours. A bus expands into its bits, and a row showing bits shows
 what is left of them: delete one and its bus narrows to the rest. The same rule works the other
-way round, so a group of one-bit signals reads and draws as a vector, and a group of those is a
-dimension above that. The full model is [`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
+way round, so a group of one-bit signals reads and draws as a vector; a group of wider things
+reads as the list of them, `{001122}{112233}`, nesting as `{{11}{22}}{{22}{33}}`. The full model
+is [`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
 
 The kernel and the GUI are separate processes and talk over a Unix domain socket, so a window on
 your machine can drive a simulation on another one:
