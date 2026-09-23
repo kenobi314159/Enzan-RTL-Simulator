@@ -12,12 +12,10 @@
 #include <QStringList>
 #include <QVector>
 
-#include <memory>
-#include <optional>
-
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 
 class QSocketNotifier;
 class QProcess;
