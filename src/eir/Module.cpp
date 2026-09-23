@@ -38,4 +38,30 @@ std::uint32_t ModuleDefinition::addObject(Object object) {
     return index;
 }
 
+std::string_view EnumDefinition::nameOf(const BitVector& value) const {
+    for (const EnumMember& member : members) {
+        if (member.value == value) return member.name;
+    }
+    return {};
+}
+
+std::uint32_t ModuleDefinition::addEnum(EnumDefinition definition) {
+    const auto same = [&definition](const EnumDefinition& existing) {
+        if (existing.name != definition.name) return false;
+        if (existing.members.size() != definition.members.size()) return false;
+
+        return std::ranges::equal(existing.members, definition.members,
+                                  [](const EnumMember& left, const EnumMember& right) {
+                                      return left.name == right.name && left.value == right.value;
+                                  });
+    };
+
+    const auto found = std::ranges::find_if(enums, same);
+    if (found != enums.end()) return static_cast<std::uint32_t>(found - enums.begin());
+
+    const auto index = static_cast<std::uint32_t>(enums.size());
+    enums.push_back(std::move(definition));
+    return index;
+}
+
 } // namespace enzan::eir

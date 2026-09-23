@@ -908,7 +908,32 @@ it would sit beside is how a tool acquires a number nobody reads.
   on demand rather than up front. Making them eagerly would cost a thousand rows
   for a thousand-bit vector nobody had asked to look inside.
 
-  **An unpacked vector is a group in every respect, including what may be put in
+- **A signal whose type is an enumeration shows the name, not the number.**
+  `S_SEND` is what the reader wrote; `3'h2` is what the compiler made of it, and
+  a reader watching a state machine should not have to hold the encoding in their
+  head to follow it. This is a display rule and nothing more: EIR models an
+  enumeration as the packed vector every operation on it treats it as, and the
+  mapping is carried alongside, from the frontend that alone knew it, through
+  elaboration and the protocol, to the row.
+
+  Three things follow from the rule being about a *whole value of that type*. A
+  slice is not named, because an enumeration names values and bit 1 of `S_SEND`
+  is not a state. A row that has lost some of its bits is not named, because
+  naming what is left would be naming a value other than the one on screen. And
+  a group is not named, because a join of several signals is not of any one
+  enumerated type — though what is inside the group keeps its own name.
+
+  A value the enumeration does not name falls back to the number rather than to
+  nothing. An X is such a value, and so is an encoding outside the declared set,
+  and both are things the reader needs to see rather than be shielded from.
+
+  **The naming can be turned off**, and choosing any radix turns it off. The
+  encoding is sometimes exactly what is being debugged; more to the point, a
+  radix menu that silently did nothing to a state register would read as a fault
+  rather than as a choice. The way back is a `Symbolic` entry in the same menu,
+  listed first, since it is where an enumerated row starts.
+
+- **An unpacked vector is a group in every respect, including what may be put in
   it.** Rows may be dragged out of one and back into it, and rows from elsewhere
   may be dragged in. Half a container — one that lets a bit be taken out but
   never put back — is not the same kind of thing as a group, and a bit removed by

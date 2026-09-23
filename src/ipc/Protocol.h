@@ -18,7 +18,7 @@ namespace enzan::ipc {
 /// handshake compares it and refuses rather than negotiating: a GUI and a kernel from
 /// different builds that half-understand each other would show wrong values, and section 1.2
 /// puts correctness above convenience.
-constexpr std::uint32_t ProtocolVersion = 1;
+constexpr std::uint32_t ProtocolVersion = 2;
 
 /// What a message is.
 ///
@@ -198,11 +198,41 @@ struct ObjectEntry {
     /// tell "no history yet" from "outside the logging scope" instead of showing an empty
     /// trace for both.
     bool recorded = false;
+
+    /// Index into the message's `enums`, or `NoEnum` when the object's type is not one.
+    std::uint32_t enumIndex = NoEnum;
+
+    static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
+};
+
+/// One name an enumeration gives to one value.
+struct EnumMemberEntry {
+    std::string name;
+
+    /// Not default-constructible without a width, so an unknown single bit stands in until the
+    /// decoder reads the real one — the same stand-in `HistoryEntry` uses.
+    eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
+};
+
+/// An enumeration an object's type is, so that a display can show `S_SEND` where the trace
+/// holds `3'd2` (DESIGN_GUIDE.md section 10.7).
+struct EnumEntry {
+    /// The type's declared name, or empty for an anonymous enumeration.
+    std::string name;
+
+    std::vector<EnumMemberEntry> members;
 };
 
 struct ObjectsMessage {
     std::string instancePath;
     std::vector<ObjectEntry> objects;
+
+    /// The enumerations the objects above refer to by index.
+    ///
+    /// A table rather than a copy inside each object: one enumeration usually declares several
+    /// signals in a scope, and a copy per signal would send the same members over and over.
+    /// Only the ones this scope uses are here, renumbered from the kernel's own table.
+    std::vector<EnumEntry> enums;
 };
 
 /// One signal's new value.
@@ -389,12 +419,26 @@ void serialize(Archive& archive, ObjectEntry& entry) {
     archive.str(entry.path);
     archive.u32(entry.width);
     archive.boolean(entry.recorded);
+    archive.u32(entry.enumIndex);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, EnumMemberEntry& member) {
+    archive.str(member.name);
+    archive.bits(member.value);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, EnumEntry& entry) {
+    archive.str(entry.name);
+    archive.list(entry.members);
 }
 
 template<typename Archive>
 void serialize(Archive& archive, ObjectsMessage& message) {
     archive.str(message.instancePath);
     archive.list(message.objects);
+    archive.list(message.enums);
 }
 
 template<typename Archive>

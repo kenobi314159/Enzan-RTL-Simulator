@@ -38,6 +38,15 @@ struct WaveRow {
 
     eir::Radix radix = eir::Radix::Hexadecimal;
 
+    /// True when a row whose signal has an enumeration shows the name of the value rather than
+    /// the value.
+    ///
+    /// On by default, because `S_SEND` is what the reader wrote and `3'h2` is what the
+    /// compiler made of it. Off is still reachable, because the encoding is sometimes exactly
+    /// what is being debugged — and because a radix menu that silently did nothing on a state
+    /// register would read as a fault rather than as a choice.
+    bool symbolic = true;
+
     /// Set when this row shows only part of the signal.
     ///
     /// Section 10.3 requires extracting a bit range into a separately displayed signal. It is a
@@ -120,8 +129,20 @@ public:
 
     void setRadix(int rowId, eir::Radix radix);
 
-    /// Sets the radix of a group's contents, or of one row.
+    /// Sets the radix of a group's contents, or of one row. Turns off symbolic display, since
+    /// asking for a radix is asking to be shown the number.
     void setRadixRecursive(int rowId, eir::Radix radix);
+
+    /// Shows the names an enumeration gives its values, rather than the values, for a group's
+    /// contents or for one row.
+    void setSymbolicRecursive(int rowId, bool symbolic);
+
+    /// The names the row's signal gives its values, or nullptr when it has none.
+    ///
+    /// Only a row showing a whole signal has one. A slice is some of a value's bits and an
+    /// enumeration names whole values, and a group joins several signals into something no one
+    /// enumeration describes.
+    [[nodiscard]] const EnumInfo* enumerationOf(int rowId) const;
 
     void setLabel(int rowId, const QString& label);
 

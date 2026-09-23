@@ -9,6 +9,7 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Module.h"
 #include "eir/Process.h"
@@ -121,6 +122,76 @@ TEST_F(FrontendTest, TranslatesAModuleWithItsObjectsAndPorts) {
     const std::uint32_t q = require(module->findObject("q"), "object q");
     EXPECT_EQ(module->objects[q].type.bitWidth(), 8U);
     EXPECT_TRUE(module->objects[q].type.isFourState());
+}
+
+TEST_F(FrontendTest, AnEnumeratedObjectCarriesTheNamesOfItsValues) {
+    // EIR does not model an enumeration as a type — every operation on one treats it as the
+    // packed vector it is — but the names have to survive translation, because a reader
+    // looking at a state register wants to be told `S_SEND` and nothing downstream of the
+    // frontend could ever work that out (DESIGN_GUIDE.md section 10.7).
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (input logic clk);
+            typedef enum logic [2:0] {
+                S_IDLE = 3'd0,
+                S_ARM  = 3'd1,
+                S_SEND = 3'd4
+            } state_t;
+
+            state_t     state;
+            logic [2:0] plain;
+
+            always_ff @(posedge clk) state <= S_ARM;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr);
+
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+
+    const auto stateObject = require(module->findObject("state"));
+    const std::uint32_t enumIndex = module->objects[stateObject].enumIndex;
+    ASSERT_NE(enumIndex, enzan::eir::Object::NoEnum) << "an enumerated object has to point at one";
+    ASSERT_LT(enumIndex, module->enums.size());
+
+    const enzan::eir::EnumDefinition& enumeration = module->enums[enumIndex];
+    EXPECT_EQ(enumeration.name, "state_t") << "the declared name, not the canonical type's";
+
+    ASSERT_EQ(enumeration.members.size(), 3U);
+    EXPECT_EQ(enumeration.members[0].name, "S_IDLE") << "declaration order, not value order";
+    EXPECT_EQ(enumeration.members[2].name, "S_SEND");
+
+    // The values are the enumeration's own base type, so that looking one up against a signal
+    // of that type is a plain comparison rather than a width negotiation.
+    EXPECT_EQ(enumeration.members[2].value.width(), 3U);
+    EXPECT_EQ(enumeration.nameOf(enumeration.members[2].value), "S_SEND");
+    EXPECT_TRUE(enumeration.nameOf(*enzan::eir::BitVector::parse("3'd5")).empty())
+        << "a value the enumeration does not name has no name";
+
+    // And a plain vector of the same width is left alone: the mapping belongs to the type, not
+    // to the width.
+    const auto plainObject = require(module->findObject("plain"));
+    EXPECT_EQ(module->objects[plainObject].enumIndex, enzan::eir::Object::NoEnum);
+}
+
+TEST_F(FrontendTest, OneEnumerationIsRecordedOnceHoweverManyObjectsHaveIt) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            typedef enum logic [1:0] { A = 2'd0, B = 2'd1 } pair_t;
+            pair_t first;
+            pair_t second;
+            pair_t third;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr);
+
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+
+    EXPECT_EQ(module->enums.size(), 1U) << "three objects of one type share one table entry";
+
+    const std::uint32_t first = module->objects[require(module->findObject("first"))].enumIndex;
+    EXPECT_EQ(module->objects[require(module->findObject("second"))].enumIndex, first);
+    EXPECT_EQ(module->objects[require(module->findObject("third"))].enumIndex, first);
 }
 
 TEST_F(FrontendTest, OutputIsAlwaysVerifiableEir) {

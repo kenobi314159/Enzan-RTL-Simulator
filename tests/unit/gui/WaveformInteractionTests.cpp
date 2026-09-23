@@ -563,11 +563,13 @@ TEST_F(InteractionTest, MovingARowDownWithinItsParentLandsWhereItWasDropped) {
     const int count = rowOf.value(QStringLiteral("count"));
     const int third = model->addGroup(QStringLiteral("Third"));
 
-    ASSERT_TRUE(model->moveRowsTo({clock}, -1, 2));
+    const int before = model->indexOfRow(clock).row();
+    ASSERT_TRUE(model->moveRowsTo({clock}, -1, before + 2));
 
-    EXPECT_EQ(model->indexOfRow(count).row(), 0);
-    EXPECT_EQ(model->indexOfRow(clock).row(), 1);
-    EXPECT_EQ(model->indexOfRow(third).row(), 2);
+    EXPECT_EQ(model->indexOfRow(count).row(), before)
+        << "what was below the moved row moves up into its place";
+    EXPECT_EQ(model->indexOfRow(clock).row(), before + 1);
+    EXPECT_EQ(model->indexOfRow(third).row(), model->rowCount() - 1);
 }
 
 TEST_F(InteractionTest, AMultiBitSignalUnpacksIntoItsBits) {
@@ -592,7 +594,8 @@ TEST_F(InteractionTest, AMultiBitSignalUnpacksIntoItsBits) {
     EXPECT_EQ(model->row(top)->lowBit, 7U);
     EXPECT_FALSE(model->canUnpack(top)) << "a single bit has nothing left to unpack";
 
-    EXPECT_EQ(model->displayedSignals().size(), 2)
+    const int signalsBefore = static_cast<int>(model->displayedSignals().size());
+    EXPECT_EQ(signalsBefore, static_cast<int>(objectsOf(QStringLiteral("/tb")).size()))
         << "unpacking must not subscribe to anything new";
 }
 

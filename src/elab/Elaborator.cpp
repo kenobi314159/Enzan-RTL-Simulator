@@ -132,10 +132,44 @@ private:
         slot.type = object.type;
         slot.wordOffset = result->arenaSize;
         slot.path = instance.path + '/' + object.name;
+        slot.enumIndex = internEnum(definition, object.enumIndex);
         result->arenaSize += object.type.storageWords();
 
         result->slotList.push_back(std::move(slot));
         return slotIndex;
+    }
+
+    /// Copies a definition's enumeration into the elaborated design's table, or finds the
+    /// copy already there. Returns `Slot::NoEnum` when the object has no enumeration.
+    ///
+    /// Copied rather than pointed at because an `ElaboratedDesign` outlives no part of the
+    /// analysed one by contract but is handed around on its own, and a table of a handful of
+    /// names is cheaper to copy than a lifetime rule is to keep.
+    std::uint32_t internEnum(const eir::ModuleDefinition& definition, std::uint32_t enumIndex) {
+        if (enumIndex == eir::Object::NoEnum) return Slot::NoEnum;
+        if (enumIndex >= definition.enums.size()) return Slot::NoEnum;
+
+        const eir::EnumDefinition& wanted = definition.enums[enumIndex];
+
+        const auto same = [&wanted](const eir::EnumDefinition& existing) {
+            if (existing.name != wanted.name) return false;
+            if (existing.members.size() != wanted.members.size()) return false;
+
+            return std::ranges::equal(
+                existing.members, wanted.members,
+                [](const eir::EnumMember& left, const eir::EnumMember& right) {
+                    return left.name == right.name && left.value == right.value;
+                });
+        };
+
+        const auto found = std::ranges::find_if(result->enumList, same);
+        if (found != result->enumList.end()) {
+            return static_cast<std::uint32_t>(found - result->enumList.begin());
+        }
+
+        const auto index = static_cast<std::uint32_t>(result->enumList.size());
+        result->enumList.push_back(wanted);
+        return index;
     }
 
     /// Records that `path` names `slotIndex`.

@@ -94,6 +94,20 @@ inline eir::Design guiTestDesign() {
     top.addObject(eir::Object{.name = "count",
                               .type = eir::Type::bits(8, false, true),
                               .initialValue = eir::BitVector::parse("8'd0")});
+
+    // An enumerated signal, so that the path from a frontend's enumeration through elaboration
+    // and the protocol to what the wave window writes on a trace has something to carry. It is
+    // deliberately not driven: what is under test is how a value is *shown*, and a signal that
+    // sits at its initial value shows the same thing at every time.
+    const std::uint32_t stateEnum = top.addEnum(eir::EnumDefinition{
+        .name = "state_t",
+        .members = {eir::EnumMember{.name = "S_IDLE", .value = *eir::BitVector::parse("3'd0")},
+                    eir::EnumMember{.name = "S_ARM", .value = *eir::BitVector::parse("3'd1")},
+                    eir::EnumMember{.name = "S_SEND", .value = *eir::BitVector::parse("3'd2")}}});
+    top.addObject(eir::Object{.name = "state",
+                              .type = eir::Type::bits(3, false, true),
+                              .initialValue = eir::BitVector::parse("3'd2"),
+                              .enumIndex = stateEnum});
     top.processes.push_back(clock.finish());
     top.processes.push_back(counter.finish());
 

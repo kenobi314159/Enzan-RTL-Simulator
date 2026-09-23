@@ -224,6 +224,93 @@ TEST_F(WaveformModelTest, ARowWithNoDataShowsADashRatherThanAWrongValue) {
 }
 
 // ---------------------------------------------------------------------------
+// Enumerated signals
+// ---------------------------------------------------------------------------
+//
+// Section 10.7: a row shows the name its type gives a value, because `S_SEND` is what the
+// reader wrote and `3'h2` is what the compiler made of it. The fixture's `state` sits at
+// `S_SEND` for the whole run, so every time reads the same and the tests are about the
+// rendering rather than about when it was sampled.
+
+class EnumeratedRowTest : public WaveformModelTest {
+protected:
+    /// Adds `state` to the window and runs far enough for it to have a value.
+    int addState() {
+        const SignalInfo state = infoFor(QStringLiteral("/tb"), QStringLiteral("state"));
+        const int rowId = model->addSignal(state);
+        session->subscribe({state.signalIndex});
+        session->run(200);
+        EXPECT_TRUE(pumpUntil([this] { return session->currentTime() == 200; }));
+        return rowId;
+    }
+};
+
+TEST_F(EnumeratedRowTest, ShowsTheNameOfTheValueRatherThanTheBits) {
+    const int rowId = addState();
+
+    EXPECT_EQ(model->renderValue(rowId, 100), QStringLiteral("S_SEND"));
+    EXPECT_NE(model->enumerationOf(rowId), nullptr);
+}
+
+TEST_F(EnumeratedRowTest, AskingForARadixShowsTheNumber) {
+    const int rowId = addState();
+    ASSERT_EQ(model->renderValue(rowId, 100), QStringLiteral("S_SEND"));
+
+    // A radix menu that silently did nothing on a state register would read as a fault rather
+    // than as a choice, so choosing one turns the naming off.
+    model->setRadixRecursive(rowId, Radix::Binary);
+    EXPECT_EQ(model->renderValue(rowId, 100), QStringLiteral("010"));
+    EXPECT_EQ(model->enumerationOf(rowId), nullptr);
+
+    model->setSymbolicRecursive(rowId, true);
+    EXPECT_EQ(model->renderValue(rowId, 100), QStringLiteral("S_SEND"))
+        << "and there is a way back";
+}
+
+TEST_F(EnumeratedRowTest, OneBitOfAnEnumeratedSignalIsANumber) {
+    const int rowId = addState();
+    model->unpack(rowId);
+
+    // The bus still shows its name: unpacking does not change what it holds, only what is
+    // listed under it.
+    EXPECT_EQ(model->renderValue(rowId, 100), QStringLiteral("S_SEND"));
+
+    // Its bits do not. An enumeration names whole values, and bit 1 of `S_SEND` is not a state.
+    const WaveRow* row = model->row(rowId);
+    ASSERT_NE(row, nullptr);
+    ASSERT_EQ(row->children.size(), 3);
+    EXPECT_EQ(model->enumerationOf(row->children.front()), nullptr);
+    EXPECT_EQ(model->renderValue(row->children.front(), 100), QStringLiteral("0"))
+        << "bit 2 of 3'b010";
+    EXPECT_EQ(model->renderValue(row->children[1], 100), QStringLiteral("1"));
+}
+
+TEST_F(EnumeratedRowTest, ABusThatHasLostABitIsNoLongerNamed) {
+    const int rowId = addState();
+    model->unpack(rowId);
+
+    const WaveRow* row = model->row(rowId);
+    ASSERT_NE(row, nullptr);
+    model->removeRow(row->children.front());
+
+    // What is left is two of the three bits, which no enumeration describes. Naming it would
+    // be naming a different value than the one on screen.
+    EXPECT_EQ(model->enumerationOf(rowId), nullptr);
+    EXPECT_EQ(model->renderValue(rowId, 100), QStringLiteral("2")) << "2'b10 in hexadecimal";
+}
+
+TEST_F(EnumeratedRowTest, AGroupHoldingItIsNotNamed) {
+    const int rowId = addState();
+    const int group = model->addGroup(QStringLiteral("Machine"));
+    ASSERT_TRUE(model->moveRowsTo({rowId}, group, -1));
+
+    // The row inside keeps its name; the group is a join of whatever is in it, which is not
+    // the enumerated type.
+    EXPECT_EQ(model->renderValue(rowId, 100), QStringLiteral("S_SEND"));
+    EXPECT_EQ(model->enumerationOf(group), nullptr);
+}
+
+// ---------------------------------------------------------------------------
 // The canvas
 // ---------------------------------------------------------------------------
 

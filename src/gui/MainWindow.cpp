@@ -207,6 +207,17 @@ void MainWindow::buildDocks() {
     radixSeparator->setSeparator(true);
     waveRowsView->addAction(radixSeparator);
 
+    // Symbolic first, because it is what an enumerated signal shows by default and a reader
+    // looking for the way back to it should not have to read past four radixes to find it. It
+    // does nothing to a row whose type is not an enumeration, which is the honest answer: there
+    // are no names to show.
+    auto* symbolic = new QAction(tr("Radix: Symbolic"), waveRowsView);
+    connect(symbolic, &QAction::triggered, this, [this] {
+        for (const int rowId : selectedWaveRows()) waveModel->setSymbolicRecursive(rowId, true);
+        waveView->update();
+    });
+    waveRowsView->addAction(symbolic);
+
     for (const RadixChoice& choice : RadixChoices) {
         auto* action = new QAction(tr("Radix: %1").arg(tr(choice.name)), waveRowsView);
         const eir::Radix radix = choice.radix;

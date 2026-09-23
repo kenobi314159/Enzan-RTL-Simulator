@@ -4,6 +4,7 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
 #include "eir/Module.h"
@@ -213,6 +214,48 @@ TEST_F(ElaboratorTest, TheSameModuleMayAppearManyTimes) {
     const std::uint32_t first = require(elaborated->findSlot("/tb/u0/q"), "slot for /tb/u0/q");
     const std::uint32_t second = require(elaborated->findSlot("/tb/u1/q"), "slot for /tb/u1/q");
     EXPECT_NE(first, second);
+}
+
+TEST_F(ElaboratorTest, EnumerationsAreInternedOnceForTheWholeElaboration) {
+    // Every instance of a module declares its enumerated signals again, and a design has far
+    // more enumerated signals than it has enumerations. One table for the elaboration means a
+    // display is told the names once however many slots share them (DESIGN_GUIDE.md 10.7).
+    ModuleDefinition leaf;
+    leaf.name = "leaf";
+    const std::uint32_t leafEnum = leaf.addEnum(enzan::eir::EnumDefinition{
+        .name = "state_t",
+        .members = {
+            enzan::eir::EnumMember{.name = "A", .value = *enzan::eir::BitVector::parse("2'd0")},
+            enzan::eir::EnumMember{.name = "B", .value = *enzan::eir::BitVector::parse("2'd1")}}});
+    leaf.addObject(
+        Object{.name = "state", .type = Type::bits(2, false, true), .enumIndex = leafEnum});
+    leaf.addObject(
+        Object{.name = "next", .type = Type::bits(2, false, true), .enumIndex = leafEnum});
+    leaf.addObject(Object{.name = "plain", .type = Type::bits(2, false, true)});
+    design.addModule(std::move(leaf));
+
+    ModuleDefinition top;
+    top.name = "tb";
+    top.instances.push_back(enzan::eir::Instance{.name = "u0", .definitionName = "leaf"});
+    top.instances.push_back(enzan::eir::Instance{.name = "u1", .definitionName = "leaf"});
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr);
+
+    ASSERT_EQ(elaborated->enumerations().size(), 1U)
+        << "two instances and two signals each still describe one enumeration";
+    EXPECT_EQ(elaborated->enumerations()[0].name, "state_t");
+
+    const std::uint32_t first = require(elaborated->findSlot("/tb/u0/state"), "/tb/u0/state");
+    const std::uint32_t second = require(elaborated->findSlot("/tb/u1/next"), "/tb/u1/next");
+    EXPECT_EQ(elaborated->slots()[first].enumIndex, 0U);
+    EXPECT_EQ(elaborated->slots()[second].enumIndex, 0U);
+
+    // And a slot whose object has no enumeration says so, rather than pointing at whichever
+    // entry happened to be first.
+    const std::uint32_t plain = require(elaborated->findSlot("/tb/u0/plain"), "/tb/u0/plain");
+    EXPECT_EQ(elaborated->slots()[plain].enumIndex, enzan::elab::Slot::NoEnum);
 }
 
 TEST_F(ElaboratorTest, RejectsRecursiveInstantiation) {

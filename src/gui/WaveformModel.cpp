@@ -185,8 +185,23 @@ void WaveformModel::setRadix(int rowId, eir::Radix radix) {
 void WaveformModel::setRadixRecursive(int rowId, eir::Radix radix) {
     if (row(rowId) == nullptr) return;
 
+    // Asking for a radix is asking to be shown the number, so it turns naming off. Otherwise a
+    // reader picking "binary" on a state register would see no change and no reason why.
+    rows[rowId].symbolic = false;
     setRadix(rowId, radix);
     for (const int child : rows[rowId].children) setRadixRecursive(child, radix);
+}
+
+void WaveformModel::setSymbolicRecursive(int rowId, bool symbolic) {
+    if (row(rowId) == nullptr) return;
+
+    rows[rowId].symbolic = symbolic;
+    const QModelIndex changed = indexOfRow(rowId);
+    Q_EMIT dataChanged(changed.siblingAtColumn(ValueColumn), changed.siblingAtColumn(ValueColumn),
+                       {Qt::DisplayRole});
+    notifyValueChangedUpwards(rowId);
+
+    for (const int child : rows[rowId].children) setSymbolicRecursive(child, symbolic);
 }
 
 void WaveformModel::setLabel(int rowId, const QString& label) {
@@ -316,7 +331,7 @@ void WaveformModel::writeRow(QDataStream& stream, int rowId) const {
 
     stream << static_cast<quint8>(waveRow.kind) << waveRow.label
            << static_cast<quint32>(waveRow.signalIndex) << static_cast<quint32>(waveRow.signalWidth)
-           << static_cast<quint8>(waveRow.radix) << waveRow.sliced
+           << static_cast<quint8>(waveRow.radix) << waveRow.symbolic << waveRow.sliced
            << static_cast<quint32>(waveRow.highBit) << static_cast<quint32>(waveRow.lowBit)
            << static_cast<qint32>(waveRow.highlight) << waveRow.unpacked
            << static_cast<quint32>(waveRow.children.size());
@@ -334,8 +349,9 @@ bool WaveformModel::readPending(QDataStream& stream, PendingRow& pending) {
     qint32 highlight = 0;
     quint32 childCount = 0;
 
-    stream >> kind >> pending.row.label >> signalIndex >> signalWidth >> radix >> pending.row.sliced
-        >> highBit >> lowBit >> highlight >> pending.row.unpacked >> childCount;
+    stream >> kind >> pending.row.label >> signalIndex >> signalWidth >> radix
+        >> pending.row.symbolic >> pending.row.sliced >> highBit >> lowBit >> highlight
+        >> pending.row.unpacked >> childCount;
     if (stream.status() != QDataStream::Ok) return false;
 
     pending.row.kind = kind == static_cast<quint8>(WaveRow::Kind::Group) ? WaveRow::Kind::Group
@@ -631,7 +647,28 @@ QString WaveformModel::renderValue(int rowId, runtime::SimTime time) const {
         return waveRow->kind == WaveRow::Kind::Group ? QString() : QStringLiteral("—");
     }
 
+    if (const EnumInfo* enumeration = enumerationOf(rowId); enumeration != nullptr) {
+        // A value the enumeration does not name falls back to the number rather than to
+        // nothing. That is what an X is, and what an encoding outside the declared set is, and
+        // both are things the reader needs to see rather than be shielded from.
+        const QString named = enumeration->nameOf(*value);
+        if (!named.isEmpty()) return named;
+    }
+
     return QString::fromStdString(eir::toString(value.value().ref(), waveRow->radix));
+}
+
+const EnumInfo* WaveformModel::enumerationOf(int rowId) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr || !waveRow->symbolic) return nullptr;
+    if (waveRow->kind != WaveRow::Kind::Signal || waveRow->sliced) return nullptr;
+
+    // An unpacked bus still shows its own whole value on its own line, so it keeps its names;
+    // one that has lost a bit shows what is left, which no enumeration describes.
+    if (showsChildren(rowId) && !childrenReconstituteParent(rowId)) return nullptr;
+
+    const SignalInfo* info = kernelSession->signalInfo(waveRow->signalIndex);
+    return info == nullptr ? nullptr : info->enumeration.get();
 }
 
 // ---------------------------------------------------------------------------

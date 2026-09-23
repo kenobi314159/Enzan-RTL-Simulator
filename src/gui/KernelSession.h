@@ -12,6 +12,8 @@
 #include <QStringList>
 #include <QVector>
 
+#include <memory>
+
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -22,6 +24,25 @@ class QProcess;
 namespace enzan::gui {
 
 /// What the GUI knows about one signal.
+/// What an enumeration calls one of its values.
+struct EnumMemberInfo {
+    QString name;
+    eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
+};
+
+/// The names an enumerated signal's type gives its values.
+///
+/// Shared between every signal of the same type rather than copied into each, which is the
+/// shape the kernel sends it in: one scope's worth of state machines usually share a type.
+struct EnumInfo {
+    /// The type's declared name, or empty for an anonymous enumeration.
+    QString name;
+    QVector<EnumMemberInfo> members;
+
+    /// The name for `value`, or an empty string when no member has it.
+    [[nodiscard]] QString nameOf(const eir::BitVector& value) const;
+};
+
 struct SignalInfo {
     std::uint32_t signalIndex = 0;
     QString name;
@@ -31,6 +52,15 @@ struct SignalInfo {
     /// False when the kernel is not recording this signal, so that "nothing has happened yet"
     /// and "nothing is being kept" can be told apart on screen.
     bool recorded = false;
+
+    /// The names this signal's type gives its values, or nothing when its type is not an
+    /// enumeration.
+    ///
+    /// Held by value rather than by index into a table of the session's, because a
+    /// `SignalInfo` is copied into rows, into the objects window and into the clipboard, and
+    /// an index would make every one of those depend on the table outliving it. An enumeration
+    /// is a handful of short names.
+    std::shared_ptr<const EnumInfo> enumeration;
 };
 
 /// The GUI's end of the connection to a kernel.

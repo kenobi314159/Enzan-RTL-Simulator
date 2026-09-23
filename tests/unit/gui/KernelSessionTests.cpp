@@ -44,12 +44,33 @@ TEST_F(SessionFixture, TheHierarchyArrivesWholeWithItsShape) {
 TEST_F(SessionFixture, AScopeListsItsObjects) {
     const QVector<SignalInfo> objects = objectsOf(QStringLiteral("/tb"));
 
-    ASSERT_EQ(objects.size(), 2);
+    ASSERT_EQ(objects.size(), 3);
     EXPECT_EQ(objects[0].name, QStringLiteral("clk"));
     EXPECT_EQ(objects[0].width, 1U);
     EXPECT_TRUE(objects[0].recorded);
     EXPECT_EQ(objects[1].name, QStringLiteral("count"));
     EXPECT_EQ(objects[1].width, 8U);
+    EXPECT_EQ(objects[2].name, QStringLiteral("state"));
+    EXPECT_EQ(objects[2].width, 3U);
+}
+
+TEST_F(SessionFixture, AnEnumeratedSignalArrivesWithTheNamesOfItsValues) {
+    const QVector<SignalInfo> objects = objectsOf(QStringLiteral("/tb"));
+    ASSERT_EQ(objects.size(), 3);
+
+    const SignalInfo& state = objects[2];
+    ASSERT_NE(state.enumeration, nullptr) << "an enumerated signal has to arrive with its names";
+    EXPECT_EQ(state.enumeration->name, QStringLiteral("state_t"));
+
+    ASSERT_EQ(state.enumeration->members.size(), 3);
+    EXPECT_EQ(state.enumeration->members[0].name, QStringLiteral("S_IDLE"));
+    EXPECT_EQ(state.enumeration->nameOf(*enzan::eir::BitVector::parse("3'd2")),
+              QStringLiteral("S_SEND"));
+    EXPECT_TRUE(state.enumeration->nameOf(*enzan::eir::BitVector::parse("3'd7")).isEmpty());
+
+    // A signal whose type is not an enumeration carries nothing, rather than an empty one that
+    // every reader of this field would then have to tell apart from a real one.
+    EXPECT_EQ(objects[1].enumeration, nullptr);
 }
 
 TEST_F(SessionFixture, SubscribingBringsTheSignalsPastWithIt) {

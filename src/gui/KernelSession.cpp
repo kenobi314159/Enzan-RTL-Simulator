@@ -309,6 +309,21 @@ void KernelSession::onObjects(const ipc::Frame& frame) {
     ipc::ObjectsMessage message;
     if (!ipc::decodePayload(frame.payload, message)) return;
 
+    // Built once per message and shared by every signal that names it, which is how the
+    // kernel sends it and what stops a scope of thirty state-machine signals carrying thirty
+    // copies of the same six names.
+    std::vector<std::shared_ptr<const EnumInfo>> enums;
+    enums.reserve(message.enums.size());
+    for (const ipc::EnumEntry& entry : message.enums) {
+        auto info = std::make_shared<EnumInfo>();
+        info->name = QString::fromStdString(entry.name);
+        for (const ipc::EnumMemberEntry& member : entry.members) {
+            info->members.push_back(
+                EnumMemberInfo{.name = QString::fromStdString(member.name), .value = member.value});
+        }
+        enums.push_back(std::move(info));
+    }
+
     QVector<SignalInfo> objects;
     objects.reserve(static_cast<qsizetype>(message.objects.size()));
 
@@ -319,12 +334,22 @@ void KernelSession::onObjects(const ipc::Frame& frame) {
         info.path = QString::fromStdString(entry.path);
         info.width = entry.width;
         info.recorded = entry.recorded;
+        if (entry.enumIndex < enums.size()) info.enumeration = enums[entry.enumIndex];
 
         knownSignals[entry.signalIndex] = info;
         objects.push_back(info);
     }
 
     Q_EMIT objectsReceived(QString::fromStdString(message.instancePath), objects);
+}
+
+QString EnumInfo::nameOf(const eir::BitVector& value) const {
+    // A linear scan over a handful of members. Two members may share a value, which IEEE 1800
+    // allows; the first wins, so the answer is the one the reader wrote first.
+    for (const EnumMemberInfo& member : members) {
+        if (member.value == value) return member.name;
+    }
+    return {};
 }
 
 const SignalInfo* KernelSession::signalInfo(std::uint32_t signalIndex) const {

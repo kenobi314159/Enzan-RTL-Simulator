@@ -104,8 +104,9 @@ colours. An unpacked vector is a group like any other: bits drag
 out of it and back into it, and anything else can be dragged in too. A bus expands into its bits, and a row showing bits shows
 what is left of them: delete one and its bus narrows to the rest. The same rule works the other
 way round, so a group of one-bit signals reads and draws as a vector; a group of wider things
-reads as the list of them, `{001122}{112233}`, nesting as `{{11}{22}}{{22}{33}}`. The full model
-is [`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
+reads as the list of them, `{001122}{112233}`, nesting as `{{11}{22}}{{22}{33}}`. A signal whose
+type is an `enum` shows the name of its value — `S_SEND`, not `3'h2` — and picking a radix shows
+the number instead. The full model is [`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
 
 The kernel and the GUI are separate processes and talk over a Unix domain socket, so a window on
 your machine can drive a simulation on another one:
@@ -143,6 +144,7 @@ three colours.
 | VCD and FST waveform output | yes, both from one run |
 | Interactive GUI: hierarchy, objects, live waveform, cursors, zoom, grouping, radix | yes |
 | Wave window: edge snapping, Tab between edges, drag to reorder, unpack a bus into bits, highlight a row | yes |
+| Wave window: `enum` values shown by name | yes, with the radix menu to see the encoding |
 | Attaching a local GUI to a kernel running elsewhere | yes, over a forwarded socket |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |

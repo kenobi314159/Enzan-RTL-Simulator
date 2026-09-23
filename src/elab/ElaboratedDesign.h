@@ -36,6 +36,16 @@ struct Slot {
     /// The hierarchical path of the object that declared this slot, for diagnostics
     /// and for the waveform database's default name.
     std::string path;
+
+    /// The enumeration this slot's type is, as an index into the elaborated design's table,
+    /// or `NoEnum`.
+    ///
+    /// Interned here rather than carried per slot, because one enumeration usually declares
+    /// several signals and every instance of a module declares them again; a table means a
+    /// display is told the names once however many signals share them.
+    std::uint32_t enumIndex = NoEnum;
+
+    static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
 };
 
 /// One instantiated module.
@@ -94,6 +104,11 @@ public:
 
     [[nodiscard]] std::span<const Slot> slots() const noexcept { return slotList; }
 
+    /// The enumerations slots refer to by index.
+    [[nodiscard]] std::span<const eir::EnumDefinition> enumerations() const noexcept {
+        return enumList;
+    }
+
     [[nodiscard]] std::span<const ProcessInstance> processes() const noexcept {
         return processList;
     }
@@ -122,6 +137,7 @@ private:
 
     std::vector<Instance> instanceList;
     std::vector<Slot> slotList;
+    std::vector<eir::EnumDefinition> enumList;
     std::vector<ProcessInstance> processList;
     std::uint32_t arenaSize = 0;
     std::string topName;

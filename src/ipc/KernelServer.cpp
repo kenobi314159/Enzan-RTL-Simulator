@@ -400,6 +400,34 @@ void KernelServer::onQueryObjects(const Frame& frame) {
     ObjectsMessage message;
     message.instancePath = request.instancePath;
 
+    const elab::ElaboratedDesign& elaborated = image->elaboratedDesign();
+
+    // Only the enumerations this scope actually uses are sent, renumbered from the kernel's
+    // table into the message's own. The kernel's table covers the whole design, and a scope
+    // query answered with all of it would carry the names of every state machine in the design
+    // every time a reader clicked a module.
+    std::vector<std::uint32_t> enumSlotFor;
+    const auto enumEntryFor = [&](std::uint32_t slotEnum) {
+        if (slotEnum == elab::Slot::NoEnum) return ObjectEntry::NoEnum;
+
+        const auto found = std::ranges::find(enumSlotFor, slotEnum);
+        if (found != enumSlotFor.end()) {
+            return static_cast<std::uint32_t>(found - enumSlotFor.begin());
+        }
+
+        const eir::EnumDefinition& definition = elaborated.enumerations()[slotEnum];
+
+        EnumEntry entry;
+        entry.name = definition.name;
+        for (const eir::EnumMember& member : definition.members) {
+            entry.members.push_back(EnumMemberEntry{.name = member.name, .value = member.value});
+        }
+
+        enumSlotFor.push_back(slotEnum);
+        message.enums.push_back(std::move(entry));
+        return static_cast<std::uint32_t>(message.enums.size() - 1);
+    };
+
     // Every name a slot has is offered, not only its canonical one. A collapsed port makes one
     // slot visible in two scopes and both names are real, so a user looking inside a DUT finds
     // its ports where they expect them.
@@ -409,13 +437,15 @@ void KernelServer::onQueryObjects(const Frame& frame) {
             database != nullptr
             && database->recordIndexOf(signalIndex) != wavedb::WaveformDatabase::NotRecorded;
 
-        for (const std::string& name : image->elaboratedDesign().slotNames(signalIndex)) {
+        for (const std::string& name : elaborated.slotNames(signalIndex)) {
             if (scopeOf(name) != request.instancePath) continue;
-            message.objects.push_back(ObjectEntry{.signalIndex = signalIndex,
-                                                  .name = std::string(leafOf(name)),
-                                                  .path = name,
-                                                  .width = width,
-                                                  .recorded = recorded});
+            message.objects.push_back(
+                ObjectEntry{.signalIndex = signalIndex,
+                            .name = std::string(leafOf(name)),
+                            .path = name,
+                            .width = width,
+                            .recorded = recorded,
+                            .enumIndex = enumEntryFor(elaborated.slots()[signalIndex].enumIndex)});
         }
     }
 

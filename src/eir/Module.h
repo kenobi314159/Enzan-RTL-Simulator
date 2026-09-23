@@ -27,6 +27,39 @@ enum class ObjectKind : std::uint8_t { Net, Variable };
 
 std::string_view toString(ObjectKind kind) noexcept;
 
+/// One name an enumeration gives to one value.
+struct EnumMember {
+    std::string name;
+    BitVector value;
+};
+
+/// An enumeration type: somewhere to look up what a value is called.
+///
+/// EIR does not model enumerations as *types* — an enumeration is a packed vector as far as
+/// every operation on it is concerned, and pretending otherwise would put a distinction into
+/// the value engine that nothing there acts on. What is kept is the mapping, because a reader
+/// looking at `3'd2` on a waveform wants to be told it is `S_SEND` (DESIGN_GUIDE.md section
+/// 10.7) and only the frontend ever knew that.
+///
+/// Held per definition rather than per design, and copied into each definition that uses one,
+/// so that a definition stays an independently usable analysed unit (section 4.4).
+struct EnumDefinition {
+    /// What the type is called, for a tooltip and for diagnostics. May be empty: an anonymous
+    /// enumeration still names its values.
+    std::string name;
+
+    /// In declaration order, which is the order a reader wrote them and the order anything
+    /// listing them must use (section 3.8).
+    std::vector<EnumMember> members;
+
+    /// The name for `value`, or an empty view when no member has it.
+    ///
+    /// A linear scan over a handful of members. Two members may share a value, which IEEE 1800
+    /// allows; the first wins, so the answer is the one written first rather than whichever a
+    /// container happened to keep.
+    [[nodiscard]] std::string_view nameOf(const BitVector& value) const;
+};
+
 /// A declared signal or variable inside a module.
 struct Object {
     std::string name;
@@ -46,6 +79,13 @@ struct Object {
     /// what a collapsed port connection produces. Elaboration sets this; frontends
     /// never do.
     bool isAlias = false;
+
+    /// The enumeration this object's type is, as an index into its definition's table, or
+    /// `NoEnum`. It changes nothing about how the object behaves; it is what lets a display
+    /// name the value.
+    std::uint32_t enumIndex = NoEnum;
+
+    static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
 };
 
 /// Direction of a module port.
@@ -130,6 +170,9 @@ struct ModuleDefinition {
     std::vector<Instance> instances;
     std::vector<Process> processes;
 
+    /// The enumerations objects here refer to by index.
+    std::vector<EnumDefinition> enums;
+
     /// Returns the index of the object called `name`, or nothing.
     ///
     /// A linear scan: an object table is small, and a map would add a container
@@ -138,6 +181,12 @@ struct ModuleDefinition {
 
     /// Adds an object and returns its index.
     std::uint32_t addObject(Object object);
+
+    /// Adds an enumeration, or returns the index of an identical one already here.
+    ///
+    /// Deduplicated because one enumeration usually declares several signals, and a table with
+    /// a copy per signal would send the same members over the wire once per object.
+    std::uint32_t addEnum(EnumDefinition definition);
 };
 
 } // namespace enzan::eir

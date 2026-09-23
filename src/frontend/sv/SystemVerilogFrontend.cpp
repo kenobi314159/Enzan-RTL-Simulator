@@ -25,6 +25,7 @@
 #include "slang/ast/symbols/PortSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/AllTypes.h"
 #include "slang/ast/types/Type.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/Diagnostics.h"
@@ -131,6 +132,10 @@ private:
     /// Returns a name not already used by an object in this module.
     std::string uniqueObjectName(std::string_view preferred);
 
+    /// Records `type`'s enumeration in this definition and returns its index, or `NoEnum`
+    /// when the type is not an enumeration.
+    std::uint32_t enumFor(const ast::Type& type);
+
     /// Creates an intermediate object plus a continuous assignment for a port connection
     /// that is an expression rather than a plain signal.
     std::optional<std::uint32_t> materialiseConnection(const ast::InstanceSymbol& instance,
@@ -176,6 +181,38 @@ std::string ModuleBuilder::uniqueObjectName(std::string_view preferred) {
         std::string attempt = std::format("{}${}", candidate, suffix);
         if (!definitionValue.findObject(attempt).has_value()) return attempt;
     }
+}
+
+std::uint32_t ModuleBuilder::enumFor(const ast::Type& type) {
+    if (!type.isEnum()) return eir::Object::NoEnum;
+
+    const auto& enumeration = type.getCanonicalType().as<ast::EnumType>();
+
+    eir::EnumDefinition definition;
+
+    // The *declared* name, not the canonical type's: for `typedef enum ... state_t` this is
+    // the alias, which is what the reader wrote and what they want in a tooltip. A bare
+    // `enum { ... }` has no name and is left nameless, which is honest — its members still
+    // have names, and those are the point.
+    definition.name = std::string(type.name);
+
+    for (const ast::EnumValueSymbol& member : enumeration.values()) {
+        const slang::ConstantValue& value = member.getValue();
+
+        // A member whose value is not an integer cannot happen in a well-formed enumeration,
+        // and dropping it silently would give a display that names some values and not others
+        // with nothing to say why. The whole enumeration is dropped instead: no names at all
+        // reads as "this is a plain vector", which is at least true.
+        if (!value.isInteger()) return eir::Object::NoEnum;
+
+        definition.members.push_back(eir::EnumMember{
+            .name = std::string(member.name),
+            .value = toBitVector(value.integer()).resized(type.getBitWidth(), type.isSigned())});
+    }
+
+    if (definition.members.empty()) return eir::Object::NoEnum;
+
+    return definitionValue.addEnum(std::move(definition));
 }
 
 std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
@@ -232,6 +269,7 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     object.kind = symbol.kind == slang::ast::SymbolKind::Net ? eir::ObjectKind::Net
                                                              : eir::ObjectKind::Variable;
     object.location = convertLocation(symbol.location);
+    object.enumIndex = enumFor(symbol.getType());
 
     // A declaration initialiser is a time-zero value when it is constant. A non-constant
     // one is a static initialisation that has to run, which needs the process machinery an
