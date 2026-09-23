@@ -640,6 +640,32 @@ Both forms MUST be supported:
   wrappers around designs that already ship `.f` lists is pointless friction.
 - **Tcl file lists**, for designs and flows that prefer them.
 
+Three details of the `.f` reader are normative, because each is a place where
+the obvious behaviour and the compatible one differ.
+
+**Relative paths follow the convention the existing files were written
+against.** A path inside a list reached by `-f` resolves against the process's
+working directory; one inside a list reached by `-F` resolves against that
+list's own directory. Resolving everything against the containing file would be
+the better rule and would break the designs this feature exists to read.
+
+**An option the reader does not recognise is an error.** File lists carry
+tool-specific switches that change what is compiled — a timescale, a
+compilation-unit mode, a language version — and skipping one produces a design
+that analyses differently from what was asked for, with nothing on screen to
+say so. The position of the option is reported, so the fix is a visible edit
+rather than a hunt. `-sv` is the one switch accepted and dropped, since it asks
+for the only language the reader reads.
+
+**`$VAR` and `${VAR}` are substituted from the environment, and an unset
+variable is an error.** These files name paths through variables constantly.
+Expanding an unset one to nothing turns `$RTL_ROOT/cpu.sv` into `/cpu.sv`,
+which is then reported as a missing source file rather than as the missing
+variable that caused it.
+
+Beyond the switches named above the reader also takes `+libext+`,
+double-quoted arguments for paths containing spaces, and `/* */` alongside `//`.
+
 ### 8.3 Compile-order inference
 
 Users MUST NOT be required to specify compile order manually.

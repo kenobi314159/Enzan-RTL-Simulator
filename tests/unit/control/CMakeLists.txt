@@ -2,5 +2,5 @@
 
 enzan_add_unit_test(
   control
-  SOURCES InterpreterTests.cpp
+  SOURCES FileListTests.cpp InterpreterTests.cpp
   DEPENDS enzan::control)

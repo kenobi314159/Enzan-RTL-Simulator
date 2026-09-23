@@ -96,6 +96,21 @@ ENZAN_DIAG(TranscriptNotRedirected, 6003, Warning,
            "script output could not be redirected to the transcript ({}); `puts` will write to "
            "the terminal instead")
 ENZAN_DIAG(ScriptError, 6004, Error, "{}")
+ENZAN_DIAG(FileListUnknownOption, 6005, Error,
+           "'{}' is not an option Enzan's file lists understand; ignoring it could change what "
+           "is analysed, so it is refused rather than skipped")
+ENZAN_DIAG(FileListMissingValue, 6006, Error, "'{}' needs a value after it")
+ENZAN_DIAG(FileListEmptyOption, 6007, Error, "'{}' lists nothing")
+ENZAN_DIAG(FileListCycle, 6008, Error, "file list '{}' includes itself: {}")
+ENZAN_DIAG(FileListUnterminatedComment, 6009, Error,
+           "this block comment is never closed")
+ENZAN_DIAG(FileListUnterminatedQuote, 6010, Error,
+           "this quoted argument is never closed")
+ENZAN_DIAG(FileListUnterminatedBrace, 6011, Error,
+           "this ${{...}} substitution is missing its closing brace")
+ENZAN_DIAG(EnvironmentVariableNotSet, 6012, Error,
+           "the environment variable '{}' is not set; expanding it to nothing would turn a path "
+           "into one that silently does not exist")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 
