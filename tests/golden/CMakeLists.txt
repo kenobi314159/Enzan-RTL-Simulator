@@ -65,6 +65,13 @@ enzan_add_golden_test(control_flow)
 # `always_comb` there, where IEEE 1800 says it must.
 enzan_add_golden_test(scheduling NO_DIFFERENTIAL)
 
+# Depth, repetition and length, which the cases above deliberately do without: three levels of
+# hierarchy below the testbench, two modules instantiated three times over at different
+# parameters, and several thousand cycles of transfers with faults injected part way through.
+# A short case cannot say whether a design's accounting stays straight over a long run, and a
+# single-instance case cannot tell a parameter that is honoured from one that is ignored.
+enzan_add_golden_test(router)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------
