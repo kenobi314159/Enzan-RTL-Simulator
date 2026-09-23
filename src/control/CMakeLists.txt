@@ -6,8 +6,8 @@
 
 enzan_add_component(
   control
-  SOURCES FileList.cpp Interpreter.cpp
-  HEADERS FileList.h Interpreter.h
+  SOURCES CompileOrder.cpp FileList.cpp Interpreter.cpp
+  HEADERS CompileOrder.h FileList.h Interpreter.h
   DEPENDS enzan::common)
 
 target_include_directories(enzan_control SYSTEM PRIVATE ${TCL_INCLUDE_PATH})

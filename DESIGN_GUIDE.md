@@ -678,7 +678,34 @@ cycle spelled out; legal mutual references that do not require ordering MUST NOT
 be reported as cycles.
 
 The pre-scan MUST be much cheaper than full parsing, since it runs over every
-file before any analysis happens.
+file before any analysis happens. One linear pass over the bytes, skipping
+comments and string literals, recognising identifiers, and tracking with a small
+stack whether a keyword sits at file scope or inside something.
+
+**Instantiating a module is not a dependency.** Elaboration resolves an
+instance against the library by name (2.1), long after both files were analysed,
+so two modules that instantiate each other are exactly the legal mutual
+reference this section forbids reporting. In SystemVerilog the constraint that
+does exist is the package: a unit that imports one, or names a member of one
+through `::`, cannot be analysed before it. The scan is written so that this
+falls out rather than being special-cased away afterwards.
+
+The scan is approximate and the direction of the approximation is chosen. A
+declaration it invents costs nothing, because a declaration only ever *satisfies*
+a dependency. A reference it invents could invent a constraint, so a reference
+becomes an edge only when the name it uses is a package that another scanned
+file declares: `some_class::CONST` orders nothing, because no file declares a
+package by that name.
+
+Conditional compilation is not evaluated: text inside a `` `ifdef `` that would
+be false is scanned like any other. Analysing a package nothing ends up
+importing is harmless; failing to analyse one that something does is not.
+
+Where nothing orders two files, they keep the order they were given. Analysis
+order is observable — in diagnostics, and in which of two duplicate definitions
+is reported as the redefinition — and 3.8 makes observable ordering
+reproducible, which neither a hash-ordered nor a stack-ordered traversal would
+be.
 
 ---
 

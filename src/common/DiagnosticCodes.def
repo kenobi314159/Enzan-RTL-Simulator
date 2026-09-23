@@ -111,6 +111,8 @@ ENZAN_DIAG(FileListUnterminatedBrace, 6011, Error,
 ENZAN_DIAG(EnvironmentVariableNotSet, 6012, Error,
            "the environment variable '{}' is not set; expanding it to nothing would turn a path "
            "into one that silently does not exist")
+ENZAN_DIAG(CompileOrderCycle, 6013, Error,
+           "these files depend on each other and cannot be put in an analysis order: {}")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 

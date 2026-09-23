@@ -4,12 +4,12 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "support/Workspace.h"
 
 #include <gtest/gtest.h>
 
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,56 +29,16 @@ public:
     std::vector<Diagnostic> received;
 };
 
-/// A directory of file lists that cleans itself up, plus the working directory the relative
-/// paths in a `-f` are resolved against.
-///
-/// The working directory is changed for the duration of a test because that is what a `.f`
-/// file's relative paths mean (section 8.2), and testing the convention without standing in
-/// the right directory would test something else.
-class Workspace {
-public:
-    Workspace() {
-        root = std::filesystem::temp_directory_path()
-               / ("enzan-filelist-" + std::to_string(::getpid()) + "-" + std::to_string(counter++));
-        std::filesystem::create_directories(root);
-        previousDirectory = std::filesystem::current_path();
-        std::filesystem::current_path(root);
-    }
-
-    Workspace(const Workspace&) = delete;
-    Workspace& operator=(const Workspace&) = delete;
-    Workspace(Workspace&&) = delete;
-    Workspace& operator=(Workspace&&) = delete;
-
-    ~Workspace() {
-        std::error_code ignored;
-        std::filesystem::current_path(previousDirectory, ignored);
-        std::filesystem::remove_all(root, ignored);
-    }
-
-    /// Writes `content` to `name`, creating any directories it names.
-    void write(std::string_view name, std::string_view content) const {
-        const std::filesystem::path target = root / name;
-        std::filesystem::create_directories(target.parent_path());
-        std::ofstream file(target);
-        file << content;
-    }
-
-    [[nodiscard]] const std::filesystem::path& path() const noexcept { return root; }
-
-private:
-    static inline int counter = 0;
-    std::filesystem::path root;
-    std::filesystem::path previousDirectory;
-};
-
 class FileListTest : public ::testing::Test {
 protected:
-    FileListTest() : engine(sources) { engine.addConsumer(consumer); }
+    // The tests stand in the workspace because that is where a `.f` file's relative paths
+    // resolve to (section 8.2), and checking that convention from another directory would
+    // check something else.
+    FileListTest() : standing(workspace.path()), engine(sources) { engine.addConsumer(consumer); }
 
     /// Reads `name` from the workspace and returns whether it succeeded.
     bool read(std::string_view name) {
-        return enzan::control::readFileList(workspace.path() / name, sources, engine, list);
+        return enzan::control::readFileList(workspace / name, sources, engine, list);
     }
 
     [[nodiscard]] std::vector<std::string> fileNames() const {
@@ -92,7 +52,8 @@ protected:
         return consumer.received.empty() ? DiagCode::InternalError : consumer.received.front().code;
     }
 
-    Workspace workspace;
+    enzan::test::Workspace workspace;
+    enzan::test::ScopedWorkingDirectory standing;
     SourceManager sources;
     DiagnosticEngine engine;
     CollectingConsumer consumer;
