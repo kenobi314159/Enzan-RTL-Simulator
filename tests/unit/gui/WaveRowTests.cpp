@@ -586,7 +586,8 @@ TEST_F(WaveWindowTest, RenameOpensTheEditorOnTheName) {
         << "the name editor has to be open";
 
     // And the editor edits the label, which is what `setData` is for.
-    waveModel->setData(waveModel->indexOfRow(bus), QStringLiteral("tally"), Qt::EditRole);
+    const QModelIndex row_index = waveModel->indexOfRow(bus);
+    ASSERT_TRUE(waveModel->setData(row_index, QStringLiteral("tally"), Qt::EditRole));
     EXPECT_EQ(waveModel->indexOfRow(bus).data().toString(), QStringLiteral("tally"));
 }
 
