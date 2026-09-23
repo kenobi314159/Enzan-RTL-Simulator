@@ -88,8 +88,6 @@ void WaveformView::setRowView(QTreeView* rowView) {
     connect(rows, &QTreeView::collapsed, this, [this](const QModelIndex&) { update(); });
 
     if (const QAbstractItemModel* model = rows->model(); model != nullptr) {
-        const auto repaint = [this] { update(); };
-
         // A structural change can change what a row summarises to — a bit deleted from a bus,
         // a group gaining a member — so these throw the cached summaries away as well as
         // asking for a repaint. `dataChanged` deliberately does not: it fires on every cursor
@@ -104,7 +102,12 @@ void WaveformView::setRowView(QTreeView* rowView) {
         connect(model, &QAbstractItemModel::rowsMoved, this, restructured);
         connect(model, &QAbstractItemModel::modelReset, this, restructured);
         connect(model, &QAbstractItemModel::layoutChanged, this, restructured);
-        connect(model, &QAbstractItemModel::dataChanged, this, repaint);
+        // A radix, a highlight, a new value under the cursor: the row is the same shape and
+        // the summary still stands, but the picture drawn from it does not.
+        connect(model, &QAbstractItemModel::dataChanged, this, [this] {
+            invalidateTraces();
+            update();
+        });
     }
 
     // Selecting a row in the list means the same thing as clicking its trace: it is the row
@@ -763,21 +766,25 @@ void WaveformView::invalidateSamples() {
     sampleCache.clear();
 }
 
-std::span<const wavedb::Sample> WaveformView::sampleRow(int rowId, const QRect& area) {
+void WaveformView::invalidateTraces() {
+    for (CachedSamples& entry : sampleCache) entry.trace = QPixmap();
+}
+
+WaveformView::CachedSamples* WaveformView::sampleRow(int rowId, const QRect& area) {
     const int columns = area.width();
-    if (columns <= 0) return {};
-    if (timeAxis.span() == 0) return {};
+    if (columns <= 0) return nullptr;
+    if (timeAxis.span() == 0) return nullptr;
 
     CachedSamples& entry = sampleCache[rowId];
     entry.lastPaint = paintCounter;
-    if (!entry.samples.empty()) return entry.samples;
+    if (!entry.samples.empty()) return &entry;
 
     ++summaryCount;
     if (!sampleInto(rowId, columns, entry.samples)) {
         entry.samples.clear();
-        return {};
+        return nullptr;
     }
-    return entry.samples;
+    return &entry;
 }
 
 void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
@@ -802,14 +809,39 @@ void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
     const QRect traceRect = rowRect.adjusted(0, TraceMargin, 0, -TraceMargin);
     if (traceRect.height() <= 2) return;
 
-    const std::span<const wavedb::Sample> samples = sampleRow(geometry.rowId, traceRect);
-    if (samples.empty()) return;
+    CachedSamples* cached = sampleRow(geometry.rowId, traceRect);
+    if (cached == nullptr) return;
 
-    if (displayedWidth == 1) {
-        paintOneBitTrace(painter, traceRect, geometry.rowId, samples);
-    } else {
-        paintBusTrace(painter, traceRect, geometry.rowId, samples);
+    // Drawn once into a picture of its own and then blitted, because where a row sits is the
+    // one thing about it that a scroll changes. Without this, scrolling redrew every segment,
+    // measured every value against the font and laid out every string again, to put the same
+    // traces one line further up.
+    CachedSamples& entry = *cached;
+    if (entry.trace.isNull() || entry.traceHeight != traceRect.height()) {
+        // At the device's own resolution, or the trace would be drawn at one scale and shown
+        // at another — which on a high-resolution screen is the difference between a crisp
+        // line and a blurred one.
+        const qreal scale = devicePixelRatioF();
+        entry.trace = QPixmap(traceRect.size() * scale);
+        entry.trace.setDevicePixelRatio(scale);
+        entry.trace.fill(Qt::transparent);
+        entry.traceHeight = traceRect.height();
+
+        QPainter into(&entry.trace);
+
+        // The pixmap starts with the application's default font, not this widget's, and the
+        // bus painter measures its labels against whatever font it is given.
+        into.setFont(font());
+
+        const QRect local(0, 0, traceRect.width(), traceRect.height());
+        if (displayedWidth == 1) {
+            paintOneBitTrace(into, local, geometry.rowId, entry.samples);
+        } else {
+            paintBusTrace(into, local, geometry.rowId, entry.samples);
+        }
     }
+
+    painter.drawPixmap(traceRect.topLeft(), entry.trace);
 }
 
 void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int rowId,

@@ -10,6 +10,7 @@
 #include "wavedb/WaveformDatabase.h"
 
 #include <QHash>
+#include <QPixmap>
 #include <QPoint>
 #include <QString>
 #include <QVector>
@@ -163,6 +164,26 @@ public:
 
 protected:
 private:
+    /// One row's column summary and the picture drawn from it, with the repaint each was last
+    /// wanted for.
+    struct CachedSamples {
+        std::vector<wavedb::Sample> samples;
+
+        /// The row's trace, drawn once and then blitted.
+        ///
+        /// Summarising a row was only half of what it cost; the other half is the drawing,
+        /// which for a bus is a segment, a value measured against the font and a string laid
+        /// out for every run of columns across the window. None of that depends on where the
+        /// row sits, so scrolling can put the same picture one line further up instead of
+        /// drawing it again.
+        QPixmap trace;
+
+        /// The height `trace` was drawn at, since a row that changed height has to be redrawn.
+        int traceHeight = 0;
+
+        int lastPaint = 0;
+    };
+
     /// Where one model row sits on this canvas.
     struct RowGeometry {
         int rowId = -1;
@@ -189,19 +210,25 @@ private:
     void paintRowBackground(QPainter& painter, const RowGeometry& geometry, const QRect& area);
     void paintZoomBand(QPainter& painter);
 
-    /// One entry per column of `area` for `rowId`, or an empty span when there is nothing to
-    /// draw. The result belongs to the cache and is valid until the next call.
-    [[nodiscard]] std::span<const wavedb::Sample> sampleRow(int rowId, const QRect& area);
+    /// The cache entry for `rowId`, with its summary filled in, or nullptr when there is
+    /// nothing to draw. Valid until the next call.
+    [[nodiscard]] CachedSamples* sampleRow(int rowId, const QRect& area);
 
     /// True for a row whose value is a constant of the elaborated design rather than a trace.
     [[nodiscard]] bool isParameterRow(int rowId) const;
 
-    /// Throws away every cached summary.
+    /// Throws away every cached summary and every drawn trace.
     ///
-    /// Called when the rows themselves change. A change to what a row *shows* — its radix, its
-    /// highlight, the cursor it is read at — deliberately does not, because none of those
-    /// change the shape of the trace and the cursor moves on every drag.
+    /// Called when the rows themselves change: a bus that has lost a bit summarises to a
+    /// different shape, not merely to a different picture.
     void invalidateSamples();
+
+    /// Throws away the drawn traces, keeping the summaries.
+    ///
+    /// For a change to what a row *shows* rather than to what it is — a radix, a highlight,
+    /// the value written on a segment. The shape is still right, so the expensive half of the
+    /// work is kept and only the drawing is done again.
+    void invalidateTraces();
 
     /// Summarises one row into `out`, one entry per column.
     ///
@@ -250,12 +277,6 @@ private:
     QVector<WaveCursor> cursorList;
     int active = 0;
     int previouslyActive = 0;
-
-    /// One row's column summary, and the repaint it was last wanted for.
-    struct CachedSamples {
-        std::vector<wavedb::Sample> samples;
-        int lastPaint = 0;
-    };
 
     /// What each row summarises to, kept between repaints.
     ///
