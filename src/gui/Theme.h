@@ -3,6 +3,7 @@
 #pragma once
 
 #include <QColor>
+#include <QPalette>
 #include <QString>
 
 #include <array>
@@ -86,10 +87,23 @@ public:
     /// The shipped theme's text, for a user who wants to copy it and change a colour.
     [[nodiscard]] static QString builtInScript();
 
-    /// A Qt style sheet built from the loaded colours.
+    /// The loaded colours as a palette, which is how nearly all of them reach the widgets.
+    ///
+    /// A palette rather than a style sheet wherever a palette can say it, because the two cost
+    /// very different amounts. A style sheet rule that gives a widget a background makes Qt
+    /// render that background on every repaint instead of moving what it already had, and it
+    /// puts the whole paint through the style-sheet style; measured on a list of two hundred
+    /// signals, a universal `QWidget { background-color }` rule and the one under it were
+    /// three quarters of what scrolling the window cost. A palette is read by the ordinary
+    /// style and costs nothing.
+    [[nodiscard]] QPalette palette() const;
+
+    /// A Qt style sheet for what a palette cannot express — borders, padding, the shapes of
+    /// the scroll bar and the dock title.
     ///
     /// Generated rather than written out as a resource for the same reason as everything else
-    /// here: a style sheet with colours in it is a second place colours live.
+    /// here: a style sheet with colours in it is a second place colours live. It deliberately
+    /// sets **no background on any item view, nor on `QWidget`**; see `palette`.
     [[nodiscard]] QString styleSheet() const;
 
 private:

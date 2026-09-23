@@ -9,6 +9,8 @@
 
 #include "gui/Theme.h"
 
+#include <QPalette>
+
 #include <gtest/gtest.h>
 
 #include <QColor>
@@ -155,17 +157,58 @@ TEST(ThemeTests, TheWrittenOutThemeLoadsBackUnchanged) {
     EXPECT_EQ(fromFile.color(ThemeColor::WaveTrace), builtIn.color(ThemeColor::WaveTrace));
 }
 
-TEST(ThemeTests, TheStyleSheetCarriesTheLoadedColours) {
-    // The style sheet is generated rather than shipped, because a style sheet with colours
-    // written in it would be a second place colours live.
+TEST(ThemeTests, ThePaletteCarriesTheLoadedColours) {
+    // Both the palette and the style sheet are generated rather than shipped, because either
+    // one with colours written in it would be a second place colours live.
     Theme theme;
     theme.loadBuiltIn();
 
     QString error;
     ASSERT_TRUE(theme.evaluate(QStringLiteral("theme window.background #0a0b0c"), error));
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme selection.background #0d0e0f"), error));
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme panel.background #101112"), error));
 
+    const QPalette palette = theme.palette();
+    EXPECT_EQ(palette.color(QPalette::Window), QColor(QStringLiteral("#0a0b0c")));
+    EXPECT_EQ(palette.color(QPalette::Highlight), QColor(QStringLiteral("#0d0e0f")));
+    EXPECT_EQ(palette.color(QPalette::Base), QColor(QStringLiteral("#101112")))
+        << "an item view's background is the palette's Base, which is what lets it scroll";
+}
+
+TEST(ThemeTests, TheStyleSheetCarriesTheColoursAPaletteCannot) {
+    Theme theme;
+    theme.loadBuiltIn();
+
+    QString error;
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme header.background #0a0b0c"), error));
+
+    // The header and the dock title have no palette entry of their own, so they stay here.
     EXPECT_TRUE(theme.styleSheet().contains(QStringLiteral("#ff0a0b0c"), Qt::CaseInsensitive))
         << theme.styleSheet().toStdString();
+}
+
+TEST(ThemeTests, TheStyleSheetNeverStylesAScrollingSurface) {
+    // This is a performance rule with a correctness-shaped test, and it is worth one. A style
+    // sheet that gives a scrolling surface a background or a border makes Qt draw that widget
+    // through the style sheet's box model, and a widget drawn that way cannot scroll by moving
+    // what it already has — it repaints instead. Measured on a list of two hundred signals in
+    // a tall window, a single `QAbstractScrollArea { border }` rule was three quarters of what
+    // scrolling cost. It went into the palette; this says it stays there.
+    Theme theme;
+    theme.loadBuiltIn();
+
+    const QString sheet = theme.styleSheet();
+    for (const QString& selector :
+         {QStringLiteral("QWidget"), QStringLiteral("QAbstractScrollArea"),
+          QStringLiteral("QTreeView"), QStringLiteral("QTableView"), QStringLiteral("QListView"),
+          QStringLiteral("QPlainTextEdit")}) {
+        // A rule for one of these would begin a block; the sub-controls they have entries for,
+        // such as `QHeaderView::section`, are named differently and are not affected.
+        EXPECT_FALSE(sheet.contains(selector + QStringLiteral(" {")))
+            << selector.toStdString() << " must not be styled: " << sheet.toStdString();
+        EXPECT_FALSE(sheet.contains(selector + QStringLiteral(",")))
+            << selector.toStdString() << " must not be styled: " << sheet.toStdString();
+    }
 }
 
 TEST(ThemeTests, EveryCatalogueKeyHasANameThatLooksLikeOne) {

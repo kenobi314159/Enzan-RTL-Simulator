@@ -759,6 +759,23 @@ no colour literals in widget code.
 
 Waveform view defaults: high-contrast black background, light green traces.
 
+**The colours reach the widgets through a `QPalette`, not a style sheet.** This
+is a performance rule wearing a presentation rule's clothes. A Qt style sheet
+rule that gives a widget a background — or a border — makes Qt draw that widget
+through the style sheet's box model, and a widget drawn that way can no longer
+scroll by moving the pixels it already has: it repaints them. On a signal list
+of two hundred rows in a tall window that was the difference between 1.7 ms and
+6.2 ms for every line scrolled, and a single `QAbstractScrollArea { border }`
+rule was nearly all of it. A palette is read by the ordinary style and costs
+nothing.
+
+So: **the style sheet MUST NOT style a scrolling surface**, meaning `QWidget`,
+`QAbstractScrollArea`, or any item view, in background or in border. What a
+palette can say goes in the palette; the style sheet keeps only what has no
+palette entry — padding, the dock title, the parts of the scroll bar. A test
+asserts this, because the rule is invisible in the result: a style sheet that
+breaks it looks exactly right and scrolls four times slower.
+
 ### 10.6 Diagnostics as a feature
 
 slang's diagnostics are dramatically better than those of most commercial

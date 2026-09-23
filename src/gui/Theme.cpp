@@ -201,47 +201,91 @@ QString Theme::firstMissingKey() const {
     return {};
 }
 
+QPalette Theme::palette() const {
+    QPalette result;
+
+    // The window chrome, and the text on it.
+    result.setColor(QPalette::Window, color(ThemeColor::WindowBackground));
+    result.setColor(QPalette::WindowText, color(ThemeColor::WindowForeground));
+
+    // What an item view, a text area or any other scrolling surface is made of. This is the
+    // one that matters most for cost: as a style sheet rule it made every scroll of the signal
+    // list a full repaint.
+    result.setColor(QPalette::Base, color(ThemeColor::PanelBackground));
+    result.setColor(QPalette::AlternateBase, color(ThemeColor::PanelAlternateBackground));
+    result.setColor(QPalette::Text, color(ThemeColor::PanelForeground));
+
+    result.setColor(QPalette::Button, color(ThemeColor::ControlBackground));
+    result.setColor(QPalette::ButtonText, color(ThemeColor::ControlForeground));
+    result.setColor(QPalette::BrightText, color(ThemeColor::Accent));
+
+    result.setColor(QPalette::Highlight, color(ThemeColor::SelectionBackground));
+    result.setColor(QPalette::HighlightedText, color(ThemeColor::SelectionForeground));
+
+    result.setColor(QPalette::ToolTipBase, color(ThemeColor::HeaderBackground));
+    result.setColor(QPalette::ToolTipText, color(ThemeColor::HeaderForeground));
+
+    result.setColor(QPalette::Link, color(ThemeColor::Accent));
+    result.setColor(QPalette::LinkVisited, color(ThemeColor::Accent));
+
+    // The frame around a scrolling surface. These four are where the ordinary style takes a
+    // frame's colour from, and going through them rather than through a style sheet border is
+    // not a matter of taste: a style-sheet border on `QAbstractScrollArea` is what stopped the
+    // signal list from scrolling by moving what it had drawn, and it alone was three quarters
+    // of what a scroll of a tall window cost.
+    result.setColor(QPalette::Mid, color(ThemeColor::PanelBorder));
+    result.setColor(QPalette::Dark, color(ThemeColor::PanelBorder));
+    result.setColor(QPalette::Shadow, color(ThemeColor::PanelBorder));
+    result.setColor(QPalette::Light, color(ThemeColor::PanelBorder));
+
+    // A disabled control reads as the header foreground, which is the theme's quiet text.
+    result.setColor(QPalette::Disabled, QPalette::Text, color(ThemeColor::HeaderForeground));
+    result.setColor(QPalette::Disabled, QPalette::WindowText, color(ThemeColor::HeaderForeground));
+    result.setColor(QPalette::Disabled, QPalette::ButtonText, color(ThemeColor::HeaderForeground));
+
+    return result;
+}
+
 QString Theme::styleSheet() const {
     const auto name = [this](ThemeColor which) { return color(which).name(QColor::HexArgb); };
 
     // Written out here rather than shipped as a resource because a style sheet with colours in
     // it would be a second place colours live, and section 10.5 allows exactly one.
+    //
+    // **Nothing here may style a scrolling surface — not its background, not its border.**
+    // Either one makes Qt draw that widget through the style sheet's box model, and a widget
+    // drawn that way cannot scroll by moving what it already has; it repaints instead. On a
+    // list of two hundred signals in a tall window that was the difference between 1.7 ms and
+    // 6.2 ms per line scrolled, and the border rule on its own was nearly all of it.
+    //
+    // Anything a palette can say goes through `palette`. What is left here is the shape of
+    // things a palette has no entry for: padding, the dock title, the scroll bar's parts.
     return QStringLiteral(R"(
-QWidget { background-color: %1; color: %2; }
-QMainWindow::separator { background-color: %5; width: 3px; height: 3px; }
+QMainWindow::separator { background-color: %3; width: 3px; height: 3px; }
 QDockWidget { titlebar-close-icon: none; titlebar-normal-icon: none; }
-QDockWidget::title { background-color: %6; color: %7; padding: 4px 8px; }
-QAbstractScrollArea, QTreeView, QTableView, QPlainTextEdit, QListView {
-    background-color: %3; color: %4; border: 1px solid %5;
-}
-QTreeView::item:selected, QTableView::item:selected, QListView::item:selected {
-    background-color: %8; color: %9;
-}
+QDockWidget::title { background-color: %4; color: %5; padding: 4px 8px; }
 QHeaderView::section {
-    background-color: %6; color: %7; border: 0px; border-right: 1px solid %5;
-    border-bottom: 1px solid %5; padding: 3px 6px;
+    background-color: %4; color: %5; border: 0px; border-right: 1px solid %3;
+    border-bottom: 1px solid %3; padding: 3px 6px;
 }
-QToolBar { background-color: %6; border: 0px; spacing: 4px; padding: 3px; }
+QToolBar { background-color: %4; border: 0px; spacing: 4px; padding: 3px; }
 QToolButton, QPushButton, QLineEdit, QComboBox, QSpinBox {
-    background-color: %10; color: %11; border: 1px solid %12; padding: 3px 8px;
+    border: 1px solid %6; padding: 3px 8px;
 }
-QToolButton:hover, QPushButton:hover { border-color: %13; }
-QToolButton:disabled, QPushButton:disabled, QLineEdit:disabled { color: %7; }
-QMenuBar, QMenu { background-color: %6; color: %2; }
+QToolButton:hover, QPushButton:hover { border-color: %7; }
+QMenuBar, QMenu { background-color: %4; color: %2; }
 QMenu::item:selected, QMenuBar::item:selected { background-color: %8; color: %9; }
-QStatusBar { background-color: %6; color: %7; }
-QSplitter::handle { background-color: %5; }
-QScrollBar:vertical, QScrollBar:horizontal { background: %3; border: 0px; }
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: %12; min-height: 24px; }
+QStatusBar { background-color: %4; color: %5; }
+QSplitter::handle { background-color: %3; }
+QScrollBar:vertical, QScrollBar:horizontal { background: %1; border: 0px; }
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: %6; min-height: 24px; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0px; width: 0px; }
 )")
-        .arg(name(ThemeColor::WindowBackground), name(ThemeColor::WindowForeground),
-             name(ThemeColor::PanelBackground), name(ThemeColor::PanelForeground),
+        .arg(name(ThemeColor::PanelBackground), name(ThemeColor::WindowForeground),
              name(ThemeColor::PanelBorder), name(ThemeColor::HeaderBackground),
-             name(ThemeColor::HeaderForeground), name(ThemeColor::SelectionBackground),
-             name(ThemeColor::SelectionForeground))
-        .arg(name(ThemeColor::ControlBackground), name(ThemeColor::ControlForeground),
-             name(ThemeColor::ControlBorder), name(ThemeColor::Accent));
+             name(ThemeColor::HeaderForeground), name(ThemeColor::ControlBorder),
+             name(ThemeColor::Accent), name(ThemeColor::SelectionBackground),
+             name(ThemeColor::SelectionForeground));
 }
 
 } // namespace enzan::gui
