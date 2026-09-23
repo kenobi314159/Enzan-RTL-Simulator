@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <span>
 
 namespace enzan::gui {
 
@@ -88,11 +89,21 @@ void WaveformView::setRowView(QTreeView* rowView) {
 
     if (const QAbstractItemModel* model = rows->model(); model != nullptr) {
         const auto repaint = [this] { update(); };
-        connect(model, &QAbstractItemModel::rowsInserted, this, repaint);
-        connect(model, &QAbstractItemModel::rowsRemoved, this, repaint);
-        connect(model, &QAbstractItemModel::rowsMoved, this, repaint);
-        connect(model, &QAbstractItemModel::modelReset, this, repaint);
-        connect(model, &QAbstractItemModel::layoutChanged, this, repaint);
+
+        // A structural change can change what a row summarises to — a bit deleted from a bus,
+        // a group gaining a member — so these throw the cached summaries away as well as
+        // asking for a repaint. `dataChanged` deliberately does not: it fires on every cursor
+        // move, and the cursor does not change the shape of a trace.
+        const auto restructured = [this] {
+            invalidateSamples();
+            update();
+        };
+
+        connect(model, &QAbstractItemModel::rowsInserted, this, restructured);
+        connect(model, &QAbstractItemModel::rowsRemoved, this, restructured);
+        connect(model, &QAbstractItemModel::rowsMoved, this, restructured);
+        connect(model, &QAbstractItemModel::modelReset, this, restructured);
+        connect(model, &QAbstractItemModel::layoutChanged, this, restructured);
         connect(model, &QAbstractItemModel::dataChanged, this, repaint);
     }
 
@@ -498,6 +509,24 @@ void WaveformView::paintEvent(QPaintEvent* /*event*/) {
 
     timeAxis.setWidth(traceArea().width());
 
+    // A summary is only reusable for the range, the width and the amount of recorded history
+    // it was made against. Checking all four here, rather than asking every place that could
+    // change one of them to remember to say so, is what keeps the cache from ever being
+    // subtly stale: zooming, scrolling sideways, resizing and a kernel that has run all land
+    // in exactly one of these four.
+    const int columns = traceArea().width();
+    const runtime::SimTime extent = kernelSession->latestTime();
+    if (timeAxis.start() != cachedStart || timeAxis.end() != cachedEnd || columns != cachedColumns
+        || extent != cachedExtent) {
+        invalidateSamples();
+        cachedStart = timeAxis.start();
+        cachedEnd = timeAxis.end();
+        cachedColumns = columns;
+        cachedExtent = extent;
+    }
+
+    ++paintCounter;
+
     paintBeyondExtent(painter);
     paintRuler(painter);
 
@@ -526,6 +555,13 @@ void WaveformView::paintEvent(QPaintEvent* /*event*/) {
 
     paintZoomBand(painter);
     paintCursors(painter);
+
+    // Rows scrolled off the window keep their summary for a repaint or two and are then let
+    // go, so a window showing forty rows of a list of two thousand holds forty summaries.
+    for (auto entry = sampleCache.begin(); entry != sampleCache.end();) {
+        entry = entry.value().lastPaint < paintCounter - SampleCacheGrace ? sampleCache.erase(entry)
+                                                                          : std::next(entry);
+    }
 }
 
 void WaveformView::paintRowBackground(QPainter& painter, const RowGeometry& geometry,
@@ -682,12 +718,25 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
     return true;
 }
 
-bool WaveformView::sampleRow(int rowId, const QRect& area) {
-    const int columns = area.width();
-    if (columns <= 0) return false;
-    if (timeAxis.span() == 0) return false;
+void WaveformView::invalidateSamples() {
+    sampleCache.clear();
+}
 
-    return sampleInto(rowId, columns, samples);
+std::span<const wavedb::Sample> WaveformView::sampleRow(int rowId, const QRect& area) {
+    const int columns = area.width();
+    if (columns <= 0) return {};
+    if (timeAxis.span() == 0) return {};
+
+    CachedSamples& entry = sampleCache[rowId];
+    entry.lastPaint = paintCounter;
+    if (!entry.samples.empty()) return entry.samples;
+
+    ++summaryCount;
+    if (!sampleInto(rowId, columns, entry.samples)) {
+        entry.samples.clear();
+        return {};
+    }
+    return entry.samples;
 }
 
 void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
@@ -708,16 +757,20 @@ void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
     if (displayedWidth == 0) return;
 
     const QRect traceRect = rowRect.adjusted(0, TraceMargin, 0, -TraceMargin);
-    if (traceRect.height() <= 2 || !sampleRow(geometry.rowId, traceRect)) return;
+    if (traceRect.height() <= 2) return;
+
+    const std::span<const wavedb::Sample> samples = sampleRow(geometry.rowId, traceRect);
+    if (samples.empty()) return;
 
     if (displayedWidth == 1) {
-        paintOneBitTrace(painter, traceRect, geometry.rowId);
+        paintOneBitTrace(painter, traceRect, geometry.rowId, samples);
     } else {
-        paintBusTrace(painter, traceRect, geometry.rowId);
+        paintBusTrace(painter, traceRect, geometry.rowId, samples);
     }
 }
 
-void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int rowId) {
+void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int rowId,
+                                    std::span<const wavedb::Sample> samples) {
     const int top = area.top();
     const int bottom = area.bottom();
     const int middle = (top + bottom) / 2;
@@ -725,10 +778,11 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
     painter.setPen(theme->color(ThemeColor::WaveTrace));
 
     // Columns are walked in runs rather than one at a time, for the same reason the bus
-    // painter does it: within a run of columns showing the same change the value is the same,
+    // painter does it: within a run of columns showing the same change, the value is the same,
     // and asking for it again per column is a binary search through the trace and a value
     // allocation for an answer already in hand. On a flat one-bit trace that was one lookup
-    // per pixel of window width, per row, per repaint.
+    // per pixel of window width, per row, per repaint — which is what made scrolling cost
+    // what it did.
     int previousY = -1;
     std::size_t column = 0;
     while (column < samples.size()) {
@@ -739,8 +793,8 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
             // Busy: more than one transition inside a single pixel column. Drawn as a solid
             // bar rather than by iterating the transitions, which is the whole point — a
             // column covering a million edges costs exactly what this one does. The run stops
-            // where the unknown flag changes, so a busy stretch that is unknown in part is
-            // still drawn in two colours.
+            // where the unknown flag changes, so that a busy stretch which is unknown in part
+            // is still drawn in two colours.
             std::size_t run = column;
             while (run < samples.size() && samples[run].transitions > 0
                    && samples[run].anyUnknown == sample.anyUnknown) {
@@ -810,7 +864,8 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
     }
 }
 
-void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId) {
+void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId,
+                                 std::span<const wavedb::Sample> samples) {
     const WaveRow* waveRow = waveModel->row(rowId);
     if (waveRow == nullptr) return;
 

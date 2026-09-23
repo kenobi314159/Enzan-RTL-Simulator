@@ -9,12 +9,14 @@
 #include "runtime/Time.h"
 #include "wavedb/WaveformDatabase.h"
 
+#include <QHash>
 #include <QPoint>
 #include <QString>
 #include <QVector>
 #include <QWidget>
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 class QScrollBar;
@@ -150,6 +152,15 @@ public:
     /// is legal and confusing.
     bool eventFilter(QObject* watched, QEvent* event) override;
 
+    /// How many row summaries have been computed since the view was made.
+    ///
+    /// A row's summary is one pass over the width of the window, and it is the work the cache
+    /// exists to avoid; this is what lets a test say "scrolling one line summarised one row
+    /// rather than forty" exactly. The alternative is to time a repaint, and a timing test is
+    /// one that fails on a loaded build machine for reasons that have nothing to do with the
+    /// change it is meant to be guarding.
+    [[nodiscard]] std::uint64_t summariesComputed() const noexcept { return summaryCount; }
+
 protected:
 private:
     /// Where one model row sits on this canvas.
@@ -169,16 +180,25 @@ private:
 
     void paintRuler(QPainter& painter);
     void paintRow(QPainter& painter, const RowGeometry& geometry);
-    void paintOneBitTrace(QPainter& painter, const QRect& area, int rowId);
-    void paintBusTrace(QPainter& painter, const QRect& area, int rowId);
+    void paintOneBitTrace(QPainter& painter, const QRect& area, int rowId,
+                          std::span<const wavedb::Sample> samples);
+    void paintBusTrace(QPainter& painter, const QRect& area, int rowId,
+                       std::span<const wavedb::Sample> samples);
     void paintCursors(QPainter& painter);
     void paintBeyondExtent(QPainter& painter);
     void paintRowBackground(QPainter& painter, const RowGeometry& geometry, const QRect& area);
     void paintZoomBand(QPainter& painter);
 
-    /// Fills `samples` with one entry per column of `area`. Returns false when there is
-    /// nothing to draw.
-    [[nodiscard]] bool sampleRow(int rowId, const QRect& area);
+    /// One entry per column of `area` for `rowId`, or an empty span when there is nothing to
+    /// draw. The result belongs to the cache and is valid until the next call.
+    [[nodiscard]] std::span<const wavedb::Sample> sampleRow(int rowId, const QRect& area);
+
+    /// Throws away every cached summary.
+    ///
+    /// Called when the rows themselves change. A change to what a row *shows* — its radix, its
+    /// highlight, the cursor it is read at — deliberately does not, because none of those
+    /// change the shape of the trace and the cursor moves on every drag.
+    void invalidateSamples();
 
     /// Summarises one row into `out`, one entry per column.
     ///
@@ -228,9 +248,40 @@ private:
     int active = 0;
     int previouslyActive = 0;
 
-    /// Reused across rows and repaints, because a repaint allocating one of these per trace is
-    /// how a view that is fast in principle becomes slow in practice.
-    std::vector<wavedb::Sample> samples;
+    /// One row's column summary, and the repaint it was last wanted for.
+    struct CachedSamples {
+        std::vector<wavedb::Sample> samples;
+        int lastPaint = 0;
+    };
+
+    /// What each row summarises to, kept between repaints.
+    ///
+    /// Summarising a row costs one pass over the width of the window, and the answer depends
+    /// only on the row, the time range and that width — none of which a vertical scroll
+    /// changes. Without this, scrolling one line recomputed every row on screen to redraw the
+    /// same traces one line up, which is why the window slowed down in proportion to its own
+    /// height. Entries are dropped once a repaint goes by without wanting them, so what is
+    /// held is proportional to what is on screen rather than to the length of the list.
+    QHash<int, CachedSamples> sampleCache;
+
+    /// What the cache was computed against. A repaint whose range, width or recorded extent
+    /// differs from these throws the whole cache away, which is what makes zooming, scrolling
+    /// sideways and a running kernel correct without any of them having to remember to say so.
+    runtime::SimTime cachedStart = 0;
+    runtime::SimTime cachedEnd = 0;
+    int cachedColumns = 0;
+    runtime::SimTime cachedExtent = 0;
+
+    /// Counts summaries computed, for `summariesComputed`.
+    std::uint64_t summaryCount = 0;
+
+    /// Counts repaints, so an entry knows how long it has been since it was wanted.
+    int paintCounter = 0;
+
+    /// How many repaints an unwanted summary survives. Two rather than one so that a repaint
+    /// which happens to draw nothing — a window momentarily too short, a model mid-edit — does
+    /// not throw away everything the next one is about to ask for.
+    static constexpr int SampleCacheGrace = 2;
 
     bool panning = false;
     QPoint panFrom;

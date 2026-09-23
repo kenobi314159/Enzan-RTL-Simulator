@@ -19,6 +19,7 @@
 
 #include <QImage>
 #include <QPixmap>
+#include <QScrollBar>
 #include <QTreeView>
 
 #include <map>
@@ -33,6 +34,7 @@ using enzan::gui::SignalInfo;
 using enzan::gui::Theme;
 using enzan::gui::WaveformModel;
 using enzan::gui::WaveformView;
+using enzan::gui::WaveRow;
 using enzan::test::SessionFixture;
 
 /// How often each colour appears in an image, so that a test can ask what was drawn.
@@ -390,6 +392,115 @@ TEST_F(WaveformViewTest, FollowingTheTailKeepsTheEndInView) {
 
     EXPECT_EQ(view->axis().span(), 50U) << "following must not change the zoom";
     EXPECT_GE(view->axis().end(), 500U);
+}
+
+// ---------------------------------------------------------------------------
+// The summary cache
+// ---------------------------------------------------------------------------
+//
+// Summarising a row is a pass over the width of the window, and it used to happen for every row
+// on screen on every repaint — which is why the window slowed down in proportion to its own
+// height and why scrolling it was the worst case. The tests below are in two halves: one says
+// the cache is used, the rest say it is thrown away whenever it could be stale, which is the
+// only way a cache can be wrong.
+//
+// The second half counts summaries rather than comparing pixels. A trace is drawn partly from
+// its summary and partly from values read live, so a stale summary still moves some pixels and
+// a picture that differs proves nothing about which half did it; the count is about the cache
+// and nothing else.
+
+TEST_F(WaveformViewTest, ScrollingReusesTheSummariesAlreadyComputed) {
+    showEverythingAndRun(20'000);
+    render();
+
+    const std::uint64_t afterFirstPaint = view->summariesComputed();
+    ASSERT_GT(afterFirstPaint, 0U) << "the first repaint has to summarise something";
+
+    // Nothing changed, so nothing has to be summarised again. This is the repaint a moving
+    // cursor, a highlight or a change of radix asks for.
+    render();
+    EXPECT_EQ(view->summariesComputed(), afterFirstPaint);
+
+    // And scrolling moves the rows without changing what any of them shows.
+    QScrollBar* bar = treeView->verticalScrollBar();
+    bar->setValue(bar->value() + 1);
+    render();
+
+    EXPECT_LE(view->summariesComputed() - afterFirstPaint, 2U)
+        << "scrolling one line must summarise the row that came into view, not every row";
+}
+
+TEST_F(WaveformViewTest, ZoomingSummarisesAgain) {
+    showEverythingAndRun(20'000);
+    render();
+
+    const std::uint64_t afterFirstPaint = view->summariesComputed();
+
+    view->axis().setRange(0, 200);
+    render();
+
+    EXPECT_GT(view->summariesComputed(), afterFirstPaint)
+        << "a summary is per pixel column of a time range, so a new range needs new summaries";
+}
+
+TEST_F(WaveformViewTest, RunningFurtherSummarisesAgain) {
+    showEverythingAndRun(200);
+
+    // A window wider than the run and pinned, so that the only thing the run changes is how
+    // much history there is — not the range, which would invalidate the cache the other way
+    // and hide it if the recorded extent were not a key of its own.
+    view->setFollowTail(false);
+    view->axis().setRange(0, 2000);
+    render();
+
+    const std::uint64_t afterFirstPaint = view->summariesComputed();
+    const auto rangeStart = view->axis().start();
+    const auto rangeEnd = view->axis().end();
+
+    session->run(1800);
+    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 2000; }));
+    view->extentChanged();
+    render();
+
+    ASSERT_EQ(view->axis().start(), rangeStart) << "the range must not have moved";
+    ASSERT_EQ(view->axis().end(), rangeEnd);
+
+    EXPECT_GT(view->summariesComputed(), afterFirstPaint)
+        << "the trace the kernel has since recorded has to be summarised, not drawn from the "
+           "summary of the shorter one";
+}
+
+TEST_F(WaveformViewTest, RemovingABitSummarisesItsBusAgain) {
+    SignalInfo count;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+        if (info.name == QStringLiteral("count")) count = info;
+    }
+    ASSERT_GT(count.width, 1U) << "the counter is the design's only bus";
+
+    const int bus = model->addSignal(count);
+    session->subscribe({count.signalIndex});
+
+    session->run(2000);
+    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 2000; }));
+
+    model->unpack(bus);
+    treeView->expandAll();
+    view->zoomFit();
+    render();
+
+    const std::uint64_t afterFirstPaint = view->summariesComputed();
+
+    // Section 10.7: a row with children shows what its children show. A bus whose bits are all
+    // still there is drawn from its own trace; take one away and it has to be drawn by merging
+    // the rest, which is a different summary of a different shape.
+    const WaveRow* row = model->row(bus);
+    ASSERT_NE(row, nullptr);
+    ASSERT_FALSE(row->children.isEmpty());
+    model->removeRow(row->children.front());
+    render();
+
+    EXPECT_GT(view->summariesComputed(), afterFirstPaint)
+        << "the bus has to be summarised again without the bit that was removed";
 }
 
 } // namespace
