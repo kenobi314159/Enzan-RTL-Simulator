@@ -243,6 +243,14 @@ EvalResult Interpreter::evaluateBuffer(BufferId buffer, std::string_view text) {
     return resultFrom(code, buffer);
 }
 
+bool Interpreter::isComplete(std::string_view script) {
+    // Tcl's own answer, which knows about braces, brackets, quotes and backslash
+    // continuations. Anything Enzan worked out for itself would disagree with the parser that
+    // is about to run the text, which is the worst possible way to be wrong about it.
+    const std::string text(script);
+    return Tcl_CommandComplete(text.c_str()) != 0;
+}
+
 EvalResult Interpreter::evaluateFile(const std::filesystem::path& path, SourceManager& sources) {
     const FileReadResult read = sources.readFile(path);
     if (!read.ok()) {

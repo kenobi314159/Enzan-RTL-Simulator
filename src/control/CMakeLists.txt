@@ -18,8 +18,8 @@ target_link_libraries(enzan_control PRIVATE ${TCL_LIBRARY})
 # (DESIGN_GUIDE.md section 2.2, and src/control/README.md).
 enzan_add_component(
   control_session
-  SOURCES Session.cpp
-  HEADERS Session.h
+  SOURCES Commands.cpp Session.cpp
+  HEADERS Commands.h Session.h
   DEPENDS enzan::control enzan::eir enzan::elab enzan::runtime enzan::wavedb
   PRIVATE_DEPENDS enzan::codegen)
 

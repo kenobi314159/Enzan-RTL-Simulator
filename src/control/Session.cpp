@@ -18,6 +18,7 @@
 #include "frontend/sv/SystemVerilogFrontend.h"
 #endif
 
+#include <algorithm>
 #include <iostream>
 #include <utility>
 
@@ -146,7 +147,7 @@ bool Session::elaborate(std::string_view topModule) {
     image = std::make_unique<runtime::Image>(*design, *elaborated, *compiled);
 
     runtime::KernelOptions options;
-    options.timeScale = scale_;
+    options.timeScale = scale;
     options.deltaLimit = deltaLimit;
     options.transcript = transcript;
 
@@ -221,8 +222,7 @@ std::string Session::examine(std::uint32_t signalIndex, std::optional<eir::Radix
         if (slotIndex.has_value()) {
             const elab::Slot& slot = elaborated->slots()[*slotIndex];
             if (slot.enumIndex != elab::Slot::NoEnum) {
-                const eir::EnumDefinition& enumeration =
-                    elaborated->enumerations()[slot.enumIndex];
+                const eir::EnumDefinition& enumeration = elaborated->enumerations()[slot.enumIndex];
                 for (const eir::EnumMember& member : enumeration.members)
                     if (member.value.ref().identicalTo(value)) return member.name;
             }
@@ -232,9 +232,8 @@ std::string Session::examine(std::uint32_t signalIndex, std::optional<eir::Radix
     return eir::toString(value, radix.value_or(eir::Radix::Hexadecimal));
 }
 
-std::optional<eir::BitVector> Session::parseValue(std::uint32_t signalIndex,
-                                                  std::string_view literal,
-                                                  std::string& error) const {
+std::optional<eir::BitVector>
+Session::parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const {
     std::optional<eir::BitVector> parsed = eir::BitVector::parse(literal);
     if (!parsed.has_value()) {
         error = "'" + std::string(literal) + "' is not a value Enzan understands";
@@ -273,10 +272,13 @@ bool Session::release(std::uint32_t signalIndex) {
 
 std::vector<std::string> Session::findSignals(std::string_view pattern) const {
     std::vector<std::string> found;
-    if (image == nullptr) return found;
+    if (elaborated == nullptr) return found;
 
-    for (const runtime::Signal& signal : image->signals())
-        if (globMatches(pattern, signal.path)) found.push_back(signal.path);
+    // Over every *name*, not over the signals: a collapsed port gives one slot two
+    // hierarchical names, and `find signals /tb/u_dut/*` asking about the DUT's ports must
+    // find them under the DUT even though the storage lives in the parent.
+    for (const auto& [path, slotIndex] : elaborated->namesByPath())
+        if (globMatches(pattern, path)) found.push_back(path);
     return found;
 }
 
@@ -293,13 +295,18 @@ std::vector<std::string> Session::findInstances(std::string_view pattern) const 
 // Waveforms
 // ---------------------------------------------------------------------------
 
-bool Session::setWaveformScope(std::string_view path) {
+bool Session::addWaveformScope(std::string_view path) {
     if (!writers.empty()) {
         diagnostics.report(DiagCode::WaveformScopeAfterOpen, SourceLocation());
         return false;
     }
 
-    scope = path;
+    if (path.empty()) {
+        scopes.clear();
+        return true;
+    }
+
+    if (std::ranges::find(scopes, path) == scopes.end()) scopes.emplace_back(path);
     return true;
 }
 
@@ -310,7 +317,7 @@ bool Session::addWriter(std::unique_ptr<wavedb::WaveformWriter> writer,
         return false;
     }
 
-    writer->setScope(scope);
+    for (const std::string& selected : scopes) writer->addScope(selected);
 
     std::string error;
     if (!writer->open(path, error)) {
@@ -329,7 +336,7 @@ bool Session::openVcd(const std::filesystem::path& path) {
         return false;
     }
 
-    return addWriter(std::make_unique<wavedb::VcdWriter>(*image, kernel->arena(), scale_), path);
+    return addWriter(std::make_unique<wavedb::VcdWriter>(*image, kernel->arena(), scale), path);
 }
 
 bool Session::openFst(const std::filesystem::path& path) {
@@ -338,7 +345,7 @@ bool Session::openFst(const std::filesystem::path& path) {
         return false;
     }
 
-    return addWriter(std::make_unique<wavedb::FstWriter>(*image, kernel->arena(), scale_), path);
+    return addWriter(std::make_unique<wavedb::FstWriter>(*image, kernel->arena(), scale), path);
 }
 
 void Session::closeWaveforms() {

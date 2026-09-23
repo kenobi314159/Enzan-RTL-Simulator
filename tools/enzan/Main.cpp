@@ -38,6 +38,14 @@
 #include "wavedb/VcdWriter.h"
 #endif
 
+#ifdef ENZAN_WITH_TCL
+#include "control/Commands.h"
+#include "control/Interpreter.h"
+#include "control/Session.h"
+
+#include <unistd.h>
+#endif
+
 namespace {
 
 /// Exit statuses. `Usage` is distinct from a simulation failure so that scripts can tell
@@ -74,6 +82,19 @@ Options:
   -I, --incdir <dir>      Add a directory to the `include search path.
       --dump-stats        Print instruction and delta counts when the run ends.
 
+Control language:
+      --do <script>       Run a Tcl script and exit with what `quit` asked for. The script
+                          drives everything: `vlog`, `vsim`, `run`, `examine` and the rest of
+                          the vocabulary in DESIGN_GUIDE.md section 8.1. Anything else on the
+                          command line is passed to the script as $argv.
+  -i, --interactive       Read commands from the standard input. Combined with --do, the
+                          script runs first and the prompt follows it.
+
+The control language is the whole interface when either of those is given, so the options
+above are refused alongside them rather than quietly becoming a second way to say the same
+thing. `vlog design.sv`, `vsim tb`, `run -all` is the shortest script that does what the
+options above do.
+
 The normative specification, including the milestone roadmap, is DESIGN_GUIDE.md in the
 source tree.
 )";
@@ -101,9 +122,11 @@ struct Invocation {
     std::filesystem::path fstPath;
     std::string waveformScope;
     std::filesystem::path listenPath;
+    std::filesystem::path scriptPath;
     std::int8_t timeExponent = -12;
     std::uint32_t deltaLimit = 10'000;
     bool dumpStatistics = false;
+    bool interactive = false;
 };
 
 /// Parses a time unit name into its power-of-ten exponent.
@@ -246,6 +269,18 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
+        if (argument == "--do") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.scriptPath = value;
+            continue;
+        }
+
+        if (argument == "-i" || argument == "--interactive") {
+            invocation.interactive = true;
+            continue;
+        }
+
         if (argument.starts_with('-')) {
             std::cerr << "enzan: unrecognised option '" << argument << "'\n"
                       << "Try 'enzan --help' for the available options.\n";
@@ -383,6 +418,91 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
 
 #endif // ENZAN_WITH_SYSTEMVERILOG
 
+#ifdef ENZAN_WITH_TCL
+
+/// Reads commands from the standard input until end of file or `quit`.
+///
+/// A line at a time rather than a readline-style editor: a line editor is a dependency and a
+/// terminal-handling problem, and the shell a user drives this from already has one through
+/// `rlwrap`. The prompt is printed only to a terminal, so that a script piped in produces a
+/// transcript with nothing in it that was not asked for.
+void readCommands(enzan::control::Interpreter& interpreter, enzan::SourceManager& sources) {
+    const bool attached = ::isatty(STDIN_FILENO) != 0;
+    std::string pending;
+
+    while (!interpreter.stopRequested()) {
+        if (attached) std::cout << (pending.empty() ? "enzan> " : "     > ") << std::flush;
+
+        std::string line;
+        if (!std::getline(std::cin, line)) break;
+
+        pending += line;
+        pending += '\n';
+
+        // A `proc` or an `if` typed across several lines is evaluated once it is finished,
+        // which is what the completeness test is for.
+        if (!enzan::control::Interpreter::isComplete(pending)) continue;
+
+        const enzan::BufferId buffer = sources.addBuffer("<stdin>", pending);
+        const enzan::control::EvalResult result = interpreter.evaluateBuffer(buffer, pending);
+        pending.clear();
+
+        if (result.status == enzan::control::EvalStatus::Error) {
+            interpreter.reportFailure(result);
+            continue;
+        }
+        if (!result.value.empty()) std::cout << result.value << '\n';
+    }
+
+    // An unfinished command at end of input is a truncated script, not an empty one: saying so
+    // beats exiting successfully having silently dropped it.
+    if (!pending.empty() && !enzan::control::Interpreter::isComplete(pending))
+        std::cerr << "enzan: the input ended in the middle of a command\n";
+}
+
+/// Runs a script, an interactive session, or both.
+ExitStatus control(const Invocation& invocation, enzan::SourceManager& sources,
+                   enzan::DiagnosticEngine& diagnostics) {
+    enzan::control::Session session(sources, diagnostics);
+    enzan::control::Interpreter interpreter(diagnostics);
+    if (!interpreter.valid()) return ExitStatus::Failure;
+
+    enzan::control::registerCommands(interpreter, session, sources);
+
+    // Whatever else was on the command line is the script's, not the driver's. Collected from
+    // the positional arguments wherever they appeared, so that `--do` does not have to come
+    // first for them to be recognised.
+    std::string argumentList;
+    for (const std::filesystem::path& argument : invocation.files) {
+        if (!argumentList.empty()) argumentList += ' ';
+        argumentList += argument.string();
+    }
+    interpreter.setVariable("argv", argumentList);
+    interpreter.setVariable("argc", std::to_string(invocation.files.size()));
+
+    if (!invocation.scriptPath.empty()) {
+        const enzan::control::EvalResult result =
+            interpreter.evaluateFile(invocation.scriptPath, sources);
+        if (result.status == enzan::control::EvalStatus::Error) {
+            interpreter.reportFailure(result);
+            // The prompt is still offered after a failed script, because that is the moment a
+            // user most wants to look at what the design was left holding.
+            if (!invocation.interactive) return ExitStatus::Failure;
+        }
+    }
+
+    if (invocation.interactive && !interpreter.stopRequested()) readCommands(interpreter, sources);
+
+    // Finished here as well as by `quit`, for the session that ended at end of input.
+    session.closeWaveforms();
+
+    if (interpreter.stopRequested() && interpreter.exitStatus() != 0) return ExitStatus::Failure;
+    if (session.exitStatus() != 0) return ExitStatus::Failure;
+    return ExitStatus::Success;
+}
+
+#endif // ENZAN_WITH_TCL
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -404,7 +524,38 @@ int main(int argc, char** argv) {
     case ParseOutcome::Run: break;
     }
 
-    if (invocation.files.empty()) {
+    const bool scripted = !invocation.scriptPath.empty() || invocation.interactive;
+
+    // The control language is the whole interface when it is in play. Section 8.1 makes Tcl
+    // *the* control language, and accepting the options above alongside it would leave two
+    // ways to say the same thing that have to stay compatible with each other for ever.
+    if (scripted) {
+        const char* conflicting = nullptr;
+        if (!invocation.topModule.empty())
+            conflicting = "--top";
+        else if (invocation.runUntil.has_value())
+            conflicting = "--run";
+        else if (!invocation.vcdPath.empty())
+            conflicting = "--vcd";
+        else if (!invocation.fstPath.empty())
+            conflicting = "--fst";
+        else if (!invocation.waveformScope.empty())
+            conflicting = "--wave-scope";
+        else if (!invocation.listenPath.empty())
+            conflicting = "--listen";
+        else if (!invocation.defines.empty())
+            conflicting = "--define";
+        else if (!invocation.includeDirectories.empty())
+            conflicting = "--incdir";
+
+        if (conflicting != nullptr) {
+            std::cerr << "enzan: " << conflicting
+                      << " cannot be combined with '--do' or '--interactive'; the script is "
+                         "the whole interface, and `vlog`, `vsim`, `run`, `vcd file` and "
+                         "`log` are what say these things inside one\n";
+            return static_cast<int>(ExitStatus::Usage);
+        }
+    } else if (invocation.files.empty()) {
         std::cerr << "enzan: no source files were given\n"
                   << "Try 'enzan --help' for the available options.\n";
         return static_cast<int>(ExitStatus::Usage);
@@ -432,6 +583,17 @@ int main(int argc, char** argv) {
     enzan::DiagnosticEngine diagnostics(sources);
     enzan::TextDiagnosticConsumer consumer(sources, std::cerr);
     diagnostics.addConsumer(consumer);
+
+    if (scripted) {
+#ifdef ENZAN_WITH_TCL
+        return static_cast<int>(control(invocation, sources, diagnostics));
+#else
+        diagnostics.report(
+            enzan::DiagCode::NotYetImplemented, enzan::SourceLocation(),
+            "the control language in a build configured with -DENZAN_ENABLE_TCL=OFF");
+        return static_cast<int>(ExitStatus::Failure);
+#endif
+    }
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
     return static_cast<int>(simulate(invocation, sources, diagnostics));

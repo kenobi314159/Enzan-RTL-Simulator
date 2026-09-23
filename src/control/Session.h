@@ -11,6 +11,7 @@
 #include <iosfwd>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -79,10 +80,17 @@ public:
 
     [[nodiscard]] std::ostream& transcriptStream() const;
 
-    /// Sets the time unit delays are counted in. Takes effect at the next `vsim`.
-    void setTimeScale(runtime::TimeScale scale) noexcept { scale_ = scale; }
+    /// The engine every phase of this session reports through.
+    ///
+    /// Exposed so that a command which opens a file of its own — a file list, a do script —
+    /// reports its failure exactly as an analysis failure is reported, through one engine
+    /// (section 10.6) rather than as a bare string.
+    [[nodiscard]] DiagnosticEngine& diagnosticEngine() const noexcept { return diagnostics; }
 
-    [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale_; }
+    /// Sets the time unit delays are counted in. Takes effect at the next `vsim`.
+    void setTimeScale(runtime::TimeScale unit) noexcept { scale = unit; }
+
+    [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
 
     /// Sets the delta cycles allowed at one timestamp. Takes effect at the next `vsim`.
     void setDeltaLimit(std::uint32_t limit) noexcept { deltaLimit = limit; }
@@ -179,11 +187,13 @@ public:
     /// Releases a forced signal, returning false when it was not forced.
     bool release(std::uint32_t signalIndex);
 
-    /// Returns the paths of every signal matching a glob pattern, in declaration order.
+    /// Returns every signal name matching a glob pattern, sorted by path.
     ///
-    /// `*` matches any run of characters including `/`, and `?` matches one. Declaration
-    /// order rather than sorted, because it is the order the design declares them in and
-    /// section 3.8 requires an ordering that reproduces.
+    /// `*` matches any run of characters including `/`, and `?` matches one.
+    ///
+    /// Over names rather than over signals: a collapsed port gives one slot two hierarchical
+    /// names, and a user asking about `/tb/u_dut/*` means the DUT's ports whether or not the
+    /// storage for them lives in the parent.
     [[nodiscard]] std::vector<std::string> findSignals(std::string_view pattern) const;
 
     /// Returns the paths of every instance matching a glob pattern, in elaboration order.
@@ -193,14 +203,17 @@ public:
     // Waveforms — `log`, `vcd file`, `fst file`
     // -----------------------------------------------------------------------
 
-    /// Restricts waveform recording to `path` and what is inside it. Empty records all.
+    /// Adds `path` and what is inside it to what waveform files record.
     ///
-    /// Applies to writers opened after it. One subtree rather than a set, which is what the
-    /// writers support today (section 7.1); asking for a second one is refused rather than
-    /// silently widened to the whole design.
-    bool setWaveformScope(std::string_view path);
+    /// This is `log -r` and `add wave`: a selection is built up out of subtrees and individual
+    /// signals, and a signal's own path is a scope holding exactly that signal (section 7.1).
+    /// An empty path means the whole design and replaces everything selected so far.
+    ///
+    /// Refused once a file is open, because the signals a file declares are written into its
+    /// header and cannot be added to afterwards.
+    bool addWaveformScope(std::string_view path);
 
-    [[nodiscard]] const std::string& waveformScope() const noexcept { return scope; }
+    [[nodiscard]] std::span<const std::string> waveformScopes() const noexcept { return scopes; }
 
     /// Opens a VCD file and records into it from now on. Returns false having reported.
     bool openVcd(const std::filesystem::path& path);
@@ -223,9 +236,8 @@ public:
 
 private:
     /// Parses `literal` to the width of `signalIndex`, reporting through `error`.
-    [[nodiscard]] std::optional<eir::BitVector> parseValue(std::uint32_t signalIndex,
-                                                           std::string_view literal,
-                                                           std::string& error) const;
+    [[nodiscard]] std::optional<eir::BitVector>
+    parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;
 
     /// Opens `writer` on `path` and attaches it to the kernel.
     bool addWriter(std::unique_ptr<wavedb::WaveformWriter> writer,
@@ -249,8 +261,10 @@ private:
     /// Open waveform files. Owned here so that `quit` and the destructor both finish them.
     std::vector<std::unique_ptr<wavedb::WaveformWriter>> writers;
 
-    std::string scope;
-    runtime::TimeScale scale_;
+    /// What waveform files record, or empty for the whole design.
+    std::vector<std::string> scopes;
+
+    runtime::TimeScale scale;
     runtime::RunStatus status = runtime::RunStatus::Quiescent;
     std::uint32_t deltaLimit = 10'000;
 };

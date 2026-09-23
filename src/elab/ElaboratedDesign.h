@@ -132,6 +132,20 @@ public:
     /// Every name that resolves to `slotIndex`, in sorted order.
     [[nodiscard]] std::vector<std::string> slotNames(std::uint32_t slotIndex) const;
 
+    /// Every hierarchical name in the design, each with the slot it resolves to.
+    ///
+    /// Exposed for the commands that search names rather than look one up — `find signals`,
+    /// and the GUI's filter. Searching through `slotNames` per slot would be quadratic in a
+    /// design's signal count, which on the designs Enzan targets is the difference between a
+    /// command and a hang.
+    ///
+    /// Ordered by path, so that a search reproduces (DESIGN_GUIDE.md section 3.8), and
+    /// containing *both* names of a collapsed port because both are real.
+    [[nodiscard]] const std::map<std::string, std::uint32_t, std::less<>>&
+    namesByPath() const noexcept {
+        return slotsByPath;
+    }
+
 private:
     friend class Elaborator;
 

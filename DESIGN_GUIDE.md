@@ -600,6 +600,35 @@ that existing user muscle memory and existing scripts transfer with minimal
 friction: `vlog`, `vcom`, `vsim`, `run`, `restart`, `add wave`, `log`, `force`,
 `examine`, `radix`, `find`, `when`, `quit`.
 
+Where Enzan has no equivalent of a Questa concept, the command is **absent
+rather than approximated**. A script that relies on one then fails at the
+command, which the user can see and fix, instead of producing a different
+simulation, which they cannot. `vcom` is refused with the milestone it arrives
+at rather than ignored, for exactly this reason.
+
+Three of the commands have a definition worth writing down, because the obvious
+reading of each is wrong:
+
+- **`run` with no argument runs to the end**, the same as `run -all`. Questa
+  advances by a configurable default run length instead; Enzan has no such
+  setting, and inventing one so that the two spellings could differ would be a
+  setting nobody asked for.
+- **A time in a coarser unit than the precision is converted; a finer one is
+  refused.** `run 1ps` on a nanosecond design would round to `run 0`, and a
+  script that appears to run and does nothing is worse than one that stops. The
+  conversion is integer throughout, because 3.1 puts no floating-point time
+  anywhere in the kernel.
+- **`examine` with no radix names an enumerated value** — `S_SEND`, not
+  `3'h2` — which is what the wave window shows (10.3) and what a reader asking
+  about a state register means. A radix asks for the encoding instead, and
+  `radix symbolic` goes back.
+
+A command reports a user error through its Tcl result rather than through the
+diagnostic engine, and a failure of the phase it invoked through the engine.
+The distinction matters: a script probing for a signal that may not exist can
+catch a Tcl error, and reporting it as a diagnostic would raise the error count
+and make an otherwise clean run exit as a failed one.
+
 **All user configuration is Tcl.** There is no second configuration format. The
 GUI theme is a Tcl script setting colour variables; the window layout is a Tcl
 script. This keeps one configuration language across the whole tool and adds no

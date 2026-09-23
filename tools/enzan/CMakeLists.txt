@@ -12,6 +12,10 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
                                       enzan::runtime enzan::wavedb enzan::ipc_server)
 endif()
 
+if(ENZAN_ENABLE_TCL)
+  target_link_libraries(enzan PRIVATE enzan::control enzan::control_session)
+endif()
+
 if(ENZAN_BUILD_TESTS)
   # End-to-end checks on the executable itself. The unit tests cover the version
   # strings; these cover the thing a user actually invokes, including the error
@@ -61,4 +65,37 @@ if(ENZAN_BUILD_TESTS)
   add_test(NAME cli.enzan.listen_mentioned_in_help COMMAND enzan --help)
   set_tests_properties(cli.enzan.listen_mentioned_in_help PROPERTIES PASS_REGULAR_EXPRESSION
                                                                      "--listen <socket>")
+
+  # The control language is the whole interface when it is in play (section 8.1), so the
+  # switches that would be a second way to say the same thing are refused alongside it.
+  add_test(NAME cli.enzan.do_with_top_status COMMAND enzan --do script.do --top tb)
+  set_tests_properties(cli.enzan.do_with_top_status PROPERTIES WILL_FAIL TRUE)
+
+  add_test(NAME cli.enzan.do_with_top_message COMMAND enzan --do script.do --top tb)
+  set_tests_properties(cli.enzan.do_with_top_message
+                       PROPERTIES PASS_REGULAR_EXPRESSION "cannot be combined")
+
+  add_test(NAME cli.enzan.do_with_run_status COMMAND enzan --do script.do --run 10)
+  set_tests_properties(cli.enzan.do_with_run_status PROPERTIES WILL_FAIL TRUE)
+
+  add_test(NAME cli.enzan.do_needs_a_script COMMAND enzan --do)
+  set_tests_properties(cli.enzan.do_needs_a_script PROPERTIES WILL_FAIL TRUE)
+
+  add_test(NAME cli.enzan.do_mentioned_in_help COMMAND enzan --help)
+  set_tests_properties(cli.enzan.do_mentioned_in_help PROPERTIES PASS_REGULAR_EXPRESSION
+                                                                  "--do <script>")
+
+  if(ENZAN_ENABLE_TCL)
+    add_test(NAME cli.enzan.do_missing_script COMMAND enzan --do no-such-script.do)
+    set_tests_properties(cli.enzan.do_missing_script PROPERTIES WILL_FAIL TRUE)
+
+    # The exit status a script asked for reaches the shell, which is what makes `enzan --do`
+    # usable from a makefile at all.
+    add_test(NAME cli.enzan.quit_code COMMAND enzan --do
+                                              "${CMAKE_CURRENT_SOURCE_DIR}/tests/quit-code.do")
+    set_tests_properties(cli.enzan.quit_code PROPERTIES WILL_FAIL TRUE)
+
+    add_test(NAME cli.enzan.quit_zero COMMAND enzan --do
+                                              "${CMAKE_CURRENT_SOURCE_DIR}/tests/quit-zero.do")
+  endif()
 endif()

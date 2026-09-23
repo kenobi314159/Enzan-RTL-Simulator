@@ -31,31 +31,31 @@ Enzan targets **Linux only**; Windows and macOS support are explicit non-goals.
 | Python 3 | 3.8 | optional; only for the waveform structure checks in the test suite |
 | GoogleTest | 1.12 | built from source automatically if absent |
 | Qt 6 | 6.4 | only for the GUI, which is off by default |
-| Tcl | 8.6 | only for the GUI, whose theme is a Tcl script |
+| Tcl | 8.6 | the control language; also the GUI theme |
 | ccache | any | optional; used automatically when present |
 
 On Arch and derivatives:
 
 ```sh
-sudo pacman -S --needed base-devel cmake ninja zlib gtest ccache
+sudo pacman -S --needed base-devel cmake ninja zlib gtest tcl ccache
 # for the GUI:
-sudo pacman -S --needed qt6-base tcl
+sudo pacman -S --needed qt6-base
 ```
 
 On Debian and Ubuntu:
 
 ```sh
-sudo apt install build-essential cmake ninja-build zlib1g-dev libgtest-dev ccache
+sudo apt install build-essential cmake ninja-build zlib1g-dev libgtest-dev tcl-dev ccache
 # for the GUI:
-sudo apt install qt6-base-dev tcl-dev
+sudo apt install qt6-base-dev
 ```
 
 On Fedora:
 
 ```sh
-sudo dnf install gcc-c++ cmake ninja-build zlib-devel gtest-devel ccache
+sudo dnf install gcc-c++ cmake ninja-build zlib-devel gtest-devel tcl-devel ccache
 # for the GUI:
-sudo dnf install qt6-qtbase-devel tcl-devel
+sudo dnf install qt6-qtbase-devel
 ```
 
 If a dependency is missing, CMake stops with a message naming the package to
@@ -71,14 +71,57 @@ gtkwave wave.fst
 `--vcd` writes a VCD instead, and both may be given at once. Prefer FST unless you want to read or
 diff the file yourself: it is far smaller on a real design and a viewer can seek in it.
 
-`enzan --help` lists the options. The control language is Tcl with a Questa-style command
-vocabulary, and that arrives with M3; the command line is deliberately minimal until then, so
-that there is not a second control surface to keep compatible with it.
+`enzan --help` lists the options.
+
+### Driving a simulation from a script
+
+The control language is Tcl with a Questa-style command vocabulary, so a script that drives
+Modelsim or Questa reads the same here:
+
+```tcl
+vlog -sv design.sv testbench.sv
+vsim -t ns tb
+
+log -r /tb
+vcd file wave.vcd
+
+run 100 ns
+puts "count is [examine -radix decimal /tb/count]"
+
+force /tb/enable 1'b0
+run 50 ns
+noforce /tb/enable
+
+run -all
+quit
+```
+
+`enzan --do script.do` runs it and exits with what `quit` asked for, so a makefile can tell a
+passing regression from a failing one. Anything else on the command line reaches the script as
+`$argv`. `enzan -i` reads commands from the standard input instead, and the two combine: the
+script runs, then the prompt.
+
+The vocabulary is `vlog`, `vsim`, `run`, `restart`, `examine`, `force`, `noforce`, `deposit`,
+`log`, `add wave`, `vcd file`, `fst file`, `find`, `radix`, `do` and `quit`. `vlog` reads `.f`
+file lists with `-f`, understands `+incdir+`, `+define+` and `-sv`, and works out the compile
+order itself — a package can be named after the module that imports it. `vcom` is refused
+rather than ignored until VHDL arrives at M6, so that a mixed-language script fails at the
+command instead of simulating half a design.
+
+Three commands are worth knowing precisely. `run` with nothing runs to the end, like
+`run -all`. A time in a coarser unit than the simulation's is converted and a finer one is
+refused, because turning `run 1ps` into `run 0` on a nanosecond design would make a script
+appear to run and do nothing. And `examine` with no radix gives an enumerated signal the name
+its type uses — `S_SEND`, not `3'h2` — with `-radix` or the `radix` command asking for the
+encoding.
+
+Because the script is the whole interface, `--do` and `-i` refuse the options above rather
+than becoming a second way to say the same thing.
 
 ### Running a simulation under the GUI
 
-The GUI is built with `-DENZAN_BUILD_GUI=ON` — off by default, because Qt 6 and Tcl are a
-sizeable thing to install for someone working on the kernel. With it built:
+The GUI is built with `-DENZAN_BUILD_GUI=ON` — off by default, because Qt 6 is a sizeable
+thing to install for someone working on the kernel. With it built:
 
 ```sh
 enzan-gui --top tb design.sv testbench.sv
@@ -149,9 +192,11 @@ three colours.
 | Wave window: `enum` values shown by name | yes, with the radix menu to see the encoding |
 | Wave window: parameters and localparams as constant rows | yes, listed in Objects beside the signals |
 | Attaching a local GUI to a kernel running elsewhere | yes, over a forwarded socket |
+| Tcl control layer: `vlog`, `vsim`, `run`, `examine`, `force`, `log`, `find`, `do` | yes, from a script or a prompt |
+| `.f` file lists and automatic compile order | yes |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
-| Tcl control layer, source stepping, VHDL, VPI | not yet — M3, M3, M6, M4 |
+| Source stepping, VHDL, VPI | not yet — M3, M6, M4 |
 
 Anything unsupported is reported with a source location and the construct named, never
 mistranslated: a partially translated design would simulate and give the wrong answer, which is
@@ -199,7 +244,7 @@ cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
 | `ENZAN_BUILD_TESTS` | `ON` | build the unit test suites |
 | `ENZAN_ENABLE_SYSTEMVERILOG` | `ON` | build the slang-based frontend (M1) |
 | `ENZAN_ENABLE_VHDL` | `OFF` | build the NVC-based frontend (M6) |
-| `ENZAN_ENABLE_TCL` | `OFF` | build the Tcl control layer (M3) |
+| `ENZAN_ENABLE_TCL` | `ON` | build the Tcl control layer; `--do` and `-i` need it |
 | `ENZAN_BUILD_GUI` | `OFF` | build the Qt 6 front end; needs Qt 6 and Tcl |
 | `ENZAN_ENABLE_JIT` | `OFF` | build the LLVM JIT backend (M8) |
 | `ENZAN_WERROR` | `OFF` | treat warnings as errors, as CI does |

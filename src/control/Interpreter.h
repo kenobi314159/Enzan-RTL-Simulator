@@ -156,6 +156,13 @@ public:
     /// Evaluates `text` as though it had come from `buffer`, so failures point into it.
     EvalResult evaluateBuffer(BufferId buffer, std::string_view text);
 
+    /// True when `script` is a complete command rather than one waiting for a closing brace.
+    ///
+    /// What an interactive prompt asks between lines, so that a `proc` or an `if` typed across
+    /// several lines is evaluated once it is finished rather than reported as a syntax error
+    /// on the first one.
+    [[nodiscard]] static bool isComplete(std::string_view script);
+
     /// Reports `result` as a control-layer diagnostic, unless it succeeded.
     ///
     /// The single place a failed evaluation becomes user-visible output, so that a script run

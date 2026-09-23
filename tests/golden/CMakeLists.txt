@@ -117,3 +117,23 @@ if(Python3_Interpreter_FOUND AND ENZAN_FST2VCD)
 else()
   message(STATUS "fst2vcd not found; the FST round-trip checks are skipped")
 endif()
+
+# ---------------------------------------------------------------------------
+# The control language
+# ---------------------------------------------------------------------------
+#
+# M3's exit criterion is a design driven end to end from a script (section 18), so there is a
+# case that does exactly that and nothing else: no command-line switch appears in it, and every
+# step — analysis, elaboration, recording, running, examining, forcing and restarting — is a
+# command from the vocabulary of section 8.1.
+if(ENZAN_ENABLE_TCL)
+  add_test(NAME golden.counter.do
+           COMMAND enzan --do "${CMAKE_CURRENT_SOURCE_DIR}/do/counter.do"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv"
+                   "${CMAKE_CURRENT_BINARY_DIR}/counter-from-script.vcd")
+  set_tests_properties(
+    golden.counter.do
+    PROPERTIES PASS_REGULAR_EXPRESSION "PASS counter.do"
+               FAIL_REGULAR_EXPRESSION "FAIL"
+               TIMEOUT 60)
+endif()

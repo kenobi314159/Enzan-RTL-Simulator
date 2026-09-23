@@ -93,10 +93,15 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 # contributor at the current milestone is not asked to install dependencies
 # nothing yet uses. The milestone each one belongs to is named here because
 # turning one on before its milestone will simply find nothing to build.
+#
+# The Tcl control layer is on, because from M3 it is how the kernel is driven
+# rather than an optional extra (DESIGN_GUIDE.md section 8.1). Tcl is small and
+# packaged everywhere; a build without it still produces a working `enzan`, with
+# `--do` and `--interactive` reporting what is missing.
 option(ENZAN_BUILD_TESTS "Build the unit test suites" ON)
 option(ENZAN_ENABLE_SYSTEMVERILOG "Build the slang-based SystemVerilog frontend (M1)" ON)
 option(ENZAN_ENABLE_VHDL "Build the NVC-based VHDL frontend (M6)" OFF)
-option(ENZAN_ENABLE_TCL "Build the embedded Tcl control layer (M3)" OFF)
+option(ENZAN_ENABLE_TCL "Build the embedded Tcl control layer (M3)" ON)
 option(ENZAN_BUILD_GUI "Build the Qt 6 graphical front end (M2)" OFF)
 option(ENZAN_ENABLE_JIT "Build the LLVM JIT backend (M8)" OFF)
 
