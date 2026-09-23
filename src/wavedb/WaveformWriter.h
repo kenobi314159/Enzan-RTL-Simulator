@@ -36,7 +36,8 @@ public:
 
     ~WaveformWriter() override;
 
-    /// Restricts recording to signals whose hierarchical path is `pathPrefix` or lies inside it.
+    /// Restricts recording to signals whose hierarchical path is `pathPrefix` or lies inside it,
+    /// replacing any selection already made.
     ///
     /// Selective capture is a requirement, not a convenience: on a 100k-LUT design, recording
     /// everything exhausts memory within seconds of simulated time (DESIGN_GUIDE.md section 7.1).
@@ -45,6 +46,18 @@ public:
     ///
     /// Must be called before `open`.
     void setScope(std::string_view pathPrefix);
+
+    /// Adds `pathPrefix` to what is recorded, keeping what was already selected.
+    ///
+    /// A list rather than one prefix, because that is what the control language asks for: `log
+    /// -r /tb/u_dut` names a subtree and `add wave /tb/clk` names one signal, and a reader
+    /// builds up a selection out of both. A path that is a signal's own path matches that
+    /// signal and nothing else, so the two cases need no distinction here.
+    ///
+    /// Adding an empty prefix records the whole design, which is what `log -r /*` means.
+    ///
+    /// Must be called before `open`.
+    void addScope(std::string_view pathPrefix);
 
     /// Opens `path`, declares the recorded signals, and dumps their values at time zero.
     ///
@@ -137,6 +150,9 @@ protected:
     virtual void closeOutput() = 0;
 
 private:
+    /// True when `path` lies in any selected scope, or when nothing has been selected.
+    [[nodiscard]] bool isRecorded(std::string_view path) const;
+
     /// Chooses which signals to record, honouring the scope filter.
     void selectSignals();
 
@@ -150,7 +166,9 @@ private:
     const runtime::Arena* stateArena;
     runtime::TimeScale scale;
 
-    std::string scopePrefix;
+    /// What to record, or empty to record everything. Ordered, not a set: the declaration
+    /// order of a waveform file is observable, and section 3.8 requires it to reproduce.
+    std::vector<std::string> scopePrefixes;
 
     std::vector<std::uint32_t> recorded;
 

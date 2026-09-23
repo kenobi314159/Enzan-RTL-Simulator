@@ -113,6 +113,15 @@ ENZAN_DIAG(EnvironmentVariableNotSet, 6012, Error,
            "into one that silently does not exist")
 ENZAN_DIAG(CompileOrderCycle, 6013, Error,
            "these files depend on each other and cannot be put in an analysis order: {}")
+ENZAN_DIAG(NothingAnalysed, 6014, Error,
+           "no sources have been analysed; run `vlog` before `vsim`")
+ENZAN_DIAG(NoSimulation, 6015, Error,
+           "`{}` needs a simulation; run `vsim <top>` first")
+ENZAN_DIAG(NoSuchSignal, 6016, Error, "the design has no signal named '{}'")
+ENZAN_DIAG(WaveformScopeAfterOpen, 6017, Error,
+           "the recording scope cannot be changed once a waveform file is open; the signals a "
+           "file declares are written into its header")
+ENZAN_DIAG(BadCommandArgument, 6018, Error, "{}")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 

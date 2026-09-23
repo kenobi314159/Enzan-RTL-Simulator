@@ -555,7 +555,10 @@ not to justify threading the kernel now.
 - **Selective capture.** Only signals within an active logging scope are
   recorded. On a 100k-LUT design, recording everything exhausts memory within
   seconds of simulated time. Logging scope is user-controlled (`log -r /*` and
-  equivalents).
+  equivalents), and is a *list* of paths rather than one: a reader builds a
+  selection out of a subtree and a handful of individual signals, which is what
+  `log -r` and `add wave` respectively name. A path that is a signal's own path
+  selects that signal, so the two cases need no distinction in the writer.
 - **Live streaming.** The GUI displays a waveform while the simulation
   progresses, so the database MUST support concurrent append and read.
 - **Random access by time**, to redraw an arbitrary zoom window without
