@@ -696,6 +696,30 @@ downsampling with min/max bucketing rather than iterating transitions. Getting
 this wrong makes the viewer unusable on exactly the large designs Enzan targets,
 and it is difficult to retrofit.
 
+That bounds a repaint. What bounds *scrolling* is a second rule: **a vertical
+scroll MUST NOT repaint what it has not changed.** Scrolling moves where each
+trace sits and changes not one of them, so the window moves the pixels it
+already has and paints only the strip that has come into view — which is what
+the signal list beside it already did, and the reason the two used to feel so
+different. Three things make it hold, and each is worth stating because each was
+a separate cost in the same place:
+
+- A row's *summary* — one entry per pixel column — depends on the row, the time
+  range and the width, and none of those change when the list scrolls, so it is
+  kept between repaints.
+- A row's *drawn trace* depends on the same three, so it too is kept, as a
+  picture, and blitted rather than drawn again. Drawing a bus means a segment, a
+  value measured against the font and a string laid out for every run of columns
+  across the window; that is the expensive half and it was being repeated to put
+  the same traces one line up.
+- The distance to move by is **measured from the list**, by asking where a row
+  the canvas has drawn sits now, rather than worked out from the scroll bar.
+  Deriving it would mean assuming whether the bar counts items or pixels and
+  whether every row is the same height, and a blit that moved by the wrong
+  amount leaves traces sitting against the wrong names — a window that looks
+  entirely plausible and is lying. Anything the geometry cannot account for
+  repaints instead: slow is recoverable, wrong is not.
+
 One-pixel rules — the grid, the ruler ticks, the line between rows — are
 *filled*, not stroked. The pixels are the same either way and the fill path
 writes them directly, where the stroker sets up a pen and a clip per call; on a

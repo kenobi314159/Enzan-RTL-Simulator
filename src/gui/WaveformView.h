@@ -17,6 +17,7 @@
 #include <QWidget>
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -162,6 +163,15 @@ public:
     /// change it is meant to be guarding.
     [[nodiscard]] std::uint64_t summariesComputed() const noexcept { return summaryCount; }
 
+    /// How far the last scroll moved what was already drawn, in pixels.
+    ///
+    /// Exposed because this is the one thing here that can be *wrong* rather than merely slow:
+    /// a blit by the wrong amount leaves traces against the wrong names and the window looks
+    /// plausible while lying. Reading the moved pixels back is not possible — asking a widget
+    /// for its picture re-renders it — so what a test can check is that the distance moved was
+    /// the distance the list moved.
+    [[nodiscard]] int lastScrollShift() const noexcept { return lastShift; }
+
 protected:
 private:
     /// One row's column summary and the picture drawn from it, with the repaint each was last
@@ -213,6 +223,24 @@ private:
     /// The cache entry for `rowId`, with its summary filled in, or nullptr when there is
     /// nothing to draw. Valid until the next call.
     [[nodiscard]] CachedSamples* sampleRow(int rowId, const QRect& area);
+
+    /// Moves what is already drawn instead of drawing it again, when the list scrolls.
+    ///
+    /// A vertical scroll does not change a single trace; it changes where each one sits. The
+    /// pixels are already correct one line further down, so they are blitted and only the
+    /// strip that has come into view is painted — which is what `QTreeView` does for its own
+    /// rows and the reason the list always felt cheaper than the canvas beside it.
+    void onRowsScrolled();
+
+    /// How far the list has moved since the canvas last agreed with it, or nothing when that
+    /// cannot be told and the canvas must be repainted instead.
+    ///
+    /// Measured from the tree rather than worked out from the scroll bar: the shift is asked
+    /// of a row that was on screen, by comparing where it is now with where the canvas last
+    /// drew it. Deriving it from the bar's value instead would mean knowing whether it counts
+    /// items or pixels and whether every row is the same height — three assumptions, each of
+    /// which would put the traces against the wrong names if it were ever wrong.
+    [[nodiscard]] std::optional<int> listShift() const;
 
     /// True for a row whose value is a constant of the elaborated design rather than a trace.
     [[nodiscard]] bool isParameterRow(int rowId) const;
@@ -298,6 +326,14 @@ private:
 
     /// Counts summaries computed, for `summariesComputed`.
     std::uint64_t summaryCount = 0;
+
+    /// A row the canvas has drawn, and where it drew it, so that the next scroll can measure
+    /// how far the list has moved by asking where that row is now.
+    int anchorRowId = -1;
+    int anchorTop = 0;
+
+    /// How far the last scroll moved the contents, for the test that says it matched the list.
+    int lastShift = 0;
 
     /// Counts repaints, so an entry knows how long it has been since it was wanted.
     int paintCounter = 0;

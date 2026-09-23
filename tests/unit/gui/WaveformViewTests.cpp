@@ -22,6 +22,7 @@
 #include <QPixmap>
 #include <QScrollBar>
 #include <QTreeView>
+#include <cstdio>
 
 #include <map>
 #include <optional>
@@ -684,4 +685,142 @@ TEST_F(WaveformViewTest, RemovingABitSummarisesItsBusAgain) {
         << "the bus has to be summarised again without the bit that was removed";
 }
 
+// ---------------------------------------------------------------------------
+// Scrolling moves what is drawn
+// ---------------------------------------------------------------------------
+//
+// A vertical scroll does not change a single trace, only where each one sits, so the canvas
+// blits what it has and paints the strip that came into view. That is worth having and it is
+// the one optimisation here that can be *wrong* rather than merely slow: a blit by the wrong
+// amount leaves traces against the wrong names, and the window looks plausible while lying.
+//
+// So the test is the only one that settles it — what the window shows after scrolling has to
+// be pixel for pixel what it shows when made to draw the same thing from scratch.
+
+class ScrollingCanvasTest : public WaveformViewTest {
+protected:
+    /// Fills the window with enough rows to scroll through, each with a trace of its own.
+    void fillWithRows(int count) {
+        const QVector<SignalInfo> available = objectsOf(QStringLiteral("/tb"));
+        ASSERT_FALSE(available.isEmpty());
+
+        QVector<std::uint32_t> wanted;
+        for (int i = 0; i < count; ++i) {
+            const SignalInfo& info = available[i % available.size()];
+            model->addSignal(info);
+            if (!info.isParameter()) wanted.push_back(info.signalIndex);
+        }
+        session->subscribe(wanted);
+
+        session->run(2000);
+        ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 2000; }));
+
+        treeView->resize(200, 300);
+        view->resize(600, 300);
+        view->zoomFit();
+        QCoreApplication::processEvents();
+    }
+
+    /// What the canvas shows, after letting every queued repaint happen.
+    [[nodiscard]] QImage shown() {
+        QCoreApplication::processEvents();
+        return view->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    }
+
+    /// What the canvas shows when made to draw all of it again.
+    [[nodiscard]] QImage drawnAfresh() {
+        view->update();
+        return shown();
+    }
+};
+
+TEST_F(ScrollingCanvasTest, TheBlitMovesTheContentsAsFarAsTheListMoved) {
+    fillWithRows(40);
+    QScrollBar* bar = treeView->verticalScrollBar();
+    ASSERT_GT(bar->maximum(), 8) << "there has to be something to scroll through";
+
+    static_cast<void>(shown());
+
+    // A row that stays on screen throughout, so that how far *it* moved is how far everything
+    // moved. Comparing pictures instead would prove nothing: asking a widget for its picture
+    // re-renders it from scratch, which is exactly the path the blit is avoiding.
+    const QModelIndex probe = model->index(3, 0);
+    ASSERT_TRUE(probe.isValid());
+
+    for (int step = 0; step < 5; ++step) {
+        const int before = treeView->visualRect(probe).top();
+        bar->setValue(bar->value() + 1);
+        QCoreApplication::processEvents();
+
+        const int after = treeView->visualRect(probe).top();
+        ASSERT_NE(after, before) << "the list did not actually move on step " << step;
+        EXPECT_EQ(view->lastScrollShift(), after - before)
+            << "the canvas moved its contents a different distance than the list moved, on "
+               "step "
+            << step;
+    }
+
+    // And the other way, which is where a sign error hides.
+    for (int step = 0; step < 4; ++step) {
+        const int before = treeView->visualRect(probe).top();
+        bar->setValue(bar->value() - 1);
+        QCoreApplication::processEvents();
+
+        EXPECT_EQ(view->lastScrollShift(), treeView->visualRect(probe).top() - before)
+            << "going back up moved the contents the wrong way, on step " << step;
+    }
+}
+
+TEST_F(ScrollingCanvasTest, StepsThatArriveFasterThanRepaintsEachMoveTheContentsOnce) {
+    fillWithRows(40);
+    QScrollBar* bar = treeView->verticalScrollBar();
+    static_cast<void>(shown());
+
+    const QModelIndex probe = model->index(3, 0);
+    const int before = treeView->visualRect(probe).top();
+
+    // No repaint in between, which is what a fast scroll delivers: several steps land before
+    // the window has drawn any of them. Each has to move the contents by its own step, so the
+    // canvas has to remember where it left them rather than where it last drew them.
+    bar->setValue(bar->value() + 1);
+    const int first = view->lastScrollShift();
+    bar->setValue(bar->value() + 1);
+    const int second = view->lastScrollShift();
+
+    QCoreApplication::processEvents();
+
+    EXPECT_EQ(first + second, treeView->visualRect(probe).top() - before)
+        << "two steps moved the contents " << first + second << " where the list moved "
+        << treeView->visualRect(probe).top() - before;
+}
+
+TEST_F(ScrollingCanvasTest, AJumpPastAWindowfulIsRepaintedRatherThanBlitted) {
+    fillWithRows(40);
+    QScrollBar* bar = treeView->verticalScrollBar();
+
+    static_cast<void>(shown());
+
+    // Nothing on screen survives a jump this far, so there is nothing worth moving and the
+    // canvas is painted afresh instead.
+    bar->setValue(bar->maximum());
+    QCoreApplication::processEvents();
+    EXPECT_EQ(view->lastScrollShift(), 0);
+
+    // What it drew has to be right either way.
+    EXPECT_EQ(shown(), drawnAfresh());
+}
+
+TEST_F(ScrollingCanvasTest, ScrollingDoesNotSummariseWhatItAlreadyHas) {
+    fillWithRows(40);
+    static_cast<void>(shown());
+
+    const std::uint64_t before = view->summariesComputed();
+
+    QScrollBar* bar = treeView->verticalScrollBar();
+    bar->setValue(bar->value() + 1);
+    static_cast<void>(shown());
+
+    EXPECT_LE(view->summariesComputed() - before, 2U)
+        << "one line down summarises the row that came into view, not the window";
+}
 } // namespace

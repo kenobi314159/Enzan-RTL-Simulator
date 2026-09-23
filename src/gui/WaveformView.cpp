@@ -78,7 +78,7 @@ void WaveformView::setRowView(QTreeView* rowView) {
     // The canvas has no scroll state of its own vertically; it mirrors the tree's, which is
     // what keeps a name and its trace on the same line through every kind of scrolling.
     connect(rows->verticalScrollBar(), &QScrollBar::valueChanged, this,
-            qOverload<>(&QWidget::update));
+            [this](int) { onRowsScrolled(); });
     connect(rows->header(), &QHeaderView::geometriesChanged, this, qOverload<>(&QWidget::update));
 
     // Anything that changes which rows are on screen, or where they are, changes what the
@@ -506,8 +506,14 @@ void WaveformView::resizeEvent(QResizeEvent* event) {
     Q_EMIT rangeChanged();
 }
 
-void WaveformView::paintEvent(QPaintEvent* /*event*/) {
+void WaveformView::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
+
+    // Clipped to what is actually damaged. After a scroll that is one strip rather than the
+    // window, and every fill, blit and line below is then skipped by the raster engine for
+    // free — which is what makes moving the contents cheaper than drawing them again. A
+    // repaint asked for in any other way damages the whole window and nothing is skipped.
+    painter.setClipRect(event->rect());
     painter.fillRect(rect(), theme->color(ThemeColor::WaveBackground));
 
     timeAxis.setWidth(traceArea().width());
@@ -546,6 +552,14 @@ void WaveformView::paintEvent(QPaintEvent* /*event*/) {
     // Worked out once. The tree is asked where each of its rows is, and asking it twice over
     // for the same answer is work for nothing.
     const std::vector<RowGeometry> visible = visibleRows();
+
+    // Where the canvas and the list agree, for the next scroll to measure against.
+    if (visible.empty()) {
+        anchorRowId = -1;
+    } else {
+        anchorRowId = visible.front().rowId;
+        anchorTop = visible.front().top;
+    }
 
     // Backgrounds first and unclipped: a highlight marks the whole row, including the part of
     // it the design has not been simulated to yet.
@@ -755,6 +769,38 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
     }
 
     return true;
+}
+
+std::optional<int> WaveformView::listShift() const {
+    if (rows == nullptr || anchorRowId < 0) return std::nullopt;
+
+    const QModelIndex index = waveModel->indexOfRow(anchorRowId);
+    if (!index.isValid()) return std::nullopt;
+
+    const QRect rect = rows->visualRect(index);
+    if (!rect.isValid()) return std::nullopt;
+
+    return (traceArea().top() + rect.top()) - anchorTop;
+}
+
+void WaveformView::onRowsScrolled() {
+    const std::optional<int> shift = listShift();
+    const QRect area = traceArea();
+
+    // Past a windowful there is nothing on screen worth keeping, and anything the geometry
+    // cannot account for is repainted rather than guessed at. Slow is recoverable; a window
+    // showing one signal's trace on another's line is not.
+    if (!shift.has_value() || area.height() <= 0 || std::abs(*shift) >= area.height()) {
+        lastShift = 0;
+        update();
+        return;
+    }
+
+    lastShift = *shift;
+    if (*shift == 0) return;
+
+    anchorTop += *shift;
+    scroll(0, *shift, area);
 }
 
 bool WaveformView::isParameterRow(int rowId) const {
