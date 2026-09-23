@@ -98,6 +98,26 @@ TEST_F(WaveformModelTest, GroupingNestsRowsAndKeepsThemDisplayed) {
     EXPECT_EQ(model->displayedSignals().size(), 2);
 }
 
+TEST_F(WaveformModelTest, AGroupKeepsItsChildrenAsTheRowListGrows) {
+    // The rows live in one vector, and adding to it reallocates. A parent's child list has to
+    // be reached after the new row is stored, not through a reference taken before it: the
+    // reference is dangling by then, and the children go into freed memory.
+    const SignalInfo clock = infoFor(QStringLiteral("/tb"), QStringLiteral("clk"));
+    const int group = model->addGroup(QStringLiteral("Bus"));
+
+    constexpr int Enough = 64;
+    for (int added = 0; added < Enough; ++added) model->addSignal(clock, group);
+
+    EXPECT_EQ(model->rowCount(model->indexOfRow(group)), Enough);
+    EXPECT_EQ(model->rowCount(), 1) << "every row went into the group, not beside it";
+
+    for (int child = 0; child < Enough; ++child) {
+        const int rowId = model->rowIdOf(model->index(child, 0, model->indexOfRow(group)));
+        ASSERT_NE(model->row(rowId), nullptr) << "child " << child;
+        EXPECT_EQ(model->row(rowId)->parent, group) << "child " << child;
+    }
+}
+
 TEST_F(WaveformModelTest, AGroupCannotBeMovedInsideItself) {
     // Which would make the tree a cycle and the view an infinite recursion.
     const int outer = model->addGroup(QStringLiteral("Outer"));

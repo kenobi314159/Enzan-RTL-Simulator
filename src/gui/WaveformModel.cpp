@@ -73,12 +73,18 @@ int WaveformModel::addSignal(const SignalInfo& info, int parentGroup) {
                        : -1;
 
     const int rowId = static_cast<int>(rows.size());
-    QVector<int>& siblings = added.parent < 0 ? roots : rows[added.parent].children;
+    const int parentRow = added.parent;
 
-    beginInsertRows(added.parent < 0 ? QModelIndex() : indexOfRow(added.parent),
-                    static_cast<int>(siblings.size()), static_cast<int>(siblings.size()));
+    // The position is taken by value and the list is reached again after the row is stored.
+    // Holding a reference into `rows` across the `push_back` below would leave it dangling the
+    // moment the vector grew — which it does, silently, and then the child is appended to
+    // freed memory and the parent appears to have no children at all.
+    const int at = parentRow < 0 ? static_cast<int>(roots.size())
+                                 : static_cast<int>(rows[parentRow].children.size());
+
+    beginInsertRows(parentRow < 0 ? QModelIndex() : indexOfRow(parentRow), at, at);
     rows.push_back(added);
-    siblings.push_back(rowId);
+    (parentRow < 0 ? roots : rows[parentRow].children).push_back(rowId);
     endInsertRows();
 
     Q_EMIT displayedSignalsChanged();
@@ -94,12 +100,13 @@ int WaveformModel::addGroup(const QString& name, int parentGroup) {
                        : -1;
 
     const int rowId = static_cast<int>(rows.size());
-    QVector<int>& siblings = added.parent < 0 ? roots : rows[added.parent].children;
+    const int parentRow = added.parent;
+    const int at = parentRow < 0 ? static_cast<int>(roots.size())
+                                 : static_cast<int>(rows[parentRow].children.size());
 
-    beginInsertRows(added.parent < 0 ? QModelIndex() : indexOfRow(added.parent),
-                    static_cast<int>(siblings.size()), static_cast<int>(siblings.size()));
+    beginInsertRows(parentRow < 0 ? QModelIndex() : indexOfRow(parentRow), at, at);
     rows.push_back(added);
-    siblings.push_back(rowId);
+    (parentRow < 0 ? roots : rows[parentRow].children).push_back(rowId);
     endInsertRows();
 
     return rowId;
@@ -125,13 +132,12 @@ int WaveformModel::addSlice(int rowId, std::uint32_t high, std::uint32_t low) {
     // Placed beside the signal it came from rather than at the end, because that is where the
     // user is looking when they ask for it.
     const int parentGroup = source->parent;
-    QVector<int>& siblings = parentGroup < 0 ? roots : rows[parentGroup].children;
-    const int at = static_cast<int>(siblings.indexOf(rowId)) + 1;
+    const int at = rowOf(rowId) + 1;
 
     const int newId = static_cast<int>(rows.size());
     beginInsertRows(parentGroup < 0 ? QModelIndex() : indexOfRow(parentGroup), at, at);
     rows.push_back(added);
-    siblings.insert(at, newId);
+    (parentGroup < 0 ? roots : rows[parentGroup].children).insert(at, newId);
     endInsertRows();
 
     return newId;
