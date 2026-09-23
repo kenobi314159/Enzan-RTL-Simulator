@@ -289,6 +289,78 @@ TEST_F(WaveRowTest, TheNearestEdgeIsFoundFromEitherSide) {
 }
 
 // ---------------------------------------------------------------------------
+// An unpacked vector is a group
+// ---------------------------------------------------------------------------
+
+TEST_F(WaveRowTest, AnUnpackedVectorAcceptsRowsLikeAGroup) {
+    // Section 10.7 calls a multi-bit signal a group whose children happen to have been made
+    // for it. A container that let rows be dragged out but not back in would not be the same
+    // kind of thing at all, and a bit taken out by mistake could never be put back.
+    const int bus = model->addSignal(counter);
+    model->unpack(bus);
+
+    const int bit3 = childOf(bus, 4);
+    ASSERT_EQ(model->row(bit3)->label, QStringLiteral("count[3]"));
+
+    ASSERT_TRUE(model->moveRowsTo({bit3}, -1, 0));
+    EXPECT_EQ(model->row(bit3)->parent, -1);
+    EXPECT_EQ(model->displayedWidth(bus), 7U);
+
+    ASSERT_TRUE(model->moveRowsTo({bit3}, bus, 4)) << "a bit must be able to go back where it was";
+    EXPECT_EQ(model->row(bit3)->parent, bus);
+    EXPECT_EQ(model->displayedWidth(bus), 8U);
+    EXPECT_TRUE(model->childrenReconstituteParent(bus))
+        << "put back in order, the vector is itself again";
+}
+
+TEST_F(WaveRowTest, APackedRowHasNothingToDropInto) {
+    // A row that shows no children has nowhere to put one, so it refuses rather than silently
+    // swallowing them.
+    const int packed = model->addSignal(counter);
+    EXPECT_FALSE(model->flags(model->indexOfRow(packed)).testFlag(Qt::ItemIsDropEnabled));
+
+    model->unpack(packed);
+    EXPECT_TRUE(model->flags(model->indexOfRow(packed)).testFlag(Qt::ItemIsDropEnabled));
+
+    const int group = model->addGroup(QStringLiteral("Bus"));
+    EXPECT_TRUE(model->flags(model->indexOfRow(group)).testFlag(Qt::ItemIsDropEnabled));
+}
+
+TEST_F(WaveRowTest, AVectorWithSomethingElseInItShowsWhatIsActuallyThere) {
+    // The cost of treating a vector as a group: the row still says `count` while showing a bit
+    // that is not count's. The value tells the truth even when the label no longer does, which
+    // is the same bargain deleting a bit already made.
+    const int bus = model->addSignal(counter);
+    model->unpack(bus);
+    ASSERT_TRUE(model->childrenReconstituteParent(bus));
+
+    const int stray = model->addSignal(clock);
+    ASSERT_TRUE(model->moveRowsTo({stray}, bus, 0));
+
+    EXPECT_FALSE(model->childrenReconstituteParent(bus));
+    EXPECT_EQ(model->displayedWidth(bus), 9U);
+
+    // The clock is low at 400ns and the counter holds 40, so the nine bits read 0 0010 1000.
+    model->setRadix(bus, Radix::Binary);
+    EXPECT_EQ(model->renderValue(bus, 400), QStringLiteral("000101000"));
+}
+
+TEST_F(WaveRowTest, MovingARowDoesNotResetTheModel) {
+    // `moveToGroup` used to reset, which made the view forget every expansion in the window:
+    // collecting two signals into a group packed every other bus on screen.
+    const int first = model->addSignal(clock);
+    const int group = model->addGroup(QStringLiteral("Bus"));
+
+    int resets = 0;
+    QObject::connect(model.get(), &QAbstractItemModel::modelReset, [&resets] { ++resets; });
+
+    model->moveToGroup(first, group);
+
+    EXPECT_EQ(resets, 0);
+    EXPECT_EQ(model->row(first)->parent, group);
+}
+
+// ---------------------------------------------------------------------------
 // The clipboard
 // ---------------------------------------------------------------------------
 
@@ -483,6 +555,27 @@ TEST_F(WaveWindowTest, ANewSignalArrivesPackedAndLeavesTheOthersAlone) {
 
     const int added = waveModel->rowIdOf(waveModel->index(1, 0));
     EXPECT_FALSE(waveRows->isExpanded(waveModel->indexOfRow(added)));
+}
+
+TEST_F(WaveWindowTest, MakingAGroupLeavesTheRestOfTheWindowOpen) {
+    // Creating a group used to reset the model, which packed every bus in the window.
+    addToWave(QStringLiteral("count"));
+    addToWave(QStringLiteral("clk"));
+    ASSERT_EQ(waveModel->rowCount(), 2);
+
+    const int bus = waveModel->rowIdOf(waveModel->index(0, 0));
+    waveRows->expand(waveModel->indexOfRow(bus));
+    pump(2);
+    ASSERT_TRUE(waveRows->isExpanded(waveModel->indexOfRow(bus)));
+
+    // Group the clock, leaving the bus where it is.
+    const int clockRow = waveModel->rowIdOf(waveModel->index(1, 0));
+    const int group = waveModel->addGroup(QStringLiteral("Bus"));
+    waveModel->moveToGroup(clockRow, group);
+    pump(2);
+
+    EXPECT_TRUE(waveRows->isExpanded(waveModel->indexOfRow(bus)))
+        << "making a group must not pack what was already open";
 }
 
 TEST_F(WaveWindowTest, ASecondBusArrivesPackedWhileTheFirstStaysOpen) {

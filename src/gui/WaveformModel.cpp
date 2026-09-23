@@ -72,9 +72,7 @@ int WaveformModel::addSignal(const SignalInfo& info, int parentGroup) {
     added.label = info.name.isEmpty() ? info.path : info.name;
     added.signalIndex = info.signalIndex;
     added.signalWidth = info.width;
-    added.parent = row(parentGroup) != nullptr && rows[parentGroup].kind == WaveRow::Kind::Group
-                       ? parentGroup
-                       : -1;
+    added.parent = showsChildren(parentGroup) ? parentGroup : -1;
 
     const int rowId = static_cast<int>(rows.size());
     const int parentRow = added.parent;
@@ -99,9 +97,7 @@ int WaveformModel::addGroup(const QString& name, int parentGroup) {
     WaveRow added;
     added.kind = WaveRow::Kind::Group;
     added.label = name;
-    added.parent = row(parentGroup) != nullptr && rows[parentGroup].kind == WaveRow::Kind::Group
-                       ? parentGroup
-                       : -1;
+    added.parent = showsChildren(parentGroup) ? parentGroup : -1;
 
     const int rowId = static_cast<int>(rows.size());
     const int parentRow = added.parent;
@@ -262,10 +258,7 @@ bool WaveformModel::isDescendantOf(int candidate, int rowId) const {
 }
 
 bool WaveformModel::moveRowsTo(const QVector<int>& rowIds, int targetGroup, int position) {
-    if (targetGroup >= 0
-        && (row(targetGroup) == nullptr || rows[targetGroup].kind != WaveRow::Kind::Group)) {
-        return false;
-    }
+    if (targetGroup >= 0 && !showsChildren(targetGroup)) return false;
 
     // A group dropped inside itself would make the tree a cycle and the view an unbounded
     // recursion, so the whole move is refused rather than half-performed.
@@ -431,10 +424,7 @@ QVector<int> WaveformModel::pasteRows(int targetGroup, int position) {
     const QMimeData* data = QApplication::clipboard()->mimeData();
     if (data == nullptr || !data->hasFormat(QString::fromUtf8(RowMimeType))) return pasted;
 
-    if (targetGroup >= 0
-        && (row(targetGroup) == nullptr || rows[targetGroup].kind != WaveRow::Kind::Group)) {
-        targetGroup = -1;
-    }
+    if (targetGroup >= 0 && !showsChildren(targetGroup)) targetGroup = -1;
 
     QByteArray encoded = data->data(QString::fromUtf8(RowMimeType));
     QDataStream stream(&encoded, QIODevice::ReadOnly);
@@ -480,21 +470,10 @@ void WaveformModel::detach(int rowId) {
 }
 
 void WaveformModel::moveToGroup(int rowId, int group) {
-    if (row(rowId) == nullptr) return;
-    if (group >= 0 && (row(group) == nullptr || rows[group].kind != WaveRow::Kind::Group)) return;
-    if (group == rowId) return;
-
-    // A group cannot be moved inside itself, which would make the tree a cycle and the view an
-    // infinite recursion.
-    for (int walk = group; walk >= 0; walk = rows[walk].parent) {
-        if (walk == rowId) return;
-    }
-
-    beginResetModel();
-    detach(rowId);
-    rows[rowId].parent = group;
-    (group < 0 ? roots : rows[group].children).push_back(rowId);
-    endResetModel();
+    // Delegated rather than duplicated. The older implementation here reset the model, which
+    // made the view forget every expansion in the window — so collecting two signals into a
+    // group packed every other bus on screen.
+    static_cast<void>(moveRowsTo({rowId}, group, -1));
 }
 
 // ---------------------------------------------------------------------------
@@ -860,11 +839,13 @@ Qt::ItemFlags WaveformModel::flags(const QModelIndex& index) const {
     Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
     if (index.column() == NameColumn) result |= Qt::ItemIsEditable;
 
-    // Only a group accepts a drop *onto* it. Dropping *between* rows is a drop on their
-    // parent, which is why the root is drop-enabled above and a signal row is not: without
-    // that, dragging a row onto another signal would silently do nothing.
+    // Any row that shows its children accepts them, which is a group and an unpacked vector
+    // alike: a vector is a group whose children happen to have been made for it, and one that
+    // let rows be dragged out but not back in would not be the same kind of thing at all.
+    // Dropping *between* rows is a drop on their parent, which is why the root is drop-enabled
+    // above and a packed row — which has no children to drop among — is not.
     const int rowId = rowIdOf(index);
-    if (rowId >= 0 && rows[rowId].kind == WaveRow::Kind::Group) result |= Qt::ItemIsDropEnabled;
+    if (showsChildren(rowId)) result |= Qt::ItemIsDropEnabled;
 
     return result;
 }

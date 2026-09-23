@@ -889,6 +889,26 @@ it would sit beside is how a tool acquires a number nobody reads.
   on demand rather than up front. Making them eagerly would cost a thousand rows
   for a thousand-bit vector nobody had asked to look inside.
 
+  **An unpacked vector is a group in every respect, including what may be put in
+  it.** Rows may be dragged out of one and back into it, and rows from elsewhere
+  may be dragged in. Half a container — one that lets a bit be taken out but
+  never put back — is not the same kind of thing as a group, and a bit removed by
+  mistake could never be recovered.
+
+  The cost is that a row labelled `count` can be made to show something that is
+  not count's. That bargain was already struck the moment deleting a bit was
+  allowed to narrow the row: the label names where the row came from, and the
+  value says what is actually in it. A row whose children *are* exactly its own
+  bits, in order, is recognised as the signal again — which is both what makes
+  unpacking free to look at and what tells a reader they have put it back
+  together.
+
+- **Making a group must not disturb the rest of the window.** The same trap as
+  adding and pasting, in a third place: rebuilding the model to re-parent a row
+  makes the view forget every expansion in it. Rows that move are re-expanded by
+  the window, because Qt tracks expansion by position and a row that moves loses
+  it.
+
 - **Highlighting.** A row may be given a background colour from a palette of
   five, or returned to the default. **The palette lives in the theme file**
   (10.5), as `wave.highlight.1` through `wave.highlight.5`; five colour literals

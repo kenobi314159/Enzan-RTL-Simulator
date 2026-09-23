@@ -441,12 +441,21 @@ void MainWindow::groupSelectedWaves() {
                                                QLineEdit::Normal, tr("Group"), &accepted);
     if (!accepted || name.isEmpty()) return;
 
+    // Qt tracks expansion by position in the tree, so a row that moves is collapsed by the
+    // move. Which of them were open is recorded first and put back afterwards, or collecting
+    // an unpacked bus into a group would quietly pack it.
+    QVector<int> wereExpanded;
+    for (const int rowId : selected) {
+        if (waveRowsView->isExpanded(waveModel->indexOfRow(rowId))) wereExpanded.push_back(rowId);
+    }
+
     const int group = waveModel->addGroup(name);
     for (const int rowId : selected) waveModel->moveToGroup(rowId, group);
 
     // Only the group just made, so that the rows the reader was collecting are visible where
     // they landed and nothing else in the window moves.
     waveRowsView->expand(waveModel->indexOfRow(group));
+    for (const int rowId : wereExpanded) waveRowsView->expand(waveModel->indexOfRow(rowId));
 }
 
 void MainWindow::extractBitRange() {
@@ -523,7 +532,7 @@ void MainWindow::pasteWaves() {
     int targetGroup = -1;
     int position = -1;
     if (currentRow != nullptr) {
-        if (currentRow->kind == WaveRow::Kind::Group) {
+        if (!currentRow->children.isEmpty() || currentRow->kind == WaveRow::Kind::Group) {
             targetGroup = current;
         } else {
             targetGroup = currentRow->parent;
