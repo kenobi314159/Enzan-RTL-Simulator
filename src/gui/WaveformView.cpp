@@ -724,25 +724,47 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
 
     painter.setPen(theme->color(ThemeColor::WaveTrace));
 
+    // Columns are walked in runs rather than one at a time, for the same reason the bus
+    // painter does it: within a run of columns showing the same change the value is the same,
+    // and asking for it again per column is a binary search through the trace and a value
+    // allocation for an answer already in hand. On a flat one-bit trace that was one lookup
+    // per pixel of window width, per row, per repaint.
     int previousY = -1;
-    for (std::size_t column = 0; column < samples.size(); ++column) {
+    std::size_t column = 0;
+    while (column < samples.size()) {
         const wavedb::Sample& sample = samples[column];
         const int x = area.left() + static_cast<int>(column);
 
         if (sample.transitions > 0) {
-            // Busy: more than one transition inside this single pixel column. Drawn as a solid
-            // bar rather than by iterating the transitions, which is the whole point — a column
-            // covering a million edges costs exactly what this one does.
-            painter.fillRect(QRect(x, top, 1, bottom - top + 1),
+            // Busy: more than one transition inside a single pixel column. Drawn as a solid
+            // bar rather than by iterating the transitions, which is the whole point — a
+            // column covering a million edges costs exactly what this one does. The run stops
+            // where the unknown flag changes, so a busy stretch that is unknown in part is
+            // still drawn in two colours.
+            std::size_t run = column;
+            while (run < samples.size() && samples[run].transitions > 0
+                   && samples[run].anyUnknown == sample.anyUnknown) {
+                ++run;
+            }
+
+            painter.fillRect(QRect(x, top, static_cast<int>(run - column), bottom - top + 1),
                              sample.anyUnknown ? theme->color(ThemeColor::WaveUnknown)
                                                : theme->color(ThemeColor::WaveTrace));
             previousY = -1;
+            column = run;
             continue;
         }
 
         if (sample.changeIndex == wavedb::NoChange) {
             previousY = -1;
+            ++column;
             continue;
+        }
+
+        std::size_t run = column;
+        while (run < samples.size() && samples[run].transitions == 0
+               && samples[run].changeIndex == sample.changeIndex) {
+            ++run;
         }
 
         // Asked of the model by time rather than of the database by change index, because a
@@ -751,6 +773,7 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
         const std::optional<eir::BitVector> value = waveModel->valueAt(rowId, sample.startTime);
         if (!value.has_value()) {
             previousY = -1;
+            column = run;
             continue;
         }
 
@@ -781,8 +804,9 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
 
         painter.setPen(pen);
         if (previousY >= 0 && previousY != y) painter.drawLine(x, previousY, x, y);
-        painter.drawPoint(x, y);
+        painter.drawLine(x, y, x + static_cast<int>(run - column) - 1, y);
         previousY = y;
+        column = run;
     }
 }
 
