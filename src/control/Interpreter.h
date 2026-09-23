@@ -14,6 +14,9 @@
 #include <string_view>
 #include <vector>
 
+// Tcl's own type, forward declared so that <tcl.h> does not reach every file that drives a
+// session. Its name is Tcl's to choose, not Enzan's.
+// NOLINTNEXTLINE(readability-identifier-naming)
 struct Tcl_Interp;
 
 namespace enzan {
@@ -48,14 +51,14 @@ struct CommandResult {
     std::string value;
 
     [[nodiscard]] static CommandResult ok(std::string text = {}) {
-        return {EvalStatus::Ok, std::move(text)};
+        return {.status = EvalStatus::Ok, .value = std::move(text)};
     }
 
     [[nodiscard]] static CommandResult error(std::string message) {
-        return {EvalStatus::Error, std::move(message)};
+        return {.status = EvalStatus::Error, .value = std::move(message)};
     }
 
-    [[nodiscard]] static CommandResult stopped() { return {EvalStatus::Stopped, {}}; }
+    [[nodiscard]] static CommandResult stopped() { return {.status = EvalStatus::Stopped}; }
 };
 
 /// The arguments of one command invocation, with `args[0]` the name it was invoked by.
@@ -112,8 +115,8 @@ struct EvalResult {
 /// practice means the session owns the interpreter and not the other way round.
 class Interpreter {
 public:
-    /// `diagnostics` must outlive the interpreter.
-    explicit Interpreter(DiagnosticEngine& diagnostics);
+    /// `engine` must outlive the interpreter.
+    explicit Interpreter(DiagnosticEngine& engine);
 
     Interpreter(const Interpreter&) = delete;
     Interpreter& operator=(const Interpreter&) = delete;
@@ -192,12 +195,26 @@ private:
     /// Turns a Tcl return code plus the interpreter state into an `EvalResult`.
     EvalResult resultFrom(int code, BufferId buffer);
 
+    /// The replacement `puts`: writes to the transcript, or delegates for another channel.
+    CommandResult writeLine(CommandArguments arguments);
+
+    /// Quotes `text` so that it survives being spliced into a Tcl script.
+    [[nodiscard]] static std::string quoted(std::string_view text);
+
     DiagnosticEngine& diagnostics;
     Tcl_Interp* handle = nullptr;
     std::ostream* transcript = nullptr;
 
     /// Owned so that a handler's captures live exactly as long as the command does.
     std::vector<std::unique_ptr<Command>> commands;
+
+    /// Set by a handler that returned `Stopped`, cleared when the result is built.
+    ///
+    /// Recorded rather than read back off Tcl's return code, because Tcl converts a
+    /// `TCL_RETURN` reaching the outermost evaluation into `TCL_OK` — correct for `return`,
+    /// which means "leave this proc", and indistinguishable from success for `quit`, which
+    /// means "leave the session".
+    bool unwinding = false;
 
     bool stopping = false;
     int requestedExitStatus = 0;

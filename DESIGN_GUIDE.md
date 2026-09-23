@@ -602,6 +602,34 @@ GUI theme is a Tcl script setting colour variables; the window layout is a Tcl
 script. This keeps one configuration language across the whole tool and adds no
 dependency, and it is what commercial EDA tools do.
 
+Three properties of the embedding are normative, because each one is invisible
+in a passing test and expensive to retrofit.
+
+**Commands are C++, not Tcl procedures.** The vocabulary is installed as native
+commands so that the same operation is reachable from the GUI and from VPI,
+neither of which goes through Tcl. A command parses its arguments, calls the
+component that does the work, and turns the answer into a result or a
+diagnostic; a command that implements semantics of its own has put behaviour
+somewhere only one of the three control surfaces can reach it.
+
+**Script output goes to the transcript.** `puts` is replaced by one that writes
+where diagnostics write, because a GUI attached to a kernel (2.2) would
+otherwise see nothing a script said — the text would land on a terminal on
+another machine. Tcl's own `puts` is kept and delegated to for any other
+channel, so a script writing to a file it opened still works.
+
+**`quit` MUST NOT end the process from inside the interpreter.** Tcl's `exit`
+does exactly that, and the kernel has a waveform file to finish and a socket to
+unlink. `quit` records the request and the driving loop unwinds, so the exit
+status is the same and nothing is lost.
+
+The control layer is built as two libraries, and the split is a design
+constraint rather than a build detail. The interpreter and the file-list
+machinery depend on `common` alone; the command vocabulary, which owns a
+session, depends on the kernel. The GUI links only the first, for the theme
+script: a front end that linked the kernel to read a list of colours would
+quietly undo the process separation of 2.2.
+
 ### 8.2 File lists
 
 Both forms MUST be supported:

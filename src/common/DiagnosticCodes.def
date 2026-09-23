@@ -86,6 +86,17 @@ ENZAN_DIAG(UserError, 5004, Error, "{}")
 ENZAN_DIAG(UserWarning, 5005, Warning, "{}")
 ENZAN_DIAG(UserInfo, 5006, Note, "{}")
 
+// --- 6000-6999: control layer and Tcl commands ------------------------------
+
+ENZAN_DIAG(TclInterpreterFailed, 6001, Fatal, "a Tcl interpreter could not be created")
+ENZAN_DIAG(TclLibraryUnavailable, 6002, Warning,
+           "the Tcl script library could not be initialised ({}); `package require` and the "
+           "auto-loaded commands are unavailable, the built-in vocabulary is not affected")
+ENZAN_DIAG(TranscriptNotRedirected, 6003, Warning,
+           "script output could not be redirected to the transcript ({}); `puts` will write to "
+           "the terminal instead")
+ENZAN_DIAG(ScriptError, 6004, Error, "{}")
+
 // --- 9000-9999: internal errors and unimplemented features -----------------
 
 ENZAN_DIAG(NotYetImplemented, 9001, Error, "{} is not yet implemented")

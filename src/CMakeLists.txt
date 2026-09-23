@@ -14,8 +14,10 @@ add_subdirectory(codegen)
 add_subdirectory(runtime)
 add_subdirectory(wavedb)
 add_subdirectory(ipc)
+if(ENZAN_ENABLE_TCL OR ENZAN_BUILD_GUI)
+  add_subdirectory(control)
+endif()
 if(ENZAN_BUILD_GUI)
   add_subdirectory(gui)
 endif()
-# add_subdirectory(control)   # M3 — Tcl interpreter and commands
 # add_subdirectory(pli)       # M4 — VPI and VHPI
