@@ -7,6 +7,7 @@
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScrollBar>
@@ -349,6 +350,33 @@ void WaveformView::pickAt(const QPoint& point) {
     Q_EMIT cursorsChanged();
 }
 
+void WaveformView::showCursorMenu(int index, const QPoint& where) {
+    if (index < 0 || index >= cursorList.size()) return;
+
+    // Shown rather than run: `exec` would sit in its own event loop inside a mouse handler,
+    // which stops the socket being serviced and would freeze a live waveform for as long as
+    // the menu was open.
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+
+    connect(menu->addAction(tr("Rename…")), &QAction::triggered, this,
+            [this, index] { renameCursor(index); });
+
+    // One entry that says what it will do, rather than a checkbox whose current state the
+    // reader would have to work out from the colour of the line.
+    const bool locked = cursorList[index].locked;
+    connect(menu->addAction(locked ? tr("Unlock") : tr("Lock")), &QAction::triggered, this,
+            [this, index, locked] { setCursorLocked(index, !locked); });
+
+    menu->addSeparator();
+
+    QAction* remove = menu->addAction(tr("Remove"));
+    remove->setEnabled(cursorList.size() > 1);
+    connect(remove, &QAction::triggered, this, [this, index] { removeCursor(index); });
+
+    menu->popup(where);
+}
+
 void WaveformView::renameCursor(int index) {
     if (index < 0 || index >= cursorList.size()) return;
 
@@ -520,14 +548,73 @@ void WaveformView::paintRuler(QPainter& painter) {
     }
 }
 
-bool WaveformView::sampleRow(const QRect& area, std::uint32_t record) {
+bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample>& out) const {
+    const WaveRow* waveRow = waveModel->row(rowId);
+    if (waveRow == nullptr || columns <= 0) return false;
+
+    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
+
+    const bool merged =
+        !waveRow->children.isEmpty() && !waveModel->childrenReconstituteParent(rowId);
+
+    if (!merged) {
+        if (waveRow->kind != WaveRow::Kind::Signal) return false;
+
+        const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
+        if (record == wavedb::WaveformDatabase::NotRecorded) return false;
+
+        out.assign(static_cast<std::size_t>(columns), wavedb::Sample{});
+        database.sample(record, timeAxis.start(), timeAxis.end(), out);
+        return true;
+    }
+
+    if (waveRow->children.isEmpty()) return false;
+
+    // Allocated per level rather than shared, because this recurses for a group of groups.
+    // Section 13.4's rule about allocation is about the simulation's hot path; a repaint is
+    // not one, and a buffer shared between levels would be overwritten by the level below.
+    std::vector<wavedb::Sample> child;
+    std::vector<std::uint8_t> boundary(static_cast<std::size_t>(columns), 0);
+    std::vector<std::uint8_t> missing(static_cast<std::size_t>(columns), 0);
+
+    out.assign(static_cast<std::size_t>(columns), wavedb::Sample{});
+    bool started = false;
+
+    for (const int childRow : waveRow->children) {
+        if (!sampleInto(childRow, columns, child)) return false;
+
+        for (std::size_t column = 0; column < out.size(); ++column) {
+            if (!started) out[column].startTime = child[column].startTime;
+
+            out[column].transitions += child[column].transitions;
+            out[column].anyUnknown = out[column].anyUnknown || child[column].anyUnknown;
+
+            if (child[column].changeIndex == wavedb::NoChange) missing[column] = 1;
+            if (column > 0 && child[column].changeIndex != child[column - 1].changeIndex) {
+                boundary[column] = 1;
+            }
+        }
+        started = true;
+    }
+
+    // The change index of a merged row is a run number rather than an index into anything: it
+    // only has to differ between columns that show different values, which is what the painter
+    // uses it for.
+    std::uint64_t run = 0;
+    for (std::size_t column = 0; column < out.size(); ++column) {
+        if (column > 0 && boundary[column] != 0) ++run;
+        out[column].changeIndex = missing[column] != 0 ? wavedb::NoChange : run;
+    }
+
+    return true;
+}
+
+bool WaveformView::sampleRow(int rowId, const QRect& area) {
     const int columns = area.width();
     if (columns <= 0) return false;
     if (timeAxis.span() == 0) return false;
 
-    samples.assign(static_cast<std::size_t>(columns), wavedb::Sample{});
-    kernelSession->waveforms().sample(record, timeAxis.start(), timeAxis.end(), samples);
-    return true;
+    return sampleInto(rowId, columns, samples);
 }
 
 void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
@@ -541,29 +628,23 @@ void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
     painter.setPen(theme->color(ThemeColor::WaveRowSeparator));
     painter.drawLine(rowRect.left(), rowRect.bottom(), rowRect.right(), rowRect.bottom());
 
-    if (waveRow->kind == WaveRow::Kind::Group) return;
-
-    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
-    const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
-    if (record == wavedb::WaveformDatabase::NotRecorded) return;
+    // A group draws too, when its children make a value between them: section 10.7 has a row
+    // with children show what they show joined, and a vector assembled out of one-bit signals
+    // is worth as much on screen as one the design declared that way.
+    const std::uint32_t displayedWidth = waveModel->displayedWidth(geometry.rowId);
+    if (displayedWidth == 0) return;
 
     const QRect traceRect = rowRect.adjusted(0, TraceMargin, 0, -TraceMargin);
-    if (traceRect.height() <= 2 || !sampleRow(traceRect, record)) return;
-
-    const std::uint32_t displayedWidth =
-        waveRow->sliced ? waveRow->highBit - waveRow->lowBit + 1 : waveRow->signalWidth;
+    if (traceRect.height() <= 2 || !sampleRow(geometry.rowId, traceRect)) return;
 
     if (displayedWidth == 1) {
-        paintOneBitTrace(painter, traceRect, *waveRow, record);
+        paintOneBitTrace(painter, traceRect, geometry.rowId);
     } else {
-        paintBusTrace(painter, traceRect, *waveRow, record);
+        paintBusTrace(painter, traceRect, geometry.rowId);
     }
 }
 
-void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, const WaveRow& waveRow,
-                                    std::uint32_t record) {
-    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
-
+void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int rowId) {
     const int top = area.top();
     const int bottom = area.bottom();
     const int middle = (top + bottom) / 2;
@@ -591,9 +672,16 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, const 
             continue;
         }
 
-        const eir::BitVector whole = database.valueOfChange(record, sample.changeIndex);
-        const eir::BitVector value = WaveformModel::slice(waveRow, whole);
-        const eir::Logic bit = value.get(0);
+        // Asked of the model by time rather than of the database by change index, because a
+        // row may be showing a slice of a signal, or a value joined out of its children, and
+        // only the model knows which.
+        const std::optional<eir::BitVector> value = waveModel->valueAt(rowId, sample.startTime);
+        if (!value.has_value()) {
+            previousY = -1;
+            continue;
+        }
+
+        const eir::Logic bit = value.value().get(0);
 
         // An X or a Z sits on the midline in its own colour rather than being drawn as a
         // level. A value that is not zero or one must not read as either (section 3.9).
@@ -625,9 +713,9 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, const 
     }
 }
 
-void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, const WaveRow& waveRow,
-                                 std::uint32_t record) {
-    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
+void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId) {
+    const WaveRow* waveRow = waveModel->row(rowId);
+    if (waveRow == nullptr) return;
 
     const int top = area.top();
     const int bottom = area.bottom();
@@ -664,11 +752,14 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, const Wav
         }
 
         const int runWidth = static_cast<int>(run - column);
-        const eir::BitVector whole = database.valueOfChange(record, sample.changeIndex);
-        const eir::BitVector value = WaveformModel::slice(waveRow, whole);
+        const std::optional<eir::BitVector> value = waveModel->valueAt(rowId, sample.startTime);
+        if (!value.has_value()) {
+            column = run;
+            continue;
+        }
 
-        const QColor pen = value.ref().hasUnknown() ? theme->color(ThemeColor::WaveUnknown)
-                                                    : theme->color(ThemeColor::WaveTrace);
+        const QColor pen = value.value().ref().hasUnknown() ? theme->color(ThemeColor::WaveUnknown)
+                                                            : theme->color(ThemeColor::WaveTrace);
         painter.setPen(pen);
 
         // A bus segment: two horizontal rails with slanted shoulders where the value changes,
@@ -694,7 +785,8 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, const Wav
         }
 
         if (runWidth >= MinimumLabelPixels) {
-            const QString text = QString::fromStdString(eir::toString(value.ref(), waveRow.radix));
+            const QString text =
+                QString::fromStdString(eir::toString(value.value().ref(), waveRow->radix));
             const QRect textRect(left + shoulder + 2, top, runWidth - (2 * shoulder) - 4,
                                  bottom - top + 1);
             painter.setPen(theme->color(ThemeColor::WaveText));
@@ -766,6 +858,15 @@ void WaveformView::mousePressEvent(QMouseEvent* event) {
     }
 
     if (event->button() == Qt::RightButton) {
+        // A right-click on a cursor's label is about that cursor, not about the time axis, so
+        // it opens the cursor's menu instead of starting a zoom gesture.
+        const int label = cursorLabelAt(event->pos());
+        if (label >= 0) {
+            setActiveCursor(label);
+            showCursorMenu(label, event->globalPosition().toPoint());
+            return;
+        }
+
         zoomDragging = true;
         zoomFromX = event->pos().x();
         zoomToX = zoomFromX;

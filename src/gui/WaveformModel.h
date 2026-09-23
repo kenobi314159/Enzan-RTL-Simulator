@@ -11,6 +11,8 @@
 #include <QString>
 #include <QVector>
 
+class QDataStream;
+
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -63,6 +65,14 @@ struct WaveRow {
 /// group that could not be collapsed would not earn its place. Rows are held in one flat vector
 /// with parent and child indices: a `QModelIndex` then carries a stable row number rather than
 /// a pointer, so adding a signal does not invalidate the indices of the ones already there.
+///
+/// **A row with children shows what its children show, joined together** (section 10.7). One
+/// rule covers three things that would otherwise be three special cases: a bus that has been
+/// unpacked and had some of its bits deleted shows what is left of it; a group of one-bit
+/// signals behaves as a vector; and a group of equal-width vectors is a dimension above that,
+/// which is what makes multi-dimensional arrays fall out of nesting rather than needing their
+/// own mechanism. A group whose children are not all the same width shows nothing, because a
+/// number joined out of unrelated signals is noise rather than information.
 ///
 /// The model holds only what to draw. The values come from the session's database, which is why
 /// nothing here is copied out of it: a trace with a million transitions is drawn from the
@@ -139,6 +149,29 @@ public:
     /// row that has not been sliced.
     [[nodiscard]] static std::pair<std::uint32_t, std::uint32_t> bitRange(const WaveRow& waveRow);
 
+    /// True when a row's value comes from its children rather than from a signal of its own.
+    [[nodiscard]] bool showsChildren(int rowId) const;
+
+    /// Bits the row displays: its own, or its children's added up when it shows theirs.
+    [[nodiscard]] std::uint32_t displayedWidth(int rowId) const;
+
+    /// True when a row's children are exactly its own bits, all of them, in order.
+    ///
+    /// The state a bus is in straight after unpacking. Its joined value is then its own value,
+    /// so it can be drawn from its own trace instead of by merging every child's — which is
+    /// what stops unpacking a wide bus from costing as much again to draw.
+    [[nodiscard]] bool childrenReconstituteParent(int rowId) const;
+
+    /// Copies rows, and everything below them, to the clipboard.
+    void copyRows(const QVector<int>& rowIds) const;
+
+    /// Pastes the clipboard into `targetGroup` at `position`, or at the end when negative.
+    /// Returns the rows created, in the order they were added.
+    QVector<int> pasteRows(int targetGroup, int position);
+
+    /// True when the clipboard holds rows this window put there.
+    [[nodiscard]] static bool clipboardHasRows();
+
     // --- reading -----------------------------------------------------------
 
     [[nodiscard]] const WaveRow* row(int rowId) const;
@@ -204,6 +237,23 @@ private:
 
     /// True when `candidate` is `rowId` or lies below it.
     [[nodiscard]] bool isDescendantOf(int candidate, int rowId) const;
+
+    /// The value a row's children make between them, or nothing when they cannot make one.
+    [[nodiscard]] std::optional<eir::BitVector> combinedValueAt(int rowId,
+                                                                runtime::SimTime time) const;
+
+    /// Tells `fromRow` and everything above it that the value they show has changed.
+    ///
+    /// A row's value is part of every value above it (section 10.7), so a structural change
+    /// anywhere below has to travel up. Without this, deleting a bit would leave its bus
+    /// showing the value it had while the bit was still there.
+    void notifyValueChangedUpwards(int fromRow);
+
+    void writeRow(QDataStream& stream, int rowId) const;
+
+    /// Reads one row and its descendants, appending to `parentRow`'s children. Returns the
+    /// row created, or -1.
+    int readRow(QDataStream& stream, int parentRow);
 
     const KernelSession* kernelSession;
     const Theme* theme;

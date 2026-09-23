@@ -799,6 +799,12 @@ Which signal is selected is not decoration: it is what Tab steps along below.
 - Every cursor shows its time beside its name.
 - Clicking a cursor's label makes it the active cursor.
 - Double-clicking a label renames it.
+- Right-clicking a label opens that cursor's own menu: rename, lock or unlock,
+  remove. It is a menu rather than a set of window-level commands because every
+  entry is about *that* cursor, and a command that acted on "the active one"
+  would need the reader to make it active first and then remember that they had.
+- A cursor is added from the toolbar, beside the zoom controls, because adding
+  one is part of measuring rather than part of configuring the window.
 - **Tab** moves the active cursor to the next transition of the selected signal,
   **Shift+Tab** to the previous one.
 
@@ -817,6 +823,18 @@ it would sit beside is how a tool acquires a number nobody reads.
 
 - **Reordering.** Selected rows move by being dragged, including into and out of
   groups. The order is the reader's, and nothing may re-sort it behind them.
+- **Copy and paste.** Ctrl+C copies the selected rows, with everything below
+  them, and Ctrl+V pastes them beside whatever is current — inside it when that
+  is a group. A copy keeps its radix, its highlight and how far it was unpacked,
+  because a row that had been set up and then pasted back as a bare default
+  would be a worse answer than copying nothing. The clipboard also carries the
+  hierarchical paths as plain text, so that a copy is worth something outside
+  this window.
+- **Adding a signal changes nothing else.** A new row arrives packed, and
+  whatever was unpacked or collapsed stays as it was. This is worth stating
+  because the obvious implementation — expand the tree so the new row is
+  visible — throws away the arrangement the reader has built up, every time
+  they add a signal.
 - **Unpacking.** A multi-bit signal carries an expander that shows its bits as
   rows of their own, which then behave like any other row — radix, highlight,
   removal and all. Unpacking is a property of the display and creates no new
@@ -824,6 +842,27 @@ it would sit beside is how a tool acquires a number nobody reads.
   on screen, exactly as it already does for an extracted bit range (10.3). Arrays
   gain further levels of unpacking later, and the mechanism is built for that now
   so that it does not have to be built twice.
+- **A row with children shows what its children show, joined together.** One
+  rule, and it is doing three jobs. A bus that has been unpacked and had some of
+  its bits deleted shows what is left of it, in the order the rows are in. A
+  group whose children are one-bit signals behaves as a vector, on its line and
+  in its trace, which is how a bus assembled by hand out of separate signals
+  becomes readable. And because the rule is recursive, a group of equal-width
+  groups is a dimension above that — which is what makes multi-dimensional
+  arrays fall out of nesting rather than needing a mechanism of their own.
+
+  The first child is the most significant, which is the order the list shows
+  them in and the order unpacking creates them in. Every child must be the same
+  width: a number joined out of signals that have nothing to do with each other
+  is noise, so a group of mixed widths shows nothing rather than inventing a
+  value for itself. A bus whose bits have *all* been deleted shows nothing
+  either, rather than quietly reverting to the value the reader just took apart.
+
+  A multi-bit signal is therefore a group whose children happen to be its own
+  bits, and the only thing that distinguishes it is that those children are made
+  on demand rather than up front. Making them eagerly would cost a thousand rows
+  for a thousand-bit vector nobody had asked to look inside.
+
 - **Highlighting.** A row may be given a background colour from a palette of
   five, or returned to the default. **The palette lives in the theme file**
   (10.5), as `wave.highlight.1` through `wave.highlight.5`; five colour literals

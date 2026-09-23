@@ -91,9 +91,14 @@ In the wave window: the wheel scrolls, **Ctrl+wheel** zooms about the pointer an
 pans. Dragging the **right button** right-to-left frames the range you swept; left-to-right zooms
 to fit. A **left click** selects the signal you clicked and puts the cursor on the nearest edge,
 and **Tab** and **Shift+Tab** then walk that cursor from edge to edge — lock a second cursor and
-read both times off their labels to measure. Rows drag to reorder, a bus expands into its bits,
-and the context menu offers a radix and one of five highlight colours. The full model is
-[`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
+read both times off their labels to measure. Right-click a cursor's label to rename, lock or
+remove it.
+
+Rows drag to reorder, copy and paste with **Ctrl+C** and **Ctrl+V**, and the context menu offers a
+radix and one of five highlight colours. A bus expands into its bits, and a row showing bits shows
+what is left of them: delete one and its bus narrows to the rest. The same rule works the other
+way round, so a group of one-bit signals reads and draws as a vector, and a group of those is a
+dimension above that. The full model is [`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
 
 The kernel and the GUI are separate processes and talk over a Unix domain socket, so a window on
 your machine can drive a simulation on another one:

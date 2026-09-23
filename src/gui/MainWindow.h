@@ -68,6 +68,9 @@ private:
     void removeSelectedWaves();
     void setSelectedWaveRadix(eir::Radix radix);
     void setSelectedHighlight(int slot);
+    void copySelectedWaves();
+    void pasteWaves();
+    void addCursor();
 
     void runForRequestedTime();
     void runUntilFinished();

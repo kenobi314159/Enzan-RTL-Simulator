@@ -498,6 +498,38 @@ TEST_F(InteractionTest, ASingleBitSignalDoesNotOfferToUnpack) {
     EXPECT_FALSE(model->hasChildren(model->indexOfRow(clock)));
 }
 
+TEST_F(InteractionTest, AGroupOfOneBitSignalsDrawsAsABus) {
+    // The other half of "a group of one-bit signals behaves as a vector" (section 10.7): it has
+    // to be drawn as one too, or the reader gets the number on the line and a blank beside it.
+    populate();
+
+    const int bus = rowOf.value(QStringLiteral("count"));
+    model->unpack(bus);
+
+    const int group = model->addGroup(QStringLiteral("nibble"));
+    for (int bit = 0; bit < 4; ++bit) {
+        const QModelIndex child = model->index(0, 0, model->indexOfRow(bus));
+        ASSERT_TRUE(model->moveRowsTo({model->rowIdOf(child)}, group, bit));
+    }
+
+    // Collapsed, so only the group's own line is drawn and anything painted on it came from
+    // the joined value rather than from its children being visible.
+    treeView->collapseAll();
+    QCoreApplication::processEvents();
+
+    const QImage rendered = view->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    ASSERT_FALSE(rendered.isNull());
+
+    const QRgb trace = theme.color(enzan::gui::ThemeColor::WaveTrace).rgb();
+    int found = 0;
+    for (int y = 0; y < rendered.height(); ++y) {
+        for (int x = 0; x < rendered.width(); ++x) {
+            if (rendered.pixel(x, y) == trace) ++found;
+        }
+    }
+    EXPECT_GT(found, 100) << "the group's own line was left blank";
+}
+
 TEST_F(InteractionTest, HighlightingARowComesFromTheThemeAndCanBeCleared) {
     populate();
 

@@ -162,10 +162,8 @@ private:
 
     void paintRuler(QPainter& painter);
     void paintRow(QPainter& painter, const RowGeometry& geometry);
-    void paintOneBitTrace(QPainter& painter, const QRect& area, const WaveRow& waveRow,
-                          std::uint32_t record);
-    void paintBusTrace(QPainter& painter, const QRect& area, const WaveRow& waveRow,
-                       std::uint32_t record);
+    void paintOneBitTrace(QPainter& painter, const QRect& area, int rowId);
+    void paintBusTrace(QPainter& painter, const QRect& area, int rowId);
     void paintCursors(QPainter& painter);
     void paintBeyondExtent(QPainter& painter);
     void paintRowBackground(QPainter& painter, const RowGeometry& geometry, const QRect& area);
@@ -173,7 +171,15 @@ private:
 
     /// Fills `samples` with one entry per column of `area`. Returns false when there is
     /// nothing to draw.
-    [[nodiscard]] bool sampleRow(const QRect& area, std::uint32_t record);
+    [[nodiscard]] bool sampleRow(int rowId, const QRect& area);
+
+    /// Summarises one row into `out`, one entry per column.
+    ///
+    /// A row with children is summarised by merging theirs: it changes wherever any of them
+    /// does, and is constant only where all of them are. That costs what its children cost put
+    /// together, which is the price of the value on its line and is why a row whose children
+    /// are simply its own bits is read from its own trace instead (section 10.7).
+    [[nodiscard]] bool sampleInto(int rowId, int columns, std::vector<wavedb::Sample>& out) const;
 
     void syncScrollBar();
     void onScrollBarMoved(int value);
@@ -195,6 +201,9 @@ private:
 
     /// Asks the reader for a new name for a cursor.
     void renameCursor(int index);
+
+    /// Opens a cursor's own menu — rename, lock or unlock, remove — at `where`.
+    void showCursorMenu(int index, const QPoint& where);
 
     const KernelSession* kernelSession;
     const WaveformModel* waveModel;

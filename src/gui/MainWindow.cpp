@@ -195,6 +195,13 @@ void MainWindow::buildDocks() {
                   &MainWindow::extractBitRange);
     addWaveAction(tr("Remove"), QKeySequence(Qt::Key_Delete), &MainWindow::removeSelectedWaves);
 
+    auto* clipboardSeparator = new QAction(waveRowsView);
+    clipboardSeparator->setSeparator(true);
+    waveRowsView->addAction(clipboardSeparator);
+
+    addWaveAction(tr("Copy"), QKeySequence::Copy, &MainWindow::copySelectedWaves);
+    addWaveAction(tr("Paste"), QKeySequence::Paste, &MainWindow::pasteWaves);
+
     auto* radixSeparator = new QAction(waveRowsView);
     radixSeparator->setSeparator(true);
     waveRowsView->addAction(radixSeparator);
@@ -260,6 +267,9 @@ void MainWindow::buildToolBar() {
     bar->addAction(tr("Zoom Out"), waveView, &WaveformView::zoomOut);
     bar->addAction(tr("Zoom Cursors"), waveView, &WaveformView::zoomToCursors);
 
+    bar->addSeparator();
+    bar->addAction(tr("Add Cursor"), this, &MainWindow::addCursor);
+
     followAction = bar->addAction(tr("Follow"));
     followAction->setCheckable(true);
     followAction->setChecked(true);
@@ -288,10 +298,7 @@ void MainWindow::buildMenus() {
     });
 
     QMenu* wave = menuBar()->addMenu(tr("&Wave"));
-    wave->addAction(tr("Add Cursor"), this, [this] {
-        waveView->addCursor(tr("Cursor %1").arg(waveView->cursors().size() + 1),
-                            waveView->activeCursorTime());
-    });
+    wave->addAction(tr("Add Cursor"), this, &MainWindow::addCursor);
     wave->addAction(tr("Lock Active Cursor"), this, [this] {
         const int index = waveView->activeCursor();
         if (index < 0 || index >= waveView->cursors().size()) return;
@@ -419,7 +426,10 @@ void MainWindow::addSelectedObjectsToWave() {
         if (info != nullptr) waveModel->addSignal(*info);
     }
 
-    waveRowsView->expandAll();
+    // Deliberately nothing else. Expanding everything here — which is what this used to do —
+    // unpacked every bus in the window each time a signal was added, throwing away whatever
+    // the reader had chosen to have open. A new signal arrives packed, and what was already
+    // there stays as it was.
 }
 
 void MainWindow::groupSelectedWaves() {
@@ -433,7 +443,10 @@ void MainWindow::groupSelectedWaves() {
 
     const int group = waveModel->addGroup(name);
     for (const int rowId : selected) waveModel->moveToGroup(rowId, group);
-    waveRowsView->expandAll();
+
+    // Only the group just made, so that the rows the reader was collecting are visible where
+    // they landed and nothing else in the window moves.
+    waveRowsView->expand(waveModel->indexOfRow(group));
 }
 
 void MainWindow::extractBitRange() {
@@ -481,6 +494,47 @@ void MainWindow::removeSelectedWaves() {
 void MainWindow::setSelectedWaveRadix(eir::Radix radix) {
     for (const int rowId : selectedWaveRows()) waveModel->setRadixRecursive(rowId, radix);
     waveView->update();
+}
+
+void MainWindow::addCursor() {
+    waveView->addCursor(tr("Cursor %1").arg(waveView->cursors().size() + 1),
+                        waveView->activeCursorTime());
+}
+
+void MainWindow::copySelectedWaves() {
+    const QVector<int> selected = selectedWaveRows();
+    if (selected.isEmpty()) return;
+
+    waveModel->copyRows(selected);
+    note(tr("Copied %n row(s)", nullptr, static_cast<int>(selected.size())));
+}
+
+void MainWindow::pasteWaves() {
+    if (!WaveformModel::clipboardHasRows()) {
+        note(tr("There are no wave rows on the clipboard"));
+        return;
+    }
+
+    // Pasted beside whatever is current — inside it when that is a group — because that is
+    // where the reader is looking, and at the end of the window when nothing is.
+    const int current = waveModel->rowIdOf(waveRowsView->currentIndex());
+    const WaveRow* currentRow = waveModel->row(current);
+
+    int targetGroup = -1;
+    int position = -1;
+    if (currentRow != nullptr) {
+        if (currentRow->kind == WaveRow::Kind::Group) {
+            targetGroup = current;
+        } else {
+            targetGroup = currentRow->parent;
+            position = waveModel->indexOfRow(current).row() + 1;
+        }
+    }
+
+    const QVector<int> pasted = waveModel->pasteRows(targetGroup, position);
+    if (pasted.isEmpty()) return;
+
+    waveRowsView->setCurrentIndex(waveModel->indexOfRow(pasted.front()));
 }
 
 void MainWindow::setSelectedHighlight(int slot) {

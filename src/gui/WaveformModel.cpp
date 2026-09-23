@@ -4,12 +4,16 @@
 
 #include "wavedb/WaveformDatabase.h"
 
+#include <QApplication>
+#include <QClipboard>
 #include <QDataStream>
 #include <QIODevice>
 #include <QMimeData>
 
 #include <algorithm>
 #include <utility>
+
+#include <QStringList>
 
 namespace enzan::gui {
 
@@ -78,7 +82,7 @@ int WaveformModel::addSignal(const SignalInfo& info, int parentGroup) {
     // The position is taken by value and the list is reached again after the row is stored.
     // Holding a reference into `rows` across the `push_back` below would leave it dangling the
     // moment the vector grew — which it does, silently, and then the child is appended to
-    // freed memory and the parent appears to have no children at all.
+    // freed memory and the row appears to have no children at all.
     const int at = parentRow < 0 ? static_cast<int>(roots.size())
                                  : static_cast<int>(rows[parentRow].children.size());
 
@@ -161,6 +165,7 @@ void WaveformModel::removeRow(int rowId) {
     killSubtree(rowId);
     endRemoveRows();
 
+    notifyValueChangedUpwards(parentGroup);
     Q_EMIT displayedSignalsChanged();
 }
 
@@ -296,9 +301,154 @@ bool WaveformModel::moveRowsTo(const QVector<int>& rowIds, int targetGroup, int 
         endInsertRows();
 
         at = insertAt + 1;
+        notifyValueChangedUpwards(sourceParent);
+        notifyValueChangedUpwards(targetGroup);
     }
 
     return true;
+}
+
+void WaveformModel::notifyValueChangedUpwards(int fromRow) {
+    for (int walk = fromRow; walk >= 0; walk = rows[walk].parent) {
+        const QModelIndex changed = indexOfRow(walk);
+        if (!changed.isValid()) return;
+
+        Q_EMIT dataChanged(changed.siblingAtColumn(ValueColumn),
+                           changed.siblingAtColumn(ValueColumn), {Qt::DisplayRole});
+    }
+}
+
+void WaveformModel::writeRow(QDataStream& stream, int rowId) const {
+    const WaveRow& waveRow = rows[rowId];
+
+    stream << static_cast<quint8>(waveRow.kind) << waveRow.label
+           << static_cast<quint32>(waveRow.signalIndex) << static_cast<quint32>(waveRow.signalWidth)
+           << static_cast<quint8>(waveRow.radix) << waveRow.sliced
+           << static_cast<quint32>(waveRow.highBit) << static_cast<quint32>(waveRow.lowBit)
+           << static_cast<qint32>(waveRow.highlight) << waveRow.unpacked
+           << static_cast<quint32>(waveRow.children.size());
+
+    for (const int child : waveRow.children) writeRow(stream, child);
+}
+
+int WaveformModel::readRow(QDataStream& stream, int parentRow) {
+    quint8 kind = 0;
+    quint32 signalIndex = 0;
+    quint32 signalWidth = 1;
+    quint8 radix = 0;
+    quint32 highBit = 0;
+    quint32 lowBit = 0;
+    qint32 highlight = 0;
+    quint32 childCount = 0;
+
+    WaveRow added;
+    stream >> kind >> added.label >> signalIndex >> signalWidth >> radix >> added.sliced >> highBit
+        >> lowBit >> highlight >> added.unpacked >> childCount;
+    if (stream.status() != QDataStream::Ok) return -1;
+
+    added.kind = kind == static_cast<quint8>(WaveRow::Kind::Group) ? WaveRow::Kind::Group
+                                                                   : WaveRow::Kind::Signal;
+    added.signalIndex = signalIndex;
+    added.signalWidth = signalWidth;
+    added.radix = radix <= static_cast<quint8>(eir::Radix::Hexadecimal)
+                      ? static_cast<eir::Radix>(radix)
+                      : eir::Radix::Hexadecimal;
+    added.highBit = highBit;
+    added.lowBit = lowBit;
+    added.highlight = std::clamp(static_cast<int>(highlight), 0, HighlightSlots);
+    added.parent = parentRow;
+
+    const int rowId = static_cast<int>(rows.size());
+    rows.push_back(added);
+    (parentRow < 0 ? roots : rows[parentRow].children).push_back(rowId);
+
+    for (quint32 index = 0; index < childCount; ++index) {
+        if (readRow(stream, rowId) < 0) return rowId;
+    }
+
+    return rowId;
+}
+
+void WaveformModel::copyRows(const QVector<int>& rowIds) const {
+    QByteArray encoded;
+    QDataStream stream(&encoded, QIODevice::WriteOnly);
+
+    quint32 count = 0;
+    for (const int rowId : rowIds) {
+        if (row(rowId) != nullptr) ++count;
+    }
+
+    stream << count;
+    for (const int rowId : rowIds) {
+        if (row(rowId) != nullptr) writeRow(stream, rowId);
+    }
+
+    // The system clipboard rather than a variable of this window's own: a copy then survives
+    // whatever the reader does next, and the plain-text form below is there for whatever else
+    // they paste into.
+    QStringList paths;
+    for (const int rowId : rowIds) {
+        const WaveRow* waveRow = row(rowId);
+        if (waveRow == nullptr) continue;
+
+        const SignalInfo* info = kernelSession->signalInfo(waveRow->signalIndex);
+        paths << (info != nullptr && waveRow->kind == WaveRow::Kind::Signal ? info->path
+                                                                            : waveRow->label);
+    }
+
+    auto* data = new QMimeData;
+    data->setData(QString::fromUtf8(RowMimeType), encoded);
+    data->setText(paths.join(u'\n'));
+    QApplication::clipboard()->setMimeData(data);
+}
+
+bool WaveformModel::clipboardHasRows() {
+    const QMimeData* data = QApplication::clipboard()->mimeData();
+    return data != nullptr && data->hasFormat(QString::fromUtf8(RowMimeType));
+}
+
+QVector<int> WaveformModel::pasteRows(int targetGroup, int position) {
+    QVector<int> pasted;
+
+    const QMimeData* data = QApplication::clipboard()->mimeData();
+    if (data == nullptr || !data->hasFormat(QString::fromUtf8(RowMimeType))) return pasted;
+
+    if (targetGroup >= 0
+        && (row(targetGroup) == nullptr || rows[targetGroup].kind != WaveRow::Kind::Group)) {
+        targetGroup = -1;
+    }
+
+    QByteArray encoded = data->data(QString::fromUtf8(RowMimeType));
+    QDataStream stream(&encoded, QIODevice::ReadOnly);
+
+    quint32 count = 0;
+    stream >> count;
+    if (stream.status() != QDataStream::Ok || count == 0) return pasted;
+
+    // A reset rather than a run of insertions: whole subtrees arrive at once, and the reader
+    // is about to look at where they landed rather than at what moved to make room.
+    beginResetModel();
+    for (quint32 index = 0; index < count; ++index) {
+        const int rowId = readRow(stream, targetGroup);
+        if (rowId < 0) break;
+        pasted.push_back(rowId);
+    }
+
+    // Put where the paste was aimed rather than at the end, which is what makes pasting beside
+    // the row you copied do the obvious thing.
+    if (position >= 0 && !pasted.isEmpty()) {
+        QVector<int>& siblings = targetGroup < 0 ? roots : rows[targetGroup].children;
+        for (const int rowId : pasted) siblings.removeAll(rowId);
+
+        const int at = std::min(position, static_cast<int>(siblings.size()));
+        for (int offset = 0; offset < pasted.size(); ++offset) {
+            siblings.insert(at + offset, pasted[offset]);
+        }
+    }
+    endResetModel();
+
+    Q_EMIT displayedSignalsChanged();
+    return pasted;
 }
 
 void WaveformModel::detach(int rowId) {
@@ -340,9 +490,108 @@ eir::BitVector WaveformModel::slice(const WaveRow& waveRow, const eir::BitVector
     return narrowed;
 }
 
+bool WaveformModel::showsChildren(int rowId) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr) return false;
+
+    // `unpacked` rather than "has children", so that a bus whose bits have *all* been deleted
+    // shows nothing rather than quietly reverting to the whole value the reader just took
+    // apart. A group always shows its children, which is what a group is.
+    return waveRow->kind == WaveRow::Kind::Group || waveRow->unpacked;
+}
+
+std::uint32_t WaveformModel::displayedWidth(int rowId) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr) return 0;
+
+    if (showsChildren(rowId)) {
+        std::uint32_t total = 0;
+        for (const int child : waveRow->children) total += displayedWidth(child);
+        return total;
+    }
+
+    if (waveRow->kind != WaveRow::Kind::Signal) return 0;
+
+    const auto [high, low] = bitRange(*waveRow);
+    return high - low + 1;
+}
+
+bool WaveformModel::childrenReconstituteParent(int rowId) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return false;
+    if (waveRow->children.isEmpty()) return false;
+
+    const auto [high, low] = bitRange(*waveRow);
+    std::uint32_t expected = high;
+
+    for (int position = 0; position < waveRow->children.size(); ++position) {
+        const WaveRow* child = row(waveRow->children[position]);
+        if (child == nullptr || !child->children.isEmpty()) return false;
+        if (child->kind != WaveRow::Kind::Signal) return false;
+        if (child->signalIndex != waveRow->signalIndex) return false;
+        if (!child->sliced || child->highBit != expected || child->lowBit != expected) {
+            return false;
+        }
+
+        if (expected == low) return position == waveRow->children.size() - 1;
+        --expected;
+    }
+
+    return false;
+}
+
+std::optional<eir::BitVector> WaveformModel::combinedValueAt(int rowId,
+                                                             runtime::SimTime time) const {
+    const WaveRow& waveRow = rows[rowId];
+
+    // Every child has to be the same width, which is what "all children have the same type"
+    // amounts to for a vector. A group of unrelated signals stays blank rather than showing a
+    // number joined out of things that have nothing to do with each other.
+    std::uint32_t childWidth = 0;
+    QVector<eir::BitVector> parts;
+    parts.reserve(waveRow.children.size());
+
+    for (const int child : waveRow.children) {
+        const std::optional<eir::BitVector> value = valueAt(child, time);
+        if (!value.has_value()) return std::nullopt;
+
+        if (parts.isEmpty()) {
+            childWidth = value.value().width();
+        } else if (value.value().width() != childWidth) {
+            return std::nullopt;
+        }
+        parts.push_back(value.value());
+    }
+
+    if (parts.isEmpty()) return std::nullopt;
+
+    // The first child is the most significant, which is the order the list shows them in and
+    // the order unpacking creates them in.
+    const std::uint32_t total = childWidth * static_cast<std::uint32_t>(parts.size());
+    eir::BitVector joined = eir::BitVector::filled(total, eir::Logic::Zero);
+
+    std::uint32_t bit = total;
+    for (const eir::BitVector& part : parts) {
+        for (std::uint32_t index = part.width(); index-- > 0;) {
+            joined.set(--bit, part.get(index));
+        }
+    }
+
+    return joined;
+}
+
 std::optional<eir::BitVector> WaveformModel::valueAt(int rowId, runtime::SimTime time) const {
     const WaveRow* waveRow = row(rowId);
-    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return std::nullopt;
+    if (waveRow == nullptr) return std::nullopt;
+
+    // A row with children shows what its children show, joined. Skipped when the children are
+    // simply the row's own bits with none missing, because the answer is then the row's own
+    // value and reading it directly is cheaper.
+    if (showsChildren(rowId) && !childrenReconstituteParent(rowId)) {
+        return combinedValueAt(rowId, time);
+    }
+
+    if (waveRow->kind != WaveRow::Kind::Signal) return std::nullopt;
 
     const wavedb::WaveformDatabase& database = kernelSession->waveforms();
     const std::uint32_t record = database.recordIndexOf(waveRow->signalIndex);
@@ -356,12 +605,16 @@ std::optional<eir::BitVector> WaveformModel::valueAt(int rowId, runtime::SimTime
 
 QString WaveformModel::renderValue(int rowId, runtime::SimTime time) const {
     const WaveRow* waveRow = row(rowId);
-    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return {};
+    if (waveRow == nullptr) return {};
 
     const std::optional<eir::BitVector> value = valueAt(rowId, time);
-    if (!value.has_value()) return QStringLiteral("—");
+    if (!value.has_value()) {
+        // A group with nothing joinable in it shows nothing at all, rather than the dash that
+        // means "this signal has no value yet": they are different situations.
+        return waveRow->kind == WaveRow::Kind::Group ? QString() : QStringLiteral("—");
+    }
 
-    return QString::fromStdString(eir::toString(value->ref(), waveRow->radix));
+    return QString::fromStdString(eir::toString(value.value().ref(), waveRow->radix));
 }
 
 void WaveformModel::setCursorTime(runtime::SimTime time) {
@@ -451,8 +704,7 @@ QVariant WaveformModel::data(const QModelIndex& index, int role) const {
 
     switch (index.column()) {
     case NameColumn: return waveRow.label;
-    case ValueColumn:
-        return waveRow.kind == WaveRow::Kind::Group ? QString() : renderValue(rowId, cursorTime);
+    case ValueColumn: return renderValue(rowId, cursorTime);
     default: return {};
     }
 }
