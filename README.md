@@ -11,8 +11,9 @@ for the computational work the simulator performs.
 
 **Status: milestone M2.1 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and FST
 waveforms, and has an interactive graphical debugging environment: a design runs under the GUI with
-signals added from the window and the waveform progressing live. A parameterised counter and a
-synchronous FIFO both run, self-check, and agree with Icarus Verilog. See
+signals added from the window and the waveform progressing live. A parameterised counter, a
+synchronous FIFO, and a packet router three levels deep that pushes four hundred and eighty
+transfers through three channel instances all run, self-check, and agree with Icarus Verilog. See
 [what works today](#what-works-today) and the roadmap below.
 
 ## Building
