@@ -696,6 +696,12 @@ downsampling with min/max bucketing rather than iterating transitions. Getting
 this wrong makes the viewer unusable on exactly the large designs Enzan targets,
 and it is difficult to retrofit.
 
+One-pixel rules — the grid, the ruler ticks, the line between rows — are
+*filled*, not stroked. The pixels are the same either way and the fill path
+writes them directly, where the stroker sets up a pen and a clip per call; on a
+wide window with a line per row it was a third of what the ruler cost, paid on
+every repaint.
+
 Required features: multiple named cursors, cursor locking, zoom and pan, signal
 grouping, extracting a bit range of a signal into a separate displayed signal,
 and per-signal value radix selection.

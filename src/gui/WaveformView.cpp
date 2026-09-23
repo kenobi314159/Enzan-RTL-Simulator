@@ -656,7 +656,8 @@ void WaveformView::paintRuler(QPainter& painter) {
         if (x < -1.0 || x > width()) continue;
 
         const int column = static_cast<int>(x);
-        painter.drawLine(column, ruler.bottom() - 4, column, ruler.bottom());
+        painter.fillRect(QRect(column, ruler.bottom() - 4, 1, 5),
+                         theme->color(ThemeColor::WaveRulerForeground));
         painter.drawText(column + 3, metrics.ascent() + 2,
                          TimeAxis::format(time, kernelSession->timeScale()));
 
@@ -664,12 +665,16 @@ void WaveformView::paintRuler(QPainter& painter) {
         if (time > runtime::NoTime - step) break;
     }
 
-    painter.setPen(theme->color(ThemeColor::WaveGrid));
+    // Filled rather than stroked. A one-pixel vertical line is the same pixels either way, and
+    // the fill path writes them directly where the stroker sets up a pen, a dash pattern and a
+    // clip per call — which on a window three thousand pixels wide, with a grid line every
+    // ninety, was a third of what the ruler cost and it was paid on every repaint.
+    const QColor grid = theme->color(ThemeColor::WaveGrid);
     const QRect area = traceArea();
     for (runtime::SimTime time = first; time <= timeAxis.end(); time += step) {
         const double x = timeAxis.xOf(time);
         if (x < 0.0 || x > width()) continue;
-        painter.drawLine(static_cast<int>(x), area.top(), static_cast<int>(x), area.bottom());
+        painter.fillRect(QRect(static_cast<int>(x), area.top(), 1, area.height()), grid);
         if (time > runtime::NoTime - step) break;
     }
 }
@@ -783,8 +788,10 @@ void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
     const QRect rowRect(area.left(), geometry.top, area.width(), geometry.height);
     if (rowRect.bottom() < area.top() || rowRect.top() > area.bottom()) return;
 
-    painter.setPen(theme->color(ThemeColor::WaveRowSeparator));
-    painter.drawLine(rowRect.left(), rowRect.bottom(), rowRect.right(), rowRect.bottom());
+    // Filled rather than stroked, for the reason the grid is: one of these per row, the full
+    // width of the window, on every repaint.
+    painter.fillRect(QRect(rowRect.left(), rowRect.bottom(), rowRect.width(), 1),
+                     theme->color(ThemeColor::WaveRowSeparator));
 
     // A group draws too, when its children make a value between them: section 10.7 has a row
     // with children show what they show joined, and a vector assembled out of one-bit signals
