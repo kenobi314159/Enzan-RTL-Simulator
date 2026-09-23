@@ -79,6 +79,10 @@ std::ostream& Kernel::transcriptStream() const {
 void Kernel::initialize() {
     designImage->initializeState(stateArena);
 
+    // A force does not survive a restart: `restart` puts the design back to time zero, and a
+    // signal still pinned from the last run would be state the user did not ask to keep.
+    forcedSignals.clear();
+
     currentTime = 0;
     scheduler.resetDeltaCount();
 
@@ -290,6 +294,8 @@ void Kernel::resume(std::uint32_t processIndex, std::uint32_t resumePc) {
 }
 
 void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
+    if (isForced(signalIndex)) return;
+
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
@@ -310,6 +316,8 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
 
 void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
                              std::uint64_t lowBit) {
+    if (isForced(signalIndex)) return;
+
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
@@ -343,6 +351,31 @@ void Kernel::scheduleNonBlocking(std::uint32_t signalIndex, eir::ConstBitRef val
 void Kernel::scheduleNonBlockingPart(std::uint32_t signalIndex, eir::ConstBitRef value,
                                      std::uint64_t lowBit) {
     scheduler.appendNonBlocking(signalIndex, value, static_cast<std::uint32_t>(lowBit), true);
+}
+
+bool Kernel::isForced(std::uint32_t signalIndex) const noexcept {
+    return !forcedSignals.empty() && forcedSignals[signalIndex];
+}
+
+void Kernel::deposit(std::uint32_t signalIndex, eir::ConstBitRef value) {
+    writeSignal(signalIndex, value);
+}
+
+void Kernel::force(std::uint32_t signalIndex, eir::ConstBitRef value) {
+    // Cleared first so that re-forcing an already-forced signal to a different value writes
+    // rather than being discarded by the force it is replacing.
+    if (!forcedSignals.empty()) forcedSignals[signalIndex] = false;
+
+    writeSignal(signalIndex, value);
+
+    if (forcedSignals.empty()) forcedSignals.assign(designImage->signals().size(), false);
+    forcedSignals[signalIndex] = true;
+}
+
+bool Kernel::release(std::uint32_t signalIndex) {
+    if (!isForced(signalIndex)) return false;
+    forcedSignals[signalIndex] = false;
+    return true;
 }
 
 void Kernel::addListener(ValueChangeListener& newListener) {

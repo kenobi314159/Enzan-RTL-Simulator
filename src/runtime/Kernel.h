@@ -156,6 +156,46 @@ public:
 
     [[nodiscard]] const Image& image() const noexcept { return *designImage; }
 
+    // -----------------------------------------------------------------------
+    // Operations the control layer and the GUI perform on a stopped kernel
+    // -----------------------------------------------------------------------
+    //
+    // These are the `examine`, `force` and `deposit` of DESIGN_GUIDE.md section 10.4, which
+    // are required from both Tcl and the GUI. They are on the kernel rather than in the
+    // control layer because the GUI does not go through Tcl, and a second implementation of
+    // "write a signal from outside" would be a second set of semantics.
+    //
+    // All of them are meant to be called between runs. Calling one from inside a process
+    // would write state the running process may be holding a view of.
+
+    /// Writes `value` into a signal now, waking whatever watches it.
+    ///
+    /// `deposit` in the Modelsim vocabulary: the value lands immediately and the next thing
+    /// that drives the signal overwrites it. A deposit onto a forced signal does nothing,
+    /// because a force outranks everything until it is released.
+    void deposit(std::uint32_t signalIndex, eir::ConstBitRef value);
+
+    /// Holds `signalIndex` at `value` until `release`.
+    ///
+    /// Every subsequent write to the signal — procedural, non-blocking or another deposit —
+    /// is discarded while the force stands, which is what distinguishes a force from a
+    /// deposit and what makes it useful for pinning a reset or a mode bit while stepping.
+    ///
+    /// Forcing costs one branch on the signal write path and nothing at all until the first
+    /// force in a run: the table is allocated when it is first needed, so section 13.4's ban
+    /// on hot-path allocation is not in question.
+    void force(std::uint32_t signalIndex, eir::ConstBitRef value);
+
+    /// Releases a forced signal, returning false if it was not forced.
+    ///
+    /// The value stays where the force left it until something drives the signal again.
+    /// Recomputing what the drivers would now say needs driver resolution, which is M5; until
+    /// then a released signal keeps its value rather than reverting to a number Enzan would
+    /// have had to invent.
+    bool release(std::uint32_t signalIndex);
+
+    [[nodiscard]] bool isForced(std::uint32_t signalIndex) const noexcept;
+
     /// Registers a listener, which must outlive the kernel or be removed first.
     ///
     /// More than one is supported, and delivered to in registration order, because that is what
@@ -274,6 +314,12 @@ private:
     /// Mutable per-process state. A copy of the image's list, because `resumePc` and
     /// `queued` change as the simulation runs and the image is shared and const.
     std::vector<ProcessState> processes;
+
+    /// True for each signal a `force` is holding, or empty when nothing is forced.
+    ///
+    /// Empty rather than sized at construction so that the check on the signal write path is
+    /// a test of one size against zero for the whole of an ordinary run.
+    std::vector<bool> forcedSignals;
 
     /// Dynamic edge subscriptions created by `WaitEdge`, indexed by signal.
     ///

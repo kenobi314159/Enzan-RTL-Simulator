@@ -128,6 +128,13 @@ public:
         return enzan::eir::toString(kernel->arena().at(signal.wordOffset, signal.bitWidth), radix);
     }
 
+    /// The index of a signal by path, failing the test if the design has no such signal.
+    [[nodiscard]] std::uint32_t signal(std::string_view path) const {
+        const std::uint32_t signalIndex = image->findSignal(path);
+        EXPECT_NE(signalIndex, Image::NoSignal) << "no signal named " << path;
+        return signalIndex;
+    }
+
     [[nodiscard]] std::string transcript() const { return transcriptStream.str(); }
 
     [[nodiscard]] bool reportedCode(enzan::DiagCode code) const {
@@ -1142,6 +1149,168 @@ TEST(Kernel, ResumingAfterAnInterruptMatchesAnUninterruptedRun) {
               straight.simulationKernel().executedInstructions());
     EXPECT_EQ(chopped.simulationKernel().totalDeltaCycles(),
               straight.simulationKernel().totalDeltaCycles());
+}
+
+// ---------------------------------------------------------------------------
+// examine, deposit, force and release (section 10.4)
+// ---------------------------------------------------------------------------
+
+/// The clock-generator design again, so that a force has something to fight with.
+Design makeTogglingDesign() {
+    ProcessBuilder builder(ProcessKind::Always, "clockgen");
+    const std::uint32_t delay = builder.reg(Type::bits(32, false, false));
+    const std::uint32_t value = builder.reg(Type::logic());
+    const std::uint32_t inverted = builder.reg(Type::logic());
+    const std::uint32_t five = builder.constant("32'd5");
+
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(five)));
+    builder.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    builder.block("toggle");
+    builder.readObject(value, 0);
+    builder.emit(Instruction::make(Opcode::Not, Operand::reg(inverted), Operand::reg(value)));
+    builder.store(0, inverted);
+    builder.emit(Instruction::make(Opcode::Jump, {}, Operand::block(0)));
+
+    return designOf(makeTop(
+        {builder.finish()},
+        {Object{.name = "clk", .type = Type::logic(), .initialValue = BitVector::parse("1'b0")}}));
+}
+
+TEST(Kernel, ADepositLandsImmediately) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().deposit(clk, one);
+
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
+TEST(Kernel, ADepositWakesWhatWatchesTheSignal) {
+    Simulation simulation(makeClockedDesign(EdgeKind::Posedge, "1'b0", "1'b0"), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ASSERT_EQ(simulation.run(0), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "0");
+
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().deposit(simulation.signal("/tb/clk"), one);
+    ASSERT_EQ(simulation.run(0), RunStatus::TimeLimitReached);
+
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "1");
+}
+
+TEST(Kernel, ADepositIsOverwrittenByTheNextDrive) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().deposit(simulation.signal("/tb/clk"), one);
+    ASSERT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+
+    // The generator inverted what it found, which is the deposited value.
+    EXPECT_EQ(simulation.value("/tb/clk"), "0");
+}
+
+TEST(Kernel, AForcedSignalIgnoresWhatDrivesIt) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().force(clk, one);
+    EXPECT_TRUE(simulation.simulationKernel().isForced(clk));
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+
+    ASSERT_EQ(simulation.run(20), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
+TEST(Kernel, AForcedSignalIgnoresADeposit) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    const BitVector zero = literal("1'b0");
+    simulation.simulationKernel().force(clk, one);
+    simulation.simulationKernel().deposit(clk, zero);
+
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
+TEST(Kernel, ForcingAgainChangesTheHeldValue) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    const BitVector zero = literal("1'b0");
+    simulation.simulationKernel().force(clk, one);
+    simulation.simulationKernel().force(clk, zero);
+
+    EXPECT_EQ(simulation.value("/tb/clk"), "0");
+    EXPECT_TRUE(simulation.simulationKernel().isForced(clk));
+}
+
+TEST(Kernel, AReleasedSignalIsDrivenAgain) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().force(clk, one);
+    ASSERT_EQ(simulation.run(20), RunStatus::TimeLimitReached);
+
+    EXPECT_TRUE(simulation.simulationKernel().release(clk));
+    EXPECT_FALSE(simulation.simulationKernel().isForced(clk));
+
+    // The value stays where the force left it until something drives the signal, which the
+    // generator does at the next multiple of five.
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+    ASSERT_EQ(simulation.run(25), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), "0");
+}
+
+TEST(Kernel, ReleasingASignalThatWasNeverForcedSaysSo) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    EXPECT_FALSE(simulation.simulationKernel().release(simulation.signal("/tb/clk")));
+}
+
+TEST(Kernel, NothingIsForcedBeforeAnythingIsForced) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    EXPECT_FALSE(simulation.simulationKernel().isForced(simulation.signal("/tb/clk")));
+}
+
+TEST(Kernel, AForceDoesNotSurviveReinitialisation) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().force(clk, one);
+
+    simulation.simulationKernel().initialize();
+    EXPECT_FALSE(simulation.simulationKernel().isForced(clk));
+}
+
+TEST(Kernel, AForcedSignalIgnoresANonBlockingUpdate) {
+    Simulation simulation(makeClockedDesign(EdgeKind::Posedge, "1'b0", "1'b1"), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t count = simulation.signal("/tb/count");
+    const BitVector held = literal("8'd99");
+    simulation.simulationKernel().force(count, held);
+
+    ASSERT_EQ(simulation.run(20), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "99");
 }
 
 } // namespace
