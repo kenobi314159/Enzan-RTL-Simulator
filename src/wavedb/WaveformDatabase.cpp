@@ -26,7 +26,12 @@ constexpr std::uint64_t BytesPerWord = sizeof(eir::Word);
 /// so the product stays inside 64 bits only while the count does not approach 2^32. A million
 /// columns is already far more than any display has, so the limit costs nothing and removes
 /// the overflow from consideration.
-constexpr std::size_t MaxSampleColumns = 1U << 20U;
+///
+/// Marked maybe_unused because its only use is an assertion, and a Release build compiles
+/// those away — which leaves the name with no reader and earns clang's
+/// `-Wunused-const-variable`. The alternative is to write the number into the assertion, and a
+/// bound worth eight lines of explanation is worth a name.
+[[maybe_unused]] constexpr std::size_t MaxSampleColumns = 1U << 20U;
 
 } // namespace
 
