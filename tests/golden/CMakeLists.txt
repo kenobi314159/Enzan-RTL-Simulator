@@ -80,20 +80,20 @@ enzan_add_golden_test(router)
 # and cannot run in CI, so the properties a viewer relies on are checked instead — balanced
 # scopes, declared identifiers, widths that match their declaration, monotonic time. That is both
 # automatable and stricter than "it opened without complaining".
+#
+# `router` is checked as well as the two M1 cases because it is the only one with nested scopes
+# and repeated instances, which is where a writer's scope nesting and its aliasing of collapsed
+# ports actually get exercised.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
-  add_test(
-    NAME golden.counter.vcd
-    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-vcd-check.sh" $<TARGET_FILE:enzan>
-            "${CMAKE_CURRENT_SOURCE_DIR}/check-vcd.py" "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv"
-            tb)
-  set_tests_properties(golden.counter.vcd PROPERTIES TIMEOUT 60)
-
-  add_test(
-    NAME golden.fifo.vcd
-    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-vcd-check.sh" $<TARGET_FILE:enzan>
-            "${CMAKE_CURRENT_SOURCE_DIR}/check-vcd.py" "${CMAKE_CURRENT_SOURCE_DIR}/sv/fifo.sv" tb)
-  set_tests_properties(golden.fifo.vcd PROPERTIES TIMEOUT 60)
+  foreach(case IN ITEMS counter fifo router)
+    add_test(
+      NAME golden.${case}.vcd
+      COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-vcd-check.sh" $<TARGET_FILE:enzan>
+              "${CMAKE_CURRENT_SOURCE_DIR}/check-vcd.py"
+              "${CMAKE_CURRENT_SOURCE_DIR}/sv/${case}.sv" tb)
+    set_tests_properties(golden.${case}.vcd PROPERTIES TIMEOUT 60)
+  endforeach()
 else()
   message(STATUS "Python 3 not found; the VCD structure checks are skipped")
 endif()
@@ -106,7 +106,7 @@ find_program(ENZAN_FST2VCD fst2vcd)
 if(Python3_Interpreter_FOUND AND ENZAN_FST2VCD)
   message(STATUS "FST output will be checked against ${ENZAN_FST2VCD}")
 
-  foreach(case IN ITEMS counter fifo)
+  foreach(case IN ITEMS counter fifo router)
     add_test(
       NAME golden.${case}.fst
       COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-fst-check.sh" $<TARGET_FILE:enzan>
