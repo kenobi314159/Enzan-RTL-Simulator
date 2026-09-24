@@ -418,8 +418,36 @@ mirroring the convention users know from Questa). Entries are keyed by a hash of
 the source text plus the analysis options that affect the result, so unchanged
 units are never re-analysed.
 
+**Everything that changes what analysis produces belongs in the key**, not only
+the source text: the macro definitions, the include path, the serialised format
+version and Enzan's own version. A define that is outside the key is a define
+whose change the library cannot see, and the result is a simulation that runs
+and is wrong.
+
 The serialised form MUST carry a format version, and a version mismatch MUST
-cause clean re-analysis rather than a crash or, worse, silent misbehaviour.
+cause clean re-analysis rather than a crash or, worse, silent misbehaviour. The
+same applies to a truncated or corrupted entry, which a checksum detects: an
+interrupted write leaves a file that would otherwise decode into plausible
+nonsense.
+
+**The format version MUST be bumped when the frontend's translation changes**,
+not only when the encoding does. A unit produced by an older translator decodes
+perfectly and simulates differently, which is the harder failure to notice of
+the two.
+
+**Using a library is opt-in.** Nothing consults one until the user creates it,
+exactly as Questa makes `vlib` precede `vlog`. The version is in the key and the
+format version is disciplined, but a cache that can change a simulation result
+is a thing a user must be able to stop doing without having to find it first.
+
+A hit is currently all or nothing, and that is a property of the frontend rather
+than of the store. SystemVerilog analysis hands every source to one slang
+compilation, because a module cannot be type-checked without the packages it
+imports; so either every file's entry is present and current, in which case
+nothing is analysed at all, or one is missing and everything is analysed and
+every entry rewritten. Entries are nonetheless kept **per source file**, because
+that is the shape this section describes and the shape a per-unit frontend will
+want. Only the hit rule changes when one arrives.
 
 ---
 

@@ -101,8 +101,8 @@ passing regression from a failing one. Anything else on the command line reaches
 `$argv`. `enzan -i` reads commands from the standard input instead, and the two combine: the
 script runs, then the prompt.
 
-The vocabulary is `vlog`, `vsim`, `run`, `restart`, `examine`, `force`, `noforce`, `deposit`,
-`log`, `add wave`, `vcd file`, `fst file`, `find`, `radix`, `do` and `quit`. `vlog` reads `.f`
+The vocabulary is `vlib`, `vlog`, `vsim`, `run`, `restart`, `examine`, `force`, `noforce`,
+`deposit`, `log`, `add wave`, `vcd file`, `fst file`, `find`, `radix`, `do` and `quit`. `vlog` reads `.f`
 file lists with `-f`, understands `+incdir+`, `+define+` and `-sv`, and works out the compile
 order itself — a package can be named after the module that imports it. `vcom` is refused
 rather than ignored until VHDL arrives at M6, so that a mixed-language script fails at the
@@ -117,6 +117,27 @@ encoding.
 
 Because the script is the whole interface, `--do` and `-i` refuse the options above rather
 than becoming a second way to say the same thing.
+
+### Reusing analysed sources
+
+`vlib work` creates an analysis library, and `vlog` after it stores what it analysed there and
+reuses it on the next run when nothing has changed:
+
+```tcl
+vlib work
+vlog design.sv testbench.sv   ;# analyses, and stores
+vsim tb
+```
+
+Run the same script again and `vlog` prints `# reusing the analysed units in the library` and
+does not call the frontend at all. An entry is keyed by the source text together with
+everything else that changes what analysis produces — the macros, the include path, the
+serialised format version and Enzan's own version — so an edit, a changed `+define+` or a new
+build of Enzan is a miss and re-analyses.
+
+It is opt-in, the way Questa makes `vlib` precede `vlog`, and deliberately so: a cache that
+served units produced by a different translator would give a different simulation result, and
+a user who suspects one should have an obvious thing to stop doing.
 
 ### Running a simulation under the GUI
 
@@ -194,6 +215,7 @@ three colours.
 | Attaching a local GUI to a kernel running elsewhere | yes, over a forwarded socket |
 | Tcl control layer: `vlog`, `vsim`, `run`, `examine`, `force`, `log`, `find`, `do` | yes, from a script or a prompt |
 | `.f` file lists and automatic compile order | yes |
+| Analysis libraries reused across runs (`vlib`) | yes, keyed on the sources and the options |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
 | Source stepping, VHDL, VPI | not yet — M3, M6, M4 |

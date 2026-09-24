@@ -6,17 +6,21 @@ enzan_add_component(
           BitVector.cpp
           Design.cpp
           Instruction.cpp
+          Library.cpp
           Module.cpp
           Process.cpp
+          Serialization.cpp
           Type.cpp
           Verifier.cpp
   HEADERS BitOps.h
           BitVector.h
           Design.h
           Instruction.h
+          Library.h
           Module.h
           Opcodes.def
           Process.h
+          Serialization.h
           Type.h
           Verifier.h
   DEPENDS enzan::common)

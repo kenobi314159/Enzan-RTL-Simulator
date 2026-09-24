@@ -3,6 +3,7 @@
 #pragma once
 
 #include "eir/BitVector.h"
+#include "eir/Library.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
 
@@ -115,9 +116,27 @@ public:
     ///
     /// The files of every `vlog` so far are put in dependency order before analysis (section
     /// 8.3), so a script may name a package after the module that imports it.
+    ///
+    /// When a library is open (`openLibrary`) and every source has a current entry in it, the
+    /// units are loaded from there and the frontend does not run at all. Otherwise everything
+    /// is analysed and every entry rewritten.
     bool analyse(const AnalysisRequest& request);
 
     [[nodiscard]] bool hasDesign() const noexcept { return design != nullptr; }
+
+    /// Opens `path` as the analysis library, creating the directory: `vlib`.
+    ///
+    /// Opt-in, as Questa makes `vlib` precede `vlog`. Section 4.4's store is a cache of what
+    /// the frontend produced, and a cache that served units produced by a different translator
+    /// would give a different simulation — so a user who suspects one has an obvious thing to
+    /// stop doing. The format version and Enzan's version are both in every entry's key, which
+    /// is the belt to that pair of braces.
+    bool openLibrary(const std::filesystem::path& path);
+
+    [[nodiscard]] bool hasLibrary() const noexcept { return library.isOpen(); }
+
+    /// True when the last `analyse` came out of the library rather than the frontend.
+    [[nodiscard]] bool reusedLibrary() const noexcept { return loadedFromLibrary; }
 
     // -----------------------------------------------------------------------
     // Elaboration — `vsim`
@@ -239,6 +258,10 @@ private:
     [[nodiscard]] std::optional<eir::BitVector>
     parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;
 
+    /// Pairs each analysed file with the buffer holding its text, for the library's keys.
+    [[nodiscard]] std::vector<eir::LibrarySource>
+    librarySources(std::span<const std::filesystem::path> ordered) const;
+
     /// Opens `writer` on `path` and attaches it to the kernel.
     bool addWriter(std::unique_ptr<wavedb::WaveformWriter> writer,
                    const std::filesystem::path& path);
@@ -251,6 +274,9 @@ private:
     std::vector<std::filesystem::path> files;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
+
+    eir::Library library;
+    bool loadedFromLibrary = false;
 
     std::unique_ptr<eir::Design> design;
     std::unique_ptr<elab::ElaboratedDesign> elaborated;

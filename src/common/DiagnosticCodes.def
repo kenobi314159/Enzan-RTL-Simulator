@@ -122,6 +122,11 @@ ENZAN_DIAG(WaveformScopeAfterOpen, 6017, Error,
            "the recording scope cannot be changed once a waveform file is open; the signals a "
            "file declares are written into its header")
 ENZAN_DIAG(BadCommandArgument, 6018, Error, "{}")
+ENZAN_DIAG(LibraryNotADirectory, 6019, Error,
+           "'{}' exists and is not a directory, so it cannot be an analysis library")
+ENZAN_DIAG(LibraryWriteFailed, 6020, Warning,
+           "the analysis library entry '{}' could not be written; this run is unaffected and "
+           "the next one will analyse from source again")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 

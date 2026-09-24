@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <map>
 #include <utility>
 
 namespace enzan::control {
@@ -99,6 +100,22 @@ bool Session::analyse(const AnalysisRequest& request) {
     std::vector<std::filesystem::path> ordered;
     if (!inferCompileOrder(files, sources, diagnostics, ordered)) return false;
 
+    // The pre-scan has already read and buffered every file, so the library's keys cost no
+    // further I/O: the text it hashes is the text already in hand.
+    const std::vector<eir::LibrarySource> stored = librarySources(ordered);
+
+    loadedFromLibrary = false;
+    if (library.isOpen()) {
+        library.setOptions(defines, includeDirectories);
+
+        auto reused = std::make_unique<eir::Design>();
+        if (library.load(stored, sources, *reused)) {
+            design = std::move(reused);
+            loadedFromLibrary = true;
+            return true;
+        }
+    }
+
     frontend::sv::Options options;
     options.files = ordered;
     options.defines = defines;
@@ -108,12 +125,43 @@ bool Session::analyse(const AnalysisRequest& request) {
     if (analysed == nullptr) return false;
 
     design = std::move(analysed);
+
+    // A failed store is reported and otherwise ignored: the design is in hand either way, and
+    // refusing to simulate because a cache could not be written would be the cache making
+    // things worse.
+    if (library.isOpen()) static_cast<void>(library.store(stored, sources, *design, diagnostics));
+
     return true;
 #else
     diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
                        "analysis in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF");
     return false;
 #endif
+}
+
+bool Session::openLibrary(const std::filesystem::path& path) {
+    return library.open(path, diagnostics);
+}
+
+std::vector<eir::LibrarySource>
+Session::librarySources(std::span<const std::filesystem::path> ordered) const {
+    // The buffer for each path is the one the compile-order pre-scan read, found by name. The
+    // manager does not deduplicate, so the *last* buffer of a given name is the current one:
+    // an earlier `vlog` of the same file left an older copy behind it.
+    std::map<std::string, BufferId, std::less<>> latest;
+    for (std::size_t index = 0; index < sources.bufferCount(); ++index) {
+        const BufferId buffer = BufferId::fromIndex(static_cast<std::uint32_t>(index));
+        latest.insert_or_assign(std::string(sources.bufferName(buffer)), buffer);
+    }
+
+    std::vector<eir::LibrarySource> stored;
+    stored.reserve(ordered.size());
+    for (const std::filesystem::path& file : ordered) {
+        const auto found = latest.find(file.string());
+        if (found == latest.end()) continue;
+        stored.push_back({.path = file, .buffer = found->second});
+    }
+    return stored;
 }
 
 // ---------------------------------------------------------------------------

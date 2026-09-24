@@ -147,3 +147,18 @@ if(ENZAN_ENABLE_TCL)
                FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
                TIMEOUT 60)
 endif()
+
+# The other half of M3's exit criteria: libraries reused across runs without re-analysis.
+# Reuse is a property of two processes, so this one is driven from a shell script rather than
+# from a `do` file.
+if(ENZAN_ENABLE_TCL)
+  add_test(NAME golden.library
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh" $<TARGET_FILE:enzan>
+                   "${CMAKE_CURRENT_SOURCE_DIR}/do/library.do"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv")
+  set_tests_properties(
+    golden.library
+    PROPERTIES PASS_REGULAR_EXPRESSION "PASS library"
+               FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
+               TIMEOUT 60)
+endif()

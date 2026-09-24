@@ -141,6 +141,7 @@ public:
 
     // --- commands ----------------------------------------------------------
 
+    CommandResult vlib(CommandArguments arguments);
     CommandResult vlog(CommandArguments arguments);
     CommandResult vcom(CommandArguments arguments);
     CommandResult vsim(CommandArguments arguments);
@@ -176,8 +177,21 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// vlog
+// vlib and vlog
 // ---------------------------------------------------------------------------
+
+CommandResult Vocabulary::vlib(CommandArguments arguments) {
+    // `vlib` with no argument means `work`, which is the name every user of a Questa-style
+    // flow already has in their fingers (section 4.4).
+    const std::string_view path = arguments.size() > 1 ? arguments[1] : std::string_view("work");
+    if (arguments.size() > 2) return usage("vlib ?directory?");
+
+    if (!session->openLibrary(std::string(path)))
+        return CommandResult::error("the library could not be opened");
+
+    out() << "# library " << path << '\n';
+    return CommandResult::ok(std::string(path));
+}
 
 CommandResult Vocabulary::vlog(CommandArguments arguments) {
     Session::AnalysisRequest request;
@@ -227,6 +241,11 @@ CommandResult Vocabulary::vlog(CommandArguments arguments) {
     }
 
     if (!session->analyse(request)) return CommandResult::error("analysis failed");
+
+    // Said out loud, because "it was much faster this time" is otherwise indistinguishable
+    // from "it did not analyse the file I just edited", and the second is what a user needs
+    // to be able to see.
+    if (session->reusedLibrary()) out() << "# reusing the analysed units in the library\n";
     return CommandResult::ok();
 }
 
@@ -669,6 +688,7 @@ void install(const std::shared_ptr<Vocabulary>& vocabulary, Interpreter& interpr
         });
     };
 
+    bind("vlib", &Vocabulary::vlib);
     bind("vlog", &Vocabulary::vlog);
     bind("vcom", &Vocabulary::vcom);
     bind("vsim", &Vocabulary::vsim);
