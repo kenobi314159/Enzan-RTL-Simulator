@@ -18,6 +18,16 @@
 # NO_DIFFERENTIAL marks a case where simulators legitimately differ, which section 14.3
 # warns about. Such a case still runs under Enzan; it simply is not held to another tool's
 # behaviour.
+
+# A failure line, anchored to the start of one.
+#
+# The word on its own is not enough. A diagnostic quotes the source line it points at, and a
+# case that deliberately writes an out-of-range select has a `$display("FAIL: ...")` on the
+# very line being quoted — so the transcript contains the word without anything having failed.
+# A real failure is printed by the design and starts its line; a quoted one is indented behind
+# a line-number gutter.
+set(ENZAN_GOLDEN_FAILURE_PATTERN "\nFAIL")
+
 function(enzan_add_golden_test name)
   cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL" "" "")
 
@@ -30,7 +40,7 @@ function(enzan_add_golden_test name)
   set_tests_properties(
     golden.${name}
     PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}"
-               FAIL_REGULAR_EXPRESSION "FAIL"
+               FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
                TIMEOUT 60)
 
   if(arg_NO_DIFFERENTIAL OR NOT ENZAN_REFERENCE_SIMULATOR)
@@ -134,6 +144,6 @@ if(ENZAN_ENABLE_TCL)
   set_tests_properties(
     golden.counter.do
     PROPERTIES PASS_REGULAR_EXPRESSION "PASS counter.do"
-               FAIL_REGULAR_EXPRESSION "FAIL"
+               FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
                TIMEOUT 60)
 endif()
