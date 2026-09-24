@@ -10,6 +10,7 @@
 #ifndef ENZAN_TESTS_UNIT_SUPPORT_PROCESSBUILDER_H
 #define ENZAN_TESTS_UNIT_SUPPORT_PROCESSBUILDER_H
 
+#include "common/SourceLocation.h"
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
 #include "eir/Process.h"
@@ -66,8 +67,16 @@ public:
         return static_cast<std::uint32_t>(process.blocks.size() - 1);
     }
 
+    /// Sets the source location stamped onto everything emitted after it.
+    ///
+    /// The frontend stamps every instruction with the statement it came from, so a test that
+    /// is about source lines — a breakpoint, a step — has to be able to say the same thing.
+    void at(SourceLocation location) { current = location; }
+
     void emit(const eir::Instruction& instruction) {
-        process.blocks.back().instructions.push_back(instruction);
+        eir::Instruction stamped = instruction;
+        stamped.location = current;
+        process.blocks.back().instructions.push_back(stamped);
     }
 
     void readObject(std::uint32_t destination, std::uint32_t objectIndex) {
@@ -121,6 +130,7 @@ public:
 
 private:
     eir::Process process;
+    SourceLocation current;
     std::vector<std::uint32_t> reads;
     std::vector<std::uint32_t> writes;
 };

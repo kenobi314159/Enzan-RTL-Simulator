@@ -98,6 +98,19 @@ struct SysTaskDescriptor {
     }
 };
 
+/// Where a run of bytecode came from in the source.
+///
+/// One entry per *change* of location rather than one per instruction, which is what a
+/// debugger's line table has always been and is why it is affordable: a statement compiles to
+/// several instructions that all share a line, so the table is a small fraction of the code it
+/// describes. Entries are sorted by `pc` and cover from their own `pc` up to the next one's.
+struct LineEntry {
+    /// Index of the first instruction this location covers.
+    std::uint32_t pc = 0;
+
+    SourceLocation location;
+};
+
 /// One compiled process body.
 ///
 /// Shared by every instance of the module that declares it: the body refers to state
@@ -112,6 +125,14 @@ struct CompiledProcess {
     /// be read against the EIR it came from, and so that a resume index recorded by a
     /// suspension can be checked.
     std::vector<std::uint32_t> blockStarts;
+
+    /// Where each run of instructions came from, sorted by `pc`.
+    ///
+    /// Deliberately a side table and not a field on `Instruction`: a breakpoint or a step is
+    /// asked about once, when the kernel is already stopping, and the interpreter's inner loop
+    /// must not grow a field it never reads (section 13.4). A JIT keeps the same table against
+    /// its own addresses.
+    std::vector<LineEntry> lines;
 
     /// Size of the register frame, in Words.
     ///
@@ -138,6 +159,23 @@ struct CompiledProcess {
 
     /// True when the process must be scheduled once at time zero.
     bool startsAtTimeZero = false;
+
+    /// Returns where the instruction at `pc` came from, or an invalid location.
+    ///
+    /// A binary search over the line table, which is why the table is sorted. Called when the
+    /// kernel has already decided to stop, never per instruction.
+    [[nodiscard]] SourceLocation locationAt(std::uint32_t pc) const noexcept;
+
+    /// Returns the first instruction index whose location is on `line` of `buffer`, or
+    /// `NoInstruction`.
+    ///
+    /// What a breakpoint resolves to. The *first* match, because a line compiles to a run of
+    /// instructions and stopping anywhere but the front of it would report a line the design
+    /// has already half executed.
+    [[nodiscard]] std::uint32_t firstInstructionOnLine(BufferId buffer, std::uint32_t lineStart,
+                                                       std::uint32_t lineEnd) const noexcept;
+
+    static constexpr std::uint32_t NoInstruction = 0xFFFF'FFFFU;
 
     /// Returns a read-only view of constant `index`.
     [[nodiscard]] eir::ConstBitRef constant(std::uint32_t constantNumber) const noexcept {

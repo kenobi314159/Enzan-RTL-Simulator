@@ -89,6 +89,9 @@ public:
     /// Removes and returns the first entry of `region`, which must not be empty.
     std::uint32_t take(Region region);
 
+    /// Puts `processIndex` back at the head of `region`, undoing a `take`.
+    void putBack(Region region, std::uint32_t processIndex);
+
     /// Moves everything in `from` to the end of `to`, preserving order.
     void promote(Region from, Region to);
 
@@ -158,6 +161,20 @@ private:
         [[nodiscard]] bool empty() const noexcept { return head >= entries.size(); }
 
         void push(std::uint32_t value) { entries.push_back(value); }
+
+        /// Puts `value` back at the head, so that the next `pop` returns it.
+        ///
+        /// Only ever used to return a process that was taken and then not run to a stopping
+        /// point — a breakpoint. Pushing it to the *back* instead would let the rest of the
+        /// region overtake it, and the resumed run would then produce a different answer from
+        /// an uninterrupted one, which section 3.8 forbids.
+        void pushFront(std::uint32_t value) {
+            if (head > 0) {
+                entries[--head] = value;
+                return;
+            }
+            entries.insert(entries.begin(), value);
+        }
 
         std::uint32_t pop() { return entries[head++]; }
 

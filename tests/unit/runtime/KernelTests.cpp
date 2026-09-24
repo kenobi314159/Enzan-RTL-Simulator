@@ -87,8 +87,35 @@ public:
 /// Verifies, elaborates, compiles and runs a one-module design.
 class Simulation {
 public:
+    /// The buffer `Simulation` registers its stand-in source text as.
+    ///
+    /// Always the first buffer of the manager, so that a test can build EIR carrying
+    /// locations into it *before* the simulation that owns the manager exists. Identifiers
+    /// are handed out in the order buffers are added, which is what makes that sound.
+    static constexpr enzan::BufferId SourceBuffer = enzan::BufferId::fromIndex(0);
+
+    /// One line of stand-in source per line number, so that a location is easy to write.
+    static constexpr std::string_view SourceText = "one\ntwo\nthree\nfour\nfive\n";
+
+    /// The byte offset of 1-based `line` in `SourceText`.
+    static constexpr std::uint32_t lineOffset(std::uint32_t line) {
+        constexpr std::uint32_t Offsets[] = {0, 0, 4, 8, 14, 19};
+        return Offsets[line];
+    }
+
+    /// A location on `line` of the stand-in source.
+    static constexpr enzan::SourceLocation at(std::uint32_t line) {
+        return {SourceBuffer, lineOffset(line)};
+    }
+
     Simulation(Design design, std::string_view topName)
         : engine(sources), analysed(std::move(design)) {
+        // Added first, so that `SourceBuffer` names it. Every simulation gets one even when
+        // the test does not care, because a fixture whose buffer numbering depends on what
+        // the test asked for is a fixture that breaks the next test to be written.
+        const enzan::BufferId registered = sources.addBuffer("design.sv", std::string(SourceText));
+        EXPECT_EQ(registered, SourceBuffer);
+
         engine.addConsumer(consumer);
 
         // Verifying here means every kernel test also exercises the verifier, and that a
@@ -1367,6 +1394,222 @@ TEST(Kernel, ReinitialisingAfterASuspensionDoesNotResumeTheOldRun) {
     EXPECT_EQ(simulation.value("/tb/clk"), "0");
     ASSERT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
     EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
+// ---------------------------------------------------------------------------
+// Breakpoints and stepping (section 10.4)
+// ---------------------------------------------------------------------------
+
+/// An `initial` process writing two values, each statement attributed to its own line.
+///
+/// Instructions carry their source location the way the frontend stamps them, so this is what
+/// a two-statement `initial` block looks like to a debugger: a run of instructions on line 2,
+/// another on line 3, and the `ret` on line 4.
+Design makeSteppableDesign() {
+    ProcessBuilder builder(ProcessKind::Initial, "stepper");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t first = builder.constant("8'd11");
+    const std::uint32_t second = builder.constant("8'd22");
+
+    builder.block("entry");
+    builder.at(Simulation::at(2));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(first)));
+    builder.store(0, value);
+
+    builder.at(Simulation::at(3));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(second)));
+    builder.store(0, value);
+
+    builder.at(Simulation::at(4));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    return designOf(
+        makeTop({builder.finish()}, {Object{.name = "a",
+                                            .type = Type::bits(8, false, true),
+                                            .initialValue = BitVector::parse("8'd0")}}));
+}
+
+TEST(Kernel, WithNoBreakpointsARunIsUnaffected) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "22");
+}
+
+TEST(Kernel, ABreakpointStopsBeforeItsLineRuns) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t id =
+        simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 3);
+    ASSERT_NE(id, 0U);
+
+    EXPECT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+
+    // Line 3 has not run: the first statement's value is what is there.
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "11");
+
+    const enzan::runtime::StopPoint& stop = simulation.simulationKernel().stopPoint();
+    EXPECT_EQ(stop.breakpointId, id);
+    EXPECT_EQ(stop.location, Simulation::at(3));
+}
+
+TEST(Kernel, ContinuingFromABreakpointRunsThatLineExactlyOnce) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+    ASSERT_NE(simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 3), 0U);
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent) << "continuing stopped at the same line";
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "22");
+}
+
+TEST(Kernel, ABreakpointOnALineWithNoCodeIsRefused) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    // A marker that can never stop anything is worse than being told the line has no code.
+    EXPECT_EQ(simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 5), 0U);
+    EXPECT_EQ(simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 0), 0U);
+    EXPECT_EQ(simulation.simulationKernel().addBreakpoint(enzan::BufferId(), 3), 0U);
+    EXPECT_TRUE(simulation.simulationKernel().breakpoints().empty());
+}
+
+TEST(Kernel, ABreakpointIsListedAndRemoved) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t id =
+        simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 3);
+    ASSERT_EQ(simulation.simulationKernel().breakpoints().size(), 1U);
+    EXPECT_EQ(simulation.simulationKernel().breakpoints().front().line, 3U);
+
+    EXPECT_FALSE(simulation.simulationKernel().removeBreakpoint(id + 100));
+    EXPECT_TRUE(simulation.simulationKernel().removeBreakpoint(id));
+    EXPECT_TRUE(simulation.simulationKernel().breakpoints().empty());
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+}
+
+TEST(Kernel, ADisabledBreakpointDoesNotFireAndIsNotForgotten) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t id =
+        simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 3);
+    ASSERT_TRUE(simulation.simulationKernel().setBreakpointEnabled(id, false));
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    ASSERT_EQ(simulation.simulationKernel().breakpoints().size(), 1U);
+    EXPECT_FALSE(simulation.simulationKernel().breakpoints().front().enabled);
+
+    EXPECT_FALSE(simulation.simulationKernel().setBreakpointEnabled(id + 100, true));
+}
+
+TEST(Kernel, ClearingRemovesEveryBreakpoint) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ASSERT_NE(simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 2), 0U);
+    ASSERT_NE(simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 3), 0U);
+    simulation.simulationKernel().clearBreakpoints();
+
+    EXPECT_TRUE(simulation.simulationKernel().breakpoints().empty());
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+}
+
+TEST(Kernel, IdentifiersAreNotReused) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t first =
+        simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 2);
+    ASSERT_TRUE(simulation.simulationKernel().removeBreakpoint(first));
+    const std::uint32_t second =
+        simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 2);
+
+    // A script or a window holding the old identifier must not silently address the new one.
+    EXPECT_NE(first, second);
+}
+
+TEST(Kernel, SteppingStopsOnEachLineInTurn) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    simulation.simulationKernel().requestStep();
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+    EXPECT_EQ(simulation.simulationKernel().stopPoint().location, Simulation::at(2));
+    EXPECT_EQ(simulation.simulationKernel().stopPoint().breakpointId, 0U) << "a step, not a bp";
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "0") << "line 2 has not run yet";
+
+    simulation.simulationKernel().requestStep();
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+    EXPECT_EQ(simulation.simulationKernel().stopPoint().location, Simulation::at(3));
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "11");
+
+    simulation.simulationKernel().requestStep();
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+    EXPECT_EQ(simulation.simulationKernel().stopPoint().location, Simulation::at(4));
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "22");
+}
+
+TEST(Kernel, AStepIsSpentWhenItFires) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    simulation.simulationKernel().requestStep();
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+
+    // Without asking again, the run carries on to the end rather than stopping per line.
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "22");
+}
+
+TEST(Kernel, ABreakpointDuringAStepReportsItselfAsABreakpoint) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t id =
+        simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 2);
+    ASSERT_NE(id, 0U);
+    simulation.simulationKernel().requestStep();
+
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+    EXPECT_EQ(simulation.simulationKernel().stopPoint().breakpointId, id);
+}
+
+TEST(Kernel, BreakpointsSurviveReinitialisation) {
+    // `restart` keeps the breakpoints, which is what a user stepping through a design wants:
+    // they put them there and did not ask for them to go.
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+    ASSERT_NE(simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 3), 0U);
+
+    simulation.simulationKernel().initialize();
+    EXPECT_EQ(simulation.simulationKernel().breakpoints().size(), 1U);
+    EXPECT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+}
+
+TEST(Kernel, AResumedRunMatchesAnUninterruptedOne) {
+    // The whole point of stopping between instructions rather than anywhere: section 3.8
+    // requires a resumed run to produce what an uninterrupted one would have.
+    Simulation uninterrupted(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(uninterrupted.ready());
+    ASSERT_EQ(uninterrupted.run(), RunStatus::Quiescent);
+
+    Simulation stepped(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(stepped.ready());
+    for (int step = 0; step < 4; ++step) {
+        stepped.simulationKernel().requestStep();
+        if (stepped.run() != RunStatus::AtBreakpoint) break;
+    }
+    ASSERT_EQ(stepped.run(), RunStatus::Quiescent);
+
+    EXPECT_EQ(stepped.value("/tb/a", Radix::Decimal), uninterrupted.value("/tb/a", Radix::Decimal));
+    EXPECT_EQ(stepped.time(), uninterrupted.time());
 }
 
 } // namespace

@@ -893,6 +893,39 @@ source stepping, breakpoints on HDL source lines, run/continue/step controls,
 and `examine`, `force` and `deposit` on signals from both the GUI and Tcl. These
 are what make a simulator usable for debugging rather than merely for watching.
 
+**These operations live on the kernel, not in the control layer.** The GUI does
+not go through Tcl and VPI will not either, and a second implementation of
+"write a signal from outside" would be a second set of semantics to keep in
+step. A Tcl command's job is to parse its arguments and call one of them (8.1).
+
+**Position is carried on EIR-B, and as a line table on the bytecode.** Every
+EIR instruction records the statement it came from; codegen turns that into a
+table with one entry per *change* of location, sorted by address. The bytecode
+instruction the VM executes gains nothing, so the interpreter's inner loop
+never touches it and a JIT keeps the same table against its own addresses. The
+granularity is the statement, because a source-line debugger stops on lines and
+a per-expression table would be larger and no more useful.
+
+**Debugging costs a stopped simulation nothing.** The execution path tests one
+boolean that is false whenever no breakpoint exists and no step is pending;
+breakpoints are resolved to addresses when they are *set*, not searched for
+when they might fire. That is what keeps 13.4 intact while a line breakpoint
+exists at all.
+
+**A breakpoint stops before its line runs**, so continuing executes that line
+exactly once and the line reported is the one about to run rather than the one
+just finished. The paused process goes back to the *head* of the region it came
+from, so a resumed run produces what an uninterrupted one would have — which is
+3.8, and would not be true of re-queueing it behind whatever was waiting.
+
+**A breakpoint on a line that compiled to no instructions is refused**, rather
+than recorded as one that can never fire. A marker in the source window that
+silently does nothing is worse than being told the line has no code on it.
+
+A step runs until the source *line* changes, not until the next instruction: a
+statement compiles to a run of instructions, and stepping through them one at a
+time would be stepping through something the user never wrote.
+
 ### 10.5 Theme
 
 Dark throughout. **Every colour MUST come from the theme configuration file**;

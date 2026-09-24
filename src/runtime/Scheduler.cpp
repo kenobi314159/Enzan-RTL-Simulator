@@ -44,6 +44,10 @@ std::uint32_t Scheduler::take(Region region) {
     return value;
 }
 
+void Scheduler::putBack(Region region, std::uint32_t processIndex) {
+    queues[static_cast<std::size_t>(region)].pushFront(processIndex);
+}
+
 void Scheduler::promote(Region from, Region to) {
     Queue& source = queues[static_cast<std::size_t>(from)];
     Queue& target = queues[static_cast<std::size_t>(to)];

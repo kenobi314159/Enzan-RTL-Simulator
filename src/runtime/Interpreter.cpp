@@ -34,6 +34,16 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
     state.resumePc = 0;
 
     while (pc < body.code.size()) {
+        // The only thing source debugging costs an ordinary run: one test of a bool that is
+        // false whenever no breakpoint exists and no step is pending (DESIGN_GUIDE.md section
+        // 13.4). Stopping *before* the instruction is what makes continuing run it exactly
+        // once, and what makes the reported line the one about to execute rather than the one
+        // just finished.
+        if (kernel.debugging && kernel.shouldStopAt(processIndex, pc)) {
+            state.resumePc = pc;
+            return ExecutionResult::Paused;
+        }
+
         const codegen::Instruction& instruction = body.code[pc];
         ++kernel.instructionCount;
         ++pc;

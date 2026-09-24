@@ -135,6 +135,9 @@ private:
     std::uint32_t newRegister(eir::Type type);
     std::uint32_t newBlock(std::string label);
     void emit(const eir::Instruction& instruction);
+
+    /// The statement being translated, stamped onto everything `emit` produces.
+    SourceLocation currentStatement;
     std::uint32_t addConstant(const eir::BitVector& value);
     std::uint32_t addString(std::string text);
 
