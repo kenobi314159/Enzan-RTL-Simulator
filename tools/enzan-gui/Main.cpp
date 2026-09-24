@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
     // cannot say. Keeping backgrounds out of the style sheet is what lets the signal list and
     // the wave canvas move what they have already drawn when they scroll, rather than drawing
     // it all again (DESIGN_GUIDE.md section 10.5).
-    application.setPalette(theme.palette());
+    QApplication::setPalette(theme.palette());
     application.setStyleSheet(theme.styleSheet());
 
     // --- the session -------------------------------------------------------

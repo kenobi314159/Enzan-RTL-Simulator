@@ -164,8 +164,10 @@ TEST_F(FrontendTest, AnEnumeratedObjectCarriesTheNamesOfItsValues) {
     // of that type is a plain comparison rather than a width negotiation.
     EXPECT_EQ(enumeration.members[2].value.width(), 3U);
     EXPECT_EQ(enumeration.nameOf(enumeration.members[2].value), "S_SEND");
+    // NOLINTBEGIN(bugprone-unchecked-optional-access)
     EXPECT_TRUE(enumeration.nameOf(*enzan::eir::BitVector::parse("3'd5")).empty())
         << "a value the enumeration does not name has no name";
+    // NOLINTEND(bugprone-unchecked-optional-access)
 
     // And a plain vector of the same width is left alone: the mapping belongs to the type, not
     // to the width.

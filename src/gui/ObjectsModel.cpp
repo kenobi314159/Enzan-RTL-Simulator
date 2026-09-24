@@ -51,7 +51,7 @@ int ObjectsModel::columnCount(const QModelIndex& parent) const {
 
 QString ObjectsModel::valueOf(const SignalInfo& info) const {
     // A parameter is the same at every time, so the cursor does not come into it.
-    if (info.isParameter()) {
+    if (info.isParameter() && info.constantValue) {
         return QString::fromStdString(eir::toString(info.constantValue->ref(), valueRadix));
     }
 

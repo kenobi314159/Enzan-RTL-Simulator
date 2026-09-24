@@ -64,9 +64,11 @@ TEST_F(SessionFixture, AnEnumeratedSignalArrivesWithTheNamesOfItsValues) {
 
     ASSERT_EQ(state.enumeration->members.size(), 3);
     EXPECT_EQ(state.enumeration->members[0].name, QStringLiteral("S_IDLE"));
+    // NOLINTBEGIN(bugprone-unchecked-optional-access)
     EXPECT_EQ(state.enumeration->nameOf(*enzan::eir::BitVector::parse("3'd2")),
               QStringLiteral("S_SEND"));
     EXPECT_TRUE(state.enumeration->nameOf(*enzan::eir::BitVector::parse("3'd7")).isEmpty());
+    // NOLINTEND(bugprone-unchecked-optional-access)
 
     // A signal whose type is not an enumeration carries nothing, rather than an empty one that
     // every reader of this field would then have to tell apart from a real one.
@@ -84,13 +86,19 @@ TEST_F(SessionFixture, AScopeListsItsParametersAfterItsSignals) {
     EXPECT_EQ(objects[1].name, QStringLiteral("WIDTH"));
     ASSERT_TRUE(objects[1].isParameter());
     EXPECT_FALSE(objects[1].isLocalParameter);
+    EXPECT_TRUE(objects[1].constantValue);
+    // NOLINTBEGIN(bugprone-unchecked-optional-access)
     EXPECT_EQ(objects[1].constantValue->ref().toUInt64(), 4U);
+    // NOLINTEND(bugprone-unchecked-optional-access)
     EXPECT_EQ(objects[1].path, QStringLiteral("/tb/u_dut/WIDTH"));
 
     EXPECT_EQ(objects[2].name, QStringLiteral("DEPTH"));
     ASSERT_TRUE(objects[2].isParameter());
     EXPECT_TRUE(objects[2].isLocalParameter) << "a localparam is told apart from a parameter";
+    EXPECT_TRUE(objects[2].constantValue);
+    // NOLINTBEGIN(bugprone-unchecked-optional-access)
     EXPECT_EQ(objects[2].constantValue->ref().toUInt64(), 16U);
+    // NOLINTEND(bugprone-unchecked-optional-access)
 
     // A parameter belongs to the scope that declared it, and the top level declared none.
     for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {

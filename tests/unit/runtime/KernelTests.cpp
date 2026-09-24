@@ -36,6 +36,7 @@
 
 namespace {
 
+// NOLINTBEGIN(misc-unused-using-decls)
 using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
@@ -69,6 +70,8 @@ using enzan::runtime::RunStatus;
 using enzan::runtime::SimTime;
 using enzan::test::literal;
 using enzan::test::ProcessBuilder;
+
+// NOLINTEND(misc-unused-using-decls)
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:

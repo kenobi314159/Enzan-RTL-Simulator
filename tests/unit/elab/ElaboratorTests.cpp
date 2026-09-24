@@ -225,8 +225,10 @@ TEST_F(ElaboratorTest, EnumerationsAreInternedOnceForTheWholeElaboration) {
     const std::uint32_t leafEnum = leaf.addEnum(enzan::eir::EnumDefinition{
         .name = "state_t",
         .members = {
+            // NOLINTBEGIN(bugprone-unchecked-optional-access)
             enzan::eir::EnumMember{.name = "A", .value = *enzan::eir::BitVector::parse("2'd0")},
             enzan::eir::EnumMember{.name = "B", .value = *enzan::eir::BitVector::parse("2'd1")}}});
+    // NOLINTEND(bugprone-unchecked-optional-access)
     leaf.addObject(
         Object{.name = "state", .type = Type::bits(2, false, true), .enumIndex = leafEnum});
     leaf.addObject(

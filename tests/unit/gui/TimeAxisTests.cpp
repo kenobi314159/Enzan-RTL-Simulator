@@ -172,7 +172,7 @@ TEST(TimeAxisTests, GridStepsAreNumbersAReaderCanDivideBy) {
 }
 
 TEST(TimeAxisTests, AGridStepIsWideEnoughToLabel) {
-    TimeAxis axis = axisOf(1000, 0, 100'000);
+    const TimeAxis axis = axisOf(1000, 0, 100'000);
 
     const SimTime step = axis.gridStep(90.0);
     const double pixels = axis.xOf(step) - axis.xOf(0);
