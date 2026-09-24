@@ -44,10 +44,12 @@ public:
     void consume(const Diagnostic& diagnostic) override {
         messages.push_back(diagnostic.message);
         codes.push_back(diagnostic.code);
+        received.push_back(diagnostic);
     }
 
     std::vector<std::string> messages;
     std::vector<DiagCode> codes;
+    std::vector<Diagnostic> received;
 };
 
 /// Writes source text to a temporary file and analyses it.
@@ -538,12 +540,37 @@ TEST_F(FrontendTest, ReportsAnAscendingDeclaredRange) {
 TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {
     // The location has to resolve in Enzan's source manager, or the transcript shows a
     // message with no snippet and the quality that section 10.6 is about is lost.
-    EXPECT_EQ(analyse("module m; initial $random(); endmodule"), nullptr);
+    //
+    // The file is named by an absolute path, which is what a build system passes and what a
+    // file list expands to. slang shortens such a path when it renders a file *name*, so a
+    // conversion that matched names rather than buffers resolved nothing at all here — every
+    // diagnostic in the design lost its file, its line and its caret.
+    EXPECT_EQ(analyse("module m;\n  initial $random();\nendmodule\n"), nullptr);
 
     ASSERT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-
-    // The buffer the frontend read is the one diagnostics resolve against.
     EXPECT_GE(sources.bufferCount(), 1U);
+
+    const Diagnostic* unsupported = nullptr;
+    for (const Diagnostic& diagnostic : consumer.received)
+        if (diagnostic.code == DiagCode::UnsupportedConstruct) unsupported = &diagnostic;
+
+    ASSERT_NE(unsupported, nullptr);
+    ASSERT_TRUE(unsupported->location.valid()) << "the location did not resolve";
+    EXPECT_EQ(sources.lineNumber(unsupported->location), 2U);
+    EXPECT_EQ(sources.bufferName(unsupported->location.buffer()),
+              (directory / "design.sv").string());
+}
+
+TEST_F(FrontendTest, AModuleDefinitionCarriesTheFileItWasWrittenIn) {
+    // The library attributes units to source files by their definition's location (section
+    // 4.4), so a definition with no location is a unit that can never be cached.
+    const std::unique_ptr<Design> design = analyse("module m;\nendmodule\n");
+    ASSERT_NE(design, nullptr);
+    ASSERT_EQ(design->size(), 1U);
+
+    ASSERT_TRUE(design->module(0).location.valid());
+    EXPECT_EQ(sources.bufferName(design->module(0).location.buffer()),
+              (directory / "design.sv").string());
 }
 
 } // namespace

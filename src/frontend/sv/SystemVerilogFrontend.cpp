@@ -82,9 +82,15 @@ public:
         enzan::SourceManager& sources;
         const slang::SourceManager& slangSources;
 
-        /// Enzan buffer for each file name slang reports, so that a slang location can be
-        /// rendered against the same text Enzan read.
-        const std::map<std::string, BufferId, std::less<>>& buffers;
+        /// Enzan buffer for each slang buffer, so that a slang location can be rendered
+        /// against the same text Enzan read.
+        ///
+        /// Keyed by slang's own buffer identifier rather than by the file name it reports.
+        /// The name is a rendering — slang shortens an absolute path to its last component —
+        /// so a map keyed on it silently missed for every source named by an absolute path,
+        /// which is what a build system passes. The identifier is what the two managers
+        /// actually agree about.
+        const std::map<slang::BufferID, BufferId>& buffers;
     };
 
     ModuleBuilder(Shared& sharedState, std::string name, const ast::InstanceBodySymbol& bodySymbol)
@@ -232,8 +238,7 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
 SourceLocation ModuleBuilder::convertLocation(slang::SourceLocation location) {
     if (!location) return {};
 
-    const std::string_view fileName = shared->slangSources.getFileName(location);
-    const auto found = shared->buffers.find(fileName);
+    const auto found = shared->buffers.find(location.buffer());
     if (found == shared->buffers.end()) return {};
 
     // slang reports a line and a column; Enzan's locations are byte offsets. Going through
@@ -752,7 +757,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     // slang, so that a diagnostic from slang and one from elaboration quote the same bytes
     // and the same snippet. Reading each file twice would be slower and could disagree.
     slang::SourceManager slangSources;
-    std::map<std::string, BufferId, std::less<>> buffers;
+    std::map<slang::BufferID, BufferId> buffers;
     std::vector<slang::SourceBuffer> slangBuffers;
 
     for (const std::filesystem::path& path : options.files) {
@@ -762,9 +767,10 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             return nullptr;
         }
 
-        const std::string name = path.string();
-        buffers.emplace(name, result.buffer);
-        slangBuffers.push_back(slangSources.assignText(name, sources.bufferText(result.buffer)));
+        const slang::SourceBuffer buffer =
+            slangSources.assignText(path.string(), sources.bufferText(result.buffer));
+        buffers.emplace(buffer.id, result.buffer);
+        slangBuffers.push_back(buffer);
     }
 
     slang::Bag bag;
@@ -795,7 +801,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         const std::string message = slangEngine.formatMessage(diagnostic);
         const SourceLocation location = [&] {
             if (!diagnostic.location) return SourceLocation();
-            const auto found = buffers.find(slangSources.getFileName(diagnostic.location));
+            const auto found = buffers.find(diagnostic.location.buffer());
             if (found == buffers.end()) return SourceLocation();
             const SourceLocation start = sources.lineStart(
                 found->second,
