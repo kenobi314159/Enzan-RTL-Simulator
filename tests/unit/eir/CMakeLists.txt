@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+enzan_add_unit_test(
+  eir
+  SOURCES BitOpsTests.cpp
+          BitVectorTests.cpp
+          DesignTests.cpp
+          InstructionTests.cpp
+          TypeTests.cpp
+          VerifierTests.cpp
+  DEPENDS enzan::eir)

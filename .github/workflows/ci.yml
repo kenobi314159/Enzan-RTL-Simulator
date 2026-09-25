@@ -1,0 +1,279 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Per-commit continuous integration (DESIGN_GUIDE.md section 16).
+#
+# The default branch must stay green; a red default branch is fixed or reverted
+# before other work continues.
+#
+# The nightly jobs section 16 also describes — conformance suites, the design
+# regression suite and the benchmark run — is deliberately absent until M1,
+# because at M0 there is no simulator to run against a design and a scheduled job
+# that measures nothing is worse than none: it trains people to ignore it.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 400M
+
+jobs:
+  lint:
+    name: Format and license headers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang-format-18
+
+      # third_party/ is excluded for the same reason it is excluded from the
+      # license check: those files are byte-identical copies of upstream, and
+      # reformatting them to Enzan's style would turn the next update from a
+      # straight re-copy into a merge.
+      - name: Check formatting
+        run: |
+          mapfile -t files < <(git ls-files '*.h' '*.cpp' | grep -v '^third_party/')
+          printf 'Checking %d files\n' "${#files[@]}"
+          clang-format-18 --dry-run --Werror "${files[@]}"
+
+      - name: Check SPDX license headers
+        run: ./scripts/check-license-headers.sh
+
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [gcc-debug, gcc-release, clang-debug, clang-release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ matrix.preset }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.preset }}-
+
+      # The SystemVerilog frontend is switched off here and exercised by the
+      # dedicated job below. Nothing at M0 links slang, and building it five
+      # times per commit would spend most of the CI budget on a dependency that
+      # one job proves just as well.
+      - name: Configure
+        run: >
+          cmake --preset ${{ matrix.preset }}
+          -DENZAN_WERROR=ON
+          -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Report cache statistics
+        if: always()
+        run: ccache --show-stats
+
+  sanitize:
+    name: ASan + UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-sanitize-${{ github.sha }}
+          restore-keys: ccache-sanitize-
+
+      - name: Configure
+        run: >
+          cmake --preset clang-sanitize
+          -DENZAN_WERROR=ON
+          -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+
+      - name: Build
+        run: cmake --build --preset clang-sanitize
+
+      # detect_leaks is on, and abort_on_error makes a finding fail the test
+      # rather than print a report that scrolls past in a green log.
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --preset clang-sanitize
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ccache clang clang-tidy-18 libgtest-dev zlib1g-dev \
+            qt6-base-dev tcl-dev
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-tidy-${{ github.sha }}
+          restore-keys: ccache-tidy-
+
+      # Every optional component is enabled here even though it makes this the second job that
+      # builds slang. Linting a translation unit that the configured build does not compile
+      # does not merely skip it: clang-tidy falls back to default flags, fails to find the
+      # slang or Qt headers, and then reports whatever its half-parsed view of the file
+      # suggests. That produced nineteen findings that were not defects, and would have hidden
+      # any real one behind them.
+      - name: Configure
+        run: cmake --preset clang-debug -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_BUILD_GUI=ON
+
+      # The generated version header is produced at configure time, but
+      # GoogleTest's headers may only appear after a build when they were
+      # fetched, so the test targets are built before linting them.
+      - name: Build
+        run: cmake --build --preset clang-debug
+
+      - name: Run clang-tidy
+        run: |
+          mapfile -t files < <(git ls-files 'src/*.cpp' 'tools/*.cpp' 'tests/*.cpp')
+          printf 'Linting %d files\n' "${#files[@]}"
+          clang-tidy-18 -p build/clang-debug --quiet "${files[@]}"
+
+      - name: Report cache statistics
+        if: always()
+        run: ccache --show-stats
+
+  gui:
+    name: Graphical front end
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Qt 6 for the windows and Tcl for the theme. Section 8.1 makes Tcl the configuration
+      # language for the whole tool, so the theme needs an interpreter even though the control
+      # layer itself is M3.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ccache libgtest-dev zlib1g-dev qt6-base-dev tcl-dev
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          key: ccache-gui-${{ github.sha }}
+          path: ${{ env.CCACHE_DIR }}
+          restore-keys: ccache-gui-
+
+      # The SystemVerilog frontend is off: nothing in the front end or in its tests links slang,
+      # and the tests drive a kernel built from EIR they construct themselves, so enabling it
+      # would spend the job's time building a dependency it never uses.
+      - name: Configure
+        run: >
+          cmake --preset gcc-debug
+          -DENZAN_WERROR=ON
+          -DENZAN_BUILD_GUI=ON
+          -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+
+      - name: Build
+        run: cmake --build --preset gcc-debug
+
+      # No display is needed. The GUI tests choose the offscreen platform from inside the
+      # binary rather than trusting the environment, so that they behave the same on a machine
+      # with no session as in a desktop.
+      - name: Test
+        run: ctest --preset gcc-debug
+
+      - name: Report cache statistics
+        if: always()
+        run: ccache --show-stats
+
+  systemverilog:
+    name: SystemVerilog frontend and golden suite
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # iverilog is the reference the golden suite compares against. Running the same design
+      # under two simulators and comparing the result is the single highest-value testing
+      # strategy available (DESIGN_GUIDE.md section 14.3), so it is not optional here even
+      # though the suite skips it gracefully when no reference is installed.
+      #
+      # gtkwave is installed for one program: fst2vcd, which is how the suite checks that a
+      # reader other than ours can get the design back out of an FST. Without it the FST cases
+      # skip, and a writer that produced an unreadable file would go unnoticed here.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 iverilog gtkwave
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-slang-${{ github.sha }}
+          restore-keys: ccache-slang-
+
+      # slang is not packaged by any distribution, so the FetchContent path is
+      # the one contributors actually take. This job exists to catch a break in
+      # it — an upstream revision that no longer builds, or a CMake option that
+      # was renamed — at the commit that caused it rather than at the start of M1.
+      # This is the only job that builds slang, which is why it is also the only one that runs
+      # the frontend unit tests and the golden suite. The build matrix above configures the
+      # frontend off: nothing outside this job links slang, and compiling it five times per
+      # commit would spend most of the CI budget on one dependency.
+      - name: Configure and build with the SystemVerilog frontend enabled
+        run: |
+          cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_WERROR=ON
+          cmake --build --preset gcc-release
+
+      - name: Test
+        run: ctest --preset gcc-release
+
+      # The benchmark is a target rather than a test, because a measurement taken alongside
+      # three hundred other tests compares with nothing. It runs here so that a change which
+      # breaks the harness is caught, and so that a number is recorded per commit as section
+      # 15.1 requires; section 16 moves the published series to a nightly job once there is
+      # somewhere to publish it.
+      - name: Benchmark
+        run: cmake --build --preset gcc-release --target enzan-bench
+
+      - name: Report cache statistics
+        if: always()
+        run: ccache --show-stats

@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Generated from src/common/VersionInfo.h.in by CMake. Do not edit the
+// generated copy; edit the template.
+//
+// The values are captured at configure time. A commit made without
+// reconfiguring therefore leaves ENZAN_SOURCE_REVISION stale, which is why
+// `enzan --version` presents it as the revision the binary was *built from*
+// rather than as the current checkout.
+
+#pragma once
+
+#define ENZAN_VERSION_MAJOR @Enzan_VERSION_MAJOR@
+#define ENZAN_VERSION_MINOR @Enzan_VERSION_MINOR@
+#define ENZAN_VERSION_PATCH @Enzan_VERSION_PATCH@
+
+/// Full version, including any pre-release suffix, for example "0.1.0-dev".
+#define ENZAN_VERSION_STRING "@ENZAN_VERSION_STRING@"
+
+/// Abbreviated git revision, or "unknown" outside a git checkout.
+#define ENZAN_SOURCE_REVISION "@ENZAN_SOURCE_REVISION@"
+
+/// Compiler identification the binary was built with, for bug reports.
+#define ENZAN_BUILD_COMPILER "@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@"
+
+/// CMake build type, or "unspecified".
+#define ENZAN_BUILD_TYPE "@ENZAN_BUILD_TYPE_STRING@"

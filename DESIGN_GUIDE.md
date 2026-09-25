@@ -562,6 +562,10 @@ not to justify threading the kernel now.
   replaying from the start.
 - **A configurable memory budget**, with spill to disk when exceeded rather than
   unbounded growth.
+- **Edge navigation.** Given a signal and a time, the next and the previous
+  transition. Snapping a cursor to an edge and stepping it from edge to edge
+  (10.7) are the two things a reader does most in a wave window, and both have
+  to be one query rather than a scan.
 
 ### 7.2 Structure
 
@@ -692,12 +696,54 @@ downsampling with min/max bucketing rather than iterating transitions. Getting
 this wrong makes the viewer unusable on exactly the large designs Enzan targets,
 and it is difficult to retrofit.
 
+That bounds a repaint. What bounds *scrolling* is a second rule: **a vertical
+scroll MUST NOT repaint what it has not changed.** Scrolling moves where each
+trace sits and changes not one of them, so the window moves the pixels it
+already has and paints only the strip that has come into view — which is what
+the signal list beside it already did, and the reason the two used to feel so
+different. Three things make it hold, and each is worth stating because each was
+a separate cost in the same place:
+
+- A row's *summary* — one entry per pixel column — depends on the row, the time
+  range and the width, and none of those change when the list scrolls, so it is
+  kept between repaints.
+- A row's *drawn trace* depends on the same three, so it too is kept, as a
+  picture, and blitted rather than drawn again. Drawing a bus means a segment, a
+  value measured against the font and a string laid out for every run of columns
+  across the window; that is the expensive half and it was being repeated to put
+  the same traces one line up.
+- The distance to move by is **measured from the list**, by asking where a row
+  the canvas has drawn sits now, rather than worked out from the scroll bar.
+  Deriving it would mean assuming whether the bar counts items or pixels and
+  whether every row is the same height, and a blit that moved by the wrong
+  amount leaves traces sitting against the wrong names — a window that looks
+  entirely plausible and is lying. Anything the geometry cannot account for
+  repaints instead: slow is recoverable, wrong is not.
+
+One-pixel rules — the grid, the ruler ticks, the line between rows — are
+*filled*, not stroked. The pixels are the same either way and the fill path
+writes them directly, where the stroker sets up a pen and a clip per call; on a
+wide window with a line per row it was a third of what the ruler cost, paid on
+every repaint.
+
 Required features: multiple named cursors, cursor locking, zoom and pan, signal
 grouping, extracting a bit range of a signal into a separate displayed signal,
 and per-signal value radix selection.
 
+A bit range is *extracted* rather than dialled in. The window reaches one by
+unpacking the signal, removing the bits that are not wanted and, when the range
+should read as one value, grouping what is left — each step being a thing the
+reader can already do to any row, and the result being a row that shows the
+range on its own line (10.7). A dialog asking for `high:low` was the first way
+this worked and has been withdrawn: it was a second way to reach the same place,
+it could only ever produce a contiguous range, and it put a number between the
+reader and a thing they can point at. The model keeps the operation, because the
+control language's `add wave` takes a range as text (8.1) and will call it.
+
 Defaults, as specified: multi-bit values display in **hexadecimal**; single-bit
 values display as a line high or low.
+
+What the mouse and the keyboard do with all of this is section 10.7.
 
 ### 10.4 Debugging features
 
@@ -713,6 +759,23 @@ no colour literals in widget code.
 
 Waveform view defaults: high-contrast black background, light green traces.
 
+**The colours reach the widgets through a `QPalette`, not a style sheet.** This
+is a performance rule wearing a presentation rule's clothes. A Qt style sheet
+rule that gives a widget a background — or a border — makes Qt draw that widget
+through the style sheet's box model, and a widget drawn that way can no longer
+scroll by moving the pixels it already has: it repaints them. On a signal list
+of two hundred rows in a tall window that was the difference between 1.7 ms and
+6.2 ms for every line scrolled, and a single `QAbstractScrollArea { border }`
+rule was nearly all of it. A palette is read by the ordinary style and costs
+nothing.
+
+So: **the style sheet MUST NOT style a scrolling surface**, meaning `QWidget`,
+`QAbstractScrollArea`, or any item view, in background or in border. What a
+palette can say goes in the palette; the style sheet keeps only what has no
+palette entry — padding, the dock title, the parts of the scroll bar. A test
+asserts this, because the rule is invisible in the result: a style sheet that
+breaks it looks exactly right and scrolls four times slower.
+
 ### 10.6 Diagnostics as a feature
 
 slang's diagnostics are dramatically better than those of most commercial
@@ -725,6 +788,253 @@ optional attached notes, and a stable error code (`ENZ1234`) that can be
 referenced in documentation and suppressed selectively. Frontend diagnostics
 from slang and NVC are translated into this engine so that output is uniform
 regardless of source language.
+
+**Error codes are permanent.** A code appears in user documentation, in
+suppression lists in users' scripts, and in bug reports, so reusing a number for
+a different meaning silently changes what a user's suppression suppresses. A code
+is retired by deleting it and never reusing the number; codes are not renumbered.
+Numbers are allocated in ranges by the component that emits the diagnostic — 1–999
+for the driver and source handling, 1000–1999 for the SystemVerilog frontend,
+2000–2999 for VHDL, 3000–3999 for elaboration, 4000–4999 for codegen, 5000–5999
+for the runtime, 6000–6999 for the control layer, 7000–7999 for the waveform
+database, 8000–8999 for the PLI, and 9000–9999 for internal errors. The catalogue
+itself is `src/common/DiagnosticCodes.def`.
+
+A diagnostic whose default severity is `Fatal` MUST NOT be downgradable or
+suppressible. Fatal means continuing is unsafe, and letting a user turn one into
+a warning converts a clean stop into wrong results, which priority 1 of section
+1.2 forbids.
+
+### 10.7 Waveform view interaction
+
+The gestures below are normative. A wave window is read for hours at a time and
+driven almost entirely by hand, so what the mouse and the keyboard do is part of
+the product rather than a detail of the widget. They are written down so that
+they are decided once, and so that the next person to touch the view does not
+quietly swap two of them for the pair that feel more natural to them — both pairs
+feel natural, and a tool that changes which is which between releases is worse
+than either choice. They arrive with M2.1 (section 18).
+
+**The wheel.**
+
+- **Wheel** scrolls the signal list vertically, wherever the pointer is.
+- **Ctrl+wheel** zooms the time axis about the pointer.
+- **Shift+wheel** pans the time axis.
+
+The names and the traces are two widgets and one window. A wheel that scrolled
+over the names and zoomed over the traces would make an internal boundary the
+reader has no reason to think about decide what their wheel does; one wheel, one
+meaning, across the whole window.
+
+**The right button.** Dragging with the right button is two gestures told apart
+by their direction, with no mode to select first:
+
+- **Right to left** — zoom to the time range the drag covered.
+- **Left to right** — zoom to fit the whole run.
+
+While a drag is in progress the range it covers is shown, so that the reader sees
+what they are about to get. A drag of only a few pixels is not a gesture at all:
+a plain right-click must not zoom anywhere, or every mis-click costs the reader
+their place.
+
+**The left button.** A click on the trace area does three things at once:
+
+- moves the active cursor, unless it is locked;
+- selects the signal whose row was clicked;
+- snaps the cursor to a transition of that signal when one is close to the click.
+
+Selecting a row **in the list** means the same thing, with the cursor's own time
+standing in for where the click landed. Picking a signal by name and picking it
+by trace are the same act, and a reader who did the first and found that Tab did
+nothing would reasonably conclude the key was broken.
+
+The snap radius is measured in **pixels, not in time units**, so the gesture
+behaves the same at every zoom: close enough to click is close enough to snap.
+With no transition in range the cursor goes exactly where it was put, because a
+cursor that jumped to a distant edge would be worse than one that did not snap at
+all.
+
+Which signal is selected is not decoration: it is what Tab steps along below.
+
+**Cursors.**
+
+- Every cursor shows its time beside its name.
+- Clicking a cursor's label makes it the active cursor.
+- Double-clicking a label renames it.
+- Right-clicking a label opens that cursor's own menu: rename, lock or unlock,
+  remove. It is a menu rather than a set of window-level commands because every
+  entry is about *that* cursor, and a command that acted on "the active one"
+  would need the reader to make it active first and then remember that they had.
+- A cursor is added from the toolbar, beside the zoom controls, because adding
+  one is part of measuring rather than part of configuring the window.
+- **Tab** moves the active cursor to the next transition of the selected row,
+  **Shift+Tab** to the previous one. It does so wherever the focus is — the
+  signal list must not spend the key on its own focus navigation.
+- A *transition of the row* means a time at which what the row displays differs
+  from what it displayed an instant earlier. Not every change of the underlying
+  signal: a row showing one bit of a counter must not stop at every count, and a
+  group's transitions are its children's put together. There is no index of when
+  a single bit turns over, so the search walks the signal's transitions and gives
+  up after a bounded number of them; past that the cursor lands on a real
+  transition of something in the row, which is worse than the exact answer and
+  far better than a frozen window.
+
+Together these are the measuring workflow, and the reason cursor locking (10.3)
+exists: pin a cursor on the edge you are measuring from, select the signal, and
+step the active cursor along it. Reading both times off the labels is what makes
+that worth doing, which is why the times are on the labels and not in a status
+bar where only one of them would fit.
+
+A readout of the interval between two cursors is the obvious companion and is
+deliberately **not** part of this. It needs a decision about which pair of
+cursors it measures, and making that decision before anyone has used the stepping
+it would sit beside is how a tool acquires a number nobody reads.
+
+**The signal list.**
+
+- **Reordering.** Selected rows move by being dragged, including into and out of
+  groups. The order is the reader's, and nothing may re-sort it behind them.
+- **Renaming.** A row is renamed in place, by editing its name. The row's own
+  menu offers it as well, and opens the same editor rather than a dialog of its
+  own: a name is the contents of a cell, and offering it twice in two shapes
+  would be two things to keep in step for nothing.
+- **Packing and unpacking from the menu.** One entry, not two. A row is either
+  packed or unpacked, so a menu offering both would always have one entry that
+  did nothing; the entry toggles every selected row that has contents to show.
+  It is the same act as the disclosure arrow, which is what creates a vector's
+  bits the first time, so the two can never disagree about what a row is showing.
+- **Copy and paste.** Ctrl+C copies the selected rows, with everything below
+  them, and Ctrl+V pastes them beside whatever is current — inside it when that
+  is a group. A copy keeps its radix, its highlight and how far it was unpacked,
+  because a row that had been set up and then pasted back as a bare default
+  would be a worse answer than copying nothing. The clipboard also carries the
+  hierarchical paths as plain text, so that a copy is worth something outside
+  this window.
+- **Adding or pasting a row changes nothing else.** A new row arrives packed,
+  and whatever was unpacked or collapsed stays as it was. Worth stating twice
+  over, because both obvious implementations get it wrong: expanding the tree so
+  the new row is visible unpacks every bus in the window, and rebuilding the
+  model to insert a pasted subtree makes the view forget every expansion in it.
+  Either way the reader loses the arrangement they had built, every time they
+  add a signal.
+- **Anything that changes which rows are on screen redraws the traces.**
+  Expanding, collapsing, pasting, deleting. The names and the traces are two
+  widgets, and only one of them is told by Qt.
+- **Unpacking.** A multi-bit signal carries an expander that shows its bits as
+  rows of their own, which then behave like any other row — radix, highlight,
+  removal and all. Unpacking is a property of the display and creates no new
+  subscription: the kernel streams the signal once however many of its bits are
+  on screen, exactly as it already does for an extracted bit range (10.3). Arrays
+  gain further levels of unpacking later, and the mechanism is built for that now
+  so that it does not have to be built twice.
+- **A row with children shows what its children show, joined together.** One
+  rule, and it is doing three jobs. A bus that has been unpacked and had some of
+  its bits deleted shows what is left of it, in the order the rows are in. A
+  group whose children are one-bit signals behaves as a vector, on its line and
+  in its trace, which is how a bus assembled by hand out of separate signals
+  becomes readable. And because the rule is recursive, a group of equal-width
+  groups is a dimension above that — which is what makes multi-dimensional
+  arrays fall out of nesting rather than needing a mechanism of their own.
+
+  The first child is the most significant, which is the order the list shows
+  them in and the order unpacking creates them in. A bus whose bits have *all*
+  been deleted shows nothing, rather than quietly reverting to the value the
+  reader just took apart.
+
+  **How it reads depends on what is in it.** Children that are single bits make
+  one number, which is what lets an unpacked bus read as the bus. Children wider
+  than a bit make a *list* of them — `{001122}{112233}` — and because that
+  recurses, a group of such groups reads `{{11}{22}}{{22}{33}}`. Joining a vector
+  of vectors into one number files off exactly the boundaries that are the reason
+  it has that shape. The list form also means a group of unlike signals is
+  readable rather than being either nonsense or nothing, so no group is refused a
+  value for the widths it happens to contain.
+
+  A multi-bit signal is therefore a group whose children happen to be its own
+  bits, and the only thing that distinguishes it is that those children are made
+  on demand rather than up front. Making them eagerly would cost a thousand rows
+  for a thousand-bit vector nobody had asked to look inside.
+
+- **A signal whose type is an enumeration shows the name, not the number.**
+  `S_SEND` is what the reader wrote; `3'h2` is what the compiler made of it, and
+  a reader watching a state machine should not have to hold the encoding in their
+  head to follow it. This is a display rule and nothing more: EIR models an
+  enumeration as the packed vector every operation on it treats it as, and the
+  mapping is carried alongside, from the frontend that alone knew it, through
+  elaboration and the protocol, to the row.
+
+  Three things follow from the rule being about a *whole value of that type*. A
+  slice is not named, because an enumeration names values and bit 1 of `S_SEND`
+  is not a state. A row that has lost some of its bits is not named, because
+  naming what is left would be naming a value other than the one on screen. And
+  a group is not named, because a join of several signals is not of any one
+  enumerated type — though what is inside the group keeps its own name.
+
+  A value the enumeration does not name falls back to the number rather than to
+  nothing. An X is such a value, and so is an encoding outside the declared set,
+  and both are things the reader needs to see rather than be shielded from.
+
+  **The naming can be turned off**, and choosing any radix turns it off. The
+  encoding is sometimes exactly what is being debugged; more to the point, a
+  radix menu that silently did nothing to a state register would read as a fault
+  rather than as a choice. The way back is a `Symbolic` entry in the same menu,
+  listed first, since it is where an enumerated row starts.
+
+- **Parameters and localparams are rows like any other.** The objects window
+  lists a scope's parameters after its signals, and one dropped into the wave
+  window shows its value across the whole width of it. A design built out of
+  three differently-configured copies of one module is a thing a reader has to
+  be able to tell apart, and the way they do that is by putting `ACK_DELAY`
+  beside the traces it explains.
+
+  A parameter is **immutable and constant**, and those are two statements rather
+  than one. Constant: its value is the same at every time, so it has no edges to
+  step between and it is *not* clipped at the recorded extent the way a trace is
+  — a trace stopping there says "nothing has happened here yet", which is true of
+  a signal and false of a parameter, and before the first run the clip would hide
+  it altogether. Immutable: it has nothing behind it to unpack into, so it offers
+  no expander; a `+` that did nothing would be worse than no `+`.
+
+  It has no slot, no trace and nothing to subscribe to, so its value travels with
+  the row — including onto the clipboard, because there is nowhere for the other
+  end to look it up. A parameterised module is already one analysed definition
+  per parameterisation (4.4), so what each one resolved to is a fact the frontend
+  records about that definition and nothing else could reconstruct.
+
+- **An unpacked vector is a group in every respect, including what may be put in
+  it.** Rows may be dragged out of one and back into it, and rows from elsewhere
+  may be dragged in. Half a container — one that lets a bit be taken out but
+  never put back — is not the same kind of thing as a group, and a bit removed by
+  mistake could never be recovered.
+
+  The cost is that a row labelled `count` can be made to show something that is
+  not count's. That bargain was already struck the moment deleting a bit was
+  allowed to narrow the row: the label names where the row came from, and the
+  value says what is actually in it. A row whose children *are* exactly its own
+  bits, in order, is recognised as the signal again — which is both what makes
+  unpacking free to look at and what tells a reader they have put it back
+  together.
+
+- **Making a group must not disturb the rest of the window.** The same trap as
+  adding and pasting, in a third place: rebuilding the model to re-parent a row
+  makes the view forget every expansion in it. Rows that move are re-expanded by
+  the window, because Qt tracks expansion by position and a row that moves loses
+  it.
+
+- **Highlighting.** A row may be given a background colour from a palette of
+  five, or returned to the default. **The palette lives in the theme file**
+  (10.5), as `wave.highlight.1` through `wave.highlight.5`; five colour literals
+  in widget code would be five violations of the same rule. A highlight covers
+  the whole row in both panes, the name and the trace, because they are one row
+  to the reader and a highlight that stopped at the splitter would read as a
+  rendering fault.
+
+**What this does not change.** Panning with the middle button, the keyboard zoom
+and pan, cursor locking, grouping and per-row radix all stay as they are.
+
+Panning is the middle button's alone. Ctrl+drag used to pan as well, and no
+longer does: Ctrl means *zoom* on the wheel, and a modifier that meant zoom under
+one hand and pan under the other is a coin toss every time it is reached for.
 
 ---
 
@@ -816,6 +1126,7 @@ Enzan-RTL-Simulator/
 │   └── designs/              scripts fetching external RTL — NEVER vendored
 ├── bench/                    performance benchmarks and result tracking
 ├── docs/                     human documentation, derived from this guide
+├── scripts/                  repository checks, runnable locally and by CI
 └── third_party/              vendored dependencies where unavoidable
 ```
 
@@ -831,7 +1142,11 @@ Rules:
   revisions. External designs MUST NOT be committed to this repository: they
   are large, and they carry their own licenses.
 - Each `src/` component has a `README.md` describing its responsibility and its
-  allowed dependencies on other components.
+  allowed dependencies on other components. The build enforces its presence.
+- `scripts/` holds checks that CI runs and that a contributor MUST be able to run
+  locally with no arguments. A check that exists only inside a CI workflow cannot
+  be run before pushing, so it gets discovered as a red default branch instead of
+  as a local failure.
 
 ---
 
@@ -1148,6 +1463,34 @@ Tcl configuration.
 
 **Exit:** a design runs interactively with signals added from the GUI and the
 waveform progressing live.
+
+### M2.1 — Waveform interaction
+
+The mouse and keyboard model of section 10.7: the wheel scrolling with Ctrl to
+zoom, right-drag to zoom to a range or to fit, left-click selecting a signal and
+snapping the cursor to a nearby edge, cursors that carry their time and can be
+renamed and stepped from edge to edge, and a signal list whose rows can be
+reordered, unpacked into their bits and highlighted. With the database query the
+last of those needs (7.1).
+
+Placed here, between the GUI and the control layer, for three reasons. It is
+contained entirely in the components M2 has just built, while that code is still
+warm. Nothing later blocks on it, so putting it first costs no other milestone
+anything — while M3's command vocabulary will want a settled notion of the
+active cursor and the selected signal, which is an argument for fixing them
+before the commands are written against them rather than after. And design
+priority 1.2 puts usability above both performance and language breadth: the
+wave window is the part of Enzan a user touches most, and leaving its controls
+until after the VHDL frontend would be ordering the work for everything except
+the person using it.
+
+It is a point release rather than a milestone of its own because none of it
+changes what Enzan can simulate, record or export. Every item is about how the
+window is driven.
+
+**Exit:** every gesture in section 10.7 works and is covered by a test; a reader
+can lock one cursor on an edge, step a second along the same signal with Tab, and
+read both times off their labels without touching the mouse.
 
 ### M3 — Control layer and source debugging
 

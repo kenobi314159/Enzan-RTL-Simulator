@@ -1,0 +1,93 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The diagnostic catalogue.
+//
+// This file is included more than once, each time with ENZAN_DIAG defined to do
+// something different, so it deliberately has no include guard.
+//
+//   ENZAN_DIAG(Name, number, DefaultSeverity, "std::format format string")
+//
+// **Numbers are permanent.** A code appears in user documentation, in
+// suppression lists in users' scripts, and in bug reports (DESIGN_GUIDE.md
+// section 10.6). Reusing a number for a different meaning silently changes what
+// a user's `-Wno-ENZ0007` suppresses. Retire a code by deleting its line and
+// never reusing the number; do not renumber the ones after it.
+//
+// Number ranges, by the component that emits the diagnostic:
+//
+//   0001-0999  driver, command line, source file handling  (src/common, tools/)
+//   1000-1999  SystemVerilog frontend                      (src/frontend/sv)
+//   2000-2999  VHDL frontend                               (src/frontend/vhdl)
+//   3000-3999  elaboration                                 (src/elab)
+//   4000-4999  bytecode generation                         (src/codegen)
+//   5000-5999  runtime and scheduler                       (src/runtime)
+//   6000-6999  control layer and Tcl commands              (src/control)
+//   7000-7999  waveform database                           (src/wavedb)
+//   8000-8999  VPI, VHPI and plugin loading                (src/pli)
+//   9000-9999  internal errors and unimplemented features  (anywhere)
+//
+// The format string is consumed by std::format, so arguments are `{}` and a
+// literal brace is written `{{`.
+
+// --- 0001-0999: driver, command line and source file handling ---------------
+
+ENZAN_DIAG(CannotOpenFile, 1, Error, "cannot open file '{}': {}")
+ENZAN_DIAG(NotARegularFile, 2, Error, "'{}' is not a regular file")
+ENZAN_DIAG(FileReadFailed, 3, Error, "could not read '{}': {}")
+ENZAN_DIAG(SourceFileTooLarge, 4, Error,
+           "'{}' is too large; a single source file must be smaller than {} bytes")
+ENZAN_DIAG(TooManyErrors, 5, Fatal,
+           "too many errors emitted ({}); no further diagnostics will be reported")
+
+// --- 1000-1999: SystemVerilog frontend --------------------------------------
+
+ENZAN_DIAG(SystemVerilogError, 1001, Error, "{}")
+ENZAN_DIAG(SystemVerilogWarning, 1002, Warning, "{}")
+ENZAN_DIAG(SystemVerilogNote, 1003, Note, "{}")
+ENZAN_DIAG(UnsupportedConstruct, 1004, Error,
+           "{} is not supported by the SystemVerilog frontend yet")
+ENZAN_DIAG(NoInputFiles, 1005, Error, "no source files were given")
+ENZAN_DIAG(NoTopLevelFound, 1006, Error,
+           "the sources contain no module that could serve as a top level")
+
+// --- 3000-3999: elaboration -------------------------------------------------
+
+ENZAN_DIAG(TopModuleNotFound, 3001, Error,
+           "top module '{}' was not found; the design contains: {}")
+ENZAN_DIAG(NoTopModule, 3002, Error,
+           "no top module was given and the design has {} candidates: {}")
+ENZAN_DIAG(UnresolvedInstance, 3003, Error,
+           "instance '{}' refers to module '{}', which has not been analysed")
+ENZAN_DIAG(RecursiveInstantiation, 3004, Error,
+           "module '{}' instantiates itself, through {}; an unbounded hierarchy cannot be "
+           "elaborated")
+ENZAN_DIAG(PortWidthMismatch, 3005, Error,
+           "port '{}' of '{}' is {} bits but is connected to a {}-bit object; width conversion "
+           "on port connections is not yet implemented")
+ENZAN_DIAG(MultipleContinuousDrivers, 3006, Error,
+           "'{}' is driven by more than one continuous assignment; driver resolution is not yet "
+           "implemented")
+ENZAN_DIAG(MixedDriverKinds, 3007, Error,
+           "'{}' is driven both by a continuous assignment and by a procedural block, which "
+           "requires driver resolution")
+ENZAN_DIAG(UnconnectedPort, 3008, Warning,
+           "port '{}' of instance '{}' is not connected and will read as X")
+
+// --- 5000-5999: runtime and scheduler ---------------------------------------
+
+ENZAN_DIAG(DeltaLimitExceeded, 5001, Error,
+           "exceeded the delta cycle limit of {} at time {}; the design is not settling. "
+           "Still active: {}")
+ENZAN_DIAG(TimeOverflow, 5002, Error,
+           "a delay at time {} would advance simulated time past the 64-bit range; time is "
+           "counted in units of {}")
+ENZAN_DIAG(UserFatal, 5003, Error, "$fatal: {}")
+ENZAN_DIAG(UserError, 5004, Error, "{}")
+ENZAN_DIAG(UserWarning, 5005, Warning, "{}")
+ENZAN_DIAG(UserInfo, 5006, Note, "{}")
+
+// --- 9000-9999: internal errors and unimplemented features -----------------
+
+ENZAN_DIAG(NotYetImplemented, 9001, Error, "{} is not yet implemented")
+ENZAN_DIAG(InvalidEir, 9003, Error, "invalid EIR: {}")
+ENZAN_DIAG(InternalError, 9002, Fatal, "internal error: {}")
