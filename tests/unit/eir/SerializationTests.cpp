@@ -129,18 +129,26 @@ ModuleDefinition richModule(BufferId buffer) {
     process.constants = {literal("8'd1"), literal("4'b10xz")};
     process.strings = {"value = %d", ""};
 
+    // Instruction locations in the shape the frontend produces them: a run sharing the
+    // statement that emitted them, then a change, then a block boundary that continues the
+    // previous statement. That is what the encoding's repeat flag has to reproduce, and it is
+    // what a source-line breakpoint is resolved against.
     BasicBlock entry;
     entry.label = "entry";
     entry.instructions.push_back(
         Instruction::make(Opcode::LoadConstant, Operand::reg(1), Operand::constant(0)));
+    entry.instructions.back().location = SourceLocation(buffer, 20);
     entry.instructions.push_back(
         Instruction::makeSigned(Opcode::Add, Operand::reg(1), Operand::reg(1), Operand::reg(0)));
+    entry.instructions.back().location = SourceLocation(buffer, 20);
     entry.instructions.push_back(Instruction::make(Opcode::Jump, {}, Operand::block(1)));
+    entry.instructions.back().location = SourceLocation(buffer, 31);
     process.blocks.push_back(std::move(entry));
 
     BasicBlock second;
     second.label = "body";
     second.instructions.push_back(Instruction::make(Opcode::Return));
+    second.instructions.back().location = SourceLocation(buffer, 31);
     process.blocks.push_back(std::move(second));
 
     SysTaskCall call;
@@ -265,6 +273,50 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     EXPECT_EQ(process.sensitivity[0].edge, EdgeKind::Posedge);
     EXPECT_EQ(process.readSet, (std::vector<std::uint32_t>{0, 1}));
     EXPECT_EQ(process.writeSet, (std::vector<std::uint32_t>{1}));
+}
+
+TEST_F(SerializationTest, InstructionLocationsRoundTrip) {
+    // Without these a unit served from the library decodes cleanly, simulates identically, and
+    // silently cannot be debugged: every breakpoint on it is refused as a line that compiled to
+    // no instructions (DESIGN_GUIDE.md section 10.4).
+    const std::vector<ModuleDefinition> decoded = roundTrip({richModule(buffer)});
+    ASSERT_EQ(decoded.front().processes.size(), 1U);
+    const Process& process = decoded.front().processes.front();
+
+    ASSERT_EQ(process.blocks.size(), 2U);
+    ASSERT_EQ(process.blocks[0].instructions.size(), 3U);
+
+    // The run that shares one statement, which the encoding stores once.
+    EXPECT_EQ(process.blocks[0].instructions[0].location, SourceLocation(buffer, 20));
+    EXPECT_EQ(process.blocks[0].instructions[1].location, SourceLocation(buffer, 20));
+
+    // The change, and the block boundary that continues it.
+    EXPECT_EQ(process.blocks[0].instructions[2].location, SourceLocation(buffer, 31));
+    EXPECT_EQ(process.blocks[1].instructions[0].location, SourceLocation(buffer, 31));
+}
+
+TEST_F(SerializationTest, AnInstructionWithNoLocationStaysWithoutOne) {
+    ModuleDefinition definition;
+    definition.name = "m";
+    definition.location = SourceLocation(buffer, 0);
+
+    Process process;
+    process.kind = ProcessKind::Initial;
+    BasicBlock block;
+    block.label = "entry";
+    block.instructions.push_back(Instruction::make(Opcode::Return));
+    process.blocks.push_back(std::move(block));
+    definition.processes.push_back(std::move(process));
+
+    const std::vector<ModuleDefinition> decoded = roundTrip({std::move(definition)});
+    ASSERT_EQ(decoded.size(), 1U);
+    ASSERT_EQ(decoded.front().processes.size(), 1U);
+    ASSERT_EQ(decoded.front().processes[0].blocks.size(), 1U);
+    ASSERT_EQ(decoded.front().processes[0].blocks[0].instructions.size(), 1U);
+
+    // A frontend with no position for an instruction leaves it invalid, and the encoding must
+    // not invent one: a breakpoint that matched there would stop somewhere the user never wrote.
+    EXPECT_FALSE(decoded.front().processes[0].blocks[0].instructions[0].location.valid());
 }
 
 TEST_F(SerializationTest, EnumerationsAndParametersRoundTrip) {

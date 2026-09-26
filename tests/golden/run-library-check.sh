@@ -24,12 +24,33 @@ source_file=$3
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# Every run reads its own copy, at one path and under the source's own name. The path is part
+# of the entry key, so editing a copy at a *different* path would be a miss for two reasons at
+# once and would prove nothing about the text; and a script that sets a breakpoint names the
+# file it was written against, which a copy called something else would not be.
+mkdir -p "$work/src"
+copy="$work/src/$(basename "$source_file")"
+cp "$source_file" "$copy"
+
+# The status is carried back alongside the transcript rather than aborting the script. A `do`
+# file reports its own failure with `quit -code 1`, and under `set -e` a bare command
+# substitution would end this script there with the transcript discarded — leaving the reason
+# for the failure in the one place nobody can read it.
 run() {
-    "$enzan" --do "$script" "$source_file" "$work/work" 2>&1
+    "$enzan" --do "$script" "$copy" "$work/work" 2>&1
 }
 
-first=$(run)
-second=$(run)
+if ! first=$(run); then
+    echo "FAIL library: the first run failed"
+    echo "$first"
+    exit 1
+fi
+
+if ! second=$(run); then
+    echo "FAIL library: the run that should have reused the library failed"
+    echo "$second"
+    exit 1
+fi
 
 if grep -q 'reusing the analysed units' <<<"$first"; then
     echo "FAIL library: the first run reused a library that did not exist yet"
@@ -53,15 +74,22 @@ if ! diff <(strip "$first") <(strip "$second") >/dev/null; then
     exit 1
 fi
 
-# An edit must be noticed. The text changes, so the key changes, so the entry is a miss.
-edited="$work/edited.sv"
-{ cat "$source_file"; echo; echo "// an edit"; } > "$edited"
+# An edit must be noticed. Only the text changes — same path, same name, same options — so a
+# miss here can only be the text, which is the thing being checked.
+printf '\n// an edit\n' >> "$copy"
 
-third=$("$enzan" --do "$script" "$edited" "$work/work" 2>&1)
+if ! third=$(run); then
+    echo "FAIL library: the run over the edited source failed"
+    echo "$third"
+    exit 1
+fi
+
 if grep -q 'reusing the analysed units' <<<"$third"; then
     echo "FAIL library: an edited source was served from the library"
     echo "$third"
     exit 1
 fi
 
-echo "PASS library"
+# The script is named, because more than one is driven through here and a bare "PASS library"
+# would not say which.
+echo "PASS library ($(basename "$script"))"

@@ -169,3 +169,17 @@ set_tests_properties(
   PROPERTIES PASS_REGULAR_EXPRESSION "PASS library"
              FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
              TIMEOUT 60)
+
+# Source debugging has to survive the library, and nothing a single run can check would notice
+# that it does not. The locations a breakpoint resolves against are part of a serialised unit,
+# so a format that stored everything else would leave a warm library silently undebuggable:
+# every `bp` on it refused as a line that compiled to no instructions.
+add_test(NAME golden.debug.library
+         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh" $<TARGET_FILE:enzan>
+                 "${CMAKE_CURRENT_SOURCE_DIR}/do/debug.do"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv")
+set_tests_properties(
+  golden.debug.library
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS library"
+             FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
+             TIMEOUT 60)

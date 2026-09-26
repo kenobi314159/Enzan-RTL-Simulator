@@ -2,7 +2,16 @@
 #
 # Source debugging from the control language (DESIGN_GUIDE.md section 10.4): a breakpoint on
 # an HDL line, stepping by line, and `examine` on a stopped design.
-set source [lindex $argv 0]
+set source  [lindex $argv 0]
+set library [lindex $argv 1]
+
+# A library when one is named, so that run-library-check.sh can drive this script twice against
+# one and require the second run to debug exactly as the first did. The locations a breakpoint
+# resolves against are part of a serialised unit, so a format that dropped them would leave a
+# warm library silently undebuggable: every `bp` refused as a line with no code on it.
+if {$library ne ""} {
+    vlib $library
+}
 
 vlog -sv $source
 vsim -t ns tb

@@ -209,13 +209,33 @@ void writeOperand(Writer& out, Operand operand) {
     out.u32(operand.index());
 }
 
-void writeInstruction(Writer& out, const Instruction& instruction) {
+/// Writes one instruction, with `previous` carrying the last location written.
+///
+/// The location is stored because it is what a source-line breakpoint and a step resolve
+/// against (Instruction::location): a unit served from the library with its locations dropped
+/// decodes cleanly, simulates identically, and silently cannot be debugged.
+///
+/// A repeat costs one byte rather than eight. Nearly every instruction shares the location of
+/// the statement that produced it — that is the premise the codegen line table is built on
+/// (codegen/Bytecode.h) — so a flag per instruction is smaller than a location per instruction
+/// by about the ratio between the two.
+void writeInstruction(Writer& out, NameTable& names, const Instruction& instruction,
+                      SourceLocation& previous) {
     out.u32(static_cast<std::uint32_t>(instruction.opcode));
     out.boolean(instruction.isSigned);
     writeOperand(out, instruction.dst);
     writeOperand(out, instruction.a);
     writeOperand(out, instruction.b);
     writeOperand(out, instruction.c);
+
+    if (instruction.location == previous) {
+        out.boolean(false);
+        return;
+    }
+
+    out.boolean(true);
+    writeLocation(out, names, instruction.location);
+    previous = instruction.location;
 }
 
 void writeProcess(Writer& out, NameTable& names, const Process& process) {
@@ -232,12 +252,18 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     out.u32(static_cast<std::uint32_t>(process.strings.size()));
     for (const std::string& value : process.strings) out.text(value);
 
+    // One running location for the whole process rather than one per block, so that a block
+    // whose first statement continues the previous block's still pays a byte for it. The
+    // decoder threads the same value through in the same order, which is what makes the two
+    // agree without the encoding having to say where the run began.
+    SourceLocation previousLocation;
+
     out.u32(static_cast<std::uint32_t>(process.blocks.size()));
     for (const BasicBlock& block : process.blocks) {
         out.text(block.label);
         out.u32(static_cast<std::uint32_t>(block.instructions.size()));
         for (const Instruction& instruction : block.instructions)
-            writeInstruction(out, instruction);
+            writeInstruction(out, names, instruction, previousLocation);
     }
 
     out.u32(static_cast<std::uint32_t>(process.sysCalls.size()));
@@ -421,7 +447,7 @@ Operand readOperand(Reader& in) {
     return Operand::none();
 }
 
-Instruction readInstruction(Reader& in) {
+Instruction readInstruction(Reader& in, BufferResolver& buffers, SourceLocation& previous) {
     Instruction instruction;
     instruction.opcode = static_cast<Opcode>(in.u32());
     instruction.isSigned = in.boolean();
@@ -429,6 +455,11 @@ Instruction readInstruction(Reader& in) {
     instruction.a = readOperand(in);
     instruction.b = readOperand(in);
     instruction.c = readOperand(in);
+
+    // A location the writer marked as a repeat is not stored, so it is taken from the run it
+    // continues. The writer threads `previous` through in this same order.
+    if (in.boolean()) previous = readLocation(in, buffers);
+    instruction.location = previous;
     return instruction;
 }
 
@@ -449,11 +480,15 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     process.strings.resize(in.count());
     for (std::string& value : process.strings) value = in.text();
 
+    // The running location the writer threaded through the same traversal.
+    SourceLocation previousLocation;
+
     process.blocks.resize(in.count());
     for (BasicBlock& block : process.blocks) {
         block.label = in.text();
         block.instructions.resize(in.count());
-        for (Instruction& instruction : block.instructions) instruction = readInstruction(in);
+        for (Instruction& instruction : block.instructions)
+            instruction = readInstruction(in, buffers, previousLocation);
     }
 
     process.sysCalls.resize(in.count());
