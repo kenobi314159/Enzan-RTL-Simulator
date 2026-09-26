@@ -9,12 +9,14 @@ The name is Japanese and carries two readings: *distant peaks* (遠山), for the
 mountain-like horizon of a screen full of waveforms, and *calculation* (演算),
 for the computational work the simulator performs.
 
-**Status: milestone M2.1 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and FST
-waveforms, and has an interactive graphical debugging environment: a design runs under the GUI with
-signals added from the window and the waveform progressing live. A parameterised counter, a
-synchronous FIFO, and a packet router three levels deep that pushes four hundred and eighty
-transfers through three channel instances all run, self-check, and agree with Icarus Verilog. See
-[what works today](#what-works-today) and the roadmap below.
+**Status: milestone M3 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and FST
+waveforms, and is driven either from a Tcl script with a Questa-style command vocabulary or from
+an interactive graphical debugging environment — with breakpoints on HDL source lines, stepping
+by line, and `examine`, `force` and `deposit` from both. Analysed sources are cached in a `work/`
+library and reused across runs. A parameterised counter, a synchronous FIFO, and a packet router
+three levels deep that pushes four hundred and eighty transfers through three channel instances
+all run, self-check, and agree with Icarus Verilog. See [what works
+today](#what-works-today) and the roadmap below.
 
 ## Building
 
@@ -377,10 +379,13 @@ M1 — a SystemVerilog subset simulating to a VCD or FST waveform, with a counte
 self-check and agree with a reference simulator, and cycles/sec recorded per commit — and so is
 M2, the interactive GUI. Broader language coverage is M5's job rather than a gap in any of them.
 
-M2.1, the wave window's mouse and keyboard model, followed. Next is M3, the Tcl control layer and
-source debugging, then M4 VPI and cocotb, M6 VHDL via NVC, and M7 mixed-language simulation. See
-[`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full roadmap and the exit criteria of
-each milestone.
+M2.1, the wave window's mouse and keyboard model, followed, and then M3: the Tcl control layer and
+source debugging. A design is driven end to end from a script and libraries are reused across runs
+without re-analysis, which are M3's two exit criteria, and both are held there by a golden test.
+
+Next is M4, VPI and cocotb, then M5 four-state completion and language breadth, M6 VHDL via NVC,
+and M7 mixed-language simulation. See [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the
+full roadmap and the exit criteria of each milestone.
 
 ## License
 
