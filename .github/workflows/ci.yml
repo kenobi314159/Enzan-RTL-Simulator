@@ -68,7 +68,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev tcl-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -81,6 +81,10 @@ jobs:
       # dedicated job below. Nothing at M0 links slang, and building it five
       # times per commit would spend most of the CI budget on a dependency that
       # one job proves just as well.
+      #
+      # Tcl is installed rather than switched off. From M3 the control layer is how the kernel
+      # is driven (DESIGN_GUIDE.md section 8.1), so a matrix that built without it would be
+      # testing a configuration nobody runs.
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
@@ -107,7 +111,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev tcl-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -241,7 +245,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 iverilog gtkwave
+            cmake ninja-build ccache libgtest-dev zlib1g-dev tcl-dev python3 iverilog gtkwave
 
       - name: Restore compiler cache
         uses: actions/cache@v4
