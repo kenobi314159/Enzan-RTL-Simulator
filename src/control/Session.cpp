@@ -75,6 +75,7 @@ Session::~Session() {
 
 void Session::setTranscript(std::ostream* stream) noexcept {
     transcript = stream;
+    if (kernel != nullptr) kernel->setTranscript(stream);
 }
 
 std::ostream& Session::transcriptStream() const {

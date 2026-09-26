@@ -45,6 +45,30 @@ struct ServerOptions {
     std::ostream* localTranscript = nullptr;
 };
 
+/// Evaluates control-language text on behalf of an attached client.
+///
+/// An interface the caller implements rather than an interpreter the server owns, so that
+/// `ipc_server` does not link the Tcl embedding: the same server serves a client whether or not
+/// the process driving it has an interpreter, and a front end whose command entry is answered
+/// with "this kernel takes no commands" is better than one built against a dependency it does
+/// not need.
+class CommandEvaluator {
+public:
+    CommandEvaluator() = default;
+    CommandEvaluator(const CommandEvaluator&) = delete;
+    CommandEvaluator& operator=(const CommandEvaluator&) = delete;
+    CommandEvaluator(CommandEvaluator&&) = delete;
+    CommandEvaluator& operator=(CommandEvaluator&&) = delete;
+    virtual ~CommandEvaluator() = default;
+
+    /// Runs `script` and returns whether it succeeded.
+    ///
+    /// `result` receives what the command returned, which a prompt echoes. `error` receives the
+    /// message on failure. Anything the command *printed* has already gone to the transcript by
+    /// the ordinary route and must not be repeated here.
+    virtual bool evaluate(std::string_view script, std::string& result, std::string& error) = 0;
+};
+
 /// Serves one elaborated design to one attached client.
 ///
 /// This is the kernel end of the split described in section 2.2. The simulation belongs to a
@@ -90,6 +114,12 @@ public:
     /// zero the ones the design starts from rather than an empty arena.
     void start();
 
+    /// Registers who answers a client's control-language lines, or clears it with null.
+    ///
+    /// Not owned. A server with none answers a command with a failure naming the reason, which
+    /// is what a kernel with no interpreter built in should say.
+    void setCommandEvaluator(CommandEvaluator* evaluator) noexcept { commands = evaluator; }
+
     /// Binds a socket for clients to attach to. Returns false having filled `error`.
     bool listen(const std::filesystem::path& socketPath, std::string& error);
 
@@ -121,6 +151,13 @@ public:
     [[nodiscard]] const wavedb::WaveformDatabase& waveforms() const noexcept { return *database; }
 
     [[nodiscard]] runtime::Kernel& kernel() noexcept { return *simulationKernel; }
+
+    /// Where output has to be written to reach the attached client.
+    ///
+    /// Anything else driving the same session — the interpreter answering a typed command —
+    /// points here too, so that what it prints arrives in the client's transcript rather than
+    /// on a terminal nobody is looking at.
+    [[nodiscard]] std::ostream& transcript() noexcept { return transcriptStream; }
 
     /// The status `$finish` or `$fatal` asked for, or 2 when a run failed.
     [[nodiscard]] int exitStatus() const noexcept { return processExitStatus; }
@@ -191,6 +228,7 @@ private:
     void onStep(const Frame& frame);
     void onDeposit(const Frame& frame);
     void onForce(const Frame& frame);
+    void onCommand(const Frame& frame);
 
     /// Sends the whole breakpoint list, which is what every change to it is answered with.
     void sendBreakpoints();
@@ -218,6 +256,7 @@ private:
     const runtime::Image* image;
     DiagnosticEngine* diagnostics;
     ServerOptions options;
+    CommandEvaluator* commands = nullptr;
 
     TranscriptRelay transcriptRelay;
     std::ostream transcriptStream;

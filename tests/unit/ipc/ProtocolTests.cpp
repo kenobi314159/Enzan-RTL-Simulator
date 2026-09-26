@@ -29,6 +29,7 @@ using enzan::ipc::BreakpointEntry;
 using enzan::ipc::BreakpointsMessage;
 using enzan::ipc::ByeMessage;
 using enzan::ipc::ClearBreakpointMessage;
+using enzan::ipc::CommandMessage;
 using enzan::ipc::DepositMessage;
 using enzan::ipc::DesignMessage;
 using enzan::ipc::DiagnosticMessage;
@@ -349,6 +350,12 @@ TEST(Protocol, TheDebuggingRequestsSurviveTheRoundTrip) {
     StepMessage step;
     step.count = 12;
     EXPECT_EQ(roundTrip(MessageType::Step, step).count, 12U);
+
+    // A command is text, because section 8.1 makes Tcl the control language and a request per
+    // command would be a second vocabulary. The text may contain anything Tcl accepts.
+    CommandMessage command;
+    command.script = "puts \"count is [examine -radix decimal /tb/count]\"\nrun 100ns";
+    EXPECT_EQ(roundTrip(MessageType::Command, command).script, command.script);
 }
 
 TEST(Protocol, ADepositAndAForceSurviveTheRoundTrip) {

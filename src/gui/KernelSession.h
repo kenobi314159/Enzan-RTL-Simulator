@@ -154,6 +154,13 @@ public:
 
     void release(std::uint32_t signalIndex);
 
+    /// Sends a line of the control language for the kernel's interpreter to evaluate.
+    ///
+    /// Text rather than a request per command: section 8.1 makes Tcl the control language, and
+    /// a protocol that named each command would be a second vocabulary to keep in step with
+    /// the first. Whatever the command prints arrives as transcript text by the ordinary route.
+    void sendCommand(const QString& script);
+
     /// Asks the kernel to exit, then waits briefly for it to do so.
     void quitKernel();
 

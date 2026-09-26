@@ -26,6 +26,7 @@ std::string toString(MessageType type) {
     case MessageType::Step: return "step";
     case MessageType::Deposit: return "deposit";
     case MessageType::Force: return "force";
+    case MessageType::Command: return "command";
     case MessageType::Welcome: return "welcome";
     case MessageType::Design: return "design";
     case MessageType::Objects: return "objects";

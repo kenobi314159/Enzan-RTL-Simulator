@@ -3,6 +3,7 @@
 #include "gui/TranscriptView.h"
 
 #include <QFontDatabase>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QScrollBar>
@@ -44,15 +45,80 @@ TranscriptView::TranscriptView(const Theme& themeToUse, QWidget* parent)
 
     entry = new QLineEdit(this);
     entry->setEnabled(false);
-    entry->setPlaceholderText(
-        tr("The Tcl command line arrives with milestone M3; use the toolbar for now"));
+    entry->setPlaceholderText(tr("Waiting for a kernel"));
     entry->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    connect(entry, &QLineEdit::returnPressed, this, &TranscriptView::submitCommand);
+
+    // Up and Down walk what was typed. An event filter rather than a subclass of QLineEdit,
+    // because the two keys are the whole of the behaviour and a class would be more to read
+    // than it saves.
+    entry->installEventFilter(this);
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(2);
     layout->addWidget(output, 1);
     layout->addWidget(entry);
+}
+
+void TranscriptView::setCommandsAvailable(bool available, const QString& reason) {
+    entry->setEnabled(available);
+    entry->setPlaceholderText(available ? tr("Enter a command, for example: run 100ns") : reason);
+}
+
+void TranscriptView::submitCommand() {
+    const QString script = entry->text().trimmed();
+    if (script.isEmpty()) return;
+
+    // Cleared before the command runs rather than after. A command may take a while — `run
+    // -all` on a real design does — and a line still sitting in the box looks as though
+    // nothing happened and invites a second Return.
+    entry->clear();
+
+    // Not recorded twice in a row: a reader pressing Return on the same command repeatedly
+    // wants one entry to walk back to, not ten.
+    if (history.isEmpty() || history.constLast() != script) history.append(script);
+    historyPosition = static_cast<int>(history.size());
+
+    Q_EMIT commandEntered(script);
+}
+
+void TranscriptView::recallCommand(int offset) {
+    if (history.isEmpty()) return;
+
+    const int wanted = historyPosition + offset;
+    if (wanted < 0) return;
+
+    // Past the newest entry is the empty line the reader started from, which is where Down
+    // should end up rather than refusing to move.
+    if (wanted >= static_cast<int>(history.size())) {
+        historyPosition = static_cast<int>(history.size());
+        entry->clear();
+        return;
+    }
+
+    historyPosition = wanted;
+    entry->setText(history.at(wanted));
+}
+
+bool TranscriptView::eventFilter(QObject* watched, QEvent* event) {
+    if (watched != entry || event->type() != QEvent::KeyPress)
+        return QWidget::eventFilter(watched, event);
+
+    // A key press is a QKeyEvent, and the type test above is how Qt says so. `dynamic_cast`
+    // would ask the run time to confirm what the event system has already guaranteed, on a
+    // path that runs for every key the reader types.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+    const auto* key = static_cast<QKeyEvent*>(event);
+    if (key->key() == Qt::Key_Up) {
+        recallCommand(-1);
+        return true;
+    }
+    if (key->key() == Qt::Key_Down) {
+        recallCommand(1);
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void TranscriptView::append(const QString& text, const QColor& colour, bool ownLine) {

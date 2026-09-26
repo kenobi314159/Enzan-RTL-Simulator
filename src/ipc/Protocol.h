@@ -18,7 +18,7 @@ namespace enzan::ipc {
 /// handshake compares it and refuses rather than negotiating: a GUI and a kernel from
 /// different builds that half-understand each other would show wrong values, and section 1.2
 /// puts correctness above convenience.
-constexpr std::uint32_t ProtocolVersion = 4;
+constexpr std::uint32_t ProtocolVersion = 5;
 
 /// What a message is.
 ///
@@ -47,6 +47,7 @@ enum class MessageType : std::uint16_t {
     Step = 16,
     Deposit = 17,
     Force = 18,
+    Command = 19,
 
     // --- kernel to client ---------------------------------------------------
     Welcome = 128,
@@ -203,6 +204,20 @@ struct ForceMessage {
     /// client that could force without being able to release would be a bug waiting to be
     /// filed.
     bool release = false;
+};
+
+/// A line of the control language, typed at a front end.
+///
+/// The kernel evaluates it through the same interpreter a `do` file goes through, against the
+/// same session. Anything the command prints reaches the client as transcript text by the
+/// ordinary route; what it *returns* is echoed after it, the way a prompt does.
+///
+/// One message carrying text rather than a request per command. Section 8.1 makes Tcl the
+/// control language, and a protocol that named each command would be a second vocabulary to
+/// keep in step with the first — which is exactly the thing the Transcript's entry was left
+/// disabled to avoid.
+struct CommandMessage {
+    std::string script;
 };
 
 /// Says the client is leaving and the kernel should keep running.
@@ -552,6 +567,11 @@ void serialize(Archive& archive, ForceMessage& message) {
     archive.u32(message.signalIndex);
     archive.bits(message.value);
     archive.boolean(message.release);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, CommandMessage& message) {
+    archive.str(message.script);
 }
 
 /// Enumerations travel as a byte and are range-checked on the way in, so that a value from a

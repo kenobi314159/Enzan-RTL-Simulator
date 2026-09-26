@@ -33,6 +33,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -59,6 +60,7 @@ using enzan::eir::Type;
 using enzan::ipc::BreakpointsMessage;
 using enzan::ipc::ByeMessage;
 using enzan::ipc::ClearBreakpointMessage;
+using enzan::ipc::CommandMessage;
 using enzan::ipc::Connection;
 using enzan::ipc::DepositMessage;
 using enzan::ipc::Descriptor;
@@ -87,7 +89,6 @@ using enzan::ipc::SubscribeMessage;
 using enzan::ipc::TranscriptMessage;
 using enzan::ipc::ValueChangesMessage;
 using enzan::ipc::WelcomeMessage;
-using enzan::runtime::Image;
 using enzan::runtime::TimeScale;
 using enzan::test::literal;
 using enzan::test::ProcessBuilder;
@@ -1095,6 +1096,139 @@ TEST_F(DebugFixture, ADepositOrForceOnASignalThatDoesNotExistIsRefused) {
     force.value = literal("4'd1");
     request(MessageType::Force, force);
     EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("9999"), std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Commands typed at a front end
+// ---------------------------------------------------------------------------
+
+/// A stand-in for the Tcl interpreter, which lives on the other side of `CommandEvaluator`.
+///
+/// The server must work whether or not the process driving it has an interpreter — a build with
+/// -DENZAN_ENABLE_TCL=OFF has none — so the seam is an interface and this is what tests it.
+class RecordingEvaluator final : public enzan::ipc::CommandEvaluator {
+public:
+    bool evaluate(std::string_view script, std::string& result, std::string& error) override {
+        seen.emplace_back(script);
+        if (observe != nullptr) observe();
+
+        if (failWith.empty()) {
+            result = answer;
+            return true;
+        }
+        error = failWith;
+        return false;
+    }
+
+    std::vector<std::string> seen;
+    std::string answer;
+    std::string failWith;
+
+    /// Called from inside `evaluate`, for a test about what the server looks like while a
+    /// command is running.
+    std::function<void()> observe;
+};
+
+class CommandFixture : public ServerFixture {
+protected:
+    void SetUp() override {
+        ServerFixture::SetUp();
+        server->setCommandEvaluator(&evaluator);
+        connectClient();
+    }
+
+    void sendCommand(std::string_view script) {
+        CommandMessage message;
+        message.script = std::string(script);
+        request(MessageType::Command, message);
+    }
+
+    /// Everything the client was sent as transcript text, joined.
+    [[nodiscard]] std::string transcriptText() {
+        std::string joined;
+        for (const TranscriptMessage& message :
+             expectAll<TranscriptMessage>(MessageType::Transcript))
+            joined += message.text;
+        return joined;
+    }
+
+    RecordingEvaluator evaluator;
+};
+
+TEST_F(CommandFixture, ACommandReachesTheEvaluator) {
+    sendCommand("run 100ns");
+
+    ASSERT_EQ(evaluator.seen.size(), 1U);
+    EXPECT_EQ(evaluator.seen.front(), "run 100ns");
+}
+
+TEST_F(CommandFixture, TheLineIsEchoedSoTheTranscriptReadsAsASession) {
+    sendCommand("examine /tb/clk");
+
+    EXPECT_NE(transcriptText().find("# examine /tb/clk"), std::string::npos);
+}
+
+TEST_F(CommandFixture, WhatACommandReturnsIsEchoedAfterIt) {
+    evaluator.answer = "1'b0";
+    sendCommand("examine /tb/clk");
+
+    const std::string text = transcriptText();
+    EXPECT_NE(text.find("1'b0"), std::string::npos) << text;
+}
+
+TEST_F(CommandFixture, ACommandThatReturnsNothingEchoesNothing) {
+    sendCommand("log -r /tb");
+
+    const std::string text = transcriptText();
+    EXPECT_NE(text.find("# log -r /tb"), std::string::npos) << text;
+
+    // The echoed line and nothing after it: a blank line for every command that returns nothing
+    // would be half the transcript.
+    EXPECT_EQ(text.find("\n\n"), std::string::npos) << text;
+}
+
+TEST_F(CommandFixture, AFailingCommandComesBackAsAFailure) {
+    evaluator.failWith = "no signal named '/tb/absent'";
+    sendCommand("examine /tb/absent");
+
+    EXPECT_EQ(expect<FailureMessage>(MessageType::Failure).reason, "no signal named '/tb/absent'");
+}
+
+TEST_F(CommandFixture, ACommandIsFollowedByTheStateAndTheBreakpoints) {
+    // A command may have run the design, changed a breakpoint or written a signal, and the
+    // client has no way of knowing which.
+    sendCommand("run 10ns");
+
+    EXPECT_FALSE(expectAll<RunStateMessage>(MessageType::RunState).empty());
+    EXPECT_FALSE(expectAll<BreakpointsMessage>(MessageType::Breakpoints).empty());
+}
+
+TEST_F(CommandFixture, TheKernelLooksBusyWhileACommandIsRunning) {
+    // The socket is serviced from inside the kernel's interrupt poll, so a command that runs
+    // the design can have a second one arrive while it is still going. Anything that touches
+    // the kernel then must be refused exactly as it is during a Run request — and what makes
+    // that happen is the server reporting itself as running for the whole evaluation.
+    bool sawRunning = false;
+    evaluator.observe = [this, &sawRunning] {
+        sawRunning = server->state() == SimulationState::Running;
+    };
+
+    sendCommand("run -all");
+    EXPECT_TRUE(sawRunning);
+    EXPECT_NE(server->state(), SimulationState::Running) << "the flag was left set";
+}
+
+TEST_F(ServerFixture, ACommandIsRefusedWhenTheKernelHasNoInterpreter) {
+    connectClient();
+
+    // A build with -DENZAN_ENABLE_TCL=OFF has no interpreter, and a front end whose entry is
+    // answered with the reason is better than one that appears to work.
+    CommandMessage message;
+    message.script = "run 100ns";
+    request(MessageType::Command, message);
+
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
+    EXPECT_NE(failure.reason.find("ENZAN_ENABLE_TCL"), std::string::npos) << failure.reason;
 }
 
 } // namespace

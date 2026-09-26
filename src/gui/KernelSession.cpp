@@ -211,6 +211,12 @@ void KernelSession::release(std::uint32_t signalIndex) {
     send(ipc::MessageType::Force, message);
 }
 
+void KernelSession::sendCommand(const QString& script) {
+    ipc::CommandMessage message;
+    message.script = script.toStdString();
+    send(ipc::MessageType::Command, message);
+}
+
 void KernelSession::quitKernel() {
     if (connection.isOpen()) {
         ipc::QuitMessage message;

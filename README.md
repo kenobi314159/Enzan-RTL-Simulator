@@ -221,6 +221,11 @@ stopped in named in the transcript. The text comes from the kernel rather than f
 disk, so a window attached to a kernel on another machine shows the bytes that kernel analysed
 and not whatever happens to be at the same path locally.
 
+The **Transcript**'s entry takes the same commands a script does — `run 100ns`, `examine
+/tb/count`, `bp counter.sv 19` — and sends them to the kernel's own interpreter, so a window and
+a `.do` file drive the same session in the same language. Up and Down walk back through what you
+typed.
+
 Right-clicking in **Objects** offers **Deposit…**, **Force…** and **Release** alongside *Add to
 Wave*. A deposit writes the value now and the next thing that drives the signal overwrites it; a
 force holds it against the design until released.
@@ -255,6 +260,7 @@ three colours.
 | Breakpoints on HDL source lines and stepping by line | yes, from a script and from the Source window |
 | Source window: current line, breakpoint gutter, step | yes |
 | `force`, `deposit` and `release` from the Objects window | yes |
+| Typing control-language commands into the Transcript | yes, with history |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
 | The Processes window, VHDL, VPI | not yet — M3, M6, M4 |

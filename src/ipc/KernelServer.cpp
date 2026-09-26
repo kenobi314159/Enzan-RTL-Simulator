@@ -121,6 +121,9 @@ KernelServer::KernelServer(control::Session& sessionToServe, DiagnosticEngine& d
 KernelServer::~KernelServer() {
     diagnostics->removeConsumer(diagnosticRelay);
     detachFromKernel();
+
+    // The relay is about to go, so the session must stop writing into it.
+    session->setTranscript(nullptr);
 }
 
 void KernelServer::detachFromKernel() {
@@ -160,6 +163,11 @@ void KernelServer::start() {
                  "a server needs an elaborated session");
 
     simulationKernel->setInterrupt(this);
+
+    // While this server is serving, the session's output belongs to the client. The session may
+    // have been built before the server existed — it has to be, since the server needs it
+    // elaborated — so this cannot be an option handed to its constructor.
+    session->setTranscript(&transcriptStream);
     simulationKernel->initialize();
 
     // Recorder and publisher are both started after `initialize`, so that the values they see
@@ -355,6 +363,7 @@ void KernelServer::handle(const Frame& frame) {
     case MessageType::Step: onStep(frame); return;
     case MessageType::Deposit: onDeposit(frame); return;
     case MessageType::Force: onForce(frame); return;
+    case MessageType::Command: onCommand(frame); return;
 
     default:
         // An event arriving from the client, or a request from a newer build. Saying so beats
@@ -431,6 +440,68 @@ void KernelServer::onQueryDesign() {
     connection.send(MessageType::Design, message);
 }
 
+void KernelServer::onCommand(const Frame& frame) {
+    CommandMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a command could not be decoded");
+        return;
+    }
+
+    if (commands == nullptr) {
+        sendFailure("this kernel was built without the control language; configure it with "
+                    "-DENZAN_ENABLE_TCL=ON");
+        return;
+    }
+
+    if (running) {
+        sendFailure("a run is in progress; stop it before typing a command");
+        return;
+    }
+
+    // Echoed first, so that the transcript reads as a session rather than as a list of answers
+    // to questions nobody can see. The prompt is the one a `do` file and the `-i` prompt use.
+    transcriptStream << "# " << request.script << '\n';
+
+    // A command may run the design — `run -all` is one — and while it does, the socket is
+    // serviced from inside the kernel's interrupt poll. Anything arriving then must be refused
+    // exactly as it is during a Run request, or a second command would read a design that is
+    // half way through a time slot. So the flag that says so is set for the whole evaluation,
+    // and the client is told, which is also what greys out its Run button.
+    simulationState = SimulationState::Running;
+    sendRunState({});
+    pump();
+
+    running = true;
+    lastPump = std::chrono::steady_clock::now();
+
+    std::string result;
+    std::string error;
+    const bool ok = commands->evaluate(request.script, result, error);
+
+    running = false;
+
+    if (!ok) {
+        simulationState = stateAfter(simulationKernel->status());
+        sendRunState({});
+        sendFailure(error.empty() ? "the command failed" : error);
+        return;
+    }
+
+    // What the command *returned*, which a prompt echoes. What it printed has already gone to
+    // the transcript by the ordinary route.
+    if (!result.empty()) transcriptStream << result << '\n';
+
+    // A command may have run the design, changed a breakpoint or written a signal, and the
+    // client has no way of knowing which. Telling it everything once is cheaper than a protocol
+    // in which every command declares what it touched.
+    recorder->flush();
+    publisher->flush();
+    database->setLatestTime(simulationKernel->time());
+    simulationState = stateAfter(simulationKernel->status());
+    sendRunState({});
+    sendBreakpoints();
+}
+
 void KernelServer::onQuerySource(const Frame& frame) {
     QuerySourceMessage request;
     if (!decodePayload(frame.payload, request)) {
@@ -472,6 +543,11 @@ void KernelServer::onSetBreakpoint(const Frame& frame) {
     SetBreakpointMessage request;
     if (!decodePayload(frame.payload, request)) {
         sendFailure("a breakpoint request could not be decoded");
+        return;
+    }
+
+    if (running) {
+        sendFailure("a run is in progress; stop it before changing a breakpoint");
         return;
     }
 
@@ -534,6 +610,10 @@ void KernelServer::onStep(const Frame& frame) {
         return;
     }
 
+    if (running) {
+        sendFailure("a run is in progress; stop it before stepping");
+        return;
+    }
     if (simulationState == SimulationState::Finished
         || simulationState == SimulationState::Failed) {
         sendFailure("the simulation has ended; restart it before stepping");
@@ -556,6 +636,10 @@ void KernelServer::onDeposit(const Frame& frame) {
         return;
     }
 
+    if (running) {
+        sendFailure("a run is in progress; stop it before writing a signal");
+        return;
+    }
     if (request.signalIndex >= image->signals().size()) {
         sendFailure(std::format("{} is not a signal in this design", request.signalIndex));
         return;
@@ -575,6 +659,10 @@ void KernelServer::onForce(const Frame& frame) {
         return;
     }
 
+    if (running) {
+        sendFailure("a run is in progress; stop it before writing a signal");
+        return;
+    }
     if (request.signalIndex >= image->signals().size()) {
         sendFailure(std::format("{} is not a signal in this design", request.signalIndex));
         return;

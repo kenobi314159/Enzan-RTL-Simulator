@@ -276,6 +276,14 @@ public:
     /// Where the last `run` stopped, when it returned `AtBreakpoint`.
     [[nodiscard]] const StopPoint& stopPoint() const noexcept { return lastStop; }
 
+    /// Redirects `$display` and the severity tasks, or restores the standard output with null.
+    ///
+    /// Changeable after construction because who is listening changes: a served kernel sends
+    /// its output to the attached client, and the same kernel run from a script sends it to the
+    /// transcript. The alternative — a kernel per destination — would mean a client and a
+    /// script driving two different simulations.
+    void setTranscript(std::ostream* stream) noexcept { options.transcript = stream; }
+
     /// Registers the source polled between time slots, or clears it with a null pointer.
     ///
     /// `source` must outlive the kernel or be cleared first. One rather than a list: the

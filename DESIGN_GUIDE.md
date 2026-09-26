@@ -652,6 +652,17 @@ reading of each is wrong:
   about a state register means. A radix asks for the encoding instead, and
   `radix symbolic` goes back.
 
+**A front end's command entry sends text, not named commands.** The kernel
+evaluates it through the same interpreter a `do` file goes through, against the
+same session. A protocol with a request per command would be a second vocabulary
+to keep in step with the first, which is the whole thing this section exists to
+prevent.
+
+A command may run the design, and while it does the socket is serviced from
+inside the kernel's interrupt poll — so the kernel MUST report itself as running
+for the whole evaluation. Without that, a second command arriving mid-run is
+dispatched and reads a design half way through a time slot.
+
 A command reports a user error through its Tcl result rather than through the
 diagnostic engine, and a failure of the phase it invoked through the engine.
 The distinction matters: a script probing for a signal that may not exist can

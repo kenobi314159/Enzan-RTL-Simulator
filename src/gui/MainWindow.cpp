@@ -84,6 +84,7 @@ MainWindow::MainWindow(KernelSession& kernelSession, const Theme& themeToUse, QW
     connect(session, &KernelSession::breakpointsChanged, this, &MainWindow::onBreakpointsChanged);
     connect(session, &KernelSession::transcriptReceived, transcriptView,
             &TranscriptView::appendOutput);
+    connect(transcriptView, &TranscriptView::commandEntered, session, &KernelSession::sendCommand);
     connect(session, &KernelSession::diagnosticReceived, transcriptView,
             &TranscriptView::appendDiagnostic);
 
@@ -790,6 +791,12 @@ void MainWindow::updateActions() {
     runAction->setEnabled(attached && !running && !over);
     runAllAction->setEnabled(attached && !running && !over);
     stepAction->setEnabled(attached && !running && !over);
+
+    // A command runs on the kernel, so it waits for a kernel that is not busy. The reason goes
+    // in the placeholder rather than being left to the reader to work out from a greyed box.
+    transcriptView->setCommandsAvailable(attached && !running,
+                                         attached ? tr("Waiting for the run to stop")
+                                                  : tr("Waiting for a kernel"));
     stopAction->setEnabled(attached && running);
     restartAction->setEnabled(attached && !running);
     runLengthEdit->setEnabled(attached && !running && !over);

@@ -77,6 +77,10 @@ public:
 
     /// Where `$display`, `run`'s summary line and command output go. Null means standard
     /// output.
+    ///
+    /// Takes effect immediately, including on a kernel that already exists: a served session
+    /// sends its output to the attached client and the same session run from a script sends it
+    /// to the terminal, and which of those is happening is not known when the kernel is built.
     void setTranscript(std::ostream* stream) noexcept;
 
     [[nodiscard]] std::ostream& transcriptStream() const;

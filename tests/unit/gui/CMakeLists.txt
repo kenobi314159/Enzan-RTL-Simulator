@@ -13,6 +13,7 @@ add_executable(
   KernelSessionTests.cpp
   SourceViewTests.cpp
   ThemeTests.cpp
+  TranscriptViewTests.cpp
   WaveRowTests.cpp
   WaveformInteractionTests.cpp
   TimeAxisTests.cpp

@@ -35,7 +35,6 @@
 #ifdef ENZAN_WITH_TCL
 #include "control/Commands.h"
 #include "control/Interpreter.h"
-#include "control/Session.h"
 
 #include <unistd.h>
 #endif
@@ -318,7 +317,7 @@ bool prepare(const Invocation& invocation, enzan::control::Session& session,
 /// its departure: section 2.2 requires a GUI to be able to detach from a long simulation on a
 /// compute server without ending it.
 ExitStatus serve(const Invocation& invocation, enzan::control::Session& session,
-                 enzan::DiagnosticEngine& diagnostics) {
+                 enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
     enzan::ipc::ServerOptions serverOptions;
     serverOptions.kernelVersion = enzan::versionLine();
     serverOptions.timeScale = enzan::runtime::TimeScale(invocation.timeExponent);
@@ -327,6 +326,39 @@ ExitStatus serve(const Invocation& invocation, enzan::control::Session& session,
 
     enzan::ipc::KernelServer server(session, diagnostics, serverOptions);
     server.start();
+
+#ifdef ENZAN_WITH_TCL
+    // The front end's command entry reaches the same interpreter a `do` file does, acting on
+    // the same session. Two interpreters, or a protocol with a request per command, would be a
+    // second control surface — which is the thing section 8.1 exists to prevent.
+    enzan::control::Interpreter interpreter(diagnostics);
+    interpreter.setTranscript(&server.transcript());
+    enzan::control::registerCommands(interpreter, session, sources);
+
+    /// Hands a client's typed line to the interpreter.
+    class TclCommands final : public enzan::ipc::CommandEvaluator {
+    public:
+        explicit TclCommands(enzan::control::Interpreter& toUse) : interpreter(&toUse) {}
+
+        bool evaluate(std::string_view script, std::string& result, std::string& error) override {
+            const enzan::control::EvalResult outcome = interpreter->evaluate(script);
+            if (outcome.status == enzan::control::EvalStatus::Error) {
+                error = outcome.value;
+                return false;
+            }
+            result = outcome.value;
+            return true;
+        }
+
+    private:
+        enzan::control::Interpreter* interpreter;
+    };
+
+    TclCommands commands(interpreter);
+    if (interpreter.valid()) server.setCommandEvaluator(&commands);
+#else
+    static_cast<void>(sources);
+#endif
 
     std::string error;
     if (!server.listen(invocation.listenPath, error)) {
@@ -352,7 +384,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     enzan::control::Session session(sources, diagnostics);
     if (!prepare(invocation, session, diagnostics)) return ExitStatus::Failure;
 
-    if (!invocation.listenPath.empty()) return serve(invocation, session, diagnostics);
+    if (!invocation.listenPath.empty()) return serve(invocation, session, sources, diagnostics);
 
     // Opened after elaboration so that the values dumped at time zero are the ones the design
     // actually starts from rather than an empty arena.
