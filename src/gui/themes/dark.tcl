@@ -51,6 +51,22 @@ theme transcript.note              #7f8794
 theme transcript.warning           #e3b341
 theme transcript.error             #f85149
 
+# --- Source window -----------------------------------------------------------
+#
+# A shade lighter than the transcript, because the source is read rather than scanned and a
+# reader looking for a line number does it for minutes at a time. The current line is a wash
+# behind the text rather than a change of text colour: the text is what is being read, and
+# recolouring it would make the line the design is stopped on the hardest one to read.
+
+theme source.background            #15181d
+theme source.foreground            #d7dae0
+theme source.gutter.background     #1b1e24
+theme source.gutter.foreground     #6e7681
+theme source.current.line          #2a3a4a
+theme source.current.marker        #6cb6ff
+theme source.breakpoint            #f85149
+theme source.breakpoint.disabled   #6b3b38
+
 # --- Waveform view -----------------------------------------------------------
 #
 # Section 10.5 fixes two of these: a high-contrast black background and light green traces.

@@ -152,6 +152,65 @@ void KernelSession::detach() {
     teardown(tr("detached"));
 }
 
+void KernelSession::querySource(const QString& path) {
+    ipc::QuerySourceMessage message;
+    message.path = path.toStdString();
+    send(ipc::MessageType::QuerySource, message);
+}
+
+void KernelSession::setBreakpoint(const QString& file, std::uint32_t line) {
+    ipc::SetBreakpointMessage message;
+    message.file = file.toStdString();
+    message.line = line;
+    send(ipc::MessageType::SetBreakpoint, message);
+}
+
+void KernelSession::clearBreakpoint(std::uint32_t id) {
+    ipc::ClearBreakpointMessage message;
+    message.id = id;
+    send(ipc::MessageType::ClearBreakpoint, message);
+}
+
+void KernelSession::clearAllBreakpoints() {
+    ipc::ClearBreakpointMessage message;
+    message.all = true;
+    send(ipc::MessageType::ClearBreakpoint, message);
+}
+
+void KernelSession::setBreakpointEnabled(std::uint32_t id, bool enabled) {
+    ipc::EnableBreakpointMessage message;
+    message.id = id;
+    message.enabled = enabled;
+    send(ipc::MessageType::EnableBreakpoint, message);
+}
+
+void KernelSession::step(std::uint32_t lines) {
+    ipc::StepMessage message;
+    message.count = lines == 0 ? 1 : lines;
+    send(ipc::MessageType::Step, message);
+}
+
+void KernelSession::deposit(std::uint32_t signalIndex, const eir::BitVector& value) {
+    ipc::DepositMessage message;
+    message.signalIndex = signalIndex;
+    message.value = value;
+    send(ipc::MessageType::Deposit, message);
+}
+
+void KernelSession::force(std::uint32_t signalIndex, const eir::BitVector& value) {
+    ipc::ForceMessage message;
+    message.signalIndex = signalIndex;
+    message.value = value;
+    send(ipc::MessageType::Force, message);
+}
+
+void KernelSession::release(std::uint32_t signalIndex) {
+    ipc::ForceMessage message;
+    message.signalIndex = signalIndex;
+    message.release = true;
+    send(ipc::MessageType::Force, message);
+}
+
 void KernelSession::quitKernel() {
     if (connection.isOpen()) {
         ipc::QuitMessage message;
@@ -222,6 +281,8 @@ void KernelSession::dispatch(const ipc::Frame& frame) {
     case ipc::MessageType::ValueChanges: onValueChanges(frame); return;
     case ipc::MessageType::History: onHistory(frame); return;
     case ipc::MessageType::RunState: onRunState(frame); return;
+    case ipc::MessageType::Source: onSource(frame); return;
+    case ipc::MessageType::Breakpoints: onBreakpoints(frame); return;
 
     case ipc::MessageType::Transcript: {
         ipc::TranscriptMessage message;
@@ -301,6 +362,10 @@ void KernelSession::onDesign(const ipc::Frame& frame) {
     for (ipc::InstanceEntry& entry : message.instances) {
         designInstances.push_back(std::move(entry));
     }
+
+    designSources.clear();
+    for (const std::string& file : message.sourceFiles)
+        designSources.push_back(QString::fromStdString(file));
 
     Q_EMIT designChanged();
 }
@@ -444,6 +509,26 @@ void KernelSession::resetDatabase() {
     database = std::make_unique<wavedb::WaveformDatabase>();
 }
 
+void KernelSession::onSource(const ipc::Frame& frame) {
+    ipc::SourceMessage message;
+    if (!ipc::decodePayload(frame.payload, message)) return;
+
+    Q_EMIT sourceReceived(QString::fromStdString(message.path),
+                          QString::fromStdString(message.text), message.found);
+}
+
+void KernelSession::onBreakpoints(const ipc::Frame& frame) {
+    ipc::BreakpointsMessage message;
+    if (!ipc::decodePayload(frame.payload, message)) return;
+
+    knownBreakpoints.clear();
+    knownBreakpoints.reserve(static_cast<qsizetype>(message.breakpoints.size()));
+    for (ipc::BreakpointEntry& entry : message.breakpoints)
+        knownBreakpoints.push_back(std::move(entry));
+
+    Q_EMIT breakpointsChanged();
+}
+
 void KernelSession::onRunState(const ipc::Frame& frame) {
     ipc::RunStateMessage message;
     if (!ipc::decodePayload(frame.payload, message)) return;
@@ -456,6 +541,11 @@ void KernelSession::onRunState(const ipc::Frame& frame) {
     simulationState = message.state;
     kernelTime = message.time;
     recordedTime = message.latestRecordedTime;
+
+    // Where it stopped arrives with the fact that it stopped, so the two cannot disagree.
+    stoppedFile = QString::fromStdString(message.stopFile);
+    stoppedLine = message.stopLine;
+    stoppedProcess = QString::fromStdString(message.stopProcess);
 
     if (restarted) {
         resetDatabase();

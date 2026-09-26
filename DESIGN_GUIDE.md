@@ -827,6 +827,13 @@ The layout follows Modelsim, which is what users expect:
 Docking uses `QDockWidget`. Layout is persisted and is definable from a Tcl
 configuration script.
 
+**Wave and Source share the central area as tabs**, rather than one of them
+being a dock beside the other. Each wants the whole width: a waveform squeezed
+next to an eighty-column listing leaves too little of either to read, and a
+reader is looking at one or the other. The Source tab is raised automatically
+when the design stops at a line, because the reader asked to stop somewhere and
+the point is to see it.
+
 ### 10.3 Waveform view
 
 A custom `QWidget` with manual painting.

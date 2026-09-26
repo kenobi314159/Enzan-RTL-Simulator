@@ -213,6 +213,18 @@ enzan-gui --attach /tmp/enzan.sock
 Closing a window that started its own kernel stops that kernel; closing one that attached to a
 running kernel only detaches from it, so a long run is left alone and can be looked in on again.
 
+**Source** sits beside **Wave** as a tab of the same area. Clicking a scope in **Structure**
+opens the file its module is declared in; clicking in the line-number gutter puts a breakpoint
+on that line and clicking it again takes it away. **Step** (F11) advances by one source line,
+and when the design stops the Source tab comes forward with the line marked and the process it
+stopped in named in the transcript. The text comes from the kernel rather than from your own
+disk, so a window attached to a kernel on another machine shows the bytes that kernel analysed
+and not whatever happens to be at the same path locally.
+
+Right-clicking in **Objects** offers **Deposit…**, **Force…** and **Release** alongside *Add to
+Wave*. A deposit writes the value now and the next thing that drives the signal overwrites it; a
+force holds it against the design until released.
+
 Colours come from a Tcl theme file and nowhere else. `enzan-gui --write-theme mine.tcl` writes
 the built-in dark theme out as a starting point, and `--theme mine.tcl` — or dropping it at
 `~/.config/enzan-gui/theme.tcl` — loads yours over it, so a file that sets three colours changes
@@ -240,10 +252,12 @@ three colours.
 | Tcl control layer: `vlog`, `vsim`, `run`, `examine`, `force`, `log`, `find`, `do` | yes, from a script or a prompt |
 | `.f` file lists and automatic compile order | yes |
 | Analysis libraries reused across runs (`vlib`) | yes, keyed on the sources and the options |
-| Breakpoints on HDL source lines and stepping by line | yes, from a script; the Source window is next |
+| Breakpoints on HDL source lines and stepping by line | yes, from a script and from the Source window |
+| Source window: current line, breakpoint gutter, step | yes |
+| `force`, `deposit` and `release` from the Objects window | yes |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
-| The GUI's Source window, VHDL, VPI | not yet — M3, M6, M4 |
+| The Processes window, VHDL, VPI | not yet — M3, M6, M4 |
 
 Anything unsupported is reported with a source location and the construct named, never
 mistranslated: a partially translated design would simulate and give the wrong answer, which is

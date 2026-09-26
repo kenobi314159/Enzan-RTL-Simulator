@@ -2,9 +2,12 @@
 
 #include "gui/MainWindow.h"
 
+#include "eir/BitOps.h"
+
 #include <QAction>
 #include <QCloseEvent>
 #include <QDockWidget>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QIcon>
 #include <QInputDialog>
@@ -16,6 +19,7 @@
 #include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTableView>
 #include <QToolBar>
 #include <QTreeView>
@@ -23,6 +27,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 
 namespace enzan::gui {
 
@@ -75,6 +80,8 @@ MainWindow::MainWindow(KernelSession& kernelSession, const Theme& themeToUse, QW
     connect(session, &KernelSession::wavesCleared, this, &MainWindow::onWavesCleared);
     connect(session, &KernelSession::detached, this, &MainWindow::onDetached);
     connect(session, &KernelSession::requestFailed, this, &MainWindow::onRequestFailed);
+    connect(session, &KernelSession::sourceReceived, this, &MainWindow::onSourceReceived);
+    connect(session, &KernelSession::breakpointsChanged, this, &MainWindow::onBreakpointsChanged);
     connect(session, &KernelSession::transcriptReceived, transcriptView,
             &TranscriptView::appendOutput);
     connect(session, &KernelSession::diagnosticReceived, transcriptView,
@@ -128,6 +135,28 @@ void MainWindow::buildDocks() {
     connect(addToWave, &QAction::triggered, this, &MainWindow::addSelectedObjectsToWave);
     objectsView->addAction(addToWave);
 
+    // `examine`, `force` and `deposit` are required from the GUI as well as from Tcl (section
+    // 10.4). Examining is what the window already does — the value column *is* an examine that
+    // keeps itself up to date — so what is added here is the two that write.
+    auto* writeSeparator = new QAction(objectsView);
+    writeSeparator->setSeparator(true);
+    objectsView->addAction(writeSeparator);
+
+    auto* depositAction = new QAction(tr("Deposit…"), objectsView);
+    depositAction->setToolTip(tr("Write a value now; the next thing that drives it overwrites"));
+    connect(depositAction, &QAction::triggered, this,
+            [this] { depositOrForceSelectedObject(false); });
+    objectsView->addAction(depositAction);
+
+    auto* forceAction = new QAction(tr("Force…"), objectsView);
+    forceAction->setToolTip(tr("Hold a value against the design until it is released"));
+    connect(forceAction, &QAction::triggered, this, [this] { depositOrForceSelectedObject(true); });
+    objectsView->addAction(forceAction);
+
+    auto* releaseAction = new QAction(tr("Release"), objectsView);
+    connect(releaseAction, &QAction::triggered, this, &MainWindow::releaseSelectedObjects);
+    objectsView->addAction(releaseAction);
+
     auto* objectsDock = new QDockWidget(tr("Objects"), this);
     objectsDock->setObjectName(QStringLiteral("objects"));
     objectsDock->setWidget(objectsView);
@@ -178,7 +207,14 @@ void MainWindow::buildDocks() {
     waveSplitter->setStretchFactor(1, 1);
     waveSplitter->setSizes({340, 900});
 
-    setCentralWidget(waveSplitter);
+    // Wave and Source are tabs of the central area rather than a dock beside it, which is what
+    // Modelsim does and what the two need: each wants the whole width. A waveform squeezed
+    // beside an eighty-column listing leaves too little of either to read, and a reader is
+    // looking at one or the other.
+    panes = new QTabWidget(this);
+    panes->setDocumentMode(true);
+    panes->addTab(waveSplitter, tr("Wave"));
+    setCentralWidget(panes);
 
     const auto addWaveAction = [this](const QString& text, const QKeySequence& shortcut,
                                       auto slot) {
@@ -246,6 +282,15 @@ void MainWindow::buildDocks() {
     connect(unhighlight, &QAction::triggered, this, [this] { setSelectedHighlight(0); });
     waveRowsView->addAction(unhighlight);
 
+    // --- Source ------------------------------------------------------------
+
+    sourceView = new SourceView(*theme, this);
+    connect(sourceView, &SourceView::fileRequested, session, &KernelSession::querySource);
+    connect(sourceView, &SourceView::breakpointRequested, this, &MainWindow::requestBreakpoint);
+    connect(sourceView, &SourceView::breakpointRemoved, session, &KernelSession::clearBreakpoint);
+
+    panes->addTab(sourceView, tr("Source"));
+
     // --- Transcript --------------------------------------------------------
 
     transcriptView = new TranscriptView(*theme, this);
@@ -272,6 +317,10 @@ void MainWindow::buildToolBar() {
     runAllAction = bar->addAction(tr("Run All"), this, &MainWindow::runUntilFinished);
     stopAction = bar->addAction(tr("Stop"), this, &MainWindow::stopRun);
     restartAction = bar->addAction(tr("Restart"), this, &MainWindow::restartRun);
+
+    stepAction = bar->addAction(tr("Step"), this, &MainWindow::stepOneLine);
+    stepAction->setShortcut(QKeySequence(Qt::Key_F11));
+    stepAction->setToolTip(tr("Advance to the next source line"));
 
     bar->addSeparator();
     bar->addAction(tr("Zoom Fit"), waveView, &WaveformView::zoomFit);
@@ -309,6 +358,12 @@ void MainWindow::buildMenus() {
         close();
     });
 
+    QMenu* source = menuBar()->addMenu(tr("S&ource"));
+    source->addAction(stepAction);
+    source->addSeparator();
+    source->addAction(tr("Clear All Breakpoints"), this,
+                      [this] { session->clearAllBreakpoints(); });
+
     QMenu* wave = menuBar()->addMenu(tr("&Wave"));
     wave->addAction(tr("Add Cursor"), this, &MainWindow::addCursor);
     wave->addAction(tr("Lock Active Cursor"), this, [this] {
@@ -340,6 +395,7 @@ void MainWindow::onWelcomed() {
 void MainWindow::onDesignChanged() {
     designModel->setInstances(session->instances());
     structureView->expandToDepth(1);
+    sourceView->setFiles(session->sourceFiles());
 
     // The top level is selected for the user, because opening a window onto an empty Objects
     // pane and expecting them to guess the first click is a poor greeting.
@@ -355,7 +411,43 @@ void MainWindow::onDesignChanged() {
 
 void MainWindow::onScopeSelected(const QModelIndex& index) {
     const QString path = designModel->pathAt(index);
-    if (!path.isEmpty()) session->queryObjects(path);
+    if (path.isEmpty()) return;
+
+    session->queryObjects(path);
+    showSourceOfScope(path);
+}
+
+void MainWindow::showSourceOfScope(const QString& instancePath) {
+    // The file the module is declared in, which is what the kernel sends with the tree. A
+    // reader clicking a scope means "show me this", and the source window is where that is.
+    for (const ipc::InstanceEntry& entry : session->instances()) {
+        if (QString::fromStdString(entry.path) != instancePath) continue;
+        if (entry.file.empty()) return;
+
+        sourceView->showFile(QString::fromStdString(entry.file));
+        return;
+    }
+}
+
+void MainWindow::onSourceReceived(const QString& path, const QString& text, bool found) {
+    sourceView->setFileText(path, text, found);
+}
+
+void MainWindow::onBreakpointsChanged() {
+    QHash<QString, QHash<std::uint32_t, SourceView::Marker>> byFile;
+    for (const ipc::BreakpointEntry& entry : session->breakpoints()) {
+        byFile[QString::fromStdString(entry.file)].insert(
+            entry.line, SourceView::Marker{.id = entry.id, .enabled = entry.enabled});
+    }
+    sourceView->setBreakpoints(byFile);
+}
+
+void MainWindow::requestBreakpoint(const QString& file, std::uint32_t line) {
+    session->setBreakpoint(file, line);
+}
+
+void MainWindow::stepOneLine() {
+    session->step(1);
 }
 
 void MainWindow::onObjectsReceived(const QString& instancePath,
@@ -377,6 +469,20 @@ void MainWindow::onRunStateChanged() {
     case ipc::SimulationState::Running: statusState->setText(tr("Running…")); break;
     case ipc::SimulationState::Finished: statusState->setText(tr("Finished")); break;
     case ipc::SimulationState::Failed: statusState->setText(tr("Failed")); break;
+    }
+
+    // Where the design is stopped, which the kernel sends with the run state so that the two
+    // cannot disagree. A zero line means it is not stopped at one, and clears the marker.
+    sourceView->setCurrentLine(session->stopFile(), session->stopLine());
+
+    if (session->stopLine() != 0) {
+        // Raised, because the reader asked to stop somewhere and the point is to see it.
+        panes->setCurrentWidget(sourceView);
+        statusState->setText(tr("Stopped at %1:%2")
+                                 .arg(QFileInfo(session->stopFile()).fileName())
+                                 .arg(session->stopLine()));
+        if (!session->stopProcess().isEmpty())
+            note(tr("Stopped in %1").arg(session->stopProcess()));
     }
 }
 
@@ -442,6 +548,62 @@ void MainWindow::addSelectedObjectsToWave() {
     // unpacked every bus in the window each time a signal was added, throwing away whatever
     // the reader had chosen to have open. A new signal arrives packed, and what was already
     // there stays as it was.
+}
+
+void MainWindow::depositOrForceSelectedObject(bool force) {
+    const QModelIndexList selected = objectsView->selectionModel()->selectedRows();
+    if (selected.isEmpty()) return;
+
+    const SignalInfo* info = objectsModel->objectAt(selected.front().row());
+    if (info == nullptr) return;
+
+    if (info->isParameter()) {
+        // A parameter is a fact about the elaborated design rather than a piece of its state
+        // (section 10.7); there is no storage to write.
+        note(tr("%1 is a parameter, so it has no value to write").arg(info->path));
+        return;
+    }
+
+    bool accepted = false;
+    const QString entered =
+        QInputDialog::getText(this, force ? tr("Force Value") : tr("Deposit Value"),
+                              tr("Value for %1 (%2 bits):").arg(info->path).arg(info->width),
+                              QLineEdit::Normal, QString(), &accepted);
+    if (!accepted || entered.isEmpty()) return;
+
+    // Parsed here rather than sent as text, because the kernel's message carries a value and
+    // the reader should be told about a typo while the dialog they typed it in is still in
+    // mind.
+    const std::optional<eir::BitVector> parsed = eir::BitVector::parse(entered.toStdString());
+    if (!parsed.has_value()) {
+        note(tr("'%1' is not a value Enzan understands").arg(entered));
+        return;
+    }
+
+    // Widened or narrowed to the signal, so that `5` works without the reader counting bits.
+    eir::BitVector sized = eir::BitVector::filled(info->width, eir::Logic::Zero);
+    eir::bitops::extend(sized.mutableRef(), parsed->ref(), false);
+
+    if (force) {
+        session->force(info->signalIndex, sized);
+        note(tr("Forced %1 to %2").arg(info->path, entered));
+        return;
+    }
+
+    session->deposit(info->signalIndex, sized);
+    note(tr("Deposited %1 into %2").arg(entered, info->path));
+}
+
+void MainWindow::releaseSelectedObjects() {
+    const QModelIndexList selected = objectsView->selectionModel()->selectedRows();
+    for (const QModelIndex& index : selected) {
+        const SignalInfo* info = objectsModel->objectAt(index.row());
+        if (info == nullptr || info->isParameter()) continue;
+
+        // Releasing something that was not forced is not an error, so nothing checks first: a
+        // reader clearing a handful of rows should not have to remember which they forced.
+        session->release(info->signalIndex);
+    }
 }
 
 void MainWindow::groupSelectedWaves() {
@@ -627,6 +789,7 @@ void MainWindow::updateActions() {
 
     runAction->setEnabled(attached && !running && !over);
     runAllAction->setEnabled(attached && !running && !over);
+    stepAction->setEnabled(attached && !running && !over);
     stopAction->setEnabled(attached && running);
     restartAction->setEnabled(attached && !running);
     runLengthEdit->setEnabled(attached && !running && !over);

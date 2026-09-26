@@ -11,6 +11,7 @@ add_executable(
   DesignTreeModelTests.cpp
   GuiTestMain.cpp
   KernelSessionTests.cpp
+  SourceViewTests.cpp
   ThemeTests.cpp
   WaveRowTests.cpp
   WaveformInteractionTests.cpp
