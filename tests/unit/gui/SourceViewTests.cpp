@@ -117,6 +117,22 @@ TEST_F(SourceViewTest, TextIsKeptSoTheSameFileIsNotAskedForTwice) {
     EXPECT_TRUE(text->toPlainText().contains(QStringLiteral("first")));
 }
 
+TEST_F(SourceViewTest, RebuildingTheListAsksForTheTextAgain) {
+    view->setFiles({QStringLiteral("a.sv")});
+    view->setFileText(QStringLiteral("a.sv"), QStringLiteral("first\n"), true);
+
+    // A new list is a new design, and the same path may hold different bytes — editing a file and
+    // analysing it again is the ordinary way that happens. Keeping the old text would draw the
+    // stopped-line marker on a line of the design that has gone.
+    const QSignalSpy requested(view.get(), &SourceView::fileRequested);
+    view->setFiles({QStringLiteral("a.sv")});
+    EXPECT_EQ(requested.count(), 1);
+
+    view->setFileText(QStringLiteral("a.sv"), QStringLiteral("second\n"), true);
+    EXPECT_TRUE(text->toPlainText().contains(QStringLiteral("second")));
+    EXPECT_FALSE(text->toPlainText().contains(QStringLiteral("first")));
+}
+
 TEST_F(SourceViewTest, TheFileOnShowStaysOnShowWhenTheListIsRebuilt) {
     view->setFiles({QStringLiteral("a.sv"), QStringLiteral("b.sv")});
     view->setFileText(QStringLiteral("b.sv"), QStringLiteral("second\n"), true);

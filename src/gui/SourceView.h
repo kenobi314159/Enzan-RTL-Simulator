@@ -112,8 +112,9 @@ private:
     QString shownFile;
 
     /// Text by path, so that stepping back and forth between two modules does not ask the
-    /// kernel again. A design's sources are small next to a waveform and the kernel cannot
-    /// change them while it is running.
+    /// kernel again. A design's sources are small next to a waveform and are fixed for as long
+    /// as the design is, so the cache is emptied by `setFiles` and not before: a new file list
+    /// is a new design, and the same path in it may hold different bytes.
     QHash<QString, QString> cachedText;
 
     QHash<QString, QHash<std::uint32_t, Marker>> markers;

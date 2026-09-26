@@ -123,6 +123,13 @@ SourceView::SourceView(const Theme& themeToUse, QWidget* parent)
 void SourceView::setFiles(const QStringList& files) {
     const QString keep = shownFile;
 
+    // A new list means a new design, and the same path may well hold different bytes: editing a
+    // file and analysing it again is the ordinary way that happens. Text kept against the path
+    // would then be the *previous* design's, and the stopped-line marker would be drawn on a
+    // line of it — a debugger pointing confidently somewhere wrong, which is the failure this
+    // window takes its text from the kernel to avoid in the first place.
+    cachedText.clear();
+
     updatingChooser = true;
     chooser->clear();
     chooser->addItems(files);
