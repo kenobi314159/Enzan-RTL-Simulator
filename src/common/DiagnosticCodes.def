@@ -127,6 +127,10 @@ ENZAN_DIAG(LibraryNotADirectory, 6019, Error,
 ENZAN_DIAG(LibraryWriteFailed, 6020, Warning,
            "the analysis library entry '{}' could not be written; this run is unaffected and "
            "the next one will analyse from source again")
+ENZAN_DIAG(FileListLibrarySearchIgnored, 6021, Warning,
+           "'{}' is understood but not acted on yet: Enzan analyses every file it is given and "
+           "does not go looking for a module nothing defines, so a module reachable only this "
+           "way will be reported as undefined. Naming the file in the list analyses it")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 

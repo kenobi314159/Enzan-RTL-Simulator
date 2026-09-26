@@ -29,10 +29,14 @@ struct FileList {
     std::vector<std::filesystem::path> files;
 
     /// `-v`: files holding modules to analyse only when something instantiates one.
+    ///
+    /// Collected but not yet acted on: nothing searches for an undefined module, so reading a
+    /// list that relies on one warns where the option is. Recorded rather than discarded because
+    /// the search is what these fields are for and the reader is already right.
     std::vector<std::filesystem::path> libraryFiles;
 
     /// `-y`: directories searched for `<module><ext>` when something instantiates a module
-    /// nothing analysed defines.
+    /// nothing analysed defines. Collected but not yet acted on, as `libraryFiles` is.
     std::vector<std::filesystem::path> libraryDirectories;
 
     /// `+libext+`: the extensions tried in a `-y` directory, in order. Empty means `.v`.

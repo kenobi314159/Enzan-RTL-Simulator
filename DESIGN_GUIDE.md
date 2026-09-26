@@ -765,6 +765,17 @@ variable that caused it.
 Beyond the switches named above the reader also takes `+libext+`,
 double-quoted arguments for paths containing spaces, and `/* */` alongside `//`.
 
+`-v`, `-y` and `+libext+` are read and recorded, and the library *search* they
+describe — analysing a file only when something instantiates a module nothing
+else defines — does not exist yet. Until it does, reading one of them reports a
+warning at its position. This is the same rule as for an unrecognised option,
+applied to the case that looks different and is not: an option the reader
+recognises and then drops leaves what is analysed differing from what was asked
+for exactly as one it never understood would. It is a warning rather than an
+error only because the consequence is loud — a module reported as undefined —
+and because refusing outright would turn away every list carrying a `-v` for a
+cell the design never instantiates, which is most of them.
+
 ### 8.3 Compile-order inference
 
 Users MUST NOT be required to specify compile order manually.
