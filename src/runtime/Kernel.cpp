@@ -537,11 +537,30 @@ bool Kernel::shouldStopAt(std::uint32_t processIndex, std::uint32_t pc) {
     if (!here.valid()) return false;
     if (here == stepFrom) return false;
 
+    // A different statement is not a different line. The frontend stamps a location per
+    // statement, so `a = 0; b = 0;` written on one line arrives as two of them — and a step that
+    // stopped at both would stop twice where the user wrote once, which reads on screen as a
+    // step that did not move. `stepFrom` is advanced onto the statement just reached so that the
+    // identity test above covers the rest of it and the line is looked up once per statement
+    // rather than once per instruction.
+    if (onSameLine(here, stepFrom)) {
+        stepFrom = here;
+        return false;
+    }
+
     lastStop =
         StopPoint{.processIndex = processIndex, .pc = pc, .location = here, .breakpointId = 0};
     stepping = false;
     debugging = !resolved.empty();
     return true;
+}
+
+bool Kernel::onSameLine(SourceLocation first, SourceLocation second) const {
+    if (!first.valid() || !second.valid()) return false;
+    if (first.buffer() != second.buffer()) return false;
+
+    const SourceManager& sourceManager = diagnostics.sourceManager();
+    return sourceManager.lineNumber(first) == sourceManager.lineNumber(second);
 }
 
 bool Kernel::isForced(std::uint32_t signalIndex) const noexcept {

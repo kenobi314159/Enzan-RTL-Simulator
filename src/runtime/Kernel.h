@@ -383,6 +383,13 @@ private:
     /// True when neither a stop nor a pause is pending.
     [[nodiscard]] bool halted() const noexcept { return stopping() || pausedAtBreakpoint; }
 
+    /// True when two valid locations are on the same line of the same buffer.
+    ///
+    /// The comparison a step is decided by. Asked at most once per statement while a step is
+    /// pending and never otherwise, so the line lookup behind it is not on any path that
+    /// matters (section 13.4).
+    [[nodiscard]] bool onSameLine(SourceLocation first, SourceLocation second) const;
+
     /// Wakes whatever is waiting on a transition of `signalIndex`.
     void notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after);
 

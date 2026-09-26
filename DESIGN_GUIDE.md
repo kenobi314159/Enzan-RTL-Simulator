@@ -968,9 +968,13 @@ from, so a resumed run produces what an uninterrupted one would have — which i
 than recorded as one that can never fire. A marker in the source window that
 silently does nothing is worse than being told the line has no code on it.
 
-A step runs until the source *line* changes, not until the next instruction: a
-statement compiles to a run of instructions, and stepping through them one at a
-time would be stepping through something the user never wrote.
+A step runs until the source *line* changes — not until the next instruction,
+and **not until the next statement either**. A statement compiles to a run of
+instructions, so stepping by instruction would be stepping through something the
+user never wrote; and positions are recorded per statement, so comparing them
+directly would stop twice on `a = 0; b = 0;` written on one line. Both are the
+same mistake seen from different distances: the unit a step moves by is the unit
+the person reading the source sees, which is the line.
 
 **A front end asks the kernel for source text; it MUST NOT read the file
 itself.** The kernel is the end that knows what it analysed, and it may be on

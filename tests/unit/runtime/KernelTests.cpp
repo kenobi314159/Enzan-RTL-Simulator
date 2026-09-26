@@ -108,6 +108,14 @@ public:
         return {SourceBuffer, lineOffset(line)};
     }
 
+    /// A location `column` bytes into `line`, for a test that needs two positions on one line.
+    ///
+    /// Every line of the stand-in source is at least three bytes long, so a small column stays
+    /// on the line it was asked for.
+    static constexpr enzan::SourceLocation at(std::uint32_t line, std::uint32_t column) {
+        return {SourceBuffer, lineOffset(line) + column};
+    }
+
     Simulation(Design design, std::string_view topName)
         : engine(sources), analysed(std::move(design)) {
         // Added first, so that `SourceBuffer` names it. Every simulation gets one even when
@@ -1429,6 +1437,73 @@ Design makeSteppableDesign() {
         makeTop({builder.finish()}, {Object{.name = "a",
                                             .type = Type::bits(8, false, true),
                                             .initialValue = BitVector::parse("8'd0")}}));
+}
+
+/// Two statements on one line, then one on the next.
+///
+/// The case that tells stepping by line apart from stepping by statement, which nothing else
+/// here does: the frontend stamps a location per statement, and most lines carry one.
+Design makeTwoStatementLineDesign() {
+    ProcessBuilder builder(ProcessKind::Initial, "stepper");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t first = builder.constant("8'd11");
+    const std::uint32_t second = builder.constant("8'd22");
+    const std::uint32_t third = builder.constant("8'd33");
+
+    builder.block("entry");
+    builder.at(Simulation::at(2, 0));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(first)));
+    builder.store(0, value);
+
+    // The second statement of `a = 11; a = 22;`, further along the same line.
+    builder.at(Simulation::at(2, 2));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(second)));
+    builder.store(0, value);
+
+    builder.at(Simulation::at(3, 0));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(third)));
+    builder.store(0, value);
+
+    builder.at(Simulation::at(4, 0));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    return designOf(
+        makeTop({builder.finish()}, {Object{.name = "a",
+                                            .type = Type::bits(8, false, true),
+                                            .initialValue = BitVector::parse("8'd0")}}));
+}
+
+TEST(Kernel, AStepMovesByLineRatherThanByStatement) {
+    Simulation simulation(makeTwoStatementLineDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    simulation.simulationKernel().requestStep();
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+    EXPECT_EQ(simulation.simulationKernel().stopPoint().location, Simulation::at(2, 0));
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "0") << "line 2 has not run yet";
+
+    // Off the line, not onto its second statement. Stopping twice where the user wrote one line
+    // reads on screen as a step that did not move.
+    simulation.simulationKernel().requestStep();
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+    EXPECT_EQ(simulation.simulationKernel().stopPoint().location, Simulation::at(3, 0));
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "22")
+        << "both statements on line 2 should have run";
+}
+
+TEST(Kernel, ABreakpointStillFiresOnASecondStatementOfTheSameLine) {
+    // Stepping is what moves by lines. A breakpoint resolves to the front of the line's code and
+    // has nothing to do with the comparison a step makes, so this is the half of the change that
+    // has to stay put.
+    Simulation simulation(makeTwoStatementLineDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ASSERT_NE(simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 2), 0U);
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+    EXPECT_EQ(simulation.simulationKernel().stopPoint().location, Simulation::at(2, 0));
 }
 
 TEST(Kernel, WithNoBreakpointsARunIsUnaffected) {
