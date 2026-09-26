@@ -927,6 +927,17 @@ A step runs until the source *line* changes, not until the next instruction: a
 statement compiles to a run of instructions, and stepping through them one at a
 time would be stepping through something the user never wrote.
 
+**A front end asks the kernel for source text; it MUST NOT read the file
+itself.** The kernel is the end that knows what it analysed, and it may be on
+another machine entirely (2.2). A window that opened the path would show
+whatever is at that path on the machine running the window, which is either the
+same file or a quietly different one — and the second case is a debugger
+pointing at the wrong line with no way to tell.
+
+**Where a run stopped travels with the fact that it stopped.** The two are one
+fact, and a client that learned them from separate messages could draw its
+current-line marker against a run state it no longer holds.
+
 ### 10.5 Theme
 
 Dark throughout. **Every colour MUST come from the theme configuration file**;

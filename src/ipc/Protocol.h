@@ -18,7 +18,7 @@ namespace enzan::ipc {
 /// handshake compares it and refuses rather than negotiating: a GUI and a kernel from
 /// different builds that half-understand each other would show wrong values, and section 1.2
 /// puts correctness above convenience.
-constexpr std::uint32_t ProtocolVersion = 3;
+constexpr std::uint32_t ProtocolVersion = 4;
 
 /// What a message is.
 ///
@@ -40,6 +40,13 @@ enum class MessageType : std::uint16_t {
     Restart = 9,
     Quit = 10,
     Detach = 11,
+    QuerySource = 12,
+    SetBreakpoint = 13,
+    ClearBreakpoint = 14,
+    EnableBreakpoint = 15,
+    Step = 16,
+    Deposit = 17,
+    Force = 18,
 
     // --- kernel to client ---------------------------------------------------
     Welcome = 128,
@@ -52,6 +59,8 @@ enum class MessageType : std::uint16_t {
     RunState = 135,
     Bye = 136,
     Failure = 137,
+    Source = 138,
+    Breakpoints = 139,
 };
 
 /// Returns the message's name, for traces and diagnostics. Unknown numbers render as
@@ -138,6 +147,64 @@ struct RestartMessage {};
 /// Asks the kernel to exit once it has stopped.
 struct QuitMessage {};
 
+/// Asks for the text of one source file. Answered with Source.
+///
+/// The text comes from the kernel rather than being read by the client, because the kernel is
+/// the one that knows what it analysed and may be on another machine entirely (section 2.2). A
+/// source window that opened the path itself would show whatever happens to be at that path on
+/// the machine running the window, which is either the same file or a quietly different one.
+struct QuerySourceMessage {
+    std::string path;
+};
+
+/// Asks for a breakpoint on a source line. Answered with Breakpoints, or with Failure when the
+/// line compiled to no instructions.
+struct SetBreakpointMessage {
+    std::string file;
+
+    /// 1-based, as the source window counts.
+    std::uint32_t line = 0;
+};
+
+/// Removes one breakpoint, or all of them. Answered with Breakpoints.
+struct ClearBreakpointMessage {
+    std::uint32_t id = 0;
+    bool all = false;
+};
+
+/// Turns one breakpoint off without forgetting where it was. Answered with Breakpoints.
+struct EnableBreakpointMessage {
+    std::uint32_t id = 0;
+    bool enabled = true;
+};
+
+/// Asks the kernel to advance by source lines rather than by time.
+struct StepMessage {
+    /// Lines to step. Zero is treated as one, so that a client that forgot to set it steps.
+    std::uint32_t count = 1;
+};
+
+/// Writes a signal once, from outside the simulation (section 10.4).
+struct DepositMessage {
+    std::uint32_t signalIndex = 0;
+
+    /// Not default-constructible without a width, so an unknown single bit stands in until the
+    /// decoder reads the real one.
+    eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
+};
+
+/// Holds a signal at a value until it is released, or releases it.
+struct ForceMessage {
+    std::uint32_t signalIndex = 0;
+    eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
+
+    /// True to release instead of forcing, in which case `value` is ignored. One message
+    /// rather than two, because a window's force control is one control with two states and a
+    /// client that could force without being able to release would be a bug waiting to be
+    /// filed.
+    bool release = false;
+};
+
 /// Says the client is leaving and the kernel should keep running.
 ///
 /// The counterpart of Quit, and the reason both exist: section 2.2 requires the GUI to detach
@@ -171,6 +238,11 @@ struct InstanceEntry {
     /// Index in this message's own list, or `NoParent` for the top.
     std::uint32_t parent = NoParent;
 
+    /// Where the module this instantiates is declared, so that clicking a scope in the
+    /// Structure window can open its source at the right line. Empty when unknown.
+    std::string file;
+    std::uint32_t line = 0;
+
     static constexpr std::uint32_t NoParent = 0xFFFF'FFFFU;
 };
 
@@ -181,6 +253,12 @@ struct InstanceEntry {
 /// lazily-expanding tree would make the GUI's model depend on round trips.
 struct DesignMessage {
     std::vector<InstanceEntry> instances;
+
+    /// Every source file the design was analysed from, in analysis order.
+    ///
+    /// Sent with the tree because that is when a client is building its windows, and because
+    /// a source window needs a list of what it may open before the user has clicked anything.
+    std::vector<std::string> sourceFiles;
 };
 
 /// One signal visible in a scope.
@@ -326,6 +404,47 @@ struct RunStateMessage {
     /// Why the last run ended, as `runtime::toString(RunStatus)` words it. Empty while a run
     /// is in progress.
     std::string reason;
+
+    /// Where the design is stopped, when it stopped at a breakpoint or a step.
+    ///
+    /// Carried here rather than in a message of its own because "stopped" and "stopped *there*"
+    /// are one fact: a client that learned them separately could draw its current-line marker
+    /// against a run state it no longer has. `stopLine` is zero when the stop had no position,
+    /// which is what a client tests.
+    std::string stopFile;
+    std::uint32_t stopLine = 0;
+
+    /// The process that was executing, as the Processes window names it. Empty when unknown.
+    std::string stopProcess;
+};
+
+/// Answers QuerySource.
+struct SourceMessage {
+    std::string path;
+
+    /// The bytes the kernel read, exactly as it read them. Empty when `found` is false.
+    std::string text;
+
+    /// False when the kernel has no source by that name. Not a Failure, because asking about a
+    /// file that was not analysed is an ordinary thing for a window to do.
+    bool found = false;
+};
+
+/// One breakpoint, as the kernel holds it.
+struct BreakpointEntry {
+    std::uint32_t id = 0;
+    std::string file;
+    std::uint32_t line = 0;
+    bool enabled = true;
+};
+
+/// The whole breakpoint list, sent after every change to it.
+///
+/// Whole rather than incremental: the list is a handful of entries, and a client that rebuilt
+/// its markers from a stream of additions and removals would be one dropped message away from
+/// showing a breakpoint the kernel does not have.
+struct BreakpointsMessage {
+    std::vector<BreakpointEntry> breakpoints;
 };
 
 /// Sent before the kernel closes a connection deliberately.
@@ -394,6 +513,47 @@ void serialize(Archive& /*archive*/, QuitMessage& /*message*/) {}
 template<typename Archive>
 void serialize(Archive& /*archive*/, DetachMessage& /*message*/) {}
 
+template<typename Archive>
+void serialize(Archive& archive, QuerySourceMessage& message) {
+    archive.str(message.path);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, SetBreakpointMessage& message) {
+    archive.str(message.file);
+    archive.u32(message.line);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, ClearBreakpointMessage& message) {
+    archive.u32(message.id);
+    archive.boolean(message.all);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, EnableBreakpointMessage& message) {
+    archive.u32(message.id);
+    archive.boolean(message.enabled);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, StepMessage& message) {
+    archive.u32(message.count);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, DepositMessage& message) {
+    archive.u32(message.signalIndex);
+    archive.bits(message.value);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, ForceMessage& message) {
+    archive.u32(message.signalIndex);
+    archive.bits(message.value);
+    archive.boolean(message.release);
+}
+
 /// Enumerations travel as a byte and are range-checked on the way in, so that a value from a
 /// newer peer becomes a decode failure rather than an out-of-range enumerator.
 template<typename Archive>
@@ -425,11 +585,14 @@ void serialize(Archive& archive, InstanceEntry& entry) {
     archive.str(entry.path);
     archive.str(entry.name);
     archive.u32(entry.parent);
+    archive.str(entry.file);
+    archive.u32(entry.line);
 }
 
 template<typename Archive>
 void serialize(Archive& archive, DesignMessage& message) {
     archive.list(message.instances);
+    archive.strList(message.sourceFiles);
 }
 
 template<typename Archive>
@@ -519,6 +682,29 @@ void serialize(Archive& archive, RunStateMessage& message) {
     archive.u64(message.time);
     archive.u64(message.latestRecordedTime);
     archive.str(message.reason);
+    archive.str(message.stopFile);
+    archive.u32(message.stopLine);
+    archive.str(message.stopProcess);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, SourceMessage& message) {
+    archive.str(message.path);
+    archive.str(message.text);
+    archive.boolean(message.found);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, BreakpointEntry& entry) {
+    archive.u32(entry.id);
+    archive.str(entry.file);
+    archive.u32(entry.line);
+    archive.boolean(entry.enabled);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, BreakpointsMessage& message) {
+    archive.list(message.breakpoints);
 }
 
 template<typename Archive>

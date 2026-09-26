@@ -19,6 +19,13 @@ std::string toString(MessageType type) {
     case MessageType::Restart: return "restart";
     case MessageType::Quit: return "quit";
     case MessageType::Detach: return "detach";
+    case MessageType::QuerySource: return "query-source";
+    case MessageType::SetBreakpoint: return "set-breakpoint";
+    case MessageType::ClearBreakpoint: return "clear-breakpoint";
+    case MessageType::EnableBreakpoint: return "enable-breakpoint";
+    case MessageType::Step: return "step";
+    case MessageType::Deposit: return "deposit";
+    case MessageType::Force: return "force";
     case MessageType::Welcome: return "welcome";
     case MessageType::Design: return "design";
     case MessageType::Objects: return "objects";
@@ -29,6 +36,8 @@ std::string toString(MessageType type) {
     case MessageType::RunState: return "run-state";
     case MessageType::Bye: return "bye";
     case MessageType::Failure: return "failure";
+    case MessageType::Source: return "source";
+    case MessageType::Breakpoints: return "breakpoints";
     }
 
     // A number this build does not know is reported as the number. Guessing a name for it

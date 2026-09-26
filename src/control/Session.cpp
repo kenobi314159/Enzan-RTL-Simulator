@@ -336,45 +336,13 @@ std::vector<std::string> Session::findInstances(std::string_view pattern) const 
 // ---------------------------------------------------------------------------
 
 BufferId Session::findSourceBuffer(std::string_view file, std::string& error) const {
-    // Exactly first. A user who named the file the way the design did means that file, and
-    // nothing should come between them and it.
-    std::vector<BufferId> matches;
-    for (std::size_t index = 0; index < sources.bufferCount(); ++index) {
-        const BufferId buffer = BufferId::fromIndex(static_cast<std::uint32_t>(index));
-        if (sources.bufferName(buffer) == file) return buffer;
-    }
+    std::string ambiguity;
+    const BufferId buffer = findBufferByName(sources, file, &ambiguity);
+    if (buffer.valid()) return buffer;
 
-    // Otherwise by trailing path components, so that `bp counter.sv 14` finds
-    // `/home/who/rtl/counter.sv`. A file list expands to absolute paths and a user typing one
-    // out in full to set a breakpoint would be friction with nothing behind it.
-    const std::string suffix = "/" + std::string(file);
-    for (std::size_t index = 0; index < sources.bufferCount(); ++index) {
-        const BufferId buffer = BufferId::fromIndex(static_cast<std::uint32_t>(index));
-        const std::string_view name = sources.bufferName(buffer);
-        if (!name.ends_with(suffix)) continue;
-
-        // The manager does not deduplicate, so one file legitimately has several buffers; only
-        // a genuinely different *name* is an ambiguity.
-        const bool known = std::ranges::any_of(
-            matches, [&](BufferId other) { return sources.bufferName(other) == name; });
-        if (!known) matches.push_back(buffer);
-    }
-
-    if (matches.empty()) {
-        error = "no analysed source is called '" + std::string(file) + "'";
-        return {};
-    }
-
-    if (matches.size() > 1) {
-        error = "'" + std::string(file) + "' matches ";
-        for (std::size_t index = 0; index < matches.size(); ++index) {
-            if (index > 0) error += " and ";
-            error += sources.bufferName(matches[index]);
-        }
-        return {};
-    }
-
-    return matches.front();
+    error = ambiguity.empty() ? "no analysed source is called '" + std::string(file) + "'"
+                              : "'" + std::string(file) + "' matches " + ambiguity;
+    return {};
 }
 
 std::uint32_t Session::addBreakpoint(std::string_view file, std::uint32_t line,

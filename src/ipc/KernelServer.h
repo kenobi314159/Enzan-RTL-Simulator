@@ -176,6 +176,16 @@ private:
     void onQueryHistory(const Frame& frame);
     void onRun(const Frame& frame);
     void onRestart();
+    void onQuerySource(const Frame& frame);
+    void onSetBreakpoint(const Frame& frame);
+    void onClearBreakpoint(const Frame& frame);
+    void onEnableBreakpoint(const Frame& frame);
+    void onStep(const Frame& frame);
+    void onDeposit(const Frame& frame);
+    void onForce(const Frame& frame);
+
+    /// Sends the whole breakpoint list, which is what every change to it is answered with.
+    void sendBreakpoints();
 
     /// Sends everything the client is owed and writes what the socket will take.
     void pump();
@@ -219,6 +229,14 @@ private:
     /// Set by a Run request and cleared by `performRun`.
     bool runRequested = false;
     RunMessage requestedRun;
+
+    /// Source lines still to step, set by a Step request.
+    ///
+    /// A step goes through the same `performRun` as a Run request rather than reaching the
+    /// kernel by a path of its own, so that there is one place that decides about interrupts,
+    /// transcripts and run state. What makes it a step is this count and the kernel being
+    /// asked for one before each run.
+    std::uint32_t stepsRequested = 0;
 
     bool running = false;
     bool stopRequested = false;

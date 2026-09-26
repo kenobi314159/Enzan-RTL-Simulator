@@ -335,6 +335,14 @@ void KernelServer::handle(const Frame& frame) {
 
     case MessageType::Detach: closeClient("the client detached"); return;
 
+    case MessageType::QuerySource: onQuerySource(frame); return;
+    case MessageType::SetBreakpoint: onSetBreakpoint(frame); return;
+    case MessageType::ClearBreakpoint: onClearBreakpoint(frame); return;
+    case MessageType::EnableBreakpoint: onEnableBreakpoint(frame); return;
+    case MessageType::Step: onStep(frame); return;
+    case MessageType::Deposit: onDeposit(frame); return;
+    case MessageType::Force: onForce(frame); return;
+
     default:
         // An event arriving from the client, or a request from a newer build. Saying so beats
         // ignoring it: the client is waiting for an answer that would never come.
@@ -380,12 +388,194 @@ void KernelServer::onQueryDesign() {
     const std::span<const elab::Instance> instances = image->elaboratedDesign().instances();
     message.instances.reserve(instances.size());
 
+    const SourceManager& sources = diagnostics->sourceManager();
+
+    // The source list is collected from where the definitions actually are, not from every
+    // buffer the manager holds: a kernel driven from a script has the script in there too, and
+    // offering it to a source window as a design file would be a lie about what was analysed.
+    std::vector<std::string> files;
+
     for (const elab::Instance& instance : instances) {
-        message.instances.push_back(
-            InstanceEntry{.path = instance.path, .name = instance.name, .parent = instance.parent});
+        const eir::ModuleDefinition& definition =
+            image->analysedDesign().module(instance.definitionIndex);
+
+        std::string file;
+        std::uint32_t line = 0;
+        if (definition.location.valid()) {
+            file = sources.bufferName(definition.location.buffer());
+            line = sources.lineNumber(definition.location);
+            if (std::ranges::find(files, file) == files.end()) files.push_back(file);
+        }
+
+        message.instances.push_back(InstanceEntry{.path = instance.path,
+                                                  .name = instance.name,
+                                                  .parent = instance.parent,
+                                                  .file = std::move(file),
+                                                  .line = line});
     }
 
+    message.sourceFiles = std::move(files);
     connection.send(MessageType::Design, message);
+}
+
+void KernelServer::onQuerySource(const Frame& frame) {
+    QuerySourceMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a query for a source file could not be decoded");
+        return;
+    }
+
+    SourceMessage message;
+    message.path = request.path;
+
+    // The text comes from the kernel's own buffers rather than from the path, because the
+    // kernel may be on another machine (section 2.2) and because these are the exact bytes it
+    // analysed. A window that read the path itself could show a file that has since changed.
+    const BufferId buffer = findBufferByName(diagnostics->sourceManager(), request.path);
+    if (buffer.valid()) {
+        message.text = diagnostics->sourceManager().bufferText(buffer);
+        message.found = true;
+    }
+
+    connection.send(MessageType::Source, message);
+}
+
+void KernelServer::sendBreakpoints() {
+    BreakpointsMessage message;
+    const SourceManager& sources = diagnostics->sourceManager();
+
+    for (const runtime::Breakpoint& breakpoint : simulationKernel->breakpoints()) {
+        message.breakpoints.push_back(
+            BreakpointEntry{.id = breakpoint.id,
+                            .file = std::string(sources.bufferName(breakpoint.buffer)),
+                            .line = breakpoint.line,
+                            .enabled = breakpoint.enabled});
+    }
+
+    connection.send(MessageType::Breakpoints, message);
+}
+
+void KernelServer::onSetBreakpoint(const Frame& frame) {
+    SetBreakpointMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a breakpoint request could not be decoded");
+        return;
+    }
+
+    std::string ambiguity;
+    const BufferId buffer =
+        findBufferByName(diagnostics->sourceManager(), request.file, &ambiguity);
+    if (!buffer.valid()) {
+        sendFailure(ambiguity.empty()
+                        ? std::format("'{}' is not a source this kernel analysed", request.file)
+                        : std::format("'{}' matches {}", request.file, ambiguity));
+        return;
+    }
+
+    if (simulationKernel->addBreakpoint(buffer, request.line) == 0) {
+        sendFailure(std::format("{}:{} compiled to no instructions, so nothing could ever stop "
+                                "there",
+                                request.file, request.line));
+        return;
+    }
+
+    sendBreakpoints();
+}
+
+void KernelServer::onClearBreakpoint(const Frame& frame) {
+    ClearBreakpointMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a breakpoint removal could not be decoded");
+        return;
+    }
+
+    if (request.all) {
+        simulationKernel->clearBreakpoints();
+    } else if (!simulationKernel->removeBreakpoint(request.id)) {
+        sendFailure(std::format("there is no breakpoint {}", request.id));
+        return;
+    }
+
+    sendBreakpoints();
+}
+
+void KernelServer::onEnableBreakpoint(const Frame& frame) {
+    EnableBreakpointMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a breakpoint change could not be decoded");
+        return;
+    }
+
+    if (!simulationKernel->setBreakpointEnabled(request.id, request.enabled)) {
+        sendFailure(std::format("there is no breakpoint {}", request.id));
+        return;
+    }
+
+    sendBreakpoints();
+}
+
+void KernelServer::onStep(const Frame& frame) {
+    StepMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a step request could not be decoded");
+        return;
+    }
+
+    if (simulationState == SimulationState::Finished
+        || simulationState == SimulationState::Failed) {
+        sendFailure("the simulation has ended; restart it before stepping");
+        return;
+    }
+
+    // Recorded as a run the way a Run request is, so that the one place that performs a run
+    // performs this one too: a second path into the kernel would be a second set of rules
+    // about interrupts, transcripts and run state.
+    stepsRequested = request.count == 0 ? 1 : request.count;
+    requestedRun = RunMessage{.duration = 0, .untilFinished = true};
+    runRequested = true;
+    stopRequested = false;
+}
+
+void KernelServer::onDeposit(const Frame& frame) {
+    DepositMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a deposit could not be decoded");
+        return;
+    }
+
+    if (request.signalIndex >= image->signals().size()) {
+        sendFailure(std::format("{} is not a signal in this design", request.signalIndex));
+        return;
+    }
+
+    simulationKernel->deposit(request.signalIndex, request.value.ref());
+
+    // The publisher is told so that the window showing the signal updates, because a deposit
+    // between runs produces no time advance for the change to be batched into.
+    publisher->flush();
+}
+
+void KernelServer::onForce(const Frame& frame) {
+    ForceMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a force could not be decoded");
+        return;
+    }
+
+    if (request.signalIndex >= image->signals().size()) {
+        sendFailure(std::format("{} is not a signal in this design", request.signalIndex));
+        return;
+    }
+
+    if (request.release) {
+        // Releasing something that was not forced is not an error: a window clearing a set of
+        // signals it may or may not have forced should not have to remember which.
+        simulationKernel->release(request.signalIndex);
+    } else {
+        simulationKernel->force(request.signalIndex, request.value.ref());
+    }
+
+    publisher->flush();
 }
 
 void KernelServer::onQueryObjects(const Frame& frame) {
@@ -580,7 +770,22 @@ void KernelServer::performRun() {
 
     running = true;
     lastPump = std::chrono::steady_clock::now();
-    const runtime::RunStatus status = simulationKernel->run(until);
+
+    runtime::RunStatus status = runtime::RunStatus::TimeLimitReached;
+    if (stepsRequested == 0) {
+        status = simulationKernel->run(until);
+    } else {
+        // Each line is its own run, so a design that finishes or reaches a breakpoint part way
+        // through `step 20` stops there rather than being asked for nineteen more.
+        while (stepsRequested > 0) {
+            --stepsRequested;
+            simulationKernel->requestStep();
+            status = simulationKernel->run(until);
+            if (status != runtime::RunStatus::AtBreakpoint) break;
+        }
+        stepsRequested = 0;
+    }
+
     running = false;
 
     simulationState = stateAfter(status);
@@ -662,6 +867,20 @@ void KernelServer::sendRunState(std::string reason) {
     message.time = simulationKernel->time();
     message.latestRecordedTime = latestRecordedTime();
     message.reason = std::move(reason);
+
+    // Where it stopped travels with the fact that it stopped, so that a client cannot draw a
+    // current-line marker against a run state it no longer has.
+    if (simulationKernel->status() == runtime::RunStatus::AtBreakpoint) {
+        const runtime::StopPoint& stop = simulationKernel->stopPoint();
+        if (stop.location.valid()) {
+            const SourceManager& sources = diagnostics->sourceManager();
+            message.stopFile = sources.bufferName(stop.location.buffer());
+            message.stopLine = sources.lineNumber(stop.location);
+        }
+        if (stop.processIndex < image->processes().size())
+            message.stopProcess = image->processes()[stop.processIndex].name;
+    }
+
     connection.send(MessageType::RunState, message);
 }
 

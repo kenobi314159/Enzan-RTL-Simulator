@@ -206,4 +206,38 @@ const std::vector<std::uint32_t>& SourceManager::lineOffsets(const Buffer& buffe
     return buffer.lineOffsets;
 }
 
+BufferId findBufferByName(const SourceManager& sources, std::string_view file,
+                          std::string* ambiguity) {
+    for (std::size_t index = 0; index < sources.bufferCount(); ++index) {
+        const BufferId buffer = BufferId::fromIndex(static_cast<std::uint32_t>(index));
+        if (sources.bufferName(buffer) == file) return buffer;
+    }
+
+    const std::string suffix = "/" + std::string(file);
+    std::vector<BufferId> matches;
+    for (std::size_t index = 0; index < sources.bufferCount(); ++index) {
+        const BufferId buffer = BufferId::fromIndex(static_cast<std::uint32_t>(index));
+        const std::string_view name = sources.bufferName(buffer);
+        if (!name.ends_with(suffix)) continue;
+
+        bool known = false;
+        for (const BufferId other : matches) {
+            if (sources.bufferName(other) != name) continue;
+            known = true;
+            break;
+        }
+        if (!known) matches.push_back(buffer);
+    }
+
+    if (matches.size() == 1) return matches.front();
+
+    if (matches.size() > 1 && ambiguity != nullptr) {
+        for (std::size_t index = 0; index < matches.size(); ++index) {
+            if (index > 0) *ambiguity += " and ";
+            *ambiguity += sources.bufferName(matches[index]);
+        }
+    }
+    return {};
+}
+
 } // namespace enzan

@@ -60,11 +60,16 @@ using enzan::eir::ProcessKind;
 using enzan::eir::Type;
 using enzan::elab::ElaboratedDesign;
 using enzan::elab::Elaborator;
+using enzan::ipc::BreakpointsMessage;
 using enzan::ipc::ByeMessage;
+using enzan::ipc::ClearBreakpointMessage;
 using enzan::ipc::Connection;
+using enzan::ipc::DepositMessage;
 using enzan::ipc::Descriptor;
 using enzan::ipc::DesignMessage;
+using enzan::ipc::EnableBreakpointMessage;
 using enzan::ipc::FailureMessage;
+using enzan::ipc::ForceMessage;
 using enzan::ipc::Frame;
 using enzan::ipc::HelloMessage;
 using enzan::ipc::HistoryMessage;
@@ -73,17 +78,22 @@ using enzan::ipc::MessageType;
 using enzan::ipc::ObjectsMessage;
 using enzan::ipc::ProtocolVersion;
 using enzan::ipc::QueryHistoryMessage;
+using enzan::ipc::QuerySourceMessage;
 using enzan::ipc::ReceiveStatus;
 using enzan::ipc::RunMessage;
 using enzan::ipc::RunStateMessage;
 using enzan::ipc::ServerOptions;
+using enzan::ipc::SetBreakpointMessage;
 using enzan::ipc::SimulationState;
+using enzan::ipc::SourceMessage;
+using enzan::ipc::StepMessage;
 using enzan::ipc::SubscribeMessage;
 using enzan::ipc::TranscriptMessage;
 using enzan::ipc::ValueChangesMessage;
 using enzan::ipc::WelcomeMessage;
 using enzan::runtime::Image;
 using enzan::runtime::TimeScale;
+using enzan::test::literal;
 using enzan::test::ProcessBuilder;
 
 class DiscardingConsumer final : public enzan::DiagnosticConsumer {
@@ -165,6 +175,58 @@ Design settlingDesign() {
                          .type = Type::logic(),
                          .initialValue = enzan::eir::BitVector::parse("1'b0")});
     top.processes.push_back(driver.finish());
+
+    Design design;
+    design.addModule(std::move(top));
+    return design;
+}
+
+/// Stand-in source text for the debugging tests, one line per line number.
+constexpr std::string_view DebugSource = "one\ntwo\nthree\nfour\nfive\n";
+
+/// The byte offset of 1-based `line` in DebugSource.
+constexpr std::uint32_t debugLineOffset(std::uint32_t line) {
+    constexpr std::uint32_t Offsets[] = {0, 0, 4, 8, 14, 19};
+    return Offsets[line];
+}
+
+/// A design whose two statements sit on lines 2 and 3 of `buffer`.
+///
+/// Instructions carry their source location the way the frontend stamps them, which is what a
+/// breakpoint on a line resolves against. Built by hand rather than parsed, so that a failure
+/// here is the server's and not the frontend's.
+Design debuggableDesign(enzan::BufferId buffer) {
+    const auto at = [buffer](std::uint32_t line) {
+        return enzan::SourceLocation(buffer, debugLineOffset(line));
+    };
+
+    ProcessBuilder builder(ProcessKind::Initial, "stepper");
+    const std::uint32_t value = builder.reg(Type::bits(4, false, true));
+    const std::uint32_t first = builder.constant("4'd3");
+    const std::uint32_t second = builder.constant("4'd5");
+
+    builder.block("entry");
+    builder.at(at(2));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(first)));
+    builder.store(0, value);
+
+    builder.at(at(3));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(second)));
+    builder.store(0, value);
+
+    builder.at(at(4));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition top;
+    top.name = "tb";
+    top.sourceName = "tb";
+    top.location = at(1);
+    top.addObject(Object{.name = "q",
+                         .type = Type::bits(4, false, true),
+                         .initialValue = enzan::eir::BitVector::parse("4'd0")});
+    top.processes.push_back(builder.finish());
 
     Design design;
     design.addModule(std::move(top));
@@ -747,6 +809,294 @@ TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {
 
     const auto failure = expect<FailureMessage>(MessageType::Failure);
     EXPECT_NE(failure.reason.find("no signal"), std::string::npos) << failure.reason;
+}
+
+// ---------------------------------------------------------------------------
+// Source debugging (section 10.4)
+// ---------------------------------------------------------------------------
+
+/// A served design whose instructions carry positions in a source the kernel holds.
+class DebugFixture : public ServerFixture {
+protected:
+    void SetUp() override {
+        sourceBuffer = sources.addBuffer("design.sv", std::string(DebugSource));
+        rebuild(debuggableDesign(sourceBuffer));
+        connectClient();
+    }
+
+    /// Sets a breakpoint on `line` and returns the list the kernel answered with.
+    BreakpointsMessage setBreakpoint(std::string_view file, std::uint32_t line) {
+        SetBreakpointMessage message;
+        message.file = file;
+        message.line = line;
+        request(MessageType::SetBreakpoint, message);
+        return expect<BreakpointsMessage>(MessageType::Breakpoints);
+    }
+
+    /// The value the client last saw for `/tb/q`, as a binary string.
+    [[nodiscard]] std::string lastSeenQ() {
+        const std::vector<ValueChangesMessage> changes =
+            expectAll<ValueChangesMessage>(MessageType::ValueChanges);
+        std::string latest;
+        for (const ValueChangesMessage& change : changes)
+            for (const auto& update : change.updates)
+                if (update.signalIndex == signalIndex("/tb/q"))
+                    latest = enzan::eir::toString(update.value.ref(), enzan::eir::Radix::Decimal);
+        return latest;
+    }
+
+    enzan::BufferId sourceBuffer;
+};
+
+TEST_F(DebugFixture, TheDesignTreeNamesWhereEachScopeIsDeclared) {
+    enzan::ipc::QueryDesignMessage query;
+    request(MessageType::QueryDesign, query);
+
+    const auto design = expect<DesignMessage>(MessageType::Design);
+    ASSERT_EQ(design.instances.size(), 1U);
+    EXPECT_EQ(design.instances[0].file, "design.sv");
+    EXPECT_EQ(design.instances[0].line, 1U);
+    EXPECT_EQ(design.sourceFiles, (std::vector<std::string>{"design.sv"}));
+}
+
+TEST_F(DebugFixture, ASourceFileIsServedFromTheKernelsOwnBuffers) {
+    // From the kernel and not from the path, because the kernel may be on another machine and
+    // because these are the exact bytes it analysed (section 2.2).
+    QuerySourceMessage query;
+    query.path = "design.sv";
+    request(MessageType::QuerySource, query);
+
+    const auto source = expect<SourceMessage>(MessageType::Source);
+    EXPECT_TRUE(source.found);
+    EXPECT_EQ(source.path, "design.sv");
+    EXPECT_EQ(source.text, DebugSource);
+}
+
+TEST_F(DebugFixture, ASourceTheKernelDoesNotHaveIsNotFoundRatherThanAFailure) {
+    QuerySourceMessage query;
+    query.path = "absent.sv";
+    request(MessageType::QuerySource, query);
+
+    const auto source = expect<SourceMessage>(MessageType::Source);
+    EXPECT_FALSE(source.found);
+    EXPECT_TRUE(source.text.empty());
+    EXPECT_FALSE(sawAny(MessageType::Failure)) << "asking about a file is not an error";
+}
+
+TEST_F(DebugFixture, ABreakpointIsSetAndListedBack) {
+    const auto list = setBreakpoint("design.sv", 3);
+
+    ASSERT_EQ(list.breakpoints.size(), 1U);
+    EXPECT_EQ(list.breakpoints[0].file, "design.sv");
+    EXPECT_EQ(list.breakpoints[0].line, 3U);
+    EXPECT_TRUE(list.breakpoints[0].enabled);
+    EXPECT_NE(list.breakpoints[0].id, 0U);
+}
+
+TEST_F(DebugFixture, ABreakpointStopsTheRunAndSaysWhere) {
+    setBreakpoint("design.sv", 3);
+
+    RunMessage run;
+    run.untilFinished = true;
+    request(MessageType::Run, run);
+
+    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
+    ASSERT_FALSE(states.empty());
+    const RunStateMessage& last = states.back();
+
+    EXPECT_EQ(last.state, SimulationState::Idle) << "a breakpoint leaves the design resumable";
+    EXPECT_EQ(last.stopFile, "design.sv");
+    EXPECT_EQ(last.stopLine, 3U);
+    EXPECT_FALSE(last.stopProcess.empty());
+}
+
+TEST_F(DebugFixture, ABreakpointOnALineWithNoCodeIsRefusedWithAReason) {
+    SetBreakpointMessage message;
+    message.file = "design.sv";
+    message.line = 5;
+    request(MessageType::SetBreakpoint, message);
+
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
+    EXPECT_NE(failure.reason.find("no instructions"), std::string::npos) << failure.reason;
+    EXPECT_FALSE(sawAny(MessageType::Breakpoints));
+}
+
+TEST_F(DebugFixture, ABreakpointInAFileTheKernelDoesNotHaveIsRefused) {
+    SetBreakpointMessage message;
+    message.file = "elsewhere.sv";
+    message.line = 3;
+    request(MessageType::SetBreakpoint, message);
+
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
+    EXPECT_NE(failure.reason.find("elsewhere.sv"), std::string::npos) << failure.reason;
+}
+
+TEST_F(DebugFixture, ABreakpointIsRemovedAndTheListIsSentAgain) {
+    const auto set = setBreakpoint("design.sv", 3);
+    ASSERT_EQ(set.breakpoints.size(), 1U);
+
+    ClearBreakpointMessage clear;
+    clear.id = set.breakpoints[0].id;
+    request(MessageType::ClearBreakpoint, clear);
+
+    EXPECT_TRUE(expect<BreakpointsMessage>(MessageType::Breakpoints).breakpoints.empty());
+}
+
+TEST_F(DebugFixture, EveryBreakpointIsClearedAtOnce) {
+    setBreakpoint("design.sv", 2);
+    setBreakpoint("design.sv", 3);
+
+    ClearBreakpointMessage clear;
+    clear.all = true;
+    request(MessageType::ClearBreakpoint, clear);
+
+    EXPECT_TRUE(expect<BreakpointsMessage>(MessageType::Breakpoints).breakpoints.empty());
+}
+
+TEST_F(DebugFixture, RemovingSomethingThatIsNotThereIsRefused) {
+    ClearBreakpointMessage clear;
+    clear.id = 99;
+    request(MessageType::ClearBreakpoint, clear);
+
+    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("99"), std::string::npos);
+}
+
+TEST_F(DebugFixture, ABreakpointIsDisabledWithoutBeingForgotten) {
+    const auto set = setBreakpoint("design.sv", 3);
+
+    EnableBreakpointMessage change;
+    change.id = set.breakpoints[0].id;
+    change.enabled = false;
+    request(MessageType::EnableBreakpoint, change);
+
+    const auto list = expect<BreakpointsMessage>(MessageType::Breakpoints);
+    ASSERT_EQ(list.breakpoints.size(), 1U);
+    EXPECT_FALSE(list.breakpoints[0].enabled);
+
+    RunMessage run;
+    run.untilFinished = true;
+    request(MessageType::Run, run);
+
+    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
+    ASSERT_FALSE(states.empty());
+    EXPECT_EQ(states.back().state, SimulationState::Finished)
+        << "a disabled breakpoint stopped the run";
+}
+
+TEST_F(DebugFixture, DisablingSomethingThatIsNotThereIsRefused) {
+    EnableBreakpointMessage change;
+    change.id = 42;
+    request(MessageType::EnableBreakpoint, change);
+
+    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("42"), std::string::npos);
+}
+
+TEST_F(DebugFixture, SteppingStopsOnTheNextLine) {
+    StepMessage step;
+    step.count = 1;
+    request(MessageType::Step, step);
+
+    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
+    ASSERT_FALSE(states.empty());
+    EXPECT_EQ(states.back().stopLine, 2U);
+
+    StepMessage again;
+    again.count = 1;
+    request(MessageType::Step, again);
+
+    const std::vector<RunStateMessage> more = expectAll<RunStateMessage>(MessageType::RunState);
+    ASSERT_FALSE(more.empty());
+    EXPECT_EQ(more.back().stopLine, 3U);
+}
+
+TEST_F(DebugFixture, AStepCountOfZeroStepsOnce) {
+    // A client that forgot to set the count means one line, not none.
+    StepMessage step;
+    step.count = 0;
+    request(MessageType::Step, step);
+
+    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
+    ASSERT_FALSE(states.empty());
+    EXPECT_EQ(states.back().stopLine, 2U);
+}
+
+TEST_F(DebugFixture, SteppingAFinishedDesignIsRefused) {
+    RunMessage run;
+    run.untilFinished = true;
+    request(MessageType::Run, run);
+    static_cast<void>(expectAll<RunStateMessage>(MessageType::RunState));
+
+    StepMessage step;
+    request(MessageType::Step, step);
+    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("restart"),
+              std::string::npos);
+}
+
+TEST_F(DebugFixture, ADepositIsWrittenAndTheClientSeesIt) {
+    SubscribeMessage subscribe;
+    subscribe.signalIndices = {signalIndex("/tb/q")};
+    request(MessageType::Subscribe, subscribe);
+    static_cast<void>(expectAll<ValueChangesMessage>(MessageType::ValueChanges));
+
+    DepositMessage deposit;
+    deposit.signalIndex = signalIndex("/tb/q");
+    deposit.value = literal("4'd9");
+    request(MessageType::Deposit, deposit);
+
+    // A deposit between runs produces no time advance, so the change has to be flushed for the
+    // window showing the signal to move at all.
+    EXPECT_EQ(lastSeenQ(), "9");
+}
+
+TEST_F(DebugFixture, AForceHoldsAValueAgainstTheDesignAndAReleaseLetsItGo) {
+    ForceMessage force;
+    force.signalIndex = signalIndex("/tb/q");
+    force.value = literal("4'd1");
+    request(MessageType::Force, force);
+
+    RunMessage run;
+    run.untilFinished = true;
+    request(MessageType::Run, run);
+    static_cast<void>(expectAll<RunStateMessage>(MessageType::RunState));
+
+    // The design wrote 3 and then 5; the force outranks both.
+    enzan::ipc::QueryHistoryMessage query;
+    query.signalIndex = signalIndex("/tb/q");
+    query.toTime = enzan::runtime::NoTime;
+    request(MessageType::QueryHistory, query);
+    const auto history = expect<HistoryMessage>(MessageType::History);
+    ASSERT_FALSE(history.entries.empty());
+    EXPECT_EQ(enzan::eir::toString(history.entries.back().value.ref(), enzan::eir::Radix::Decimal),
+              "1");
+
+    ForceMessage release;
+    release.signalIndex = signalIndex("/tb/q");
+    release.release = true;
+    request(MessageType::Force, release);
+    EXPECT_FALSE(sawAny(MessageType::Failure));
+}
+
+TEST_F(DebugFixture, ReleasingSomethingThatWasNotForcedIsNotAnError) {
+    ForceMessage release;
+    release.signalIndex = signalIndex("/tb/q");
+    release.release = true;
+    request(MessageType::Force, release);
+
+    EXPECT_FALSE(sawAny(MessageType::Failure));
+}
+
+TEST_F(DebugFixture, ADepositOrForceOnASignalThatDoesNotExistIsRefused) {
+    DepositMessage deposit;
+    deposit.signalIndex = 9999;
+    deposit.value = literal("4'd1");
+    request(MessageType::Deposit, deposit);
+    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("9999"), std::string::npos);
+
+    ForceMessage force;
+    force.signalIndex = 9999;
+    force.value = literal("4'd1");
+    request(MessageType::Force, force);
+    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("9999"), std::string::npos);
 }
 
 } // namespace
