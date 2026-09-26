@@ -83,17 +83,15 @@ if(ENZAN_BUILD_TESTS)
   set_tests_properties(cli.enzan.do_mentioned_in_help PROPERTIES PASS_REGULAR_EXPRESSION
                                                                   "--do <script>")
 
-  if(TRUE)
-    add_test(NAME cli.enzan.do_missing_script COMMAND enzan --do no-such-script.do)
-    set_tests_properties(cli.enzan.do_missing_script PROPERTIES WILL_FAIL TRUE)
+  add_test(NAME cli.enzan.do_missing_script COMMAND enzan --do no-such-script.do)
+  set_tests_properties(cli.enzan.do_missing_script PROPERTIES WILL_FAIL TRUE)
 
-    # The exit status a script asked for reaches the shell, which is what makes `enzan --do`
-    # usable from a makefile at all.
-    add_test(NAME cli.enzan.quit_code COMMAND enzan --do
-                                              "${CMAKE_CURRENT_SOURCE_DIR}/tests/quit-code.do")
-    set_tests_properties(cli.enzan.quit_code PROPERTIES WILL_FAIL TRUE)
+  # The exit status a script asked for reaches the shell, which is what makes `enzan --do`
+  # usable from a makefile at all.
+  add_test(NAME cli.enzan.quit_code COMMAND enzan --do
+                                            "${CMAKE_CURRENT_SOURCE_DIR}/tests/quit-code.do")
+  set_tests_properties(cli.enzan.quit_code PROPERTIES WILL_FAIL TRUE)
 
-    add_test(NAME cli.enzan.quit_zero COMMAND enzan --do
-                                              "${CMAKE_CURRENT_SOURCE_DIR}/tests/quit-zero.do")
-  endif()
+  add_test(NAME cli.enzan.quit_zero COMMAND enzan --do
+                                            "${CMAKE_CURRENT_SOURCE_DIR}/tests/quit-zero.do")
 endif()
