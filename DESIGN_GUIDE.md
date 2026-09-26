@@ -625,8 +625,9 @@ the kernel.
 
 The command vocabulary SHOULD follow Questa/Modelsim naming where practical, so
 that existing user muscle memory and existing scripts transfer with minimal
-friction: `vlog`, `vcom`, `vsim`, `run`, `restart`, `add wave`, `log`, `force`,
-`examine`, `radix`, `find`, `when`, `quit`.
+friction: `vlib`, `vlog`, `vcom`, `vsim`, `run`, `restart`, `add wave`, `log`,
+`force`, `examine`, `radix`, `find`, `when`, `quit`, and for source debugging
+`bp`, `bd`, `enablebp`, `disablebp` and `step`.
 
 Where Enzan has no equivalent of a Questa concept, the command is **absent
 rather than approximated**. A script that relies on one then fails at the

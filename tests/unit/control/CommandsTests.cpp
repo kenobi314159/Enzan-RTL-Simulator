@@ -67,6 +67,12 @@ module tb;
 endmodule
 )";
 
+/// The 1-based line of `count <= count + 8'd1;` in CounterSource.
+///
+/// Written out rather than searched for, because a test that hunts for its own breakpoint
+/// line would still pass if the frontend attributed every instruction to line one.
+constexpr std::uint32_t CountingLine = 10;
+
 class CommandsTest : public ::testing::Test {
 protected:
     CommandsTest() : engine(sources), session(sources, engine), interpreter(engine) {
@@ -497,6 +503,139 @@ TEST_F(CommandsTest, AQuitInsideADoStopsTheOuterScript) {
 
 TEST_F(CommandsTest, DoNeedsAFile) {
     EXPECT_EQ(eval("do").status, EvalStatus::Error);
+}
+
+// ---------------------------------------------------------------------------
+// bp, bd, step
+// ---------------------------------------------------------------------------
+
+TEST_F(CommandsTest, ABreakpointStopsTheRunOnItsLine) {
+    load();
+
+    const std::string id = ok("bp counter.sv " + std::to_string(CountingLine));
+    EXPECT_NE(id, "0");
+
+    ok("run -all");
+    EXPECT_FALSE(session.isFinished()) << "the run went past the breakpoint";
+    EXPECT_NE(written().find("counter.sv:" + std::to_string(CountingLine)), std::string::npos)
+        << written();
+}
+
+TEST_F(CommandsTest, ContinuingPastABreakpointEventuallyFinishes) {
+    load();
+    ok("bp counter.sv " + std::to_string(CountingLine));
+
+    // Twenty rising edges in two hundred units, so continuing that many times reaches the end
+    // whatever else happens; the point is that each `run` makes progress.
+    for (int attempt = 0; attempt < 40 && !session.isFinished(); ++attempt) ok("run -all");
+
+    EXPECT_TRUE(session.isFinished());
+}
+
+TEST_F(CommandsTest, ABreakpointOnALineWithNoCodeIsRefusedWithAReason) {
+    load();
+
+    const EvalResult result = eval("bp counter.sv 2");
+    EXPECT_EQ(result.status, EvalStatus::Error);
+    EXPECT_NE(result.value.find("no instructions"), std::string::npos) << result.value;
+}
+
+TEST_F(CommandsTest, ABreakpointInAFileThatWasNotAnalysedIsRefused) {
+    load();
+
+    const EvalResult result = eval("bp nowhere.sv 3");
+    EXPECT_EQ(result.status, EvalStatus::Error);
+    EXPECT_NE(result.value.find("nowhere.sv"), std::string::npos) << result.value;
+}
+
+TEST_F(CommandsTest, ABreakpointIsFoundByTheTailOfItsPath) {
+    // The design was analysed by absolute path, which is what a file list expands to; a user
+    // setting a breakpoint types the name.
+    load();
+    EXPECT_TRUE(eval("bp counter.sv " + std::to_string(CountingLine)).ok());
+}
+
+TEST_F(CommandsTest, BpWithNoArgumentsListsWhatIsSet) {
+    load();
+    ok("bp counter.sv " + std::to_string(CountingLine));
+
+    const std::string listed = ok("bp");
+    EXPECT_NE(listed.find("counter.sv:" + std::to_string(CountingLine)), std::string::npos)
+        << listed;
+}
+
+TEST_F(CommandsTest, BdRemovesABreakpoint) {
+    load();
+    const std::string id = ok("bp counter.sv " + std::to_string(CountingLine));
+
+    ok("bd " + id);
+    EXPECT_EQ(ok("bp"), "");
+    ok("run -all");
+    EXPECT_TRUE(session.isFinished());
+}
+
+TEST_F(CommandsTest, BdAllRemovesEveryBreakpoint) {
+    load();
+    ok("bp counter.sv " + std::to_string(CountingLine));
+
+    ok("bd -all");
+    EXPECT_EQ(ok("bp"), "");
+}
+
+TEST_F(CommandsTest, BdOnSomethingThatIsNotThereSaysSo) {
+    load();
+    EXPECT_EQ(eval("bd 99").status, EvalStatus::Error);
+    EXPECT_EQ(eval("bd nonsense").status, EvalStatus::Error);
+}
+
+TEST_F(CommandsTest, DisablingABreakpointStopsItFiringWithoutForgettingIt) {
+    load();
+    const std::string id = ok("bp counter.sv " + std::to_string(CountingLine));
+
+    ok("disablebp " + id);
+    ok("run -all");
+    EXPECT_TRUE(session.isFinished());
+    EXPECT_NE(ok("bp").find("disabled"), std::string::npos);
+
+    ok("restart");
+    ok("enablebp " + id);
+    ok("run -all");
+    EXPECT_FALSE(session.isFinished());
+}
+
+TEST_F(CommandsTest, EnablingSomethingThatIsNotThereSaysSo) {
+    load();
+    EXPECT_EQ(eval("enablebp 99").status, EvalStatus::Error);
+    EXPECT_EQ(eval("disablebp what").status, EvalStatus::Error);
+}
+
+TEST_F(CommandsTest, StepStopsOnTheNextLine) {
+    load();
+
+    ok("step");
+    EXPECT_FALSE(session.isFinished());
+    EXPECT_NE(written().find("counter.sv:"), std::string::npos) << written();
+}
+
+TEST_F(CommandsTest, StepTakesACount) {
+    load();
+    ok("step 5");
+    EXPECT_FALSE(session.isFinished());
+}
+
+TEST_F(CommandsTest, StepRefusesANonsenseCount) {
+    load();
+    EXPECT_EQ(eval("step 0").status, EvalStatus::Error);
+    EXPECT_EQ(eval("step lots").status, EvalStatus::Error);
+    EXPECT_EQ(eval("step 1 2").status, EvalStatus::Error);
+}
+
+TEST_F(CommandsTest, TheDebuggingCommandsNeedASimulation) {
+    for (const char* command : {"bp", "bd -all", "step", "enablebp 1", "disablebp 1"}) {
+        const EvalResult result = eval(command);
+        EXPECT_EQ(result.status, EvalStatus::Error) << command;
+        EXPECT_NE(result.value.find("vsim"), std::string::npos) << command << ": " << result.value;
+    }
 }
 
 } // namespace

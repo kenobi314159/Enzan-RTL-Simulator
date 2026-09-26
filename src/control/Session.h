@@ -219,6 +219,37 @@ public:
     [[nodiscard]] std::vector<std::string> findInstances(std::string_view pattern) const;
 
     // -----------------------------------------------------------------------
+    // Source debugging — `bp`, `bd`, `step`
+    // -----------------------------------------------------------------------
+
+    /// Sets a breakpoint on `line` of `file`, returning its identifier or zero.
+    ///
+    /// `file` is matched against the sources that were analysed: exactly if it can be, and
+    /// otherwise by the trailing path components, so that `bp counter.sv 14` works on a design
+    /// whose files were named by absolute paths — which is what a file list expands to.
+    ///
+    /// Returns zero having filled `error`: no such file, an ambiguous one, or a line that
+    /// compiled to no instructions.
+    std::uint32_t addBreakpoint(std::string_view file, std::uint32_t line, std::string& error);
+
+    bool removeBreakpoint(std::uint32_t id);
+
+    bool setBreakpointEnabled(std::uint32_t id, bool enabled);
+
+    void clearBreakpoints();
+
+    [[nodiscard]] std::span<const runtime::Breakpoint> breakpoints() const;
+
+    /// Makes the next `run` stop when execution reaches a different source line.
+    void step();
+
+    /// Where the last run stopped, as `file:line in <process>`, or an empty string.
+    [[nodiscard]] std::string stopDescription() const;
+
+    /// Renders a breakpoint as `<id> <file>:<line>`, with a note when it is disabled.
+    [[nodiscard]] std::string describe(const runtime::Breakpoint& breakpoint) const;
+
+    // -----------------------------------------------------------------------
     // Waveforms — `log`, `vcd file`, `fst file`
     // -----------------------------------------------------------------------
 
@@ -257,6 +288,9 @@ private:
     /// Parses `literal` to the width of `signalIndex`, reporting through `error`.
     [[nodiscard]] std::optional<eir::BitVector>
     parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;
+
+    /// Returns the buffer holding `file`, or an invalid one, filling `error` when ambiguous.
+    [[nodiscard]] BufferId findSourceBuffer(std::string_view file, std::string& error) const;
 
     /// Pairs each analysed file with the buffer holding its text, for the library's keys.
     [[nodiscard]] static std::vector<eir::LibrarySource>

@@ -102,7 +102,8 @@ passing regression from a failing one. Anything else on the command line reaches
 script runs, then the prompt.
 
 The vocabulary is `vlib`, `vlog`, `vsim`, `run`, `restart`, `examine`, `force`, `noforce`,
-`deposit`, `log`, `add wave`, `vcd file`, `fst file`, `find`, `radix`, `do` and `quit`. `vlog` reads `.f`
+`deposit`, `log`, `add wave`, `vcd file`, `fst file`, `find`, `radix`, `do`, `quit`, and for
+source debugging `bp`, `bd`, `enablebp`, `disablebp` and `step`. `vlog` reads `.f`
 file lists with `-f`, understands `+incdir+`, `+define+` and `-sv`, and works out the compile
 order itself — a package can be named after the module that imports it. `vcom` is refused
 rather than ignored until VHDL arrives at M6, so that a mixed-language script fails at the
@@ -117,6 +118,29 @@ encoding.
 
 Because the script is the whole interface, `--do` and `-i` refuse the options above rather
 than becoming a second way to say the same thing.
+
+### Stopping in the source
+
+`bp <file> <line>` puts a breakpoint on an HDL line and `step` advances by one line:
+
+```tcl
+vlog -sv counter.sv
+vsim -t ns tb
+
+bp counter.sv 19        ;# the line the counter increments on
+run -all                ;# stops there, inside the DUT
+examine -radix decimal /tb/count
+step
+step
+disablebp 1
+run -all
+```
+
+A breakpoint stops *before* its line runs, so the value you read is the one going in and
+continuing executes the line exactly once. `bp` on its own lists what is set, `bd` removes
+one, and `bd -all` clears them. A breakpoint on a line that compiled to no instructions — a
+declaration, a comment — is refused with the reason, rather than left as a marker that can
+never stop anything.
 
 ### Reusing analysed sources
 
@@ -216,9 +240,10 @@ three colours.
 | Tcl control layer: `vlog`, `vsim`, `run`, `examine`, `force`, `log`, `find`, `do` | yes, from a script or a prompt |
 | `.f` file lists and automatic compile order | yes |
 | Analysis libraries reused across runs (`vlib`) | yes, keyed on the sources and the options |
+| Breakpoints on HDL source lines and stepping by line | yes, from a script; the Source window is next |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
-| Source stepping, VHDL, VPI | not yet — M3, M6, M4 |
+| The GUI's Source window, VHDL, VPI | not yet — M3, M6, M4 |
 
 Anything unsupported is reported with a source location and the construct named, never
 mistranslated: a partially translated design would simulate and give the wrong answer, which is

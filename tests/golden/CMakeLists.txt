@@ -148,6 +148,19 @@ if(ENZAN_ENABLE_TCL)
                TIMEOUT 60)
 endif()
 
+# Source debugging from the control language: a breakpoint on an HDL line, stepping by line,
+# and `examine` on a design stopped part way through (section 10.4).
+if(ENZAN_ENABLE_TCL)
+  add_test(NAME golden.counter.debug
+           COMMAND enzan --do "${CMAKE_CURRENT_SOURCE_DIR}/do/debug.do"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv")
+  set_tests_properties(
+    golden.counter.debug
+    PROPERTIES PASS_REGULAR_EXPRESSION "PASS debug.do"
+               FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
+               TIMEOUT 60)
+endif()
+
 # The other half of M3's exit criteria: libraries reused across runs without re-analysis.
 # Reuse is a property of two processes, so this one is driven from a shell script rather than
 # from a `do` file.

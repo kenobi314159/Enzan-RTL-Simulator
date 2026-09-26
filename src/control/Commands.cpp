@@ -147,6 +147,11 @@ public:
     CommandResult vsim(CommandArguments arguments);
     CommandResult run(CommandArguments arguments);
     CommandResult restart(CommandArguments arguments);
+    CommandResult breakpoint(CommandArguments arguments);
+    CommandResult deleteBreakpoint(CommandArguments arguments);
+    CommandResult enableBreakpoint(CommandArguments arguments);
+    CommandResult disableBreakpoint(CommandArguments arguments);
+    CommandResult step(CommandArguments arguments);
     CommandResult quit(CommandArguments arguments);
     CommandResult doFile(CommandArguments arguments);
     CommandResult examine(CommandArguments arguments);
@@ -320,6 +325,11 @@ void Vocabulary::reportRunOutcome(runtime::RunStatus status) const {
     case runtime::RunStatus::Finished: out() << "# " << now << ": $finish\n"; return;
     case runtime::RunStatus::Error: out() << "# " << now << ": the run was abandoned\n"; return;
     case runtime::RunStatus::Interrupted: out() << "# " << now << ": interrupted\n"; return;
+    case runtime::RunStatus::AtBreakpoint:
+        // The position first, because it is what the reader is looking for and the reason
+        // they are reading this line at all.
+        out() << "# " << session->stopDescription() << " at " << now << '\n';
+        return;
     }
 }
 
@@ -391,6 +401,115 @@ CommandResult Vocabulary::restart(CommandArguments arguments) {
 
     if (!session->restart()) return CommandResult::error("the design could not be restarted");
     out() << "# restarted\n";
+    return CommandResult::ok();
+}
+
+// ---------------------------------------------------------------------------
+// bp, bd, step
+// ---------------------------------------------------------------------------
+
+CommandResult Vocabulary::breakpoint(CommandArguments arguments) {
+    CommandResult failure;
+    if (!requireSimulation("bp", failure)) return failure;
+
+    // `bp` with nothing lists, which is how every debugger with this command behaves and what
+    // a user reaches for after setting three of them.
+    if (arguments.size() == 1) {
+        std::string listed;
+        for (const runtime::Breakpoint& entry : session->breakpoints()) {
+            if (!listed.empty()) listed += '\n';
+            listed += session->describe(entry);
+        }
+        if (!listed.empty()) out() << listed << '\n';
+        return CommandResult::ok(listed);
+    }
+
+    if (arguments.size() != 3) return usage("bp ?file line?");
+
+    const std::optional<std::uint64_t> line = parseUnsigned(arguments[2]);
+    if (!line.has_value() || *line == 0 || *line > 0xFFFF'FFFFU)
+        return CommandResult::error("'" + std::string(arguments[2]) + "' is not a line number");
+
+    std::string error;
+    const std::uint32_t id =
+        session->addBreakpoint(arguments[1], static_cast<std::uint32_t>(*line), error);
+    if (id == 0) return CommandResult::error(error);
+
+    out() << "# breakpoint " << id << " at " << arguments[1] << ':' << arguments[2] << '\n';
+    return CommandResult::ok(std::to_string(id));
+}
+
+CommandResult Vocabulary::deleteBreakpoint(CommandArguments arguments) {
+    CommandResult failure;
+    if (!requireSimulation("bd", failure)) return failure;
+
+    if (arguments.size() == 2 && arguments[1] == "-all") {
+        session->clearBreakpoints();
+        return CommandResult::ok();
+    }
+
+    if (arguments.size() < 2) return usage("bd id ?id ...?|-all");
+
+    for (std::size_t index = 1; index < arguments.size(); ++index) {
+        const std::optional<std::uint64_t> id = parseUnsigned(arguments[index]);
+        if (!id.has_value())
+            return CommandResult::error("'" + std::string(arguments[index])
+                                        + "' is not a breakpoint number");
+
+        // A number that names no breakpoint is an error rather than a shrug: a script
+        // deleting one it believes in should hear that it was wrong.
+        if (!session->removeBreakpoint(static_cast<std::uint32_t>(*id)))
+            return CommandResult::error("there is no breakpoint " + std::string(arguments[index]));
+    }
+    return CommandResult::ok();
+}
+
+/// The body of both `enablebp` and `disablebp`, which differ only in the flag.
+CommandResult Vocabulary::enableBreakpoint(CommandArguments arguments) {
+    CommandResult failure;
+    if (!requireSimulation("enablebp", failure)) return failure;
+    if (arguments.size() != 2) return usage("enablebp id");
+
+    const std::optional<std::uint64_t> id = parseUnsigned(arguments[1]);
+    if (!id.has_value())
+        return CommandResult::error("'" + std::string(arguments[1])
+                                    + "' is not a breakpoint number");
+
+    const bool enable = arguments[0] != "disablebp";
+    if (!session->setBreakpointEnabled(static_cast<std::uint32_t>(*id), enable))
+        return CommandResult::error("there is no breakpoint " + std::string(arguments[1]));
+    return CommandResult::ok();
+}
+
+CommandResult Vocabulary::disableBreakpoint(CommandArguments arguments) {
+    return enableBreakpoint(arguments);
+}
+
+CommandResult Vocabulary::step(CommandArguments arguments) {
+    CommandResult failure;
+    if (!requireSimulation("step", failure)) return failure;
+
+    std::uint64_t count = 1;
+    if (arguments.size() == 2) {
+        const std::optional<std::uint64_t> parsed = parseUnsigned(arguments[1]);
+        if (!parsed.has_value() || *parsed == 0)
+            return CommandResult::error("'" + std::string(arguments[1])
+                                        + "' is not a number of steps");
+        count = *parsed;
+    } else if (arguments.size() != 1) {
+        return usage("step ?count?");
+    }
+
+    // Each step is its own run, so a design that finishes or stops at a breakpoint part way
+    // through `step 20` stops there rather than being asked for nineteen more.
+    runtime::RunStatus status = session->lastStatus();
+    for (std::uint64_t taken = 0; taken < count; ++taken) {
+        session->step();
+        status = session->run(std::nullopt);
+        if (status != runtime::RunStatus::AtBreakpoint) break;
+    }
+
+    reportRunOutcome(status);
     return CommandResult::ok();
 }
 
@@ -694,6 +813,11 @@ void install(const std::shared_ptr<Vocabulary>& vocabulary, Interpreter& interpr
     bind("vsim", &Vocabulary::vsim);
     bind("run", &Vocabulary::run);
     bind("restart", &Vocabulary::restart);
+    bind("bp", &Vocabulary::breakpoint);
+    bind("bd", &Vocabulary::deleteBreakpoint);
+    bind("enablebp", &Vocabulary::enableBreakpoint);
+    bind("disablebp", &Vocabulary::disableBreakpoint);
+    bind("step", &Vocabulary::step);
     bind("quit", &Vocabulary::quit);
     bind("exit", &Vocabulary::quit);
     bind("do", &Vocabulary::doFile);
