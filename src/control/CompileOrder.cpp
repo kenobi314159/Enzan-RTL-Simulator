@@ -278,13 +278,21 @@ public:
 
     /// Returns one cycle among the files not in `order`, as indices, first repeated last.
     [[nodiscard]] std::vector<std::size_t> findCycle(const std::vector<std::size_t>& order) const {
+        static constexpr auto NotVisited = static_cast<std::size_t>(-1);
+
         std::vector<bool> placed(paths.size(), false);
         for (const std::size_t index : order) placed[index] = true;
 
-        // Every file left over is on a cycle or downstream of one, so walking forward from any
-        // of them reaches a cycle. Walking until a file repeats finds it.
-        std::vector<std::size_t> walk;
-        std::vector<int> visitedAt(paths.size(), -1);
+        // Walked *backwards*, against the direction the edges mean. Every file Kahn's algorithm
+        // could not place has an unplaced predecessor — that is precisely why it could not be
+        // placed — so following predecessors always arrives at a cycle, in at most one step per
+        // file. Following successors instead dead-ends on a file that is merely downstream of
+        // the cycle, and which file the search starts from is decided by the order the user
+        // happened to give: the same cycle would be spelled out or not depending on where the
+        // top level sat in the file list.
+        std::vector<std::vector<std::size_t>> predecessors(paths.size());
+        for (std::size_t from = 0; from < paths.size(); ++from)
+            for (const std::size_t to : successors[from]) predecessors[to].push_back(from);
 
         std::size_t current = paths.size();
         for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -294,22 +302,33 @@ public:
         }
         if (current == paths.size()) return {};
 
-        while (visitedAt[current] < 0) {
-            visitedAt[current] = static_cast<int>(walk.size());
+        std::vector<std::size_t> walk;
+        std::vector<std::size_t> visitedAt(paths.size(), NotVisited);
+
+        while (visitedAt[current] == NotVisited) {
+            visitedAt[current] = walk.size();
             walk.push_back(current);
 
             std::size_t next = paths.size();
-            for (const std::size_t successor : successors[current]) {
-                if (placed[successor]) continue;
-                next = successor;
+            for (const std::size_t predecessor : predecessors[current]) {
+                if (placed[predecessor]) continue;
+                next = predecessor;
                 break;
             }
+
+            // Unreachable while the invariant above holds. Returning rather than indexing with
+            // `paths.size()` keeps it a missing message if it ever stops holding.
             if (next == paths.size()) return {};
             current = next;
         }
 
-        std::vector<std::size_t> cycle(walk.begin() + visitedAt[current], walk.end());
-        cycle.push_back(current);
+        std::vector<std::size_t> cycle(
+            walk.begin() + static_cast<std::ptrdiff_t>(visitedAt[current]), walk.end());
+
+        // Reversed, so the message reads as the chain of "must be analysed before" that the
+        // edges are, rather than backwards along it.
+        std::ranges::reverse(cycle);
+        cycle.push_back(cycle.front());
         return cycle;
     }
 

@@ -275,6 +275,26 @@ TEST_F(CompileOrderTest, ReportsAGenuineCycleWithTheCycleSpelledOut) {
     EXPECT_NE(message.find("->"), std::string::npos) << message;
 }
 
+TEST_F(CompileOrderTest, SpellsOutTheCycleWhenTheFirstUnorderedFileIsOnlyDownstreamOfIt) {
+    // What is left unordered is everything on a cycle *and* everything downstream of one, and
+    // which of those comes first is whatever order the user gave. `top.sv` is downstream and has
+    // no dependent of its own, so a search that starts there and follows the direction of the
+    // ordering dead-ends immediately — reporting a cycle with nothing in it, on a design where
+    // naming the two files involved is the whole of the help available.
+    write("top.sv", "module top;\n  import a_pkg::*;\nendmodule\n");
+    write("a.sv", "package a_pkg;\n  import b_pkg::*;\nendpackage\n");
+    write("b.sv", "package b_pkg;\n  import a_pkg::*;\nendpackage\n");
+
+    EXPECT_FALSE(order());
+    ASSERT_EQ(consumer.received.size(), 1U);
+    EXPECT_EQ(consumer.received.front().code, DiagCode::CompileOrderCycle);
+
+    const std::string& message = consumer.received.front().message;
+    EXPECT_NE(message.find("a.sv"), std::string::npos) << message;
+    EXPECT_NE(message.find("b.sv"), std::string::npos) << message;
+    EXPECT_NE(message.find("->"), std::string::npos) << message;
+}
+
 TEST_F(CompileOrderTest, ReportsACycleThatSomethingElseDependsOn) {
     write("a.sv", "package a_pkg;\n  import b_pkg::*;\nendpackage\n");
     write("b.sv", "package b_pkg;\n  import a_pkg::*;\nendpackage\n");
@@ -283,6 +303,13 @@ TEST_F(CompileOrderTest, ReportsACycleThatSomethingElseDependsOn) {
     EXPECT_FALSE(order());
     ASSERT_EQ(consumer.received.size(), 1U);
     EXPECT_EQ(consumer.received.front().code, DiagCode::CompileOrderCycle);
+
+    // The two files that are actually stuck, and not the one that is merely waiting on them:
+    // naming `top.sv` here would send the reader to edit a file with nothing wrong with it.
+    const std::string& message = consumer.received.front().message;
+    EXPECT_NE(message.find("a.sv"), std::string::npos) << message;
+    EXPECT_NE(message.find("b.sv"), std::string::npos) << message;
+    EXPECT_EQ(message.find("top.sv"), std::string::npos) << message;
 }
 
 TEST_F(CompileOrderTest, ReportsAFileItCannotRead) {
