@@ -144,6 +144,35 @@ void KernelServer::detachFromKernel() {
     database.reset();
 }
 
+KernelServer::Borrow KernelServer::renewKernelBorrow() {
+    if (session->simulationKernel() == simulationKernel && session->designImage() == image)
+        return Borrow::Unchanged;
+
+    // The kernel that was being served has been destroyed, and every registration made against
+    // it went with it. The pointers are dropped *before* anything else, because `detachFromKernel`
+    // would otherwise take those registrations back through them; and the publisher goes with
+    // them rather than being carried over, because `start` restores what it had subscribed to
+    // and a different elaboration numbers its signals differently.
+    simulationKernel = nullptr;
+    image = nullptr;
+    publisher.reset();
+    recorder.reset();
+    database.reset();
+
+    if (session->simulationKernel() == nullptr || session->designImage() == nullptr) {
+        simulationState = SimulationState::Failed;
+        closeClient("a command discarded the design, so there is nothing left to serve");
+        return Borrow::Gone;
+    }
+
+    // Everything a client holds describes the design that has gone — the instance tree, the
+    // signal indices it subscribed to, the history in its database — so it is sent the new tree
+    // and starts again from it, exactly as a newly attached client does.
+    start();
+    onQueryDesign();
+    return Borrow::Renewed;
+}
+
 void KernelServer::start() {
     // A restart keeps what the user asked to watch. Losing the wave window's contents because
     // the design was reset would make the button useless for the thing it is used for, which
@@ -481,8 +510,16 @@ void KernelServer::onCommand(const Frame& frame) {
 
     running = false;
 
+    // Before anything below reads the kernel. A command is free to replace the elaboration —
+    // `vsim` is one — which destroys the kernel this server borrowed.
+    const Borrow borrow = renewKernelBorrow();
+    if (borrow == Borrow::Gone) return;
+
     if (!ok) {
-        simulationState = stateAfter(simulationKernel->status());
+        // The state is left as it is when the elaboration was replaced: `start` has already put
+        // it at time zero, and `stateAfter` on a kernel that has not run yet would report the
+        // fresh design as finished.
+        if (borrow == Borrow::Unchanged) simulationState = stateAfter(simulationKernel->status());
         sendRunState({});
         sendFailure(error.empty() ? "the command failed" : error);
         return;
@@ -498,7 +535,11 @@ void KernelServer::onCommand(const Frame& frame) {
     recorder->flush();
     publisher->flush();
     database->setLatestTime(simulationKernel->time());
-    simulationState = stateAfter(simulationKernel->status());
+
+    // As above: a design that has just been elaborated is at time zero and has not run, which
+    // `start` already said. Only a kernel that was there before the command has a run status
+    // worth mapping.
+    if (borrow == Borrow::Unchanged) simulationState = stateAfter(simulationKernel->status());
     sendRunState({});
     sendBreakpoints();
 }

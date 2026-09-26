@@ -718,6 +718,17 @@ take that registration back before it is destroyed, because the kernel now
 outlives it. A listener destroyed while still registered is a dangling pointer
 the *next* run calls through.
 
+The converse holds too, and is the harder half. **A borrowed kernel is not a
+kernel that lasts.** `vsim` replaces the whole elaboration, and it is an
+ordinary command: a script or a line typed at a front end may destroy the kernel
+anything else is holding a pointer to. Whatever borrows one MUST therefore
+re-ask the session for it after every evaluation rather than after the ones that
+look like they matter, and MUST treat a session left with no simulation as a
+case rather than as an impossibility. The allocator commonly hands the
+replacement the address the old one had, so this is a defect that reads
+correctly, tests green against a pointer comparison, and shows up only under a
+sanitiser or on a user's machine.
+
 ### 8.2 File lists
 
 Both forms MUST be supported:

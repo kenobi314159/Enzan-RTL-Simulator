@@ -237,6 +237,25 @@ private:
     /// database, the recorder and the publisher.
     void detachFromKernel();
 
+    /// What `renewKernelBorrow` found.
+    enum class Borrow : std::uint8_t {
+        /// The session still holds the kernel this server was serving.
+        Unchanged,
+        /// It holds a different one, which this server is now serving from time zero.
+        Renewed,
+        /// It holds none, and the client has been told and dropped.
+        Gone,
+    };
+
+    /// Re-borrows the session's kernel when something has replaced the one being served.
+    ///
+    /// The server borrows a kernel the session owns, and a command is free to destroy it:
+    /// `vsim` replaces the whole elaboration and so does anything a script calls it from. Every
+    /// path that reads the kernel after an evaluation has to come through here first, because
+    /// the alternative is reading a freed object — and with the allocator handing the new kernel
+    /// the old one's address, that is a bug a test comparing pointers cannot see.
+    Borrow renewKernelBorrow();
+
     /// Sends everything the client is owed and writes what the socket will take.
     void pump();
 

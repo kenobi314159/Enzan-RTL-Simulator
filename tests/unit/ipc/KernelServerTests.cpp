@@ -1219,6 +1219,41 @@ TEST_F(CommandFixture, TheKernelLooksBusyWhileACommandIsRunning) {
     EXPECT_NE(server->state(), SimulationState::Running) << "the flag was left set";
 }
 
+TEST_F(CommandFixture, ACommandThatReElaboratesLeavesTheServerOnTheNewKernel) {
+    // `vsim` typed at a front end is a command like any other, and it tears down the kernel the
+    // server borrowed to build a new one. Everything the server does after an evaluation reads
+    // that kernel, so a server that kept the old pointer would answer the very command that
+    // replaced it through freed memory.
+    evaluator.observe = [this] {
+        ASSERT_TRUE(session->elaborate("tb"))
+            << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.back());
+    };
+
+    sendCommand("vsim tb");
+
+    EXPECT_EQ(&server->kernel(), session->simulationKernel());
+    EXPECT_NE(server->state(), SimulationState::Running);
+
+    // And the new kernel is the one the server drives from here on, rather than one nothing is
+    // registered against: a run has to reach it and its listeners.
+    RunMessage request;
+    request.duration = 20;
+    this->request(MessageType::Run, request);
+    EXPECT_GT(expectAll<RunStateMessage>(MessageType::RunState).back().time, 0U);
+}
+
+TEST_F(CommandFixture, ACommandThatDiscardsTheDesignEndsTheConnectionRatherThanServingNothing) {
+    // A command may leave the session with no simulation at all — a `vsim` whose elaboration
+    // failed. There is then nothing to serve, and the client is told so rather than being
+    // answered out of a kernel that no longer exists.
+    evaluator.observe = [this] { session->setDesign(std::make_unique<Design>()); };
+
+    sendCommand("vsim nonexistent");
+
+    const auto bye = expect<ByeMessage>(MessageType::Bye);
+    EXPECT_NE(bye.reason.find("design"), std::string::npos) << bye.reason;
+}
+
 TEST_F(ServerFixture, ACommandIsRefusedWhenTheKernelHasNoEvaluator) {
     connectClient();
 
