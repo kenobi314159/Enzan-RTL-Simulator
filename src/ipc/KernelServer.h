@@ -3,6 +3,7 @@
 #pragma once
 
 #include "common/Diagnostics.h"
+#include "control/Session.h"
 #include "ipc/ChangePublisher.h"
 #include "ipc/Protocol.h"
 #include "ipc/Transport.h"
@@ -46,12 +47,18 @@ struct ServerOptions {
 
 /// Serves one elaborated design to one attached client.
 ///
-/// This is the kernel end of the split described in section 2.2. It owns the simulation — the
-/// `runtime::Kernel`, the live waveform database and the recorder filling it — and answers a
-/// client's requests about it. Everything that makes the split worth having lives here: the
-/// kernel runs perfectly well with nobody attached, a client may attach and detach while a
-/// simulation is in progress, and a client that stops reading is left behind rather than
-/// allowed to stall the run.
+/// This is the kernel end of the split described in section 2.2. The simulation belongs to a
+/// `control::Session` — the same one the Tcl vocabulary drives — and the server adds the live
+/// waveform database, the recorder filling it and the answers to a client's requests.
+///
+/// **One session, whichever surface is driving.** A served kernel, a `-do` script and a batch
+/// run are the same pipeline; a server that built a kernel of its own would mean two, and a
+/// command typed at a front end would then be acting on a different simulation from the one on
+/// screen.
+///
+/// Everything that makes the split worth having lives here: the kernel runs perfectly well with
+/// nobody attached, a client may attach and detach while a simulation is in progress, and a
+/// client that stops reading is left behind rather than allowed to stall the run.
 ///
 /// **A run is interruptible, not chopped up.** `run` is called once for the whole requested
 /// span and the server answers the kernel's interrupt poll from inside it, servicing the socket
@@ -64,8 +71,9 @@ struct ServerOptions {
 /// two views of the same run, and nothing asks for that yet.
 class KernelServer final : public runtime::RunInterrupt {
 public:
-    /// `imageToServe` and `diagnostics` must outlive the server.
-    KernelServer(const runtime::Image& imageToServe, DiagnosticEngine& diagnosticEngine,
+    /// `sessionToServe` and `diagnostics` must outlive the server, and the session must
+    /// already have been elaborated.
+    KernelServer(control::Session& sessionToServe, DiagnosticEngine& diagnosticEngine,
                  ServerOptions serverOptions);
 
     KernelServer(const KernelServer&) = delete;
@@ -75,7 +83,7 @@ public:
 
     ~KernelServer() override;
 
-    /// Creates the kernel, writes the time-zero state and begins recording.
+    /// Puts the design at time zero and begins recording.
     ///
     /// Separate from the constructor because it is also what `restart` does, and because the
     /// order — initialise, then start recording — is what makes the values captured at time
@@ -187,6 +195,10 @@ private:
     /// Sends the whole breakpoint list, which is what every change to it is answered with.
     void sendBreakpoints();
 
+    /// Takes back every registration made against the session's kernel, then drops the
+    /// database, the recorder and the publisher.
+    void detachFromKernel();
+
     /// Sends everything the client is owed and writes what the socket will take.
     void pump();
 
@@ -202,6 +214,7 @@ private:
 
     [[nodiscard]] runtime::SimTime latestRecordedTime() const noexcept;
 
+    control::Session* session;
     const runtime::Image* image;
     DiagnosticEngine* diagnostics;
     ServerOptions options;
@@ -210,9 +223,12 @@ private:
     std::ostream transcriptStream;
     DiagnosticRelay diagnosticRelay;
 
-    // Recreated by `start`, because a restart has to reset the arena, the scheduler queues and
-    // every process's resume point, and a fresh kernel is the only way to be sure it has.
-    std::unique_ptr<runtime::Kernel> simulationKernel;
+    /// The session's kernel, not the server's. Borrowed for as long as the session holds it,
+    /// which is what makes a command typed at a front end act on the simulation on screen.
+    runtime::Kernel* simulationKernel = nullptr;
+
+    // Recreated by `start`: a restarted design begins at time zero with nothing recorded, and
+    // the database is where "nothing recorded" lives.
     std::unique_ptr<wavedb::WaveformDatabase> database;
     std::unique_ptr<wavedb::WaveformRecorder> recorder;
     std::unique_ptr<ChangePublisher> publisher;

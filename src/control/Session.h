@@ -124,6 +124,18 @@ public:
 
     [[nodiscard]] bool hasDesign() const noexcept { return design != nullptr; }
 
+    /// Takes `analysed` as this session's design, replacing whatever was there.
+    ///
+    /// The seam for a design that came from somewhere other than this session's own `vlog`:
+    /// units loaded from a library, a design assembled from two frontends once mixed-language
+    /// simulation arrives (section 3.5), and a test that builds EIR by hand to exercise the
+    /// kernel without depending on a frontend.
+    ///
+    /// Everything elaborated from the previous design is torn down, because a session holding
+    /// a kernel built from a design it no longer has would be a use-after-free waiting for the
+    /// next command.
+    void setDesign(std::unique_ptr<eir::Design> analysed);
+
     /// Opens `path` as the analysis library, creating the directory: `vlib`.
     ///
     /// Opt-in, as Questa makes `vlib` precede `vlog`. Section 4.4's store is a cache of what
@@ -285,6 +297,9 @@ public:
     [[nodiscard]] const runtime::Image* designImage() const noexcept { return image.get(); }
 
 private:
+    /// Drops the kernel, the image and everything they were built from.
+    void discardElaboration();
+
     /// Parses `literal` to the width of `signalIndex`, reporting through `error`.
     [[nodiscard]] std::optional<eir::BitVector>
     parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;

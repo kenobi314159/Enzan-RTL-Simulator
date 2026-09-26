@@ -691,6 +691,19 @@ session, depends on the kernel. The GUI links only the first, for the theme
 script: a front end that linked the kernel to read a list of colours would
 quietly undo the process separation of 2.2.
 
+**A session owns the simulation, and there is one of it per kernel process.** A
+batch run, a served kernel and a `-do` script are the same pipeline through the
+same object. A server that built a kernel of its own would make two, and a
+command typed at a front end would then act on a different simulation from the
+one the front end is showing — which is the failure mode that makes a debugger
+untrustworthy rather than merely wrong.
+
+A consequence worth stating because it is easy to get wrong: whatever registers
+itself against a kernel — a value-change listener, the interrupt poll — must
+take that registration back before it is destroyed, because the kernel now
+outlives it. A listener destroyed while still registered is a dangling pointer
+the *next* run calls through.
+
 ### 8.2 File lists
 
 Both forms MUST be supported:

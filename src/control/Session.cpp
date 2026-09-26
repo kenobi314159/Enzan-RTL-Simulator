@@ -160,19 +160,32 @@ Session::librarySources(std::span<const std::filesystem::path> ordered,
 // Elaboration
 // ---------------------------------------------------------------------------
 
+void Session::setDesign(std::unique_ptr<eir::Design> analysed) {
+    discardElaboration();
+    design = std::move(analysed);
+    loadedFromLibrary = false;
+}
+
+void Session::discardElaboration() {
+    // Torn down in dependency order, so that nothing is left holding a reference to something
+    // already gone: the writers listen to the kernel, the kernel reads the image, and the
+    // image reads the elaboration and the compiled bodies.
+    closeWaveforms();
+    kernel.reset();
+    image.reset();
+    compiled.reset();
+    elaborated.reset();
+}
+
 bool Session::elaborate(std::string_view topModule) {
     if (design == nullptr) {
         diagnostics.report(DiagCode::NothingAnalysed, SourceLocation());
         return false;
     }
 
-    // Torn down in dependency order before anything new is built, so that a failed `vsim` on a
-    // running design leaves nothing half-replaced for the next command to find.
-    closeWaveforms();
-    kernel.reset();
-    image.reset();
-    compiled.reset();
-    elaborated.reset();
+    // Before anything new is built, so that a failed `vsim` on a running design leaves nothing
+    // half-replaced for the next command to find.
+    discardElaboration();
 
     elab::Elaborator elaborator(*design, diagnostics);
     std::unique_ptr<elab::ElaboratedDesign> tree = elaborator.elaborate(topModule);

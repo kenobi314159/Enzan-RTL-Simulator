@@ -106,9 +106,10 @@ std::vector<DiagnosticMessage> KernelServer::DiagnosticRelay::take() {
 // Construction
 // ---------------------------------------------------------------------------
 
-KernelServer::KernelServer(const runtime::Image& imageToServe, DiagnosticEngine& diagnosticEngine,
+KernelServer::KernelServer(control::Session& sessionToServe, DiagnosticEngine& diagnosticEngine,
                            ServerOptions serverOptions)
-    : image(&imageToServe),
+    : session(&sessionToServe),
+      image(sessionToServe.designImage()),
       diagnostics(&diagnosticEngine),
       options(std::move(serverOptions)),
       transcriptRelay(options.localTranscript != nullptr ? *options.localTranscript : std::cout),
@@ -119,13 +120,25 @@ KernelServer::KernelServer(const runtime::Image& imageToServe, DiagnosticEngine&
 
 KernelServer::~KernelServer() {
     diagnostics->removeConsumer(diagnosticRelay);
+    detachFromKernel();
+}
 
-    // The kernel must not outlive its listeners, and the recorder flushes into the database as
-    // it closes, so the order is spelled out rather than left to the member declarations.
+void KernelServer::detachFromKernel() {
+    // The kernel belongs to the session and outlives this server, so every registration made
+    // against it has to be taken back. A listener destroyed while still registered is a
+    // dangling pointer the *next* run calls through — which is a crash in the middle of a
+    // simulation with nothing in the transcript to explain it.
+    if (simulationKernel != nullptr) {
+        if (recorder != nullptr) simulationKernel->removeListener(*recorder);
+        if (publisher != nullptr) simulationKernel->removeListener(*publisher);
+        simulationKernel->setInterrupt(nullptr);
+    }
+
+    // The recorder flushes into the database as it closes, so the order is spelled out rather
+    // than left to the member declarations.
     publisher.reset();
     recorder.reset();
     database.reset();
-    simulationKernel.reset();
 }
 
 void KernelServer::start() {
@@ -135,17 +148,17 @@ void KernelServer::start() {
     std::vector<std::uint32_t> keepSubscribed;
     if (publisher != nullptr) keepSubscribed = publisher->subscribedSignals();
 
-    publisher.reset();
-    recorder.reset();
-    database.reset();
-    simulationKernel.reset();
+    detachFromKernel();
 
-    runtime::KernelOptions kernelOptions;
-    kernelOptions.timeScale = options.timeScale;
-    kernelOptions.deltaLimit = options.deltaLimit;
-    kernelOptions.transcript = &transcriptStream;
+    // The session's kernel, put back to time zero. `initialize` resets everything a run
+    // accumulates — the arena, the queues, the time wheel, each process's resume point — so a
+    // kernel of the server's own would buy nothing and would mean two simulations for the two
+    // surfaces driving them.
+    image = session->designImage();
+    simulationKernel = session->simulationKernel();
+    ENZAN_ASSERT(simulationKernel != nullptr && image != nullptr,
+                 "a server needs an elaborated session");
 
-    simulationKernel = std::make_unique<runtime::Kernel>(*image, *diagnostics, kernelOptions);
     simulationKernel->setInterrupt(this);
     simulationKernel->initialize();
 

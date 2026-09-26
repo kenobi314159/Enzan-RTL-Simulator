@@ -26,16 +26,10 @@
 #include <vector>
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
-#include "codegen/Compiler.h"
-#include "eir/Design.h"
-#include "elab/Elaborator.h"
-#include "frontend/sv/SystemVerilogFrontend.h"
+#include "control/Session.h"
 #include "ipc/KernelServer.h"
-#include "runtime/Image.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
-#include "wavedb/FstWriter.h"
-#include "wavedb/VcdWriter.h"
 #endif
 
 #ifdef ENZAN_WITH_TCL
@@ -295,12 +289,35 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
 
-/// Serves an elaborated design to a graphical front end instead of running it here.
+/// Builds the session every path shares: analysis and elaboration, once.
+///
+/// One pipeline for the batch run, the served kernel and the script. Three copies of it was
+/// where the differences between them started: a `--listen` that resolved a file differently
+/// from a `vlog`, or a batch run that put the waveform somewhere a served one did not.
+bool prepare(const Invocation& invocation, enzan::control::Session& session,
+             enzan::DiagnosticEngine& diagnostics) {
+    session.setTimeScale(enzan::runtime::TimeScale(invocation.timeExponent));
+    session.setDeltaLimit(invocation.deltaLimit);
+
+    enzan::control::Session::AnalysisRequest request;
+    request.files = invocation.files;
+    request.defines = invocation.defines;
+    request.includeDirectories = invocation.includeDirectories;
+    if (!session.analyse(request)) return false;
+
+    if (!invocation.waveformScope.empty() && !session.addWaveformScope(invocation.waveformScope))
+        return false;
+
+    static_cast<void>(diagnostics);
+    return session.elaborate(invocation.topModule);
+}
+
+/// Serves an elaborated session to a graphical front end instead of running it here.
 ///
 /// The client drives the run, so nothing happens until one attaches, and the kernel survives
 /// its departure: section 2.2 requires a GUI to be able to detach from a long simulation on a
 /// compute server without ending it.
-ExitStatus serve(const Invocation& invocation, const enzan::runtime::Image& image,
+ExitStatus serve(const Invocation& invocation, enzan::control::Session& session,
                  enzan::DiagnosticEngine& diagnostics) {
     enzan::ipc::ServerOptions serverOptions;
     serverOptions.kernelVersion = enzan::versionLine();
@@ -308,7 +325,7 @@ ExitStatus serve(const Invocation& invocation, const enzan::runtime::Image& imag
     serverOptions.deltaLimit = invocation.deltaLimit;
     serverOptions.waveformScope = invocation.waveformScope;
 
-    enzan::ipc::KernelServer server(image, diagnostics, serverOptions);
+    enzan::ipc::KernelServer server(session, diagnostics, serverOptions);
     server.start();
 
     std::string error;
@@ -329,87 +346,36 @@ ExitStatus serve(const Invocation& invocation, const enzan::runtime::Image& imag
     return ExitStatus::Success;
 }
 
-/// Analyses, elaborates, compiles and runs. Returns the process exit status.
+/// Analyses, elaborates and runs. Returns the process exit status.
 ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                     enzan::DiagnosticEngine& diagnostics) {
-    enzan::frontend::sv::Options frontendOptions;
-    frontendOptions.files = invocation.files;
-    frontendOptions.defines = invocation.defines;
-    frontendOptions.includeDirectories = invocation.includeDirectories;
-    if (!invocation.topModule.empty()) frontendOptions.topModules.push_back(invocation.topModule);
+    enzan::control::Session session(sources, diagnostics);
+    if (!prepare(invocation, session, diagnostics)) return ExitStatus::Failure;
 
-    const std::unique_ptr<enzan::eir::Design> design =
-        enzan::frontend::sv::analyse(frontendOptions, sources, diagnostics);
-    if (design == nullptr) return ExitStatus::Failure;
+    if (!invocation.listenPath.empty()) return serve(invocation, session, diagnostics);
 
-    enzan::elab::Elaborator elaborator(*design, diagnostics);
-    const std::unique_ptr<enzan::elab::ElaboratedDesign> elaborated =
-        elaborator.elaborate(invocation.topModule);
-    if (elaborated == nullptr) return ExitStatus::Failure;
-
-    enzan::codegen::Compiler compiler(diagnostics);
-    const std::unique_ptr<enzan::codegen::CompiledDesign> compiled = compiler.compile(*design);
-    if (compiled == nullptr) return ExitStatus::Failure;
-
-    const enzan::runtime::Image image(*design, *elaborated, *compiled);
-
-    if (!invocation.listenPath.empty()) return serve(invocation, image, diagnostics);
-
-    enzan::runtime::KernelOptions kernelOptions;
-    kernelOptions.timeScale = enzan::runtime::TimeScale(invocation.timeExponent);
-    kernelOptions.deltaLimit = invocation.deltaLimit;
-
-    enzan::runtime::Kernel kernel(image, diagnostics, kernelOptions);
-    kernel.initialize();
-
-    // The writers are created after `initialize` so that the values they dump at time zero are the
-    // ones the design actually starts from rather than an empty arena.
-    std::vector<std::unique_ptr<enzan::wavedb::WaveformWriter>> writers;
-    const auto openWriter = [&](std::unique_ptr<enzan::wavedb::WaveformWriter> writer,
-                                const std::filesystem::path& path) {
-        writer->setScope(invocation.waveformScope);
-
-        std::string error;
-        if (!writer->open(path, error)) {
-            diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
-                               path.string(), error);
-            return false;
-        }
-
-        kernel.addListener(*writer);
-        writers.push_back(std::move(writer));
-        return true;
-    };
-
-    if (!invocation.vcdPath.empty()
-        && !openWriter(std::make_unique<enzan::wavedb::VcdWriter>(image, kernel.arena(),
-                                                                  kernelOptions.timeScale),
-                       invocation.vcdPath)) {
+    // Opened after elaboration so that the values dumped at time zero are the ones the design
+    // actually starts from rather than an empty arena.
+    if (!invocation.vcdPath.empty() && !session.openVcd(invocation.vcdPath))
         return ExitStatus::Failure;
-    }
-
-    if (!invocation.fstPath.empty()
-        && !openWriter(std::make_unique<enzan::wavedb::FstWriter>(image, kernel.arena(),
-                                                                  kernelOptions.timeScale),
-                       invocation.fstPath)) {
+    if (!invocation.fstPath.empty() && !session.openFst(invocation.fstPath))
         return ExitStatus::Failure;
-    }
 
-    const enzan::runtime::RunStatus status =
-        kernel.run(invocation.runUntil.value_or(enzan::runtime::NoTime));
+    const enzan::runtime::RunStatus status = session.run(invocation.runUntil);
 
     // Closed before the statistics are printed, so that a writer failing to finish its file says
     // so before the run looks successful.
-    for (const std::unique_ptr<enzan::wavedb::WaveformWriter>& writer : writers) writer->close();
+    session.closeWaveforms();
 
     if (invocation.dumpStatistics) {
-        std::cout << "-- " << kernel.executedInstructions() << " instructions, "
-                  << kernel.totalDeltaCycles() << " delta cycles, ended at "
-                  << kernelOptions.timeScale.format(kernel.time()) << " ("
+        const enzan::runtime::Kernel* kernel = session.simulationKernel();
+        std::cout << "-- " << kernel->executedInstructions() << " instructions, "
+                  << kernel->totalDeltaCycles() << " delta cycles, ended at "
+                  << session.timeScale().format(session.time()) << " ("
                   << enzan::runtime::toString(status) << ")\n";
     }
 
-    if (status == enzan::runtime::RunStatus::Error || kernel.exitStatus() != 0
+    if (status == enzan::runtime::RunStatus::Error || session.exitStatus() != 0
         || diagnostics.hasErrors()) {
         return ExitStatus::Failure;
     }

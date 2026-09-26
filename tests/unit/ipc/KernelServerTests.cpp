@@ -10,16 +10,15 @@
 
 #include "ipc/KernelServer.h"
 
-#include "codegen/Compiler.h"
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "control/Session.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
 #include "eir/Module.h"
 #include "eir/Process.h"
 #include "eir/Type.h"
-#include "elab/Elaborator.h"
 #include "ipc/Protocol.h"
 #include "ipc/Transport.h"
 #include "runtime/Image.h"
@@ -48,8 +47,7 @@ namespace {
 
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
-using enzan::codegen::CompiledDesign;
-using enzan::codegen::Compiler;
+using enzan::control::Session;
 using enzan::eir::Design;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
@@ -58,8 +56,6 @@ using enzan::eir::Opcode;
 using enzan::eir::Operand;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
-using enzan::elab::ElaboratedDesign;
-using enzan::elab::Elaborator;
 using enzan::ipc::BreakpointsMessage;
 using enzan::ipc::ByeMessage;
 using enzan::ipc::ClearBreakpointMessage;
@@ -240,32 +236,37 @@ protected:
 
     void SetUp() override { rebuild(tickingDesign()); }
 
-    /// Elaborates, compiles and serves `design`. Called again by a test that needs a design
-    /// the fixture's own does not provide.
+    /// Elaborates and serves `design`. Called again by a test that needs a design the
+    /// fixture's own does not provide.
+    ///
+    /// The design goes through a `control::Session`, which is what the served kernel owns: a
+    /// command typed at a front end and a request from one act on the same simulation, so a
+    /// test that served an image of its own would be testing an arrangement that does not
+    /// exist.
     void rebuild(Design design) {
-        analysed = std::move(design);
-
-        Elaborator elaborator(analysed, engine);
-        elaborated = elaborator.elaborate("tb");
-        ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
-
-        Compiler compiler(engine);
-        compiled = compiler.compile(analysed);
-        ASSERT_NE(compiled, nullptr);
-
-        image = std::make_unique<Image>(analysed, *elaborated, *compiled);
+        // The old server before the old session: the server borrows the session's kernel, and
+        // replacing the session first would leave it pointing at one that has gone.
+        server.reset();
+        session = std::make_unique<Session>(sources, engine);
+        session->setTimeScale(TimeScale(-9));
+        session->setDesign(std::make_unique<Design>(std::move(design)));
+        ASSERT_TRUE(session->elaborate("tb"))
+            << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.front());
 
         ServerOptions options;
         options.kernelVersion = "enzan test";
         options.timeScale = TimeScale(-9);
         options.localTranscript = &localTranscript;
-        server = std::make_unique<KernelServer>(*image, engine, options);
+        server = std::make_unique<KernelServer>(*session, engine, options);
         server->start();
     }
 
     void TearDown() override {
         client.close();
+
+        // The server borrows the session's kernel, so it goes first.
         server.reset();
+        session.reset();
     }
 
     /// Connects a client and completes the handshake.
@@ -355,7 +356,7 @@ protected:
 
     /// The kernel signal index for a hierarchical path.
     [[nodiscard]] std::uint32_t signalIndex(std::string_view path) const {
-        return image->findSignal(path);
+        return session->designImage()->findSignal(path);
     }
 
     struct Captured {
@@ -368,10 +369,7 @@ protected:
     DiscardingConsumer consumer;
     std::ostringstream localTranscript;
 
-    Design analysed;
-    std::unique_ptr<ElaboratedDesign> elaborated;
-    std::unique_ptr<CompiledDesign> compiled;
-    std::unique_ptr<Image> image;
+    std::unique_ptr<Session> session;
     std::unique_ptr<KernelServer> server;
 
     Connection client;

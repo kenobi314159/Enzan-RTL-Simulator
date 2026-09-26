@@ -14,6 +14,7 @@
 #include "codegen/Compiler.h"
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "control/Session.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
@@ -155,24 +156,19 @@ protected:
     SessionFixture() : engine(sources) { engine.addConsumer(consumer); }
 
     void SetUp() override {
-        analysed = guiTestDesign();
-
-        elab::Elaborator elaborator(analysed, engine);
-        elaborated = elaborator.elaborate("tb");
-        ASSERT_NE(elaborated, nullptr)
+        // Through a `control::Session`, which is what a served kernel owns: one simulation for
+        // every surface that drives it.
+        kernelSession = std::make_unique<control::Session>(sources, engine);
+        kernelSession->setTimeScale(runtime::TimeScale(-9));
+        kernelSession->setDesign(std::make_unique<eir::Design>(guiTestDesign()));
+        ASSERT_TRUE(kernelSession->elaborate("tb"))
             << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.front());
-
-        codegen::Compiler compiler(engine);
-        compiled = compiler.compile(analysed);
-        ASSERT_NE(compiled, nullptr);
-
-        image = std::make_unique<runtime::Image>(analysed, *elaborated, *compiled);
 
         ipc::ServerOptions options;
         options.kernelVersion = "enzan test";
         options.timeScale = runtime::TimeScale(-9);
         options.localTranscript = &transcript;
-        server = std::make_unique<ipc::KernelServer>(*image, engine, options);
+        server = std::make_unique<ipc::KernelServer>(*kernelSession, engine, options);
         server->start();
 
         ASSERT_TRUE(directory.isValid());
@@ -193,7 +189,10 @@ protected:
 
     void TearDown() override {
         session.reset();
+
+        // The server borrows the kernel from its session, so it goes first.
         server.reset();
+        kernelSession.reset();
     }
 
     /// Gives both ends a turn: the server steps, then Qt delivers whatever arrived.
@@ -215,7 +214,7 @@ protected:
 
     /// The kernel's signal index for a hierarchical path.
     [[nodiscard]] std::uint32_t signalIndex(std::string_view path) const {
-        return image->findSignal(path);
+        return kernelSession->designImage()->findSignal(path);
     }
 
     /// Asks for a scope's objects and waits for the answer.
@@ -236,10 +235,8 @@ protected:
     FixtureConsumer consumer;
     std::ostringstream transcript;
 
-    eir::Design analysed;
-    std::unique_ptr<elab::ElaboratedDesign> elaborated;
-    std::unique_ptr<codegen::CompiledDesign> compiled;
-    std::unique_ptr<runtime::Image> image;
+    /// The kernel end's session, which owns the simulation the server serves.
+    std::unique_ptr<control::Session> kernelSession;
     std::unique_ptr<ipc::KernelServer> server;
     std::unique_ptr<gui::KernelSession> session;
 
