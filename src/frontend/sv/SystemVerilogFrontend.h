@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "common/SourceLocation.h"
 #include "eir/Design.h"
 
 #include <filesystem>
@@ -26,6 +27,19 @@ namespace enzan::frontend::sv {
 /// What to analyse.
 struct Options {
     std::vector<std::filesystem::path> files;
+
+    /// Buffers already holding each file's text, parallel to `files`, or empty.
+    ///
+    /// The compile-order pre-scan (section 8.3) has read every source in order to scan it, so
+    /// handing the buffers over saves the frontend reading them again. That is not only about
+    /// the I/O: the source manager does not deduplicate, so a second read leaves *two*
+    /// buffers per file, and a SourceLocation's buffer then depends on which pass produced it.
+    /// Two things downstream compare locations by buffer — the analysis library, which
+    /// attributes units to files, and a source-line breakpoint — and both were silently
+    /// matching nothing.
+    ///
+    /// An entry may be invalid, which makes the frontend read that file itself.
+    std::vector<BufferId> buffers;
 
     /// Macro definitions, each either `NAME` or `NAME=VALUE`.
     std::vector<std::string> defines;

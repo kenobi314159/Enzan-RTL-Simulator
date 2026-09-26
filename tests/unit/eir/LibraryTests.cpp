@@ -305,8 +305,8 @@ TEST_F(StoredLibraryTest, ACorruptEntryIsAMissRatherThanACrash) {
     // worse, silent misbehaviour.
     for (const std::filesystem::directory_entry& entry :
          std::filesystem::directory_iterator(library.path())) {
-        std::ofstream file(entry.path(), std::ios::binary | std::ios::trunc);
-        file << "ENZANEIR" << std::string(40, '\xA5');
+        std::ofstream corrupted(entry.path(), std::ios::binary | std::ios::trunc);
+        corrupted << "ENZANEIR" << std::string(40, '\xA5');
     }
 
     Design loaded;

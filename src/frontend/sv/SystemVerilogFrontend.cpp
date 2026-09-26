@@ -760,16 +760,22 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     std::map<slang::BufferID, BufferId> buffers;
     std::vector<slang::SourceBuffer> slangBuffers;
 
-    for (const std::filesystem::path& path : options.files) {
-        const FileReadResult result = sources.readFile(path);
-        if (!result.ok()) {
-            reportFileReadFailure(diagnostics, path, result);
-            return nullptr;
+    for (std::size_t index = 0; index < options.files.size(); ++index) {
+        const std::filesystem::path& path = options.files[index];
+
+        BufferId text = index < options.buffers.size() ? options.buffers[index] : BufferId();
+        if (!text.valid()) {
+            const FileReadResult result = sources.readFile(path);
+            if (!result.ok()) {
+                reportFileReadFailure(diagnostics, path, result);
+                return nullptr;
+            }
+            text = result.buffer;
         }
 
         const slang::SourceBuffer buffer =
-            slangSources.assignText(path.string(), sources.bufferText(result.buffer));
-        buffers.emplace(buffer.id, result.buffer);
+            slangSources.assignText(path.string(), sources.bufferText(text));
+        buffers.emplace(buffer.id, text);
         slangBuffers.push_back(buffer);
     }
 

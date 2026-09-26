@@ -345,18 +345,23 @@ SourceScan scanSystemVerilog(BufferId buffer, std::string_view text) {
 }
 
 bool inferCompileOrder(std::span<const std::filesystem::path> files, SourceManager& sources,
-                       DiagnosticEngine& diagnostics, std::vector<std::filesystem::path>& ordered) {
+                       DiagnosticEngine& diagnostics, std::vector<std::filesystem::path>& ordered,
+                       std::vector<BufferId>* buffers) {
     ordered.clear();
+    if (buffers != nullptr) buffers->clear();
 
     std::vector<SourceScan> scans;
+    std::vector<BufferId> read;
     scans.reserve(files.size());
+    read.reserve(files.size());
     for (const std::filesystem::path& file : files) {
-        const FileReadResult read = sources.readFile(file);
-        if (!read.ok()) {
-            reportFileReadFailure(diagnostics, file, read);
+        const FileReadResult result = sources.readFile(file);
+        if (!result.ok()) {
+            reportFileReadFailure(diagnostics, file, result);
             return false;
         }
-        scans.push_back(scanSystemVerilog(read.buffer, sources.bufferText(read.buffer)));
+        read.push_back(result.buffer);
+        scans.push_back(scanSystemVerilog(result.buffer, sources.bufferText(result.buffer)));
     }
 
     // Ordered rather than hash-based, so that two files declaring the same package resolve the
@@ -397,6 +402,11 @@ bool inferCompileOrder(std::span<const std::filesystem::path> files, SourceManag
 
     ordered.reserve(order.size());
     for (const std::size_t index : order) ordered.push_back(graph.path(index));
+
+    if (buffers != nullptr) {
+        buffers->reserve(order.size());
+        for (const std::size_t index : order) buffers->push_back(read[index]);
+    }
     return true;
 }
 

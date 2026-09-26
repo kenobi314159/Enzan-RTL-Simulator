@@ -98,11 +98,13 @@ bool Session::analyse(const AnalysisRequest& request) {
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
     std::vector<std::filesystem::path> ordered;
-    if (!inferCompileOrder(files, sources, diagnostics, ordered)) return false;
+    std::vector<BufferId> buffers;
+    if (!inferCompileOrder(files, sources, diagnostics, ordered, &buffers)) return false;
 
-    // The pre-scan has already read and buffered every file, so the library's keys cost no
-    // further I/O: the text it hashes is the text already in hand.
-    const std::vector<eir::LibrarySource> stored = librarySources(ordered);
+    // The pre-scan has already read and buffered every file. Those buffers go on to both the
+    // library and the frontend, so each file is read once and has exactly one buffer — which
+    // is what lets anything downstream compare a location's buffer and mean it.
+    const std::vector<eir::LibrarySource> stored = librarySources(ordered, buffers);
 
     loadedFromLibrary = false;
     if (library.isOpen()) {
@@ -118,6 +120,7 @@ bool Session::analyse(const AnalysisRequest& request) {
 
     frontend::sv::Options options;
     options.files = ordered;
+    options.buffers = buffers;
     options.defines = defines;
     options.includeDirectories = includeDirectories;
 
@@ -144,23 +147,12 @@ bool Session::openLibrary(const std::filesystem::path& path) {
 }
 
 std::vector<eir::LibrarySource>
-Session::librarySources(std::span<const std::filesystem::path> ordered) const {
-    // The buffer for each path is the one the compile-order pre-scan read, found by name. The
-    // manager does not deduplicate, so the *last* buffer of a given name is the current one:
-    // an earlier `vlog` of the same file left an older copy behind it.
-    std::map<std::string, BufferId, std::less<>> latest;
-    for (std::size_t index = 0; index < sources.bufferCount(); ++index) {
-        const BufferId buffer = BufferId::fromIndex(static_cast<std::uint32_t>(index));
-        latest.insert_or_assign(std::string(sources.bufferName(buffer)), buffer);
-    }
-
+Session::librarySources(std::span<const std::filesystem::path> ordered,
+                        std::span<const BufferId> buffers) {
     std::vector<eir::LibrarySource> stored;
     stored.reserve(ordered.size());
-    for (const std::filesystem::path& file : ordered) {
-        const auto found = latest.find(file.string());
-        if (found == latest.end()) continue;
-        stored.push_back({.path = file, .buffer = found->second});
-    }
+    for (std::size_t index = 0; index < ordered.size() && index < buffers.size(); ++index)
+        stored.push_back({.path = ordered[index], .buffer = buffers[index]});
     return stored;
 }
 

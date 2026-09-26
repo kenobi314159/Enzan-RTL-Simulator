@@ -33,9 +33,12 @@ std::string_view leafOf(std::string_view path) {
 /// Maps a finished run onto what the client is told the kernel is now doing.
 SimulationState stateAfter(runtime::RunStatus status) {
     switch (status) {
-    // Both mean the kernel stopped where it was asked to and can be told to carry on.
+    // All three mean the kernel stopped where it was asked to and can be told to carry on.
+    // A breakpoint is one of those: the design is intact and another run continues from the
+    // instruction it stopped before.
     case runtime::RunStatus::TimeLimitReached:
-    case runtime::RunStatus::Interrupted: return SimulationState::Idle;
+    case runtime::RunStatus::Interrupted:
+    case runtime::RunStatus::AtBreakpoint: return SimulationState::Idle;
 
     // `$finish` and running out of events are both ends of the simulation; only a restart
     // brings the design back.

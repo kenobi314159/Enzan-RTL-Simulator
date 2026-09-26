@@ -259,8 +259,9 @@ private:
     parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;
 
     /// Pairs each analysed file with the buffer holding its text, for the library's keys.
-    [[nodiscard]] std::vector<eir::LibrarySource>
-    librarySources(std::span<const std::filesystem::path> ordered) const;
+    [[nodiscard]] static std::vector<eir::LibrarySource>
+    librarySources(std::span<const std::filesystem::path> ordered,
+                   std::span<const BufferId> buffers);
 
     /// Opens `writer` on `path` and attaches it to the kernel.
     bool addWriter(std::unique_ptr<wavedb::WaveformWriter> writer,

@@ -84,10 +84,19 @@ struct SourceScan {
 /// order is observable — in diagnostics, and in which of two duplicate definitions is reported
 /// as the redefinition — and section 3.8 makes observable ordering reproducible.
 ///
+/// `buffers`, when given, receives the buffer holding each ordered file's text.
+///
+/// The pre-scan has read every source already, and the frontend needs the same text. Handing
+/// the buffers on means each file is read once and has one buffer: the manager does not
+/// deduplicate, and a second buffer per file makes a location's identity depend on which pass
+/// produced it, which silently breaks everything downstream that compares locations by
+/// buffer — the analysis library, and a source-line breakpoint.
+///
 /// Returns false having reported through `diagnostics`. Files that cannot be read are reported
 /// and the ordering fails, because an unreadable file cannot be shown to be free of
 /// dependencies.
 bool inferCompileOrder(std::span<const std::filesystem::path> files, SourceManager& sources,
-                       DiagnosticEngine& diagnostics, std::vector<std::filesystem::path>& ordered);
+                       DiagnosticEngine& diagnostics, std::vector<std::filesystem::path>& ordered,
+                       std::vector<BufferId>* buffers = nullptr);
 
 } // namespace enzan::control
