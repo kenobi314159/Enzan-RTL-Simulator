@@ -603,6 +603,22 @@ TEST_F(CommandsTest, DisablingABreakpointStopsItFiringWithoutForgettingIt) {
     EXPECT_FALSE(session.isFinished());
 }
 
+TEST_F(CommandsTest, DisablingWorksUnderARenamedCommand) {
+    // The interpreter supports renaming a command — it is how the vocabulary is layered and how
+    // a user's script adjusts it — so a command that decided what to do by looking at the name
+    // it was invoked by would do the opposite of what was asked. `disablebp` reading its own
+    // name would have *enabled* the breakpoint here.
+    load();
+    const std::string id = ok("bp counter.sv " + std::to_string(CountingLine));
+
+    ok("rename disablebp nobp");
+    ok("nobp " + id);
+    EXPECT_NE(ok("bp").find("disabled"), std::string::npos);
+
+    ok("run -all");
+    EXPECT_TRUE(session.isFinished()) << "the renamed command enabled it instead";
+}
+
 TEST_F(CommandsTest, EnablingSomethingThatIsNotThereSaysSo) {
     load();
     EXPECT_EQ(eval("enablebp 99").status, EvalStatus::Error);

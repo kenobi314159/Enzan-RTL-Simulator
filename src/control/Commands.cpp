@@ -169,6 +169,8 @@ public:
     void reportRunOutcome(runtime::RunStatus status) const;
 
 private:
+    CommandResult changeBreakpoint(CommandArguments arguments, bool enable);
+
     Interpreter* interpreter;
     Session* session;
     SourceManager* sources;
@@ -465,24 +467,35 @@ CommandResult Vocabulary::deleteBreakpoint(CommandArguments arguments) {
 }
 
 /// The body of both `enablebp` and `disablebp`, which differ only in the flag.
-CommandResult Vocabulary::enableBreakpoint(CommandArguments arguments) {
+///
+/// The flag is a parameter rather than something read back off `arguments[0]`. The name a
+/// command was invoked by is not the command: the interpreter supports renaming one, which is
+/// how the vocabulary is layered and how a user's script adjusts it, and a `disablebp` reached
+/// under any other name would silently have *enabled* the breakpoint. It also keeps the usage
+/// and error text naming the command the user actually typed.
+CommandResult Vocabulary::changeBreakpoint(CommandArguments arguments, bool enable) {
+    const std::string name = enable ? "enablebp" : "disablebp";
+
     CommandResult failure;
-    if (!requireSimulation("enablebp", failure)) return failure;
-    if (arguments.size() != 2) return usage("enablebp id");
+    if (!requireSimulation(name, failure)) return failure;
+    if (arguments.size() != 2) return usage(name + " id");
 
     const std::optional<std::uint64_t> id = parseUnsigned(arguments[1]);
     if (!id.has_value())
         return CommandResult::error("'" + std::string(arguments[1])
                                     + "' is not a breakpoint number");
 
-    const bool enable = arguments[0] != "disablebp";
     if (!session->setBreakpointEnabled(static_cast<std::uint32_t>(*id), enable))
         return CommandResult::error("there is no breakpoint " + std::string(arguments[1]));
     return CommandResult::ok();
 }
 
+CommandResult Vocabulary::enableBreakpoint(CommandArguments arguments) {
+    return changeBreakpoint(arguments, true);
+}
+
 CommandResult Vocabulary::disableBreakpoint(CommandArguments arguments) {
-    return enableBreakpoint(arguments);
+    return changeBreakpoint(arguments, false);
 }
 
 CommandResult Vocabulary::step(CommandArguments arguments) {
@@ -758,6 +771,10 @@ CommandResult Vocabulary::add(CommandArguments arguments) {
     if (arguments.size() < 2) return usage("add wave path ?path ...?");
     if (arguments[1] != "wave")
         return CommandResult::error("add takes `wave`, not '" + std::string(arguments[1]) + '\'');
+
+    // Answered here rather than by `log`, which would name itself in a message about a command
+    // the user did not type.
+    if (arguments.size() < 3) return usage("add wave ?-r? path ?path ...?");
 
     // `add wave` and `log` name the same thing in a headless kernel: which signals are
     // recorded. Which of them a *window* then shows is the GUI's business, and the GUI does
