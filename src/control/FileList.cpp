@@ -249,12 +249,17 @@ public:
         if (!tokenizer.tokenize(tokens)) return false;
 
         stack.push_back(key);
-        const bool ok = process(tokens, resolved.parent_path());
+        const bool ok = process(tokens, resolved.parent_path(), anchor);
         stack.pop_back();
         return ok;
     }
 
 private:
+    /// Resolves one relative path against the anchor that governs the list it was named in.
+    ///
+    /// The same rule applies to a nested list's own path and to every path *inside* a list,
+    /// which is what makes `-F` mean what it means elsewhere: a list reached by `-F` was
+    /// written as though the tool had been run from beside it.
     static std::filesystem::path resolve(const std::filesystem::path& path, Anchor anchor,
                                          const std::filesystem::path& parentDirectory) {
         if (path.is_absolute() || anchor == Anchor::WorkingDirectory) return path;
@@ -272,7 +277,10 @@ private:
         return &tokens[++index];
     }
 
-    bool process(const std::vector<Token>& tokens, const std::filesystem::path& directory) {
+    /// Reads one list's tokens. `anchor` is how *this* list's own relative paths resolve, and
+    /// `directory` is where it sits.
+    bool process(const std::vector<Token>& tokens, const std::filesystem::path& directory,
+                 Anchor anchor) {
         for (std::size_t index = 0; index < tokens.size(); ++index) {
             const Token& token = tokens[index];
             const std::string_view text = token.text;
@@ -280,23 +288,23 @@ private:
             if (text == "-f" || text == "-F") {
                 const Token* nested = value(tokens, index);
                 if (nested == nullptr) return false;
-                const Anchor anchor =
+                const Anchor nestedAnchor =
                     text == "-F" ? Anchor::ListDirectory : Anchor::WorkingDirectory;
-                if (!read(nested->text, anchor, directory)) return false;
+                if (!read(nested->text, nestedAnchor, directory)) return false;
                 continue;
             }
 
             if (text == "-v") {
                 const Token* file = value(tokens, index);
                 if (file == nullptr) return false;
-                result.libraryFiles.emplace_back(file->text);
+                result.libraryFiles.push_back(resolve(file->text, anchor, directory));
                 continue;
             }
 
             if (text == "-y") {
                 const Token* dir = value(tokens, index);
                 if (dir == nullptr) return false;
-                result.libraryDirectories.emplace_back(dir->text);
+                result.libraryDirectories.push_back(resolve(dir->text, anchor, directory));
                 continue;
             }
 
@@ -307,7 +315,9 @@ private:
             if (text == "-sv") continue;
 
             if (text.starts_with("+incdir+")) {
-                if (!appendPlusList(token, text.substr(8), result.includeDirectories)) return false;
+                if (!appendPlusList(token, text.substr(8), anchor, directory,
+                                    result.includeDirectories))
+                    return false;
                 continue;
             }
 
@@ -330,15 +340,17 @@ private:
                 return false;
             }
 
-            result.files.emplace_back(text);
+            result.files.push_back(resolve(text, anchor, directory));
         }
 
         return true;
     }
 
-    bool appendPlusList(const Token& token, std::string_view tail,
+    bool appendPlusList(const Token& token, std::string_view tail, Anchor anchor,
+                        const std::filesystem::path& directory,
                         std::vector<std::filesystem::path>& out) {
-        for (const std::string_view part : splitPlusList(tail)) out.emplace_back(part);
+        for (const std::string_view part : splitPlusList(tail))
+            out.push_back(resolve(part, anchor, directory));
         return checkNotEmpty(token, tail);
     }
 

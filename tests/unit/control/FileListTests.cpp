@@ -174,8 +174,45 @@ TEST_F(FileListTest, MinusCapitalFResolvesAgainstTheListsOwnDirectory) {
     workspace.write("sub/inner.f", "b.sv\n");
     workspace.write("outer.f", "-F sub/inner.f\n");
 
+    // The nested list is found beside the list that named it, and so is everything *inside* it:
+    // `-F` says the list was written as though the tool had been run from its own directory
+    // (DESIGN_GUIDE.md section 8.2). Anchoring only the list's own path and not its contents
+    // would send the analysis looking for `b.sv` in the working directory, where it is not.
     ASSERT_TRUE(read("outer.f"));
-    EXPECT_EQ(fileNames(), (std::vector<std::string>{"b.sv"}));
+    EXPECT_EQ(fileNames(), (std::vector<std::string>{(workspace / "sub" / "b.sv").string()}));
+}
+
+TEST_F(FileListTest, MinusCapitalFAnchorsTheOptionsInsideItToo) {
+    workspace.write("sub/inner.f", "+incdir+include\n-v cells.v\n-y cells\n");
+    workspace.write("outer.f", "-F sub/inner.f\n");
+
+    ASSERT_TRUE(read("outer.f"));
+    ASSERT_EQ(list.includeDirectories.size(), 1U);
+    EXPECT_EQ(list.includeDirectories.front(), workspace / "sub" / "include");
+    ASSERT_EQ(list.libraryFiles.size(), 1U);
+    EXPECT_EQ(list.libraryFiles.front(), workspace / "sub" / "cells.v");
+    ASSERT_EQ(list.libraryDirectories.size(), 1U);
+    EXPECT_EQ(list.libraryDirectories.front(), workspace / "sub" / "cells");
+}
+
+TEST_F(FileListTest, AnAbsolutePathInsideAMinusCapitalFListIsLeftAlone) {
+    const std::string absolute = (workspace / "rtl" / "a.sv").string();
+    workspace.write("sub/inner.f", absolute + "\n");
+    workspace.write("outer.f", "-F sub/inner.f\n");
+
+    ASSERT_TRUE(read("outer.f"));
+    EXPECT_EQ(fileNames(), (std::vector<std::string>{absolute}));
+}
+
+TEST_F(FileListTest, AMinusFListInsideAMinusCapitalFOneGoesBackToTheWorkingDirectory) {
+    // Each switch says how the list it names was written, and `-f` says "from where the tool was
+    // run" whatever the list containing it was reached by. Nesting does not accumulate.
+    workspace.write("sub/inner.f", "-f plain.f\n");
+    workspace.write("plain.f", "c.sv\n");
+    workspace.write("outer.f", "-F sub/inner.f\n");
+
+    ASSERT_TRUE(read("outer.f"));
+    EXPECT_EQ(fileNames(), (std::vector<std::string>{"c.sv"}));
 }
 
 TEST_F(FileListTest, MinusFResolvesAgainstTheWorkingDirectory) {
