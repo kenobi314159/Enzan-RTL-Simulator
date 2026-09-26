@@ -211,26 +211,24 @@ endif()
 # Tcl — control and configuration language (DESIGN_GUIDE.md section 8.1)
 # ---------------------------------------------------------------------------
 
-# Needed by the GUI as well as by the control layer, and that is not an accident of the
-# implementation. Section 8.1 makes Tcl *the* configuration language with no second format, and
-# names the GUI theme as a Tcl script setting colour variables. The control layer's command
-# vocabulary is M3; the theme is M2, and it needs an interpreter to evaluate.
-if(ENZAN_ENABLE_TCL OR ENZAN_BUILD_GUI)
-  # No version is requested here: CMake's FindTCL module reports no version, so a
-  # version constraint would make the package unfindable rather than
-  # version-checked. The 8.6 requirement is checked in the code that embeds the
-  # interpreter instead, against TCL_MAJOR_VERSION and TCL_MINOR_VERSION from tcl.h.
-  find_package(TCL QUIET)
-  if(NOT TCL_FOUND)
-    enzan_dependency_missing(
-      NAME TCL
-      PURPOSE "the embedded Tcl control and configuration layer, including the GUI theme"
-      ARCH tcl
-      DEBIAN tcl-dev
-      FEDORA tcl-devel)
-  endif()
-  message(STATUS "Using Tcl ${TCL_LIBRARY}")
+# Not optional. Section 8.1 makes Tcl *the* control and configuration language with no second
+# format anywhere in the tool: the command vocabulary, the file lists and the GUI theme are all
+# Tcl, and from M3 every path into the simulator goes through a control session.
+#
+# No version is requested here: CMake's FindTCL module reports no version, so a version
+# constraint would make the package unfindable rather than version-checked. The 8.6 requirement
+# is checked in the code that embeds the interpreter instead, against TCL_MAJOR_VERSION and
+# TCL_MINOR_VERSION from tcl.h.
+find_package(TCL QUIET)
+if(NOT TCL_FOUND)
+  enzan_dependency_missing(
+    NAME TCL
+    PURPOSE "the embedded Tcl control and configuration language"
+    ARCH tcl
+    DEBIAN tcl-dev
+    FEDORA tcl-devel)
 endif()
+message(STATUS "Using Tcl ${TCL_LIBRARY}")
 
 # ---------------------------------------------------------------------------
 # Qt 6 — graphical front end (DESIGN_GUIDE.md section 10.1), milestone M2

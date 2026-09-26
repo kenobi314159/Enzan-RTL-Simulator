@@ -621,7 +621,10 @@ GUI, and VCD/FST remain the interchange path permanently.
 
 Tcl is the control and configuration language, matching the convention users
 already know from Questa, Vivado and Xcelium. Tcl 8.6 or later is embedded in
-the kernel.
+the kernel, and it is **not optional**: from M3 every path into the simulator —
+a batch run, a served kernel, a script — goes through a control session, and a
+build without the interpreter would be a configuration nobody runs and nothing
+would notice breaking.
 
 The command vocabulary SHOULD follow Questa/Modelsim naming where practical, so
 that existing user muscle memory and existing scripts transfer with minimal

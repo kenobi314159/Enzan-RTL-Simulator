@@ -136,7 +136,7 @@ endif()
 # case that does exactly that and nothing else: no command-line switch appears in it, and every
 # step — analysis, elaboration, recording, running, examining, forcing and restarting — is a
 # command from the vocabulary of section 8.1.
-if(ENZAN_ENABLE_TCL)
+if(TRUE)
   add_test(NAME golden.counter.do
            COMMAND enzan --do "${CMAKE_CURRENT_SOURCE_DIR}/do/counter.do"
                    "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv"
@@ -150,7 +150,7 @@ endif()
 
 # Source debugging from the control language: a breakpoint on an HDL line, stepping by line,
 # and `examine` on a design stopped part way through (section 10.4).
-if(ENZAN_ENABLE_TCL)
+if(TRUE)
   add_test(NAME golden.counter.debug
            COMMAND enzan --do "${CMAKE_CURRENT_SOURCE_DIR}/do/debug.do"
                    "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv")
@@ -164,7 +164,7 @@ endif()
 # The other half of M3's exit criteria: libraries reused across runs without re-analysis.
 # Reuse is a property of two processes, so this one is driven from a shell script rather than
 # from a `do` file.
-if(ENZAN_ENABLE_TCL)
+if(TRUE)
   add_test(NAME golden.library
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh" $<TARGET_FILE:enzan>
                    "${CMAKE_CURRENT_SOURCE_DIR}/do/library.do"

@@ -1104,8 +1104,9 @@ TEST_F(DebugFixture, ADepositOrForceOnASignalThatDoesNotExistIsRefused) {
 
 /// A stand-in for the Tcl interpreter, which lives on the other side of `CommandEvaluator`.
 ///
-/// The server must work whether or not the process driving it has an interpreter — a build with
-/// -DENZAN_ENABLE_TCL=OFF has none — so the seam is an interface and this is what tests it.
+/// An interface rather than an interpreter the server owns, so that `ipc_server` does not link
+/// the Tcl embedding and a kernel embedded in something that has no interpreter still serves.
+/// This is what tests that seam.
 class RecordingEvaluator final : public enzan::ipc::CommandEvaluator {
 public:
     bool evaluate(std::string_view script, std::string& result, std::string& error) override {
@@ -1218,17 +1219,17 @@ TEST_F(CommandFixture, TheKernelLooksBusyWhileACommandIsRunning) {
     EXPECT_NE(server->state(), SimulationState::Running) << "the flag was left set";
 }
 
-TEST_F(ServerFixture, ACommandIsRefusedWhenTheKernelHasNoInterpreter) {
+TEST_F(ServerFixture, ACommandIsRefusedWhenTheKernelHasNoEvaluator) {
     connectClient();
 
-    // A build with -DENZAN_ENABLE_TCL=OFF has no interpreter, and a front end whose entry is
-    // answered with the reason is better than one that appears to work.
+    // A front end whose entry is answered with the reason is better than one that appears to
+    // work. The fixture registers no evaluator, which is the case this pins.
     CommandMessage message;
     message.script = "run 100ns";
     request(MessageType::Command, message);
 
     const auto failure = expect<FailureMessage>(MessageType::Failure);
-    EXPECT_NE(failure.reason.find("ENZAN_ENABLE_TCL"), std::string::npos) << failure.reason;
+    EXPECT_NE(failure.reason.find("no commands"), std::string::npos) << failure.reason;
 }
 
 } // namespace

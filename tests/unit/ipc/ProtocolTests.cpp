@@ -277,9 +277,12 @@ TEST(Protocol, SmallMessagesSurviveTheRoundTrip) {
 TEST(Protocol, ASourceFileSurvivesTheRoundTrip) {
     SourceMessage sent;
     sent.path = "/rtl/counter.sv";
-    // Including the bytes a text field is most likely to be mangled by: a tab, a CR, a NUL and
-    // a non-ASCII byte all appear in real sources and none may be translated in transit.
-    sent.text = std::string("module m;\r\n\tlogic a;\nendmodule\n\xE2\x9C\x93", 40);
+    // Built up rather than written as one literal with a length, because the bytes a text
+    // field is most likely to be mangled by include a NUL: a tab, a CR, a NUL and a non-ASCII
+    // byte all appear in real sources and none may be translated in transit.
+    sent.text = "module m;\r\n\tlogic a;\nendmodule\n";
+    sent.text += '\0';
+    sent.text += "\xE2\x9C\x93";
     sent.found = true;
 
     const SourceMessage got = roundTrip(MessageType::Source, sent);

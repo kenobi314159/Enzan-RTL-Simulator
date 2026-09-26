@@ -448,8 +448,9 @@ void KernelServer::onCommand(const Frame& frame) {
     }
 
     if (commands == nullptr) {
-        sendFailure("this kernel was built without the control language; configure it with "
-                    "-DENZAN_ENABLE_TCL=ON");
+        // A served kernel always has one; a kernel embedded in something else — a future PLI
+        // host, a test — may not, and saying so beats an entry that appears to work.
+        sendFailure("this kernel takes no commands");
         return;
     }
 

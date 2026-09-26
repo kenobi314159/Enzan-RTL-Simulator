@@ -94,14 +94,14 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 # nothing yet uses. The milestone each one belongs to is named here because
 # turning one on before its milestone will simply find nothing to build.
 #
-# The Tcl control layer is on, because from M3 it is how the kernel is driven
-# rather than an optional extra (DESIGN_GUIDE.md section 8.1). Tcl is small and
-# packaged everywhere; a build without it still produces a working `enzan`, with
-# `--do` and `--interactive` reporting what is missing.
+# There is deliberately no option for the Tcl control layer. Section 11.3 lists
+# Tcl as a required system dependency and section 8.1 makes it *the* control
+# language; from M3 every path into the simulator — a batch run, a served kernel,
+# a script — goes through a control session, so a build without it would be a
+# configuration nobody runs and that nothing would notice breaking.
 option(ENZAN_BUILD_TESTS "Build the unit test suites" ON)
 option(ENZAN_ENABLE_SYSTEMVERILOG "Build the slang-based SystemVerilog frontend (M1)" ON)
 option(ENZAN_ENABLE_VHDL "Build the NVC-based VHDL frontend (M6)" OFF)
-option(ENZAN_ENABLE_TCL "Build the embedded Tcl control layer (M3)" ON)
 option(ENZAN_BUILD_GUI "Build the Qt 6 graphical front end (M2)" OFF)
 option(ENZAN_ENABLE_JIT "Build the LLVM JIT backend (M8)" OFF)
 
@@ -168,7 +168,6 @@ message(STATUS "  Sanitizers ......... ${ENZAN_SANITIZERS}")
 message(STATUS "  Unit tests ......... ${ENZAN_BUILD_TESTS}")
 message(STATUS "  SystemVerilog ...... ${ENZAN_ENABLE_SYSTEMVERILOG}")
 message(STATUS "  VHDL ............... ${ENZAN_ENABLE_VHDL}")
-message(STATUS "  Tcl control layer .. ${ENZAN_ENABLE_TCL}")
 message(STATUS "  GUI ................ ${ENZAN_BUILD_GUI}")
 message(STATUS "  JIT ................ ${ENZAN_ENABLE_JIT}")
 message(STATUS "")

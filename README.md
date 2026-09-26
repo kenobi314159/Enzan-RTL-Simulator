@@ -61,6 +61,10 @@ sudo dnf install qt6-qtbase-devel
 If a dependency is missing, CMake stops with a message naming the package to
 install for your distribution rather than with a link error.
 
+Tcl is not optional. It is the control language (`--do`, `-i`, the Transcript's command entry),
+the format of the GUI theme, and what every path into the simulator goes through; there is no
+build without it to keep working.
+
 ### Running a simulation
 
 ```sh
@@ -311,7 +315,6 @@ cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
 | `ENZAN_BUILD_TESTS` | `ON` | build the unit test suites |
 | `ENZAN_ENABLE_SYSTEMVERILOG` | `ON` | build the slang-based frontend (M1) |
 | `ENZAN_ENABLE_VHDL` | `OFF` | build the NVC-based frontend (M6) |
-| `ENZAN_ENABLE_TCL` | `ON` | build the Tcl control layer; `--do` and `-i` need it |
 | `ENZAN_BUILD_GUI` | `OFF` | build the Qt 6 front end; needs Qt 6 and Tcl |
 | `ENZAN_ENABLE_JIT` | `OFF` | build the LLVM JIT backend (M8) |
 | `ENZAN_WERROR` | `OFF` | treat warnings as errors, as CI does |

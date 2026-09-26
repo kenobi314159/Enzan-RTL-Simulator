@@ -12,9 +12,7 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
                                       enzan::runtime enzan::wavedb enzan::ipc_server)
 endif()
 
-if(ENZAN_ENABLE_TCL)
-  target_link_libraries(enzan PRIVATE enzan::control enzan::control_session)
-endif()
+target_link_libraries(enzan PRIVATE enzan::control enzan::control_session)
 
 if(ENZAN_BUILD_TESTS)
   # End-to-end checks on the executable itself. The unit tests cover the version
@@ -85,7 +83,7 @@ if(ENZAN_BUILD_TESTS)
   set_tests_properties(cli.enzan.do_mentioned_in_help PROPERTIES PASS_REGULAR_EXPRESSION
                                                                   "--do <script>")
 
-  if(ENZAN_ENABLE_TCL)
+  if(TRUE)
     add_test(NAME cli.enzan.do_missing_script COMMAND enzan --do no-such-script.do)
     set_tests_properties(cli.enzan.do_missing_script PROPERTIES WILL_FAIL TRUE)
 

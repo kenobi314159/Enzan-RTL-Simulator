@@ -45,9 +45,6 @@ std::string buildDescription() {
 #ifdef ENZAN_WITH_VHDL
     append("vhdl");
 #endif
-#ifdef ENZAN_WITH_TCL
-    append("tcl");
-#endif
 #ifdef ENZAN_WITH_JIT
     append("jit");
 #endif

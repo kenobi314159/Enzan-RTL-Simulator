@@ -25,18 +25,16 @@
 #include <string_view>
 #include <vector>
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#include "control/Commands.h"
+#include "control/Interpreter.h"
 #include "control/Session.h"
+
+#include <unistd.h>
+
+#ifdef ENZAN_WITH_SYSTEMVERILOG
 #include "ipc/KernelServer.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
-#endif
-
-#ifdef ENZAN_WITH_TCL
-#include "control/Commands.h"
-#include "control/Interpreter.h"
-
-#include <unistd.h>
 #endif
 
 namespace {
@@ -327,7 +325,6 @@ ExitStatus serve(const Invocation& invocation, enzan::control::Session& session,
     enzan::ipc::KernelServer server(session, diagnostics, serverOptions);
     server.start();
 
-#ifdef ENZAN_WITH_TCL
     // The front end's command entry reaches the same interpreter a `do` file does, acting on
     // the same session. Two interpreters, or a protocol with a request per command, would be a
     // second control surface — which is the thing section 8.1 exists to prevent.
@@ -356,9 +353,6 @@ ExitStatus serve(const Invocation& invocation, enzan::control::Session& session,
 
     TclCommands commands(interpreter);
     if (interpreter.valid()) server.setCommandEvaluator(&commands);
-#else
-    static_cast<void>(sources);
-#endif
 
     std::string error;
     if (!server.listen(invocation.listenPath, error)) {
@@ -415,8 +409,6 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
 }
 
 #endif // ENZAN_WITH_SYSTEMVERILOG
-
-#ifdef ENZAN_WITH_TCL
 
 /// Reads commands from the standard input until end of file or `quit`.
 ///
@@ -499,8 +491,6 @@ ExitStatus control(const Invocation& invocation, enzan::SourceManager& sources,
     return ExitStatus::Success;
 }
 
-#endif // ENZAN_WITH_TCL
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -582,16 +572,7 @@ int main(int argc, char** argv) {
     enzan::TextDiagnosticConsumer consumer(sources, std::cerr);
     diagnostics.addConsumer(consumer);
 
-    if (scripted) {
-#ifdef ENZAN_WITH_TCL
-        return static_cast<int>(control(invocation, sources, diagnostics));
-#else
-        diagnostics.report(
-            enzan::DiagCode::NotYetImplemented, enzan::SourceLocation(),
-            "the control language in a build configured with -DENZAN_ENABLE_TCL=OFF");
-        return static_cast<int>(ExitStatus::Failure);
-#endif
-    }
+    if (scripted) return static_cast<int>(control(invocation, sources, diagnostics));
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
     return static_cast<int>(simulate(invocation, sources, diagnostics));
