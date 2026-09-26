@@ -1593,6 +1593,52 @@ TEST(Kernel, BreakpointsSurviveReinitialisation) {
     EXPECT_EQ(simulation.run(), RunStatus::AtBreakpoint);
 }
 
+TEST(Kernel, ABreakpointFiresAgainAfterReinitialisation) {
+    // The instruction a pause stopped before is remembered, so that continuing runs it instead
+    // of stopping at it a second time. Reinitialising is the start of a new run and must forget
+    // it: otherwise the first run after a `restart` walks straight past the breakpoint, and the
+    // design stops somewhere different every other time it is run from the beginning.
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t id =
+        simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 3);
+    ASSERT_NE(id, 0U);
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+
+    simulation.simulationKernel().initialize();
+
+    EXPECT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+    EXPECT_EQ(simulation.simulationKernel().stopPoint().breakpointId, id);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "11") << "line 3 ran anyway";
+}
+
+TEST(Kernel, ReinitialisingForgetsWhereTheLastRunStopped) {
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+    ASSERT_NE(simulation.simulationKernel().addBreakpoint(Simulation::SourceBuffer, 3), 0U);
+    ASSERT_EQ(simulation.run(), RunStatus::AtBreakpoint);
+    ASSERT_TRUE(simulation.simulationKernel().stopPoint().valid());
+
+    simulation.simulationKernel().initialize();
+
+    // A design at time zero has not stopped anywhere, and a marker on the line the previous run
+    // stopped at would point at something nothing is waiting on.
+    EXPECT_FALSE(simulation.simulationKernel().stopPoint().valid());
+}
+
+TEST(Kernel, ReinitialisingCancelsAPendingStep) {
+    // A step asked for belongs to the run it was asked of, exactly as a force does.
+    Simulation simulation(makeSteppableDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    simulation.simulationKernel().requestStep();
+    simulation.simulationKernel().initialize();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "22");
+}
+
 TEST(Kernel, AResumedRunMatchesAnUninterruptedOne) {
     // The whole point of stopping between instructions rather than anywhere: section 3.8
     // requires a resumed run to produce what an uninterrupted one would have.

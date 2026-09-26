@@ -97,6 +97,23 @@ void Kernel::initialize() {
     // be state the user did not ask to keep.
     forcedSignals.clear();
 
+    // Nor does anything a pause left behind. The remembered instruction exists so that
+    // continuing does not stop at the same breakpoint twice, and carrying it across an
+    // initialise would make the first run after a `restart` skip that breakpoint — a design
+    // that stops somewhere different every other time it is run from the beginning. The
+    // breakpoints themselves stay, because the user put them there.
+    pausedAtBreakpoint = false;
+    pausedProcess = NoPausedProcess;
+    pausedPc = 0;
+
+    // A step asked for during the run that has gone, and the place it stopped, belong to that
+    // run. `stopPoint` is what a transcript line and the source window's marker are drawn from,
+    // and a design at time zero has not stopped anywhere yet.
+    stepping = false;
+    stepFrom = SourceLocation();
+    lastStop = StopPoint();
+    debugging = !resolved.empty();
+
     finishRequested = false;
     errorRequested = false;
     finishStatus = 0;
