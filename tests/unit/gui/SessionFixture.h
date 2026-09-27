@@ -217,15 +217,28 @@ protected:
         return kernelSession->designImage()->findSignal(path);
     }
 
-    /// Asks for a scope's objects and waits for the answer.
+    /// Asks for a scope's objects and waits for the answer to *that* scope.
+    ///
+    /// The path is compared rather than the first reply taken, because a scope's objects arrive
+    /// by the same message whoever asked for them: with a `MainWindow` in the test, which asks
+    /// about the top level as soon as it has the hierarchy, a reply meant for the window was
+    /// being handed back here as though it were this scope's.
+    ///
+    /// Waiting on a flag rather than on the answer being non-empty, so that a scope which really
+    /// declares nothing returns instead of spinning until the timeout.
     QVector<gui::SignalInfo> objectsOf(const QString& scope) {
         QVector<gui::SignalInfo> received;
-        const auto connection = QObject::connect(
-            session.get(), &gui::KernelSession::objectsReceived,
-            [&](const QString&, const QVector<gui::SignalInfo>& objects) { received = objects; });
+        bool answered = false;
+        const auto connection =
+            QObject::connect(session.get(), &gui::KernelSession::objectsReceived,
+                             [&](const QString& path, const QVector<gui::SignalInfo>& objects) {
+                                 if (path != scope) return;
+                                 received = objects;
+                                 answered = true;
+                             });
 
         session->queryObjects(scope);
-        pumpUntil([&] { return !received.isEmpty(); });
+        pumpUntil([&] { return answered; });
         QObject::disconnect(connection);
         return received;
     }

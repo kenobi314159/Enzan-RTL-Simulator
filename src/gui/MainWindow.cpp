@@ -112,7 +112,34 @@ void MainWindow::buildDocks() {
     structureView->setModel(designModel);
     structureView->setHeaderHidden(false);
     structureView->setUniformRowHeights(true);
+    structureView->setContextMenuPolicy(Qt::ActionsContextMenu);
     connect(structureView, &QTreeView::clicked, this, &MainWindow::onScopeSelected);
+
+    // Adding a whole module's signals from here rather than selecting them in the Objects
+    // window: the reader has just found the module in the hierarchy, and making them click it,
+    // move to another pane, select everything and add it is four steps to say one thing.
+    //
+    // Four entries rather than two with modifiers, because each is a different question — this
+    // module or its subtree, kept together or not — and a menu that hides half of its answers
+    // behind a held key is a menu that only its author knows the whole of.
+    struct ScopeInsert {
+        const char* label;
+        bool recursive;
+        bool grouped;
+    };
+
+    for (const ScopeInsert& entry :
+         {ScopeInsert{"Insert module signals", false, false},
+          ScopeInsert{"Insert module signals recursive", true, false},
+          ScopeInsert{"Insert grouped module signals", false, true},
+          ScopeInsert{"Insert grouped module signals recursive", true, true}}) {
+        auto* action = new QAction(tr(entry.label), structureView);
+        const bool recursive = entry.recursive;
+        const bool grouped = entry.grouped;
+        connect(action, &QAction::triggered, this,
+                [this, recursive, grouped] { insertScopeSignals(recursive, grouped); });
+        structureView->addAction(action);
+    }
 
     auto* structureDock = new QDockWidget(tr("Structure"), this);
     structureDock->setObjectName(QStringLiteral("structure"));
@@ -394,6 +421,12 @@ void MainWindow::onWelcomed() {
 }
 
 void MainWindow::onDesignChanged() {
+    // A new design's scopes are not the old one's, so an insert still waiting on a reply is
+    // waiting for a scope that may no longer exist, and its group belongs to a window that is
+    // about to be rebuilt.
+    pendingInserts.clear();
+    objectsScope.clear();
+
     designModel->setInstances(session->instances());
     structureView->expandToDepth(1);
     sourceView->setFiles(session->sourceFiles());
@@ -414,6 +447,9 @@ void MainWindow::onScopeSelected(const QModelIndex& index) {
     const QString path = designModel->pathAt(index);
     if (path.isEmpty()) return;
 
+    // Recorded before the request, because the reply is what decides whether the pane is
+    // repainted and a reply for some other scope must not be able to.
+    objectsScope = path;
     session->queryObjects(path);
     showSourceOfScope(path);
 }
@@ -453,6 +489,24 @@ void MainWindow::stepOneLine() {
 
 void MainWindow::onObjectsReceived(const QString& instancePath,
                                    const QVector<SignalInfo>& objects) {
+    // Anything waiting on this scope is served first. More than one insert may be — a reader
+    // can ask for a subtree twice — so every match is taken rather than the first.
+    for (int index = 0; index < pendingInserts.size();) {
+        if (pendingInserts[index].scope != instancePath) {
+            ++index;
+            continue;
+        }
+
+        const int group = pendingInserts[index].group;
+        pendingInserts.removeAt(index);
+        insertObjectsIntoWave(objects, group);
+    }
+
+    // And the Objects window, but only when this is the scope it is showing. A recursive insert
+    // asks about every scope in a subtree, and without this test the pane would end up showing
+    // whichever of them answered last — a module the reader never clicked.
+    if (instancePath != objectsScope) return;
+
     objectsModel->setObjects(instancePath, objects);
     objectsModel->setCursorTime(waveView->activeCursorTime());
     objectsView->resizeColumnsToContents();
@@ -549,6 +603,55 @@ void MainWindow::addSelectedObjectsToWave() {
     // unpacked every bus in the window each time a signal was added, throwing away whatever
     // the reader had chosen to have open. A new signal arrives packed, and what was already
     // there stays as it was.
+}
+
+void MainWindow::insertScopeSignals(bool recursive, bool grouped) {
+    const QString root = designModel->pathAt(structureView->currentIndex());
+    if (root.isEmpty()) return;
+
+    // The scopes to take, in the order the kernel sent the tree — which is elaboration order,
+    // and is the order the Structure window shows them in. Taken from the tree the window
+    // already holds rather than asked for, so that the set is decided at once and the groups
+    // can be made in it before any reply arrives.
+    QStringList scopes;
+    if (!recursive) {
+        scopes << root;
+    } else {
+        const QString prefix = root + QLatin1Char('/');
+        for (const ipc::InstanceEntry& instance : session->instances()) {
+            const QString path = QString::fromStdString(instance.path);
+
+            // The prefix is compared with the separator attached, so that `/tb/u_dut` does not
+            // take `/tb/u_dut2` with it.
+            if (path == root || path.startsWith(prefix)) scopes << path;
+        }
+    }
+
+    for (const QString& scope : scopes) {
+        // The group exists before its contents do, and every group of one insert is made before
+        // any reply can arrive, which is what puts them in tree order rather than in the order
+        // the kernel happened to answer. Flat, by the argument on `insertScopeSignals`.
+        const int group = grouped ? waveModel->addGroup(scope) : -1;
+        pendingInserts.append(PendingInsert{.scope = scope, .group = group});
+        session->queryObjects(scope);
+    }
+}
+
+void MainWindow::insertObjectsIntoWave(const QVector<SignalInfo>& objects, int group) {
+    for (const SignalInfo& info : objects) {
+        // Signals only. A parameter is a constant the elaboration settled on, so its row is a
+        // flat line from the beginning of time to the end of it; a reader who asked for a
+        // module's signals did not ask for its parameterisation spelled out in the wave window.
+        // They remain one click away in the Objects window.
+        if (info.isParameter()) continue;
+        waveModel->addSignal(info, group);
+    }
+
+    // A module that declares no signals leaves no group behind. A row named after a scope with
+    // nothing in it says only that the scope was asked about, which is not worth a line.
+    if (group < 0) return;
+    const WaveRow* groupRow = waveModel->row(group);
+    if (groupRow != nullptr && groupRow->children.isEmpty()) waveModel->removeRow(group);
 }
 
 void MainWindow::depositOrForceSelectedObject(bool force) {
