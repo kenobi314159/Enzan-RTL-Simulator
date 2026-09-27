@@ -100,6 +100,12 @@ struct Change {
 /// Values are read only for the columns that are constant enough to print one, which bounds
 /// reads — and therefore chunk reloads — by the pixel count too.
 ///
+/// **That bound is for a whole signal.** Summarising a *bit range* of one cannot be answered from
+/// the index, because the index counts changes of the signal and says nothing about which bits
+/// each of them moved; the `sample` overload taking a range reads values instead and costs what
+/// the changes in the range cost. It exists because the alternative was a wrong picture rather
+/// than a slow one — see that overload for the whole of the argument.
+///
 /// The database is written by one producer in increasing time order and read concurrently by
 /// the view (section 7.1 requires live streaming). It is not thread-safe: the GUI process holds
 /// its own copy, fed over IPC, and the kernel process holds the authoritative one.
@@ -190,6 +196,29 @@ public:
     /// `out` must not be empty.
     void sample(std::uint32_t recordIndex, runtime::SimTime from, runtime::SimTime to,
                 std::span<Sample> out) const;
+
+    /// Summarises only bits `[lowBit, highBit]` of the signal, as a row showing a slice needs.
+    ///
+    /// **A slice's transitions are not the signal's**, and summarising the signal for a row that
+    /// displays one bit of it is what made an unpacked bus unreadable: every column in which the
+    /// *bus* changed reported a transition, so a bit that never moved was drawn as a solid busy
+    /// bar for the whole width of the window, and only zooming in until each column held no
+    /// change at all resolved it into the flat line it always was. The same applied to
+    /// `anyUnknown`: one X bit made every bit of the bus look unknown.
+    ///
+    /// Exact, and it costs more than the whole-signal overload: answering it needs the values of
+    /// the changes in the range, so the work is proportional to the changes the range covers
+    /// rather than to the number of columns, and it reads the value payload where the other one
+    /// touches only the resident index. That is a deliberate trade — section 1.2 puts a correct
+    /// picture above a fast one — and it is bounded in the two ways that matter: the renderer
+    /// caches a summary until the range changes, so a scroll or a repaint pays nothing, and only
+    /// a row the reader has actually sliced or unpacked takes this path at all.
+    ///
+    /// A per-bit change index would restore the cheaper bound and is the obvious next move if
+    /// this is ever measured to matter; it is not built yet because it costs memory per bit of
+    /// every recorded signal, whether or not anyone looks at one.
+    void sample(std::uint32_t recordIndex, runtime::SimTime from, runtime::SimTime to,
+                std::uint32_t highBit, std::uint32_t lowBit, std::span<Sample> out) const;
 
     // --- memory accounting -------------------------------------------------
 

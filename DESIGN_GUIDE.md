@@ -907,6 +907,28 @@ downsampling with min/max bucketing rather than iterating transitions. Getting
 this wrong makes the viewer unusable on exactly the large designs Enzan targets,
 and it is difficult to retrofit.
 
+**One exception, and it is a defect to be paid off rather than a design.** A row
+showing a *bit range* of a signal — an unpacked bit, an extracted slice — cannot
+be summarised from the change index, because that index counts changes of the
+signal and records nothing about which bits each of them moved. Summarising the
+whole signal for such a row is wrong in the way that matters: every column in
+which any bit of a bus moved reported a transition, so a bit that never changed
+was drawn as a solid busy bar for the width of the window and became the flat
+line it always was only once the reader zoomed in far enough for each column to
+hold a single value. The same went for the unknown flag — one X bit made every
+bit of the bus look unknown.
+
+So a sliced row is summarised from the values, at a cost proportional to the
+changes in the range, and section 1.2 is what decides that: a wrong picture is
+worse than a slow one. It is bounded twice over — the renderer keeps a summary
+until the time range changes, so scrolling and repainting pay nothing, and only a
+row the reader has deliberately sliced or unpacked takes the path at all.
+
+The way back to the pixel bound is a per-bit change index, which is not built
+because it costs memory for every bit of every recorded signal whether or not
+anyone ever looks at one. Anyone finding this in a profile should build it rather
+than reinstate the whole-signal summary.
+
 That bounds a repaint. What bounds *scrolling* is a second rule: **a vertical
 scroll MUST NOT repaint what it has not changed.** Scrolling moves where each
 trace sits and changes not one of them, so the window moves the pixels it
