@@ -477,16 +477,16 @@ TEST(ReportFileReadFailure, MapsEachCauseToItsOwnCode) {
     // diagnostic rather than silence, because the alternative is a phase continuing with an
     // invalid buffer.
     constexpr Case Cases[] = {
-        {enzan::FileReadStatus::NotFound, DiagCode::CannotOpenFile},
-        {enzan::FileReadStatus::NotARegularFile, DiagCode::NotARegularFile},
-        {enzan::FileReadStatus::TooLarge, DiagCode::SourceFileTooLarge},
-        {enzan::FileReadStatus::PermissionDenied, DiagCode::FileReadFailed},
-        {enzan::FileReadStatus::ReadFailed, DiagCode::FileReadFailed},
-        {enzan::FileReadStatus::Success, DiagCode::FileReadFailed},
+        {.status = enzan::FileReadStatus::NotFound, .expected = DiagCode::CannotOpenFile},
+        {.status = enzan::FileReadStatus::NotARegularFile, .expected = DiagCode::NotARegularFile},
+        {.status = enzan::FileReadStatus::TooLarge, .expected = DiagCode::SourceFileTooLarge},
+        {.status = enzan::FileReadStatus::PermissionDenied, .expected = DiagCode::FileReadFailed},
+        {.status = enzan::FileReadStatus::ReadFailed, .expected = DiagCode::FileReadFailed},
+        {.status = enzan::FileReadStatus::Success, .expected = DiagCode::FileReadFailed},
     };
 
     for (const Case& testCase : Cases) {
-        SourceManager sources;
+        const SourceManager sources;
         DiagnosticEngine engine(sources);
         CollectingConsumer consumer;
         engine.addConsumer(consumer);
