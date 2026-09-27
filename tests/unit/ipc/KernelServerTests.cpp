@@ -1234,12 +1234,27 @@ TEST_F(CommandFixture, ACommandThatReElaboratesLeavesTheServerOnTheNewKernel) {
     EXPECT_EQ(&server->kernel(), session->simulationKernel());
     EXPECT_NE(server->state(), SimulationState::Running);
 
-    // And the new kernel is the one the server drives from here on, rather than one nothing is
-    // registered against: a run has to reach it and its listeners.
+    // Renewing sends the client the new tree, because everything it holds describes the design
+    // that has gone. It is also the one visible sign that the borrow *was* renewed rather than
+    // mistaken for unchanged — which is what a comparison of addresses does whenever the new
+    // kernel lands where the old one was.
+    static_cast<void>(expect<DesignMessage>(MessageType::Design));
+
+    // And the design the server now drives is the new one, ready at time zero rather than
+    // wearing the finished status of the kernel that was replaced.
+    EXPECT_EQ(server->state(), SimulationState::Idle);
+
+    // A run has to reach that kernel and the listeners registered against it. Asserted on the
+    // kernel rather than only on the message, so the test does not depend on how many pump
+    // rounds the socket needed.
     RunMessage request;
     request.duration = 20;
     this->request(MessageType::Run, request);
-    EXPECT_GT(expectAll<RunStateMessage>(MessageType::RunState).back().time, 0U);
+    EXPECT_EQ(server->kernel().time(), 20U);
+
+    const auto states = expectAll<RunStateMessage>(MessageType::RunState);
+    ASSERT_FALSE(states.empty()) << "the client was never told about the run";
+    EXPECT_EQ(states.back().time, 20U);
 }
 
 TEST_F(CommandFixture, ACommandThatDiscardsTheDesignEndsTheConnectionRatherThanServingNothing) {

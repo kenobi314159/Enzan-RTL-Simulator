@@ -724,10 +724,23 @@ ordinary command: a script or a line typed at a front end may destroy the kernel
 anything else is holding a pointer to. Whatever borrows one MUST therefore
 re-ask the session for it after every evaluation rather than after the ones that
 look like they matter, and MUST treat a session left with no simulation as a
-case rather than as an impossibility. The allocator commonly hands the
-replacement the address the old one had, so this is a defect that reads
-correctly, tests green against a pointer comparison, and shows up only under a
-sanitiser or on a user's machine.
+case rather than as an impossibility.
+
+**That question MUST be asked of the session's elaboration generation, never by
+comparing pointers.** Tearing an elaboration down frees its objects and building
+the next one allocates the same sizes in the same order, so the allocator
+routinely hands the replacement the address the old one just released. It did so
+here for the kernel but not the image on one machine, and for both on CI, so a
+pointer comparison reported "nothing has changed" about a kernel that had been
+destroyed — on one machine and not the next.
+
+Address reuse is also what makes this class of defect so dangerous: it converts
+a use-after-free into a *live* pointer into somebody else's object. There is no
+invalid access left for ASan to report, so the sanitiser job goes green and what
+surfaces instead is a wrong answer — here, a freshly elaborated design reported
+to the front end as already finished. A monotonic counter cannot be confused
+this way, which is the only reason to prefer it over the comparison that reads
+more naturally.
 
 ### 8.2 File lists
 

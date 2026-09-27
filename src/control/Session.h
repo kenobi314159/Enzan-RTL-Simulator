@@ -167,6 +167,19 @@ public:
 
     [[nodiscard]] bool isElaborated() const noexcept { return kernel != nullptr; }
 
+    /// Counts how many times this session has thrown an elaboration away.
+    ///
+    /// What something borrowing the kernel compares to find out that what it holds has gone.
+    /// **Pointer identity cannot answer this and must not be used for it.** Tearing an
+    /// elaboration down frees the kernel and building the next one allocates the same sizes in
+    /// the same order, so the allocator routinely hands the replacement the address the old one
+    /// just released — on one machine and not the next, which is the worst way for it to be
+    /// wrong. A borrower comparing addresses then keeps a pointer into a different simulation
+    /// and no sanitiser can see it, because the memory is valid; it is simply someone else's.
+    ///
+    /// Monotonic and never reset, so a comparison cannot come out equal by wrapping.
+    [[nodiscard]] std::uint64_t elaborationGeneration() const noexcept { return generation; }
+
     // -----------------------------------------------------------------------
     // Running — `run`, `restart`
     // -----------------------------------------------------------------------
@@ -347,6 +360,10 @@ private:
     runtime::TimeScale scale;
     runtime::RunStatus status = runtime::RunStatus::Quiescent;
     std::uint32_t deltaLimit = 10'000;
+
+    /// Bumped by `discardElaboration`, which every path that replaces the simulation goes
+    /// through. See `elaborationGeneration`.
+    std::uint64_t generation = 0;
 };
 
 } // namespace enzan::control

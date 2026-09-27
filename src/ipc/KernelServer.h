@@ -252,8 +252,12 @@ private:
     /// The server borrows a kernel the session owns, and a command is free to destroy it:
     /// `vsim` replaces the whole elaboration and so does anything a script calls it from. Every
     /// path that reads the kernel after an evaluation has to come through here first, because
-    /// the alternative is reading a freed object — and with the allocator handing the new kernel
-    /// the old one's address, that is a bug a test comparing pointers cannot see.
+    /// the alternative is reading a freed object.
+    ///
+    /// The question is asked of the session's elaboration generation, never of the pointers:
+    /// the replacement routinely lands at the address the old one just released, which makes a
+    /// pointer comparison answer "unchanged" about a kernel that has gone, on some machines and
+    /// not others.
     Borrow renewKernelBorrow();
 
     /// Sends everything the client is owed and writes what the socket will take.
@@ -284,6 +288,12 @@ private:
     /// The session's kernel, not the server's. Borrowed for as long as the session holds it,
     /// which is what makes a command typed at a front end act on the simulation on screen.
     runtime::Kernel* simulationKernel = nullptr;
+
+    /// The session's elaboration generation when this borrow was taken.
+    ///
+    /// The only sound way to ask whether the borrow still holds; `Session::elaborationGeneration`
+    /// says why comparing `simulationKernel` against the session's own pointer is not.
+    std::uint64_t borrowedGeneration = 0;
 
     // Recreated by `start`: a restarted design begins at time zero with nothing recorded, and
     // the database is where "nothing recorded" lives.

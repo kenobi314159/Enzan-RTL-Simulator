@@ -168,6 +168,12 @@ void Session::setDesign(std::unique_ptr<eir::Design> analysed) {
 }
 
 void Session::discardElaboration() {
+    // Counted before anything is freed, and counted even when there was nothing to free: a
+    // borrower is entitled to notice that the answer to "is this still yours" changed, and an
+    // over-cautious renewal costs a round trip where a missed one costs a pointer into a
+    // simulation that no longer exists.
+    ++generation;
+
     // Torn down in dependency order, so that nothing is left holding a reference to something
     // already gone: the writers listen to the kernel, the kernel reads the image, and the
     // image reads the elaboration and the compiled bodies.

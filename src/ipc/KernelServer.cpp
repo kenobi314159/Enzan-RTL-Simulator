@@ -145,8 +145,12 @@ void KernelServer::detachFromKernel() {
 }
 
 KernelServer::Borrow KernelServer::renewKernelBorrow() {
-    if (session->simulationKernel() == simulationKernel && session->designImage() == image)
-        return Borrow::Unchanged;
+    // Asked of the session's own counter, never of the addresses. Freeing one elaboration and
+    // building the next allocates the same sizes in the same order, so the new kernel commonly
+    // lands exactly where the old one was: on this machine the image moved and the kernel did
+    // not, on CI neither moved, and a comparison of pointers therefore answered "nothing has
+    // changed" about a kernel that had been destroyed and replaced.
+    if (session->elaborationGeneration() == borrowedGeneration) return Borrow::Unchanged;
 
     // The kernel that was being served has been destroyed, and every registration made against
     // it went with it. The pointers are dropped *before* anything else, because `detachFromKernel`
@@ -160,8 +164,15 @@ KernelServer::Borrow KernelServer::renewKernelBorrow() {
     database.reset();
 
     if (session->simulationKernel() == nullptr || session->designImage() == nullptr) {
+        borrowedGeneration = session->elaborationGeneration();
         simulationState = SimulationState::Failed;
         closeClient("a command discarded the design, so there is nothing left to serve");
+
+        // And the process stops rather than waiting for another client. Every answer the server
+        // gives reads the kernel, so a server that stayed listening with none would greet the
+        // next client and then fail on its first request; there is nothing here to serve and
+        // saying so by exiting is the honest end.
+        exitRequested = true;
         return Borrow::Gone;
     }
 
@@ -188,6 +199,7 @@ void KernelServer::start() {
     // surfaces driving them.
     image = session->designImage();
     simulationKernel = session->simulationKernel();
+    borrowedGeneration = session->elaborationGeneration();
     ENZAN_ASSERT(simulationKernel != nullptr && image != nullptr,
                  "a server needs an elaborated session");
 

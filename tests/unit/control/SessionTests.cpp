@@ -222,6 +222,40 @@ TEST_F(SessionTest, ElaboratingAgainReplacesTheSimulation) {
     EXPECT_EQ(session.time(), 0U);
 }
 
+TEST_F(SessionTest, ReplacingTheSimulationChangesTheElaborationGeneration) {
+    // What a borrower of the kernel compares to find out that what it holds has gone. It cannot
+    // compare addresses: tearing an elaboration down and building the next one allocates the
+    // same sizes in the same order, so the replacement is routinely handed the address the old
+    // one just released — which was observed here for the kernel but not the image, and on CI
+    // for both. A counter cannot come out equal that way.
+    loadCounter();
+    const std::uint64_t first = session.elaborationGeneration();
+
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+    const std::uint64_t second = session.elaborationGeneration();
+    EXPECT_NE(second, first);
+
+    // A design replaced wholesale counts too, including the case that leaves nothing elaborated
+    // at all: `setDesign` throws the kernel away without building another.
+    session.setDesign(nullptr);
+    EXPECT_FALSE(session.isElaborated());
+    EXPECT_NE(session.elaborationGeneration(), second);
+}
+
+TEST_F(SessionTest, TheElaborationGenerationOnlyEverMovesForward) {
+    // Monotonic, so that a borrower's comparison cannot come out equal by wrapping or by being
+    // reset when the session goes back to time zero. A `restart` keeps the elaboration, so it is
+    // deliberately not a change.
+    loadCounter();
+    const std::uint64_t afterLoad = session.elaborationGeneration();
+
+    ASSERT_TRUE(session.restart());
+    EXPECT_EQ(session.elaborationGeneration(), afterLoad) << "a restart replaces nothing";
+
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+    EXPECT_GT(session.elaborationGeneration(), afterLoad);
+}
+
 // ---------------------------------------------------------------------------
 // examine
 // ---------------------------------------------------------------------------
