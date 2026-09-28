@@ -140,6 +140,7 @@ jobs:
   tidy:
     name: clang-tidy
     runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
