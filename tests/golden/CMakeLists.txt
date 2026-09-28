@@ -183,3 +183,16 @@ set_tests_properties(
   PROPERTIES PASS_REGULAR_EXPRESSION "PASS library"
              FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
              TIMEOUT 60)
+
+# Handing a session to a front end is a property of a process that stays up, so no `do` script
+# can check it: `listen` blocks, and reaching the line after it would mean it had not worked.
+# This drives the kernel from outside and watches for the socket, which is bound only once the
+# script has finished — so a bound socket is the whole sequence having happened in order.
+add_test(NAME golden.listen
+         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-listen-check.sh" $<TARGET_FILE:enzan>
+                 "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv")
+set_tests_properties(
+  golden.listen
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS listen"
+             FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
+             TIMEOUT 60)

@@ -108,8 +108,8 @@ passing regression from a failing one. Anything else on the command line reaches
 script runs, then the prompt.
 
 The vocabulary is `vlib`, `vlog`, `vsim`, `run`, `restart`, `examine`, `force`, `noforce`,
-`deposit`, `log`, `add wave`, `vcd file`, `fst file`, `find`, `radix`, `do`, `quit`, and for
-source debugging `bp`, `bd`, `enablebp`, `disablebp` and `step`. `vlog` reads `.f`
+`deposit`, `log`, `add wave`, `vcd file`, `fst file`, `find`, `radix`, `do`, `listen`, `quit`,
+and for source debugging `bp`, `bd`, `enablebp`, `disablebp` and `step`. `vlog` reads `.f`
 file lists with `-f`, understands `+incdir+`, `+define+` and `-sv`, and works out the compile
 order itself — a package can be named after the module that imports it. `vcom` is refused
 rather than ignored until VHDL arrives at M6, so that a mixed-language script fails at the
@@ -178,7 +178,36 @@ thing to install for someone working on the kernel. With it built:
 enzan-gui --top tb design.sv testbench.sv
 ```
 
-which starts a kernel for the design and attaches to it. Press **Run**, click a scope in
+which starts a kernel for the design and attaches to it. To set the simulation up from a script
+instead — compile options, a file list, what to log — hand the window that script and let it do
+the work:
+
+```sh
+enzan-gui --do setup.do design.sv testbench.sv
+```
+
+The script says `vlog`, `vsim`, `log` and `add wave` as any other does, the files named reach it
+as `$argv`, and the window attaches once it has finished. Nothing else is passed with `--do`:
+`--top`, `--timescale` and `--wave-scope` are refused beside it, because the script says those
+things itself.
+
+A script can also choose where the handover happens, with `listen`:
+
+```tcl
+vlog -sv design.sv testbench.sv
+vsim -t ns tb
+log -r /tb
+add wave /tb/count
+
+listen /tmp/enzan.sock
+puts "the window has gone; time is [examine -radix decimal /tb/count]"
+```
+
+`listen` blocks, so everything after it runs once the front end detaches — and `enzan --do
+setup.do --listen /tmp/enzan.sock` is the same thing with the handover at the end of the script.
+One rule is worth knowing: `listen` refuses a design that has already run, because serving puts
+it back to time zero and would discard that run rather than show it. Put `listen` before the run
+and drive it from the window, or `restart` first. Press **Run**, click a scope in
 **Structure**, select signals in **Objects** and press Ctrl+W to put them in the wave window;
 the traces fill in as the simulation advances.
 
