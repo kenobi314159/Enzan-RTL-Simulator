@@ -28,7 +28,6 @@ std::string_view toString(RunStatus status) noexcept {
     case RunStatus::Finished: return "finished";
     case RunStatus::Error: return "error";
     case RunStatus::Interrupted: return "interrupted";
-    case RunStatus::AtBreakpoint: return "stopped at a breakpoint";
     }
     return "error";
 }
@@ -97,23 +96,6 @@ void Kernel::initialize() {
     // be state the user did not ask to keep.
     forcedSignals.clear();
 
-    // Nor does anything a pause left behind. The remembered instruction exists so that
-    // continuing does not stop at the same breakpoint twice, and carrying it across an
-    // initialise would make the first run after a `restart` skip that breakpoint — a design
-    // that stops somewhere different every other time it is run from the beginning. The
-    // breakpoints themselves stay, because the user put them there.
-    pausedAtBreakpoint = false;
-    pausedProcess = NoPausedProcess;
-    pausedPc = 0;
-
-    // A step asked for during the run that has gone, and the place it stopped, belong to that
-    // run. `stopPoint` is what a transcript line and the source window's marker are drawn from,
-    // and a design at time zero has not stopped anywhere yet.
-    stepping = false;
-    stepFrom = SourceLocation();
-    lastStop = StopPoint();
-    debugging = !resolved.empty();
-
     finishRequested = false;
     errorRequested = false;
     finishStatus = 0;
@@ -142,15 +124,6 @@ RunStatus Kernel::run(SimTime until) {
 
         if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates()) {
             if (!runTimeSlot()) {
-                // A pause leaves the design mid-slot and resumable, so it is checked before
-                // the endings that are not: the process is back at the head of its region and
-                // the next `run` carries on from the instruction it stopped before.
-                if (pausedAtBreakpoint) {
-                    pausedAtBreakpoint = false;
-                    lastStatus = RunStatus::AtBreakpoint;
-                    return lastStatus;
-                }
-
                 lastStatus = errorRequested ? RunStatus::Error : RunStatus::Finished;
                 runFinalProcesses();
                 return lastStatus;
@@ -235,19 +208,6 @@ void Kernel::drain(Region region) {
         processes[processIndex].queued = false;
 
         const ExecutionResult result = interpreter.run(processIndex);
-
-        if (result == ExecutionResult::Paused) {
-            // Back at the head of the region it came from, so that resuming runs it before
-            // anything that was behind it. Putting it at the back instead would let the rest
-            // of the region overtake it and make a resumed run differ from an uninterrupted
-            // one, which section 3.8 forbids.
-            scheduler.putBack(region, processIndex);
-            processes[processIndex].queued = true;
-            pausedAtBreakpoint = true;
-            pausedProcess = processIndex;
-            pausedPc = processes[processIndex].resumePc;
-            return;
-        }
 
         if (result == ExecutionResult::Stopped || stopping()) return;
 
@@ -410,157 +370,6 @@ void Kernel::scheduleNonBlocking(std::uint32_t signalIndex, eir::ConstBitRef val
 void Kernel::scheduleNonBlockingPart(std::uint32_t signalIndex, eir::ConstBitRef value,
                                      std::uint64_t lowBit) {
     scheduler.appendNonBlocking(signalIndex, value, static_cast<std::uint32_t>(lowBit), true);
-}
-
-std::uint32_t Kernel::addBreakpoint(BufferId buffer, std::uint32_t line) {
-    if (!buffer.valid() || line == 0) return 0;
-
-    const SourceManager& sourceManager = diagnostics.sourceManager();
-    const SourceLocation start = sourceManager.lineStart(buffer, line);
-    if (!start.valid()) return 0;
-
-    // The line's byte range, which is what an instruction's location is compared against. A
-    // location is a byte offset, so "on this line" means "between this line's first byte and
-    // the next line's".
-    const SourceLocation next = sourceManager.lineStart(buffer, line + 1);
-    const std::uint32_t end =
-        next.valid() ? next.offset()
-                     : static_cast<std::uint32_t>(sourceManager.bufferText(buffer).size());
-
-    // Resolved now rather than when it might fire. A line with no instructions is refused
-    // instead of recorded: a marker in the source window that can never stop anything is
-    // worse than being told the line has no code on it.
-    bool anywhere = false;
-    for (const codegen::CompiledProcess& body : designImage->compiledDesign().bodies()) {
-        if (body.firstInstructionOnLine(buffer, start.offset(), end)
-            != codegen::CompiledProcess::NoInstruction) {
-            anywhere = true;
-            break;
-        }
-    }
-    if (!anywhere) return 0;
-
-    const std::uint32_t id = nextBreakpointId++;
-    breakList.push_back(Breakpoint{.id = id, .buffer = buffer, .line = line, .enabled = true});
-    resolveBreakpoints();
-    return id;
-}
-
-bool Kernel::removeBreakpoint(std::uint32_t id) {
-    const auto found =
-        std::ranges::find_if(breakList, [id](const Breakpoint& entry) { return entry.id == id; });
-    if (found == breakList.end()) return false;
-
-    breakList.erase(found);
-    resolveBreakpoints();
-    return true;
-}
-
-bool Kernel::setBreakpointEnabled(std::uint32_t id, bool enabled) {
-    const auto found =
-        std::ranges::find_if(breakList, [id](const Breakpoint& entry) { return entry.id == id; });
-    if (found == breakList.end()) return false;
-
-    found->enabled = enabled;
-    resolveBreakpoints();
-    return true;
-}
-
-void Kernel::clearBreakpoints() {
-    breakList.clear();
-    resolveBreakpoints();
-}
-
-void Kernel::resolveBreakpoints() {
-    resolved.clear();
-
-    const SourceManager& sourceManager = diagnostics.sourceManager();
-    const codegen::CompiledDesign& compiled = designImage->compiledDesign();
-
-    for (const Breakpoint& entry : breakList) {
-        if (!entry.enabled) continue;
-
-        const SourceLocation start = sourceManager.lineStart(entry.buffer, entry.line);
-        if (!start.valid()) continue;
-        const SourceLocation next = sourceManager.lineStart(entry.buffer, entry.line + 1);
-        const std::uint32_t end =
-            next.valid()
-                ? next.offset()
-                : static_cast<std::uint32_t>(sourceManager.bufferText(entry.buffer).size());
-
-        for (std::uint32_t bodyIndex = 0; bodyIndex < compiled.bodies().size(); ++bodyIndex) {
-            const std::uint32_t pc =
-                compiled.body(bodyIndex).firstInstructionOnLine(entry.buffer, start.offset(), end);
-            if (pc == codegen::CompiledProcess::NoInstruction) continue;
-            resolved.push_back(
-                ResolvedBreakpoint{.bodyIndex = bodyIndex, .pc = pc, .id = entry.id});
-        }
-    }
-
-    debugging = !resolved.empty() || stepping;
-}
-
-void Kernel::requestStep() noexcept {
-    stepping = true;
-    stepFrom = lastStop.location;
-    debugging = true;
-}
-
-bool Kernel::shouldStopAt(std::uint32_t processIndex, std::uint32_t pc) {
-    const ProcessState& state = processes[processIndex];
-
-    // The instruction a previous pause stopped before must not stop again, or `run` after a
-    // breakpoint would never get past it. Consumed on the first check rather than cleared on
-    // the way in, so that resuming from a *suspension* — a delay, an edge — at the same
-    // instruction still stops, which is what a breakpoint on a clocked line means.
-    if (processIndex == pausedProcess && pc == pausedPc) {
-        pausedProcess = NoPausedProcess;
-        return false;
-    }
-
-    for (const ResolvedBreakpoint& entry : resolved) {
-        if (entry.bodyIndex != state.bodyIndex || entry.pc != pc) continue;
-
-        lastStop = StopPoint{.processIndex = processIndex,
-                             .pc = pc,
-                             .location =
-                                 designImage->compiledDesign().body(state.bodyIndex).locationAt(pc),
-                             .breakpointId = entry.id};
-        stepping = false;
-        debugging = !resolved.empty();
-        return true;
-    }
-
-    if (!stepping) return false;
-
-    const SourceLocation here = designImage->compiledDesign().body(state.bodyIndex).locationAt(pc);
-    if (!here.valid()) return false;
-    if (here == stepFrom) return false;
-
-    // A different statement is not a different line. The frontend stamps a location per
-    // statement, so `a = 0; b = 0;` written on one line arrives as two of them — and a step that
-    // stopped at both would stop twice where the user wrote once, which reads on screen as a
-    // step that did not move. `stepFrom` is advanced onto the statement just reached so that the
-    // identity test above covers the rest of it and the line is looked up once per statement
-    // rather than once per instruction.
-    if (onSameLine(here, stepFrom)) {
-        stepFrom = here;
-        return false;
-    }
-
-    lastStop =
-        StopPoint{.processIndex = processIndex, .pc = pc, .location = here, .breakpointId = 0};
-    stepping = false;
-    debugging = !resolved.empty();
-    return true;
-}
-
-bool Kernel::onSameLine(SourceLocation first, SourceLocation second) const {
-    if (!first.valid() || !second.valid()) return false;
-    if (first.buffer() != second.buffer()) return false;
-
-    const SourceManager& sourceManager = diagnostics.sourceManager();
-    return sourceManager.lineNumber(first) == sourceManager.lineNumber(second);
 }
 
 bool Kernel::isForced(std::uint32_t signalIndex) const noexcept {

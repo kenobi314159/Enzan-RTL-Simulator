@@ -89,9 +89,6 @@ public:
     /// Removes and returns the first entry of `region`, which must not be empty.
     std::uint32_t take(Region region);
 
-    /// Puts `processIndex` back at the head of `region`, undoing a `take`.
-    void putBack(Region region, std::uint32_t processIndex);
-
     /// Moves everything in `from` to the end of `to`, preserving order.
     void promote(Region from, Region to);
 

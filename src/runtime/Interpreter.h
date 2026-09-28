@@ -16,12 +16,6 @@ enum class ExecutionResult : std::uint8_t {
     Suspended,
     /// The run must stop: `$finish`, `$fatal`, or a kernel error.
     Stopped,
-    /// Execution reached a breakpoint, or completed a source line while stepping.
-    ///
-    /// The body is left resumable at the instruction it stopped *before*, so continuing runs
-    /// it and nothing has happened twice. Distinct from `Suspended` because nothing will wake
-    /// this process: the kernel puts it back at the head of its region and stops the run.
-    Paused,
 };
 
 /// Executes compiled bodies.

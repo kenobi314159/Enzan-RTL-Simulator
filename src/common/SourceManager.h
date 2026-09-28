@@ -174,24 +174,4 @@ private:
     std::vector<std::unique_ptr<Buffer>> buffers;
 };
 
-/// Finds the buffer holding `file` among those `sources` holds.
-///
-/// Exactly by name first: a user who named a file the way the design did means that file, and
-/// nothing should come between them and it. Failing that, by the tail of the path, so that
-/// `counter.sv` finds `/home/who/rtl/counter.sv` — a file list expands to absolute paths, and
-/// making a user type one out in full to set a breakpoint would be friction with nothing
-/// behind it.
-///
-/// Returns an invalid identifier when nothing matches, and also when several *differently
-/// named* buffers match the tail, filling `ambiguity` with their names when it is given. One
-/// file legitimately has more than one buffer — the manager does not deduplicate — so buffers
-/// sharing a name are not an ambiguity.
-///
-/// Lives here rather than in a caller because both ends of the tool need it: the control
-/// layer resolves `bp counter.sv 19`, and the kernel resolves the same request arriving from a
-/// front end. Two copies of a matching rule would drift, and the two would then disagree about
-/// which file a breakpoint is on.
-[[nodiscard]] BufferId findBufferByName(const SourceManager& sources, std::string_view file,
-                                        std::string* ambiguity = nullptr);
-
 } // namespace enzan

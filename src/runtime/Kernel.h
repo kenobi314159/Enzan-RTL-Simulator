@@ -35,9 +35,6 @@ enum class RunStatus : std::uint8_t {
     /// A registered `RunInterrupt` asked the run to stop. The design is untouched and
     /// another `run` continues exactly where this one left off.
     Interrupted,
-    /// Execution reached a breakpoint, or finished a source line while stepping. As with
-    /// `Interrupted`, another `run` continues exactly where this one stopped.
-    AtBreakpoint,
 };
 
 std::string_view toString(RunStatus status) noexcept;
@@ -67,40 +64,6 @@ public:
     /// Must not report diagnostics, touch the arena or schedule anything: it runs in the
     /// middle of a simulation and its only job is to answer the question.
     virtual bool shouldInterrupt() = 0;
-};
-
-/// A breakpoint on an HDL source line (DESIGN_GUIDE.md section 10.4).
-///
-/// Resolved to bytecode addresses when it is set, not searched for when it might fire: a line
-/// compiles to a run of instructions in possibly several bodies, and working that out once
-/// keeps the check on the execution path down to comparing two integers.
-struct Breakpoint {
-    /// Identifies the breakpoint to whoever set it. Never reused within a run, so that a
-    /// script or a window holding an old one cannot silently address a new one.
-    std::uint32_t id = 0;
-
-    BufferId buffer;
-
-    /// 1-based, as the user and the source window count.
-    std::uint32_t line = 0;
-
-    bool enabled = true;
-};
-
-/// Where a run stopped, when it stopped at a breakpoint or a step.
-struct StopPoint {
-    std::uint32_t processIndex = 0;
-
-    /// The instruction about to be executed. Continuing runs it.
-    std::uint32_t pc = 0;
-
-    /// Where that instruction came from. May be invalid for code with no position.
-    SourceLocation location;
-
-    /// The breakpoint that fired, or zero for a step.
-    std::uint32_t breakpointId = 0;
-
-    [[nodiscard]] bool valid() const noexcept { return location.valid() || breakpointId != 0; }
 };
 
 /// Receives value changes and time advances, for the waveform database.
@@ -216,7 +179,7 @@ public:
     ///
     /// Every subsequent write to the signal — procedural, non-blocking or another deposit —
     /// is discarded while the force stands, which is what distinguishes a force from a
-    /// deposit and what makes it useful for pinning a reset or a mode bit while stepping.
+    /// deposit and what makes it useful for pinning a reset or a mode bit.
     ///
     /// Forcing costs one branch on the signal write path and nothing at all until the first
     /// force in a run: the table is allocated when it is first needed, so section 13.4's ban
@@ -243,38 +206,6 @@ public:
 
     /// Removes the first registration of `listener`. Does nothing if it was never registered.
     void removeListener(ValueChangeListener& listener);
-
-    // -----------------------------------------------------------------------
-    // Source debugging (section 10.4)
-    // -----------------------------------------------------------------------
-
-    /// Sets a breakpoint on `line` of `buffer` and returns its identifier, or zero.
-    ///
-    /// Zero means the line compiled to no instructions — a declaration, a comment, a line
-    /// inside a module nothing instantiated. Refused rather than recorded as a breakpoint
-    /// that can never fire, because a marker in the source window that silently does nothing
-    /// is worse than being told the line has no code on it.
-    std::uint32_t addBreakpoint(BufferId buffer, std::uint32_t line);
-
-    /// Removes a breakpoint. Returns false when no breakpoint has that identifier.
-    bool removeBreakpoint(std::uint32_t id);
-
-    /// Enables or disables one without forgetting where it was. Returns false when unknown.
-    bool setBreakpointEnabled(std::uint32_t id, bool enabled);
-
-    void clearBreakpoints();
-
-    [[nodiscard]] std::span<const Breakpoint> breakpoints() const noexcept { return breakList; }
-
-    /// Makes the next `run` stop as soon as execution reaches a different source line.
-    ///
-    /// One source line, not one instruction: a statement compiles to a run of instructions and
-    /// stepping through them one at a time would be stepping through something the user never
-    /// wrote. Cleared once it fires.
-    void requestStep() noexcept;
-
-    /// Where the last `run` stopped, when it returned `AtBreakpoint`.
-    [[nodiscard]] const StopPoint& stopPoint() const noexcept { return lastStop; }
 
     /// Redirects `$display` and the severity tasks, or restores the standard output with null.
     ///
@@ -372,23 +303,7 @@ private:
 
     [[nodiscard]] bool stopping() const noexcept { return finishRequested || errorRequested; }
 
-    /// Rebuilds `resolved` and `debugging` from the breakpoint list.
-    void resolveBreakpoints();
-
-    /// True when execution must stop before the instruction at `pc` of `processIndex`.
-    ///
-    /// Called once per instruction *while debugging only*, which is what `debugging` guards.
-    [[nodiscard]] bool shouldStopAt(std::uint32_t processIndex, std::uint32_t pc);
-
-    /// True when neither a stop nor a pause is pending.
-    [[nodiscard]] bool halted() const noexcept { return stopping() || pausedAtBreakpoint; }
-
-    /// True when two valid locations are on the same line of the same buffer.
-    ///
-    /// The comparison a step is decided by. Asked at most once per statement while a step is
-    /// pending and never otherwise, so the line lookup behind it is not on any path that
-    /// matters (section 13.4).
-    [[nodiscard]] bool onSameLine(SourceLocation first, SourceLocation second) const;
+    [[nodiscard]] bool halted() const noexcept { return stopping(); }
 
     /// Wakes whatever is waiting on a transition of `signalIndex`.
     void notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after);
@@ -409,43 +324,6 @@ private:
     /// Mutable per-process state. A copy of the image's list, because `resumePc` and
     /// `queued` change as the simulation runs and the image is shared and const.
     std::vector<ProcessState> processes;
-
-    /// True while a breakpoint exists or a step is pending, so that the execution path pays
-    /// one predictable branch and nothing else when nobody is debugging (section 13.4).
-    bool debugging = false;
-
-    /// Every breakpoint, in the order they were set.
-    std::vector<Breakpoint> breakList;
-
-    /// One breakpoint resolved against one compiled body.
-    struct ResolvedBreakpoint {
-        std::uint32_t bodyIndex = 0;
-        std::uint32_t pc = 0;
-        std::uint32_t id = 0;
-    };
-
-    /// Where the breakpoints actually are. Rebuilt whenever the list changes, which is a user
-    /// action; never searched or built while running.
-    std::vector<ResolvedBreakpoint> resolved;
-
-    /// The next identifier to hand out. Never reused within a run.
-    std::uint32_t nextBreakpointId = 1;
-
-    /// Set by `requestStep`; the line execution was on when it was asked for.
-    bool stepping = false;
-    SourceLocation stepFrom;
-
-    StopPoint lastStop;
-
-    /// True between a pause and the `run` call that reports it.
-    bool pausedAtBreakpoint = false;
-
-    /// Where the last pause left a process, so that resuming does not stop there again.
-    /// Consumed the first time that instruction is checked.
-    std::uint32_t pausedProcess = NoPausedProcess;
-    std::uint32_t pausedPc = 0;
-
-    static constexpr std::uint32_t NoPausedProcess = 0xFFFF'FFFFU;
 
     /// True for each signal a `force` is holding, or empty when nothing is forced.
     ///

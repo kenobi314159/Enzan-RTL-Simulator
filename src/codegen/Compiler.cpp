@@ -21,27 +21,6 @@ std::uint32_t CompiledDesign::bodyIndex(std::uint32_t definitionIndex,
     return found == keys.end() ? NotCompiled : found->bodyIndex;
 }
 
-SourceLocation CompiledProcess::locationAt(std::uint32_t pc) const noexcept {
-    if (lines.empty()) return {};
-
-    // The last entry whose pc is at or before `pc`: an entry covers from itself up to the
-    // next one. `upper_bound` finds the first entry *after* it, so the answer is the one
-    // before that.
-    const auto after = std::ranges::upper_bound(lines, pc, {}, &LineEntry::pc);
-    if (after == lines.begin()) return {};
-    return std::prev(after)->location;
-}
-
-std::uint32_t CompiledProcess::firstInstructionOnLine(BufferId buffer, std::uint32_t lineStart,
-                                                      std::uint32_t lineEnd) const noexcept {
-    for (const LineEntry& entry : lines) {
-        if (entry.location.buffer() != buffer) continue;
-        if (entry.location.offset() < lineStart || entry.location.offset() >= lineEnd) continue;
-        return entry.pc;
-    }
-    return NoInstruction;
-}
-
 namespace {
 
 /// Assigns each virtual register a Word offset in the frame and records its width.
@@ -150,16 +129,6 @@ bool Compiler::compileProcess(const eir::ModuleDefinition& definition, const eir
         out.blockStarts.push_back(static_cast<std::uint32_t>(out.code.size()));
 
         for (const eir::Instruction& source : block.instructions) {
-            // The line table takes an entry only where the location changes, which is once
-            // per statement rather than once per instruction. A block boundary counts as a
-            // change even when the location repeats: control can arrive at a block from
-            // somewhere else, so a run of instructions is only contiguous within one block.
-            if (out.lines.empty() || out.lines.back().location != source.location
-                || out.lines.back().pc < out.blockStarts.back()) {
-                out.lines.push_back(LineEntry{.pc = static_cast<std::uint32_t>(out.code.size()),
-                                              .location = source.location});
-            }
-
             Instruction emitted;
             emitted.opcode = source.opcode;
             emitted.isSigned = source.isSigned;
