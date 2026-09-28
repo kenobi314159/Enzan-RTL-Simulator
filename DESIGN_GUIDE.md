@@ -526,6 +526,31 @@ The integration plan is therefore:
 - `src/frontend/vhdl/` walks the analysed tree and emits EIR, exactly as the
   SystemVerilog adapter does.
 
+NVC builds with autotools, which does not compose with the build of 11.1. Since
+the plan uses only the analysis stage, the spike SHOULD establish that Enzan can
+compile that file subset directly with its own CMake target, and record the file
+list in `docs/nvc_integration.md`; driving NVC's `configure` from
+`ExternalProject` is the fallback if it cannot.
+
+**Two costs are larger than they look, and neither is an API problem.**
+
+*Predefined and foreign subprograms.* NVC implements much of `std.standard`,
+`std_logic_1164`, `numeric_std`, `std.textio` and `std.env` as builtins,
+intrinsics or foreign functions that its **runtime** resolves. Discarding that
+runtime means Enzan MUST supply its own implementation of everything the
+analysed tree leaves predefined or foreign, and the set is discovered only by
+walking it. This is more certain than any drift risk and is not avoided by
+choosing a different frontend — GHDL is built the same way — so it is scope for
+M6 rather than an argument about 5.2.
+
+*Semantics that settle only at elaboration.* Consuming trees after
+simplification and bounds checking is the right boundary: it is what section 5
+means by a frontend that does not flatten hierarchy, and Enzan elaborates for
+itself. The consequence is that generic folding, subtype resolution and
+unconstrained arrays sized by a generic are Enzan's work, not NVC's, and the
+VHDL elaborator therefore reimplements them rather than reusing NVC's `elab`.
+The spike MUST size this before the milestone commits to the boundary.
+
 Known risks, to be confirmed by a spike at the start of M6: NVC's internal APIs
 are not stability-guaranteed and will drift; NVC is C and uses its own arena
 allocators and global state, so reentrancy and ownership need checking; and the
@@ -1839,7 +1864,9 @@ tasks, functions, packages, interfaces, generate, structs, enums, arrays;
 
 NVC integration spike first, to confirm the approach in 5.2 before committing
 to it; vendored pinned fork; NVC tree to EIR adapter; `std_logic` value model;
-VHDL simulation cycle; VHPI subset for cocotb.
+VHDL generic and subtype elaboration; Enzan's own implementations of the
+predefined and foreign subprograms NVC's runtime would have resolved; VHDL
+simulation cycle; VHPI subset for cocotb.
 
 **Exit:** NEORV32 simulates; the VUnit suite runs.
 
