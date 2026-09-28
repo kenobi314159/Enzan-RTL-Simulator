@@ -126,7 +126,7 @@ TEST_F(CommandsTest, EveryCommandInTheSpecificationIsRegistered) {
     // noticed by the user whose script stopped working.
     for (const char* name :
          {"vlog", "vcom", "vsim", "run", "restart", "add", "log", "force", "examine", "radix",
-          "find", "quit", "do", "deposit", "noforce", "vcd", "fst"})
+          "find", "quit", "do", "deposit", "noforce", "vcd", "fst", "listen"})
         EXPECT_TRUE(interpreter.hasCommand(name)) << name;
 }
 
@@ -652,6 +652,111 @@ TEST_F(CommandsTest, TheDebuggingCommandsNeedASimulation) {
         EXPECT_EQ(result.status, EvalStatus::Error) << command;
         EXPECT_NE(result.value.find("vsim"), std::string::npos) << command << ": " << result.value;
     }
+}
+
+// ---------------------------------------------------------------------------
+// listen
+// ---------------------------------------------------------------------------
+
+/// Stands in for the driver's front-end server, which lives in `tools/enzan`.
+///
+/// The seam is the point of the test: `control_session` cannot link `ipc`, so what `listen`
+/// does is hand a socket path to whatever the driver installed, and a session with nothing
+/// installed has to say so rather than appear to work.
+class RecordingServer final : public enzan::control::SessionServer {
+public:
+    bool serve(const std::filesystem::path& socketPath, std::string& error) override {
+        asked.push_back(socketPath);
+        if (failWith.empty()) return true;
+        error = failWith;
+        return false;
+    }
+
+    std::vector<std::filesystem::path> asked;
+    std::string failWith;
+};
+
+TEST_F(CommandsTest, ListenHandsTheSocketToTheInstalledServer) {
+    load();
+
+    RecordingServer server;
+    session.setServer(&server);
+
+    ok("listen /tmp/enzan-test.sock");
+    ASSERT_EQ(server.asked.size(), 1U);
+    EXPECT_EQ(server.asked.front(), std::filesystem::path("/tmp/enzan-test.sock"));
+}
+
+TEST_F(CommandsTest, ListenSaysSoWhenThisKernelCannotServe) {
+    load();
+
+    // No server installed, which is what a build without the frontend and what a test process
+    // both look like. The command exists either way, because a script that gets "unknown
+    // command" cannot tell that from a typo.
+    const EvalResult result = eval("listen /tmp/enzan-test.sock");
+    EXPECT_EQ(result.status, EvalStatus::Error);
+    EXPECT_NE(result.value.find("cannot serve"), std::string::npos) << result.value;
+}
+
+TEST_F(CommandsTest, ListenNeedsASimulation) {
+    RecordingServer server;
+    session.setServer(&server);
+
+    const EvalResult result = eval("listen /tmp/enzan-test.sock");
+    EXPECT_EQ(result.status, EvalStatus::Error);
+    EXPECT_NE(result.value.find("vsim"), std::string::npos) << result.value;
+    EXPECT_TRUE(server.asked.empty());
+}
+
+TEST_F(CommandsTest, ListenRefusesADesignThatHasAlreadyRun) {
+    // Serving puts the design back to time zero, so a session that has run would be silently
+    // reset and the run the user wanted to look at would be gone. Refused instead, naming the
+    // time reached so that the message says what was about to be lost.
+    load();
+    ok("run 50 ns");
+
+    RecordingServer server;
+    session.setServer(&server);
+
+    const EvalResult result = eval("listen /tmp/enzan-test.sock");
+    EXPECT_EQ(result.status, EvalStatus::Error);
+    EXPECT_NE(result.value.find("already run"), std::string::npos) << result.value;
+    EXPECT_TRUE(server.asked.empty()) << "the design was served despite having run";
+}
+
+TEST_F(CommandsTest, ListenServesAgainAfterARestart) {
+    load();
+    ok("run 50 ns");
+    ok("restart");
+
+    RecordingServer server;
+    session.setServer(&server);
+
+    ok("listen /tmp/enzan-test.sock");
+    EXPECT_EQ(server.asked.size(), 1U);
+}
+
+TEST_F(CommandsTest, ListenReportsWhatTheServerFailedWith) {
+    load();
+
+    RecordingServer server;
+    server.failWith = "no such directory";
+    session.setServer(&server);
+
+    const EvalResult result = eval("listen /nowhere/enzan.sock");
+    EXPECT_EQ(result.status, EvalStatus::Error);
+    EXPECT_NE(result.value.find("no such directory"), std::string::npos) << result.value;
+}
+
+TEST_F(CommandsTest, ListenTakesExactlyOneSocket) {
+    load();
+
+    RecordingServer server;
+    session.setServer(&server);
+
+    EXPECT_EQ(eval("listen").status, EvalStatus::Error);
+    EXPECT_EQ(eval("listen a b").status, EvalStatus::Error);
+    EXPECT_TRUE(server.asked.empty());
 }
 
 } // namespace

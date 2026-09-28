@@ -248,6 +248,31 @@ bool Session::restart() {
     return true;
 }
 
+bool Session::serveTo(const std::filesystem::path& socketPath, std::string& error) {
+    if (server == nullptr) {
+        error = "this kernel cannot serve a front end";
+        return false;
+    }
+    if (kernel == nullptr) {
+        error = "there is no simulation to serve; `vsim` first";
+        return false;
+    }
+
+    // Refused rather than done badly. Serving puts the design back to time zero and starts
+    // recording there, because that is what makes the values the wave window shows at time zero
+    // the ones the design begins from. A session that has already run would therefore be
+    // silently reset, losing exactly the run the user wanted to look at — so say so, and say
+    // where the command goes instead.
+    if (time() != 0) {
+        error = "this design has already run to " + scale.format(time())
+                + "; serving it would put it back to time zero and lose that run. Put `listen` "
+                  "before the run and let the front end drive it, or `restart` first.";
+        return false;
+    }
+
+    return server->serve(socketPath, error);
+}
+
 runtime::SimTime Session::time() const noexcept {
     return kernel != nullptr ? kernel->time() : 0;
 }

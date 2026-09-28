@@ -44,6 +44,29 @@ class WaveformWriter;
 
 namespace enzan::control {
 
+/// Hands an elaborated session to a graphical front end: what `listen` calls.
+///
+/// An interface the driver implements rather than a server the session owns. `ipc` depends on
+/// `control` for the session it serves (`src/ipc/KernelServer.h`), so `control_session` cannot
+/// depend on `ipc` back, and a session built in a process with no front-end server — a test, a
+/// build without the frontend — still has to answer the command rather than fail to link.
+class SessionServer {
+public:
+    SessionServer() = default;
+    SessionServer(const SessionServer&) = delete;
+    SessionServer& operator=(const SessionServer&) = delete;
+    SessionServer(SessionServer&&) = delete;
+    SessionServer& operator=(SessionServer&&) = delete;
+    virtual ~SessionServer() = default;
+
+    /// Binds `socketPath` and serves this session until the front end is finished with it.
+    ///
+    /// **Blocking, and that is the point.** `listen` gives the session away, and the script
+    /// resumes only once it is handed back — which is what lets a script place the command
+    /// where it wants the front end to take over. Returns false having filled `error`.
+    virtual bool serve(const std::filesystem::path& socketPath, std::string& error) = 0;
+};
+
 /// Everything one `enzan` process holds between commands.
 ///
 /// The session is the object the command vocabulary of section 8.1 acts on, and it is
@@ -194,6 +217,21 @@ public:
     /// Puts the design back to time zero, keeping the elaboration and the waveform files.
     bool restart();
 
+    // -----------------------------------------------------------------------
+    // Serving a front end — `listen`
+    // -----------------------------------------------------------------------
+
+    /// Installs who answers `listen`, or clears it with null. Not owned, and must outlive this.
+    void setServer(SessionServer* toUse) noexcept { server = toUse; }
+
+    /// Hands this session to a front end on `socketPath` and blocks until it is finished.
+    ///
+    /// Returns false having filled `error`, which is where every reason this cannot be done
+    /// lives — no server in this process, nothing elaborated yet, or a design that has already
+    /// run. One place rather than one per caller, because the command and the `--listen` option
+    /// are two spellings of the same request and must refuse it identically.
+    bool serveTo(const std::filesystem::path& socketPath, std::string& error);
+
     [[nodiscard]] runtime::SimTime time() const noexcept;
 
     /// The status of the last `run`.
@@ -336,6 +374,9 @@ private:
     SourceManager& sources;
     DiagnosticEngine& diagnostics;
     std::ostream* transcript = nullptr;
+
+    /// Who answers `listen`, or null in a process that cannot serve one.
+    SessionServer* server = nullptr;
 
     /// Every source `vlog` has been given, in the order it was given them.
     std::vector<std::filesystem::path> files;

@@ -154,6 +154,7 @@ public:
     CommandResult step(CommandArguments arguments);
     CommandResult quit(CommandArguments arguments);
     CommandResult doFile(CommandArguments arguments);
+    CommandResult listen(CommandArguments arguments);
     CommandResult examine(CommandArguments arguments);
     CommandResult force(CommandArguments arguments);
     CommandResult noforce(CommandArguments arguments);
@@ -585,6 +586,29 @@ CommandResult Vocabulary::doFile(CommandArguments arguments) {
 }
 
 // ---------------------------------------------------------------------------
+// listen
+// ---------------------------------------------------------------------------
+
+/// Hands the session to a graphical front end and resumes when it gives it back.
+///
+/// The command exists so that the control language can say the one thing only the command line
+/// could: section 8.1 makes Tcl *the* control surface, and `--listen` was the single option
+/// with no command behind it, which is why it had to be refused alongside `--do` and why a
+/// script could not set a simulation up for the GUI (section 8.2).
+///
+/// Blocking, so that where the command appears is where the front end takes over. A script
+/// analyses, elaborates and chooses what to log, then says `listen`, and the person who attaches
+/// finds the design ready at time zero and drives the run themselves.
+CommandResult Vocabulary::listen(CommandArguments arguments) {
+    if (arguments.size() != 2) return usage("listen socket");
+
+    std::string error;
+    if (!session->serveTo(std::filesystem::path(arguments[1]), error))
+        return CommandResult::error(error);
+    return CommandResult::ok();
+}
+
+// ---------------------------------------------------------------------------
 // examine, force, deposit
 // ---------------------------------------------------------------------------
 
@@ -838,6 +862,7 @@ void install(const std::shared_ptr<Vocabulary>& vocabulary, Interpreter& interpr
     bind("quit", &Vocabulary::quit);
     bind("exit", &Vocabulary::quit);
     bind("do", &Vocabulary::doFile);
+    bind("listen", &Vocabulary::listen);
     bind("examine", &Vocabulary::examine);
     bind("force", &Vocabulary::force);
     bind("noforce", &Vocabulary::noforce);
