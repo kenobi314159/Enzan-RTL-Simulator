@@ -157,12 +157,12 @@ public:
     [[nodiscard]] const Image& image() const noexcept { return *designImage; }
 
     // -----------------------------------------------------------------------
-    // Operations the control layer and the GUI perform on a stopped kernel
+    // Operations a front end performs on a stopped kernel
     // -----------------------------------------------------------------------
     //
     // These are the `examine`, `force` and `deposit` of DESIGN_GUIDE.md section 10.4, which
     // are required from both Tcl and the GUI. They are on the kernel rather than in the
-    // control layer because the GUI does not go through Tcl, and a second implementation of
+    // the kernel rather than above it, because a second implementation of
     // "write a signal from outside" would be a second set of semantics.
     //
     // All of them are meant to be called between runs. Calling one from inside a process

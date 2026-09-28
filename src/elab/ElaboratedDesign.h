@@ -52,8 +52,8 @@ struct Slot {
 struct Instance {
     /// Full hierarchical path, with `/` separators and no trailing slash: `/tb/u_dut`.
     ///
-    /// Slash-separated rather than dot-separated to match what Questa's `find` and
-    /// `add wave` commands accept, since section 8.1 commits to that vocabulary.
+    /// Slash-separated rather than dot-separated, matching the hierarchical paths the GUI
+    /// and the wire protocol use.
     std::string path;
 
     /// The instance's own name, without its parents.

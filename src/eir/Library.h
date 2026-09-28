@@ -49,7 +49,8 @@ struct LibrarySource {
 /// will want; only the hit rule would change.
 ///
 /// **The library is opt-in.** Nothing uses it until a session opens one, exactly as Questa
-/// makes `vlib` precede `vlog`. That is not only convention: a cache that silently served EIR
+/// requires a library to be created before it is used. That is not only convention: a cache
+/// that silently served EIR
 /// produced by a different translator would give a different simulation result, and section
 /// 1.2 ranks that worst of all. The version is in the key, and the format version must be
 /// bumped whenever the translation changes (see Serialization.h), but an opt-in cache means a

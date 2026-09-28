@@ -427,7 +427,7 @@ TEST_F(WaveformWriterTest, ScopeFilteringDoesNotCatchASiblingWithACommonPrefix) 
 }
 
 TEST_F(WaveformWriterTest, SeveralScopesAreRecordedTogether) {
-    // What the control language builds up: `log -r` on a subtree, `add wave` on one signal.
+    // A selection built out of a subtree and one individual signal.
     build(hierarchicalDesign(), "tb");
     writer->addScope("/tb/u_dut");
     writer->addScope("/tb/drive");

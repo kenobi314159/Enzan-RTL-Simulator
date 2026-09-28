@@ -14,7 +14,7 @@
 // Section 8.1 asks for Tcl 8.6 or later. Checked here rather than in CMake because CMake's
 // FindTCL module reports no version at all, so the header is the only thing that knows.
 static_assert(TCL_MAJOR_VERSION > 8 || (TCL_MAJOR_VERSION == 8 && TCL_MINOR_VERSION >= 6),
-              "Enzan requires Tcl 8.6 or later (DESIGN_GUIDE.md section 8.1)");
+              "Enzan requires Tcl 8.6 or later (DESIGN_GUIDE.md section 10.5)");
 
 namespace enzan::gui {
 

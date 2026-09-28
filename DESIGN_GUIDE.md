@@ -97,7 +97,7 @@ The dependency stack is internally consistent under GPLv3:
 | NVC (VHDL frontend) | GPLv3 | yes, and what sets the project's licence |
 | slang (SystemVerilog frontend) | MIT | yes |
 | Qt 6 | LGPLv3 | yes |
-| Tcl | BSD-style | yes |
+| Tcl (GUI theme) | BSD-style | yes |
 | GoogleTest | BSD-3 | yes |
 | FST / libfst | permissive | yes |
 
@@ -156,7 +156,7 @@ feature users of commercial tools rely on daily and will expect.
    ┌──────────────────────┐        Unix domain socket        ┌──────────────────┐
    │   enzan (kernel)     │ <──────────────────────────────> │   enzan-gui      │
    │  headless, batch     │      versioned binary protocol   │   Qt 6 widgets   │
-   │  Tcl control layer   │                                  │   attach/detach  │
+   │                      │                                  │   attach/detach  │
    └──────────────────────┘                                  └──────────────────┘
 ```
 
@@ -185,9 +185,9 @@ without terminating it.
                                      └───────────────────────────────────────────┘
                                         │             │              │
                                         ▼             ▼              ▼
-                                   waveform DB    VPI / VHPI     Tcl control
+                                   waveform DB    VPI / VHPI        IPC
                                         │             │              │
-                                   VCD / FST       cocotb         GUI / scripts
+                                   VCD / FST       cocotb           GUI
 ```
 
 ---
@@ -678,264 +678,11 @@ GUI, and VCD/FST remain the interchange path permanently.
 
 ---
 
-## 8. Control layer
+## 8. The command line
 
-### 8.1 Tcl
-
-Tcl is the control and configuration language, matching the convention users
-already know from Questa, Vivado and Xcelium. Tcl 8.6 or later is embedded in
-the kernel, and it is **not optional**: from M3 every path into the simulator —
-a batch run, a served kernel, a script — goes through a control session, and a
-build without the interpreter would be a configuration nobody runs and nothing
-would notice breaking.
-
-The command vocabulary SHOULD follow Questa/Modelsim naming where practical, so
-that existing user muscle memory and existing scripts transfer with minimal
-friction: `vlib`, `vlog`, `vcom`, `vsim`, `run`, `restart`, `add wave`, `log`,
-`force`, `examine`, `radix`, `find`, `when`, `quit`, and for source debugging
-`bp`, `bd`, `enablebp`, `disablebp` and `step`.
-
-Where Enzan has no equivalent of a Questa concept, the command is **absent
-rather than approximated**. A script that relies on one then fails at the
-command, which the user can see and fix, instead of producing a different
-simulation, which they cannot. `vcom` is refused with the milestone it arrives
-at rather than ignored, for exactly this reason.
-
-Enzan adds `listen <socket>`, which has no Questa equivalent because Questa
-spells the same thing as a switch on `vsim`. It is in the vocabulary rather than
-only on the command line because **every capability MUST be reachable from the
-control language.** An option with no command behind it cannot be combined with
-a script, since a script is refused the options it duplicates — and `--listen`
-duplicated nothing, so refusing it made serving a front end unreachable from the
-one surface this section calls *the* interface. `--listen` is now its shorthand,
-the way the other options relate to their commands, and the two go through one
-implementation so that they cannot come to differ.
-
-Four of the commands have a definition worth writing down, because the obvious
-reading of each is wrong:
-
-- **`run` with no argument runs to the end**, the same as `run -all`. Questa
-  advances by a configurable default run length instead; Enzan has no such
-  setting, and inventing one so that the two spellings could differ would be a
-  setting nobody asked for.
-- **A time in a coarser unit than the precision is converted; a finer one is
-  refused.** `run 1ps` on a nanosecond design would round to `run 0`, and a
-  script that appears to run and does nothing is worse than one that stops. The
-  conversion is integer throughout, because 3.1 puts no floating-point time
-  anywhere in the kernel.
-- **`examine` with no radix names an enumerated value** — `S_SEND`, not
-  `3'h2` — which is what the wave window shows (10.3) and what a reader asking
-  about a state register means. A radix asks for the encoding instead, and
-  `radix symbolic` goes back.
-- **`listen` blocks, and is in practice the last command a script runs.** It
-  gives the session away rather than starting a server beside the script, so
-  where the command appears is where the handover happens: a script analyses,
-  elaborates and chooses what to log, then says `listen`, and whoever attaches
-  finds the design ready and drives the run themselves. Placing it after `run`
-  would be the wrong way round, and is refused rather than obeyed — see below.
-  It returns only when a front end asks for the simulation to *stop*, because a
-  front end that merely detaches leaves the kernel serving (2.2), and that
-  request stops the script as well, exactly as a `quit` inside a `do` file stops
-  the outer one. A script MUST NOT be written to depend on the lines after
-  `listen` running.
-
-**`listen` MUST refuse a design that has already run.** Serving puts the design
-back to time zero and starts recording there, because that is what makes the
-values a wave window shows at time zero the ones the design begins from (7.1). A
-session that had already run would therefore be silently reset, losing exactly
-the run the user meant to look at, and the wave window would have no history for
-the span anyway. The refusal names the time reached and says where the command
-goes instead. `restart` first is the way to serve a session that has run.
-
-**The refusals live in one place, not one per spelling.** `listen` and `--listen`
-are the same request and MUST be refused identically; a session method both go
-through is what guarantees that, and is the reason serving is not implemented
-twice. The kernel process is also the only place that can join the two halves:
-`ipc` depends on `control` for the session it serves, so the command reaches a
-server through an interface the driver installs rather than by depending on `ipc`
-itself.
-
-**A front end's command entry sends text, not named commands.** The kernel
-evaluates it through the same interpreter a `do` file goes through, against the
-same session. A protocol with a request per command would be a second vocabulary
-to keep in step with the first, which is the whole thing this section exists to
-prevent.
-
-A command may run the design, and while it does the socket is serviced from
-inside the kernel's interrupt poll — so the kernel MUST report itself as running
-for the whole evaluation. Without that, a second command arriving mid-run is
-dispatched and reads a design half way through a time slot.
-
-A command reports a user error through its Tcl result rather than through the
-diagnostic engine, and a failure of the phase it invoked through the engine.
-The distinction matters: a script probing for a signal that may not exist can
-catch a Tcl error, and reporting it as a diagnostic would raise the error count
-and make an otherwise clean run exit as a failed one.
-
-**All user configuration is Tcl.** There is no second configuration format. The
-GUI theme is a Tcl script setting colour variables; the window layout is a Tcl
-script. This keeps one configuration language across the whole tool and adds no
-dependency, and it is what commercial EDA tools do.
-
-Three properties of the embedding are normative, because each one is invisible
-in a passing test and expensive to retrofit.
-
-**Commands are C++, not Tcl procedures.** The vocabulary is installed as native
-commands so that the same operation is reachable from the GUI and from VPI,
-neither of which goes through Tcl. A command parses its arguments, calls the
-component that does the work, and turns the answer into a result or a
-diagnostic; a command that implements semantics of its own has put behaviour
-somewhere only one of the three control surfaces can reach it.
-
-**Script output goes to the transcript.** `puts` is replaced by one that writes
-where diagnostics write, because a GUI attached to a kernel (2.2) would
-otherwise see nothing a script said — the text would land on a terminal on
-another machine. Tcl's own `puts` is kept and delegated to for any other
-channel, so a script writing to a file it opened still works.
-
-**`quit` MUST NOT end the process from inside the interpreter.** Tcl's `exit`
-does exactly that, and the kernel has a waveform file to finish and a socket to
-unlink. `quit` records the request and the driving loop unwinds, so the exit
-status is the same and nothing is lost.
-
-The control layer is built as two libraries, and the split is a design
-constraint rather than a build detail. The interpreter and the file-list
-machinery depend on `common` alone; the command vocabulary, which owns a
-session, depends on the kernel. The GUI links only the first, for the theme
-script: a front end that linked the kernel to read a list of colours would
-quietly undo the process separation of 2.2.
-
-**A session owns the simulation, and there is one of it per kernel process.** A
-batch run, a served kernel and a `-do` script are the same pipeline through the
-same object. A server that built a kernel of its own would make two, and a
-command typed at a front end would then act on a different simulation from the
-one the front end is showing — which is the failure mode that makes a debugger
-untrustworthy rather than merely wrong.
-
-A consequence worth stating because it is easy to get wrong: whatever registers
-itself against a kernel — a value-change listener, the interrupt poll — must
-take that registration back before it is destroyed, because the kernel now
-outlives it. A listener destroyed while still registered is a dangling pointer
-the *next* run calls through.
-
-The converse holds too, and is the harder half. **A borrowed kernel is not a
-kernel that lasts.** `vsim` replaces the whole elaboration, and it is an
-ordinary command: a script or a line typed at a front end may destroy the kernel
-anything else is holding a pointer to. Whatever borrows one MUST therefore
-re-ask the session for it after every evaluation rather than after the ones that
-look like they matter, and MUST treat a session left with no simulation as a
-case rather than as an impossibility.
-
-**That question MUST be asked of the session's elaboration generation, never by
-comparing pointers.** Tearing an elaboration down frees its objects and building
-the next one allocates the same sizes in the same order, so the allocator
-routinely hands the replacement the address the old one just released. It did so
-here for the kernel but not the image on one machine, and for both on CI, so a
-pointer comparison reported "nothing has changed" about a kernel that had been
-destroyed — on one machine and not the next.
-
-Address reuse is also what makes this class of defect so dangerous: it converts
-a use-after-free into a *live* pointer into somebody else's object. There is no
-invalid access left for ASan to report, so the sanitiser job goes green and what
-surfaces instead is a wrong answer — here, a freshly elaborated design reported
-to the front end as already finished. A monotonic counter cannot be confused
-this way, which is the only reason to prefer it over the comparison that reads
-more naturally.
-
-### 8.2 File lists
-
-Both forms MUST be supported:
-
-- **`.f` files** (`-f list.f`), the de-facto industry standard. Nearly every
-  open-source design on GitHub ships one. Support `-v`, `-y`, `+incdir+`,
-  `+define+`, `-sv`, comments and nested `-f`. Requiring users to write Tcl
-  wrappers around designs that already ship `.f` lists is pointless friction.
-- **Tcl file lists**, for designs and flows that prefer them.
-
-Three details of the `.f` reader are normative, because each is a place where
-the obvious behaviour and the compatible one differ.
-
-**Relative paths follow the convention the existing files were written
-against.** A path inside a list reached by `-f` resolves against the process's
-working directory; one inside a list reached by `-F` resolves against that
-list's own directory. Resolving everything against the containing file would be
-the better rule and would break the designs this feature exists to read.
-
-**An option the reader does not recognise is an error.** File lists carry
-tool-specific switches that change what is compiled — a timescale, a
-compilation-unit mode, a language version — and skipping one produces a design
-that analyses differently from what was asked for, with nothing on screen to
-say so. The position of the option is reported, so the fix is a visible edit
-rather than a hunt. `-sv` is the one switch accepted and dropped, since it asks
-for the only language the reader reads.
-
-**`$VAR` and `${VAR}` are substituted from the environment, and an unset
-variable is an error.** These files name paths through variables constantly.
-Expanding an unset one to nothing turns `$RTL_ROOT/cpu.sv` into `/cpu.sv`,
-which is then reported as a missing source file rather than as the missing
-variable that caused it.
-
-Beyond the switches named above the reader also takes `+libext+`,
-double-quoted arguments for paths containing spaces, and `/* */` alongside `//`.
-
-`-v`, `-y` and `+libext+` are read and recorded, and the library *search* they
-describe — analysing a file only when something instantiates a module nothing
-else defines — does not exist yet. Until it does, reading one of them reports a
-warning at its position. This is the same rule as for an unrecognised option,
-applied to the case that looks different and is not: an option the reader
-recognises and then drops leaves what is analysed differing from what was asked
-for exactly as one it never understood would. It is a warning rather than an
-error only because the consequence is loud — a module reported as undefined —
-and because refusing outright would turn away every list carrying a `-v` for a
-cell the design never instantiates, which is most of them.
-
-### 8.3 Compile-order inference
-
-Users MUST NOT be required to specify compile order manually.
-
-A fast pre-scan pass extracts defined and referenced symbols from each file —
-modules, packages, interfaces, programs, entities, architectures,
-configurations — and builds a dependency graph. Files are then analysed in
-topological order. Genuine dependency cycles are reported as errors with the
-cycle spelled out; legal mutual references that do not require ordering MUST NOT
-be reported as cycles.
-
-The pre-scan MUST be much cheaper than full parsing, since it runs over every
-file before any analysis happens. One linear pass over the bytes, skipping
-comments and string literals, recognising identifiers, and tracking with a small
-stack whether a keyword sits at file scope or inside something.
-
-**Instantiating a module is not a dependency.** Elaboration resolves an
-instance against the library by name (2.1), long after both files were analysed,
-so two modules that instantiate each other are exactly the legal mutual
-reference this section forbids reporting. In SystemVerilog the constraint that
-does exist is the package: a unit that imports one, or names a member of one
-through `::`, cannot be analysed before it. The scan is written so that this
-falls out rather than being special-cased away afterwards.
-
-The scan is approximate and the direction of the approximation is chosen. A
-declaration it invents costs nothing, because a declaration only ever *satisfies*
-a dependency. A reference it invents could invent a constraint, so a reference
-becomes an edge only when the name it uses is a package that another scanned
-file declares: `some_class::CONST` orders nothing, because no file declares a
-package by that name.
-
-Conditional compilation is not evaluated: text inside a `` `ifdef `` that would
-be false is scanned like any other. Analysing a package nothing ends up
-importing is harmless; failing to analyse one that something does is not.
-
-Where nothing orders two files, they keep the order they were given. Analysis
-order is observable — in diagnostics, and in which of two duplicate definitions
-is reported as the redefinition — and 3.8 makes observable ordering
-reproducible, which neither a hash-ordered nor a stack-ordered traversal would
-be.
-
-### 8.4 The command line
-
-The control language is the interface (8.1), so each executable's command line is
-deliberately small. What it does carry is still an interface, and the rules below
-exist because the two programs had already drifted apart without anyone deciding
-that they should.
+Each executable's command line is small, and it is still an interface. The rules
+below exist because the two programs had already drifted apart without anyone
+deciding that they should.
 
 **An option two executables share MUST be spelled the same in both**, short forms
 included. `--top`, `--timescale` and `--wave-scope` mean one thing whether the
@@ -943,9 +690,8 @@ kernel or the front end is given them, and a user who learns `-t` on one and is
 refused it by the other has been taught something untrue about the tool.
 
 **`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` is not a synonym:
-in the file-list vocabulary Enzan already reads, `-v` names a library file (8.2),
-and binding it to something else on one command line invites the two meanings to
-collide later.
+Verilog tools spell a library file that way, and binding it to something else on
+one command line invites the two meanings to collide later.
 
 **One definition of what `--version` prints**, in `common` rather than in each
 executable. Two copies is how the front end came to print its own name in front of
@@ -1098,67 +844,32 @@ range on its own line (10.7). A dialog asking for `high:low` was the first way
 this worked and has been withdrawn: it was a second way to reach the same place,
 it could only ever produce a contiguous range, and it put a number between the
 reader and a thing they can point at. The model keeps the operation, because the
-control language's `add wave` takes a range as text (8.1) and will call it.
+a front end asks for a range as text and will call it.
 
 Defaults, as specified: multi-bit values display in **hexadecimal**; single-bit
 values display as a line high or low.
 
 What the mouse and the keyboard do with all of this is section 10.7.
 
-### 10.4 Debugging features
+### 10.4 Writing signals from outside
 
 The waveform is the headline feature but not the whole product. Also required:
-source stepping, breakpoints on HDL source lines, run/continue/step controls,
-and `examine`, `force` and `deposit` on signals from both the GUI and Tcl. These
-are what make a simulator usable for debugging rather than merely for watching.
+run/continue controls, and `examine`, `force` and `deposit` on signals from the
+GUI.
 
-**These operations live on the kernel, not in the control layer.** The GUI does
-not go through Tcl and VPI will not either, and a second implementation of
-"write a signal from outside" would be a second set of semantics to keep in
-step. A Tcl command's job is to parse its arguments and call one of them (8.1).
+**These operations live on the kernel.** The GUI does not reach them through any
+intermediate layer and VPI will not either, and a second implementation of "write
+a signal from outside" would be a second set of semantics to keep in step.
 
-**Position is carried on EIR-B, and as a line table on the bytecode.** Every
-EIR instruction records the statement it came from; codegen turns that into a
-table with one entry per *change* of location, sorted by address. The bytecode
-instruction the VM executes gains nothing, so the interpreter's inner loop
-never touches it and a JIT keeps the same table against its own addresses. The
-granularity is the statement, because a source-line debugger stops on lines and
-a per-expression table would be larger and no more useful.
+**A force outranks the design; a deposit does not.** Every subsequent write to a
+forced signal is discarded until it is released, which is what makes a force
+useful for pinning a reset or a mode bit. A deposit is written once and whatever
+drives the signal next overwrites it.
 
-**Debugging costs a stopped simulation nothing.** The execution path tests one
-boolean that is false whenever no breakpoint exists and no step is pending;
-breakpoints are resolved to addresses when they are *set*, not searched for
-when they might fire. That is what keeps 13.4 intact while a line breakpoint
-exists at all.
-
-**A breakpoint stops before its line runs**, so continuing executes that line
-exactly once and the line reported is the one about to run rather than the one
-just finished. The paused process goes back to the *head* of the region it came
-from, so a resumed run produces what an uninterrupted one would have — which is
-3.8, and would not be true of re-queueing it behind whatever was waiting.
-
-**A breakpoint on a line that compiled to no instructions is refused**, rather
-than recorded as one that can never fire. A marker in the source window that
-silently does nothing is worse than being told the line has no code on it.
-
-A step runs until the source *line* changes — not until the next instruction,
-and **not until the next statement either**. A statement compiles to a run of
-instructions, so stepping by instruction would be stepping through something the
-user never wrote; and positions are recorded per statement, so comparing them
-directly would stop twice on `a = 0; b = 0;` written on one line. Both are the
-same mistake seen from different distances: the unit a step moves by is the unit
-the person reading the source sees, which is the line.
-
-**A front end asks the kernel for source text; it MUST NOT read the file
-itself.** The kernel is the end that knows what it analysed, and it may be on
-another machine entirely (2.2). A window that opened the path would show
-whatever is at that path on the machine running the window, which is either the
-same file or a quietly different one — and the second case is a debugger
-pointing at the wrong line with no way to tell.
-
-**Where a run stopped travels with the fact that it stopped.** The two are one
-fact, and a client that learned them from separate messages could draw its
-current-line marker against a run state it no longer holds.
+**Forcing costs an ordinary run nothing.** The table of forced signals is
+allocated when the first force in a run needs it, so the check on the signal
+write path is a test of one size against zero until then — which is what keeps
+13.4 intact.
 
 ### 10.5 Theme
 
@@ -1204,7 +915,7 @@ is retired by deleting it and never reusing the number; codes are not renumbered
 Numbers are allocated in ranges by the component that emits the diagnostic — 1–999
 for the driver and source handling, 1000–1999 for the SystemVerilog frontend,
 2000–2999 for VHDL, 3000–3999 for elaboration, 4000–4999 for codegen, 5000–5999
-for the runtime, 6000–6999 for the control layer, 7000–7999 for the waveform
+for the runtime, 6000–6999 for the session, 7000–7999 for the waveform
 database, 8000–8999 for the PLI, and 9000–9999 for internal errors. The catalogue
 itself is `src/common/DiagnosticCodes.def`.
 
@@ -1479,7 +1190,7 @@ license check against section 1.4.
 |---|---|---|
 | slang | SystemVerilog frontend | system, FetchContent fallback |
 | NVC | VHDL frontend (M6) | vendored submodule, pinned |
-| Tcl 8.6+ | control language | system |
+| Tcl 8.6+ | GUI theme language (M2) | system |
 | Qt 6 | GUI (M2) | system |
 | GoogleTest | unit tests | system, FetchContent fallback |
 | LLVM | JIT backend (M8, optional) | system, off by default |
@@ -1520,7 +1231,7 @@ Enzan-RTL-Simulator/
 │   ├── codegen/              EIR-B -> bytecode
 │   ├── runtime/              VM, scheduler, value engine, drivers
 │   ├── wavedb/               waveform database, VCD and FST writers
-│   ├── control/              Tcl interpreter, commands, file lists
+│   ├── session/              analysis, elaboration and the kernel, per process
 │   ├── ipc/                  kernel <-> GUI protocol
 │   ├── pli/                  VPI and VHPI
 │   └── gui/                  Qt 6 application code
@@ -1892,12 +1603,9 @@ renamed and stepped from edge to edge, and a signal list whose rows can be
 reordered, unpacked into their bits and highlighted. With the database query the
 last of those needs (7.1).
 
-Placed here, between the GUI and the control layer, for three reasons. It is
-contained entirely in the components M2 has just built, while that code is still
-warm. Nothing later blocks on it, so putting it first costs no other milestone
-anything — while M3's command vocabulary will want a settled notion of the
-active cursor and the selected signal, which is an argument for fixing them
-before the commands are written against them rather than after. And design
+Placed here, straight after the GUI, for three reasons. It is contained entirely
+in the components M2 has just built, while that code is still warm. Nothing later
+blocks on it, so putting it first costs no other milestone anything. And design
 priority 1.2 puts usability above both performance and language breadth: the
 wave window is the part of Enzan a user touches most, and leaving its controls
 until after the VHDL frontend would be ordering the work for everything except
@@ -1911,14 +1619,9 @@ window is driven.
 can lock one cursor on an edge, step a second along the same signal with Tab, and
 read both times off their labels without touching the mouse.
 
-### M3 — Control layer and source debugging
+### M3 — Control layer
 
-Embedded Tcl with the Modelsim-style command vocabulary; `.f` and Tcl file
-lists; compile-order inference; library persistence and reuse; Source window
-with breakpoints, stepping, `examine`, `force` and `deposit`.
-
-**Exit:** a design driven end to end from a script; libraries reused across
-runs without re-analysis.
+*(open)* — not yet specified.
 
 ### M4 — VPI and cocotb
 

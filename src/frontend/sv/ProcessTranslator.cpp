@@ -1520,9 +1520,9 @@ bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNod
     } else if (name == "$write" || name == "$writeb" || name == "$writeo" || name == "$writeh") {
         kind = eir::SysTaskKind::Write;
     } else if (name == "$finish" || name == "$stop") {
-        // `$stop` would return control to an interactive prompt, which needs the control
-        // layer of M3. Treating it as `$finish` ends the run instead of ignoring it, which
-        // is the safer of the two wrong answers.
+        // `$stop` would return control to an interactive prompt, and there is none. Treating
+        // it as `$finish` ends the run instead of ignoring it, which is the safer of the two
+        // wrong answers.
         kind = eir::SysTaskKind::Finish;
         ignoreArguments = true;
     } else if (name == "$fatal") {

@@ -1349,7 +1349,7 @@ TEST(Kernel, AForcedSignalIgnoresANonBlockingUpdate) {
 }
 
 // ---------------------------------------------------------------------------
-// restart (section 8.1)
+// restart
 // ---------------------------------------------------------------------------
 
 TEST(Kernel, ReinitialisingRunsTheDesignAgainIdentically) {

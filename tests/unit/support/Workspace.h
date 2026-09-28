@@ -61,32 +61,6 @@ private:
     std::filesystem::path root;
 };
 
-/// Stands the process in `directory` for as long as this object lives.
-///
-/// Needed where the behaviour under test is defined in terms of the working directory — a
-/// `.f` file's relative paths are (DESIGN_GUIDE.md section 8.2) — because testing that
-/// convention from the wrong directory tests something else.
-class ScopedWorkingDirectory {
-public:
-    explicit ScopedWorkingDirectory(const std::filesystem::path& directory)
-        : previous(std::filesystem::current_path()) {
-        std::filesystem::current_path(directory);
-    }
-
-    ScopedWorkingDirectory(const ScopedWorkingDirectory&) = delete;
-    ScopedWorkingDirectory& operator=(const ScopedWorkingDirectory&) = delete;
-    ScopedWorkingDirectory(ScopedWorkingDirectory&&) = delete;
-    ScopedWorkingDirectory& operator=(ScopedWorkingDirectory&&) = delete;
-
-    ~ScopedWorkingDirectory() {
-        std::error_code ignored;
-        std::filesystem::current_path(previous, ignored);
-    }
-
-private:
-    std::filesystem::path previous;
-};
-
 } // namespace enzan::test
 
 #endif // ENZAN_TESTS_UNIT_SUPPORT_WORKSPACE_H

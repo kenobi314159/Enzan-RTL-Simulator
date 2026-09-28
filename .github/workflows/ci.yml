@@ -82,9 +82,6 @@ jobs:
       # times per commit would spend most of the CI budget on a dependency that
       # one job proves just as well.
       #
-      # Tcl is installed rather than switched off. From M3 the control layer is how the kernel
-      # is driven (DESIGN_GUIDE.md section 8.1), so a matrix that built without it would be
-      # testing a configuration nobody runs.
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
@@ -189,9 +186,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Qt 6 for the windows and Tcl for the theme. Section 8.1 makes Tcl the configuration
-      # language for the whole tool, so the theme needs an interpreter even though the control
-      # layer itself is M3.
+      # Qt 6 for the windows and Tcl for the theme.
       - name: Install dependencies
         run: |
           sudo apt-get update

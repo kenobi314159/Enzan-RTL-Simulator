@@ -162,7 +162,7 @@ bool Library::load(std::span<const LibrarySource> sources, const SourceManager& 
     }
 
     // A stored location may name a file the caller has not read — an include, or a source from
-    // an earlier `vlog`. Only the buffers already in hand are offered: reading files to
+    // an earlier analysis. Only the buffers already in hand are offered: reading files to
     // resolve a location would undo the saving the library exists for, and a location that
     // cannot be resolved simply loses its snippet.
     std::map<std::string, BufferId, std::less<>> known;

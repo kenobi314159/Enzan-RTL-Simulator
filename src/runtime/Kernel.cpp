@@ -80,8 +80,8 @@ std::ostream& Kernel::transcriptStream() const {
 void Kernel::initialize() {
     designImage->initializeState(stateArena);
 
-    // Everything a previous run left behind goes with it, because `restart` (section 8.1) is
-    // this method called a second time and a design put back to time zero must behave exactly
+    // Everything a previous run left behind goes with it, because a restart is this method
+    // called a second time and a design put back to time zero must behave exactly
     // as it did the first time. A clock event still in the time wheel would resume at a
     // timestamp the design has not reached; a process still holding a resume point would
     // continue a simulation that no longer exists; an edge subscription would fire for an

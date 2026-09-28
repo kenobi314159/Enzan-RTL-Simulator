@@ -30,10 +30,10 @@ struct Options {
 
     /// Buffers already holding each file's text, parallel to `files`, or empty.
     ///
-    /// The compile-order pre-scan (section 8.3) has read every source in order to scan it, so
-    /// handing the buffers over saves the frontend reading them again. That is not only about
-    /// the I/O: the source manager does not deduplicate, so a second read leaves *two*
-    /// buffers per file, and a SourceLocation's buffer then depends on which pass produced it.
+    /// The caller has already read every source, so handing the buffers over saves the
+    /// frontend reading them again. That is not only about the I/O: the source manager does not
+    /// deduplicate, so a second read leaves *two* buffers per file, and a SourceLocation's
+    /// buffer then depends on which pass produced it.
     /// Two things downstream compare locations by buffer — the analysis library, which
     /// attributes units to files, and a source-line breakpoint — and both were silently
     /// matching nothing.

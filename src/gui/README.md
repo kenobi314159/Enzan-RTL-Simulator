@@ -33,8 +33,8 @@ layered over it, so a file that sets three colours changes three colours. A key 
 `ThemeColors.def` without being added to the theme file fails a test rather than producing a
 black rectangle on someone's screen.
 
-**The theme is Tcl** because section 8.1 commits to Tcl as *the* configuration language for the
-whole tool, with no second format. The script gets one command and nothing else: a theme is a
+**The theme is Tcl** because section 10.5 says so, rather than inventing a settings format for
+one purpose. The script gets one command and nothing else: a theme is a
 list of colours, and an interpreter that also offered file access would make "copy this theme
 from the internet" a more exciting decision than it should be.
 
@@ -64,12 +64,4 @@ for the other.
 
 ## What this milestone does not include
 
-The **Source** and **Processes** windows of section 10.2 are absent. Source browsing is only
-useful with the breakpoints and stepping that make it a debugger rather than a file viewer, and
-those arrive with M3; a window that showed source and could do nothing with it would be a worse
-answer than the editor the user already has.
-
-The Transcript's **command entry is present and disabled**, with the reason in its placeholder.
-Section 8.1 commits to Tcl with a Questa-style vocabulary as *the* control language and section 18
-puts it in M3. A handful of commands invented here to fill the gap would be a second control
-surface that M3 would then have to stay compatible with.
+The **Source** and **Processes** windows of section 10.2 are absent.

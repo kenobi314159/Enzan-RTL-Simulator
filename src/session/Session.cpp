@@ -199,7 +199,7 @@ bool Session::elaborate(std::string_view topModule) {
         return false;
     }
 
-    // Before anything new is built, so that a failed `vsim` on a running design leaves nothing
+    // Before anything new is built, so that a failed elaboration on a running design leaves nothing
     // half-replaced for the next command to find.
     discardElaboration();
 

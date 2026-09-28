@@ -6,10 +6,8 @@
 // executable must stay usable with no display attached, so nothing here may reach into
 // src/gui or link Qt.
 //
-// The command line is deliberately minimal. Section 8.1 commits to Tcl as *the* control
-// language with a Questa-style command vocabulary, and that arrives with M3; adding a broad
-// set of switches now would create a second control surface to keep compatible with it. What
-// is here is enough to analyse, elaborate and run one design, which is what M1 needs.
+// The command line is deliberately minimal: enough to analyse, elaborate and run one design,
+// or to serve it to a front end. Section 8 holds the rules it shares with `enzan-gui`.
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
@@ -253,7 +251,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 ///
 /// One pipeline for the batch run, the served kernel and the script. Three copies of it was
 /// where the differences between them started: a `--listen` that resolved a file differently
-/// from a `vlog`, or a batch run that put the waveform somewhere a served one did not.
+/// differently from another, or a batch run that put the waveform somewhere a served one did not.
 bool prepare(const Invocation& invocation, enzan::session::Session& session,
              enzan::DiagnosticEngine& diagnostics) {
     session.setTimeScale(enzan::runtime::TimeScale(invocation.timeExponent));

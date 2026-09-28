@@ -49,7 +49,7 @@ public:
 
     /// Adds `pathPrefix` to what is recorded, keeping what was already selected.
     ///
-    /// A list rather than one prefix, because that is what the control language asks for: `log
+    /// A list rather than one prefix, because a selection is built out of subtrees: a request
     /// -r /tb/u_dut` names a subtree and `add wave /tb/clk` names one signal, and a reader
     /// builds up a selection out of both. A path that is a signal's own path matches that
     /// signal and nothing else, so the two cases need no distinction here.

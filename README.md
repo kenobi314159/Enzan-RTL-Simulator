@@ -9,11 +9,9 @@ The name is Japanese and carries two readings: *distant peaks* (遠山), for the
 mountain-like horizon of a screen full of waveforms, and *calculation* (演算),
 for the computational work the simulator performs.
 
-**Status: milestone M3 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and FST
-waveforms, and is driven either from a Tcl script with a Questa-style command vocabulary or from
-an interactive graphical debugging environment — with breakpoints on HDL source lines, stepping
-by line, and `examine`, `force` and `deposit` from both. Analysed sources are cached in a `work/`
-library and reused across runs. A parameterised counter, a synchronous FIFO, and a packet router
+**Status: milestone M2.1 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and
+FST waveforms, and comes with an interactive graphical debugging environment. A parameterised
+counter, a synchronous FIFO, and a packet router
 three levels deep that pushes four hundred and eighty transfers through three channel instances
 all run, self-check, and agree with Icarus Verilog. See [what works
 today](#what-works-today) and the roadmap below.
@@ -33,7 +31,7 @@ Enzan targets **Linux only**; Windows and macOS support are explicit non-goals.
 | Python 3 | 3.8 | optional; only for the waveform structure checks in the test suite |
 | GoogleTest | 1.12 | built from source automatically if absent |
 | Qt 6 | 6.4 | only for the GUI, which is off by default |
-| Tcl | 8.6 | the control language; also the GUI theme |
+| Tcl | 8.6 | the GUI theme; needed only with `-DENZAN_BUILD_GUI=ON` |
 | ccache | any | optional; used automatically when present |
 
 On Arch and derivatives:
@@ -63,9 +61,7 @@ sudo dnf install qt6-qtbase-devel
 If a dependency is missing, CMake stops with a message naming the package to
 install for your distribution rather than with a link error.
 
-Tcl is not optional. It is the control language (`--do`, `-i`, the Transcript's command entry),
-the format of the GUI theme, and what every path into the simulator goes through; there is no
-build without it to keep working.
+Tcl is needed only for the GUI, whose theme is a Tcl script.
 
 ### Running a simulation
 
@@ -79,96 +75,6 @@ diff the file yourself: it is far smaller on a real design and a viewer can seek
 
 `enzan --help` lists the options.
 
-### Driving a simulation from a script
-
-The control language is Tcl with a Questa-style command vocabulary, so a script that drives
-Modelsim or Questa reads the same here:
-
-```tcl
-vlog -sv design.sv testbench.sv
-vsim -t ns tb
-
-log -r /tb
-vcd file wave.vcd
-
-run 100 ns
-puts "count is [examine -radix decimal /tb/count]"
-
-force /tb/enable 1'b0
-run 50 ns
-noforce /tb/enable
-
-run -all
-quit
-```
-
-`enzan --do script.do` runs it and exits with what `quit` asked for, so a makefile can tell a
-passing regression from a failing one. Anything else on the command line reaches the script as
-`$argv`. `enzan -i` reads commands from the standard input instead, and the two combine: the
-script runs, then the prompt.
-
-The vocabulary is `vlib`, `vlog`, `vsim`, `run`, `restart`, `examine`, `force`, `noforce`,
-`deposit`, `log`, `add wave`, `vcd file`, `fst file`, `find`, `radix`, `do`, `listen`, `quit`,
-and for source debugging `bp`, `bd`, `enablebp`, `disablebp` and `step`. `vlog` reads `.f`
-file lists with `-f`, understands `+incdir+`, `+define+` and `-sv`, and works out the compile
-order itself — a package can be named after the module that imports it. `vcom` is refused
-rather than ignored until VHDL arrives at M6, so that a mixed-language script fails at the
-command instead of simulating half a design.
-
-Three commands are worth knowing precisely. `run` with nothing runs to the end, like
-`run -all`. A time in a coarser unit than the simulation's is converted and a finer one is
-refused, because turning `run 1ps` into `run 0` on a nanosecond design would make a script
-appear to run and do nothing. And `examine` with no radix gives an enumerated signal the name
-its type uses — `S_SEND`, not `3'h2` — with `-radix` or the `radix` command asking for the
-encoding.
-
-Because the script is the whole interface, `--do` and `-i` refuse the options above rather
-than becoming a second way to say the same thing.
-
-### Stopping in the source
-
-`bp <file> <line>` puts a breakpoint on an HDL line and `step` advances by one line:
-
-```tcl
-vlog -sv counter.sv
-vsim -t ns tb
-
-bp counter.sv 19        ;# the line the counter increments on
-run -all                ;# stops there, inside the DUT
-examine -radix decimal /tb/count
-step
-step
-disablebp 1
-run -all
-```
-
-A breakpoint stops *before* its line runs, so the value you read is the one going in and
-continuing executes the line exactly once. `bp` on its own lists what is set, `bd` removes
-one, and `bd -all` clears them. A breakpoint on a line that compiled to no instructions — a
-declaration, a comment — is refused with the reason, rather than left as a marker that can
-never stop anything.
-
-### Reusing analysed sources
-
-`vlib work` creates an analysis library, and `vlog` after it stores what it analysed there and
-reuses it on the next run when nothing has changed:
-
-```tcl
-vlib work
-vlog design.sv testbench.sv   ;# analyses, and stores
-vsim tb
-```
-
-Run the same script again and `vlog` prints `# reusing the analysed units in the library` and
-does not call the frontend at all. An entry is keyed by the source text together with
-everything else that changes what analysis produces — the macros, the include path, the
-serialised format version and Enzan's own version — so an edit, a changed `+define+` or a new
-build of Enzan is a miss and re-analyses.
-
-It is opt-in, the way Questa makes `vlib` precede `vlog`, and deliberately so: a cache that
-served units produced by a different translator would give a different simulation result, and
-a user who suspects one should have an obvious thing to stop doing.
-
 ### Running a simulation under the GUI
 
 The GUI is built with `-DENZAN_BUILD_GUI=ON` — off by default, because Qt 6 is a sizeable
@@ -178,38 +84,7 @@ thing to install for someone working on the kernel. With it built:
 enzan-gui --top tb design.sv testbench.sv
 ```
 
-which starts a kernel for the design and attaches to it. To set the simulation up from a script
-instead — compile options, a file list, what to log — hand the window that script and let it do
-the work:
-
-```sh
-enzan-gui --do setup.do design.sv testbench.sv
-```
-
-The script says `vlog`, `vsim`, `log` and `add wave` as any other does, the files named reach it
-as `$argv`, and the window attaches once it has finished. Nothing else is passed with `--do`:
-`--top`, `--timescale` and `--wave-scope` are refused beside it, because the script says those
-things itself.
-
-A script can also choose where the handover happens, with `listen`:
-
-```tcl
-vlog -sv design.sv testbench.sv
-vsim -t ns tb
-log -r /tb
-add wave /tb/count
-
-listen /tmp/enzan.sock
-```
-
-`listen` blocks and is the last thing such a script does: a window that detaches leaves the
-kernel serving, so that a long run can be looked in on and left again, and quitting from the
-window ends the script too. `enzan --do setup.do --listen /tmp/enzan.sock` is the same thing with
-the handover at the end of the script instead.
-
-One rule is worth knowing: `listen` refuses a design that has already run, because serving puts
-it back to time zero and would discard that run rather than show it. Put `listen` before the run
-and drive it from the window, or `restart` first. Press **Run**, click a scope in
+which starts a kernel for the design and attaches to it. Press **Run**, click a scope in
 **Structure**, select signals in **Objects** and press Ctrl+W to put them in the wave window;
 the traces fill in as the simulation advances.
 
@@ -250,19 +125,6 @@ enzan-gui --attach /tmp/enzan.sock
 Closing a window that started its own kernel stops that kernel; closing one that attached to a
 running kernel only detaches from it, so a long run is left alone and can be looked in on again.
 
-**Source** sits beside **Wave** as a tab of the same area. Clicking a scope in **Structure**
-opens the file its module is declared in; clicking in the line-number gutter puts a breakpoint
-on that line and clicking it again takes it away. **Step** (F11) advances by one source line,
-and when the design stops the Source tab comes forward with the line marked and the process it
-stopped in named in the transcript. The text comes from the kernel rather than from your own
-disk, so a window attached to a kernel on another machine shows the bytes that kernel analysed
-and not whatever happens to be at the same path locally.
-
-The **Transcript**'s entry takes the same commands a script does — `run 100ns`, `examine
-/tb/count`, `bp counter.sv 19` — and sends them to the kernel's own interpreter, so a window and
-a `.do` file drive the same session in the same language. Up and Down walk back through what you
-typed.
-
 Right-clicking in **Objects** offers **Deposit…**, **Force…** and **Release** alongside *Add to
 Wave*. A deposit writes the value now and the next thing that drives the signal overwrites it; a
 force holds it against the design until released.
@@ -291,16 +153,10 @@ three colours.
 | Wave window: `enum` values shown by name | yes, with the radix menu to see the encoding |
 | Wave window: parameters and localparams as constant rows | yes, listed in Objects beside the signals |
 | Attaching a local GUI to a kernel running elsewhere | yes, over a forwarded socket |
-| Tcl control layer: `vlog`, `vsim`, `run`, `examine`, `force`, `log`, `find`, `do` | yes, from a script or a prompt |
-| `.f` file lists and automatic compile order | yes |
-| Analysis libraries reused across runs (`vlib`) | yes, keyed on the sources and the options |
-| Breakpoints on HDL source lines and stepping by line | yes, from a script and from the Source window |
-| Source window: current line, breakpoint gutter, step | yes |
 | `force`, `deposit` and `release` from the Objects window | yes |
-| Typing control-language commands into the Transcript | yes, with history |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
-| The Processes window, VHDL, VPI | not yet — M3, M6, M4 |
+| The Processes and Source windows, VHDL, VPI | not yet — M6, M4 |
 
 Anything unsupported is reported with a source location and the construct named, never
 mistranslated: a partially translated design would simulate and give the wrong answer, which is
@@ -410,9 +266,7 @@ M1 — a SystemVerilog subset simulating to a VCD or FST waveform, with a counte
 self-check and agree with a reference simulator, and cycles/sec recorded per commit — and so is
 M2, the interactive GUI. Broader language coverage is M5's job rather than a gap in any of them.
 
-M2.1, the wave window's mouse and keyboard model, followed, and then M3: the Tcl control layer and
-source debugging. A design is driven end to end from a script and libraries are reused across runs
-without re-analysis, which are M3's two exit criteria, and both are held there by a golden test.
+M2.1, the wave window's mouse and keyboard model, followed.
 
 Next is M4, VPI and cocotb, then M5 four-state completion and language breadth, M6 VHDL via NVC,
 and M7 mixed-language simulation. See [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the

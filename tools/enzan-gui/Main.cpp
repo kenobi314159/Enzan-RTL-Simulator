@@ -86,18 +86,7 @@ Options:
                           Write the built-in theme to this file and exit, as a starting
                           point for one of your own.
 
-Control language:
-      --do <script>       Set the simulation up from this Tcl script instead of from the
-                          options above. The script says `vlog`, `vsim`, `log` and the rest
-                          of the vocabulary in DESIGN_GUIDE.md section 8.1, and this window
-                          attaches once it has handed the session over. Any files named are
-                          passed to the script as $argv.
-
-The script is the whole set-up when --do is given, so --top, --timescale and --wave-scope are
-refused alongside it, as they are by the kernel. --attach is refused too: a kernel that is
-already listening has been set up already.
-
-With neither sources, --do nor --attach, the window comes up and explains itself.
+With neither sources nor --attach, the window comes up and explains itself.
 
 The normative specification is DESIGN_GUIDE.md in the source tree.
 )";
@@ -167,14 +156,6 @@ int main(int argc, char** argv) {
     const QCommandLineOption kernelOption(QStringLiteral("kernel"),
                                           QStringLiteral("Path to the enzan kernel to start."),
                                           QStringLiteral("program"));
-    const QCommandLineOption doOption(
-        QStringLiteral("do"),
-        QStringLiteral("Set the simulation up from this Tcl script instead of from the options "
-                       "here. The script says `vlog`, `vsim`, `log` and the rest of the "
-                       "vocabulary, and the kernel waits for this window once it has finished. "
-                       "Any files named are passed to the script as $argv."),
-        QStringLiteral("script"));
-
     parser.addOption(attachOption);
     parser.addOption(topOption);
     parser.addOption(timescaleOption);
@@ -182,7 +163,6 @@ int main(int argc, char** argv) {
     parser.addOption(themeOption);
     parser.addOption(writeThemeOption);
     parser.addOption(kernelOption);
-    parser.addOption(doOption);
     parser.addPositionalArgument(QStringLiteral("files"),
                                  QStringLiteral("HDL source files to simulate."),
                                  QStringLiteral("[file.sv...]"));
@@ -237,53 +217,21 @@ int main(int argc, char** argv) {
         window.note(QStringLiteral("%1: %2").arg(themePath, themeError));
     }
 
-    // Refused here rather than passed on, because the kernel refuses the option set beside a
-    // script — the script is the whole interface (DESIGN_GUIDE.md section 8.1) — and a message
-    // about an option this window was never given would be a puzzle to whoever typed it.
-    if (parser.isSet(doOption)) {
-        const char* conflicting = nullptr;
-        if (parser.isSet(attachOption))
-            conflicting = "--attach";
-        else if (parser.isSet(topOption))
-            conflicting = "--top";
-        else if (parser.isSet(timescaleOption))
-            conflicting = "--timescale";
-        else if (parser.isSet(scopeOption))
-            conflicting = "--wave-scope";
-
-        if (conflicting != nullptr) {
-            QTextStream(stderr) << "enzan-gui: " << conflicting
-                                << " cannot be combined with --do; the script says these things "
-                                   "itself with `vsim -t`, `log` and `add wave`, and --attach "
-                                   "connects to a kernel that has already been set up\n";
-            return EXIT_FAILURE;
-        }
-    }
-
     QString error;
     if (parser.isSet(attachOption)) {
         if (!session.attach(parser.value(attachOption), error)) {
             window.note(QStringLiteral("Could not attach to %1: %2")
                             .arg(parser.value(attachOption), error));
         }
-    } else if (parser.isSet(doOption) || !parser.positionalArguments().isEmpty()) {
+    } else if (!parser.positionalArguments().isEmpty()) {
         QStringList arguments;
-        if (parser.isSet(doOption)) {
-            // The script is the whole set-up, so none of the options above are passed with it.
-            // `--listen` is added by `launch`, and it is what hands the session over once the
-            // script has finished — so a script driven from here says `vlog`, `vsim` and `log`
-            // and leaves the handover alone rather than calling `listen` with a socket of its
-            // own, which this window would not be waiting on.
-            arguments << QStringLiteral("--do") << parser.value(doOption);
-        } else {
-            if (parser.isSet(topOption))
-                arguments << QStringLiteral("--top") << parser.value(topOption);
-            if (parser.isSet(timescaleOption)) {
-                arguments << QStringLiteral("--timescale") << parser.value(timescaleOption);
-            }
-            if (parser.isSet(scopeOption)) {
-                arguments << QStringLiteral("--wave-scope") << parser.value(scopeOption);
-            }
+        if (parser.isSet(topOption))
+            arguments << QStringLiteral("--top") << parser.value(topOption);
+        if (parser.isSet(timescaleOption)) {
+            arguments << QStringLiteral("--timescale") << parser.value(timescaleOption);
+        }
+        if (parser.isSet(scopeOption)) {
+            arguments << QStringLiteral("--wave-scope") << parser.value(scopeOption);
         }
         arguments << parser.positionalArguments();
 
@@ -296,9 +244,8 @@ int main(int argc, char** argv) {
         // Neither a socket nor sources. The window is up and useful — it explains itself —
         // rather than the program exiting with a usage message at someone who double-clicked.
         window.note(QStringLiteral(
-            "Nothing to simulate yet. Start this with HDL sources to run them, with "
-            "--do <script> to set a simulation up from a Tcl script, or with --attach <socket> "
-            "to connect to a kernel already running under `enzan --listen`."));
+            "Nothing to simulate yet. Start this with HDL sources to run them, or with "
+            "--attach <socket> to connect to a kernel already running under `enzan --listen`."));
     }
 
     return QApplication::exec();

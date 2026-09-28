@@ -65,7 +65,7 @@ public:
 
         // The top instance's path is its module name, so that a design elaborated
         // with `tb` as its top has `/tb/...` paths — which is what a user typing a
-        // Questa-style `add wave /tb/u_dut/count` expects.
+        // a hierarchical path like /tb/u_dut/count names.
         const std::uint32_t topInstance =
             createInstance("/" + design.module(*topIndex).name, design.module(*topIndex).name,
                            *topIndex, Instance::NoParent);

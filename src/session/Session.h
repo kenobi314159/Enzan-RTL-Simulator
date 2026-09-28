@@ -44,18 +44,17 @@ class WaveformWriter;
 
 namespace enzan::session {
 
-/// Everything one `enzan` process holds between commands.
+/// The analysis, elaboration and simulation one `enzan` process holds.
 ///
-/// The session is the object the command vocabulary of section 8.1 acts on, and it is
-/// deliberately not a Tcl thing: the GUI drives the same operations without an interpreter
-/// anywhere in the picture, and VPI will too. A command's job is to parse its arguments and
-/// call one of these methods (`src/control/README.md`).
+/// One object for all three phases, because the batch driver and the served kernel must be the
+/// same pipeline: two of them would mean two simulations, and a front end would then be showing
+/// a different one from whatever else was driving it.
 ///
 /// The three phases of section 2.1 are three distinct states here, and the state machine is
 /// what the commands enforce rather than discover:
 ///
-/// - **analysed**: `vlog` has produced EIR. `vsim` needs this.
-/// - **elaborated**: `vsim` has produced an instance tree, an arena and a kernel. Everything
+/// - **analysed**: `analyse` has produced EIR. Elaboration needs this.
+/// - **elaborated**: `elaborate` has produced an instance tree, an arena and a kernel. Everything
 ///   that touches a signal needs this.
 /// - **running**: between `run` calls. The kernel is stopped whenever a command sees it,
 ///   because commands are executed from the loop that drives the kernel and never from
@@ -92,19 +91,19 @@ public:
     /// (section 10.6) rather than as a bare string.
     [[nodiscard]] DiagnosticEngine& diagnosticEngine() const noexcept { return diagnostics; }
 
-    /// Sets the time unit delays are counted in. Takes effect at the next `vsim`.
+    /// Sets the time unit delays are counted in. Takes effect at the next elaboration.
     void setTimeScale(runtime::TimeScale unit) noexcept { scale = unit; }
 
     [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
 
-    /// Sets the delta cycles allowed at one timestamp. Takes effect at the next `vsim`.
+    /// Sets the delta cycles allowed at one timestamp. Takes effect at the next elaboration.
     void setDeltaLimit(std::uint32_t limit) noexcept { deltaLimit = limit; }
 
     // -----------------------------------------------------------------------
     // Analysis
     // -----------------------------------------------------------------------
 
-    /// What one `vlog` invocation adds.
+    /// What one `analyse` call adds.
     struct AnalysisRequest {
         std::vector<std::filesystem::path> files;
         std::vector<std::string> defines;
@@ -118,9 +117,6 @@ public:
     /// section 4.4's library store; until that exists, re-analysing is the behaviour that is
     /// *correct*, and the only thing wrong with it is that it is slower than it will be.
     ///
-    /// The files of every `vlog` so far are put in dependency order before analysis (section
-    /// 8.3), so a script may name a package after the module that imports it.
-    ///
     /// When a library is open (`openLibrary`) and every source has a current entry in it, the
     /// units are loaded from there and the frontend does not run at all. Otherwise everything
     /// is analysed and every entry rewritten.
@@ -130,7 +126,7 @@ public:
 
     /// Takes `analysed` as this session's design, replacing whatever was there.
     ///
-    /// The seam for a design that came from somewhere other than this session's own `vlog`:
+    /// The seam for a design that came from somewhere other than this session's own analysis:
     /// units loaded from a library, a design assembled from two frontends once mixed-language
     /// simulation arrives (section 3.5), and a test that builds EIR by hand to exercise the
     /// kernel without depending on a frontend.
@@ -140,9 +136,9 @@ public:
     /// next command.
     void setDesign(std::unique_ptr<eir::Design> analysed);
 
-    /// Opens `path` as the analysis library, creating the directory: `vlib`.
+    /// Opens `path` as the analysis library, creating the directory.
     ///
-    /// Opt-in, as Questa makes `vlib` precede `vlog`. Section 4.4's store is a cache of what
+    /// Opt-in. Section 4.4's store is a cache of what
     /// the frontend produced, and a cache that served units produced by a different translator
     /// would give a different simulation — so a user who suspects one has an obvious thing to
     /// stop doing. The format version and Enzan's version are both in every entry's key, which
@@ -162,7 +158,7 @@ public:
     ///
     /// An empty `topModule` lets elaboration choose, which it does only when the design has
     /// exactly one candidate. Calling this again replaces the whole simulation, which is what
-    /// `vsim` on a running design means everywhere else.
+    /// re-elaborating a running design means everywhere else.
     bool elaborate(std::string_view topModule);
 
     [[nodiscard]] bool isElaborated() const noexcept { return kernel != nullptr; }
@@ -303,7 +299,7 @@ private:
     DiagnosticEngine& diagnostics;
     std::ostream* transcript = nullptr;
 
-    /// Every source `vlog` has been given, in the order it was given them.
+    /// Every source given to `analyse`, in the order it was given.
     std::vector<std::filesystem::path> files;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;

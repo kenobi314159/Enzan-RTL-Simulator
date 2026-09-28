@@ -211,7 +211,7 @@ private:
     /// Re-borrows the session's kernel when something has replaced the one being served.
     ///
     /// The server borrows a kernel the session owns, and a command is free to destroy it:
-    /// `vsim` replaces the whole elaboration and so does anything a script calls it from. Every
+    /// Re-elaborating replaces the whole simulation. Every
     /// path that reads the kernel after an evaluation has to come through here first, because
     /// the alternative is reading a freed object.
     ///
