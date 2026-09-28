@@ -930,6 +930,33 @@ is reported as the redefinition — and 3.8 makes observable ordering
 reproducible, which neither a hash-ordered nor a stack-ordered traversal would
 be.
 
+### 8.4 The command line
+
+The control language is the interface (8.1), so each executable's command line is
+deliberately small. What it does carry is still an interface, and the rules below
+exist because the two programs had already drifted apart without anyone deciding
+that they should.
+
+**An option two executables share MUST be spelled the same in both**, short forms
+included. `--top`, `--timescale` and `--wave-scope` mean one thing whether the
+kernel or the front end is given them, and a user who learns `-t` on one and is
+refused it by the other has been taught something untrue about the tool.
+
+**`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` is not a synonym:
+in the file-list vocabulary Enzan already reads, `-v` names a library file (8.2),
+and binding it to something else on one command line invites the two meanings to
+collide later.
+
+**One definition of what `--version` prints**, in `common` rather than in each
+executable. Two copies is how the front end came to print its own name in front of
+a line that already named the simulator.
+
+**A generated usage text is not automatically the right one.** Qt's parser will
+write a help message from the options it was given, and it will not match the one
+beside it: a different wrap width, argv[0] as the program name, and its own
+options offered as though they were Enzan's. Where a generated text and a
+consistent one differ, consistency wins and the text is written out.
+
 ---
 
 ## 9. External API: VPI, VHPI and cocotb
