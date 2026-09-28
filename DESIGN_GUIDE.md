@@ -83,11 +83,18 @@ does not creep into them by accident:
 Enzan is licensed **GPLv3**. This is a consequence of linking NVC, which is
 GPLv3, to provide the VHDL frontend.
 
+**This is a consequence of the choice, not a reason for it.** The licence
+follows from the engineering decision in 5.2 and does not justify it. The only
+serious alternative VHDL frontend, GHDL, is GPL-2.0-or-later and therefore also
+copyleft: it would not have bought a permissive licence, only the freedom to be
+GPLv2-or-later instead of GPLv3. Any future re-examination of the VHDL frontend
+must be argued on the grounds in 5.2, and the licence adjusted to follow.
+
 The dependency stack is internally consistent under GPLv3:
 
 | Dependency | License | Compatible |
 |---|---|---|
-| NVC (VHDL frontend) | GPLv3 | yes, and the reason for the choice |
+| NVC (VHDL frontend) | GPLv3 | yes, and what sets the project's licence |
 | slang (SystemVerilog frontend) | MIT | yes |
 | Qt 6 | LGPLv3 | yes |
 | Tcl | BSD-style | yes |
