@@ -154,14 +154,19 @@ feature users of commercial tools rely on daily and will expect.
 
 ```
    ┌──────────────────────┐        Unix domain socket        ┌──────────────────┐
-   │   enzan (kernel)     │ <──────────────────────────────> │   enzan-gui      │
+   │   enzan (kernel)     │ <──────────────────────────────> │   front end      │
    │  headless, batch     │      versioned binary protocol   │   Qt 6 widgets   │
-   │                      │                                  │   attach/detach  │
+   │  links no Qt         │                                  │   attach/detach  │
    └──────────────────────┘                                  └──────────────────┘
 ```
 
 The GUI MUST be able to attach to an already-running kernel and to detach
 without terminating it.
+
+**The user does not invoke the two separately.** `enzan --gui` starts the front
+end, which is a second process and an implementation detail rather than a second
+program to learn (8.4). Two processes is the architecture; two commands was never
+the point.
 
 ### 2.3 Component map
 
@@ -172,7 +177,7 @@ without terminating it.
         │                   ├──> frontend adapters ──> EIR (analysis output)
         └── NVC ────────────┘                               │
                                                             ▼
-                                                     library store (work/)
+                                                  library store (optional)
                                                             │
                                                             ▼
                                             elaboration ──> instance tree
@@ -420,10 +425,21 @@ locality becomes something that can be optimised by reordering the layout.
 
 ### 4.4 Libraries
 
-Analysis output is serialised into a library directory (`work/` by default,
-mirroring the convention users know from Questa). Entries are keyed by a hash of
-the source text plus the analysis options that affect the result, so unchanged
-units are never re-analysed.
+Analysis output is serialised into a library directory, named by the user
+(`work/` is the conventional choice, not a default — see 8.2). Entries carry a
+key over the source text plus the analysis options that affect the result, so
+unchanged units are never re-analysed.
+
+**A library has a logical name as well as a path**, because that is what a design
+refers to: `library ieee;` resolves against a name. The map from name to directory
+is 8.2's `-L`.
+
+**An entry's file name comes from the unit it holds, and its key lives inside
+it.** The two are separate on purpose. A path that were a hash of the source could
+not be named by a Makefile, and a build that cannot predict its own outputs cannot
+be incremental; a key that were only the path could not tell a stale entry from a
+current one. So the name is what `make` depends on and the key is what Enzan
+checks.
 
 **Everything that changes what analysis produces belongs in the key**, not only
 the source text: the macro definitions, the include path, the serialised format
@@ -442,10 +458,12 @@ not only when the encoding does. A unit produced by an older translator decodes
 perfectly and simulates differently, which is the harder failure to notice of
 the two.
 
-**Using a library is opt-in.** Nothing consults one until the user creates it,
-exactly as Questa makes `vlib` precede `vlog`. The version is in the key and the
-format version is disciplined, but a cache that can change a simulation result
-is a thing a user must be able to stop doing without having to find it first.
+**Using a library is opt-in, and there is no implicit one.** Nothing is written
+and nothing is consulted until the user names a library (8.2), so a simulation runs
+from a one-time analysis by default. The version is in the key and the format
+version is disciplined, but a cache that can change a simulation result is a thing
+a user must be able to stop doing without having to find it first — and a cache
+that appeared without being asked for is one they would have to find first.
 
 A hit is currently all or nothing, and that is a property of the frontend rather
 than of the store. SystemVerilog analysis hands every source to one slang
@@ -680,22 +698,185 @@ GUI, and VCD/FST remain the interchange path permanently.
 
 ## 8. The command line
 
+**The command line is Enzan's control interface, and there is no other.** No
+embedded scripting language, and no vocabulary of the tool's own for driving a
+simulation: what composes invocations is the shell, `make`, or whatever the user
+already builds with. This is a deliberate reversal of the obvious arrangement, and
+the reason is that an interface only the tool can speak has to be kept in step with
+everything the tool can do, while a parameterised command is composable the moment
+it exists.
+
+A consequence worth stating, because it is the thing a reader will look for: there
+is no way to stop a running simulation and poke at it from a script. Interactive
+inspection is the graphical front end's job (8.4), and programmatic control is
+VPI's (section 9). A third way to do it would be a third set of semantics.
+
+### 8.1 Shape
+
+One executable with subcommands, rather than one per phase:
+
+| Invocation | Does |
+|---|---|
+| `enzan analyse [options] <sources…>` | analyses sources into design units |
+| `enzan elaborate [options] <top>` | elaborates and reports; simulates nothing |
+| `enzan run [options] <top>` | elaborates and simulates |
+| `enzan lib create\|list\|clean <dir>` | manages an analysis library |
+| `enzan [options] <sources…>` | analyses and runs in one process |
+
+The last form takes no subcommand and is the shorthand every small case wants;
+the first word is read as a subcommand only when it is one of the names above, so
+a source file called `run.sv` is still a source file.
+
+**`elaborate` persists nothing.** It exists to answer "does this design build",
+which is what a CI job and a `make check` want, and it MUST NOT be a prerequisite
+of `run`: an elaboration on disk would be a second serialised format to version
+and a second thing to invalidate, and elaboration is not the expensive phase.
+
+**Exit statuses are distinct enough to branch on**, because a Makefile and a CI
+job need to tell a broken invocation from a broken design:
+
+| Status | Meaning |
+|---|---|
+| 0 | success |
+| 1 | the command line was wrong |
+| 2 | analysis or elaboration failed |
+| 3 | the simulation ran and the design failed |
+
+Conflating the last two is the mistake to avoid: a regression script that cannot
+distinguish "the tool could not compile this" from "the testbench reported an
+error" reports both as the same red square.
+
+### 8.2 Analysis libraries
+
+A library is a directory of serialised design units, as section 4.4 describes.
+This section is about naming them and reaching them.
+
+**Libraries are optional and there is no default.** With no `--work`, analysis
+output lives and dies with the process and a simulation runs from a one-time
+analysis. A directory that appeared because the user ran the tool would be a cache
+they did not ask for, and section 4.4 explains why a cache nobody asked for is
+worse than no cache: it can change a result.
+
+```
+--work <dir>        the library analysis is written into; also readable
+--lib <name>        its logical name, default "work"
+-L <name>=<dir>     another library to resolve against, repeatable
+```
+
+**Libraries are named, not anonymous.** The logical name is what a design refers
+to, and VHDL requires it: `library ieee;` resolves against a name rather than a
+path. Building an unnamed store now would mean rebuilding it at M6, so the map
+from logical name to directory exists from the start, and `-L` is its user-facing
+form. For SystemVerilog the same map gives `-L`'s other meaning — the order in
+which libraries are searched for a module nothing analysed defines.
+
+**A unit's path inside a library MUST be derivable from its name**, not from a
+hash of its source. `make` can only depend on a path it can predict, and a build
+that cannot name its own outputs cannot be incremental. The hash stays where it
+belongs, as the staleness key *inside* the entry (4.4); the file name is the unit.
+
+### 8.3 File lists
+
+`.f` files are the de-facto industry standard and nearly every open-source design
+ships one. Enzan reads them; it does not write them. Generating a list is what the
+user's own build already does, and a generator here would be a second opinion
+about their source tree.
+
+Supported: `-f` and `-F` including nested, `-v`, `-y`, `+incdir+`, `+define+`,
+`+libext+`, `-sv`, `//` and `/* */` comments, double-quoted arguments, and `$VAR`
+and `${VAR}` substitution from the environment.
+
+**Relative paths follow the convention the existing files were written against.**
+A path inside a list reached by `-f` resolves against the process's working
+directory; one inside a list reached by `-F` resolves against that list's own
+directory. Resolving everything against the containing file would be the better
+rule and would break the designs this feature exists to read. **The two spellings
+MUST differ at the point they are given on the command line as well as when nested**,
+or `-F` becomes a synonym for `-f` exactly where a user is most likely to type it.
+
+**An option the reader does not recognise is an error.** File lists carry
+tool-specific switches that change what is compiled — a timescale, a
+compilation-unit mode, a language version — and skipping one produces a design
+that analyses differently from what was asked for, with nothing on screen to say
+so. The position of the option is reported, so the fix is a visible edit rather
+than a hunt. `-sv` is the one switch accepted and dropped, since it asks for the
+only language the reader reads.
+
+**`$VAR` and `${VAR}` are substituted from the environment, and an unset variable
+is an error.** An empty expansion turns `$RTL_ROOT/cpu.sv` into `/cpu.sv`, which
+is reported as a missing source rather than as the missing variable that caused it.
+
+Two options exist because a list is something a user has to debug:
+
+**`--dry-run` prints the expanded list, in order, and exits.** The first question
+anyone asks of a misbehaving list is what the tool thinks it names, and the answer
+should not require a build.
+
+**`--depfile <file>` writes a `make`-style dependency file** naming the includes
+each source actually pulled in, as a C compiler's `-MMD` does. Without it a build
+cannot know that editing an included header should trigger re-analysis, and the
+incremental build is wrong in the one way that is both silent and expensive.
+
+### 8.4 The graphical front end
+
+**`--gui` is an option of `enzan`, not a second program to learn.** Starting a
+window is not a different activity from starting a simulation — in nearly every
+case the window exists *because* a run was started — so the user says
+`enzan run --gui <top>` and the socket, the listening and the attaching are
+arranged out of sight.
+
+**It remains two processes, and that MUST NOT be collapsed.** Section 2.2's
+reasons are unchanged: the kernel must be usable with no display attached, a
+stalled front end must never stall the kernel, and a local window must be able to
+drive a kernel elsewhere. `--gui` therefore starts the front end rather than
+becoming it, and the kernel binary MUST NOT link Qt — a headless server and a CI
+runner would otherwise install a GUI toolkit to run a batch simulation.
+
+**With `--gui` the design is elaborated and handed over, not run.** The front end
+drives every run. This is not only a preference: serving a session puts the design
+back to time zero and begins recording there, so anything run beforehand would be
+discarded rather than shown. `--run` alongside `--gui` is therefore refused rather
+than silently dropped.
+
+**`--vcd` and `--fst` are allowed with `--gui`.** Someone debugging in a window
+who then wants a file for later should not have to run the design again, so a
+served session records into both the live database and any writer that was opened.
+
+**The lifetime of the kernel follows how the session was started.** The flag a
+user chose is the decision, so there is nothing further to configure:
+
+- **`enzan run --gui <top>`** — the window started the kernel, so closing the
+  window ends the kernel too, and the process's exit status is the simulation's
+  (8.1) rather than the window's. A run nobody is watching, that nobody asked to
+  keep, is a leak.
+- **`enzan --gui --attach <socket>`** — the window did not start the kernel, so
+  closing it only detaches. This is what makes a long run something that can be
+  looked in on and left alone again, and it is the case that the shared lifetime
+  above deliberately gives up.
+
+`enzan run --listen <socket>` is the other half of the second form: it elaborates
+and waits without starting a window. Between them the two forms cover the two
+things the explicit spelling is for — a kernel that outlives its window, and a
+window on a different machine from its kernel — and nothing else needs it.
+
+### 8.5 One tool, one spelling
+
 Each executable's command line is small, and it is still an interface. The rules
-below exist because the two programs had already drifted apart without anyone
-deciding that they should.
+below exist because the programs had already drifted apart without anyone deciding
+that they should.
 
 **An option two executables share MUST be spelled the same in both**, short forms
-included. `--top`, `--timescale` and `--wave-scope` mean one thing whether the
-kernel or the front end is given them, and a user who learns `-t` on one and is
-refused it by the other has been taught something untrue about the tool.
+included. `--top`, `--timescale` and `--wave-scope` mean one thing whichever is
+given them, and a user who learns `-t` on one and is refused it by the other has
+been taught something untrue about the tool.
 
 **`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` is not a synonym:
-Verilog tools spell a library file that way, and binding it to something else on
-one command line invites the two meanings to collide later.
+`.f` lists spell a library file that way (8.3), and binding it to something else on
+one command line invites the two meanings to collide.
 
 **One definition of what `--version` prints**, in `common` rather than in each
-executable. Two copies is how the front end came to print its own name in front of
-a line that already named the simulator.
+executable. Two copies is how one of them came to print its own name in front of a
+line that already named the simulator.
 
 **A generated usage text is not automatically the right one.** Qt's parser will
 write a help message from the options it was given, and it will not match the one
@@ -1237,7 +1418,7 @@ Enzan-RTL-Simulator/
 │   └── gui/                  Qt 6 application code
 ├── tools/
 │   ├── enzan/                headless kernel CLI
-│   └── enzan-gui/            Qt 6 front end
+│   └── enzan-gui/            Qt 6 front end, started by `enzan --gui`
 ├── tests/
 │   ├── unit/                 GoogleTest, mirrors src/ layout
 │   ├── golden/               self-checking HDL cases and expected output
@@ -1619,9 +1800,24 @@ window is driven.
 can lock one cursor on an edge, step a second along the same signal with Tab, and
 read both times off their labels without touching the mouse.
 
-### M3 — Control layer
+### M3 — Command line, file lists and libraries
 
-*(open)* — not yet specified.
+The subcommands and exit statuses of section 8.1; `.f` file lists with `--dry-run`
+and `--depfile` (8.3); named, opt-in analysis libraries with `lib create`, `--work`,
+`--lib` and `-L` (8.2, 4.4); `--gui` as an option of `enzan` with the lifetimes of
+8.4.
+
+The per-source hit rule of 4.4 is **not** in scope. It is a property of the
+frontend rather than of the store — a module cannot be type-checked without the
+packages it imports, so today one changed file re-analyses all of them — and
+changing it is frontend work that a library's shape does not depend on. What M3
+owes is a library whose entries `make` can name, so that the incremental build
+arrives when the frontend can support it.
+
+**Exit:** a design with a `.f` list and a library builds and simulates from a
+Makefile; touching an included header re-analyses and touching nothing does not;
+`enzan run --gui` opens a window on a design it elaborated, and closing it ends the
+kernel while closing an `--attach`ed window does not.
 
 ### M4 — VPI and cocotb
 
