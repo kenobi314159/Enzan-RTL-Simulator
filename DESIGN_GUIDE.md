@@ -481,6 +481,37 @@ slang requires **C++20**, which sets the project's language floor.
 [NVC](https://github.com/nickg/nvc) provides the VHDL frontend. It supports
 almost all of VHDL-2008 and is actively maintained.
 
+**Why NVC and not GHDL.** [GHDL](https://github.com/ghdl/ghdl) is the other
+credible open-source VHDL frontend, and on one axis it is the better candidate:
+it deliberately exposes its analysis frontend as a shared library, `libghdl`,
+which already has third-party consumers — `pyGHDL` and the language server,
+`pyVHDLModel`, and `ghdl-yosys-plugin`, a C++ tool that walks GHDL's analysed
+VHDL and emits an unrelated IR. That last one is almost exactly the job
+`src/frontend/vhdl/` has to do, with years of evidence that it is possible. The
+API-drift risk recorded in section 19 is genuinely lower for GHDL, and this
+section should not pretend otherwise.
+
+NVC wins on everything else, and the balance is not close:
+
+- **GHDL is written in Ada.** Using it puts GNAT in the dependency set for CI
+  and for every contributor, and links the Ada runtime into a C++20 binary —
+  elaboration ordering, a secondary stack, and exceptions at the boundary. It
+  also degrades the sanitiser configuration of 11.4, which would no longer see
+  into the frontend. NVC is C11: one toolchain, one runtime, `extern "C"`.
+- **Only NVC can be consumed in part.** Its analysis stage pulls in no LLVM, so
+  the vendored subset is small (see the integration plan below). GHDL has no
+  equivalent subset; `libghdl` is built whole, with GNAT, or not at all.
+- **`tree_t` is a better tree to walk.** It is arena-allocated behind uniform
+  accessors that assert node kinds at runtime with usable messages. GHDL's `Iir`
+  is an untyped integer handle over several hundred node kinds with heavy field
+  aliasing, and its generated bindings are maintained for Python, not C++.
+- **Coverage and momentum.** NVC covers nearly all of VHDL-2008 except PSL and
+  has VHDL-2019 work landing; GHDL targets VHDL-2008. NVC releases steadily and
+  its maintainer is responsive on frontend-level defects, which matters when the
+  dependency is on internals nobody has promised to keep.
+
+The M6 exit criteria — NEORV32, VUnit, OSVVM — are all first-class NVC targets.
+
 **Understand the integration honestly before working on it.** NVC is not a
 frontend library; it is a complete simulator written in C that lowers VHDL
 through its own `vcode` IR to LLVM and runs it on its own scheduler with its own
