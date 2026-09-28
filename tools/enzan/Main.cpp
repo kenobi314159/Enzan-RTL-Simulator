@@ -97,7 +97,9 @@ The normative specification, including the milestone roadmap, is DESIGN_GUIDE.md
 source tree.
 )";
 
-void printVersion() { std::cout << enzan::versionNotice("enzan"); }
+void printVersion() {
+    std::cout << enzan::versionNotice("enzan");
+}
 
 /// Everything the command line can ask for.
 struct Invocation {
@@ -344,7 +346,9 @@ public:
     DriverServer(const Invocation& invocationToUse, enzan::control::Session& sessionToServe,
                  enzan::control::Interpreter& interpreterToUse,
                  enzan::DiagnosticEngine& diagnosticEngine)
-        : invocation(&invocationToUse), session(&sessionToServe), interpreter(&interpreterToUse),
+        : invocation(&invocationToUse),
+          session(&sessionToServe),
+          interpreter(&interpreterToUse),
           diagnostics(&diagnosticEngine) {}
 
     bool serve(const std::filesystem::path& socketPath, std::string& error) override {
@@ -552,8 +556,7 @@ ExitStatus control(const Invocation& invocation, enzan::SourceManager& sources,
     // handover happens once the script has finished having its say. A script that said `listen`
     // itself has already been served and is not served again: it chose where the front end took
     // over, which is the whole reason the command exists.
-    if (!invocation.listenPath.empty() && !server.hasServedOne()
-        && !interpreter.stopRequested()) {
+    if (!invocation.listenPath.empty() && !server.hasServedOne() && !interpreter.stopRequested()) {
         std::string error;
         if (!session.serveTo(invocation.listenPath, error)) {
             diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),

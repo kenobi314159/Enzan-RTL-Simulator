@@ -215,8 +215,8 @@ CommandResult Vocabulary::vlog(CommandArguments arguments) {
             // named with `-F` was written as though the tool had been run from beside it
             // (section 8.2). Reading both against the working directory would make `-F` a
             // synonym for `-f` at the one place a user is most likely to type it.
-            const FileListAnchor anchor = argument == "-F" ? FileListAnchor::ListDirectory
-                                                           : FileListAnchor::WorkingDirectory;
+            const FileListAnchor anchor =
+                argument == "-F" ? FileListAnchor::ListDirectory : FileListAnchor::WorkingDirectory;
 
             FileList list;
             if (!readFileList(std::string(arguments[++index]), *sources,
