@@ -380,9 +380,8 @@ int main(int argc, char** argv) {
         }
         if (!invocation.vcdPath.empty() || !invocation.fstPath.empty()) {
             std::cerr << "enzan: '--vcd' and '--fst' cannot be combined with '--listen'; a "
-                         "served session records into the live waveform database. To write a "
-                         "file as well, say `vcd file` or `fst file` in a script and hand the "
-                         "session over with `listen`\n";
+                         "served session records into the live waveform database that the "
+                         "attached front end reads\n";
             return static_cast<int>(ExitStatus::Usage);
         }
     }
