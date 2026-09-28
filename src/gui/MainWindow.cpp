@@ -80,11 +80,8 @@ MainWindow::MainWindow(KernelSession& kernelSession, const Theme& themeToUse, QW
     connect(session, &KernelSession::wavesCleared, this, &MainWindow::onWavesCleared);
     connect(session, &KernelSession::detached, this, &MainWindow::onDetached);
     connect(session, &KernelSession::requestFailed, this, &MainWindow::onRequestFailed);
-    connect(session, &KernelSession::sourceReceived, this, &MainWindow::onSourceReceived);
-    connect(session, &KernelSession::breakpointsChanged, this, &MainWindow::onBreakpointsChanged);
     connect(session, &KernelSession::transcriptReceived, transcriptView,
             &TranscriptView::appendOutput);
-    connect(transcriptView, &TranscriptView::commandEntered, session, &KernelSession::sendCommand);
     connect(session, &KernelSession::diagnosticReceived, transcriptView,
             &TranscriptView::appendDiagnostic);
 
@@ -307,15 +304,6 @@ void MainWindow::buildDocks() {
     connect(unhighlight, &QAction::triggered, this, [this] { setSelectedHighlight(0); });
     waveRowsView->addAction(unhighlight);
 
-    // --- Source ------------------------------------------------------------
-
-    sourceView = new SourceView(*theme, this);
-    connect(sourceView, &SourceView::fileRequested, session, &KernelSession::querySource);
-    connect(sourceView, &SourceView::breakpointRequested, this, &MainWindow::requestBreakpoint);
-    connect(sourceView, &SourceView::breakpointRemoved, session, &KernelSession::clearBreakpoint);
-
-    panes->addTab(sourceView, tr("Source"));
-
     // --- Transcript --------------------------------------------------------
 
     transcriptView = new TranscriptView(*theme, this);
@@ -342,10 +330,6 @@ void MainWindow::buildToolBar() {
     runAllAction = bar->addAction(tr("Run All"), this, &MainWindow::runUntilFinished);
     stopAction = bar->addAction(tr("Stop"), this, &MainWindow::stopRun);
     restartAction = bar->addAction(tr("Restart"), this, &MainWindow::restartRun);
-
-    stepAction = bar->addAction(tr("Step"), this, &MainWindow::stepOneLine);
-    stepAction->setShortcut(QKeySequence(Qt::Key_F11));
-    stepAction->setToolTip(tr("Advance to the next source line"));
 
     bar->addSeparator();
     bar->addAction(tr("Zoom Fit"), waveView, &WaveformView::zoomFit);
@@ -382,12 +366,6 @@ void MainWindow::buildMenus() {
         session->quitKernel();
         close();
     });
-
-    QMenu* source = menuBar()->addMenu(tr("S&ource"));
-    source->addAction(stepAction);
-    source->addSeparator();
-    source->addAction(tr("Clear All Breakpoints"), this,
-                      [this] { session->clearAllBreakpoints(); });
 
     QMenu* wave = menuBar()->addMenu(tr("&Wave"));
     wave->addAction(tr("Add Cursor"), this, &MainWindow::addCursor);
@@ -426,7 +404,6 @@ void MainWindow::onDesignChanged() {
 
     designModel->setInstances(session->instances());
     structureView->expandToDepth(1);
-    sourceView->setFiles(session->sourceFiles());
 
     // The top level is selected for the user, because opening a window onto an empty Objects
     // pane and expecting them to guess the first click is a poor greeting.
@@ -448,40 +425,6 @@ void MainWindow::onScopeSelected(const QModelIndex& index) {
     // repainted and a reply for some other scope must not be able to.
     objectsScope = path;
     session->queryObjects(path);
-    showSourceOfScope(path);
-}
-
-void MainWindow::showSourceOfScope(const QString& instancePath) {
-    // The file the module is declared in, which is what the kernel sends with the tree. A
-    // reader clicking a scope means "show me this", and the source window is where that is.
-    for (const ipc::InstanceEntry& entry : session->instances()) {
-        if (QString::fromStdString(entry.path) != instancePath) continue;
-        if (entry.file.empty()) return;
-
-        sourceView->showFile(QString::fromStdString(entry.file));
-        return;
-    }
-}
-
-void MainWindow::onSourceReceived(const QString& path, const QString& text, bool found) {
-    sourceView->setFileText(path, text, found);
-}
-
-void MainWindow::onBreakpointsChanged() {
-    QHash<QString, QHash<std::uint32_t, SourceView::Marker>> byFile;
-    for (const ipc::BreakpointEntry& entry : session->breakpoints()) {
-        byFile[QString::fromStdString(entry.file)].insert(
-            entry.line, SourceView::Marker{.id = entry.id, .enabled = entry.enabled});
-    }
-    sourceView->setBreakpoints(byFile);
-}
-
-void MainWindow::requestBreakpoint(const QString& file, std::uint32_t line) {
-    session->setBreakpoint(file, line);
-}
-
-void MainWindow::stepOneLine() {
-    session->step(1);
 }
 
 void MainWindow::onObjectsReceived(const QString& instancePath,
@@ -523,19 +466,6 @@ void MainWindow::onRunStateChanged() {
     case ipc::SimulationState::Failed: statusState->setText(tr("Failed")); break;
     }
 
-    // Where the design is stopped, which the kernel sends with the run state so that the two
-    // cannot disagree. A zero line means it is not stopped at one, and clears the marker.
-    sourceView->setCurrentLine(session->stopFile(), session->stopLine());
-
-    if (session->stopLine() != 0) {
-        // Raised, because the reader asked to stop somewhere and the point is to see it.
-        panes->setCurrentWidget(sourceView);
-        statusState->setText(tr("Stopped at %1:%2")
-                                 .arg(QFileInfo(session->stopFile()).fileName())
-                                 .arg(session->stopLine()));
-        if (!session->stopProcess().isEmpty())
-            note(tr("Stopped in %1").arg(session->stopProcess()));
-    }
 }
 
 void MainWindow::onWavesChanged() {
@@ -885,13 +815,6 @@ void MainWindow::updateActions() {
 
     runAction->setEnabled(attached && !running && !over);
     runAllAction->setEnabled(attached && !running && !over);
-    stepAction->setEnabled(attached && !running && !over);
-
-    // A command runs on the kernel, so it waits for a kernel that is not busy. The reason goes
-    // in the placeholder rather than being left to the reader to work out from a greyed box.
-    transcriptView->setCommandsAvailable(attached && !running,
-                                         attached ? tr("Waiting for the run to stop")
-                                                  : tr("Waiting for a kernel"));
     stopAction->setEnabled(attached && running);
     restartAction->setEnabled(attached && !running);
     runLengthEdit->setEnabled(attached && !running && !over);

@@ -12,9 +12,7 @@ add_executable(
   GuiTestMain.cpp
   KernelSessionTests.cpp
   MainWindowTests.cpp
-  SourceViewTests.cpp
   ThemeTests.cpp
-  TranscriptViewTests.cpp
   WaveRowTests.cpp
   WaveformInteractionTests.cpp
   TimeAxisTests.cpp

@@ -6,7 +6,6 @@
 #include "gui/DesignTreeModel.h"
 #include "gui/KernelSession.h"
 #include "gui/ObjectsModel.h"
-#include "gui/SourceView.h"
 #include "gui/Theme.h"
 #include "gui/TranscriptView.h"
 #include "gui/WaveformModel.h"
@@ -31,9 +30,7 @@ namespace enzan::gui {
 /// Structure, Objects, Wave and Transcript, docked with `QDockWidget` so the arrangement can be
 /// rearranged and is remembered between sessions.
 ///
-/// The Processes window of section 10.2 is not here yet. The Source window is, with the
-/// breakpoints and stepping that make it a debugger rather than a file viewer: those are what a
-/// source window is *for*, which is why it did not exist before M3.
+/// The Processes window of section 10.2 is not here yet.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -59,8 +56,6 @@ private:
     void onWavesCleared();
     void onDetached(const QString& reason);
     void onRequestFailed(const QString& reason);
-    void onBreakpointsChanged();
-    void onSourceReceived(const QString& path, const QString& text, bool found);
 
     void onScopeSelected(const QModelIndex& index);
     void onCursorsChanged();
@@ -109,13 +104,6 @@ private:
     void runUntilFinished();
     void stopRun();
     void restartRun();
-    void stepOneLine();
-
-    /// Puts a breakpoint on a line, or reports why it could not go there.
-    void requestBreakpoint(const QString& file, std::uint32_t line);
-
-    /// Opens the source of the scope the reader clicked, at its declaration.
-    void showSourceOfScope(const QString& instancePath);
 
     /// Writes a value into the selected signal, asking for it first.
     ///
@@ -150,10 +138,9 @@ private:
     QTreeView* waveRowsView = nullptr;
     WaveformView* waveView = nullptr;
     TranscriptView* transcriptView = nullptr;
-    SourceView* sourceView = nullptr;
 
-    /// The central area's tabs: Wave and Source. Each needs the whole width, so they share it
-    /// in turn rather than side by side.
+    /// The central area's tabs. Each needs the whole width, so they share it in turn rather
+    /// than side by side.
     QTabWidget* panes = nullptr;
 
     QLineEdit* runLengthEdit = nullptr;
@@ -166,7 +153,6 @@ private:
     QAction* stopAction = nullptr;
     QAction* restartAction = nullptr;
     QAction* followAction = nullptr;
-    QAction* stepAction = nullptr;
 
     /// The signals currently subscribed to, so that a change of what is displayed sends only
     /// the difference rather than resubscribing to everything.
