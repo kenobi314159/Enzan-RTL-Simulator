@@ -1582,12 +1582,23 @@ delta-level ordering. Comparisons MUST be made at settled time boundaries, not
 at every delta, or the suite will produce constant false failures and be
 switched off.
 
+**The VHDL references are not interchangeable.** Because NVC supplies Enzan's
+VHDL frontend (5.2), NVC is not an independent oracle for anything the frontend
+decides: a shared parsing or semantic-analysis defect produces the same wrong
+answer on both sides and the comparison passes. **GHDL is therefore the primary
+VHDL differential reference and MUST be part of the suite**, with NVC kept as a
+secondary reference that is still meaningful for everything downstream of EIR.
+The same reasoning will apply to any future frontend dependency.
+
 ### 14.4 Conformance suites
 
 Run against public suites and **track the pass rate as a number over time**:
 `sv-tests` (CHIPS Alliance) for SystemVerilog, `ivtest` for Verilog, and the
 GHDL/NVC VHDL suites plus VUnit and OSVVM for VHDL. A published compliance
 percentage is also a credible public signal of maturity.
+
+The GHDL and NVC suites are both run for the reason given in 14.3: NVC's suite
+cannot exercise a defect Enzan inherited from NVC's own frontend.
 
 **The pass rate MUST NOT regress.** This is a ratchet: a change that lowers it
 is a defect unless the regression is explicitly justified.
