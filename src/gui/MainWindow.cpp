@@ -128,11 +128,8 @@ void MainWindow::buildDocks() {
         bool grouped;
     };
 
-    for (const ScopeInsert& entry :
-         {ScopeInsert{"Insert module signals", false, false},
-          ScopeInsert{"Insert module signals recursive", true, false},
-          ScopeInsert{"Insert grouped module signals", false, true},
-          ScopeInsert{"Insert grouped module signals recursive", true, true}}) {
+    for (const ScopeInsert& entry : {ScopeInsert{"Add to wave", false, true},
+                                     ScopeInsert{"Add to wave recursive", true, true}}) {
         auto* action = new QAction(tr(entry.label), structureView);
         const bool recursive = entry.recursive;
         const bool grouped = entry.grouped;
@@ -639,11 +636,6 @@ void MainWindow::insertScopeSignals(bool recursive, bool grouped) {
 
 void MainWindow::insertObjectsIntoWave(const QVector<SignalInfo>& objects, int group) {
     for (const SignalInfo& info : objects) {
-        // Signals only. A parameter is a constant the elaboration settled on, so its row is a
-        // flat line from the beginning of time to the end of it; a reader who asked for a
-        // module's signals did not ask for its parameterisation spelled out in the wave window.
-        // They remain one click away in the Objects window.
-        if (info.isParameter()) continue;
         waveModel->addSignal(info, group);
     }
 

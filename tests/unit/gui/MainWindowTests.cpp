@@ -149,52 +149,6 @@ protected:
 };
 
 // ---------------------------------------------------------------------------
-// Ungrouped
-// ---------------------------------------------------------------------------
-
-TEST_F(MainWindowTest, InsertingAModuleTakesItsOwnSignalsAndNoOthers) {
-    const QVector<std::uint32_t> expected = signalsOf(Top);
-    ASSERT_FALSE(expected.isEmpty()) << "the fixture's top level declares no signals";
-
-    insert(Top, QStringLiteral("Insert module signals"));
-    ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
-
-    QVector<std::uint32_t> shown = waves()->displayedSignals();
-    std::ranges::sort(shown);
-    EXPECT_EQ(shown, expected);
-
-    // Flat: nothing was grouped, so every row is a signal at the top level.
-    for (const int rowId : topRows()) {
-        EXPECT_EQ(waves()->row(rowId)->kind, WaveRow::Kind::Signal);
-    }
-}
-
-TEST_F(MainWindowTest, InsertingRecursivelyTakesTheSubtree) {
-    QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
-    std::ranges::sort(expected);
-    ASSERT_GT(expected.size(), signalsOf(Top).size()) << "the child scope declares no signals";
-
-    insert(Top, QStringLiteral("Insert module signals recursive"));
-    ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
-
-    QVector<std::uint32_t> shown = waves()->displayedSignals();
-    std::ranges::sort(shown);
-    EXPECT_EQ(shown, expected);
-}
-
-TEST_F(MainWindowTest, InsertingALeafScopeRecursivelyIsTheSameAsInsertingIt) {
-    const QVector<std::uint32_t> expected = signalsOf(Child);
-    ASSERT_FALSE(expected.isEmpty());
-
-    insert(Child, QStringLiteral("Insert module signals recursive"));
-    ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
-
-    QVector<std::uint32_t> shown = waves()->displayedSignals();
-    std::ranges::sort(shown);
-    EXPECT_EQ(shown, expected);
-}
-
-// ---------------------------------------------------------------------------
 // Grouped
 // ---------------------------------------------------------------------------
 
@@ -202,7 +156,7 @@ TEST_F(MainWindowTest, AGroupedInsertNamesTheGroupAfterTheScopesPath) {
     const QVector<std::uint32_t> expected = signalsOf(Top);
     ASSERT_FALSE(expected.isEmpty());
 
-    insert(Top, QStringLiteral("Insert grouped module signals"));
+    insert(Top, QStringLiteral("Add to wave"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
@@ -222,7 +176,7 @@ TEST_F(MainWindowTest, AGroupedRecursiveInsertPutsTheGroupsSideBySide) {
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
-    insert(Top, QStringLiteral("Insert grouped module signals recursive"));
+    insert(Top, QStringLiteral("Add to wave recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
@@ -262,7 +216,7 @@ TEST_F(MainWindowTest, AnInsertLeavesTheObjectsWindowOnTheScopeTheReaderClicked)
     ASSERT_TRUE(pumpUntil([this] { return objects()->scope() == Top; }));
 
     const QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
-    insert(Top, QStringLiteral("Insert module signals recursive"));
+    insert(Top, QStringLiteral("Add to wave recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     EXPECT_EQ(objects()->scope(), Top);
@@ -276,7 +230,7 @@ TEST_F(MainWindowTest, NoGroupIsLeftEmpty) {
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
-    insert(Top, QStringLiteral("Insert grouped module signals recursive"));
+    insert(Top, QStringLiteral("Add to wave recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
