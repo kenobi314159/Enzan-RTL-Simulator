@@ -200,11 +200,13 @@ log -r /tb
 add wave /tb/count
 
 listen /tmp/enzan.sock
-puts "the window has gone; time is [examine -radix decimal /tb/count]"
 ```
 
-`listen` blocks, so everything after it runs once the front end detaches — and `enzan --do
-setup.do --listen /tmp/enzan.sock` is the same thing with the handover at the end of the script.
+`listen` blocks and is the last thing such a script does: a window that detaches leaves the
+kernel serving, so that a long run can be looked in on and left again, and quitting from the
+window ends the script too. `enzan --do setup.do --listen /tmp/enzan.sock` is the same thing with
+the handover at the end of the script instead.
+
 One rule is worth knowing: `listen` refuses a design that has already run, because serving puts
 it back to time zero and would discard that run rather than show it. Put `listen` before the run
 and drive it from the window, or `restart` first. Press **Run**, click a scope in

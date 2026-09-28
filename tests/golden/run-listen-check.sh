@@ -50,6 +50,7 @@ vlog -sv [lindex $argv 0]
 vsim -t ns tb
 log -r /tb
 listen [lindex $argv 1]
+puts "CARRIED ON"
 SCRIPT
 
 "$enzan" --do "$work/command.do" "$source_file" "$work/command.sock" >"$work/command.log" 2>&1 &
@@ -61,6 +62,13 @@ wait "$command_pid" 2>/dev/null || true
 
 grep -q 'attach with' "$work/command.log" \
     || fail "nothing told the user how to attach to the socket that was bound"
+
+# The line after `listen` must not have run. `listen` returns only when a front end asks for the
+# simulation to *stop* — detaching leaves the kernel serving, which is what section 2.2 requires
+# of it — and this kernel was killed while still waiting, so nothing had asked for anything.
+if grep -q 'CARRIED ON' "$work/command.log"; then
+    fail "the script ran past \`listen\` while the session was still being served"
+fi
 
 # --- the option, alongside a script ---------------------------------------------------------
 

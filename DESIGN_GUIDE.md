@@ -727,12 +727,17 @@ reading of each is wrong:
   `3'h2` — which is what the wave window shows (10.3) and what a reader asking
   about a state register means. A radix asks for the encoding instead, and
   `radix symbolic` goes back.
-- **`listen` blocks, and everything after it runs once the front end has gone.**
-  It gives the session away rather than starting a server beside the script, so
+- **`listen` blocks, and is in practice the last command a script runs.** It
+  gives the session away rather than starting a server beside the script, so
   where the command appears is where the handover happens: a script analyses,
   elaborates and chooses what to log, then says `listen`, and whoever attaches
   finds the design ready and drives the run themselves. Placing it after `run`
   would be the wrong way round, and is refused rather than obeyed — see below.
+  It returns only when a front end asks for the simulation to *stop*, because a
+  front end that merely detaches leaves the kernel serving (2.2), and that
+  request stops the script as well, exactly as a `quit` inside a `do` file stops
+  the outer one. A script MUST NOT be written to depend on the lines after
+  `listen` running.
 
 **`listen` MUST refuse a design that has already run.** Serving puts the design
 back to time zero and starts recording there, because that is what makes the

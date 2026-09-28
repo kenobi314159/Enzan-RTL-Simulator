@@ -599,12 +599,19 @@ CommandResult Vocabulary::doFile(CommandArguments arguments) {
 /// Blocking, so that where the command appears is where the front end takes over. A script
 /// analyses, elaborates and chooses what to log, then says `listen`, and the person who attaches
 /// finds the design ready at time zero and drives the run themselves.
+///
+/// In practice the last command a script runs. A front end detaching leaves the kernel serving,
+/// because section 2.2 requires a long run to survive being looked in on and left again, so this
+/// returns only once one has asked for the simulation to stop — and that request stops the script
+/// as well, the way a `quit` inside a `do` file stops the outer one.
 CommandResult Vocabulary::listen(CommandArguments arguments) {
     if (arguments.size() != 2) return usage("listen socket");
 
     std::string error;
     if (!session->serveTo(std::filesystem::path(arguments[1]), error))
         return CommandResult::error(error);
+
+    if (interpreter->stopRequested()) return CommandResult::stopped();
     return CommandResult::ok();
 }
 

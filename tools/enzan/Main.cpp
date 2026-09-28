@@ -90,7 +90,8 @@ options above do.
 are meant to be used together: `--do setup.do --listen <socket>` sets the simulation up from
 the script and then waits for a front end, which is how a graphical session is given a set-up
 script. A script that says `listen <socket>` itself chooses where the handover happens instead,
-and everything after that line runs once the front end has gone.
+and that command is the last thing it does: a front end detaching leaves the kernel serving, and
+quitting from one ends the script too.
 
 The normative specification, including the milestone roadmap, is DESIGN_GUIDE.md in the
 source tree.
@@ -388,9 +389,16 @@ public:
         hasServed = true;
         served = server.serve();
 
-        // Put back before the server goes, because its transcript stream dies with it and a
-        // script that carries on after `listen` would otherwise write into a destroyed object.
+        // Put back before the server goes, because its transcript stream dies with it and
+        // anything written into it afterwards would be writing into a destroyed object.
         interpreter->setTranscript(nullptr);
+
+        // Only a client's Quit ends the loop above — detaching leaves the kernel serving, which
+        // is what section 2.2 requires of it — so getting here means the front end asked for the
+        // simulation to stop. That stops the script too, exactly as a `quit` inside a `do` file
+        // stops the outer one: carrying on with the lines after `listen` would be ignoring the
+        // thing the user just asked for.
+        interpreter->requestStop(served);
         return true;
     }
 
