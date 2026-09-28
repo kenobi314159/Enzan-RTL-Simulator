@@ -57,15 +57,11 @@ using enzan::eir::Opcode;
 using enzan::eir::Operand;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
-using enzan::ipc::BreakpointsMessage;
 using enzan::ipc::ByeMessage;
-using enzan::ipc::ClearBreakpointMessage;
-using enzan::ipc::CommandMessage;
 using enzan::ipc::Connection;
 using enzan::ipc::DepositMessage;
 using enzan::ipc::Descriptor;
 using enzan::ipc::DesignMessage;
-using enzan::ipc::EnableBreakpointMessage;
 using enzan::ipc::FailureMessage;
 using enzan::ipc::ForceMessage;
 using enzan::ipc::Frame;
@@ -76,15 +72,11 @@ using enzan::ipc::MessageType;
 using enzan::ipc::ObjectsMessage;
 using enzan::ipc::ProtocolVersion;
 using enzan::ipc::QueryHistoryMessage;
-using enzan::ipc::QuerySourceMessage;
 using enzan::ipc::ReceiveStatus;
 using enzan::ipc::RunMessage;
 using enzan::ipc::RunStateMessage;
 using enzan::ipc::ServerOptions;
-using enzan::ipc::SetBreakpointMessage;
 using enzan::ipc::SimulationState;
-using enzan::ipc::SourceMessage;
-using enzan::ipc::StepMessage;
 using enzan::ipc::SubscribeMessage;
 using enzan::ipc::TranscriptMessage;
 using enzan::ipc::ValueChangesMessage;
@@ -811,25 +803,16 @@ TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {
 }
 
 // ---------------------------------------------------------------------------
-// Source debugging (section 10.4)
+// Writing a signal from outside the simulation (section 10.4)
 // ---------------------------------------------------------------------------
 
-/// A served design whose instructions carry positions in a source the kernel holds.
+/// A served design a client can write signals in.
 class DebugFixture : public ServerFixture {
 protected:
     void SetUp() override {
         sourceBuffer = sources.addBuffer("design.sv", std::string(DebugSource));
         rebuild(debuggableDesign(sourceBuffer));
         connectClient();
-    }
-
-    /// Sets a breakpoint on `line` and returns the list the kernel answered with.
-    BreakpointsMessage setBreakpoint(std::string_view file, std::uint32_t line) {
-        SetBreakpointMessage message;
-        message.file = file;
-        message.line = line;
-        request(MessageType::SetBreakpoint, message);
-        return expect<BreakpointsMessage>(MessageType::Breakpoints);
     }
 
     /// The value the client last saw for `/tb/q`, as a binary string.
@@ -856,179 +839,6 @@ TEST_F(DebugFixture, TheDesignTreeNamesWhereEachScopeIsDeclared) {
     EXPECT_EQ(design.instances[0].file, "design.sv");
     EXPECT_EQ(design.instances[0].line, 1U);
     EXPECT_EQ(design.sourceFiles, (std::vector<std::string>{"design.sv"}));
-}
-
-TEST_F(DebugFixture, ASourceFileIsServedFromTheKernelsOwnBuffers) {
-    // From the kernel and not from the path, because the kernel may be on another machine and
-    // because these are the exact bytes it analysed (section 2.2).
-    QuerySourceMessage query;
-    query.path = "design.sv";
-    request(MessageType::QuerySource, query);
-
-    const auto source = expect<SourceMessage>(MessageType::Source);
-    EXPECT_TRUE(source.found);
-    EXPECT_EQ(source.path, "design.sv");
-    EXPECT_EQ(source.text, DebugSource);
-}
-
-TEST_F(DebugFixture, ASourceTheKernelDoesNotHaveIsNotFoundRatherThanAFailure) {
-    QuerySourceMessage query;
-    query.path = "absent.sv";
-    request(MessageType::QuerySource, query);
-
-    const auto source = expect<SourceMessage>(MessageType::Source);
-    EXPECT_FALSE(source.found);
-    EXPECT_TRUE(source.text.empty());
-    EXPECT_FALSE(sawAny(MessageType::Failure)) << "asking about a file is not an error";
-}
-
-TEST_F(DebugFixture, ABreakpointIsSetAndListedBack) {
-    const auto list = setBreakpoint("design.sv", 3);
-
-    ASSERT_EQ(list.breakpoints.size(), 1U);
-    EXPECT_EQ(list.breakpoints[0].file, "design.sv");
-    EXPECT_EQ(list.breakpoints[0].line, 3U);
-    EXPECT_TRUE(list.breakpoints[0].enabled);
-    EXPECT_NE(list.breakpoints[0].id, 0U);
-}
-
-TEST_F(DebugFixture, ABreakpointStopsTheRunAndSaysWhere) {
-    setBreakpoint("design.sv", 3);
-
-    RunMessage run;
-    run.untilFinished = true;
-    request(MessageType::Run, run);
-
-    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
-    ASSERT_FALSE(states.empty());
-    const RunStateMessage& last = states.back();
-
-    EXPECT_EQ(last.state, SimulationState::Idle) << "a breakpoint leaves the design resumable";
-    EXPECT_EQ(last.stopFile, "design.sv");
-    EXPECT_EQ(last.stopLine, 3U);
-    EXPECT_FALSE(last.stopProcess.empty());
-}
-
-TEST_F(DebugFixture, ABreakpointOnALineWithNoCodeIsRefusedWithAReason) {
-    SetBreakpointMessage message;
-    message.file = "design.sv";
-    message.line = 5;
-    request(MessageType::SetBreakpoint, message);
-
-    const auto failure = expect<FailureMessage>(MessageType::Failure);
-    EXPECT_NE(failure.reason.find("no instructions"), std::string::npos) << failure.reason;
-    EXPECT_FALSE(sawAny(MessageType::Breakpoints));
-}
-
-TEST_F(DebugFixture, ABreakpointInAFileTheKernelDoesNotHaveIsRefused) {
-    SetBreakpointMessage message;
-    message.file = "elsewhere.sv";
-    message.line = 3;
-    request(MessageType::SetBreakpoint, message);
-
-    const auto failure = expect<FailureMessage>(MessageType::Failure);
-    EXPECT_NE(failure.reason.find("elsewhere.sv"), std::string::npos) << failure.reason;
-}
-
-TEST_F(DebugFixture, ABreakpointIsRemovedAndTheListIsSentAgain) {
-    const auto set = setBreakpoint("design.sv", 3);
-    ASSERT_EQ(set.breakpoints.size(), 1U);
-
-    ClearBreakpointMessage clear;
-    clear.id = set.breakpoints[0].id;
-    request(MessageType::ClearBreakpoint, clear);
-
-    EXPECT_TRUE(expect<BreakpointsMessage>(MessageType::Breakpoints).breakpoints.empty());
-}
-
-TEST_F(DebugFixture, EveryBreakpointIsClearedAtOnce) {
-    setBreakpoint("design.sv", 2);
-    setBreakpoint("design.sv", 3);
-
-    ClearBreakpointMessage clear;
-    clear.all = true;
-    request(MessageType::ClearBreakpoint, clear);
-
-    EXPECT_TRUE(expect<BreakpointsMessage>(MessageType::Breakpoints).breakpoints.empty());
-}
-
-TEST_F(DebugFixture, RemovingSomethingThatIsNotThereIsRefused) {
-    ClearBreakpointMessage clear;
-    clear.id = 99;
-    request(MessageType::ClearBreakpoint, clear);
-
-    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("99"), std::string::npos);
-}
-
-TEST_F(DebugFixture, ABreakpointIsDisabledWithoutBeingForgotten) {
-    const auto set = setBreakpoint("design.sv", 3);
-
-    EnableBreakpointMessage change;
-    change.id = set.breakpoints[0].id;
-    change.enabled = false;
-    request(MessageType::EnableBreakpoint, change);
-
-    const auto list = expect<BreakpointsMessage>(MessageType::Breakpoints);
-    ASSERT_EQ(list.breakpoints.size(), 1U);
-    EXPECT_FALSE(list.breakpoints[0].enabled);
-
-    RunMessage run;
-    run.untilFinished = true;
-    request(MessageType::Run, run);
-
-    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
-    ASSERT_FALSE(states.empty());
-    EXPECT_EQ(states.back().state, SimulationState::Finished)
-        << "a disabled breakpoint stopped the run";
-}
-
-TEST_F(DebugFixture, DisablingSomethingThatIsNotThereIsRefused) {
-    EnableBreakpointMessage change;
-    change.id = 42;
-    request(MessageType::EnableBreakpoint, change);
-
-    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("42"), std::string::npos);
-}
-
-TEST_F(DebugFixture, SteppingStopsOnTheNextLine) {
-    StepMessage step;
-    step.count = 1;
-    request(MessageType::Step, step);
-
-    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
-    ASSERT_FALSE(states.empty());
-    EXPECT_EQ(states.back().stopLine, 2U);
-
-    StepMessage again;
-    again.count = 1;
-    request(MessageType::Step, again);
-
-    const std::vector<RunStateMessage> more = expectAll<RunStateMessage>(MessageType::RunState);
-    ASSERT_FALSE(more.empty());
-    EXPECT_EQ(more.back().stopLine, 3U);
-}
-
-TEST_F(DebugFixture, AStepCountOfZeroStepsOnce) {
-    // A client that forgot to set the count means one line, not none.
-    StepMessage step;
-    step.count = 0;
-    request(MessageType::Step, step);
-
-    const std::vector<RunStateMessage> states = expectAll<RunStateMessage>(MessageType::RunState);
-    ASSERT_FALSE(states.empty());
-    EXPECT_EQ(states.back().stopLine, 2U);
-}
-
-TEST_F(DebugFixture, SteppingAFinishedDesignIsRefused) {
-    RunMessage run;
-    run.untilFinished = true;
-    request(MessageType::Run, run);
-    static_cast<void>(expectAll<RunStateMessage>(MessageType::RunState));
-
-    StepMessage step;
-    request(MessageType::Step, step);
-    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("restart"),
-              std::string::npos);
 }
 
 TEST_F(DebugFixture, ADepositIsWrittenAndTheClientSeesIt) {
@@ -1096,190 +906,6 @@ TEST_F(DebugFixture, ADepositOrForceOnASignalThatDoesNotExistIsRefused) {
     force.value = literal("4'd1");
     request(MessageType::Force, force);
     EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("9999"), std::string::npos);
-}
-
-// ---------------------------------------------------------------------------
-// Commands typed at a front end
-// ---------------------------------------------------------------------------
-
-/// A stand-in for the Tcl interpreter, which lives on the other side of `CommandEvaluator`.
-///
-/// An interface rather than an interpreter the server owns, so that `ipc_server` does not link
-/// the Tcl embedding and a kernel embedded in something that has no interpreter still serves.
-/// This is what tests that seam.
-class RecordingEvaluator final : public enzan::ipc::CommandEvaluator {
-public:
-    bool evaluate(std::string_view script, std::string& result, std::string& error) override {
-        seen.emplace_back(script);
-        if (observe != nullptr) observe();
-
-        if (failWith.empty()) {
-            result = answer;
-            return true;
-        }
-        error = failWith;
-        return false;
-    }
-
-    std::vector<std::string> seen;
-    std::string answer;
-    std::string failWith;
-
-    /// Called from inside `evaluate`, for a test about what the server looks like while a
-    /// command is running.
-    std::function<void()> observe;
-};
-
-class CommandFixture : public ServerFixture {
-protected:
-    void SetUp() override {
-        ServerFixture::SetUp();
-        server->setCommandEvaluator(&evaluator);
-        connectClient();
-    }
-
-    void sendCommand(std::string_view script) {
-        CommandMessage message;
-        message.script = std::string(script);
-        request(MessageType::Command, message);
-    }
-
-    /// Everything the client was sent as transcript text, joined.
-    [[nodiscard]] std::string transcriptText() {
-        std::string joined;
-        for (const TranscriptMessage& message :
-             expectAll<TranscriptMessage>(MessageType::Transcript))
-            joined += message.text;
-        return joined;
-    }
-
-    RecordingEvaluator evaluator;
-};
-
-TEST_F(CommandFixture, ACommandReachesTheEvaluator) {
-    sendCommand("run 100ns");
-
-    ASSERT_EQ(evaluator.seen.size(), 1U);
-    EXPECT_EQ(evaluator.seen.front(), "run 100ns");
-}
-
-TEST_F(CommandFixture, TheLineIsEchoedSoTheTranscriptReadsAsASession) {
-    sendCommand("examine /tb/clk");
-
-    EXPECT_NE(transcriptText().find("# examine /tb/clk"), std::string::npos);
-}
-
-TEST_F(CommandFixture, WhatACommandReturnsIsEchoedAfterIt) {
-    evaluator.answer = "1'b0";
-    sendCommand("examine /tb/clk");
-
-    const std::string text = transcriptText();
-    EXPECT_NE(text.find("1'b0"), std::string::npos) << text;
-}
-
-TEST_F(CommandFixture, ACommandThatReturnsNothingEchoesNothing) {
-    sendCommand("log -r /tb");
-
-    const std::string text = transcriptText();
-    EXPECT_NE(text.find("# log -r /tb"), std::string::npos) << text;
-
-    // The echoed line and nothing after it: a blank line for every command that returns nothing
-    // would be half the transcript.
-    EXPECT_EQ(text.find("\n\n"), std::string::npos) << text;
-}
-
-TEST_F(CommandFixture, AFailingCommandComesBackAsAFailure) {
-    evaluator.failWith = "no signal named '/tb/absent'";
-    sendCommand("examine /tb/absent");
-
-    EXPECT_EQ(expect<FailureMessage>(MessageType::Failure).reason, "no signal named '/tb/absent'");
-}
-
-TEST_F(CommandFixture, ACommandIsFollowedByTheStateAndTheBreakpoints) {
-    // A command may have run the design, changed a breakpoint or written a signal, and the
-    // client has no way of knowing which.
-    sendCommand("run 10ns");
-
-    EXPECT_FALSE(expectAll<RunStateMessage>(MessageType::RunState).empty());
-    EXPECT_FALSE(expectAll<BreakpointsMessage>(MessageType::Breakpoints).empty());
-}
-
-TEST_F(CommandFixture, TheKernelLooksBusyWhileACommandIsRunning) {
-    // The socket is serviced from inside the kernel's interrupt poll, so a command that runs
-    // the design can have a second one arrive while it is still going. Anything that touches
-    // the kernel then must be refused exactly as it is during a Run request — and what makes
-    // that happen is the server reporting itself as running for the whole evaluation.
-    bool sawRunning = false;
-    evaluator.observe = [this, &sawRunning] {
-        sawRunning = server->state() == SimulationState::Running;
-    };
-
-    sendCommand("run -all");
-    EXPECT_TRUE(sawRunning);
-    EXPECT_NE(server->state(), SimulationState::Running) << "the flag was left set";
-}
-
-TEST_F(CommandFixture, ACommandThatReElaboratesLeavesTheServerOnTheNewKernel) {
-    // `vsim` typed at a front end is a command like any other, and it tears down the kernel the
-    // server borrowed to build a new one. Everything the server does after an evaluation reads
-    // that kernel, so a server that kept the old pointer would answer the very command that
-    // replaced it through freed memory.
-    evaluator.observe = [this] {
-        ASSERT_TRUE(session->elaborate("tb"))
-            << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.back());
-    };
-
-    sendCommand("vsim tb");
-
-    EXPECT_EQ(&server->kernel(), session->simulationKernel());
-    EXPECT_NE(server->state(), SimulationState::Running);
-
-    // Renewing sends the client the new tree, because everything it holds describes the design
-    // that has gone. It is also the one visible sign that the borrow *was* renewed rather than
-    // mistaken for unchanged — which is what a comparison of addresses does whenever the new
-    // kernel lands where the old one was.
-    static_cast<void>(expect<DesignMessage>(MessageType::Design));
-
-    // And the design the server now drives is the new one, ready at time zero rather than
-    // wearing the finished status of the kernel that was replaced.
-    EXPECT_EQ(server->state(), SimulationState::Idle);
-
-    // A run has to reach that kernel and the listeners registered against it. Asserted on the
-    // kernel rather than only on the message, so the test does not depend on how many pump
-    // rounds the socket needed.
-    RunMessage request;
-    request.duration = 20;
-    this->request(MessageType::Run, request);
-    EXPECT_EQ(server->kernel().time(), 20U);
-
-    const auto states = expectAll<RunStateMessage>(MessageType::RunState);
-    ASSERT_FALSE(states.empty()) << "the client was never told about the run";
-    EXPECT_EQ(states.back().time, 20U);
-}
-
-TEST_F(CommandFixture, ACommandThatDiscardsTheDesignEndsTheConnectionRatherThanServingNothing) {
-    // A command may leave the session with no simulation at all — a `vsim` whose elaboration
-    // failed. There is then nothing to serve, and the client is told so rather than being
-    // answered out of a kernel that no longer exists.
-    evaluator.observe = [this] { session->setDesign(std::make_unique<Design>()); };
-
-    sendCommand("vsim nonexistent");
-
-    const auto bye = expect<ByeMessage>(MessageType::Bye);
-    EXPECT_NE(bye.reason.find("design"), std::string::npos) << bye.reason;
-}
-
-TEST_F(ServerFixture, ACommandIsRefusedWhenTheKernelHasNoEvaluator) {
-    connectClient();
-
-    // A front end whose entry is answered with the reason is better than one that appears to
-    // work. The fixture registers no evaluator, which is the case this pins.
-    CommandMessage message;
-    message.script = "run 100ns";
-    request(MessageType::Command, message);
-
-    const auto failure = expect<FailureMessage>(MessageType::Failure);
-    EXPECT_NE(failure.reason.find("no commands"), std::string::npos) << failure.reason;
 }
 
 } // namespace

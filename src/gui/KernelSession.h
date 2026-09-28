@@ -129,23 +129,6 @@ public:
     void stop();
     void restart();
 
-    /// Asks for a source file's text. Answered by `sourceReceived`.
-    ///
-    /// From the kernel rather than read locally, because the kernel is the end that knows what
-    /// it analysed and may be on another machine (DESIGN_GUIDE.md section 2.2). A window that
-    /// opened the path itself would show whatever is at that path here, which is either the
-    /// same file or a quietly different one — and the second is a debugger pointing confidently
-    /// at the wrong line.
-    void querySource(const QString& path);
-
-    void setBreakpoint(const QString& file, std::uint32_t line);
-    void clearBreakpoint(std::uint32_t id);
-    void clearAllBreakpoints();
-    void setBreakpointEnabled(std::uint32_t id, bool enabled);
-
-    /// Advances by source lines rather than by time.
-    void step(std::uint32_t lines);
-
     /// Writes a signal once. The next thing that drives it overwrites the value.
     void deposit(std::uint32_t signalIndex, const eir::BitVector& value);
 
@@ -153,13 +136,6 @@ public:
     void force(std::uint32_t signalIndex, const eir::BitVector& value);
 
     void release(std::uint32_t signalIndex);
-
-    /// Sends a line of the control language for the kernel's interpreter to evaluate.
-    ///
-    /// Text rather than a request per command: section 8.1 makes Tcl the control language, and
-    /// a protocol that named each command would be a second vocabulary to keep in step with
-    /// the first. Whatever the command prints arrives as transcript text by the ordinary route.
-    void sendCommand(const QString& script);
 
     /// Asks the kernel to exit, then waits briefly for it to do so.
     void quitKernel();
@@ -190,20 +166,6 @@ public:
     /// The source files the design was analysed from, in analysis order.
     [[nodiscard]] const QStringList& sourceFiles() const noexcept { return designSources; }
 
-    /// Every breakpoint the kernel holds.
-    [[nodiscard]] const QVector<ipc::BreakpointEntry>& breakpoints() const noexcept {
-        return knownBreakpoints;
-    }
-
-    /// The file the design is stopped in, or an empty string when it is not stopped at a line.
-    [[nodiscard]] const QString& stopFile() const noexcept { return stoppedFile; }
-
-    /// The 1-based line the design is stopped on, or zero.
-    [[nodiscard]] std::uint32_t stopLine() const noexcept { return stoppedLine; }
-
-    /// The process that was executing when it stopped, as the kernel names it.
-    [[nodiscard]] const QString& stopProcess() const noexcept { return stoppedProcess; }
-
 Q_SIGNALS:
     /// The handshake completed and the kernel described itself.
     void welcomed();
@@ -231,12 +193,6 @@ Q_SIGNALS:
     /// A request could not be honoured. The connection is still up.
     void requestFailed(const QString& reason);
 
-    /// A source file's text arrived. `found` is false when the kernel has no such file.
-    void sourceReceived(const QString& path, const QString& text, bool found);
-
-    /// The breakpoint list changed; `breakpoints()` holds it.
-    void breakpointsChanged();
-
     void detached(const QString& reason);
 
 private:
@@ -256,8 +212,6 @@ private:
     void onValueChanges(const ipc::Frame& frame);
     void onHistory(const ipc::Frame& frame);
     void onRunState(const ipc::Frame& frame);
-    void onSource(const ipc::Frame& frame);
-    void onBreakpoints(const ipc::Frame& frame);
 
     /// Sends a request and starts draining the socket.
     template<typename Message>
@@ -289,11 +243,6 @@ private:
 
     QVector<ipc::InstanceEntry> designInstances;
     QStringList designSources;
-    QVector<ipc::BreakpointEntry> knownBreakpoints;
-
-    QString stoppedFile;
-    QString stoppedProcess;
-    std::uint32_t stoppedLine = 0;
 
     /// Signal metadata by kernel index. Ordered rather than hash-based, because what the GUI
     /// lists is observable and section 3.8 makes observable ordering reproducible.

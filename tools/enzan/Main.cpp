@@ -308,28 +308,6 @@ bool prepare(const Invocation& invocation, enzan::control::Session& session,
     return session.elaborate(invocation.topModule);
 }
 
-/// Hands a client's typed line to the interpreter.
-///
-/// At namespace scope rather than inside the server, because the same evaluator serves whether
-/// the session was set up by the options or by a script.
-class TclCommands final : public enzan::ipc::CommandEvaluator {
-public:
-    explicit TclCommands(enzan::control::Interpreter& toUse) : interpreter(&toUse) {}
-
-    bool evaluate(std::string_view script, std::string& result, std::string& error) override {
-        const enzan::control::EvalResult outcome = interpreter->evaluate(script);
-        if (outcome.status == enzan::control::EvalStatus::Error) {
-            error = outcome.value;
-            return false;
-        }
-        result = outcome.value;
-        return true;
-    }
-
-private:
-    enzan::control::Interpreter* interpreter;
-};
-
 /// Serves an elaborated session to a graphical front end instead of running it here.
 ///
 /// The client drives the run, so nothing happens until one attaches, and the kernel survives
@@ -368,9 +346,6 @@ public:
         // the same session. Two interpreters, or a protocol with a request per command, would be a
         // second control surface — which is the thing section 8.1 exists to prevent.
         interpreter->setTranscript(&server.transcript());
-
-        TclCommands commands(*interpreter);
-        if (interpreter->valid()) server.setCommandEvaluator(&commands);
 
         if (!server.listen(socketPath, error)) return false;
 

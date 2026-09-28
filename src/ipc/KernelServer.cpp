@@ -33,12 +33,9 @@ std::string_view leafOf(std::string_view path) {
 /// Maps a finished run onto what the client is told the kernel is now doing.
 SimulationState stateAfter(runtime::RunStatus status) {
     switch (status) {
-    // All three mean the kernel stopped where it was asked to and can be told to carry on.
-    // A breakpoint is one of those: the design is intact and another run continues from the
-    // instruction it stopped before.
+    // Both mean the kernel stopped where it was asked to and can be told to carry on.
     case runtime::RunStatus::TimeLimitReached:
-    case runtime::RunStatus::Interrupted:
-    case runtime::RunStatus::AtBreakpoint: return SimulationState::Idle;
+    case runtime::RunStatus::Interrupted: return SimulationState::Idle;
 
     // `$finish` and running out of events are both ends of the simulation; only a restart
     // brings the design back.
@@ -397,14 +394,8 @@ void KernelServer::handle(const Frame& frame) {
 
     case MessageType::Detach: closeClient("the client detached"); return;
 
-    case MessageType::QuerySource: onQuerySource(frame); return;
-    case MessageType::SetBreakpoint: onSetBreakpoint(frame); return;
-    case MessageType::ClearBreakpoint: onClearBreakpoint(frame); return;
-    case MessageType::EnableBreakpoint: onEnableBreakpoint(frame); return;
-    case MessageType::Step: onStep(frame); return;
     case MessageType::Deposit: onDeposit(frame); return;
     case MessageType::Force: onForce(frame); return;
-    case MessageType::Command: onCommand(frame); return;
 
     default:
         // An event arriving from the client, or a request from a newer build. Saying so beats
@@ -479,208 +470,6 @@ void KernelServer::onQueryDesign() {
 
     message.sourceFiles = std::move(files);
     connection.send(MessageType::Design, message);
-}
-
-void KernelServer::onCommand(const Frame& frame) {
-    CommandMessage request;
-    if (!decodePayload(frame.payload, request)) {
-        sendFailure("a command could not be decoded");
-        return;
-    }
-
-    if (commands == nullptr) {
-        // A served kernel always has one; a kernel embedded in something else — a future PLI
-        // host, a test — may not, and saying so beats an entry that appears to work.
-        sendFailure("this kernel takes no commands");
-        return;
-    }
-
-    if (running) {
-        sendFailure("a run is in progress; stop it before typing a command");
-        return;
-    }
-
-    // Echoed first, so that the transcript reads as a session rather than as a list of answers
-    // to questions nobody can see. The prompt is the one a `do` file and the `-i` prompt use.
-    transcriptStream << "# " << request.script << '\n';
-
-    // A command may run the design — `run -all` is one — and while it does, the socket is
-    // serviced from inside the kernel's interrupt poll. Anything arriving then must be refused
-    // exactly as it is during a Run request, or a second command would read a design that is
-    // half way through a time slot. So the flag that says so is set for the whole evaluation,
-    // and the client is told, which is also what greys out its Run button.
-    simulationState = SimulationState::Running;
-    sendRunState({});
-    pump();
-
-    running = true;
-    lastPump = std::chrono::steady_clock::now();
-
-    std::string result;
-    std::string error;
-    const bool ok = commands->evaluate(request.script, result, error);
-
-    running = false;
-
-    // Before anything below reads the kernel. A command is free to replace the elaboration —
-    // `vsim` is one — which destroys the kernel this server borrowed.
-    const Borrow borrow = renewKernelBorrow();
-    if (borrow == Borrow::Gone) return;
-
-    if (!ok) {
-        // The state is left as it is when the elaboration was replaced: `start` has already put
-        // it at time zero, and `stateAfter` on a kernel that has not run yet would report the
-        // fresh design as finished.
-        if (borrow == Borrow::Unchanged) simulationState = stateAfter(simulationKernel->status());
-        sendRunState({});
-        sendFailure(error.empty() ? "the command failed" : error);
-        return;
-    }
-
-    // What the command *returned*, which a prompt echoes. What it printed has already gone to
-    // the transcript by the ordinary route.
-    if (!result.empty()) transcriptStream << result << '\n';
-
-    // A command may have run the design, changed a breakpoint or written a signal, and the
-    // client has no way of knowing which. Telling it everything once is cheaper than a protocol
-    // in which every command declares what it touched.
-    recorder->flush();
-    publisher->flush();
-    database->setLatestTime(simulationKernel->time());
-
-    // As above: a design that has just been elaborated is at time zero and has not run, which
-    // `start` already said. Only a kernel that was there before the command has a run status
-    // worth mapping.
-    if (borrow == Borrow::Unchanged) simulationState = stateAfter(simulationKernel->status());
-    sendRunState({});
-    sendBreakpoints();
-}
-
-void KernelServer::onQuerySource(const Frame& frame) {
-    QuerySourceMessage request;
-    if (!decodePayload(frame.payload, request)) {
-        sendFailure("a query for a source file could not be decoded");
-        return;
-    }
-
-    SourceMessage message;
-    message.path = request.path;
-
-    // The text comes from the kernel's own buffers rather than from the path, because the
-    // kernel may be on another machine (section 2.2) and because these are the exact bytes it
-    // analysed. A window that read the path itself could show a file that has since changed.
-    const BufferId buffer = findBufferByName(diagnostics->sourceManager(), request.path);
-    if (buffer.valid()) {
-        message.text = diagnostics->sourceManager().bufferText(buffer);
-        message.found = true;
-    }
-
-    connection.send(MessageType::Source, message);
-}
-
-void KernelServer::sendBreakpoints() {
-    BreakpointsMessage message;
-    const SourceManager& sources = diagnostics->sourceManager();
-
-    for (const runtime::Breakpoint& breakpoint : simulationKernel->breakpoints()) {
-        message.breakpoints.push_back(
-            BreakpointEntry{.id = breakpoint.id,
-                            .file = std::string(sources.bufferName(breakpoint.buffer)),
-                            .line = breakpoint.line,
-                            .enabled = breakpoint.enabled});
-    }
-
-    connection.send(MessageType::Breakpoints, message);
-}
-
-void KernelServer::onSetBreakpoint(const Frame& frame) {
-    SetBreakpointMessage request;
-    if (!decodePayload(frame.payload, request)) {
-        sendFailure("a breakpoint request could not be decoded");
-        return;
-    }
-
-    if (running) {
-        sendFailure("a run is in progress; stop it before changing a breakpoint");
-        return;
-    }
-
-    std::string ambiguity;
-    const BufferId buffer =
-        findBufferByName(diagnostics->sourceManager(), request.file, &ambiguity);
-    if (!buffer.valid()) {
-        sendFailure(ambiguity.empty()
-                        ? std::format("'{}' is not a source this kernel analysed", request.file)
-                        : std::format("'{}' matches {}", request.file, ambiguity));
-        return;
-    }
-
-    if (simulationKernel->addBreakpoint(buffer, request.line) == 0) {
-        sendFailure(std::format("{}:{} compiled to no instructions, so nothing could ever stop "
-                                "there",
-                                request.file, request.line));
-        return;
-    }
-
-    sendBreakpoints();
-}
-
-void KernelServer::onClearBreakpoint(const Frame& frame) {
-    ClearBreakpointMessage request;
-    if (!decodePayload(frame.payload, request)) {
-        sendFailure("a breakpoint removal could not be decoded");
-        return;
-    }
-
-    if (request.all) {
-        simulationKernel->clearBreakpoints();
-    } else if (!simulationKernel->removeBreakpoint(request.id)) {
-        sendFailure(std::format("there is no breakpoint {}", request.id));
-        return;
-    }
-
-    sendBreakpoints();
-}
-
-void KernelServer::onEnableBreakpoint(const Frame& frame) {
-    EnableBreakpointMessage request;
-    if (!decodePayload(frame.payload, request)) {
-        sendFailure("a breakpoint change could not be decoded");
-        return;
-    }
-
-    if (!simulationKernel->setBreakpointEnabled(request.id, request.enabled)) {
-        sendFailure(std::format("there is no breakpoint {}", request.id));
-        return;
-    }
-
-    sendBreakpoints();
-}
-
-void KernelServer::onStep(const Frame& frame) {
-    StepMessage request;
-    if (!decodePayload(frame.payload, request)) {
-        sendFailure("a step request could not be decoded");
-        return;
-    }
-
-    if (running) {
-        sendFailure("a run is in progress; stop it before stepping");
-        return;
-    }
-    if (simulationState == SimulationState::Finished
-        || simulationState == SimulationState::Failed) {
-        sendFailure("the simulation has ended; restart it before stepping");
-        return;
-    }
-
-    // Recorded as a run the way a Run request is, so that the one place that performs a run
-    // performs this one too: a second path into the kernel would be a second set of rules
-    // about interrupts, transcripts and run state.
-    stepsRequested = request.count == 0 ? 1 : request.count;
-    requestedRun = RunMessage{.duration = 0, .untilFinished = true};
-    runRequested = true;
-    stopRequested = false;
 }
 
 void KernelServer::onDeposit(const Frame& frame) {
@@ -926,20 +715,7 @@ void KernelServer::performRun() {
     running = true;
     lastPump = std::chrono::steady_clock::now();
 
-    runtime::RunStatus status = runtime::RunStatus::TimeLimitReached;
-    if (stepsRequested == 0) {
-        status = simulationKernel->run(until);
-    } else {
-        // Each line is its own run, so a design that finishes or reaches a breakpoint part way
-        // through `step 20` stops there rather than being asked for nineteen more.
-        while (stepsRequested > 0) {
-            --stepsRequested;
-            simulationKernel->requestStep();
-            status = simulationKernel->run(until);
-            if (status != runtime::RunStatus::AtBreakpoint) break;
-        }
-        stepsRequested = 0;
-    }
+    const runtime::RunStatus status = simulationKernel->run(until);
 
     running = false;
 
@@ -1022,19 +798,6 @@ void KernelServer::sendRunState(std::string reason) {
     message.time = simulationKernel->time();
     message.latestRecordedTime = latestRecordedTime();
     message.reason = std::move(reason);
-
-    // Where it stopped travels with the fact that it stopped, so that a client cannot draw a
-    // current-line marker against a run state it no longer has.
-    if (simulationKernel->status() == runtime::RunStatus::AtBreakpoint) {
-        const runtime::StopPoint& stop = simulationKernel->stopPoint();
-        if (stop.location.valid()) {
-            const SourceManager& sources = diagnostics->sourceManager();
-            message.stopFile = sources.bufferName(stop.location.buffer());
-            message.stopLine = sources.lineNumber(stop.location);
-        }
-        if (stop.processIndex < image->processes().size())
-            message.stopProcess = image->processes()[stop.processIndex].name;
-    }
 
     connection.send(MessageType::RunState, message);
 }

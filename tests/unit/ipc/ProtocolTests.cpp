@@ -25,15 +25,10 @@ namespace {
 
 using enzan::eir::BitVector;
 using enzan::eir::Logic;
-using enzan::ipc::BreakpointEntry;
-using enzan::ipc::BreakpointsMessage;
 using enzan::ipc::ByeMessage;
-using enzan::ipc::ClearBreakpointMessage;
-using enzan::ipc::CommandMessage;
 using enzan::ipc::DepositMessage;
 using enzan::ipc::DesignMessage;
 using enzan::ipc::DiagnosticMessage;
-using enzan::ipc::EnableBreakpointMessage;
 using enzan::ipc::FailureMessage;
 using enzan::ipc::ForceMessage;
 using enzan::ipc::Frame;
@@ -47,13 +42,9 @@ using enzan::ipc::ObjectEntry;
 using enzan::ipc::ObjectsMessage;
 using enzan::ipc::ProtocolVersion;
 using enzan::ipc::QueryHistoryMessage;
-using enzan::ipc::QuerySourceMessage;
 using enzan::ipc::RunMessage;
 using enzan::ipc::RunStateMessage;
-using enzan::ipc::SetBreakpointMessage;
 using enzan::ipc::SimulationState;
-using enzan::ipc::SourceMessage;
-using enzan::ipc::StepMessage;
 using enzan::ipc::SubscribeMessage;
 using enzan::ipc::TranscriptMessage;
 using enzan::ipc::ValueChangesMessage;
@@ -270,97 +261,6 @@ TEST(Protocol, SmallMessagesSurviveTheRoundTrip) {
     EXPECT_EQ(stateBack.reason, "finished");
 }
 
-// ---------------------------------------------------------------------------
-// Source debugging
-// ---------------------------------------------------------------------------
-
-TEST(Protocol, ASourceFileSurvivesTheRoundTrip) {
-    SourceMessage sent;
-    sent.path = "/rtl/counter.sv";
-    // Built up rather than written as one literal with a length, because the bytes a text
-    // field is most likely to be mangled by include a NUL: a tab, a CR, a NUL and a non-ASCII
-    // byte all appear in real sources and none may be translated in transit.
-    sent.text = "module m;\r\n\tlogic a;\nendmodule\n";
-    sent.text += '\0';
-    sent.text += "\xE2\x9C\x93";
-    sent.found = true;
-
-    const SourceMessage got = roundTrip(MessageType::Source, sent);
-    EXPECT_EQ(got.path, sent.path);
-    EXPECT_EQ(got.text, sent.text);
-    EXPECT_TRUE(got.found);
-}
-
-TEST(Protocol, ASourceFileThatWasNotFoundSurvivesAsNotFound) {
-    SourceMessage sent;
-    sent.path = "/rtl/absent.sv";
-    sent.found = false;
-
-    const SourceMessage got = roundTrip(MessageType::Source, sent);
-    EXPECT_FALSE(got.found);
-    EXPECT_TRUE(got.text.empty());
-}
-
-TEST(Protocol, BreakpointsSurviveTheRoundTrip) {
-    BreakpointsMessage sent;
-    sent.breakpoints.push_back(
-        BreakpointEntry{.id = 1, .file = "counter.sv", .line = 19, .enabled = true});
-    sent.breakpoints.push_back(
-        BreakpointEntry{.id = 4, .file = "fifo.sv", .line = 62, .enabled = false});
-
-    const BreakpointsMessage got = roundTrip(MessageType::Breakpoints, sent);
-
-    ASSERT_EQ(got.breakpoints.size(), 2U);
-    EXPECT_EQ(got.breakpoints[0].id, 1U);
-    EXPECT_EQ(got.breakpoints[0].line, 19U);
-    EXPECT_TRUE(got.breakpoints[0].enabled);
-    EXPECT_EQ(got.breakpoints[1].file, "fifo.sv");
-    EXPECT_FALSE(got.breakpoints[1].enabled);
-}
-
-TEST(Protocol, AnEmptyBreakpointListSurvivesTheRoundTrip) {
-    // The list is sent whole after every change, so "none" is a message that has to work.
-    BreakpointsMessage sent;
-    EXPECT_TRUE(roundTrip(MessageType::Breakpoints, sent).breakpoints.empty());
-}
-
-TEST(Protocol, TheDebuggingRequestsSurviveTheRoundTrip) {
-    QuerySourceMessage query;
-    query.path = "/rtl/counter.sv";
-    EXPECT_EQ(roundTrip(MessageType::QuerySource, query).path, query.path);
-
-    SetBreakpointMessage set;
-    set.file = "counter.sv";
-    set.line = 19;
-    const SetBreakpointMessage setBack = roundTrip(MessageType::SetBreakpoint, set);
-    EXPECT_EQ(setBack.file, "counter.sv");
-    EXPECT_EQ(setBack.line, 19U);
-
-    ClearBreakpointMessage clear;
-    clear.id = 7;
-    clear.all = true;
-    const ClearBreakpointMessage clearBack = roundTrip(MessageType::ClearBreakpoint, clear);
-    EXPECT_EQ(clearBack.id, 7U);
-    EXPECT_TRUE(clearBack.all);
-
-    EnableBreakpointMessage enable;
-    enable.id = 3;
-    enable.enabled = false;
-    const EnableBreakpointMessage enableBack = roundTrip(MessageType::EnableBreakpoint, enable);
-    EXPECT_EQ(enableBack.id, 3U);
-    EXPECT_FALSE(enableBack.enabled);
-
-    StepMessage step;
-    step.count = 12;
-    EXPECT_EQ(roundTrip(MessageType::Step, step).count, 12U);
-
-    // A command is text, because section 8.1 makes Tcl the control language and a request per
-    // command would be a second vocabulary. The text may contain anything Tcl accepts.
-    CommandMessage command;
-    command.script = "puts \"count is [examine -radix decimal /tb/count]\"\nrun 100ns";
-    EXPECT_EQ(roundTrip(MessageType::Command, command).script, command.script);
-}
-
 TEST(Protocol, ADepositAndAForceSurviveTheRoundTrip) {
     DepositMessage deposit;
     deposit.signalIndex = 5;
@@ -381,30 +281,6 @@ TEST(Protocol, ADepositAndAForceSurviveTheRoundTrip) {
     release.signalIndex = 9;
     release.release = true;
     EXPECT_TRUE(roundTrip(MessageType::Force, release).release);
-}
-
-TEST(Protocol, AStopPositionSurvivesTheRoundTrip) {
-    RunStateMessage sent;
-    sent.state = SimulationState::Idle;
-    sent.time = 55;
-    sent.reason = "stopped at a breakpoint";
-    sent.stopFile = "/rtl/counter.sv";
-    sent.stopLine = 19;
-    sent.stopProcess = "/tb/u_dut always_ff@counter.sv:15";
-
-    const RunStateMessage got = roundTrip(MessageType::RunState, sent);
-    EXPECT_EQ(got.stopFile, sent.stopFile);
-    EXPECT_EQ(got.stopLine, 19U);
-    EXPECT_EQ(got.stopProcess, sent.stopProcess);
-}
-
-TEST(Protocol, NoStopPositionSurvivesAsNone) {
-    RunStateMessage sent;
-    sent.state = SimulationState::Running;
-
-    const RunStateMessage got = roundTrip(MessageType::RunState, sent);
-    EXPECT_TRUE(got.stopFile.empty());
-    EXPECT_EQ(got.stopLine, 0U) << "zero is what a client tests for";
 }
 
 TEST(Protocol, AMessageWithNoFieldsStillFrames) {
@@ -573,12 +449,6 @@ TEST(Protocol, AnUnknownStateDecodesAsFailedRatherThanOutOfRange) {
     writer.u64(time);
     std::string reason;
     writer.str(reason);
-    std::string stopFile;
-    writer.str(stopFile);
-    std::uint32_t stopLine = 0;
-    writer.u32(stopLine);
-    std::string stopProcess;
-    writer.str(stopProcess);
 
     RunStateMessage decoded;
     EXPECT_TRUE(enzan::ipc::decodePayload(payload, decoded));
