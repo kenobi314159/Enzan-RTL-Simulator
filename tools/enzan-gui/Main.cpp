@@ -19,9 +19,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QTextStream>
 
 #include <cstdlib>
+#include <optional>
+#include <string_view>
 
 namespace {
 
@@ -46,31 +49,104 @@ QString findKernel() {
     return QStringLiteral("enzan");
 }
 
+/// What `--help` prints.
+///
+/// Written out rather than left to `QCommandLineParser::helpText`, which produced a different
+/// shape from the kernel's: it wrapped to a different width, echoed argv[0] as the program name
+/// so the usage line read `build/.../enzan-gui`, offered `--help-all` listing Qt's own options
+/// as though they were Enzan's, and spelled `--version` as `-v` where the kernel spells it
+/// `-V`. Two programs of one tool disagreeing about how to ask for the version is a papercut
+/// that a generated help text cannot be told not to inflict.
+///
+/// The options shared with the kernel — `--top`, `--timescale`, `--wave-scope` — MUST keep the
+/// spellings they have there, short forms included.
+constexpr std::string_view UsageText =
+    R"(Usage: enzan-gui [options] [file.sv...]
+
+Enzan's graphical debugging environment. The kernel is a separate process, so a window here can
+drive a simulation on another machine over a forwarded socket.
+
+Options:
+  -h, --help              Print this message and exit.
+  -V, --version           Print version and build information and exit.
+  -t, --top <module>      Module to elaborate as the top level. Required only when the
+                          sources contain more than one candidate.
+      --timescale <unit>  Time unit used for delays and reported times: s, ms, us, ns,
+                          ps or fs. The default is ps.
+      --wave-scope <path> Record only this subtree, for example /tb/u_dut.
+      --attach <socket>   Attach to a kernel already running under `enzan --listen` rather
+                          than starting one. Closing a window that attached only detaches
+                          from the kernel, so a long run is left alone and can be looked in
+                          on again.
+      --kernel <program>  Path to the enzan kernel to start. The default is the one beside
+                          this executable, then whatever is on the path.
+      --theme <file>      Load colours from this Tcl theme script. The default is
+                          $XDG_CONFIG_HOME/enzan-gui/theme.tcl when it exists.
+      --write-theme <file>
+                          Write the built-in theme to this file and exit, as a starting
+                          point for one of your own.
+
+Control language:
+      --do <script>       Set the simulation up from this Tcl script instead of from the
+                          options above. The script says `vlog`, `vsim`, `log` and the rest
+                          of the vocabulary in DESIGN_GUIDE.md section 8.1, and this window
+                          attaches once it has handed the session over. Any files named are
+                          passed to the script as $argv.
+
+The script is the whole set-up when --do is given, so --top, --timescale and --wave-scope are
+refused alongside it, as they are by the kernel. --attach is refused too: a kernel that is
+already listening has been set up already.
+
+With neither sources, --do nor --attach, the window comes up and explains itself.
+
+The normative specification is DESIGN_GUIDE.md in the source tree.
+)";
+
+/// Answers `--help` and `--version` before Qt's parser sees the command line.
+///
+/// Ahead of `QCommandLineParser` because this does not call `addHelpOption` or
+/// `addVersionOption`: those are what generate the divergent help and bind `-v`. Returns the
+/// exit status when one of them was asked for.
+std::optional<int> answerHelpOrVersion(int argc, char** argv) {
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument(argv[index]);
+
+        if (argument == "-h" || argument == "--help") {
+            QTextStream(stdout) << QString::fromUtf8(UsageText.data(),
+                                                     static_cast<qsizetype>(UsageText.size()));
+            return EXIT_SUCCESS;
+        }
+        if (argument == "-V" || argument == "--version") {
+            QTextStream(stdout) << QString::fromStdString(enzan::versionNotice("enzan-gui"));
+            return EXIT_SUCCESS;
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    // Before the QApplication, so that `--help` and `--version` answer with no display attached
+    // and without Qt reporting that it could not connect to one.
+    if (const std::optional<int> status = answerHelpOrVersion(argc, argv)) return *status;
+
     QApplication application(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("enzan-gui"));
     QCoreApplication::setOrganizationName(QStringLiteral("Enzan"));
     QCoreApplication::setApplicationVersion(QString::fromStdString(enzan::versionLine()));
 
+    // Neither `addHelpOption` nor `addVersionOption`: both are answered above, from one text
+    // that matches the kernel's. Adding them here would put `-v` and `--help-all` back.
     QCommandLineParser parser;
-    parser.setApplicationDescription(
-        QStringLiteral("Enzan's graphical debugging environment.\n\n"
-                       "With source files, a kernel is started for them. With --do, a kernel is "
-                       "started and set up by that Tcl script, which is how a graphical session "
-                       "is given a compile-and-configure script. With --attach, this connects "
-                       "to a kernel already running under `enzan --listen`, which is how a "
-                       "local window drives a simulation on another machine over a forwarded "
-                       "socket."));
-    parser.addHelpOption();
-    parser.addVersionOption();
 
     const QCommandLineOption attachOption(
         QStringLiteral("attach"),
         QStringLiteral("Attach to a kernel listening on this Unix domain socket."),
         QStringLiteral("socket"));
-    const QCommandLineOption topOption(QStringLiteral("top"),
+    // `-t` as well as `--top`, because that is what the kernel takes and the option means the
+    // same thing in both.
+    const QCommandLineOption topOption(QStringList{QStringLiteral("t"), QStringLiteral("top")},
                                        QStringLiteral("Module to elaborate as the top level."),
                                        QStringLiteral("module"));
     const QCommandLineOption timescaleOption(

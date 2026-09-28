@@ -97,17 +97,7 @@ The normative specification, including the milestone roadmap, is DESIGN_GUIDE.md
 source tree.
 )";
 
-void printVersion() {
-    std::cout << enzan::versionLine() << '\n' << enzan::buildDescription();
-
-    // The notice is what the GPL asks an interactive program to display, and users of
-    // simulators expect `--version` to say which one they are running.
-    std::cout << "\nCopyright (C) 2026 the Enzan authors.\n"
-                 "License GPLv3+: GNU GPL version 3 or later "
-                 "<https://gnu.org/licenses/gpl.html>.\n"
-                 "This is free software: you are free to change and redistribute it.\n"
-                 "There is NO WARRANTY, to the extent permitted by law.\n";
-}
+void printVersion() { std::cout << enzan::versionNotice("enzan"); }
 
 /// Everything the command line can ask for.
 struct Invocation {
