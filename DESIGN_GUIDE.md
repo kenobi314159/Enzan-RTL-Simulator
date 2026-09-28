@@ -701,7 +701,17 @@ command, which the user can see and fix, instead of producing a different
 simulation, which they cannot. `vcom` is refused with the milestone it arrives
 at rather than ignored, for exactly this reason.
 
-Three of the commands have a definition worth writing down, because the obvious
+Enzan adds `listen <socket>`, which has no Questa equivalent because Questa
+spells the same thing as a switch on `vsim`. It is in the vocabulary rather than
+only on the command line because **every capability MUST be reachable from the
+control language.** An option with no command behind it cannot be combined with
+a script, since a script is refused the options it duplicates — and `--listen`
+duplicated nothing, so refusing it made serving a front end unreachable from the
+one surface this section calls *the* interface. `--listen` is now its shorthand,
+the way the other options relate to their commands, and the two go through one
+implementation so that they cannot come to differ.
+
+Four of the commands have a definition worth writing down, because the obvious
 reading of each is wrong:
 
 - **`run` with no argument runs to the end**, the same as `run -all`. Questa
@@ -717,6 +727,28 @@ reading of each is wrong:
   `3'h2` — which is what the wave window shows (10.3) and what a reader asking
   about a state register means. A radix asks for the encoding instead, and
   `radix symbolic` goes back.
+- **`listen` blocks, and everything after it runs once the front end has gone.**
+  It gives the session away rather than starting a server beside the script, so
+  where the command appears is where the handover happens: a script analyses,
+  elaborates and chooses what to log, then says `listen`, and whoever attaches
+  finds the design ready and drives the run themselves. Placing it after `run`
+  would be the wrong way round, and is refused rather than obeyed — see below.
+
+**`listen` MUST refuse a design that has already run.** Serving puts the design
+back to time zero and starts recording there, because that is what makes the
+values a wave window shows at time zero the ones the design begins from (7.1). A
+session that had already run would therefore be silently reset, losing exactly
+the run the user meant to look at, and the wave window would have no history for
+the span anyway. The refusal names the time reached and says where the command
+goes instead. `restart` first is the way to serve a session that has run.
+
+**The refusals live in one place, not one per spelling.** `listen` and `--listen`
+are the same request and MUST be refused identically; a session method both go
+through is what guarantees that, and is the reason serving is not implemented
+twice. The kernel process is also the only place that can join the two halves:
+`ipc` depends on `control` for the session it serves, so the command reaches a
+server through an interface the driver installs rather than by depending on `ipc`
+itself.
 
 **A front end's command entry sends text, not named commands.** The kernel
 evaluates it through the same interpreter a `do` file goes through, against the
