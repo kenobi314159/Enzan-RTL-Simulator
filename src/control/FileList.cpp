@@ -23,14 +23,7 @@ struct Token {
     SourceLocation location;
 };
 
-/// How a nested list's relative paths are resolved.
-enum class Anchor : std::uint8_t {
-    /// `-f`: against the process's working directory, which is what the file was written
-    /// against in every tool that reads these.
-    WorkingDirectory,
-    /// `-F`: against the directory of the list that named it.
-    ListDirectory,
-};
+using Anchor = FileListAnchor;
 
 /// Splits a file list buffer into words, resolving comments, quotes and `$VAR`.
 ///
@@ -383,9 +376,9 @@ private:
 } // namespace
 
 bool readFileList(const std::filesystem::path& path, SourceManager& sources,
-                  DiagnosticEngine& diagnostics, FileList& result) {
+                  DiagnosticEngine& diagnostics, FileList& result, FileListAnchor anchor) {
     Reader reader(sources, diagnostics, result);
-    return reader.read(path, Anchor::WorkingDirectory, {});
+    return reader.read(path, anchor, {});
 }
 
 } // namespace enzan::control

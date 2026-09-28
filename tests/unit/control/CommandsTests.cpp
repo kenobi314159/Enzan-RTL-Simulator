@@ -158,6 +158,30 @@ TEST_F(CommandsTest, VlogReadsAFileList) {
     EXPECT_TRUE(session.hasDesign());
 }
 
+// The two spellings of a file list differ by where the paths inside it resolve, and the pair
+// below is what tells them apart: the same list, named relatively from its parent directory,
+// must be readable by `-F` and unreadable by `-f`. A `-F` that resolved against the working
+// directory would pass the first of these and fail the second, which is what it used to do.
+TEST_F(CommandsTest, VlogMinusCapitalFResolvesAgainstTheListsOwnDirectory) {
+    workspace.write("sub/inner.sv", CounterSource);
+    workspace.write("sub/design.f", "inner.sv\n");
+
+    const enzan::test::ScopedWorkingDirectory here(workspace.path());
+    ASSERT_TRUE(eval("vlog -F sub/design.f").ok());
+    EXPECT_TRUE(session.hasDesign());
+}
+
+TEST_F(CommandsTest, VlogMinusFResolvesAgainstTheWorkingDirectory) {
+    workspace.write("sub/inner.sv", CounterSource);
+    workspace.write("sub/design.f", "inner.sv\n");
+
+    // `inner.sv` is beside the list, not beside us, so the working-directory rule cannot find
+    // it. Refused rather than quietly falling back to the other anchor: section 8.2 makes the
+    // distinction normative, and a `-f` that searched both would read lists no other tool does.
+    const enzan::test::ScopedWorkingDirectory here(workspace.path());
+    EXPECT_EQ(eval("vlog -f sub/design.f").status, EvalStatus::Error);
+}
+
 TEST_F(CommandsTest, VlogRefusesAnOptionItDoesNotUnderstand) {
     const EvalResult result = eval("vlog -nologo x.sv");
     EXPECT_EQ(result.status, EvalStatus::Error);

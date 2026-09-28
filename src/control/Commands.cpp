@@ -211,11 +211,18 @@ CommandResult Vocabulary::vlog(CommandArguments arguments) {
             if (index + 1 >= arguments.size())
                 return CommandResult::error("'" + std::string(argument) + "' needs a file");
 
+            // The two spellings differ by exactly this, here as much as inside a list: a list
+            // named with `-F` was written as though the tool had been run from beside it
+            // (section 8.2). Reading both against the working directory would make `-F` a
+            // synonym for `-f` at the one place a user is most likely to type it.
+            const FileListAnchor anchor = argument == "-F" ? FileListAnchor::ListDirectory
+                                                           : FileListAnchor::WorkingDirectory;
+
             FileList list;
             if (!readFileList(std::string(arguments[++index]), *sources,
                               // The engine is reached through the session so that a file-list
                               // failure is reported exactly as an analysis failure is.
-                              session->diagnosticEngine(), list))
+                              session->diagnosticEngine(), list, anchor))
                 return CommandResult::error("the file list could not be read");
 
             for (const std::filesystem::path& file : list.files) request.files.push_back(file);

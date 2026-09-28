@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -49,6 +50,19 @@ struct FileList {
     std::vector<std::string> defines;
 };
 
+/// How the relative paths inside a list are resolved.
+///
+/// Named at the top level too, not only for nesting, because `vlog -f` and `vlog -F` differ by
+/// exactly this and a reader that could only be told at a nested list would make the two
+/// spellings mean the same thing at the point a user is most likely to type them.
+enum class FileListAnchor : std::uint8_t {
+    /// `-f`: against the process's working directory, which is what the file was written
+    /// against in every tool that reads these.
+    WorkingDirectory,
+    /// `-F`: against the directory of the list itself.
+    ListDirectory,
+};
+
 /// Reads `path` as a `.f` file list, appending what it names to `result`.
 ///
 /// `.f` is the de-facto industry standard and nearly every open-source design on GitHub ships
@@ -73,7 +87,11 @@ struct FileList {
 ///
 /// Returns false having reported through `diagnostics`. `result` may hold what was read up to
 /// the failure, so a caller that failed must discard it rather than use it.
+///
+/// `anchor` says which of the two rules governs *this* list; a list it nests chooses its own
+/// from the `-f` or `-F` that named it.
 bool readFileList(const std::filesystem::path& path, SourceManager& sources,
-                  DiagnosticEngine& diagnostics, FileList& result);
+                  DiagnosticEngine& diagnostics, FileList& result,
+                  FileListAnchor anchor = FileListAnchor::WorkingDirectory);
 
 } // namespace enzan::control
