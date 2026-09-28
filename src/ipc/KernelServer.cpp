@@ -103,7 +103,7 @@ std::vector<DiagnosticMessage> KernelServer::DiagnosticRelay::take() {
 // Construction
 // ---------------------------------------------------------------------------
 
-KernelServer::KernelServer(control::Session& sessionToServe, DiagnosticEngine& diagnosticEngine,
+KernelServer::KernelServer(session::Session& sessionToServe, DiagnosticEngine& diagnosticEngine,
                            ServerOptions serverOptions)
     : session(&sessionToServe),
       image(sessionToServe.designImage()),

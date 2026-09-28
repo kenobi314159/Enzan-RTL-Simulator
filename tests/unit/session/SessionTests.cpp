@@ -5,7 +5,7 @@
 // three phases of DESIGN_GUIDE.md section 2.1 together, and a test against a hand-built
 // design would not exercise the joins that are the thing being tested.
 
-#include "control/Session.h"
+#include "session/Session.h"
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
@@ -28,7 +28,7 @@ using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
 using Radix = enzan::eir::Radix;
-using enzan::control::Session;
+using enzan::session::Session;
 using enzan::runtime::RunStatus;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {

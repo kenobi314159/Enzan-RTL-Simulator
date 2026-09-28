@@ -93,12 +93,6 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 # contributor at the current milestone is not asked to install dependencies
 # nothing yet uses. The milestone each one belongs to is named here because
 # turning one on before its milestone will simply find nothing to build.
-#
-# There is deliberately no option for the Tcl control layer. Section 11.3 lists
-# Tcl as a required system dependency and section 8.1 makes it *the* control
-# language; from M3 every path into the simulator — a batch run, a served kernel,
-# a script — goes through a control session, so a build without it would be a
-# configuration nobody runs and that nothing would notice breaking.
 option(ENZAN_BUILD_TESTS "Build the unit test suites" ON)
 option(ENZAN_ENABLE_SYSTEMVERILOG "Build the slang-based SystemVerilog frontend (M1)" ON)
 option(ENZAN_ENABLE_VHDL "Build the NVC-based VHDL frontend (M6)" OFF)

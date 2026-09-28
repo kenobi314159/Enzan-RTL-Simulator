@@ -14,8 +14,8 @@ add_subdirectory(codegen)
 add_subdirectory(runtime)
 add_subdirectory(wavedb)
 
-# Before `ipc`, because the server end of the protocol serves a control session.
-add_subdirectory(control)
+# Before `ipc`, because the server end of the protocol serves a session.
+add_subdirectory(session)
 add_subdirectory(ipc)
 if(ENZAN_BUILD_GUI)
   add_subdirectory(gui)

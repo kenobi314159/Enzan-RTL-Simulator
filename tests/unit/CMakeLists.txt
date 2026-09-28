@@ -14,7 +14,7 @@ add_subdirectory(runtime)
 add_subdirectory(wavedb)
 add_subdirectory(ipc)
 
-add_subdirectory(control)
+add_subdirectory(session)
 
 if(ENZAN_BUILD_GUI)
   add_subdirectory(gui)

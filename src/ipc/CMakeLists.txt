@@ -16,7 +16,7 @@ enzan_add_component(
   HEADERS Codec.h Protocol.h Transport.h
   DEPENDS enzan::common enzan::eir)
 
-# `ipc_server` depends on `control_session` because the simulation belongs to a session: a
+# `ipc_server` depends on `session` because the simulation belongs to a session: a
 # served kernel, a `-do` script and a batch run are one pipeline, and a server that built a
 # kernel of its own would mean a command typed at a front end acted on a different simulation
 # from the one on screen.
@@ -24,5 +24,5 @@ enzan_add_component(
   ipc_server
   SOURCES ChangePublisher.cpp KernelServer.cpp
   HEADERS ChangePublisher.h KernelServer.h
-  DEPENDS enzan::control_session enzan::ipc enzan::runtime enzan::wavedb
+  DEPENDS enzan::session enzan::ipc enzan::runtime enzan::wavedb
   PRIVATE_DEPENDS enzan::elab)

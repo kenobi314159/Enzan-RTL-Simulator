@@ -25,9 +25,7 @@
 #include <string_view>
 #include <vector>
 
-#include "control/Commands.h"
-#include "control/Interpreter.h"
-#include "control/Session.h"
+#include "session/Session.h"
 
 #include <unistd.h>
 
@@ -73,26 +71,6 @@ Options:
   -I, --incdir <dir>      Add a directory to the `include search path.
       --dump-stats        Print instruction and delta counts when the run ends.
 
-Control language:
-      --do <script>       Run a Tcl script and exit with what `quit` asked for. The script
-                          drives everything: `vlog`, `vsim`, `run`, `examine` and the rest of
-                          the vocabulary in DESIGN_GUIDE.md section 8.1. Anything else on the
-                          command line is passed to the script as $argv.
-  -i, --interactive       Read commands from the standard input. Combined with --do, the
-                          script runs first and the prompt follows it.
-
-The control language is the whole interface when either of those is given, so the options
-above are refused alongside them rather than quietly becoming a second way to say the same
-thing. `vlog design.sv`, `vsim tb`, `run -all` is the shortest script that does what the
-options above do.
-
---listen is the exception, because the vocabulary's `listen` is the same request and the two
-are meant to be used together: `--do setup.do --listen <socket>` sets the simulation up from
-the script and then waits for a front end, which is how a graphical session is given a set-up
-script. A script that says `listen <socket>` itself chooses where the handover happens instead,
-and that command is the last thing it does: a front end detaching leaves the kernel serving, and
-quitting from one ends the script too.
-
 The normative specification, including the milestone roadmap, is DESIGN_GUIDE.md in the
 source tree.
 )";
@@ -112,11 +90,9 @@ struct Invocation {
     std::filesystem::path fstPath;
     std::string waveformScope;
     std::filesystem::path listenPath;
-    std::filesystem::path scriptPath;
     std::int8_t timeExponent = -12;
     std::uint32_t deltaLimit = 10'000;
     bool dumpStatistics = false;
-    bool interactive = false;
 };
 
 /// Parses a time unit name into its power-of-ten exponent.
@@ -259,18 +235,6 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
-        if (argument == "--do") {
-            const char* value = requireValue(index, argument);
-            if (value == nullptr) return ParseOutcome::BadUsage;
-            invocation.scriptPath = value;
-            continue;
-        }
-
-        if (argument == "-i" || argument == "--interactive") {
-            invocation.interactive = true;
-            continue;
-        }
-
         if (argument.starts_with('-')) {
             std::cerr << "enzan: unrecognised option '" << argument << "'\n"
                       << "Try 'enzan --help' for the available options.\n";
@@ -290,12 +254,12 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 /// One pipeline for the batch run, the served kernel and the script. Three copies of it was
 /// where the differences between them started: a `--listen` that resolved a file differently
 /// from a `vlog`, or a batch run that put the waveform somewhere a served one did not.
-bool prepare(const Invocation& invocation, enzan::control::Session& session,
+bool prepare(const Invocation& invocation, enzan::session::Session& session,
              enzan::DiagnosticEngine& diagnostics) {
     session.setTimeScale(enzan::runtime::TimeScale(invocation.timeExponent));
     session.setDeltaLimit(invocation.deltaLimit);
 
-    enzan::control::Session::AnalysisRequest request;
+    enzan::session::Session::AnalysisRequest request;
     request.files = invocation.files;
     request.defines = invocation.defines;
     request.includeDirectories = invocation.includeDirectories;
@@ -313,107 +277,42 @@ bool prepare(const Invocation& invocation, enzan::control::Session& session,
 /// The client drives the run, so nothing happens until one attaches, and the kernel survives
 /// its departure: section 2.2 requires a GUI to be able to detach from a long simulation on a
 /// compute server without ending it.
-///
-/// This is the driver's half of the seam `control::SessionServer` declares, and the driver is
-/// where it has to live: `ipc` depends on `control` for the session it serves, so
-/// `control_session` cannot depend on `ipc` back, and this executable is the one place that
-/// links both. Installing it is what gives the `listen` command something to do, and `--listen`
-/// is the same request spelled as an option.
-class DriverServer final : public enzan::control::SessionServer {
-public:
-    DriverServer(const Invocation& invocationToUse, enzan::control::Session& sessionToServe,
-                 enzan::control::Interpreter& interpreterToUse,
-                 enzan::DiagnosticEngine& diagnosticEngine)
-        : invocation(&invocationToUse),
-          session(&sessionToServe),
-          interpreter(&interpreterToUse),
-          diagnostics(&diagnosticEngine) {}
+ExitStatus serve(const Invocation& invocation, enzan::session::Session& session,
+                 enzan::DiagnosticEngine& diagnostics) {
+    enzan::ipc::ServerOptions serverOptions;
+    serverOptions.kernelVersion = enzan::versionLine();
+    serverOptions.timeScale = session.timeScale();
+    serverOptions.deltaLimit = invocation.deltaLimit;
+    serverOptions.waveformScope = invocation.waveformScope;
 
-    bool serve(const std::filesystem::path& socketPath, std::string& error) override {
-        enzan::ipc::ServerOptions serverOptions;
-        serverOptions.kernelVersion = enzan::versionLine();
-        // From the session rather than from the command line, because a scripted session takes
-        // its time unit from `vsim -t` and only an option-driven one from `--timescale`. The
-        // session holds whichever of them happened.
-        serverOptions.timeScale = session->timeScale();
-        serverOptions.deltaLimit = invocation->deltaLimit;
-        serverOptions.waveformScope = invocation->waveformScope;
+    enzan::ipc::KernelServer server(session, diagnostics, serverOptions);
+    server.start();
 
-        enzan::ipc::KernelServer server(*session, *diagnostics, serverOptions);
-        server.start();
-
-        // The front end's command entry reaches the same interpreter a `do` file does, acting on
-        // the same session. Two interpreters, or a protocol with a request per command, would be a
-        // second control surface — which is the thing section 8.1 exists to prevent.
-        interpreter->setTranscript(&server.transcript());
-
-        if (!server.listen(socketPath, error)) return false;
-
-        // Printed rather than logged, because it is the one thing the user needs next and they are
-        // looking at this terminal.
-        std::cout << "-- listening on " << server.socketPath().string() << "\n"
-                  << "-- attach with: enzan-gui --attach " << server.socketPath().string() << '\n'
-                  << std::flush;
-
-        hasServed = true;
-        served = server.serve();
-
-        // Put back before the server goes, because its transcript stream dies with it and
-        // anything written into it afterwards would be writing into a destroyed object.
-        interpreter->setTranscript(nullptr);
-
-        // Only a client's Quit ends the loop above — detaching leaves the kernel serving, which
-        // is what section 2.2 requires of it — so getting here means the front end asked for the
-        // simulation to stop. That stops the script too, exactly as a `quit` inside a `do` file
-        // stops the outer one: carrying on with the lines after `listen` would be ignoring the
-        // thing the user just asked for.
-        interpreter->requestStop(served);
-        return true;
+    std::string error;
+    if (!server.listen(invocation.listenPath, error)) {
+        diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
+                           invocation.listenPath.string(), error);
+        return ExitStatus::Failure;
     }
 
-    /// True once a front end has been served, so that the driver does not serve a second time
-    /// for a script that already said `listen`.
-    [[nodiscard]] bool hasServedOne() const noexcept { return hasServed; }
+    // Printed rather than logged, because it is the one thing the user needs next and they are
+    // looking at this terminal.
+    std::cout << "-- listening on " << server.socketPath().string() << "\n"
+              << "-- attach with: enzan-gui --attach " << server.socketPath().string() << '\n'
+              << std::flush;
 
-    /// What the served session ended with, as `KernelServer::serve` reports it.
-    [[nodiscard]] int status() const noexcept { return served; }
-
-private:
-    const Invocation* invocation;
-    enzan::control::Session* session;
-    enzan::control::Interpreter* interpreter;
-    enzan::DiagnosticEngine* diagnostics;
-
-    bool hasServed = false;
-    int served = 0;
-};
+    const int status = server.serve();
+    if (status != 0 || diagnostics.hasErrors()) return ExitStatus::Failure;
+    return ExitStatus::Success;
+}
 
 /// Analyses, elaborates and runs. Returns the process exit status.
 ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                     enzan::DiagnosticEngine& diagnostics) {
-    enzan::control::Session session(sources, diagnostics);
+    enzan::session::Session session(sources, diagnostics);
     if (!prepare(invocation, session, diagnostics)) return ExitStatus::Failure;
 
-    if (!invocation.listenPath.empty()) {
-        // Through the same seam the `listen` command goes through, so that the option and the
-        // command cannot drift apart: one of them refusing a design that has already run while
-        // the other reset it silently is exactly the divergence a second control surface causes.
-        enzan::control::Interpreter interpreter(diagnostics);
-        if (!interpreter.valid()) return ExitStatus::Failure;
-        enzan::control::registerCommands(interpreter, session, sources);
-
-        DriverServer server(invocation, session, interpreter, diagnostics);
-        session.setServer(&server);
-
-        std::string error;
-        if (!session.serveTo(invocation.listenPath, error)) {
-            diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
-                               invocation.listenPath.string(), error);
-            return ExitStatus::Failure;
-        }
-        if (server.status() != 0 || diagnostics.hasErrors()) return ExitStatus::Failure;
-        return ExitStatus::Success;
-    }
+    if (!invocation.listenPath.empty()) return serve(invocation, session, diagnostics);
 
     // Opened after elaboration so that the values dumped at time zero are the ones the design
     // actually starts from rather than an empty arena.
@@ -445,113 +344,6 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
 
 #endif // ENZAN_WITH_SYSTEMVERILOG
 
-/// Reads commands from the standard input until end of file or `quit`.
-///
-/// A line at a time rather than a readline-style editor: a line editor is a dependency and a
-/// terminal-handling problem, and the shell a user drives this from already has one through
-/// `rlwrap`. The prompt is printed only to a terminal, so that a script piped in produces a
-/// transcript with nothing in it that was not asked for.
-void readCommands(enzan::control::Interpreter& interpreter, enzan::SourceManager& sources) {
-    const bool attached = ::isatty(STDIN_FILENO) != 0;
-    std::string pending;
-
-    while (!interpreter.stopRequested()) {
-        if (attached) std::cout << (pending.empty() ? "enzan> " : "     > ") << std::flush;
-
-        std::string line;
-        if (!std::getline(std::cin, line)) break;
-
-        pending += line;
-        pending += '\n';
-
-        // A `proc` or an `if` typed across several lines is evaluated once it is finished,
-        // which is what the completeness test is for.
-        if (!enzan::control::Interpreter::isComplete(pending)) continue;
-
-        const enzan::BufferId buffer = sources.addBuffer("<stdin>", pending);
-        const enzan::control::EvalResult result = interpreter.evaluateBuffer(buffer, pending);
-        pending.clear();
-
-        if (result.status == enzan::control::EvalStatus::Error) {
-            interpreter.reportFailure(result);
-            continue;
-        }
-        if (!result.value.empty()) std::cout << result.value << '\n';
-    }
-
-    // An unfinished command at end of input is a truncated script, not an empty one: saying so
-    // beats exiting successfully having silently dropped it.
-    if (!pending.empty() && !enzan::control::Interpreter::isComplete(pending))
-        std::cerr << "enzan: the input ended in the middle of a command\n";
-}
-
-/// Runs a script, an interactive session, or both.
-ExitStatus control(const Invocation& invocation, enzan::SourceManager& sources,
-                   enzan::DiagnosticEngine& diagnostics) {
-    enzan::control::Session session(sources, diagnostics);
-    enzan::control::Interpreter interpreter(diagnostics);
-    if (!interpreter.valid()) return ExitStatus::Failure;
-
-    enzan::control::registerCommands(interpreter, session, sources);
-
-#ifdef ENZAN_WITH_SYSTEMVERILOG
-    // Installed before anything is evaluated, because `listen` may be the first line of the
-    // script. A build without the frontend has no server to install and answers the command
-    // with that reason, which is better than not having the command at all.
-    DriverServer server(invocation, session, interpreter, diagnostics);
-    session.setServer(&server);
-#endif
-
-    // Whatever else was on the command line is the script's, not the driver's. Collected from
-    // the positional arguments wherever they appeared, so that `--do` does not have to come
-    // first for them to be recognised.
-    std::string argumentList;
-    for (const std::filesystem::path& argument : invocation.files) {
-        if (!argumentList.empty()) argumentList += ' ';
-        argumentList += argument.string();
-    }
-    interpreter.setVariable("argv", argumentList);
-    interpreter.setVariable("argc", std::to_string(invocation.files.size()));
-
-    if (!invocation.scriptPath.empty()) {
-        const enzan::control::EvalResult result =
-            interpreter.evaluateFile(invocation.scriptPath, sources);
-        if (result.status == enzan::control::EvalStatus::Error) {
-            interpreter.reportFailure(result);
-            // The prompt is still offered after a failed script, because that is the moment a
-            // user most wants to look at what the design was left holding.
-            if (!invocation.interactive) return ExitStatus::Failure;
-        }
-    }
-
-    if (invocation.interactive && !interpreter.stopRequested()) readCommands(interpreter, sources);
-
-#ifdef ENZAN_WITH_SYSTEMVERILOG
-    // `--listen` beside a script means "set the simulation up and then hand it over", so the
-    // handover happens once the script has finished having its say. A script that said `listen`
-    // itself has already been served and is not served again: it chose where the front end took
-    // over, which is the whole reason the command exists.
-    if (!invocation.listenPath.empty() && !server.hasServedOne() && !interpreter.stopRequested()) {
-        std::string error;
-        if (!session.serveTo(invocation.listenPath, error)) {
-            diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
-                               invocation.listenPath.string(), error);
-            return ExitStatus::Failure;
-        }
-    }
-#endif
-
-    // Finished here as well as by `quit`, for the session that ended at end of input.
-    session.closeWaveforms();
-
-    if (interpreter.stopRequested() && interpreter.exitStatus() != 0) return ExitStatus::Failure;
-    if (session.exitStatus() != 0) return ExitStatus::Failure;
-#ifdef ENZAN_WITH_SYSTEMVERILOG
-    if (server.status() != 0) return ExitStatus::Failure;
-#endif
-    return ExitStatus::Success;
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -573,36 +365,7 @@ int main(int argc, char** argv) {
     case ParseOutcome::Run: break;
     }
 
-    const bool scripted = !invocation.scriptPath.empty() || invocation.interactive;
-
-    // The control language is the whole interface when it is in play. Section 8.1 makes Tcl
-    // *the* control language, and accepting the options above alongside it would leave two
-    // ways to say the same thing that have to stay compatible with each other for ever.
-    if (scripted) {
-        const char* conflicting = nullptr;
-        if (!invocation.topModule.empty())
-            conflicting = "--top";
-        else if (invocation.runUntil.has_value())
-            conflicting = "--run";
-        else if (!invocation.vcdPath.empty())
-            conflicting = "--vcd";
-        else if (!invocation.fstPath.empty())
-            conflicting = "--fst";
-        else if (!invocation.waveformScope.empty())
-            conflicting = "--wave-scope";
-        else if (!invocation.defines.empty())
-            conflicting = "--define";
-        else if (!invocation.includeDirectories.empty())
-            conflicting = "--incdir";
-
-        if (conflicting != nullptr) {
-            std::cerr << "enzan: " << conflicting
-                      << " cannot be combined with '--do' or '--interactive'; the script is "
-                         "the whole interface, and `vlog`, `vsim`, `run`, `vcd file` and "
-                         "`log` are what say these things inside one\n";
-            return static_cast<int>(ExitStatus::Usage);
-        }
-    } else if (invocation.files.empty()) {
+    if (invocation.files.empty()) {
         std::cerr << "enzan: no source files were given\n"
                   << "Try 'enzan --help' for the available options.\n";
         return static_cast<int>(ExitStatus::Usage);
@@ -630,8 +393,6 @@ int main(int argc, char** argv) {
     enzan::DiagnosticEngine diagnostics(sources);
     enzan::TextDiagnosticConsumer consumer(sources, std::cerr);
     diagnostics.addConsumer(consumer);
-
-    if (scripted) return static_cast<int>(control(invocation, sources, diagnostics));
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
     return static_cast<int>(simulate(invocation, sources, diagnostics));

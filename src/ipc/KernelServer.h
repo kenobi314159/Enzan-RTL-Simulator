@@ -3,7 +3,7 @@
 #pragma once
 
 #include "common/Diagnostics.h"
-#include "control/Session.h"
+#include "session/Session.h"
 #include "ipc/ChangePublisher.h"
 #include "ipc/Protocol.h"
 #include "ipc/Transport.h"
@@ -48,7 +48,7 @@ struct ServerOptions {
 /// Serves one elaborated design to one attached client.
 ///
 /// This is the kernel end of the split described in section 2.2. The simulation belongs to a
-/// `control::Session` — the same one the Tcl vocabulary drives — and the server adds the live
+/// `session::Session` and the server adds the live
 /// waveform database, the recorder filling it and the answers to a client's requests.
 ///
 /// **One session, whichever surface is driving.** A served kernel, a `-do` script and a batch
@@ -73,7 +73,7 @@ class KernelServer final : public runtime::RunInterrupt {
 public:
     /// `sessionToServe` and `diagnostics` must outlive the server, and the session must
     /// already have been elaborated.
-    KernelServer(control::Session& sessionToServe, DiagnosticEngine& diagnosticEngine,
+    KernelServer(session::Session& sessionToServe, DiagnosticEngine& diagnosticEngine,
                  ServerOptions serverOptions);
 
     KernelServer(const KernelServer&) = delete;
@@ -236,7 +236,7 @@ private:
 
     [[nodiscard]] runtime::SimTime latestRecordedTime() const noexcept;
 
-    control::Session* session;
+    session::Session* session;
     const runtime::Image* image;
     DiagnosticEngine* diagnostics;
     ServerOptions options;

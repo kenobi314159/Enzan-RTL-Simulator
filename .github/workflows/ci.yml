@@ -68,7 +68,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache clang libgtest-dev zlib1g-dev tcl-dev
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -111,7 +111,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache clang libgtest-dev zlib1g-dev tcl-dev
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -246,7 +246,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache libgtest-dev zlib1g-dev tcl-dev python3 iverilog gtkwave
+            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 iverilog gtkwave
 
       - name: Restore compiler cache
         uses: actions/cache@v4

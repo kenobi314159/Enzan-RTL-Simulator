@@ -12,7 +12,7 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
-#include "control/Session.h"
+#include "session/Session.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
@@ -48,7 +48,7 @@ namespace {
 
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
-using enzan::control::Session;
+using enzan::session::Session;
 using enzan::eir::Design;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
@@ -232,7 +232,7 @@ protected:
     /// Elaborates and serves `design`. Called again by a test that needs a design the
     /// fixture's own does not provide.
     ///
-    /// The design goes through a `control::Session`, which is what the served kernel owns: a
+    /// The design goes through a `session::Session`, which is what the served kernel owns: a
     /// command typed at a front end and a request from one act on the same simulation, so a
     /// test that served an image of its own would be testing an arrangement that does not
     /// exist.

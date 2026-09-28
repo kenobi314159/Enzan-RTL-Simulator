@@ -14,7 +14,7 @@
 #include "codegen/Compiler.h"
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
-#include "control/Session.h"
+#include "session/Session.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
@@ -156,9 +156,9 @@ protected:
     SessionFixture() : engine(sources) { engine.addConsumer(consumer); }
 
     void SetUp() override {
-        // Through a `control::Session`, which is what a served kernel owns: one simulation for
+        // Through a `session::Session`, which is what a served kernel owns: one simulation for
         // every surface that drives it.
-        kernelSession = std::make_unique<control::Session>(sources, engine);
+        kernelSession = std::make_unique<session::Session>(sources, engine);
         kernelSession->setTimeScale(runtime::TimeScale(-9));
         kernelSession->setDesign(std::make_unique<eir::Design>(guiTestDesign()));
         ASSERT_TRUE(kernelSession->elaborate("tb"))
@@ -249,7 +249,7 @@ protected:
     std::ostringstream transcript;
 
     /// The kernel end's session, which owns the simulation the server serves.
-    std::unique_ptr<control::Session> kernelSession;
+    std::unique_ptr<session::Session> kernelSession;
     std::unique_ptr<ipc::KernelServer> server;
     std::unique_ptr<gui::KernelSession> session;
 

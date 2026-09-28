@@ -208,27 +208,27 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
 endif()
 
 # ---------------------------------------------------------------------------
-# Tcl — control and configuration language (DESIGN_GUIDE.md section 8.1)
+# Tcl — the GUI theme language (DESIGN_GUIDE.md section 10.5)
 # ---------------------------------------------------------------------------
 
-# Not optional. Section 8.1 makes Tcl *the* control and configuration language with no second
-# format anywhere in the tool: the command vocabulary, the file lists and the GUI theme are all
-# Tcl, and from M3 every path into the simulator goes through a control session.
+# Needed only by the graphical front end, whose theme is a Tcl script.
 #
 # No version is requested here: CMake's FindTCL module reports no version, so a version
 # constraint would make the package unfindable rather than version-checked. The 8.6 requirement
 # is checked in the code that embeds the interpreter instead, against TCL_MAJOR_VERSION and
 # TCL_MINOR_VERSION from tcl.h.
-find_package(TCL QUIET)
-if(NOT TCL_FOUND)
-  enzan_dependency_missing(
-    NAME TCL
-    PURPOSE "the embedded Tcl control and configuration language"
-    ARCH tcl
-    DEBIAN tcl-dev
-    FEDORA tcl-devel)
+if(ENZAN_BUILD_GUI)
+  find_package(TCL QUIET)
+  if(NOT TCL_FOUND)
+    enzan_dependency_missing(
+      NAME TCL
+      PURPOSE "the Tcl theme language of the graphical front end"
+      ARCH tcl
+      DEBIAN tcl-dev
+      FEDORA tcl-devel)
+  endif()
+  message(STATUS "Using Tcl ${TCL_LIBRARY}")
 endif()
-message(STATUS "Using Tcl ${TCL_LIBRARY}")
 
 # ---------------------------------------------------------------------------
 # Qt 6 — graphical front end (DESIGN_GUIDE.md section 10.1), milestone M2
