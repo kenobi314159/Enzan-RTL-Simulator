@@ -17,6 +17,8 @@
 
 #include <gtest/gtest.h>
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <fstream>
 #include <string>
@@ -374,6 +376,10 @@ TEST_F(StoredLibraryTest, AnEmptyEntryIsAMiss) {
 }
 
 TEST_F(StoredLibraryTest, AFailedWriteIsReportedAndDoesNotFailTheRun) {
+    // The same reason SourceManagerFileTest skips its unreadable-file case: a directory mode
+    // does not restrict root, so the write this expects to fail would succeed.
+    if (::geteuid() == 0) GTEST_SKIP() << "directory permissions do not restrict root";
+
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
     library.setOptions({}, {});
 
