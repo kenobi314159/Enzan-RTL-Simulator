@@ -431,8 +431,9 @@ key over the source text plus the analysis options that affect the result, so
 unchanged units are never re-analysed.
 
 **A library has a logical name as well as a path**, because that is what a design
-refers to: `library ieee;` resolves against a name. The map from name to directory
-is 8.2's `-L`.
+refers to: `library ieee;` resolves against a name. The name is fixed when the
+library is created and stored in the library's own index, so that the two ends of a
+build cannot disagree about it; 8.2 covers how it is set and overridden.
 
 **An entry's file name comes from the unit it holds, and its key lives inside
 it.** The two are separate on purpose. A path that were a hash of the source could
@@ -751,29 +752,91 @@ error" reports both as the same red square.
 A library is a directory of serialised design units, as section 4.4 describes.
 This section is about naming them and reaching them.
 
-**Libraries are optional and there is no default.** With no `--work`, analysis
-output lives and dies with the process and a simulation runs from a one-time
-analysis. A directory that appeared because the user ran the tool would be a cache
-they did not ask for, and section 4.4 explains why a cache nobody asked for is
-worse than no cache: it can change a result.
+**Libraries are optional and there is no implicit one.** With no `--out-lib`,
+analysis output lives and dies with the process and a simulation runs from a
+one-time analysis. A directory that appeared because the user ran the tool would be
+a cache they did not ask for, and section 4.4 explains why that is worse than no
+cache: it can change a result, and they would have to find it before they could
+stop using it.
 
 ```
---work <dir>        the library analysis is written into; also readable
---lib <name>        its logical name, default "work"
--L <name>=<dir>     another library to resolve against, repeatable
+enzan lib create [--name <n>] <dir>   creates a library and fixes its logical name
+enzan lib list <dir>                  what a library holds, and what wrote it
+enzan lib clean <dir>                 empties it, keeping the library
+
+--out-lib <dir>                       the library analysis is written into
+--in-lib <dir>                        a library to read; repeatable
+--in-lib <name>=<dir>                 the same, overriding the name it carries
+--context <file>                      analysed so references resolve; not stored
 ```
 
-**Libraries are named, not anonymous.** The logical name is what a design refers
-to, and VHDL requires it: `library ieee;` resolves against a name rather than a
-path. Building an unnamed store now would mean rebuilding it at M6, so the map
-from logical name to directory exists from the start, and `-L` is its user-facing
-form. For SystemVerilog the same map gives `-L`'s other meaning — the order in
-which libraries are searched for a module nothing analysed defines.
+**The logical name lives in the library, not in the command line.** It is fixed
+when the library is created and read from the library thereafter, so the two ends
+cannot disagree — a name restated at every use is a name that will eventually be
+restated differently, and a design analysed into `uart` and then read back as
+`work` fails to find its own units. `--out-lib` on a directory that does not exist
+creates one named after the basename, and refuses when the basename is not usable
+as an identifier. `<name>=<dir>` exists for the cases a stored name cannot cover:
+two vendors each shipping a directory called `work`, or a path whose basename is
+not the name the design refers to.
 
-**A unit's path inside a library MUST be derivable from its name**, not from a
-hash of its source. `make` can only depend on a path it can predict, and a build
-that cannot name its own outputs cannot be incremental. The hash stays where it
-belongs, as the staleness key *inside* the entry (4.4); the file name is the unit.
+**A library therefore carries an index**, holding its logical name and the format
+version. The version belongs there rather than only in each entry so that
+`lib list` can report a library written by an incompatible build without decoding
+an entry to discover it.
+
+**Libraries are named because a design refers to them by name.** VHDL requires it —
+`library ieee;` resolves against a name rather than a path — so the map exists from
+the start rather than being retrofitted at M6. For SystemVerilog the same map gives
+the search order for a module nothing analysed defines.
+
+**`--in-lib` is an elaboration-time facility.** It resolves an instantiation of a
+module this design does not define. It **cannot** resolve an analysis-time
+reference — a package import, an interface named in a port list — because slang
+type-checks from syntax and EIR does not feed back into it. Commercial tools manage
+this because their compiled library is a semantic artifact their own front end
+re-consumes; ours is not. A reader who assumes otherwise will write a library split
+that cannot be analysed.
+
+**Libraries are searched in the order given**, left to right.
+
+**A name that two libraries both define is an error, not a silent choice.** The
+message names both, and the fix is to qualify: `uart.fifo`. Picking whichever was
+loaded first is the failure mode 1.2 ranks worst, and it is what happens today —
+`Design::findModule` takes a bare name and `addModule` is additive, so **EIR MUST
+carry the logical library on every unit** for any of this to hold.
+
+**A unit's path inside a library MUST be derivable from its name**, not from a hash
+of its source. `make` can only depend on a path it can predict, and a build that
+cannot name its own outputs cannot be incremental. The hash stays where it belongs,
+as the staleness key *inside* the entry (4.4); the file name is the unit.
+
+#### Where a library boundary may fall
+
+**Module instantiation crosses a library boundary; a compile-time reference does
+not.** An instantiation is resolved at elaboration, from EIR. A package import, a
+`` `include`` and an interface named in a port list are resolved during analysis,
+from source. So a package and everything importing it belong in one library unless
+`--context` is used, and a split that ignores this does not fail at run time — it
+fails at `analyse`, which is at least the honest end.
+
+**`--context` names a source analysed for resolution whose units are not stored.**
+It exists so that a library split may be finer than the compile-time dependency
+graph allows. The alternative — listing the shared source in every invocation that
+needs it — analyses correctly and then stores the same package in several
+libraries, which under the ambiguity rule above is an error on first reference, and
+is worse than an error when the copies were analysed with different macro
+definitions: two genuinely different packages, one of them silently chosen.
+
+The mechanism is not new. Units are attributed to a source by the buffer their
+definition sits in and only listed sources are written, so a file that is analysed
+without being listed already contributes nothing to the store. `--context` is a way
+of asking for that deliberately.
+
+**A context file is a dependency of the library that names it.** Changing it makes
+that library stale without being stored in it, so it MUST appear in `--depfile`
+(8.3). It buys correct ownership and not speed: the file is re-parsed by every
+analysis that names it.
 
 ### 8.3 File lists
 
@@ -812,10 +875,80 @@ Two options exist because a list is something a user has to debug:
 anyone asks of a misbehaving list is what the tool thinks it names, and the answer
 should not require a build.
 
-**`--depfile <file>` writes a `make`-style dependency file** naming the includes
-each source actually pulled in, as a C compiler's `-MMD` does. Without it a build
+**`--depfile <file>` writes a `make`-style dependency file**, as a C compiler's
+`-MMD` does. It names **every file the analysis read** — the sources a list expanded
+to, the headers they included, and the context files of 8.2 — not only the includes.
+Listing all of them is what lets a Makefile name a `.f` file as the single
+prerequisite it can see and get the rest back after the first build, exactly as a C
+build bootstraps from a source file to its header dependencies. Without it a build
 cannot know that editing an included header should trigger re-analysis, and the
 incremental build is wrong in the one way that is both silent and expensive.
+
+**`--depfile-target <name>` names the target those prerequisites attach to.** A
+compiler can default this to the object file it is writing; analysis has no single
+output file, so the target has to be given. When it is omitted the `--out-lib`
+directory is used, which is right for a build that treats the library as its output
+and wrong for one that uses a stamp file, so a Makefile should say.
+
+#### A design driven from `make`
+
+The workflow this section exists to serve, in full. Three things are worth reading
+out of it: the library is the unit of rebuild, the `.f` file is the only
+prerequisite written by hand, and the two `run` forms differ by nothing but a flag.
+
+```make
+ENZAN ?= enzan
+PKG   := rtl/pkg/types_pkg.sv
+
+# Libraries are opt-in (8.2), so creating one is a step of its own rather than
+# something that happens because analysis ran.
+libs/%/.created:
+	$(ENZAN) lib create libs/$*
+	@touch $@
+
+# One stamp per library rather than one target per unit: within a library a hit is
+# all or nothing (4.4), so the library is the smallest thing make can rebuild.
+libs/pkg/.stamp: rtl/pkg.f | libs/pkg/.created
+	$(ENZAN) analyse --out-lib libs/pkg -f rtl/pkg.f \
+	         --depfile libs/pkg/deps.d --depfile-target $@
+	@touch $@
+
+# The package is read for resolution and stored only in libs/pkg, so there is
+# exactly one of it to resolve against at elaboration (8.2).
+libs/uart/.stamp: rtl/uart.f | libs/uart/.created
+	$(ENZAN) analyse --out-lib libs/uart -f rtl/uart.f --context $(PKG) \
+	         --depfile libs/uart/deps.d --depfile-target $@
+	@touch $@
+
+libs/tb/.stamp: rtl/tb.f | libs/tb/.created
+	$(ENZAN) analyse --out-lib libs/tb -f rtl/tb.f --context $(PKG) \
+	         --depfile libs/tb/deps.d --depfile-target $@
+	@touch $@
+
+# Every file each analysis read. Until these exist a `.f` file is the only
+# prerequisite make knows about, which is enough, because nothing is built yet.
+-include $(wildcard libs/*/deps.d)
+
+IN     := --in-lib libs/pkg --in-lib libs/uart --in-lib libs/tb
+STAMPS := libs/pkg/.stamp libs/uart/.stamp libs/tb/.stamp
+
+sim: $(STAMPS)
+	$(ENZAN) run $(IN) --timescale ns --fst wave.fst tb
+
+gui: $(STAMPS)
+	$(ENZAN) run --gui $(IN) --timescale ns tb
+
+check: $(STAMPS)
+	$(ENZAN) elaborate $(IN) tb
+
+clean:
+	rm -rf libs
+```
+
+Editing a file in `rtl/uart` rebuilds `libs/uart` and nothing else; editing
+`types_pkg.sv` rebuilds all three, because each named it. `make check` is the
+elaboration-only form of 8.1, which is what a CI job wants when it only needs to
+know that the design still builds.
 
 ### 8.4 The graphical front end
 
@@ -1802,22 +1935,29 @@ read both times off their labels without touching the mouse.
 
 ### M3 — Command line, file lists and libraries
 
-The subcommands and exit statuses of section 8.1; `.f` file lists with `--dry-run`
-and `--depfile` (8.3); named, opt-in analysis libraries with `lib create`, `--work`,
-`--lib` and `-L` (8.2, 4.4); `--gui` as an option of `enzan` with the lifetimes of
-8.4.
+The subcommands and exit statuses of 8.1. File lists with `--dry-run`, `--depfile`
+and `--depfile-target` (8.3). Named, opt-in analysis libraries with `lib create`,
+`lib list`, `lib clean`, `--out-lib`, `--in-lib` and `--context` (8.2, 4.4), which
+requires two things EIR does not have yet: **a logical library on every unit**, so
+that two libraries defining one name collide loudly rather than silently, and **an
+entry path derived from the unit name** rather than from a hash, so that `make` can
+depend on it. A library index carrying the logical name and the format version.
+`--gui` as an option of `enzan`, with the lifetimes of 8.4.
 
-The per-source hit rule of 4.4 is **not** in scope. It is a property of the
-frontend rather than of the store — a module cannot be type-checked without the
-packages it imports, so today one changed file re-analyses all of them — and
-changing it is frontend work that a library's shape does not depend on. What M3
-owes is a library whose entries `make` can name, so that the incremental build
-arrives when the frontend can support it.
+The per-source hit rule of 4.4 is **not** in scope. It is a property of the frontend
+rather than of the store — a module cannot be type-checked without the packages it
+imports, so today one changed file re-analyses all of them — and changing it is
+frontend work that a library's shape does not depend on. What M3 owes is a library
+whose entries `make` can name and a boundary rule a user can follow, so that finer
+incrementality is a frontend change later rather than a redesign.
 
-**Exit:** a design with a `.f` list and a library builds and simulates from a
-Makefile; touching an included header re-analyses and touching nothing does not;
-`enzan run --gui` opens a window on a design it elaborated, and closing it ends the
-kernel while closing an `--attach`ed window does not.
+**Exit:** the Makefile of 8.3 builds and simulates a design split across three
+libraries; editing one library's source rebuilds that library alone, editing a
+context file rebuilds every library that named it, and editing nothing rebuilds
+nothing; two libraries defining one name are reported rather than silently resolved;
+`enzan run --gui` opens a window on a design it elaborated, and closing that window
+ends the kernel, while closing a window that reached the kernel through
+`--gui --attach` leaves it running.
 
 ### M4 — VPI and cocotb
 
