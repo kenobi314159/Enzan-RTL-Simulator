@@ -79,37 +79,72 @@ struct FileListRequest {
 };
 
 constexpr std::string_view UsageText =
-    R"(Usage: enzan [options] <file.sv>...
+    R"(Usage: enzan [command] [options] [arguments]
 
 Enzan is an event-driven, mixed-language RTL simulator for SystemVerilog and VHDL.
 
-Options:
-  -h, --help              Print this message and exit.
-  -V, --version           Print version and build information and exit.
-  -t, --top <module>      Module to elaborate as the top level. Required only when the
-                          sources contain more than one candidate.
-  -r, --run <time>        Stop after this many time units. The default runs until the
-                          design finishes or runs out of events.
+Commands:
+  analyse <sources...>    Analyse sources into design units.
+  elaborate <top>         Elaborate and report; simulate nothing.
+  run <top>               Elaborate and simulate.
+  lib create <dir>        Create an analysis library.
+  lib list <dir>          List what a library holds.
+  lib clean <dir>         Remove a library's entries, keeping the library.
+
+With no command, the sources given are analysed and run in one process, which is
+what a small case wants. A source file called `run.sv` is still a source file: the
+first word is a command only when it is one of the names above.
+
+Sources:
+  -f <list.f>             Read a file list. Relative paths inside it resolve
+                          against the working directory.
+  -F <list.f>             The same, resolving against the list's own directory.
+      --context <file>    Analyse this so references resolve, without storing its
+                          units. For a package shared across libraries.
+      --dry-run           Print what the file lists expanded to, and exit.
+      --depfile <file>    Write a make-style dependency file of every file read.
+      --depfile-target <t>
+                          The target those prerequisites attach to.
+  -D, --define <NAME[=V]> Define a preprocessor macro. +define+ is also accepted.
+  -I, --incdir <dir>      Add a directory to the `include search path. +incdir+
+                          is also accepted.
+
+Libraries:
+      --out-lib <dir>     The library analysis is written into, created when it
+                          is absent and named after the directory.
+      --in-lib <dir>      A library to resolve against; repeatable.
+      --in-lib <name>=<dir>
+                          The same, overriding the name the library carries.
+      --name <n>          The name `lib create` gives a library.
+
+Simulation:
+  -t, --top <module>      Module to elaborate as the top level. `elaborate` and
+                          `run` take it as their one positional word instead.
+  -r, --run <time>        Stop after this many time units.
       --vcd <file>        Write a VCD waveform to this file.
-      --fst <file>        Write an FST waveform to this file. Far smaller than a VCD on a
-                          real design, and seekable, so prefer it unless you need to diff or
-                          read the file yourself. Both may be given at once.
+      --fst <file>        Write an FST waveform to this file. Far smaller on a
+                          real design, and seekable. Both may be given at once.
       --wave-scope <path> Record only this subtree, for example /tb/u_dut.
-      --timescale <unit>  Time unit used for delays and reported times: s, ms, us, ns,
+      --timescale <unit>  Time unit for delays and reported times: s, ms, us, ns,
                           ps or fs. The default is ps.
-      --delta-limit <n>   Delta cycles allowed at one timestamp before the run is
-                          abandoned. The default is 10000.
-      --listen <socket>   Elaborate the design and then wait on this Unix domain socket for
-                          a graphical front end to attach, instead of running immediately.
-                          The attached client drives the run, and the kernel keeps running
-                          when it detaches, so a long simulation can be looked in on and
-                          left alone again. Attach with `enzan-gui --attach <socket>`.
-  -D, --define <NAME[=V]> Define a preprocessor macro.
-  -I, --incdir <dir>      Add a directory to the `include search path.
+      --delta-limit <n>   Delta cycles allowed at one timestamp. Default 10000.
       --dump-stats        Print instruction and delta counts when the run ends.
 
-The normative specification, including the milestone roadmap, is DESIGN_GUIDE.md in the
-source tree.
+Graphical front end:
+      --gui               Hand the elaborated design to a window rather than
+                          running here. Closing the window ends this kernel.
+      --gui --attach <s>  Attach to a kernel already listening on socket s.
+                          Closing that window leaves the kernel running.
+      --listen <socket>   Elaborate and wait for a front end without starting
+                          one, so the kernel outlives whatever attaches.
+
+  -h, --help              Print this message and exit.
+  -V, --version           Print version and build information and exit.
+
+Exit statuses: 0 success, 1 the command line was wrong, 2 analysis or elaboration
+failed, 3 the simulation ran and the design failed.
+
+The normative specification is DESIGN_GUIDE.md in the source tree.
 )";
 
 void printVersion() {
