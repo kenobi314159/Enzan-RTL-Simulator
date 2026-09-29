@@ -108,7 +108,7 @@ constexpr int IndexVersion = 2;
 constexpr std::string_view IndexFileName = "enzan.lib";
 
 /// Prefixes an entry, ahead of its staleness key and the units themselves.
-const std::string EntryMagic = "enzan-entry\n";
+constexpr std::string_view EntryMagic = "enzan-entry\n";
 
 /// Characters in a key, which is a 128-bit digest in hex.
 constexpr std::size_t DigestHexLength = 32;
@@ -430,7 +430,7 @@ bool Library::store(std::span<const LibrarySource> sources, const SourceManager&
         // A file that defines nothing still gets an entry. Without one it would look like a
         // miss for ever, and a header of macros or a file of only `` `include `` directives is
         // an ordinary thing for a design to contain.
-        std::string payload = EntryMagic;
+        std::string payload(EntryMagic);
         for (const std::filesystem::path& dependency : dependencies) {
             payload += dependency.string();
             payload += '\n';

@@ -97,6 +97,7 @@ private:
                 if (specialisations.size() == 1) return specialisations.front();
                 if (specialisations.size() > 1) {
                     std::vector<std::string_view> names;
+                    names.reserve(specialisations.size());
                     for (const std::uint32_t candidate : specialisations)
                         names.push_back(design.module(candidate).name);
                     diagnostics.report(DiagCode::AmbiguousSpecialisation, SourceLocation(),

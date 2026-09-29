@@ -180,7 +180,7 @@ bool Session::analyse(const AnalysisRequest& request) {
     if (library.isOpen()) {
         // Everything the frontend opened that is not one of the sources: the headers they
         // included, which is what a source's text alone cannot tell the library about.
-        std::set<std::filesystem::path> named(ordered.begin(), ordered.end());
+        const std::set<std::filesystem::path> named(ordered.begin(), ordered.end());
         std::vector<std::filesystem::path> dependencies;
         for (const std::filesystem::path& file : lastFilesRead) {
             if (!named.contains(file)) dependencies.push_back(file);

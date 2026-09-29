@@ -245,13 +245,13 @@ std::size_t readCommand(std::span<char*> arguments, Invocation& invocation) {
     if (first != "lib") return 0;
 
     const std::string_view second = arguments.size() > 1 ? std::string_view(arguments[1]) : "";
-    if (second == "create")
+    if (second == "create") {
         invocation.command = Command::LibCreate;
-    else if (second == "list")
+    } else if (second == "list") {
         invocation.command = Command::LibList;
-    else if (second == "clean")
+    } else if (second == "clean") {
         invocation.command = Command::LibClean;
-    else {
+    } else {
         std::cerr << "enzan: `lib` takes create, list or clean\n";
         invocation.command = Command::OneShot;
         return 0;
@@ -482,7 +482,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 /// The front end executable, beside this one first so that a build tree runs its own.
 std::filesystem::path frontEndProgram() {
     std::error_code failure;
-    const std::filesystem::path beside =
+    std::filesystem::path beside =
         std::filesystem::read_symlink("/proc/self/exe", failure).parent_path() / "enzan-gui";
     if (!failure && std::filesystem::exists(beside, failure)) return beside;
     return "enzan-gui";
