@@ -83,6 +83,14 @@ const ModuleDefinition& Design::module(std::uint32_t index) const {
     return definitions[index];
 }
 
+std::vector<std::uint32_t> Design::findSpecialisations(std::string_view sourceName) const {
+    std::vector<std::uint32_t> found;
+    for (std::uint32_t index = 0; index < definitions.size(); ++index) {
+        if (definitions[index].sourceName == sourceName) found.push_back(index);
+    }
+    return found;
+}
+
 std::vector<std::string> Design::candidateTopModules() const {
     // An ordered set, so that the result is the same on every run even though it is
     // built by iterating instances (section 3.8).

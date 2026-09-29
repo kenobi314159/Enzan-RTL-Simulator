@@ -154,24 +154,37 @@ bool Library::create(const std::filesystem::path& newDirectory, std::string_view
         return false;
     }
 
+
+    directory = newDirectory;
+    logicalName = std::move(wanted);
+    recordedSources.clear();
+    opened = true;
+    return writeIndex(diagnostics);
+}
+
+bool Library::writeIndex(DiagnosticEngine& diagnostics) const {
     std::string index(IndexMagic);
     index += '\n';
     index += std::to_string(IndexVersion);
     index += '\n';
-    index += wanted;
+    index += logicalName;
     index += '\n';
 
-    const std::filesystem::path indexPath = newDirectory / IndexFileName;
-    if (!writeWholeFile(indexPath, index)) {
-        diagnostics.report(DiagCode::CannotOpenFile, SourceLocation(), indexPath.string(),
-                           "the library index could not be written");
-        return false;
+    // The sources this library was analysed from, so that a design analysed *against* it can
+    // read the declarations it needs (8.2). Paths and not text: duplicating the RTL into every
+    // library that uses it would make the library a copy of the design rather than an index of
+    // it, and a build driven from one tree has stable paths.
+    for (const std::filesystem::path& source : recordedSources) {
+        index += source.string();
+        index += '\n';
     }
 
-    directory = newDirectory;
-    logicalName = std::move(wanted);
-    opened = true;
-    return true;
+    const std::filesystem::path indexPath = directory / IndexFileName;
+    if (writeWholeFile(indexPath, index)) return true;
+
+    diagnostics.report(DiagCode::CannotOpenFile, SourceLocation(), indexPath.string(),
+                       "the library index could not be written");
+    return false;
 }
 
 bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& diagnostics) {
@@ -208,6 +221,12 @@ bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& 
 
     directory = newDirectory;
     logicalName = std::string(lines[2]);
+
+    recordedSources.clear();
+    for (std::size_t line = 3; line < lines.size(); ++line) {
+        if (!lines[line].empty()) recordedSources.emplace_back(lines[line]);
+    }
+
     opened = true;
     return true;
 }
@@ -305,7 +324,8 @@ bool Library::load(std::span<const LibrarySource> sources, const SourceManager& 
 }
 
 bool Library::store(std::span<const LibrarySource> sources, const SourceManager& sourceManager,
-                    const Design& design, DiagnosticEngine& diagnostics) {
+                    const Design& design, DiagnosticEngine& diagnostics,
+                    const std::set<std::string, std::less<>>& excluded) {
     if (!opened) return false;
 
     // Units grouped by the *name* of the buffer their definition was written in, which is how
@@ -319,6 +339,7 @@ bool Library::store(std::span<const LibrarySource> sources, const SourceManager&
     std::map<std::string, std::vector<const ModuleDefinition*>, std::less<>> byName;
     for (const ModuleDefinition& definition : design.modules()) {
         if (!definition.location.valid()) continue;
+        if (excluded.contains(definition.name)) continue;
         byName[std::string(sourceManager.bufferName(definition.location.buffer()))].push_back(
             &definition);
     }
@@ -343,6 +364,12 @@ bool Library::store(std::span<const LibrarySource> sources, const SourceManager&
         diagnostics.report(DiagCode::LibraryWriteFailed, SourceLocation(), target.string());
         allWritten = false;
     }
+
+    // Recorded so that a design analysed against this library can read these declarations.
+    // Replaced rather than merged: the sources named now are what the library holds now.
+    recordedSources.clear();
+    for (const LibrarySource& source : sources) recordedSources.push_back(source.path);
+    if (!writeIndex(diagnostics)) allWritten = false;
 
     return allWritten;
 }

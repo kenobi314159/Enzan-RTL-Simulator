@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -120,8 +121,12 @@ public:
     ///
     /// Returns false having reported when a file could not be written. A failed store is not
     /// a failed analysis: the caller has the design either way.
+    /// `excluded` names units this library must not store because another one already holds
+    /// them. A specialisation a design created for itself belongs here; one its input library
+    /// already has must not be duplicated, or an unqualified reference to it becomes ambiguous.
     bool store(std::span<const LibrarySource> sources, const SourceManager& sourceManager,
-               const Design& design, DiagnosticEngine& diagnostics);
+               const Design& design, DiagnosticEngine& diagnostics,
+               const std::set<std::string, std::less<>>& excluded = {});
 
     /// The number of entries `load` found, for the transcript line that says so.
     [[nodiscard]] std::size_t entriesLoaded() const noexcept { return loadedCount; }
@@ -141,6 +146,17 @@ public:
     /// vendors each shipping a directory called `work`, or a path whose basename is not the
     /// name the design refers to. Returns false when the name is not usable.
     [[nodiscard]] bool overrideName(std::string_view replacement);
+
+    /// The sources this library was analysed from, in the order they were given.
+    ///
+    /// A design analysed *against* this library reads these so that slang has the declarations
+    /// it needs: slang type-checks from syntax, so an instantiation of a unit in another library
+    /// needs that unit's source however it was analysed before (8.2). Paths rather than text,
+    /// because duplicating the RTL into every library that uses it would make a library a copy
+    /// of the design instead of an index of it.
+    [[nodiscard]] std::span<const std::filesystem::path> sources() const noexcept {
+        return recordedSources;
+    }
 
     /// The units this library holds, by the source each came from, for `lib list`.
     ///
@@ -164,8 +180,12 @@ private:
     [[nodiscard]] std::string entryKey(const LibrarySource& source,
                                        const SourceManager& sourceManager) const;
 
+    /// Writes the index, which carries the logical name and the recorded sources.
+    [[nodiscard]] bool writeIndex(DiagnosticEngine& diagnostics) const;
+
     std::filesystem::path directory;
     std::string logicalName;
+    std::vector<std::filesystem::path> recordedSources;
 
     /// The part of every key that does not depend on the file: the options, the format
     /// version and Enzan's version. Computed once when the options are set.

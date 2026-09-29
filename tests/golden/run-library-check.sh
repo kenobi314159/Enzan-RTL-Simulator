@@ -119,6 +119,62 @@ grep -q 'more than one library' <<<"$clash" \
 "$enzan" run --in-lib libs/two --in-lib libs/clash --timescale ns two.two_tb >/dev/null \
     || fail "a qualified name did not resolve the collision"
 
+# --- a library is parametrisable by whoever uses it ------------------------------------------------
+
+# The point of section 8.2's libraries: a unit is not baked with the parameters the library
+# happened to be analysed with. The consumer creates the parameterisation it needs, and it lands
+# in the consumer's library rather than being duplicated from the producer's.
+mkdir -p par
+cat >par/counter.sv <<'EOF'
+module pcounter #(parameter int Width = 4) (output logic [Width-1:0] q);
+    initial q = '1;
+endmodule
+EOF
+cat >par/wrap.sv <<'EOF'
+module pwrap_tb;
+    logic [3:0] narrow;
+    logic [7:0] wide;
+    pcounter #(.Width(4)) u_narrow(.q(narrow));
+    pcounter #(.Width(8)) u_wide(.q(wide));
+    initial begin
+        #1;
+        if (narrow !== 4'hF || wide !== 8'hFF) begin
+            $display("FAIL library: narrow=%0h wide=%0h", narrow, wide);
+            $fatal(1);
+        end
+        $display("parametrisable ok");
+        $finish;
+    end
+endmodule
+EOF
+
+"$enzan" lib create libs/pc >/dev/null || fail "libs/pc could not be created"
+"$enzan" lib create libs/pw >/dev/null || fail "libs/pw could not be created"
+"$enzan" analyse --out-lib libs/pc par/counter.sv || fail "the counter library could not be analysed"
+"$enzan" analyse --in-lib libs/pc --out-lib libs/pw par/wrap.sv \
+    || fail "a design could not be analysed against a library"
+
+# The suffix is the parameterisation, not a counter: a counter would number them in the order
+# one compilation walked them, and the same name would mean different modules in two libraries.
+"$enzan" lib list libs/pc | grep -q 'pcounter\$Width_4' \
+    || fail "the producer's library does not name its parameterisation: $("$enzan" lib list libs/pc)"
+
+# The width the consumer asked for is stored by the consumer, and the one the producer already
+# has is not duplicated into it — duplicating it would make an unqualified reference ambiguous.
+"$enzan" lib list libs/pw | grep -q 'pcounter\$Width_8' \
+    || fail "the consumer's library does not hold the parameterisation it created"
+"$enzan" lib list libs/pw | grep -q 'pcounter\$Width_4' \
+    && fail "the consumer duplicated a parameterisation its input library already held"
+
+par_output=$("$enzan" run --in-lib libs/pc --in-lib libs/pw --timescale ns pwrap_tb) \
+    || fail "a parametrised design split across libraries did not run"
+grep -q 'parametrisable ok' <<<"$par_output" || fail "the parametrised run did not check out"
+
+# A parameterised top is named by its parameter values, so the name the user wrote has to find
+# it; otherwise `run <top>` could not name a parameterised testbench at all.
+"$enzan" run --in-lib libs/pw --in-lib libs/pc --timescale ns pwrap_tb >/dev/null \
+    || fail "the libraries could not be given in the other order"
+
 # --- cleaning keeps the library and removes its entries -------------------------------------------
 
 "$enzan" lib clean libs/work >/dev/null || fail "a library could not be cleaned"

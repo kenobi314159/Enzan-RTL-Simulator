@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -255,8 +256,10 @@ TEST_F(FrontendTest, AParameterThatIsNotAnIntegerIsSkippedRatherThanRefused) {
     )");
     ASSERT_NE(design, nullptr) << "a string parameter must not fail the analysis";
 
-    const ModuleDefinition* module = design->findModule("m");
-    ASSERT_NE(module, nullptr);
+    // Named for its parameter values, so it is found by the name the source gave it.
+    const std::vector<std::uint32_t> found = design->findSpecialisations("m");
+    ASSERT_EQ(found.size(), 1U);
+    const ModuleDefinition* module = &design->module(found.front());
 
     ASSERT_EQ(module->parameters.size(), 1U);
     EXPECT_EQ(module->parameters[0].name, "SIZE");
@@ -372,11 +375,26 @@ TEST_F(FrontendTest, EachParameterisationBecomesItsOwnDefinition) {
                                                    "top");
     ASSERT_NE(design, nullptr) << consumer.messages.front();
 
-    // Two bodies for one source module, distinguished by a suffix.
-    EXPECT_NE(design->findModule("leaf"), nullptr);
-    EXPECT_NE(design->findModule("leaf$1"), nullptr);
-    EXPECT_EQ(design->findModule("leaf")->sourceName, "leaf");
-    EXPECT_EQ(design->findModule("leaf$1")->sourceName, "leaf");
+    // Two bodies for one source module, each named for its own parameter values rather than
+    // by a counter. The distinction matters beyond this design: a counter numbers the
+    // parameterisations in the order one compilation walked them, so `leaf$1` from another
+    // analysis would be a different module under the same name, and a design assembled from
+    // two libraries (section 8.2) would bind an instance to the wrong body.
+    const std::vector<std::uint32_t> leaves = design->findSpecialisations("leaf");
+    ASSERT_EQ(leaves.size(), 2U);
+
+    std::vector<std::string> names;
+    for (const std::uint32_t index : leaves) {
+        names.push_back(design->module(index).name);
+        EXPECT_EQ(design->module(index).sourceName, "leaf");
+    }
+    std::ranges::sort(names);
+    EXPECT_EQ(names, std::vector<std::string>({"leaf$WIDTH_16", "leaf$WIDTH_8"}))
+        << "the suffix says which parameterisation, not which was seen first";
+
+    // Named by their values, so the same parameterisation is the same name wherever it is
+    // produced, which is what lets a library be instantiated by whoever uses it.
+    EXPECT_NE(design->findModule("leaf$WIDTH_8"), nullptr);
 }
 
 TEST_F(FrontendTest, AConnectionThatIsAnExpressionGetsAnIntermediateAndAnAssignment) {

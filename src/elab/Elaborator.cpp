@@ -89,6 +89,22 @@ private:
                                    joinNames(ambiguity), topModuleName);
                 return std::nullopt;
             }
+            // A parameterised module is named for its parameter values, so the name a user
+            // wrote is its source name. Tried second, so an exact name still wins.
+            if (!index.has_value()) {
+                const std::vector<std::uint32_t> specialisations =
+                    design.findSpecialisations(topModuleName);
+                if (specialisations.size() == 1) return specialisations.front();
+                if (specialisations.size() > 1) {
+                    std::vector<std::string_view> names;
+                    for (const std::uint32_t candidate : specialisations)
+                        names.push_back(design.module(candidate).name);
+                    diagnostics.report(DiagCode::AmbiguousSpecialisation, SourceLocation(),
+                                       topModuleName, joinNames(names));
+                    return std::nullopt;
+                }
+            }
+
             if (!index.has_value()) {
                 std::vector<std::string> names;
                 for (const eir::ModuleDefinition& definition : design.modules())

@@ -667,27 +667,79 @@ private:
         std::map<const ast::Symbol*, std::uint32_t> portIndices;
     };
 
-    /// Returns a module name not already used.
+    /// Returns the EIR name for one parameterisation of a module.
     ///
     /// slang caches one body per distinct parameterisation, so a parameterised module
-    /// produces several. Each becomes its own EIR definition — which is what keeps
-    /// parameters out of EIR entirely (see eir/Module.h) — and a numeric suffix
-    /// distinguishes them. The suffixes are assigned in the order the hierarchy is walked,
-    /// so they are the same on every run.
-    std::string uniqueModuleName(std::string_view preferred);
+    /// produces several. Each becomes its own EIR definition — which is what keeps parameters
+    /// out of EIR entirely (see eir/Module.h) — and a suffix distinguishes them.
+    ///
+    /// **The suffix is a function of the parameter values, not a counter.** A counter numbers
+    /// the parameterisations in the order *this* compilation happened to walk them, which makes
+    /// the name meaningless outside it: `counter$1` from one analysis and `counter$1` from
+    /// another would be different modules wearing one name, and a design assembled from two
+    /// libraries (DESIGN_GUIDE.md section 8.2) would resolve an instance to the wrong body with
+    /// nothing to say so. Deriving it from the values instead gives a specialisation the same
+    /// name wherever it is produced, which is what lets a library be instantiated with
+    /// parameters chosen by whoever uses it.
+    std::string specialisedModuleName(const ast::InstanceBodySymbol& body);
 
     eir::Design* design;
     ModuleBuilder::Shared shared;
     std::map<const ast::InstanceBodySymbol*, BodyInfo> bodies;
-    std::map<std::string, unsigned, std::less<>> nameCounters;
     bool succeeded = true;
 };
 
-std::string Walker::uniqueModuleName(std::string_view preferred) {
-    std::string base(preferred);
-    const unsigned count = nameCounters[base]++;
-    if (count == 0) return base;
-    return std::format("{}${}", base, count);
+std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
+    const std::string base(body.getDefinition().name);
+
+    // Only the parameters set from outside: a localparam is derived inside the module from
+    // those, so two instances agreeing on the ports agree on it, and including it would make
+    // the name longer without making it more specific.
+    std::string values;
+    for (const ast::ParameterSymbolBase* parameter : body.getParameters()) {
+        if (parameter->isLocalParam()) continue;
+
+        const ast::Symbol& symbol = parameter->symbol;
+        std::string rendered;
+        if (symbol.kind == ast::SymbolKind::Parameter) {
+            rendered = symbol.as<ast::ParameterSymbol>().getValue().toString();
+        } else if (symbol.kind == ast::SymbolKind::TypeParameter) {
+            rendered = symbol.as<ast::TypeParameterSymbol>().targetType.getType().toString();
+        } else {
+            continue;
+        }
+
+        if (!values.empty()) values += ',';
+        values += symbol.name;
+        values += '=';
+        values += rendered;
+    }
+
+    if (values.empty()) return base;
+
+    // Readable while it is short, which is what a `lib list` and a waveform hierarchy want; a
+    // digest once it is not, so that a module with many or wide parameters does not produce a
+    // name nothing can display. Either way it is a function of the values alone.
+    std::string suffix;
+    if (values.size() <= 32) {
+        suffix = values;
+        for (char& c : suffix) {
+            const bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                              || (c >= '0' && c <= '9') || c == '_';
+            if (!keep) c = '_';
+        }
+    } else {
+        // FNV-1a over the rendered values. Stable across runs, builds and machines, which a
+        // std::hash is not required to be.
+        std::uint64_t hash = 0xcbf2'9ce4'8422'2325ULL;
+        for (const char c : values) {
+            hash ^= static_cast<unsigned char>(c);
+            hash *= 0x0000'0100'0000'01b3ULL;
+        }
+        suffix = std::format("{:016x}", hash);
+    }
+
+    return std::format("{}${}", base, suffix);
 }
 
 std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance) {
@@ -703,7 +755,7 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
         return std::nullopt;
     }
 
-    std::string name = uniqueModuleName(instance.getDefinition().name);
+    std::string name = specialisedModuleName(body);
     ModuleBuilder builder(shared, name, body);
 
     if (!builder.collectDeclarations()) {

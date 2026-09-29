@@ -528,6 +528,11 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
     enzan::session::Session::AnalysisRequest request;
     if (!collectSources(invocation, sources, diagnostics, request)) return false;
 
+    // An input library's own sources supply the declarations this analysis instantiates, which
+    // is what lets those units be instantiated with whatever parameters are wanted here rather
+    // than only the ones the library stored (8.2).
+    request.libraryFiles = session.inputLibrarySources();
+
     return session.analyse(request);
 }
 

@@ -114,6 +114,14 @@ public:
         /// source however the package was analysed before. Storing it here as well would put
         /// the same unit in two libraries, which an unqualified reference then cannot resolve.
         std::vector<std::filesystem::path> contextFiles;
+
+        /// Sources belonging to the libraries this session resolves against.
+        ///
+        /// Read for the same reason as `contextFiles`, but a *specialisation* created from them
+        /// is stored: a parameterisation the other library does not hold was created for this
+        /// design, and nothing else would hold it. One the other library already has is
+        /// excluded rather than duplicated (8.2).
+        std::vector<std::filesystem::path> libraryFiles;
         std::vector<std::string> defines;
         std::vector<std::filesystem::path> includeDirectories;
     };
@@ -161,6 +169,15 @@ public:
     /// stored name cannot cover: two vendors each shipping a directory called `work`, or a
     /// path whose basename is not what the design refers to.
     bool addInputLibrary(const std::filesystem::path& path, std::string_view name = {});
+
+    /// The sources every input library was analysed from, in the order the libraries were given.
+    ///
+    /// What `analyse --in-lib` reads as context: a unit instantiating one from another library
+    /// needs that unit's declaration, because slang type-checks from syntax and EIR does not
+    /// feed back into it (8.2). Reading the declaration is also what keeps a library
+    /// parametrisable — the instantiation resolves its parameters here, rather than being
+    /// limited to whatever parameterisation the other library happened to store.
+    [[nodiscard]] std::vector<std::filesystem::path> inputLibrarySources() const;
 
     [[nodiscard]] bool hasLibrary() const noexcept { return library.isOpen(); }
 
@@ -321,6 +338,9 @@ private:
 
     /// Sources read for resolution whose units this session does not store.
     std::vector<std::filesystem::path> contextFiles;
+
+    /// Sources of the libraries this session resolves against.
+    std::vector<std::filesystem::path> libraryFiles;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
 

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <iostream>
 #include <map>
+#include <set>
 #include <utility>
 
 namespace enzan::session {
@@ -87,6 +88,7 @@ std::ostream& Session::transcriptStream() const {
 
 bool Session::analyse(const AnalysisRequest& request) {
     for (const std::filesystem::path& file : request.contextFiles) contextFiles.push_back(file);
+    for (const std::filesystem::path& file : request.libraryFiles) libraryFiles.push_back(file);
     for (const std::filesystem::path& file : request.files) files.push_back(file);
     for (const std::string& define : request.defines) defines.push_back(define);
     for (const std::filesystem::path& directory : request.includeDirectories)
@@ -103,8 +105,9 @@ bool Session::analyse(const AnalysisRequest& request) {
     // depend on which pass produced it.
     std::vector<std::filesystem::path> ordered;
     std::vector<BufferId> buffers;
-    ordered.reserve(contextFiles.size() + files.size());
-    buffers.reserve(contextFiles.size() + files.size());
+    const std::size_t total = contextFiles.size() + libraryFiles.size() + files.size();
+    ordered.reserve(total);
+    buffers.reserve(total);
 
     // Context first, so that a package is in the compilation before whatever imports it.
     const auto read = [&](const std::filesystem::path& file) {
@@ -120,14 +123,24 @@ bool Session::analyse(const AnalysisRequest& request) {
     for (const std::filesystem::path& file : contextFiles)
         if (!read(file)) return false;
 
-    const std::size_t firstOwn = ordered.size();
+    const std::size_t firstStored = ordered.size();
+    for (const std::filesystem::path& file : libraryFiles)
+        if (!read(file)) return false;
+
     for (const std::filesystem::path& file : files)
         if (!read(file)) return false;
 
-    // Only this session's own sources are stored. A context file is read so that references
-    // resolve and belongs to whichever library did store it (8.2).
-    const std::vector<eir::LibrarySource> stored =
-        librarySources(std::span(ordered).subspan(firstOwn), std::span(buffers).subspan(firstOwn));
+    // This session's own sources, plus the sources of the libraries it resolves against: a
+    // parameterisation those libraries do not hold was created *here*, for this design, and has
+    // to be stored here or nothing holds it at all. Units an input library already has are
+    // excluded below rather than duplicated (8.2).
+    const std::vector<eir::LibrarySource> stored = librarySources(
+        std::span(ordered).subspan(firstStored), std::span(buffers).subspan(firstStored));
+
+    std::set<std::string, std::less<>> alreadyElsewhere;
+    for (const eir::Library& input : inputLibraries) {
+        for (const std::string& unit : input.unitNames()) alreadyElsewhere.insert(unit);
+    }
 
     loadedFromLibrary = false;
     if (library.isOpen()) {
@@ -155,7 +168,8 @@ bool Session::analyse(const AnalysisRequest& request) {
     // A failed store is reported and otherwise ignored: the design is in hand either way, and
     // refusing to simulate because a cache could not be written would be the cache making
     // things worse.
-    if (library.isOpen()) static_cast<void>(library.store(stored, sources, *design, diagnostics));
+    if (library.isOpen())
+        static_cast<void>(library.store(stored, sources, *design, diagnostics, alreadyElsewhere));
 
     return true;
 #else
@@ -220,6 +234,14 @@ bool Session::addInputLibrary(const std::filesystem::path& path, std::string_vie
 
     inputLibraries.push_back(std::move(opened));
     return true;
+}
+
+std::vector<std::filesystem::path> Session::inputLibrarySources() const {
+    std::vector<std::filesystem::path> all;
+    for (const eir::Library& input : inputLibraries) {
+        for (const std::filesystem::path& source : input.sources()) all.push_back(source);
+    }
+    return all;
 }
 
 bool Session::elaborate(std::string_view topModule) {

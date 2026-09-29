@@ -68,6 +68,16 @@ public:
 
     [[nodiscard]] bool empty() const noexcept { return definitions.empty(); }
 
+    /// Returns the indices of every specialisation whose *source* name is `sourceName`.
+    ///
+    /// A parameterised module becomes one definition per parameterisation, named for its
+    /// parameter values (see `ModuleDefinition::name`), so a user naming a top level writes the
+    /// name they wrote in the source and not the one analysis derived. More than one means the
+    /// choice is not forced and has to be reported rather than guessed.
+    ///
+    /// In the order the definitions were added, so a diagnostic listing them is reproducible.
+    [[nodiscard]] std::vector<std::uint32_t> findSpecialisations(std::string_view sourceName) const;
+
     /// Returns the definitions that nothing else in this design instantiates.
     ///
     /// These are the candidate top levels. Reported in name order so that a driver
