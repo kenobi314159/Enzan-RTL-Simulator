@@ -89,16 +89,8 @@ ENZAN_DIAG(UserError, 5004, Error, "{}")
 ENZAN_DIAG(UserWarning, 5005, Warning, "{}")
 ENZAN_DIAG(UserInfo, 5006, Note, "{}")
 
-// --- 6000-6999: control layer and Tcl commands ------------------------------
+// --- 6000-6999: the session and its command line -----------------------------
 
-ENZAN_DIAG(TclInterpreterFailed, 6001, Fatal, "a Tcl interpreter could not be created")
-ENZAN_DIAG(TclLibraryUnavailable, 6002, Warning,
-           "the Tcl script library could not be initialised ({}); `package require` and the "
-           "auto-loaded commands are unavailable, the built-in vocabulary is not affected")
-ENZAN_DIAG(TranscriptNotRedirected, 6003, Warning,
-           "script output could not be redirected to the transcript ({}); `puts` will write to "
-           "the terminal instead")
-ENZAN_DIAG(ScriptError, 6004, Error, "{}")
 ENZAN_DIAG(FileListUnknownOption, 6005, Error,
            "'{}' is not an option Enzan's file lists understand; ignoring it could change what "
            "is analysed, so it is refused rather than skipped")
@@ -114,17 +106,12 @@ ENZAN_DIAG(FileListUnterminatedBrace, 6011, Error,
 ENZAN_DIAG(EnvironmentVariableNotSet, 6012, Error,
            "the environment variable '{}' is not set; expanding it to nothing would turn a path "
            "into one that silently does not exist")
-ENZAN_DIAG(CompileOrderCycle, 6013, Error,
-           "these files depend on each other and cannot be put in an analysis order: {}")
 ENZAN_DIAG(NothingAnalysed, 6014, Error,
-           "no sources have been analysed; run `vlog` before `vsim`")
-ENZAN_DIAG(NoSimulation, 6015, Error,
-           "`{}` needs a simulation; run `vsim <top>` first")
-ENZAN_DIAG(NoSuchSignal, 6016, Error, "the design has no signal named '{}'")
+           "no sources have been analysed, so there is nothing to elaborate")
+ENZAN_DIAG(NoSimulation, 6015, Error, "`{}` needs an elaborated design")
 ENZAN_DIAG(WaveformScopeAfterOpen, 6017, Error,
            "the recording scope cannot be changed once a waveform file is open; the signals a "
            "file declares are written into its header")
-ENZAN_DIAG(BadCommandArgument, 6018, Error, "{}")
 ENZAN_DIAG(LibraryNotADirectory, 6019, Error,
            "'{}' exists and is not a directory, so it cannot be an analysis library")
 ENZAN_DIAG(LibraryWriteFailed, 6020, Warning,
