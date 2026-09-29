@@ -24,6 +24,7 @@
 #include <fstream>
 #include <memory>
 #include <algorithm>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -37,6 +38,7 @@ using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
 using enzan::eir::Design;
+using enzan::eir::Instance;
 using enzan::eir::ModuleDefinition;
 using enzan::test::require;
 
@@ -589,6 +591,48 @@ TEST_F(FrontendTest, AModuleDefinitionCarriesTheFileItWasWrittenIn) {
     ASSERT_TRUE(design->module(0).location.valid());
     EXPECT_EQ(sources.bufferName(design->module(0).location.buffer()),
               (directory / "design.sv").string());
+}
+
+
+TEST_F(FrontendTest, EveryInstanceOfOneParameterisationSharesOneDefinitionAndIsWiredToIt) {
+    // One translation serves every instance of a parameterisation, which is only sound while
+    // port indices are keyed by port *name*. Keyed by slang's port symbols — a separate object
+    // per instance — the shared map binds nothing, and the design still elaborates and still
+    // simulates, to the wrong answer. So what this pins is the wiring, not the sharing: each
+    // instance must reach its *own* port object.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf #(parameter int WIDTH = 8) (input logic [WIDTH-1:0] d,
+                                                output logic [WIDTH-1:0] q);
+            assign q = d;
+        endmodule
+
+        module top;
+            logic [7:0] a, b, c, ra, rb, rc;
+            leaf #(.WIDTH(8)) u_a (.d(a), .q(ra));
+            leaf #(.WIDTH(8)) u_b (.d(b), .q(rb));
+            leaf #(.WIDTH(8)) u_c (.d(c), .q(rc));
+        endmodule
+    )",
+                                                  "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    // Three instances, one definition between them.
+    EXPECT_EQ(design->findSpecialisations("leaf").size(), 1U)
+        << "identical parameterisations must not each get a definition of their own";
+
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+    ASSERT_EQ(top->instances.size(), 3U);
+
+    // Each instance connects both its ports, and no two instances share a port object: that is
+    // the property a pointer-keyed port map destroys.
+    std::set<std::uint32_t> objects;
+    for (const Instance& instance : top->instances) {
+        EXPECT_EQ(instance.connections.size(), 2U)
+            << "instance '" << instance.name << "' lost a connection";
+        for (const auto& connection : instance.connections) objects.insert(connection.objectIndex);
+    }
+    EXPECT_EQ(objects.size(), 6U) << "instances are sharing port storage";
 }
 
 } // namespace
