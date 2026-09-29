@@ -103,7 +103,7 @@ constexpr std::string_view IndexMagic = "enzan-library";
 
 /// The index's own version, separate from the serialised unit format: the two change for
 /// different reasons, and a reader must be able to say which of them it does not understand.
-constexpr int IndexVersion = 1;
+constexpr int IndexVersion = 2;
 
 constexpr std::string_view IndexFileName = "enzan.lib";
 
@@ -112,6 +112,39 @@ const std::string EntryMagic = "enzan-entry\n";
 
 /// Characters in a key, which is a 128-bit digest in hex.
 constexpr std::size_t DigestHexLength = 32;
+
+/// One entry's header: the files it depended on, and where its units begin.
+struct EntryHeader {
+    std::vector<std::filesystem::path> dependencies;
+
+    /// Offset of the key. The units follow it.
+    std::size_t keyOffset = 0;
+};
+
+/// Parses an entry's header, or nothing when it is not one this build wrote.
+///
+/// One reader for every caller — the cache check, a library being resolved against, and a
+/// listing — because three parsers of one format is three chances for them to disagree about
+/// where the units start.
+std::optional<EntryHeader> readEntryHeader(std::string_view contents) {
+    if (!contents.starts_with(EntryMagic)) return std::nullopt;
+
+    EntryHeader header;
+    std::size_t cursor = EntryMagic.size();
+    for (;;) {
+        const std::size_t end = contents.find('\n', cursor);
+        if (end == std::string_view::npos) return std::nullopt;
+
+        const std::string_view line = contents.substr(cursor, end - cursor);
+        cursor = end + 1;
+        if (line.empty()) break;
+        header.dependencies.emplace_back(line);
+    }
+
+    if (contents.size() < cursor + DigestHexLength) return std::nullopt;
+    header.keyOffset = cursor;
+    return header;
+}
 
 } // namespace
 
@@ -170,12 +203,28 @@ bool Library::writeIndex(DiagnosticEngine& diagnostics) const {
     index += logicalName;
     index += '\n';
 
-    // The sources this library was analysed from, so that a design analysed *against* it can
-    // read the declarations it needs (8.2). Paths and not text: duplicating the RTL into every
-    // library that uses it would make the library a copy of the design rather than an index of
-    // it, and a build driven from one tree has stable paths.
+    // The sources this library was analysed from *and the options they need*, so that a design
+    // analysed against it can read the declarations it wants (8.2). A source is no use without
+    // the include path that resolves its `` `include `` directives and the macros it was
+    // compiled with: reading it without them fails, or worse parses to something else.
+    //
+    // Paths and not text: duplicating the RTL into every library that uses it would make a
+    // library a copy of the design rather than an index of it.
+    //
+    // Tagged rather than positional so that a later field is an addition and not a new format.
     for (const std::filesystem::path& source : recordedSources) {
+        index += "source ";
         index += source.string();
+        index += '\n';
+    }
+    for (const std::filesystem::path& directory : recordedIncludeDirectories) {
+        index += "incdir ";
+        index += directory.string();
+        index += '\n';
+    }
+    for (const std::string& define : recordedDefines) {
+        index += "define ";
+        index += define;
         index += '\n';
     }
 
@@ -223,8 +272,13 @@ bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& 
     logicalName = std::string(lines[2]);
 
     recordedSources.clear();
+    recordedIncludeDirectories.clear();
+    recordedDefines.clear();
     for (std::size_t line = 3; line < lines.size(); ++line) {
-        if (!lines[line].empty()) recordedSources.emplace_back(lines[line]);
+        const std::string_view text = lines[line];
+        if (text.starts_with("source ")) recordedSources.emplace_back(text.substr(7));
+        else if (text.starts_with("incdir ")) recordedIncludeDirectories.emplace_back(text.substr(7));
+        else if (text.starts_with("define ")) recordedDefines.emplace_back(text.substr(7));
     }
 
     opened = true;
@@ -233,6 +287,11 @@ bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& 
 
 void Library::setOptions(std::span<const std::string> defines,
                          std::span<const std::filesystem::path> includeDirectories) {
+    // Kept as well as hashed: the hash says whether an entry is current, and these say how to
+    // read the sources again from somewhere else.
+    recordedDefines.assign(defines.begin(), defines.end());
+    recordedIncludeDirectories.assign(includeDirectories.begin(), includeDirectories.end());
+
     Digest digest;
 
     // The format version and Enzan's own version come first, so that a build whose translator
@@ -265,12 +324,21 @@ std::filesystem::path Library::entryPath(const LibrarySource& source) const {
     return directory / (readable + "-" + digest.hex().substr(0, 8) + ".eirlib");
 }
 
-std::string Library::entryKey(const LibrarySource& source,
-                              const SourceManager& sourceManager) const {
+std::string Library::entryKey(const LibrarySource& source, const SourceManager& sourceManager,
+                              std::span<const std::filesystem::path> dependencies) {
     Digest digest;
     digest.add(optionsDigest);
     digest.add(source.path.string());
     digest.add(sourceManager.bufferText(source.buffer));
+
+    // The dependencies' *contents*, so that editing an included header makes this entry stale.
+    // In the order given, which the caller sorts, because a digest is order-dependent and
+    // section 3.8 keeps observable results off the order a directory happened to be read in.
+    for (const std::filesystem::path& dependency : dependencies) {
+        digest.add(dependency.string());
+        const std::optional<std::string> contents = readWholeFile(dependency);
+        digest.add(contents.value_or(std::string("<unreadable>")));
+    }
     return digest.hex();
 }
 
@@ -285,15 +353,20 @@ bool Library::load(std::span<const LibrarySource> sources, const SourceManager& 
     payloads.reserve(sources.size());
     for (const LibrarySource& source : sources) {
         const std::optional<std::string> contents = readWholeFile(entryPath(source));
-        if (!contents.has_value()) return false;
+        if (!contents.has_value() || !contents->starts_with(EntryMagic)) return false;
+
+        // The entry names the files it depended on, so that their contents can be folded into
+        // the key it is checked against. Without that a changed header leaves the entry looking
+        // current and the library serves EIR the source no longer produces.
+        const std::optional<EntryHeader> header = readEntryHeader(*contents);
+        if (!header.has_value()) return false;
 
         // The key is inside the entry rather than in its name (4.4), so a stale entry is one
         // that is present and disagrees rather than one that is missing.
-        const std::string wanted = EntryMagic + entryKey(source, sourceManager);
-        if (contents->size() < wanted.size() || contents->compare(0, wanted.size(), wanted) != 0)
-            return false;
+        const std::string wanted = entryKey(source, sourceManager, header->dependencies);
+        if (contents->compare(header->keyOffset, wanted.size(), wanted) != 0) return false;
 
-        payloads.push_back(contents->substr(wanted.size()));
+        payloads.push_back(contents->substr(header->keyOffset + wanted.size()));
     }
 
     // A stored location may name a file the caller has not read — an include, or a source from
@@ -325,7 +398,8 @@ bool Library::load(std::span<const LibrarySource> sources, const SourceManager& 
 
 bool Library::store(std::span<const LibrarySource> sources, const SourceManager& sourceManager,
                     const Design& design, DiagnosticEngine& diagnostics,
-                    const std::set<std::string, std::less<>>& excluded) {
+                    const std::set<std::string, std::less<>>& excluded,
+                    std::span<const std::filesystem::path> dependencies) {
     if (!opened) return false;
 
     // Units grouped by the *name* of the buffer their definition was written in, which is how
@@ -356,8 +430,14 @@ bool Library::store(std::span<const LibrarySource> sources, const SourceManager&
         // A file that defines nothing still gets an entry. Without one it would look like a
         // miss for ever, and a header of macros or a file of only `` `include `` directives is
         // an ordinary thing for a design to contain.
-        const std::string payload =
-            EntryMagic + entryKey(source, sourceManager) + encodeModules(units, sourceManager);
+        std::string payload = EntryMagic;
+        for (const std::filesystem::path& dependency : dependencies) {
+            payload += dependency.string();
+            payload += '\n';
+        }
+        payload += '\n';
+        payload += entryKey(source, sourceManager, dependencies);
+        payload += encodeModules(units, sourceManager);
         const std::filesystem::path target = entryPath(source);
         if (writeWholeFile(target, payload)) continue;
 
@@ -395,12 +475,13 @@ bool Library::loadAll(Design& design, DiagnosticEngine& diagnostics) const {
 
     for (const std::filesystem::path& entry : entries) {
         const std::optional<std::string> contents = readWholeFile(entry);
-        const std::size_t offset = EntryMagic.size() + DigestHexLength;
-        if (!contents.has_value() || !contents->starts_with(EntryMagic)
-            || contents->size() < offset) {
+        const std::optional<EntryHeader> header =
+            contents.has_value() ? readEntryHeader(*contents) : std::nullopt;
+        if (!header.has_value()) {
             diagnostics.report(DiagCode::LibraryEntryUnreadable, SourceLocation(), entry.string());
             return false;
         }
+        const std::size_t offset = header->keyOffset + DigestHexLength;
 
         // Locations name buffers this process has not read; a unit from a library it is only
         // resolving against carries no snippet, which costs a diagnostic its source line and
@@ -436,11 +517,11 @@ std::vector<std::string> Library::unitNames() const {
         if (entry.path().extension() != ".eirlib") continue;
 
         const std::optional<std::string> contents = readWholeFile(entry.path());
-        if (!contents.has_value() || !contents->starts_with(EntryMagic)) continue;
+        const std::optional<EntryHeader> header =
+            contents.has_value() ? readEntryHeader(*contents) : std::nullopt;
+        if (!header.has_value()) continue;
 
-        // Past the magic and the key, which is a fixed-width hex digest.
-        const std::size_t offset = EntryMagic.size() + DigestHexLength;
-        if (contents->size() < offset) continue;
+        const std::size_t offset = header->keyOffset + DigestHexLength;
 
         // Nothing here has the buffers a location names, and a listing does not need them.
         const auto noBuffers = [](std::string_view) { return BufferId(); };

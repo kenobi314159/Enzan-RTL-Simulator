@@ -139,3 +139,14 @@ set_tests_properties(
   PROPERTIES PASS_REGULAR_EXPRESSION "PASS library"
              FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
              TIMEOUT 120)
+
+# The Makefile of section 8.3, actually run. What only `make` can show is that the right library
+# rebuilds and no other, which rests on the dependency file naming the headers an analysis read
+# — the one thing a build cannot work out for itself.
+add_test(NAME golden.make
+         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-make-check.sh" $<TARGET_FILE:enzan>)
+set_tests_properties(
+  golden.make
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS make"
+             FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
+             TIMEOUT 180)

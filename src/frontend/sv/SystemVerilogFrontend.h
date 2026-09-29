@@ -52,6 +52,14 @@ struct Options {
     /// This is slang's notion of a top level, used to decide which instance bodies exist
     /// at all. Enzan's own choice of which one to simulate happens at elaboration.
     std::vector<std::string> topModules;
+
+    /// Receives every file the analysis read, when given.
+    ///
+    /// The sources handed in *and* the files they included, which is the part a caller cannot
+    /// work out for itself: an `` `include `` is resolved by the preprocessor against the
+    /// include path, and a build that does not know which header a source actually opened
+    /// cannot rebuild when that header changes (DESIGN_GUIDE.md section 8.3).
+    std::vector<std::filesystem::path>* filesRead = nullptr;
 };
 
 /// Analyses SystemVerilog sources into EIR.

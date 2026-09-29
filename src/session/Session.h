@@ -140,6 +140,19 @@ public:
 
     [[nodiscard]] bool hasDesign() const noexcept { return design != nullptr; }
 
+    /// Every file the last `analyse` read: the sources, the files they included, and the
+    /// context and library sources read for resolution.
+    ///
+    /// What `--depfile` writes (8.3). Sorted and free of duplicates.
+    ///
+    /// **Empty when the analysis was served from the library.** Nothing ran the frontend, so
+    /// nothing knows what was included, and a caller MUST write no dependency file rather than
+    /// one missing the headers: a prerequisite that quietly disappears is a rebuild that
+    /// quietly stops happening.
+    [[nodiscard]] std::span<const std::filesystem::path> filesRead() const noexcept {
+        return lastFilesRead;
+    }
+
     /// Takes `analysed` as this session's design, replacing whatever was there.
     ///
     /// The seam for a design that came from somewhere other than this session's own analysis:
@@ -178,6 +191,13 @@ public:
     /// parametrisable — the instantiation resolves its parameters here, rather than being
     /// limited to whatever parameterisation the other library happened to store.
     [[nodiscard]] std::vector<std::filesystem::path> inputLibrarySources() const;
+
+    /// The include directories and macros those sources need, in the same order.
+    ///
+    /// A source is no use without them: its `` `include `` directives do not resolve, and a
+    /// macro it was compiled with changes what it means rather than whether it parses.
+    [[nodiscard]] std::vector<std::filesystem::path> inputLibraryIncludeDirectories() const;
+    [[nodiscard]] std::vector<std::string> inputLibraryDefines() const;
 
     [[nodiscard]] bool hasLibrary() const noexcept { return library.isOpen(); }
 
@@ -341,6 +361,9 @@ private:
 
     /// Sources of the libraries this session resolves against.
     std::vector<std::filesystem::path> libraryFiles;
+
+    /// Every file the last analysis read, for `--depfile`.
+    std::vector<std::filesystem::path> lastFilesRead;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
 

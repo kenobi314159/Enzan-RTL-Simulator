@@ -37,6 +37,7 @@
 
 #include <format>
 #include <map>
+#include <set>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -904,6 +905,20 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             break;
         case slang::DiagnosticSeverity::Ignored: break;
         }
+    }
+
+    // Collected whether or not the analysis succeeded: a build that failed because a header
+    // was wrong still has to rebuild when that header is fixed.
+    if (options.filesRead != nullptr) {
+        // Sorted, because slang hands them back in whatever order it opened them and section
+        // 3.8 puts observable ordering beyond that. Duplicates dropped: one file included
+        // twice is one prerequisite.
+        std::set<std::filesystem::path> opened;
+        for (const slang::BufferID buffer : slangSources.getAllBuffers()) {
+            const std::filesystem::path& path = slangSources.getFullPath(buffer);
+            if (!path.empty()) opened.insert(path);
+        }
+        options.filesRead->assign(opened.begin(), opened.end());
     }
 
     if (hasError) return nullptr;

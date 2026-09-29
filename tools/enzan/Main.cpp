@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -533,6 +534,17 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
     // than only the ones the library stored (8.2).
     request.libraryFiles = session.inputLibrarySources();
 
+    // Ahead of this analysis's own, so that a library's own include path and macros are what
+    // its sources are read with and anything named here can still override.
+    std::vector<std::filesystem::path> includes = session.inputLibraryIncludeDirectories();
+    for (const std::filesystem::path& directory : request.includeDirectories)
+        includes.push_back(directory);
+    request.includeDirectories = std::move(includes);
+
+    std::vector<std::string> defines = session.inputLibraryDefines();
+    for (const std::string& define : request.defines) defines.push_back(define);
+    request.defines = std::move(defines);
+
     return session.analyse(request);
 }
 
@@ -623,6 +635,46 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
 }
 
 #endif // ENZAN_WITH_SYSTEMVERILOG
+
+/// Writes a `make`-style dependency file naming every file the analysis read (8.3).
+///
+/// One target and its prerequisites, continued across lines the way a compiler writes them.
+/// Nothing is written when the analysis came from the library: see `Session::filesRead`.
+bool writeDependencyFile(const Invocation& invocation, const enzan::session::Session& session,
+                         enzan::DiagnosticEngine& diagnostics) {
+    const std::span<const std::filesystem::path> read = session.filesRead();
+    if (read.empty()) return true;
+
+    // The target has to be given, because analysis has no single output file for it to be
+    // inferred from; the output library stands in when it is not.
+    std::string target = invocation.depfileTarget;
+    if (target.empty()) target = invocation.outputLibrary.string();
+
+    std::string contents = target;
+    contents += ':';
+    for (const std::filesystem::path& file : read) {
+        contents += " \\\n  ";
+        contents += file.string();
+    }
+    contents += '\n';
+
+    // A phony target per prerequisite, so that deleting a header does not stop the build with
+    // "no rule to make target" — the same trick a compiler's `-MP` plays, and for the same
+    // reason: the build should rebuild, not refuse to run.
+    for (const std::filesystem::path& file : read) {
+        contents += '\n';
+        contents += file.string();
+        contents += ":\n";
+    }
+
+    std::ofstream out(invocation.depfilePath, std::ios::trunc);
+    out << contents;
+    if (out) return true;
+
+    diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
+                       invocation.depfilePath.string(), "the dependency file could not be written");
+    return false;
+}
 
 /// `enzan lib create|list|clean`.
 ExitStatus runLibCommand(const Invocation& invocation, enzan::DiagnosticEngine& diagnostics) {
@@ -757,8 +809,15 @@ int main(int argc, char** argv) {
 #ifdef ENZAN_WITH_SYSTEMVERILOG
     if (invocation.command == Command::Analyse) {
         enzan::session::Session session(sources, diagnostics);
-        if (!analyseOnly(invocation, session, sources, diagnostics))
+        const bool analysed = analyseOnly(invocation, session, sources, diagnostics);
+
+        // Written even when the analysis failed, so that fixing the header it failed on
+        // rebuilds rather than being invisible to the build.
+        if (!invocation.depfilePath.empty()
+            && !writeDependencyFile(invocation, session, diagnostics)) {
             return static_cast<int>(ExitStatus::AnalysisFailed);
+        }
+        if (!analysed) return static_cast<int>(ExitStatus::AnalysisFailed);
         return static_cast<int>(ExitStatus::Success);
     }
 

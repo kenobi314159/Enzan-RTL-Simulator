@@ -124,9 +124,16 @@ public:
     /// `excluded` names units this library must not store because another one already holds
     /// them. A specialisation a design created for itself belongs here; one its input library
     /// already has must not be duplicated, or an unqualified reference to it becomes ambiguous.
+    /// `dependencies` names every other file the analysis read — the headers its sources
+    /// included, above all. They are recorded in each entry and their contents form part of its
+    /// key, so that editing an included header makes the entry stale. Without them a header
+    /// change leaves every entry looking current and the library serves EIR that no longer
+    /// matches the source: a cache that changes a simulation result, which 4.4 ranks as the one
+    /// thing a library must never do.
     bool store(std::span<const LibrarySource> sources, const SourceManager& sourceManager,
                const Design& design, DiagnosticEngine& diagnostics,
-               const std::set<std::string, std::less<>>& excluded = {});
+               const std::set<std::string, std::less<>>& excluded = {},
+               std::span<const std::filesystem::path> dependencies = {});
 
     /// The number of entries `load` found, for the transcript line that says so.
     [[nodiscard]] std::size_t entriesLoaded() const noexcept { return loadedCount; }
@@ -158,6 +165,16 @@ public:
         return recordedSources;
     }
 
+    /// The include path those sources need, without which their `` `include `` directives do
+    /// not resolve when another design reads them.
+    [[nodiscard]] std::span<const std::filesystem::path> includeDirectories() const noexcept {
+        return recordedIncludeDirectories;
+    }
+
+    /// The macros those sources were analysed with. A source read without them parses to
+    /// something else, which is worse than failing to parse.
+    [[nodiscard]] std::span<const std::string> defines() const noexcept { return recordedDefines; }
+
     /// The units this library holds, by the source each came from, for `lib list`.
     ///
     /// Reads every entry, which is what makes it a reporting call rather than one anything
@@ -178,7 +195,8 @@ private:
     /// The staleness key for `source`: the text and everything else that changes what analysis
     /// produces. Stored inside the entry rather than in its name (4.4).
     [[nodiscard]] std::string entryKey(const LibrarySource& source,
-                                       const SourceManager& sourceManager) const;
+                                       const SourceManager& sourceManager,
+                                       std::span<const std::filesystem::path> dependencies);
 
     /// Writes the index, which carries the logical name and the recorded sources.
     [[nodiscard]] bool writeIndex(DiagnosticEngine& diagnostics) const;
@@ -186,6 +204,8 @@ private:
     std::filesystem::path directory;
     std::string logicalName;
     std::vector<std::filesystem::path> recordedSources;
+    std::vector<std::filesystem::path> recordedIncludeDirectories;
+    std::vector<std::string> recordedDefines;
 
     /// The part of every key that does not depend on the file: the options, the format
     /// version and Enzan's version. Computed once when the options are set.

@@ -150,11 +150,20 @@ bool Session::analyse(const AnalysisRequest& request) {
         if (library.load(stored, sources, *reused)) {
             design = std::move(reused);
             loadedFromLibrary = true;
+
+            // Left empty on purpose. A hit does not run the frontend, so nothing knows which
+            // files were included, and a dependency file listing only the sources would drop
+            // every header from the build's prerequisites — a rebuild that stops happening,
+            // which is worse than one that happens twice. The caller writes no dependency file
+            // rather than an incomplete one, and the file from the analysis that wrote the
+            // entry stays correct because the entry is still current.
+            lastFilesRead.clear();
             return true;
         }
     }
 
     frontend::sv::Options options;
+    options.filesRead = &lastFilesRead;
     options.files = ordered;
     options.buffers = buffers;
     options.defines = defines;
@@ -168,8 +177,18 @@ bool Session::analyse(const AnalysisRequest& request) {
     // A failed store is reported and otherwise ignored: the design is in hand either way, and
     // refusing to simulate because a cache could not be written would be the cache making
     // things worse.
-    if (library.isOpen())
-        static_cast<void>(library.store(stored, sources, *design, diagnostics, alreadyElsewhere));
+    if (library.isOpen()) {
+        // Everything the frontend opened that is not one of the sources: the headers they
+        // included, which is what a source's text alone cannot tell the library about.
+        std::set<std::filesystem::path> named(ordered.begin(), ordered.end());
+        std::vector<std::filesystem::path> dependencies;
+        for (const std::filesystem::path& file : lastFilesRead) {
+            if (!named.contains(file)) dependencies.push_back(file);
+        }
+
+        static_cast<void>(library.store(stored, sources, *design, diagnostics, alreadyElsewhere,
+                                        dependencies));
+    }
 
     return true;
 #else
@@ -240,6 +259,23 @@ std::vector<std::filesystem::path> Session::inputLibrarySources() const {
     std::vector<std::filesystem::path> all;
     for (const eir::Library& input : inputLibraries) {
         for (const std::filesystem::path& source : input.sources()) all.push_back(source);
+    }
+    return all;
+}
+
+std::vector<std::filesystem::path> Session::inputLibraryIncludeDirectories() const {
+    std::vector<std::filesystem::path> all;
+    for (const eir::Library& input : inputLibraries) {
+        for (const std::filesystem::path& directory : input.includeDirectories())
+            all.push_back(directory);
+    }
+    return all;
+}
+
+std::vector<std::string> Session::inputLibraryDefines() const {
+    std::vector<std::string> all;
+    for (const eir::Library& input : inputLibraries) {
+        for (const std::string& define : input.defines()) all.push_back(define);
     }
     return all;
 }
