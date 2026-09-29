@@ -465,7 +465,6 @@ void MainWindow::onRunStateChanged() {
     case ipc::SimulationState::Finished: statusState->setText(tr("Finished")); break;
     case ipc::SimulationState::Failed: statusState->setText(tr("Failed")); break;
     }
-
 }
 
 void MainWindow::onWavesChanged() {

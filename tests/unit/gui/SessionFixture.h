@@ -14,7 +14,6 @@
 #include "codegen/Compiler.h"
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
-#include "session/Session.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
@@ -26,6 +25,7 @@
 #include "ipc/KernelServer.h"
 #include "runtime/Image.h"
 #include "runtime/Time.h"
+#include "session/Session.h"
 
 #include "support/ProcessBuilder.h"
 

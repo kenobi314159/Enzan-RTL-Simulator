@@ -12,7 +12,6 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
-#include "session/Session.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
@@ -23,6 +22,7 @@
 #include "ipc/Transport.h"
 #include "runtime/Image.h"
 #include "runtime/Time.h"
+#include "session/Session.h"
 
 #include "support/Literals.h"
 #include "support/ProcessBuilder.h"
@@ -48,7 +48,6 @@ namespace {
 
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
-using enzan::session::Session;
 using enzan::eir::Design;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
@@ -82,6 +81,7 @@ using enzan::ipc::TranscriptMessage;
 using enzan::ipc::ValueChangesMessage;
 using enzan::ipc::WelcomeMessage;
 using enzan::runtime::TimeScale;
+using enzan::session::Session;
 using enzan::test::literal;
 using enzan::test::ProcessBuilder;
 

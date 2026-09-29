@@ -3,13 +3,13 @@
 #pragma once
 
 #include "common/Diagnostics.h"
-#include "session/Session.h"
 #include "ipc/ChangePublisher.h"
 #include "ipc/Protocol.h"
 #include "ipc/Transport.h"
 #include "runtime/Image.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
+#include "session/Session.h"
 #include "wavedb/WaveformDatabase.h"
 #include "wavedb/WaveformRecorder.h"
 

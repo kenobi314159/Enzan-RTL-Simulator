@@ -28,8 +28,8 @@ using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
 using Radix = enzan::eir::Radix;
-using enzan::session::Session;
 using enzan::runtime::RunStatus;
+using enzan::session::Session;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:

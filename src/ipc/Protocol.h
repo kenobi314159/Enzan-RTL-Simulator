@@ -360,9 +360,7 @@ struct RunStateMessage {
     /// Why the last run ended, as `runtime::toString(RunStatus)` words it. Empty while a run
     /// is in progress.
     std::string reason;
-
 };
-
 
 /// Sent before the kernel closes a connection deliberately.
 struct ByeMessage {
