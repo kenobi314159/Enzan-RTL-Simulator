@@ -13,13 +13,13 @@
 #include "common/SourceManager.h"
 #include "common/Version.h"
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
-#include <array>
 #include <span>
 #include <string>
 #include <string_view>
@@ -245,9 +245,12 @@ std::size_t readCommand(std::span<char*> arguments, Invocation& invocation) {
     if (first != "lib") return 0;
 
     const std::string_view second = arguments.size() > 1 ? std::string_view(arguments[1]) : "";
-    if (second == "create") invocation.command = Command::LibCreate;
-    else if (second == "list") invocation.command = Command::LibList;
-    else if (second == "clean") invocation.command = Command::LibClean;
+    if (second == "create")
+        invocation.command = Command::LibCreate;
+    else if (second == "list")
+        invocation.command = Command::LibList;
+    else if (second == "clean")
+        invocation.command = Command::LibClean;
     else {
         std::cerr << "enzan: `lib` takes create, list or clean\n";
         invocation.command = Command::OneShot;
@@ -666,8 +669,7 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
         // are looking at this terminal. Not printed under --gui, where the socket is an
         // implementation detail the user was deliberately not made to think about.
         std::cout << "-- listening on " << server.socketPath().string() << "\n"
-                  << "-- attach with: enzan --gui --attach " << server.socketPath().string()
-                  << '\n'
+                  << "-- attach with: enzan --gui --attach " << server.socketPath().string() << '\n'
                   << std::flush;
     }
 
@@ -695,8 +697,9 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
         // A socket in the user's runtime directory: per-user by construction, which is the
         // access control a Unix domain socket gets. Its name is not the user's business.
         const char* runtime = std::getenv("XDG_RUNTIME_DIR"); // NOLINT(concurrency-mt-unsafe)
-        const std::filesystem::path directory =
-            runtime != nullptr ? std::filesystem::path(runtime) : std::filesystem::temp_directory_path();
+        const std::filesystem::path directory = runtime != nullptr
+                                                    ? std::filesystem::path(runtime)
+                                                    : std::filesystem::temp_directory_path();
         const std::filesystem::path socketPath =
             directory / ("enzan-" + std::to_string(::getpid()) + ".sock");
         std::error_code ignored;
@@ -860,8 +863,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    const bool needsSources = invocation.command == Command::OneShot
-                              || invocation.command == Command::Analyse;
+    const bool needsSources =
+        invocation.command == Command::OneShot || invocation.command == Command::Analyse;
     if (needsSources && invocation.files.empty() && invocation.fileLists.empty()) {
         std::cerr << "enzan: no source files were given\n"
                   << "Try 'enzan --help' for the available options.\n";

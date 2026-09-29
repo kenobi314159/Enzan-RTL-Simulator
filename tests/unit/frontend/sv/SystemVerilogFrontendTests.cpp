@@ -23,7 +23,6 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
-#include <algorithm>
 #include <set>
 #include <string>
 #include <string_view>
@@ -593,7 +592,6 @@ TEST_F(FrontendTest, AModuleDefinitionCarriesTheFileItWasWrittenIn) {
               (directory / "design.sv").string());
 }
 
-
 TEST_F(FrontendTest, EveryInstanceOfOneParameterisationSharesOneDefinitionAndIsWiredToIt) {
     // One translation serves every instance of a parameterisation, which is only sound while
     // port indices are keyed by port *name*. Keyed by slang's port symbols — a separate object
@@ -613,7 +611,7 @@ TEST_F(FrontendTest, EveryInstanceOfOneParameterisationSharesOneDefinitionAndIsW
             leaf #(.WIDTH(8)) u_c (.d(c), .q(rc));
         endmodule
     )",
-                                                  "top");
+                                                   "top");
     ASSERT_NE(design, nullptr) << consumer.messages.front();
 
     // Three instances, one definition between them.

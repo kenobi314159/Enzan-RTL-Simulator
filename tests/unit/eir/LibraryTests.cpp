@@ -388,7 +388,6 @@ TEST_F(StoredLibraryTest, AFailedWriteIsReportedAndDoesNotFailTheRun) {
     std::filesystem::permissions(library.path(), std::filesystem::perms::owner_all);
 }
 
-
 // ---------------------------------------------------------------------------
 // A library read rather than written
 // ---------------------------------------------------------------------------
@@ -491,8 +490,8 @@ TEST_F(StoredLibraryTest, AnEntryIsNamedAfterItsSourceAndStaysThereWhenItChanges
         << "an entry is readable as the source it came from: " << before.front();
 
     const LibrarySource changed = source("counter.sv", "module counter; wire w; endmodule\n");
-    ASSERT_TRUE(library.store({&changed, 1}, sources, designWith("counter", changed.buffer),
-                              engine));
+    ASSERT_TRUE(
+        library.store({&changed, 1}, sources, designWith("counter", changed.buffer), engine));
 
     std::vector<std::filesystem::path> after;
     for (const auto& e : std::filesystem::directory_iterator(library.path()))

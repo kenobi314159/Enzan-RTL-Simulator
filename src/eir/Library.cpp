@@ -13,8 +13,8 @@
 #include <cstdio>
 #include <fstream>
 #include <map>
-#include <set>
 #include <optional>
+#include <set>
 #include <system_error>
 #include <utility>
 
@@ -156,9 +156,7 @@ bool Library::isValidName(std::string_view text) noexcept {
     };
     if (!isLetter(text.front())) return false;
 
-    return std::ranges::all_of(text, [&](char c) {
-        return isLetter(c) || (c >= '0' && c <= '9');
-    });
+    return std::ranges::all_of(text, [&](char c) { return isLetter(c) || (c >= '0' && c <= '9'); });
 }
 
 bool Library::create(const std::filesystem::path& newDirectory, std::string_view name,
@@ -186,7 +184,6 @@ bool Library::create(const std::filesystem::path& newDirectory, std::string_view
                            failure.message());
         return false;
     }
-
 
     directory = newDirectory;
     logicalName = std::move(wanted);
@@ -276,9 +273,12 @@ bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& 
     recordedDefines.clear();
     for (std::size_t line = 3; line < lines.size(); ++line) {
         const std::string_view text = lines[line];
-        if (text.starts_with("source ")) recordedSources.emplace_back(text.substr(7));
-        else if (text.starts_with("incdir ")) recordedIncludeDirectories.emplace_back(text.substr(7));
-        else if (text.starts_with("define ")) recordedDefines.emplace_back(text.substr(7));
+        if (text.starts_with("source "))
+            recordedSources.emplace_back(text.substr(7));
+        else if (text.starts_with("incdir "))
+            recordedIncludeDirectories.emplace_back(text.substr(7));
+        else if (text.starts_with("define "))
+            recordedDefines.emplace_back(text.substr(7));
     }
 
     opened = true;

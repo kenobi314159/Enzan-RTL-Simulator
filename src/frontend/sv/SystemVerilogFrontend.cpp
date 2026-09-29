@@ -37,8 +37,8 @@
 
 #include <format>
 #include <map>
-#include <set>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -609,8 +609,9 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
     return objectIndex;
 }
 
-bool ModuleBuilder::addInstance(const ast::InstanceSymbol& instance, const std::string& targetName,
-                                const std::map<std::string, std::uint32_t, std::less<>>& targetPorts) {
+bool ModuleBuilder::addInstance(
+    const ast::InstanceSymbol& instance, const std::string& targetName,
+    const std::map<std::string, std::uint32_t, std::less<>>& targetPorts) {
     eir::Instance result;
     result.name = std::string(instance.name);
     result.definitionName = targetName;

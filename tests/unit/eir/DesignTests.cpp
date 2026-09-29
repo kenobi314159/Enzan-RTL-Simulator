@@ -114,7 +114,6 @@ TEST(ModuleDefinition, FindObjectByName) {
     EXPECT_FALSE(definition.findObject("absent").has_value());
 }
 
-
 // ---------------------------------------------------------------------------
 // Units from more than one library
 // ---------------------------------------------------------------------------

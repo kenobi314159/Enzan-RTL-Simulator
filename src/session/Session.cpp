@@ -186,8 +186,8 @@ bool Session::analyse(const AnalysisRequest& request) {
             if (!named.contains(file)) dependencies.push_back(file);
         }
 
-        static_cast<void>(library.store(stored, sources, *design, diagnostics, alreadyElsewhere,
-                                        dependencies));
+        static_cast<void>(
+            library.store(stored, sources, *design, diagnostics, alreadyElsewhere, dependencies));
     }
 
     return true;
