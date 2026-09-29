@@ -819,30 +819,45 @@ rather than where it lives.
 
 #### Where a library boundary may fall
 
-**Module instantiation crosses a library boundary; a compile-time reference does
-not.** An instantiation is resolved at elaboration, from EIR. A package import, a
-`` `include`` and an interface named in a port list are resolved during analysis,
-from source. So a package and everything importing it belong in one library unless
-`--context` is used, and a split that ignores this does not fail at run time — it
-fails at `analyse`, which is at least the honest end.
+**A library records the sources it was analysed from**, and a design analysed against
+it reads them. That is what makes the boundary crossable at all: slang type-checks
+from syntax, so a unit instantiating one from another library needs that unit's
+declaration however it was analysed before, and EIR does not feed back into slang.
+Paths rather than text, because duplicating the RTL into every library that uses it
+would make a library a copy of the design instead of an index of it.
 
-**`--context` names a source analysed for resolution whose units are not stored.**
-It exists so that a library split may be finer than the compile-time dependency
-graph allows. The alternative — listing the shared source in every invocation that
-needs it — analyses correctly and then stores the same package in several
-libraries, which under the ambiguity rule above is an error on first reference, and
-is worse than an error when the copies were analysed with different macro
-definitions: two genuinely different packages, one of them silently chosen.
+So `--in-lib` on `analyse` means *read these libraries' declarations*, and `--in-lib`
+on `run` means *resolve against these libraries' units*. The two are the same option
+because they name the same thing; what differs is which half of it is wanted.
 
-The mechanism is not new. Units are attributed to a source by the buffer their
-definition sits in and only listed sources are written, so a file that is analysed
-without being listed already contributes nothing to the store. `--context` is a way
-of asking for that deliberately.
+**A library is instantiable with parameters chosen by whoever uses it.** A
+parameterised module becomes one unit per parameterisation, so a unit is not baked
+with the parameters its library happened to be analysed with: the design that needs
+`Width=8` creates that specialisation from the declarations it read, and stores it in
+its own library. A specialisation the input library already holds is **not** stored a
+second time, because two libraries defining one name is exactly what an unqualified
+reference cannot resolve.
 
-**A context file is a dependency of the library that names it.** Changing it makes
-that library stale without being stored in it, so it MUST appear in `--depfile`
-(8.3). It buys correct ownership and not speed: the file is re-parsed by every
-analysis that names it.
+**A specialisation's name MUST be a function of its parameter values.** A counter
+numbers the parameterisations in the order one compilation walked them, which makes
+the name meaningless outside it — `counter$1` from one analysis and `counter$1` from
+another are different modules wearing one name, and an instance binds to the wrong
+body with nothing on screen to say so. Naming it for the values gives a
+specialisation one identity wherever it is produced, which is the whole of what makes
+libraries composable.
+
+**A parameterised top is named for its values too**, so the name a user writes is the
+one the *source* gave it. A top is therefore resolved by source name when no unit has
+that exact name, and more than one parameterisation of it is reported rather than
+guessed.
+
+**`--context` remains for a source no library holds.** It names a source analysed for
+resolution whose units are not stored — a package shared by libraries that do not
+depend on each other, or a vendor header compiled against but not redistributed. A
+context file is a dependency of the library that names it: changing it makes that
+library stale without being stored in it, so it MUST appear in `--depfile` (8.3). It
+buys correct ownership and not speed, since the file is re-parsed by every analysis
+that names it.
 
 ### 8.3 File lists
 
@@ -1792,7 +1807,7 @@ genuinely touches just that area; a change spanning several components carries
 the category alone.
 
 Categories: `build`, `ci`, `design`, `docs`, `eir`, `elab`, `frontend`, `gui`,
-`control`, `wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`,
+`session`, `ipc`, `wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`,
 `perf`, `refactor`, `license`.
 
 Examples:
