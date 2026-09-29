@@ -6,6 +6,6 @@
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   enzan_add_unit_test(
     session
-    SOURCES SessionTests.cpp
+    SOURCES FileListTests.cpp SessionTests.cpp
     DEPENDS enzan::session)
 endif()
