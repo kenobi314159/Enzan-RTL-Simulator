@@ -166,7 +166,15 @@ int main(int argc, char** argv) {
     parser.addPositionalArgument(QStringLiteral("files"),
                                  QStringLiteral("HDL source files to simulate."),
                                  QStringLiteral("[file.sv...]"));
-    parser.process(application);
+    // `enzan run --gui ...` forwards its command word, which this process has no use for: it
+    // starts a kernel, and the kernel is the thing that runs. Dropped rather than refused, so
+    // that both spellings of the same request work (DESIGN_GUIDE.md section 8.4).
+    QStringList forwarded;
+    for (const QString& argument : QCoreApplication::arguments()) {
+        if (argument == QStringLiteral("run") || argument == QStringLiteral("elaborate")) continue;
+        forwarded << argument;
+    }
+    parser.process(forwarded);
 
     // --- the theme ---------------------------------------------------------
 

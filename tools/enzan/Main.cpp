@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <array>
 #include <span>
 #include <string>
 #include <string_view>
@@ -28,6 +29,7 @@
 #include "session/FileList.h"
 #include "session/Session.h"
 
+#include <sys/wait.h>
 #include <unistd.h>
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
@@ -474,6 +476,57 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
     return ParseOutcome::Run;
 }
 
+/// The front end executable, beside this one first so that a build tree runs its own.
+std::filesystem::path frontEndProgram() {
+    std::error_code failure;
+    const std::filesystem::path beside =
+        std::filesystem::read_symlink("/proc/self/exe", failure).parent_path() / "enzan-gui";
+    if (!failure && std::filesystem::exists(beside, failure)) return beside;
+    return "enzan-gui";
+}
+
+/// Starts a window attached to `socketPath`, and returns its process id or -1.
+///
+/// `--gui` is an option of `enzan` rather than a second program to learn, but the two remain
+/// two processes and the kernel binary links no Qt: a headless server and a CI runner must not
+/// install a GUI toolkit to run a batch simulation (2.2). The kernel is what parses the command
+/// line, analyses and elaborates; the window only ever attaches, which is why it needs to know
+/// nothing about libraries or file lists.
+::pid_t startFrontEnd(const std::filesystem::path& socketPath) {
+    const std::filesystem::path program = frontEndProgram();
+
+    const ::pid_t child = ::fork();
+    if (child != 0) return child;
+
+    std::string name = program.string();
+    std::string attach = "--attach";
+    std::string path = socketPath.string();
+    std::array<char*, 4> argv{name.data(), attach.data(), path.data(), nullptr};
+    ::execvp(name.c_str(), argv.data());
+
+    std::cerr << "enzan: could not start the graphical front end '" << name
+              << "'; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)\n";
+    std::_Exit(static_cast<int>(ExitStatus::Usage));
+}
+
+/// Replaces this process with a window attached to an already-listening kernel.
+///
+/// `--gui --attach` starts no kernel, so there is nothing here to keep: closing that window
+/// leaves the kernel it found running, which is the lifetime 8.4 gives this spelling.
+[[noreturn]] void becomeAttachedFrontEnd(const std::filesystem::path& socketPath) {
+    const std::filesystem::path program = frontEndProgram();
+
+    std::string name = program.string();
+    std::string attach = "--attach";
+    std::string path = socketPath.string();
+    std::array<char*, 4> argv{name.data(), attach.data(), path.data(), nullptr};
+    ::execvp(name.c_str(), argv.data());
+
+    std::cerr << "enzan: could not start the graphical front end '" << name
+              << "'; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)\n";
+    std::exit(static_cast<int>(ExitStatus::Usage));
+}
+
 #ifdef ENZAN_WITH_SYSTEMVERILOG
 
 /// Builds the session every path shares: analysis and elaboration, once.
@@ -567,6 +620,22 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
 /// The client drives the run, so nothing happens until one attaches, and the kernel survives
 /// its departure: section 2.2 requires a GUI to be able to detach from a long simulation on a
 /// compute server without ending it.
+/// Serves until the client is finished, or until a window this process started has closed.
+///
+/// `serve()` returns only when a client asks the simulation to stop, which is right for
+/// `--listen`: a kernel that outlives its window is the whole point of that spelling. With
+/// `--gui` the kernel exists *for* the window it started, so its closing ends the kernel too
+/// (8.4). Stepping rather than serving is what lets both be true of one server.
+int serveUntilDone(enzan::ipc::KernelServer& server, ::pid_t window) {
+    while (server.step(200)) {
+        if (window <= 0) continue;
+
+        int status = 0;
+        if (::waitpid(window, &status, WNOHANG) == window) break;
+    }
+    return server.exitStatus();
+}
+
 ExitStatus serve(const Invocation& invocation, const std::filesystem::path& socketPath,
                  enzan::session::Session& session, enzan::DiagnosticEngine& diagnostics) {
     enzan::ipc::ServerOptions serverOptions;
@@ -585,13 +654,24 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
         return ExitStatus::AnalysisFailed;
     }
 
-    // Printed rather than logged, because it is the one thing the user needs next and they are
-    // looking at this terminal.
-    std::cout << "-- listening on " << server.socketPath().string() << "\n"
-              << "-- attach with: enzan-gui --attach " << server.socketPath().string() << '\n'
-              << std::flush;
+    ::pid_t window = -1;
+    if (invocation.useGui) {
+        window = startFrontEnd(server.socketPath());
+        if (window < 0) {
+            std::cerr << "enzan: the graphical front end could not be started\n";
+            return ExitStatus::Usage;
+        }
+    } else {
+        // Printed rather than logged, because it is the one thing the user needs next and they
+        // are looking at this terminal. Not printed under --gui, where the socket is an
+        // implementation detail the user was deliberately not made to think about.
+        std::cout << "-- listening on " << server.socketPath().string() << "\n"
+                  << "-- attach with: enzan --gui --attach " << server.socketPath().string()
+                  << '\n'
+                  << std::flush;
+    }
 
-    const int status = server.serve();
+    const int status = serveUntilDone(server, window);
     if (status != 0) return ExitStatus::SimulationFailed;
     if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;
     return ExitStatus::Success;
@@ -610,6 +690,20 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
         return ExitStatus::AnalysisFailed;
     if (!invocation.fstPath.empty() && !session.openFst(invocation.fstPath))
         return ExitStatus::AnalysisFailed;
+
+    if (invocation.useGui) {
+        // A socket in the user's runtime directory: per-user by construction, which is the
+        // access control a Unix domain socket gets. Its name is not the user's business.
+        const char* runtime = std::getenv("XDG_RUNTIME_DIR"); // NOLINT(concurrency-mt-unsafe)
+        const std::filesystem::path directory =
+            runtime != nullptr ? std::filesystem::path(runtime) : std::filesystem::temp_directory_path();
+        const std::filesystem::path socketPath =
+            directory / ("enzan-" + std::to_string(::getpid()) + ".sock");
+        std::error_code ignored;
+        std::filesystem::remove(socketPath, ignored);
+
+        return serve(invocation, socketPath, session, diagnostics);
+    }
 
     if (!invocation.listenPath.empty())
         return serve(invocation, invocation.listenPath, session, diagnostics);
@@ -771,6 +865,17 @@ int main(int argc, char** argv) {
     if (needsSources && invocation.files.empty() && invocation.fileLists.empty()) {
         std::cerr << "enzan: no source files were given\n"
                   << "Try 'enzan --help' for the available options.\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
+    // Nothing to elaborate here: the kernel is somewhere else and already has.
+    if (invocation.useGui && !invocation.attachPath.empty())
+        becomeAttachedFrontEnd(invocation.attachPath);
+
+    if (invocation.useGui && !invocation.listenPath.empty()) {
+        std::cerr << "enzan: '--listen' cannot be combined with '--gui'; --gui starts a window "
+                     "on a socket of its own, and --listen is for a kernel that outlives "
+                     "whatever attaches to it\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 

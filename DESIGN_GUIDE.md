@@ -1001,6 +1001,13 @@ than silently dropped.
 who then wants a file for later should not have to run the design again, so a
 served session records into both the live database and any writer that was opened.
 
+**The kernel parses the command line; the window only attaches.** `--gui` does not
+hand the user's arguments to the front end — it analyses and elaborates here, binds
+a socket the user is not made to think about, starts a window attached to it, and
+ends when that window does. The front end therefore needs to know nothing about
+libraries, file lists or any option added later, and the kernel binary still links
+no Qt.
+
 **The lifetime of the kernel follows how the session was started.** The flag a
 user chose is the decision, so there is nothing further to configure:
 
