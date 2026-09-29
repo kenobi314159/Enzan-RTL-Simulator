@@ -1980,6 +1980,29 @@ nothing; two libraries defining one name are reported rather than silently resol
 ends the kernel, while closing a window that reached the kernel through
 `--gui --attach` leaves it running.
 
+### M3.1 — Analysis cost proportional to the design
+
+One translation per parameterisation rather than per instance. slang creates a
+separate body symbol for each instance, so a module was translated once per
+instance and every translation but one discarded; a hundred instances of one module
+cost a hundred translations of it.
+
+Placed here rather than deferred to M8 because it is not an optimisation of the
+simulation, it is analysis doing a hundred times the work it needs to on any design
+that instantiates anything more than once — which is every real design. M8's subject
+is how fast a *run* is, and none of the measurement discipline there is what this
+needed.
+
+A port map keyed on the frontend's own symbols is what made the naive version
+unsafe: such a map belongs to one instance's body, and sharing it binds no
+connections while leaving the design elaborable and runnable. **A frontend
+structure shared between instances MUST be keyed by something the source names**,
+not by a pointer the frontend happened to produce.
+
+**Exit:** analysing a design whose instances share a parameterisation costs what
+one of them costs, and a test pins each instance reaching its own port storage
+rather than pinning the sharing.
+
 ### M4 — VPI and cocotb
 
 VPI subset per section 9; `vpi_user.h`; callback plumbing into the scheduler
