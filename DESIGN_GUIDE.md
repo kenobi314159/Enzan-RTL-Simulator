@@ -838,6 +838,11 @@ its own library. A specialisation the input library already holds is **not** sto
 second time, because two libraries defining one name is exactly what an unqualified
 reference cannot resolve.
 
+This is what makes a library usable rather than what makes it save work. Reading the
+other library's sources means re-analysing them, so the boundary costs what it would
+have cost without the library. M5.1 removes that by making a unit generic over its
+parameters, and rewrites this subsection and the naming rule below when it lands.
+
 **A specialisation's name MUST be a function of its parameter values.** A counter
 numbers the parameterisations in the order one compilation walked them, which makes
 the name meaningless outside it — `counter$1` from one analysis and `counter$1` from
@@ -2018,6 +2023,59 @@ tasks, functions, packages, interfaces, generate, structs, enums, arrays;
 
 **Exit:** picorv32 and Ibex simulate correctly against a reference.
 
+### M5.1 — Parameter-generic analysis
+
+**What this closes is a gap between this document and the code, not a new design.**
+2.1 already says analysis output is independent of any particular top level and
+that elaboration is what resolves parameters and generics; 4.1 already lists
+parameters among the things EIR-S describes. Analysis has never worked that way. A
+parameterised module is translated once per parameterisation, with the values baked
+into each unit's types and mangled into its name, so a unit exists only because
+something instantiated it with particular values.
+
+Two consequences follow from that, and they are the reason to do this rather than
+leave the gap open:
+
+- **A library is not reusable, only re-runnable.** A design analysed *against*
+  another library re-reads and re-analyses that library's sources, because the units
+  in it are specialisations of no use to a different instantiation (8.2). The library
+  saves nothing across the boundary; it is a file list with a cache attached.
+- **Analysis cost scales with distinct parameterisations.** M3.1 removed the cost
+  that scaled with *instances*; what remains is genuine work under the current design
+  and unnecessary work under this one — a hundred widths of one module are a hundred
+  translations of it.
+
+**The change.** EIR-S holds one unit per source module, carrying its formal
+parameters. An object's type carries its width as an expression over those
+parameters rather than as a number, and an instance carries the values it sets.
+Elaboration evaluates those expressions and materialises the concrete types, which
+is where 2.1 already says parameter resolution belongs. Everything downstream of
+elaboration — codegen, the runtime, the waveform database — sees what it sees today,
+because it only ever sees elaborated output.
+
+**Before M6, and that is the point of placing it here.** VHDL generics are this
+problem in another language, so an NVC adapter written against parameter-resolved
+EIR would be written twice.
+
+**Spike first, as M6 does.** slang is an elaborating front end: it type-checks a
+body in the context of an instance, because a type can depend on a parameter, and it
+does not offer a parameter-generic typed body. Whether one can be obtained — and
+what the alternative is if not — is the first question this milestone answers, and
+it is answered before the EIR change is committed to rather than discovered
+half way through it.
+
+**What this removes.** The specialisation naming of 8.2 exists only because
+specialisations are units; with generic units there is nothing to name. `--in-lib`
+on `analyse` stops needing to read the other library's sources, so the boundary rule
+of 8.2 loses its exception and `--context` narrows again. Those sections are rewritten
+by this milestone rather than extended.
+
+**Exit:** a library analysed once is instantiated at a width it has never seen
+without re-reading its sources; analysing a design with a hundred distinct
+parameterisations of one module costs what one of them costs; the `.f`-and-library
+Makefile of 8.3 still builds, and the conformance and design regression pass rates
+of 14.4 and 14.5 do not move.
+
 ### M6 — VHDL via NVC
 
 NVC integration spike first, to confirm the approach in 5.2 before committing
@@ -2055,6 +2113,7 @@ constraint solver); save and restore; multiple clock domain tooling; UVM.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
+| slang cannot yield a parameter-generic typed body | High — blocks M5.1, and a library stays a file list | Spike before committing to the EIR change (M5.1); the fallback is to keep specialisation in analysis and accept that libraries do not save work across a boundary |
 | NVC internal APIs drift or prove unusable as a frontend | High — blocks VHDL | Spike first in M6; pin the revision; thin adapter in one directory; documented co-simulation fallback (5.2) |
 | The predefined and foreign subprograms NVC's runtime resolved are a larger body of work than estimated | High — inflates M6 | Enumerate the set during the M6 spike by walking the analysed tree, before the milestone is planned (5.2) |
 | VHDL generic and subtype elaboration must be reimplemented rather than reused from NVC | Medium — inflates M6 | Sized by the M6 spike; the tree boundary is reconsidered if it proves worse than the alternative (5.2) |
