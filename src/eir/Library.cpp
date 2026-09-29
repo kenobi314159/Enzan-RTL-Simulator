@@ -214,9 +214,9 @@ bool Library::writeIndex(DiagnosticEngine& diagnostics) const {
         index += source.string();
         index += '\n';
     }
-    for (const std::filesystem::path& directory : recordedIncludeDirectories) {
+    for (const std::filesystem::path& include : recordedIncludeDirectories) {
         index += "incdir ";
-        index += directory.string();
+        index += include.string();
         index += '\n';
     }
     for (const std::string& define : recordedDefines) {
