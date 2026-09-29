@@ -783,7 +783,9 @@ not the name the design refers to.
 **A library therefore carries an index**, holding its logical name and the format
 version. The version belongs there rather than only in each entry so that
 `lib list` can report a library written by an incompatible build without decoding
-an entry to discover it.
+an entry to discover it. **A directory with no index is not a library**: libraries
+are opt-in, so a directory that was never created is a mistake to report rather than
+a library to invent.
 
 **Libraries are named because a design refers to them by name.** VHDL requires it —
 `library ieee;` resolves against a name rather than a path — so the map exists from
@@ -806,10 +808,14 @@ loaded first is the failure mode 1.2 ranks worst, and it is what happens today �
 `Design::findModule` takes a bare name and `addModule` is additive, so **EIR MUST
 carry the logical library on every unit** for any of this to hold.
 
-**A unit's path inside a library MUST be derivable from its name**, not from a hash
-of its source. `make` can only depend on a path it can predict, and a build that
-cannot name its own outputs cannot be incremental. The hash stays where it belongs,
-as the staleness key *inside* the entry (4.4); the file name is the unit.
+**An entry's path MUST be derivable from the source it holds**, not from a hash of
+that source's text. Entries are per source file (4.4), because that is what the
+frontend produces in one piece, so the name comes from the file rather than from any
+one unit inside it. A short digest of the file's *path* disambiguates two sources
+sharing a basename; it never covers the text, so editing a file rewrites its entry
+in place instead of leaving the previous one behind on every save. The text belongs
+in the staleness key *inside* the entry, where it says whether the entry is current
+rather than where it lives.
 
 #### Where a library boundary may fall
 

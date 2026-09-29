@@ -57,11 +57,35 @@ struct LibrarySource {
 /// user who suspects one has an obvious thing to stop doing.
 class Library {
 public:
-    /// Opens, creating the directory if it does not exist.
+    /// Creates a library at `directory` and fixes its logical name.
     ///
-    /// Returns false having reported through `diagnostics` when the path exists and is not a
-    /// directory, or cannot be created.
+    /// An empty `logicalName` takes the directory's own name, which is what a user who called
+    /// their directory after their library means. The name is stored in the library's index so
+    /// that every later use reads it rather than restating it: a name given twice is a name
+    /// that will eventually be given differently, and a design analysed into one name and read
+    /// back under another fails to find its own units (DESIGN_GUIDE.md section 8.2).
+    ///
+    /// Returns false having reported when the path is not usable, or the name is not an
+    /// identifier. Creating over an existing library rewrites its index and keeps its entries.
+    [[nodiscard]] bool create(const std::filesystem::path& directory, std::string_view logicalName,
+                              DiagnosticEngine& diagnostics);
+
+    /// Opens an existing library, reading its logical name from its index.
+    ///
+    /// Returns false having reported when there is no library there. A directory that merely
+    /// exists is not one: libraries are opt-in (8.2), so something that was never created is a
+    /// mistake to report rather than a library to invent.
     [[nodiscard]] bool open(const std::filesystem::path& directory, DiagnosticEngine& diagnostics);
+
+    /// The logical name a design refers to this library by.
+    [[nodiscard]] const std::string& name() const noexcept { return logicalName; }
+
+    /// True when `text` can be a library's logical name.
+    ///
+    /// The rule is an HDL identifier's: a letter or underscore, then letters, digits and
+    /// underscores. A name that a design cannot write — with a dot in it, say, which is how a
+    /// qualified unit name is spelled — would be a library nothing could refer to.
+    [[nodiscard]] static bool isValidName(std::string_view text) noexcept;
 
     [[nodiscard]] bool isOpen() const noexcept { return opened; }
 
@@ -102,12 +126,46 @@ public:
     /// The number of entries `load` found, for the transcript line that says so.
     [[nodiscard]] std::size_t entriesLoaded() const noexcept { return loadedCount; }
 
+    /// Adds every unit this library holds to `design`, for a library being read rather than
+    /// written (`--in-lib`, section 8.2).
+    ///
+    /// No staleness key is checked, because there is nothing to check it against: the sources
+    /// belong to whoever analysed this library, and this caller is consuming what they produced
+    /// rather than deciding whether to reproduce it. An entry that cannot be decoded fails the
+    /// load, because a library read in part is a design missing modules it will not mention.
+    [[nodiscard]] bool loadAll(Design& design, DiagnosticEngine& diagnostics) const;
+
+    /// Replaces the logical name read from the index.
+    ///
+    /// For `--in-lib <name>=<dir>`, which exists for what a stored name cannot cover: two
+    /// vendors each shipping a directory called `work`, or a path whose basename is not the
+    /// name the design refers to. Returns false when the name is not usable.
+    [[nodiscard]] bool overrideName(std::string_view replacement);
+
+    /// The units this library holds, by the source each came from, for `lib list`.
+    ///
+    /// Reads every entry, which is what makes it a reporting call rather than one anything
+    /// hot depends on. Entries that cannot be decoded are skipped rather than failing the
+    /// listing: being told what is readable is more use than being told nothing.
+    [[nodiscard]] std::vector<std::string> unitNames() const;
+
 private:
     /// The file an entry for `source` lives in.
-    [[nodiscard]] std::filesystem::path entryPath(const LibrarySource& source,
-                                                  const SourceManager& sourceManager) const;
+    ///
+    /// Named after the source rather than after a hash of its text, so that the name is stable
+    /// while the file is edited and legible when a user looks in the directory. A short digest
+    /// of the full path is appended because two sources in different directories can share a
+    /// basename; it is of the path and never of the text, so editing a file does not move its
+    /// entry.
+    [[nodiscard]] std::filesystem::path entryPath(const LibrarySource& source) const;
+
+    /// The staleness key for `source`: the text and everything else that changes what analysis
+    /// produces. Stored inside the entry rather than in its name (4.4).
+    [[nodiscard]] std::string entryKey(const LibrarySource& source,
+                                       const SourceManager& sourceManager) const;
 
     std::filesystem::path directory;
+    std::string logicalName;
 
     /// The part of every key that does not depend on the file: the options, the format
     /// version and Enzan's version. Computed once when the options are set.

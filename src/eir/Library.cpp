@@ -9,9 +9,11 @@
 #include "eir/Module.h"
 #include "eir/Serialization.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <map>
+#include <set>
 #include <optional>
 #include <system_error>
 #include <utility>
@@ -95,13 +97,53 @@ bool writeWholeFile(const std::filesystem::path& path, std::string_view contents
     return true;
 }
 
+/// The first line of a library's index, so that a directory of unrelated files is recognised
+/// as not being a library rather than decoded as a broken one.
+constexpr std::string_view IndexMagic = "enzan-library";
+
+/// The index's own version, separate from the serialised unit format: the two change for
+/// different reasons, and a reader must be able to say which of them it does not understand.
+constexpr int IndexVersion = 1;
+
+constexpr std::string_view IndexFileName = "enzan.lib";
+
+/// Prefixes an entry, ahead of its staleness key and the units themselves.
+const std::string EntryMagic = "enzan-entry\n";
+
+/// Characters in a key, which is a 128-bit digest in hex.
+constexpr std::size_t DigestHexLength = 32;
+
 } // namespace
 
-bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& diagnostics) {
+bool Library::isValidName(std::string_view text) noexcept {
+    if (text.empty()) return false;
+
+    const auto isLetter = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    };
+    if (!isLetter(text.front())) return false;
+
+    return std::ranges::all_of(text, [&](char c) {
+        return isLetter(c) || (c >= '0' && c <= '9');
+    });
+}
+
+bool Library::create(const std::filesystem::path& newDirectory, std::string_view name,
+                     DiagnosticEngine& diagnostics) {
     std::error_code failure;
     if (std::filesystem::exists(newDirectory, failure)
         && !std::filesystem::is_directory(newDirectory, failure)) {
         diagnostics.report(DiagCode::LibraryNotADirectory, SourceLocation(), newDirectory.string());
+        return false;
+    }
+
+    // An empty name means the directory's own, which is what `--out-lib libs/uart` means
+    // without being made to say `uart` twice.
+    std::string wanted(name);
+    if (wanted.empty()) wanted = newDirectory.filename().string();
+
+    if (!isValidName(wanted)) {
+        diagnostics.report(DiagCode::LibraryBadName, SourceLocation(), wanted);
         return false;
     }
 
@@ -112,7 +154,60 @@ bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& 
         return false;
     }
 
+    std::string index(IndexMagic);
+    index += '\n';
+    index += std::to_string(IndexVersion);
+    index += '\n';
+    index += wanted;
+    index += '\n';
+
+    const std::filesystem::path indexPath = newDirectory / IndexFileName;
+    if (!writeWholeFile(indexPath, index)) {
+        diagnostics.report(DiagCode::CannotOpenFile, SourceLocation(), indexPath.string(),
+                           "the library index could not be written");
+        return false;
+    }
+
     directory = newDirectory;
+    logicalName = std::move(wanted);
+    opened = true;
+    return true;
+}
+
+bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& diagnostics) {
+    const std::filesystem::path indexPath = newDirectory / IndexFileName;
+    const std::optional<std::string> index = readWholeFile(indexPath);
+    if (!index.has_value()) {
+        // A directory that merely exists is not a library. Reported rather than created,
+        // because a library nobody asked for is a cache nobody asked for (4.4).
+        diagnostics.report(DiagCode::NotALibrary, SourceLocation(), newDirectory.string());
+        return false;
+    }
+
+    std::vector<std::string_view> lines;
+    for (std::size_t start = 0; start < index->size();) {
+        const std::size_t end = std::min(index->find('\n', start), index->size());
+        lines.push_back(std::string_view(*index).substr(start, end - start));
+        start = end + 1;
+    }
+
+    if (lines.size() < 3 || lines[0] != IndexMagic) {
+        diagnostics.report(DiagCode::NotALibrary, SourceLocation(), newDirectory.string());
+        return false;
+    }
+    if (lines[1] != std::to_string(IndexVersion)) {
+        diagnostics.report(DiagCode::LibraryVersionMismatch, SourceLocation(),
+                           newDirectory.string(), std::string(lines[1]),
+                           std::to_string(IndexVersion));
+        return false;
+    }
+    if (!isValidName(lines[2])) {
+        diagnostics.report(DiagCode::LibraryBadName, SourceLocation(), std::string(lines[2]));
+        return false;
+    }
+
+    directory = newDirectory;
+    logicalName = std::string(lines[2]);
     opened = true;
     return true;
 }
@@ -133,17 +228,31 @@ void Library::setOptions(std::span<const std::string> defines,
     optionsDigest = digest.hex();
 }
 
-std::filesystem::path Library::entryPath(const LibrarySource& source,
-                                         const SourceManager& sourceManager) const {
+std::filesystem::path Library::entryPath(const LibrarySource& source) const {
+    // Everything that is not a letter, a digit, a dash or a dot becomes an underscore, so the
+    // result is a filename on any filesystem and still readable as the source it came from.
+    std::string readable = source.path.filename().string();
+    for (char& c : readable) {
+        const bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                          || c == '-' || c == '.';
+        if (!keep) c = '_';
+    }
+
+    // Of the path and never of the text: two sources may share a basename, and an entry whose
+    // name moved when its file was edited would leave the old one behind on every save.
+    Digest digest;
+    digest.add(source.path.string());
+
+    return directory / (readable + "-" + digest.hex().substr(0, 8) + ".eirlib");
+}
+
+std::string Library::entryKey(const LibrarySource& source,
+                              const SourceManager& sourceManager) const {
     Digest digest;
     digest.add(optionsDigest);
-
-    // The path as well as the text: two files with identical contents are still two units, and
-    // a diagnostic about one must name the right file.
     digest.add(source.path.string());
     digest.add(sourceManager.bufferText(source.buffer));
-
-    return directory / (digest.hex() + ".eirlib");
+    return digest.hex();
 }
 
 bool Library::load(std::span<const LibrarySource> sources, const SourceManager& sourceManager,
@@ -156,9 +265,16 @@ bool Library::load(std::span<const LibrarySource> sources, const SourceManager& 
     std::vector<std::string> payloads;
     payloads.reserve(sources.size());
     for (const LibrarySource& source : sources) {
-        std::optional<std::string> contents = readWholeFile(entryPath(source, sourceManager));
+        const std::optional<std::string> contents = readWholeFile(entryPath(source));
         if (!contents.has_value()) return false;
-        payloads.push_back(std::move(*contents));
+
+        // The key is inside the entry rather than in its name (4.4), so a stale entry is one
+        // that is present and disagrees rather than one that is missing.
+        const std::string wanted = EntryMagic + entryKey(source, sourceManager);
+        if (contents->size() < wanted.size() || contents->compare(0, wanted.size(), wanted) != 0)
+            return false;
+
+        payloads.push_back(contents->substr(wanted.size()));
     }
 
     // A stored location may name a file the caller has not read — an include, or a source from
@@ -178,7 +294,12 @@ bool Library::load(std::span<const LibrarySource> sources, const SourceManager& 
     for (const std::string& payload : payloads)
         if (!decodeModules(payload, resolve, decoded)) return false;
 
-    for (ModuleDefinition& definition : decoded) design.addModule(std::move(definition));
+    // Stamped on the way in rather than stored in the entry, so that the name a design refers
+    // to a unit by is the one the library carries and cannot disagree with it (8.2).
+    for (ModuleDefinition& definition : decoded) {
+        definition.library = logicalName;
+        design.addModule(std::move(definition));
+    }
     loadedCount = sources.size();
     return true;
 }
@@ -214,8 +335,9 @@ bool Library::store(std::span<const LibrarySource> sources, const SourceManager&
         // A file that defines nothing still gets an entry. Without one it would look like a
         // miss for ever, and a header of macros or a file of only `` `include `` directives is
         // an ordinary thing for a design to contain.
-        const std::string payload = encodeModules(units, sourceManager);
-        const std::filesystem::path target = entryPath(source, sourceManager);
+        const std::string payload =
+            EntryMagic + entryKey(source, sourceManager) + encodeModules(units, sourceManager);
+        const std::filesystem::path target = entryPath(source);
         if (writeWholeFile(target, payload)) continue;
 
         diagnostics.report(DiagCode::LibraryWriteFailed, SourceLocation(), target.string());
@@ -223,6 +345,88 @@ bool Library::store(std::span<const LibrarySource> sources, const SourceManager&
     }
 
     return allWritten;
+}
+
+bool Library::overrideName(std::string_view replacement) {
+    if (!isValidName(replacement)) return false;
+    logicalName = std::string(replacement);
+    return true;
+}
+
+bool Library::loadAll(Design& design, DiagnosticEngine& diagnostics) const {
+    if (!opened) return false;
+
+    // Gathered and sorted before anything is decoded: a directory listing arrives in whatever
+    // order the filesystem gives, and section 3.8 puts observable ordering beyond that.
+    std::vector<std::filesystem::path> entries;
+    std::error_code failure;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
+        if (failure) break;
+        if (entry.path().extension() == ".eirlib") entries.push_back(entry.path());
+    }
+    std::ranges::sort(entries);
+
+    for (const std::filesystem::path& entry : entries) {
+        const std::optional<std::string> contents = readWholeFile(entry);
+        const std::size_t offset = EntryMagic.size() + DigestHexLength;
+        if (!contents.has_value() || !contents->starts_with(EntryMagic)
+            || contents->size() < offset) {
+            diagnostics.report(DiagCode::LibraryEntryUnreadable, SourceLocation(), entry.string());
+            return false;
+        }
+
+        // Locations name buffers this process has not read; a unit from a library it is only
+        // resolving against carries no snippet, which costs a diagnostic its source line and
+        // nothing else.
+        const auto noBuffers = [](std::string_view) { return BufferId(); };
+
+        std::vector<ModuleDefinition> decoded;
+        if (!decodeModules(std::string_view(*contents).substr(offset), noBuffers, decoded)) {
+            diagnostics.report(DiagCode::LibraryEntryUnreadable, SourceLocation(), entry.string());
+            return false;
+        }
+
+        for (ModuleDefinition& definition : decoded) {
+            definition.library = logicalName;
+            design.addModule(std::move(definition));
+        }
+    }
+    return true;
+}
+
+std::vector<std::string> Library::unitNames() const {
+    std::vector<std::string> names;
+    if (!opened) return names;
+
+    // Collected into an ordered set rather than reported in directory order: a directory
+    // listing is whatever the filesystem feels like, and section 3.8 puts observable ordering
+    // beyond the reach of that.
+    std::set<std::string, std::less<>> sorted;
+
+    std::error_code failure;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
+        if (failure) break;
+        if (entry.path().extension() != ".eirlib") continue;
+
+        const std::optional<std::string> contents = readWholeFile(entry.path());
+        if (!contents.has_value() || !contents->starts_with(EntryMagic)) continue;
+
+        // Past the magic and the key, which is a fixed-width hex digest.
+        const std::size_t offset = EntryMagic.size() + DigestHexLength;
+        if (contents->size() < offset) continue;
+
+        // Nothing here has the buffers a location names, and a listing does not need them.
+        const auto noBuffers = [](std::string_view) { return BufferId(); };
+
+        std::vector<ModuleDefinition> decoded;
+        if (!decodeModules(std::string_view(*contents).substr(offset), noBuffers, decoded))
+            continue;
+
+        for (const ModuleDefinition& definition : decoded) sorted.insert(definition.name);
+    }
+
+    names.assign(sorted.begin(), sorted.end());
+    return names;
 }
 
 } // namespace enzan::eir

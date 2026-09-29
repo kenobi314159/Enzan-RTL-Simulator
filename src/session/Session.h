@@ -136,14 +136,23 @@ public:
     /// next command.
     void setDesign(std::unique_ptr<eir::Design> analysed);
 
-    /// Opens `path` as the analysis library, creating the directory.
+    /// Opens `path` as the library analysis is written into, creating it when it is absent.
     ///
-    /// Opt-in. Section 4.4's store is a cache of what
-    /// the frontend produced, and a cache that served units produced by a different translator
-    /// would give a different simulation — so a user who suspects one has an obvious thing to
-    /// stop doing. The format version and Enzan's version are both in every entry's key, which
-    /// is the belt to that pair of braces.
-    bool openLibrary(const std::filesystem::path& path);
+    /// Creating on absence is what `--out-lib <dir>` means: the library takes the directory's
+    /// own name, and a name that is not an identifier is reported rather than adjusted (8.2).
+    ///
+    /// Opt-in. Section 4.4's store is a cache of what the frontend produced, and a cache that
+    /// served units produced by a different translator would give a different simulation — so a
+    /// user who suspects one has an obvious thing to stop doing. The format version and Enzan's
+    /// version are both in every entry's key, which is the belt to that pair of braces.
+    bool openOutputLibrary(const std::filesystem::path& path);
+
+    /// Opens `path` as a library to resolve against, which MUST already exist.
+    ///
+    /// `name`, when given, overrides the logical name the library carries — for the cases a
+    /// stored name cannot cover: two vendors each shipping a directory called `work`, or a
+    /// path whose basename is not what the design refers to.
+    bool addInputLibrary(const std::filesystem::path& path, std::string_view name = {});
 
     [[nodiscard]] bool hasLibrary() const noexcept { return library.isOpen(); }
 
@@ -306,6 +315,9 @@ private:
 
     eir::Library library;
     bool loadedFromLibrary = false;
+
+    /// Libraries this session resolves against, in the order they were given.
+    std::vector<eir::Library> inputLibraries;
 
     std::unique_ptr<eir::Design> design;
     std::unique_ptr<elab::ElaboratedDesign> elaborated;

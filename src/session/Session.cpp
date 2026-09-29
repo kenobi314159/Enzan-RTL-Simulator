@@ -152,8 +152,12 @@ bool Session::analyse(const AnalysisRequest& request) {
 #endif
 }
 
-bool Session::openLibrary(const std::filesystem::path& path) {
-    return library.open(path, diagnostics);
+bool Session::openOutputLibrary(const std::filesystem::path& path) {
+    std::error_code failure;
+    if (std::filesystem::exists(path / "enzan.lib", failure))
+        return library.open(path, diagnostics);
+
+    return library.create(path, {}, diagnostics);
 }
 
 std::vector<eir::LibrarySource>
@@ -193,7 +197,29 @@ void Session::discardElaboration() {
     elaborated.reset();
 }
 
+bool Session::addInputLibrary(const std::filesystem::path& path, std::string_view name) {
+    eir::Library opened;
+    if (!opened.open(path, diagnostics)) return false;
+    if (!name.empty() && !opened.overrideName(name)) {
+        diagnostics.report(DiagCode::LibraryBadName, SourceLocation(), std::string(name));
+        return false;
+    }
+
+    inputLibraries.push_back(std::move(opened));
+    return true;
+}
+
 bool Session::elaborate(std::string_view topModule) {
+    // A run may be given nothing but libraries to resolve against, so the design to elaborate
+    // is whatever was analysed here plus every unit the input libraries hold. Merged in the
+    // order the libraries were given, which is the order 8.2 says they are searched and the
+    // order an ambiguity is reported in.
+    if (design == nullptr && !inputLibraries.empty()) design = std::make_unique<eir::Design>();
+
+    for (const eir::Library& input : inputLibraries) {
+        if (!input.loadAll(*design, diagnostics)) return false;
+    }
+
     if (design == nullptr) {
         diagnostics.report(DiagCode::NothingAnalysed, SourceLocation());
         return false;

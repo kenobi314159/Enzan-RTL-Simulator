@@ -114,6 +114,18 @@ ENZAN_DIAG(WaveformScopeAfterOpen, 6017, Error,
            "file declares are written into its header")
 ENZAN_DIAG(LibraryNotADirectory, 6019, Error,
            "'{}' exists and is not a directory, so it cannot be an analysis library")
+ENZAN_DIAG(NotALibrary, 6022, Error,
+           "'{}' is not an analysis library; create one with `enzan lib create` before writing "
+           "to it or reading from it")
+ENZAN_DIAG(LibraryVersionMismatch, 6023, Error,
+           "the analysis library '{}' was written with index version {} and this build "
+           "understands {}; create it again")
+ENZAN_DIAG(LibraryBadName, 6024, Error,
+           "'{}' cannot be a library name; a name is a letter or underscore followed by "
+           "letters, digits and underscores, because a design has to be able to write it")
+ENZAN_DIAG(LibraryEntryUnreadable, 6025, Error,
+           "the analysis library entry '{}' could not be read; the library was written by an "
+           "incompatible build or has been damaged, so create it again")
 ENZAN_DIAG(LibraryWriteFailed, 6020, Warning,
            "the analysis library entry '{}' could not be written; this run is unaffected and "
            "the next one will analyse from source again")

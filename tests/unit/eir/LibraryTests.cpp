@@ -84,31 +84,76 @@ protected:
 // Opening
 // ---------------------------------------------------------------------------
 
-TEST_F(LibraryTest, OpeningCreatesTheDirectory) {
+TEST_F(LibraryTest, CreatingMakesTheDirectoryAndNamesIt) {
     Library library;
     const std::filesystem::path path = workspace / "work";
 
-    ASSERT_TRUE(library.open(path, engine));
+    ASSERT_TRUE(library.create(path, {}, engine));
     EXPECT_TRUE(library.isOpen());
     EXPECT_TRUE(std::filesystem::is_directory(path));
     EXPECT_EQ(library.path(), path);
+    EXPECT_EQ(library.name(), "work") << "an empty name takes the directory's own";
 }
 
-TEST_F(LibraryTest, OpeningAnExistingDirectoryIsFine) {
+TEST_F(LibraryTest, ACreatedLibraryIsOpenedByName) {
+    const std::filesystem::path path = workspace / "store";
+    {
+        Library made;
+        ASSERT_TRUE(made.create(path, "acme", engine));
+    }
+
+    Library library;
+    ASSERT_TRUE(library.open(path, engine));
+    EXPECT_EQ(library.name(), "acme") << "the name comes from the library, not from the caller";
+}
+
+TEST_F(LibraryTest, ADirectoryThatWasNeverCreatedIsNotALibrary) {
+    // Libraries are opt-in (8.2), so a directory that merely exists is a mistake to report
+    // rather than a library to invent.
     const std::filesystem::path path = workspace / "work";
     std::filesystem::create_directories(path);
 
     Library library;
-    EXPECT_TRUE(library.open(path, engine));
+    EXPECT_FALSE(library.open(path, engine));
+    EXPECT_TRUE(reported(DiagCode::NotALibrary));
+}
+
+TEST_F(LibraryTest, OpeningSomewhereThatDoesNotExistIsNotALibrary) {
+    Library library;
+    EXPECT_FALSE(library.open(workspace / "nowhere", engine));
+    EXPECT_TRUE(reported(DiagCode::NotALibrary));
 }
 
 TEST_F(LibraryTest, RefusesAPathThatIsAFile) {
     workspace.write("work", "not a directory");
 
     Library library;
-    EXPECT_FALSE(library.open(workspace / "work", engine));
+    EXPECT_FALSE(library.create(workspace / "work", {}, engine));
     EXPECT_FALSE(library.isOpen());
     EXPECT_TRUE(reported(DiagCode::LibraryNotADirectory));
+}
+
+TEST_F(LibraryTest, RefusesANameADesignCouldNotWrite) {
+    Library library;
+    EXPECT_FALSE(library.create(workspace / "work", "my-lib", engine));
+    EXPECT_TRUE(reported(DiagCode::LibraryBadName));
+}
+
+TEST_F(LibraryTest, RefusesADirectoryWhoseNameIsNotAnIdentifier) {
+    // The default name is the basename, so a directory nobody could name in a design has to
+    // be told about rather than silently given a different name.
+    Library library;
+    EXPECT_FALSE(library.create(workspace / "my-lib", {}, engine));
+    EXPECT_TRUE(reported(DiagCode::LibraryBadName));
+}
+
+TEST_F(LibraryTest, ANameIsAnIdentifier) {
+    EXPECT_TRUE(Library::isValidName("work"));
+    EXPECT_TRUE(Library::isValidName("_ieee2008"));
+    EXPECT_FALSE(Library::isValidName(""));
+    EXPECT_FALSE(Library::isValidName("2fast"));
+    EXPECT_FALSE(Library::isValidName("has.dot")) << "a dot is how a unit name is qualified";
+    EXPECT_FALSE(Library::isValidName("has space"));
 }
 
 TEST_F(LibraryTest, AClosedLibraryNeitherLoadsNorStores) {
@@ -127,7 +172,7 @@ TEST_F(LibraryTest, AClosedLibraryNeitherLoadsNorStores) {
 
 class StoredLibraryTest : public LibraryTest {
 protected:
-    StoredLibraryTest() { EXPECT_TRUE(library.open(workspace / "work", engine)); }
+    StoredLibraryTest() { EXPECT_TRUE(library.create(workspace / "work", {}, engine)); }
 
     Library library;
 };
@@ -341,6 +386,119 @@ TEST_F(StoredLibraryTest, AFailedWriteIsReportedAndDoesNotFailTheRun) {
     EXPECT_TRUE(reported(DiagCode::LibraryWriteFailed));
 
     std::filesystem::permissions(library.path(), std::filesystem::perms::owner_all);
+}
+
+
+// ---------------------------------------------------------------------------
+// A library read rather than written
+// ---------------------------------------------------------------------------
+
+TEST_F(LibraryTest, EveryUnitIsLoadedAndStampedWithTheLibrarysName) {
+    const std::filesystem::path path = workspace / "acme";
+    const LibrarySource file = source("a.sv", "module a; endmodule\n");
+
+    {
+        Library writing;
+        ASSERT_TRUE(writing.create(path, {}, engine));
+        ASSERT_TRUE(writing.store({&file, 1}, sources, designWith("a", file.buffer), engine));
+    }
+
+    Library reading;
+    ASSERT_TRUE(reading.open(path, engine));
+
+    Design design;
+    ASSERT_TRUE(reading.loadAll(design, engine));
+    ASSERT_NE(design.findModule("a"), nullptr);
+    EXPECT_EQ(design.findModule("a")->library, "acme");
+    EXPECT_NE(design.findModule("acme.a"), nullptr) << "and is reachable qualified";
+}
+
+TEST_F(LibraryTest, AnOverriddenNameIsWhatTheUnitsCarry) {
+    const std::filesystem::path path = workspace / "work";
+    const LibrarySource file = source("a.sv", "module a; endmodule\n");
+
+    {
+        Library writing;
+        ASSERT_TRUE(writing.create(path, {}, engine));
+        ASSERT_TRUE(writing.store({&file, 1}, sources, designWith("a", file.buffer), engine));
+    }
+
+    Library reading;
+    ASSERT_TRUE(reading.open(path, engine));
+    ASSERT_TRUE(reading.overrideName("vendor"));
+
+    Design design;
+    ASSERT_TRUE(reading.loadAll(design, engine));
+    EXPECT_NE(design.findModule("vendor.a"), nullptr);
+}
+
+TEST_F(LibraryTest, AnOverrideThatIsNotAnIdentifierIsRefused) {
+    const std::filesystem::path path = workspace / "work";
+    Library library;
+    ASSERT_TRUE(library.create(path, {}, engine));
+
+    EXPECT_FALSE(library.overrideName("not.a.name"));
+    EXPECT_EQ(library.name(), "work") << "and the library keeps the name it had";
+}
+
+TEST_F(LibraryTest, ADamagedEntryFailsTheLoadRatherThanBeingSkipped) {
+    // A library read in part is a design missing modules it will never mention, which is the
+    // failure mode section 1.2 ranks worst.
+    const std::filesystem::path path = workspace / "work";
+    const LibrarySource file = source("a.sv", "module a; endmodule\n");
+    {
+        Library writing;
+        ASSERT_TRUE(writing.create(path, {}, engine));
+        ASSERT_TRUE(writing.store({&file, 1}, sources, designWith("a", file.buffer), engine));
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(path)) {
+        if (entry.path().extension() != ".eirlib") continue;
+        std::ofstream(entry.path(), std::ios::binary | std::ios::trunc) << "rubbish";
+    }
+
+    Library reading;
+    ASSERT_TRUE(reading.open(path, engine));
+
+    Design design;
+    EXPECT_FALSE(reading.loadAll(design, engine));
+    EXPECT_TRUE(reported(DiagCode::LibraryEntryUnreadable));
+}
+
+TEST_F(LibraryTest, ListingNamesTheUnitsItHolds) {
+    const std::filesystem::path path = workspace / "work";
+    const LibrarySource file = source("a.sv", "module a; endmodule\n");
+
+    Library library;
+    ASSERT_TRUE(library.create(path, {}, engine));
+    ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
+
+    EXPECT_EQ(library.unitNames(), std::vector<std::string>{"a"});
+}
+
+TEST_F(StoredLibraryTest, AnEntryIsNamedAfterItsSourceAndStaysThereWhenItChanges) {
+    // The name must not move when the file is edited, or every save leaves the previous entry
+    // behind and the library grows without bound.
+    const LibrarySource first = source("counter.sv", "module counter; endmodule\n");
+    ASSERT_TRUE(library.store({&first, 1}, sources, designWith("counter", first.buffer), engine));
+
+    std::vector<std::filesystem::path> before;
+    for (const auto& e : std::filesystem::directory_iterator(library.path()))
+        if (e.path().extension() == ".eirlib") before.push_back(e.path().filename());
+
+    ASSERT_EQ(before.size(), 1U);
+    EXPECT_NE(before.front().string().find("counter.sv"), std::string::npos)
+        << "an entry is readable as the source it came from: " << before.front();
+
+    const LibrarySource changed = source("counter.sv", "module counter; wire w; endmodule\n");
+    ASSERT_TRUE(library.store({&changed, 1}, sources, designWith("counter", changed.buffer),
+                              engine));
+
+    std::vector<std::filesystem::path> after;
+    for (const auto& e : std::filesystem::directory_iterator(library.path()))
+        if (e.path().extension() == ".eirlib") after.push_back(e.path().filename());
+
+    EXPECT_EQ(after, before) << "the entry was rewritten in place, not written beside the old one";
 }
 
 } // namespace
