@@ -19,11 +19,12 @@ namespace enzan::elab {
 namespace {
 
 /// Joins a list of names for a diagnostic, in the order given.
-std::string joinNames(const std::vector<std::string>& names) {
+template<typename Range>
+std::string joinNames(const Range& names) {
     if (names.empty()) return "(none)";
 
     std::string result;
-    for (const std::string& name : names) {
+    for (const std::string_view name : names) {
         if (!result.empty()) result += ", ";
         result += '\'';
         result += name;
@@ -80,7 +81,14 @@ public:
 private:
     std::optional<std::uint32_t> resolveTop(std::string_view topModuleName) {
         if (!topModuleName.empty()) {
-            const std::optional<std::uint32_t> index = design.findModuleIndex(topModuleName);
+            std::vector<std::string_view> ambiguity;
+            const std::optional<std::uint32_t> index =
+                design.findModuleIndex(topModuleName, &ambiguity);
+            if (!index.has_value() && !ambiguity.empty()) {
+                diagnostics.report(DiagCode::AmbiguousModule, SourceLocation(), topModuleName,
+                                   joinNames(ambiguity), topModuleName);
+                return std::nullopt;
+            }
             if (!index.has_value()) {
                 std::vector<std::string> names;
                 for (const eir::ModuleDefinition& definition : design.modules())
@@ -203,8 +211,14 @@ private:
     }
 
     bool expandChild(std::uint32_t parentIndex, const eir::Instance& child) {
+        std::vector<std::string_view> ambiguity;
         const std::optional<std::uint32_t> childDefinition =
-            design.findModuleIndex(child.definitionName);
+            design.findModuleIndex(child.definitionName, &ambiguity);
+        if (!childDefinition.has_value() && !ambiguity.empty()) {
+            diagnostics.report(DiagCode::AmbiguousModule, child.location, child.definitionName,
+                               joinNames(ambiguity), child.definitionName);
+            return false;
+        }
         if (!childDefinition.has_value()) {
             diagnostics.report(DiagCode::UnresolvedInstance, child.location, child.name,
                                child.definitionName);

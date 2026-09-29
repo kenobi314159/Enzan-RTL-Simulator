@@ -22,6 +22,13 @@ ModuleDefinition makeModule(std::string name) {
     return definition;
 }
 
+/// The same unit as it would arrive from a named library.
+ModuleDefinition makeModule(std::string name, std::string library) {
+    ModuleDefinition definition = makeModule(std::move(name));
+    definition.library = std::move(library);
+    return definition;
+}
+
 TEST(Design, StartsEmpty) {
     const Design design;
     EXPECT_TRUE(design.empty());
@@ -105,6 +112,97 @@ TEST(ModuleDefinition, FindObjectByName) {
     EXPECT_EQ(definition.findObject("count"), index);
     EXPECT_EQ(definition.findObject("clk"), 0U);
     EXPECT_FALSE(definition.findObject("absent").has_value());
+}
+
+
+// ---------------------------------------------------------------------------
+// Units from more than one library
+// ---------------------------------------------------------------------------
+
+TEST(Design, OneNameFromTwoLibrariesKeepsBoth) {
+    // The hazard this exists to prevent: keying on the bare name means the second
+    // definition replaces the first and the design silently loses a module.
+    Design design;
+    design.addModule(makeModule("fifo", "acme"));
+    design.addModule(makeModule("fifo", "local"));
+
+    EXPECT_EQ(design.size(), 2U);
+}
+
+TEST(Design, AnUnqualifiedNameTwoLibrariesDefineIsNotResolved) {
+    Design design;
+    design.addModule(makeModule("fifo", "acme"));
+    design.addModule(makeModule("fifo", "local"));
+
+    std::vector<std::string_view> ambiguity;
+    EXPECT_EQ(design.findModule("fifo", &ambiguity), nullptr);
+    EXPECT_EQ(ambiguity, std::vector<std::string_view>({"acme", "local"}))
+        << "reported in the order the libraries were added, which is search order";
+}
+
+TEST(Design, QualifyingTheNameSelectsOneOfThem) {
+    Design design;
+    design.addModule(makeModule("fifo", "acme"));
+    design.addModule(makeModule("fifo", "local"));
+
+    const ModuleDefinition* acme = design.findModule("acme.fifo");
+    ASSERT_NE(acme, nullptr);
+    EXPECT_EQ(acme->library, "acme");
+
+    const ModuleDefinition* local = design.findModule("local.fifo");
+    ASSERT_NE(local, nullptr);
+    EXPECT_EQ(local->library, "local");
+}
+
+TEST(Design, QualifyingWithALibraryThatDoesNotDefineItFindsNothing) {
+    Design design;
+    design.addModule(makeModule("fifo", "acme"));
+
+    EXPECT_EQ(design.findModule("elsewhere.fifo"), nullptr);
+}
+
+TEST(Design, AnUnambiguousNameNeedsNoQualifier) {
+    Design design;
+    design.addModule(makeModule("counter", "work"));
+
+    std::vector<std::string_view> ambiguity;
+    ASSERT_NE(design.findModule("counter", &ambiguity), nullptr);
+    EXPECT_TRUE(ambiguity.empty());
+}
+
+TEST(Design, ReanalysingReplacesWithinOneLibraryOnly) {
+    Design design;
+    design.addModule(makeModule("fifo", "acme"));
+    design.addModule(makeModule("fifo", "local"));
+
+    // What re-analysing a changed source in `acme` does: it updates that entry and
+    // leaves the other library's definition where it was.
+    ModuleDefinition again = makeModule("fifo", "acme");
+    again.sourceName = "fifo_v2";
+    design.addModule(std::move(again));
+
+    EXPECT_EQ(design.size(), 2U);
+    EXPECT_EQ(design.findModule("acme.fifo")->sourceName, "fifo_v2");
+    EXPECT_EQ(design.findModule("local.fifo")->sourceName, "fifo");
+}
+
+TEST(Design, AMangledParameterisationIsNotMistakenForAQualifiedName) {
+    // `leaf$1` carries no dot, so nothing here should try to split it; the guard is
+    // that a qualifier is taken from the first dot and there is none.
+    Design design;
+    design.addModule(makeModule("leaf$1", "work"));
+
+    EXPECT_NE(design.findModule("leaf$1"), nullptr);
+    EXPECT_NE(design.findModule("work.leaf$1"), nullptr);
+}
+
+TEST(Design, AUnitWithNoLibraryIsStillFound) {
+    // A one-time analysis writes no library, so every unit carries an empty name.
+    Design design;
+    design.addModule(makeModule("counter"));
+
+    EXPECT_NE(design.findModule("counter"), nullptr);
+    EXPECT_TRUE(design.findModule("counter")->library.empty());
 }
 
 } // namespace

@@ -58,6 +58,9 @@ ENZAN_DIAG(NoTopModule, 3002, Error,
            "no top module was given and the design has {} candidates: {}")
 ENZAN_DIAG(UnresolvedInstance, 3003, Error,
            "instance '{}' refers to module '{}', which has not been analysed")
+ENZAN_DIAG(AmbiguousModule, 3009, Error,
+           "'{}' is defined by more than one library ({}); name the one meant, as "
+           "<library>.{}")
 ENZAN_DIAG(RecursiveInstantiation, 3004, Error,
            "module '{}' instantiates itself, through {}; an unbounded hierarchy cannot be "
            "elaborated")
