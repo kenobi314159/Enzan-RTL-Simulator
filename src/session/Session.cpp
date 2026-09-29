@@ -86,6 +86,7 @@ std::ostream& Session::transcriptStream() const {
 // ---------------------------------------------------------------------------
 
 bool Session::analyse(const AnalysisRequest& request) {
+    for (const std::filesystem::path& file : request.contextFiles) contextFiles.push_back(file);
     for (const std::filesystem::path& file : request.files) files.push_back(file);
     for (const std::string& define : request.defines) defines.push_back(define);
     for (const std::filesystem::path& directory : request.includeDirectories)
@@ -102,19 +103,31 @@ bool Session::analyse(const AnalysisRequest& request) {
     // depend on which pass produced it.
     std::vector<std::filesystem::path> ordered;
     std::vector<BufferId> buffers;
-    ordered.reserve(files.size());
-    buffers.reserve(files.size());
-    for (const std::filesystem::path& file : files) {
-        const FileReadResult read = sources.readFile(file);
-        if (!read.ok()) {
-            reportFileReadFailure(diagnostics, file, read);
+    ordered.reserve(contextFiles.size() + files.size());
+    buffers.reserve(contextFiles.size() + files.size());
+
+    // Context first, so that a package is in the compilation before whatever imports it.
+    const auto read = [&](const std::filesystem::path& file) {
+        const FileReadResult result = sources.readFile(file);
+        if (!result.ok()) {
+            reportFileReadFailure(diagnostics, file, result);
             return false;
         }
         ordered.push_back(file);
-        buffers.push_back(read.buffer);
-    }
+        buffers.push_back(result.buffer);
+        return true;
+    };
+    for (const std::filesystem::path& file : contextFiles)
+        if (!read(file)) return false;
 
-    const std::vector<eir::LibrarySource> stored = librarySources(ordered, buffers);
+    const std::size_t firstOwn = ordered.size();
+    for (const std::filesystem::path& file : files)
+        if (!read(file)) return false;
+
+    // Only this session's own sources are stored. A context file is read so that references
+    // resolve and belongs to whichever library did store it (8.2).
+    const std::vector<eir::LibrarySource> stored =
+        librarySources(std::span(ordered).subspan(firstOwn), std::span(buffers).subspan(firstOwn));
 
     loadedFromLibrary = false;
     if (library.isOpen()) {

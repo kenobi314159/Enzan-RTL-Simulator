@@ -106,6 +106,14 @@ public:
     /// What one `analyse` call adds.
     struct AnalysisRequest {
         std::vector<std::filesystem::path> files;
+
+        /// Sources analysed so that `files` resolve against them, whose units are **not**
+        /// stored in the library (`--context`, section 8.2).
+        ///
+        /// slang type-checks from syntax, so a unit importing a package needs that package's
+        /// source however the package was analysed before. Storing it here as well would put
+        /// the same unit in two libraries, which an unqualified reference then cannot resolve.
+        std::vector<std::filesystem::path> contextFiles;
         std::vector<std::string> defines;
         std::vector<std::filesystem::path> includeDirectories;
     };
@@ -310,6 +318,9 @@ private:
 
     /// Every source given to `analyse`, in the order it was given.
     std::vector<std::filesystem::path> files;
+
+    /// Sources read for resolution whose units this session does not store.
+    std::vector<std::filesystem::path> contextFiles;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
 

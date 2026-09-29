@@ -23,6 +23,8 @@
 #include <string_view>
 #include <vector>
 
+#include "eir/Library.h"
+#include "session/FileList.h"
 #include "session/Session.h"
 
 #include <unistd.h>
@@ -37,7 +39,44 @@ namespace {
 
 /// Exit statuses. `Usage` is distinct from a simulation failure so that scripts can tell
 /// "you invoked me wrongly" from "the design failed".
-enum class ExitStatus : std::uint8_t { Success = 0, Usage = 1, Failure = 2 };
+/// Exit statuses, distinct enough for a Makefile to branch on (DESIGN_GUIDE.md section 8.1).
+///
+/// `AnalysisFailed` and `SimulationFailed` are separate because a regression script that
+/// cannot tell "the tool could not compile this" from "the testbench reported an error"
+/// reports both as the same red square.
+enum class ExitStatus : std::uint8_t {
+    Success = 0,
+    Usage = 1,
+    AnalysisFailed = 2,
+    SimulationFailed = 3,
+};
+
+/// What the command line asked to be done.
+enum class Command : std::uint8_t {
+    /// No subcommand: analyse and run in one process, which is what a small case wants.
+    OneShot,
+    Analyse,
+    Elaborate,
+    Run,
+    LibCreate,
+    LibList,
+    LibClean,
+};
+
+/// A library named on the command line, with the name it is to be known by.
+///
+/// An empty `name` means the one the library carries, which is the usual case: the name lives
+/// in the library so that the two ends of a build cannot disagree about it (8.2).
+struct NamedLibrary {
+    std::string name;
+    std::filesystem::path path;
+};
+
+/// A file list and the rule its relative paths resolve by (8.3).
+struct FileListRequest {
+    std::filesystem::path path;
+    enzan::session::FileListAnchor anchor = enzan::session::FileListAnchor::WorkingDirectory;
+};
 
 constexpr std::string_view UsageText =
     R"(Usage: enzan [options] <file.sv>...
@@ -79,7 +118,21 @@ void printVersion() {
 
 /// Everything the command line can ask for.
 struct Invocation {
+    Command command = Command::OneShot;
+
     std::vector<std::filesystem::path> files;
+    std::vector<FileListRequest> fileLists;
+    std::vector<std::filesystem::path> contextFiles;
+
+    std::filesystem::path outputLibrary;
+    std::vector<NamedLibrary> inputLibraries;
+
+    std::filesystem::path depfilePath;
+    std::string depfileTarget;
+    bool dryRun = false;
+    bool useGui = false;
+    std::filesystem::path attachPath;
+    std::string libraryName;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
     std::string topModule;
@@ -104,6 +157,18 @@ std::optional<std::int8_t> parseTimeUnit(std::string_view text) {
     return std::nullopt;
 }
 
+/// Splits `+incdir+a+b` into its parts, dropping the empty ones a trailing `+` produces.
+std::vector<std::string_view> splitPlusList(std::string_view token) {
+    std::vector<std::string_view> parts;
+    std::size_t start = 0;
+    while (start <= token.size()) {
+        const std::size_t end = std::min(token.find('+', start), token.size());
+        if (end > start) parts.push_back(token.substr(start, end - start));
+        start = end + 1;
+    }
+    return parts;
+}
+
 /// Parses an unsigned decimal, rejecting anything that is not entirely digits.
 std::optional<std::uint64_t> parseUnsigned(std::string_view text) {
     if (text.empty()) return std::nullopt;
@@ -118,6 +183,40 @@ std::optional<std::uint64_t> parseUnsigned(std::string_view text) {
 
 /// Result of parsing the command line.
 enum class ParseOutcome : std::uint8_t { Run, PrintedHelp, BadUsage };
+
+/// Recognises a leading subcommand, consuming it and any word it takes.
+///
+/// The first word is a subcommand only when it is one of these names, so a source file called
+/// `run.sv` is still a source file (8.1).
+std::size_t readCommand(std::span<char*> arguments, Invocation& invocation) {
+    if (arguments.empty()) return 0;
+
+    const std::string_view first(arguments[0]);
+    if (first == "analyse" || first == "analyze") {
+        invocation.command = Command::Analyse;
+        return 1;
+    }
+    if (first == "elaborate") {
+        invocation.command = Command::Elaborate;
+        return 1;
+    }
+    if (first == "run") {
+        invocation.command = Command::Run;
+        return 1;
+    }
+    if (first != "lib") return 0;
+
+    const std::string_view second = arguments.size() > 1 ? std::string_view(arguments[1]) : "";
+    if (second == "create") invocation.command = Command::LibCreate;
+    else if (second == "list") invocation.command = Command::LibList;
+    else if (second == "clean") invocation.command = Command::LibClean;
+    else {
+        std::cerr << "enzan: `lib` takes create, list or clean\n";
+        invocation.command = Command::OneShot;
+        return 0;
+    }
+    return 2;
+}
 
 ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation) {
     const auto requireValue = [&](std::size_t& index, std::string_view option) -> const char* {
@@ -233,7 +332,101 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
-        if (argument.starts_with('-')) {
+        if (argument == "--out-lib") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.outputLibrary = value;
+            continue;
+        }
+
+        if (argument == "--in-lib") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+
+            // `<name>=<dir>` overrides the name the library carries; a bare path uses it.
+            const std::string_view text(value);
+            const std::size_t equals = text.find('=');
+            if (equals == std::string_view::npos) {
+                invocation.inputLibraries.push_back({.name = {}, .path = text});
+            } else {
+                invocation.inputLibraries.push_back(
+                    {.name = std::string(text.substr(0, equals)), .path = text.substr(equals + 1)});
+            }
+            continue;
+        }
+
+        if (argument == "--context") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.contextFiles.emplace_back(value);
+            continue;
+        }
+
+        if (argument == "-f" || argument == "-F") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.fileLists.push_back(
+                {.path = value,
+                 .anchor = argument == "-F" ? enzan::session::FileListAnchor::ListDirectory
+                                            : enzan::session::FileListAnchor::WorkingDirectory});
+            continue;
+        }
+
+        if (argument == "--depfile") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.depfilePath = value;
+            continue;
+        }
+
+        if (argument == "--depfile-target") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.depfileTarget = value;
+            continue;
+        }
+
+        if (argument == "--attach") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.attachPath = value;
+            continue;
+        }
+
+        if (argument == "--name") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.libraryName = value;
+            continue;
+        }
+
+        if (argument == "--dry-run") {
+            invocation.dryRun = true;
+            continue;
+        }
+
+        if (argument == "--gui") {
+            invocation.useGui = true;
+            continue;
+        }
+
+        if (argument.starts_with("+incdir+")) {
+            for (const std::string_view part : splitPlusList(argument.substr(8)))
+                invocation.includeDirectories.emplace_back(part);
+            continue;
+        }
+
+        if (argument.starts_with("+define+")) {
+            for (const std::string_view part : splitPlusList(argument.substr(8)))
+                invocation.defines.emplace_back(part);
+            continue;
+        }
+
+        // `-sv` asks for the only language this build reads, so it is accepted and dropped
+        // exactly as the file-list reader treats it.
+        if (argument == "-sv") continue;
+
+        if (argument.starts_with('-') || argument.starts_with('+')) {
             std::cerr << "enzan: unrecognised option '" << argument << "'\n"
                       << "Try 'enzan --help' for the available options.\n";
             return ParseOutcome::BadUsage;
@@ -252,21 +445,68 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 /// One pipeline for the batch run, the served kernel and the script. Three copies of it was
 /// where the differences between them started: a `--listen` that resolved a file differently
 /// differently from another, or a batch run that put the waveform somewhere a served one did not.
-bool prepare(const Invocation& invocation, enzan::session::Session& session,
-             enzan::DiagnosticEngine& diagnostics) {
+/// Expands the file lists and the sources named directly into one analysis request.
+///
+/// A list's own options join the ones given on the command line rather than replacing them,
+/// which is what a design that ships a `.f` naming its include directories expects.
+bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
+                    enzan::DiagnosticEngine& diagnostics,
+                    enzan::session::Session::AnalysisRequest& request) {
+    for (const FileListRequest& list : invocation.fileLists) {
+        enzan::session::FileList expanded;
+        if (!readFileList(list.path, sources, diagnostics, expanded, list.anchor)) return false;
+
+        for (const std::filesystem::path& file : expanded.files) request.files.push_back(file);
+        for (const std::string& define : expanded.defines) request.defines.push_back(define);
+        for (const std::filesystem::path& directory : expanded.includeDirectories)
+            request.includeDirectories.push_back(directory);
+    }
+
+    for (const std::filesystem::path& file : invocation.files) request.files.push_back(file);
+    for (const std::string& define : invocation.defines) request.defines.push_back(define);
+    for (const std::filesystem::path& directory : invocation.includeDirectories)
+        request.includeDirectories.push_back(directory);
+
+    request.contextFiles = invocation.contextFiles;
+    return true;
+}
+
+/// Opens the libraries this invocation writes into and reads from.
+bool openLibraries(const Invocation& invocation, enzan::session::Session& session) {
+    if (!invocation.outputLibrary.empty() && !session.openOutputLibrary(invocation.outputLibrary))
+        return false;
+
+    for (const NamedLibrary& input : invocation.inputLibraries) {
+        if (!session.addInputLibrary(input.path, input.name)) return false;
+    }
+    return true;
+}
+
+/// Analyses, without elaborating. Returns false having reported.
+bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
+                 enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
     session.setTimeScale(enzan::runtime::TimeScale(invocation.timeExponent));
     session.setDeltaLimit(invocation.deltaLimit);
 
+    if (!openLibraries(invocation, session)) return false;
+
     enzan::session::Session::AnalysisRequest request;
-    request.files = invocation.files;
-    request.defines = invocation.defines;
-    request.includeDirectories = invocation.includeDirectories;
-    if (!session.analyse(request)) return false;
+    if (!collectSources(invocation, sources, diagnostics, request)) return false;
+
+    return session.analyse(request);
+}
+
+bool prepare(const Invocation& invocation, enzan::session::Session& session,
+             enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
+    // A run given nothing but libraries has no sources of its own to analyse, and elaboration
+    // then works from what the libraries hold.
+    const bool hasSources = !invocation.files.empty() || !invocation.fileLists.empty();
+    if (hasSources && !analyseOnly(invocation, session, sources, diagnostics)) return false;
+    if (!hasSources && !openLibraries(invocation, session)) return false;
 
     if (!invocation.waveformScope.empty() && !session.addWaveformScope(invocation.waveformScope))
         return false;
 
-    static_cast<void>(diagnostics);
     return session.elaborate(invocation.topModule);
 }
 
@@ -275,8 +515,8 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
 /// The client drives the run, so nothing happens until one attaches, and the kernel survives
 /// its departure: section 2.2 requires a GUI to be able to detach from a long simulation on a
 /// compute server without ending it.
-ExitStatus serve(const Invocation& invocation, enzan::session::Session& session,
-                 enzan::DiagnosticEngine& diagnostics) {
+ExitStatus serve(const Invocation& invocation, const std::filesystem::path& socketPath,
+                 enzan::session::Session& session, enzan::DiagnosticEngine& diagnostics) {
     enzan::ipc::ServerOptions serverOptions;
     serverOptions.kernelVersion = enzan::versionLine();
     serverOptions.timeScale = session.timeScale();
@@ -287,10 +527,10 @@ ExitStatus serve(const Invocation& invocation, enzan::session::Session& session,
     server.start();
 
     std::string error;
-    if (!server.listen(invocation.listenPath, error)) {
+    if (!server.listen(socketPath, error)) {
         diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
-                           invocation.listenPath.string(), error);
-        return ExitStatus::Failure;
+                           socketPath.string(), error);
+        return ExitStatus::AnalysisFailed;
     }
 
     // Printed rather than logged, because it is the one thing the user needs next and they are
@@ -300,7 +540,8 @@ ExitStatus serve(const Invocation& invocation, enzan::session::Session& session,
               << std::flush;
 
     const int status = server.serve();
-    if (status != 0 || diagnostics.hasErrors()) return ExitStatus::Failure;
+    if (status != 0) return ExitStatus::SimulationFailed;
+    if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;
     return ExitStatus::Success;
 }
 
@@ -308,16 +549,18 @@ ExitStatus serve(const Invocation& invocation, enzan::session::Session& session,
 ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                     enzan::DiagnosticEngine& diagnostics) {
     enzan::session::Session session(sources, diagnostics);
-    if (!prepare(invocation, session, diagnostics)) return ExitStatus::Failure;
+    if (!prepare(invocation, session, sources, diagnostics)) return ExitStatus::AnalysisFailed;
 
-    if (!invocation.listenPath.empty()) return serve(invocation, session, diagnostics);
-
-    // Opened after elaboration so that the values dumped at time zero are the ones the design
-    // actually starts from rather than an empty arena.
+    // Opened before serving as well as before running: a served session records into the live
+    // database *and* into any writer that was asked for, so that someone debugging in a window
+    // who wants a file for later does not have to run the design again (8.4).
     if (!invocation.vcdPath.empty() && !session.openVcd(invocation.vcdPath))
-        return ExitStatus::Failure;
+        return ExitStatus::AnalysisFailed;
     if (!invocation.fstPath.empty() && !session.openFst(invocation.fstPath))
-        return ExitStatus::Failure;
+        return ExitStatus::AnalysisFailed;
+
+    if (!invocation.listenPath.empty())
+        return serve(invocation, invocation.listenPath, session, diagnostics);
 
     const enzan::runtime::RunStatus status = session.run(invocation.runUntil);
 
@@ -333,14 +576,66 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                   << enzan::runtime::toString(status) << ")\n";
     }
 
-    if (status == enzan::runtime::RunStatus::Error || session.exitStatus() != 0
-        || diagnostics.hasErrors()) {
-        return ExitStatus::Failure;
-    }
+    if (status == enzan::runtime::RunStatus::Error || session.exitStatus() != 0)
+        return ExitStatus::SimulationFailed;
+    if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;
     return ExitStatus::Success;
 }
 
 #endif // ENZAN_WITH_SYSTEMVERILOG
+
+/// `enzan lib create|list|clean`.
+ExitStatus runLibCommand(const Invocation& invocation, enzan::DiagnosticEngine& diagnostics) {
+    if (invocation.files.size() != 1) {
+        std::cerr << "enzan: `lib` needs exactly one library directory\n";
+        return ExitStatus::Usage;
+    }
+    const std::filesystem::path& path = invocation.files.front();
+
+    if (invocation.command == Command::LibCreate) {
+        enzan::eir::Library library;
+        if (!library.create(path, invocation.libraryName, diagnostics))
+            return ExitStatus::AnalysisFailed;
+
+        std::cout << "-- created library '" << library.name() << "' in " << path.string() << '\n';
+        return ExitStatus::Success;
+    }
+
+    enzan::eir::Library library;
+    if (!library.open(path, diagnostics)) return ExitStatus::AnalysisFailed;
+
+    if (invocation.command == Command::LibList) {
+        const std::vector<std::string> units = library.unitNames();
+        std::cout << "library '" << library.name() << "' in " << path.string() << ", "
+                  << units.size() << (units.size() == 1 ? " unit\n" : " units\n");
+        for (const std::string& unit : units) std::cout << "  " << unit << '\n';
+        return ExitStatus::Success;
+    }
+
+    // Clean: the entries go, the library and its name stay, so a Makefile that created it once
+    // does not have to create it again.
+    std::error_code failure;
+    std::size_t removed = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(path, failure)) {
+        if (entry.path().extension() != ".eirlib") continue;
+        if (std::filesystem::remove(entry.path(), failure)) ++removed;
+    }
+    std::cout << "-- removed " << removed << (removed == 1 ? " entry\n" : " entries\n");
+    return ExitStatus::Success;
+}
+
+/// Prints what the file lists expanded to, in order, and nothing else (`--dry-run`, 8.3).
+ExitStatus printExpandedSources(const Invocation& invocation, enzan::SourceManager& sources,
+                                enzan::DiagnosticEngine& diagnostics) {
+    enzan::session::Session::AnalysisRequest request;
+    if (!collectSources(invocation, sources, diagnostics, request))
+        return ExitStatus::AnalysisFailed;
+
+    for (const std::filesystem::path& file : request.contextFiles)
+        std::cout << file.string() << '\n';
+    for (const std::filesystem::path& file : request.files) std::cout << file.string() << '\n';
+    return ExitStatus::Success;
+}
 
 } // namespace
 
@@ -357,15 +652,40 @@ int main(int argc, char** argv) {
     }
 
     Invocation invocation;
-    switch (parseCommandLine(arguments, invocation)) {
+    const std::size_t consumed = readCommand(arguments, invocation);
+    switch (parseCommandLine(arguments.subspan(consumed), invocation)) {
     case ParseOutcome::PrintedHelp: return static_cast<int>(ExitStatus::Success);
     case ParseOutcome::BadUsage: return static_cast<int>(ExitStatus::Usage);
     case ParseOutcome::Run: break;
     }
 
-    if (invocation.files.empty()) {
+    // `elaborate` and `run` take the top level as their one positional word; everything else
+    // reads its positional words as sources.
+    if (invocation.command == Command::Elaborate || invocation.command == Command::Run) {
+        if (invocation.files.size() > 1) {
+            std::cerr << "enzan: `" << (invocation.command == Command::Run ? "run" : "elaborate")
+                      << "` takes one top level; name sources with `analyse`, a file list or "
+                         "a library\n";
+            return static_cast<int>(ExitStatus::Usage);
+        }
+        if (!invocation.files.empty()) {
+            invocation.topModule = invocation.files.front().string();
+            invocation.files.clear();
+        }
+    }
+
+    const bool needsSources = invocation.command == Command::OneShot
+                              || invocation.command == Command::Analyse;
+    if (needsSources && invocation.files.empty() && invocation.fileLists.empty()) {
         std::cerr << "enzan: no source files were given\n"
                   << "Try 'enzan --help' for the available options.\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
+    if (invocation.useGui && invocation.runUntil.has_value()) {
+        std::cerr << "enzan: '--run' cannot be combined with '--gui'; the window drives the "
+                     "run, and a design run before it attached would be put back to time zero "
+                     "rather than shown\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 
@@ -378,12 +698,6 @@ int main(int argc, char** argv) {
                          "is run from the attached client\n";
             return static_cast<int>(ExitStatus::Usage);
         }
-        if (!invocation.vcdPath.empty() || !invocation.fstPath.empty()) {
-            std::cerr << "enzan: '--vcd' and '--fst' cannot be combined with '--listen'; a "
-                         "served session records into the live waveform database that the "
-                         "attached front end reads\n";
-            return static_cast<int>(ExitStatus::Usage);
-        }
     }
 
     enzan::SourceManager sources;
@@ -391,13 +705,36 @@ int main(int argc, char** argv) {
     enzan::TextDiagnosticConsumer consumer(sources, std::cerr);
     diagnostics.addConsumer(consumer);
 
+    if (invocation.command == Command::LibCreate || invocation.command == Command::LibList
+        || invocation.command == Command::LibClean) {
+        return static_cast<int>(runLibCommand(invocation, diagnostics));
+    }
+
+    if (invocation.dryRun) {
+        return static_cast<int>(printExpandedSources(invocation, sources, diagnostics));
+    }
+
 #ifdef ENZAN_WITH_SYSTEMVERILOG
+    if (invocation.command == Command::Analyse) {
+        enzan::session::Session session(sources, diagnostics);
+        if (!analyseOnly(invocation, session, sources, diagnostics))
+            return static_cast<int>(ExitStatus::AnalysisFailed);
+        return static_cast<int>(ExitStatus::Success);
+    }
+
+    if (invocation.command == Command::Elaborate) {
+        enzan::session::Session session(sources, diagnostics);
+        if (!prepare(invocation, session, sources, diagnostics))
+            return static_cast<int>(ExitStatus::AnalysisFailed);
+        return static_cast<int>(ExitStatus::Success);
+    }
+
     return static_cast<int>(simulate(invocation, sources, diagnostics));
 #else
     // Building without the frontend is a legitimate configuration — it is what the CI build
     // matrix uses — so it must fail with the reason rather than with a link error.
     diagnostics.report(enzan::DiagCode::NotYetImplemented, enzan::SourceLocation(),
                        "simulation in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF");
-    return static_cast<int>(ExitStatus::Failure);
+    return static_cast<int>(ExitStatus::AnalysisFailed);
 #endif
 }

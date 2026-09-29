@@ -127,3 +127,15 @@ if(Python3_Interpreter_FOUND AND ENZAN_FST2VCD)
 else()
   message(STATUS "fst2vcd not found; the FST round-trip checks are skipped")
 endif()
+
+# The command line of section 8, driven as a Makefile drives it. A library exists so that what
+# one process analysed another can run, so the separation is what has to be checked and cannot
+# be checked from inside a single invocation.
+add_test(NAME golden.library
+         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh" $<TARGET_FILE:enzan>
+                 "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv")
+set_tests_properties(
+  golden.library
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS library"
+             FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
+             TIMEOUT 120)
