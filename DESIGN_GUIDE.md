@@ -1016,9 +1016,21 @@ user chose is the decision, so there is nothing further to configure:
   (8.1) rather than the window's. A run nobody is watching, that nobody asked to
   keep, is a leak.
 - **`enzan --gui --attach <socket>`** — the window did not start the kernel, so
-  closing it only detaches. This is what makes a long run something that can be
+  closing it only detaches. **`--attach` requires `--gui`**: it is a window that
+  attaches to a running kernel, a kernel has nothing to attach to, and accepting it
+  without one would start a second simulation while the user waited to be shown the
+  first. This is what makes a long run something that can be
   looked in on and left alone again, and it is the case that the shared lifetime
   above deliberately gives up.
+
+**A served kernel removes its socket when it is signalled.** An unhandled signal
+ends a process without running a destructor, so the listener's own cleanup never
+happens and the path is left on disk; `SIGINT`, `SIGTERM` and `SIGHUP` are handled
+for that reason. `SIGKILL` cannot be — it is not deliverable to a handler by design
+— so a kernel killed with it always leaves its socket behind. That MUST cost
+nothing: **binding probes an existing path and reclaims one nothing is listening
+on**, refusing only when a live kernel is there. A leftover path is then a file to
+be taken back rather than a state a user has to clear by hand.
 
 `enzan run --listen <socket>` is the other half of the second form: it elaborates
 and waits without starting a window. Between them the two forms cover the two

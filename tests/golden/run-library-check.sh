@@ -175,6 +175,46 @@ grep -q 'parametrisable ok' <<<"$par_output" || fail "the parametrised run did n
 "$enzan" run --in-lib libs/pw --in-lib libs/pc --timescale ns pwrap_tb >/dev/null \
     || fail "the libraries could not be given in the other order"
 
+# --- the socket a served kernel binds ---------------------------------------------------------------
+
+# A signal that is not handled ends a process without running a destructor, so the listener's own
+# cleanup never happens and the socket is left on disk. SIGTERM is handled for that reason.
+sock="$work/served.sock"
+"$enzan" --listen "$sock" --top tb counter.sv >/dev/null 2>&1 &
+served=$!
+for _ in $(seq 200); do [[ -S $sock ]] && break; sleep 0.05; done
+[[ -S $sock ]] || fail "a served kernel did not bind its socket"
+
+kill -TERM "$served" 2>/dev/null
+wait "$served" 2>/dev/null || true
+sleep 0.3
+[[ -e $sock ]] && fail "SIGTERM left the socket behind"
+
+# SIGKILL cannot be delivered to a handler, so that one always leaves the path. It has to cost
+# nothing: binding probes an existing path and reclaims one nothing is listening on.
+"$enzan" --listen "$sock" --top tb counter.sv >/dev/null 2>&1 &
+served=$!
+for _ in $(seq 200); do [[ -S $sock ]] && break; sleep 0.05; done
+kill -KILL "$served" 2>/dev/null
+wait "$served" 2>/dev/null || true
+sleep 0.3
+[[ -e $sock ]] || fail "SIGKILL is expected to leave the path; the test below is then moot"
+
+"$enzan" --listen "$sock" --top tb counter.sv >/dev/null 2>&1 &
+served=$!
+bound=no
+for _ in $(seq 200); do [[ -S $sock ]] && { bound=yes; break; }; sleep 0.05; done
+kill "$served" 2>/dev/null
+wait "$served" 2>/dev/null || true
+[[ $bound == yes ]] || fail "a socket left by a killed kernel was not reclaimed by the next one"
+
+# --- --attach is a window's option ------------------------------------------------------------------
+
+# Without --gui there is nothing to attach: silently ignoring it would start a second simulation
+# while the user waited to be shown the one they meant.
+[[ $(status_of "$enzan" --attach "$work/nothing.sock") -eq 1 ]] \
+    || fail "--attach without --gui was not refused"
+
 # --- cleaning keeps the library and removes its entries -------------------------------------------
 
 "$enzan" lib clean libs/work >/dev/null || fail "a library could not be cleaned"

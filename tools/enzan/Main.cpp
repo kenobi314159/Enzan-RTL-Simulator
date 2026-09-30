@@ -13,7 +13,9 @@
 #include "common/SourceManager.h"
 #include "common/Version.h"
 
+#include <algorithm>
 #include <array>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -488,6 +490,44 @@ std::filesystem::path frontEndProgram() {
     return "enzan-gui";
 }
 
+/// The socket a signal handler has to remove, and nothing else.
+///
+/// A plain buffer rather than a `std::string`, because a handler may only call what POSIX lists
+/// as async-signal-safe and may not touch an allocator. Written once before any handler is
+/// installed and never again.
+std::array<char, 4096> signalSocketPath{};
+
+/// Removes the socket and lets the signal take its course.
+///
+/// Without this a kernel stopped with Ctrl-C or `kill` leaves its socket behind: a signal that
+/// is not handled ends the process without running a destructor, and the listener's own cleanup
+/// never happens. `unlink` is async-signal-safe; re-raising after restoring the default gives
+/// the shell the exit status it expects rather than inventing one.
+extern "C" void removeSocketOnSignal(int signalNumber) {
+    if (signalSocketPath[0] != '\0') ::unlink(signalSocketPath.data());
+
+    ::signal(signalNumber, SIG_DFL);
+    ::raise(signalNumber);
+}
+
+/// Arranges for `socketPath` to be removed if this process is signalled.
+///
+/// **`SIGKILL` cannot be included and cannot be worked around**: it is not deliverable to a
+/// handler by design, so a kernel killed with it always leaves its socket on disk. That is why
+/// binding probes an existing path and reclaims one nothing is listening on (`Listener::listen`)
+/// — the leftover costs nothing because the next kernel takes it back.
+void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
+    const std::string text = socketPath.string();
+    if (text.size() + 1 > signalSocketPath.size()) return;
+
+    std::ranges::copy(text, signalSocketPath.begin());
+    signalSocketPath[text.size()] = '\0';
+
+    for (const int signalNumber : {SIGINT, SIGTERM, SIGHUP}) {
+        ::signal(signalNumber, removeSocketOnSignal);
+    }
+}
+
 #ifdef ENZAN_WITH_SYSTEMVERILOG
 
 /// Starts a window attached to `socketPath`, and returns its process id or -1.
@@ -660,6 +700,8 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
                            socketPath.string(), error);
         return ExitStatus::AnalysisFailed;
     }
+
+    removeSocketWhenSignalled(server.socketPath());
 
     ::pid_t window = -1;
     if (invocation.useGui) {
@@ -871,6 +913,20 @@ int main(int argc, char** argv) {
         }
     }
 
+    // `--attach` only means anything to a window: there is nothing for a headless kernel to
+    // attach *to*, and silently ignoring it would leave a user watching a second simulation
+    // start while they waited to be shown the one they meant.
+    if (!invocation.attachPath.empty() && !invocation.useGui) {
+        std::cerr << "enzan: '--attach' needs '--gui'; it is a window that attaches to a "
+                     "running kernel, and a kernel has nothing to attach to\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
+    // Before the check for sources, because attaching needs none: the kernel is somewhere else
+    // and has already analysed and elaborated whatever it is serving.
+    if (invocation.useGui && !invocation.attachPath.empty())
+        becomeAttachedFrontEnd(invocation.attachPath);
+
     const bool needsSources =
         invocation.command == Command::OneShot || invocation.command == Command::Analyse;
     if (needsSources && invocation.files.empty() && invocation.fileLists.empty()) {
@@ -878,10 +934,6 @@ int main(int argc, char** argv) {
                   << "Try 'enzan --help' for the available options.\n";
         return static_cast<int>(ExitStatus::Usage);
     }
-
-    // Nothing to elaborate here: the kernel is somewhere else and already has.
-    if (invocation.useGui && !invocation.attachPath.empty())
-        becomeAttachedFrontEnd(invocation.attachPath);
 
     if (invocation.useGui && !invocation.listenPath.empty()) {
         std::cerr << "enzan: '--listen' cannot be combined with '--gui'; --gui starts a window "
