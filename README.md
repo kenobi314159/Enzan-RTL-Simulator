@@ -81,10 +81,11 @@ The GUI is built with `-DENZAN_BUILD_GUI=ON` — off by default, because Qt 6 is
 thing to install for someone working on the kernel. With it built:
 
 ```sh
-enzan-gui --top tb design.sv testbench.sv
+enzan run --gui --top tb design.sv testbench.sv
 ```
 
-which starts a kernel for the design and attaches to it. Press **Run**, click a scope in
+which elaborates the design, opens a window on it and attaches. `--gui` is an option of `enzan`
+rather than a separate program: the socket, the listening and the attaching are arranged for you. Press **Run**, click a scope in
 **Structure**, select signals in **Objects** and press Ctrl+W to put them in the wave window;
 the traces fill in as the simulation advances.
 
@@ -119,18 +120,19 @@ enzan --top tb --listen /tmp/enzan.sock design.sv testbench.sv
 
 # locally, over a forwarded socket
 ssh -L /tmp/enzan.sock:/tmp/enzan.sock server
-enzan-gui --attach /tmp/enzan.sock
+enzan --gui --attach /tmp/enzan.sock
 ```
 
-Closing a window that started its own kernel stops that kernel; closing one that attached to a
-running kernel only detaches from it, so a long run is left alone and can be looked in on again.
+The flag you choose is the lifetime. `enzan run --gui` starts the kernel, so closing the window
+ends it too. `enzan --gui --attach` finds a kernel it did not start, so closing the window only
+detaches and the run is left alone to be looked in on again.
 
 Right-clicking in **Objects** offers **Deposit…**, **Force…** and **Release** alongside *Add to
 Wave*. A deposit writes the value now and the next thing that drives the signal overwrites it; a
 force holds it against the design until released.
 
-Colours come from a Tcl theme file and nowhere else. `enzan-gui --write-theme mine.tcl` writes
-the built-in dark theme out as a starting point, and `--theme mine.tcl` — or dropping it at
+Colours come from a Tcl theme file and nowhere else. `enzan --write-theme mine.tcl` writes
+the built-in dark theme out as a starting point, and `enzan --gui --theme mine.tcl` — or dropping it at
 `~/.config/enzan-gui/theme.tcl` — loads yours over it, so a file that sets three colours changes
 three colours.
 

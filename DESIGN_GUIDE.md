@@ -1008,6 +1008,18 @@ ends when that window does. The front end therefore needs to know nothing about
 libraries, file lists or any option added later, and the kernel binary still links
 no Qt.
 
+**The front end's own options travel through `enzan` too.** Its theme is the one
+thing a user configures about it, so `--theme` and `--write-theme` are options of
+`enzan` that are forwarded, and `--write-theme` starts no kernel because writing a
+file out is not a simulation. An option reachable only by running the front end
+directly would make it the second program this section exists to avoid.
+
+**The front end is a separate executable and not a second entry point.** It remains
+a separate *binary* because the kernel MUST NOT link Qt, and a separate *process*
+for 2.2's reasons; neither makes it something to invoke. Its command line is
+therefore only what `enzan` sends it, and when this project gains an install step
+it belongs in `libexec` rather than on a user's `PATH`.
+
 **The lifetime of the kernel follows how the session was started.** The flag a
 user chose is the decision, so there is nothing further to configure:
 

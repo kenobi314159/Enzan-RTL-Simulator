@@ -18,7 +18,6 @@
 #include <optional>
 
 class QSocketNotifier;
-class QProcess;
 
 namespace enzan::gui {
 
@@ -104,19 +103,9 @@ public:
     /// Connects to a kernel already listening on `socketPath` and sends the handshake.
     bool attach(const QString& socketPath, QString& error);
 
-    /// Starts `program` with `arguments` plus a `--listen` on a private socket, then attaches.
-    ///
-    /// The everyday path: a user runs `enzan-gui design.sv` and gets a kernel without having to
-    /// arrange one. A kernel started this way is asked to quit when the window closes, because
-    /// it has no life of its own; one attached to with `--attach` is only detached from.
-    bool launch(const QString& program, const QStringList& arguments, QString& error);
-
     void detach();
 
     [[nodiscard]] bool isAttached() const;
-
-    /// True when this session started the kernel, and so is responsible for ending it.
-    [[nodiscard]] bool ownsKernel() const noexcept { return kernelProcess != nullptr; }
 
     // --- requests ----------------------------------------------------------
 
@@ -237,7 +226,6 @@ private:
     ipc::Connection connection;
     QSocketNotifier* readNotifier = nullptr;
     QSocketNotifier* writeNotifier = nullptr;
-    QProcess* kernelProcess = nullptr;
 
     std::unique_ptr<wavedb::WaveformDatabase> database;
 
@@ -254,9 +242,6 @@ private:
     runtime::SimTime kernelTime = 0;
     runtime::SimTime recordedTime = 0;
     ipc::SimulationState simulationState = ipc::SimulationState::Idle;
-
-    /// The socket path this session created for a kernel it launched, removed on the way out.
-    QString launchedSocketPath;
 };
 
 } // namespace enzan::gui

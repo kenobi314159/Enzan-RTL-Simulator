@@ -845,16 +845,11 @@ void MainWindow::saveLayout() {
 void MainWindow::closeEvent(QCloseEvent* event) {
     saveLayout();
 
-    // A kernel this front end started has no reason to outlive it; one the user attached to is
-    // theirs, and is left running. Getting this backwards would either orphan a process on
-    // every exit or kill a simulation somebody was in the middle of.
-    if (session->isAttached()) {
-        if (session->ownsKernel()) {
-            session->quitKernel();
-        } else {
-            session->detach();
-        }
-    }
+    // Detached from and never ended. A window only ever attaches now (DESIGN_GUIDE.md section
+    // 8.4), so whether the kernel should outlive it is the kernel's decision: one started by
+    // `--gui` waits on this process and goes when it does, and one found with `--attach` keeps
+    // running. Ending it from here would take that decision away from the flag the user chose.
+    if (session->isAttached()) session->detach();
 
     QMainWindow::closeEvent(event);
 }

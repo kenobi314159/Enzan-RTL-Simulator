@@ -142,6 +142,11 @@ Graphical front end:
                           Closing that window leaves the kernel running.
       --listen <socket>   Elaborate and wait for a front end without starting
                           one, so the kernel outlives whatever attaches.
+      --theme <file>      Colour the window from this Tcl theme script. The
+                          default is $XDG_CONFIG_HOME/enzan-gui/theme.tcl.
+      --write-theme <file>
+                          Write the built-in theme out as a starting point for
+                          one of your own, and exit.
 
   -h, --help              Print this message and exit.
   -V, --version           Print version and build information and exit.
@@ -173,6 +178,8 @@ struct Invocation {
     bool useGui = false;
     std::filesystem::path attachPath;
     std::string libraryName;
+    std::filesystem::path themePath;
+    std::filesystem::path writeThemePath;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
     std::string topModule;
@@ -443,6 +450,20 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
+        if (argument == "--theme") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.themePath = value;
+            continue;
+        }
+
+        if (argument == "--write-theme") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.writeThemePath = value;
+            continue;
+        }
+
         if (argument == "--dry-run") {
             invocation.dryRun = true;
             continue;
@@ -528,6 +549,46 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
     }
 }
 
+/// The window's own options, as the front end spells them.
+///
+/// `--gui` is the only way in (8.4), so anything the window needs has to travel through here.
+/// Its theme is the one thing a user configures about it, and leaving that reachable only by
+/// running the front end directly would make it a second program to learn after all.
+std::vector<std::string> frontEndOptions(const Invocation& invocation) {
+    std::vector<std::string> options;
+    if (!invocation.themePath.empty()) {
+        options.emplace_back("--theme");
+        options.push_back(invocation.themePath.string());
+    }
+    if (!invocation.writeThemePath.empty()) {
+        options.emplace_back("--write-theme");
+        options.push_back(invocation.writeThemePath.string());
+    }
+    return options;
+}
+
+/// Runs the front end with `options` and nothing else, and never returns.
+///
+/// For `--write-theme`, which writes a file and exits: there is no simulation in it, so a kernel
+/// would be a process started to do nothing.
+[[noreturn]] void becomeFrontEnd(const std::vector<std::string>& options) {
+    const std::filesystem::path program = frontEndProgram();
+
+    std::vector<std::string> owned = options;
+    std::string name = program.string();
+
+    std::vector<char*> argv;
+    argv.push_back(name.data());
+    for (std::string& option : owned) argv.push_back(option.data());
+    argv.push_back(nullptr);
+
+    ::execvp(name.c_str(), argv.data());
+
+    std::cerr << "enzan: could not start the graphical front end '" << name
+              << "'; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)\n";
+    std::exit(static_cast<int>(ExitStatus::Usage));
+}
+
 #ifdef ENZAN_WITH_SYSTEMVERILOG
 
 /// Starts a window attached to `socketPath`, and returns its process id or -1.
@@ -537,16 +598,22 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
 /// install a GUI toolkit to run a batch simulation (2.2). The kernel is what parses the command
 /// line, analyses and elaborates; the window only ever attaches, which is why it needs to know
 /// nothing about libraries or file lists.
-::pid_t startFrontEnd(const std::filesystem::path& socketPath) {
-    const std::filesystem::path program = frontEndProgram();
-
+::pid_t startFrontEnd(const Invocation& invocation, const std::filesystem::path& socketPath) {
     const ::pid_t child = ::fork();
     if (child != 0) return child;
 
+    std::vector<std::string> options = frontEndOptions(invocation);
+    options.emplace_back("--attach");
+    options.push_back(socketPath.string());
+
+    const std::filesystem::path program = frontEndProgram();
     std::string name = program.string();
-    std::string attach = "--attach";
-    std::string path = socketPath.string();
-    std::array<char*, 4> argv{name.data(), attach.data(), path.data(), nullptr};
+
+    std::vector<char*> argv;
+    argv.push_back(name.data());
+    for (std::string& option : options) argv.push_back(option.data());
+    argv.push_back(nullptr);
+
     ::execvp(name.c_str(), argv.data());
 
     std::cerr << "enzan: could not start the graphical front end '" << name
@@ -560,18 +627,11 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
 ///
 /// `--gui --attach` starts no kernel, so there is nothing here to keep: closing that window
 /// leaves the kernel it found running, which is the lifetime 8.4 gives this spelling.
-[[noreturn]] void becomeAttachedFrontEnd(const std::filesystem::path& socketPath) {
-    const std::filesystem::path program = frontEndProgram();
-
-    std::string name = program.string();
-    std::string attach = "--attach";
-    std::string path = socketPath.string();
-    std::array<char*, 4> argv{name.data(), attach.data(), path.data(), nullptr};
-    ::execvp(name.c_str(), argv.data());
-
-    std::cerr << "enzan: could not start the graphical front end '" << name
-              << "'; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)\n";
-    std::exit(static_cast<int>(ExitStatus::Usage));
+[[noreturn]] void becomeAttachedFrontEnd(const Invocation& invocation) {
+    std::vector<std::string> options = frontEndOptions(invocation);
+    options.emplace_back("--attach");
+    options.push_back(invocation.attachPath.string());
+    becomeFrontEnd(options);
 }
 
 /// Expands the file lists and the sources named directly into one analysis request.
@@ -705,7 +765,7 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
 
     ::pid_t window = -1;
     if (invocation.useGui) {
-        window = startFrontEnd(server.socketPath());
+        window = startFrontEnd(invocation, server.socketPath());
         if (window < 0) {
             std::cerr << "enzan: the graphical front end could not be started\n";
             return ExitStatus::Usage;
@@ -913,6 +973,14 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (!invocation.writeThemePath.empty()) becomeFrontEnd(frontEndOptions(invocation));
+
+    if (!invocation.themePath.empty() && !invocation.useGui) {
+        std::cerr << "enzan: '--theme' needs '--gui'; it colours a window, and a headless run "
+                     "has none\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
     // `--attach` only means anything to a window: there is nothing for a headless kernel to
     // attach *to*, and silently ignoring it would leave a user watching a second simulation
     // start while they waited to be shown the one they meant.
@@ -924,8 +992,7 @@ int main(int argc, char** argv) {
 
     // Before the check for sources, because attaching needs none: the kernel is somewhere else
     // and has already analysed and elaborated whatever it is serving.
-    if (invocation.useGui && !invocation.attachPath.empty())
-        becomeAttachedFrontEnd(invocation.attachPath);
+    if (invocation.useGui && !invocation.attachPath.empty()) becomeAttachedFrontEnd(invocation);
 
     const bool needsSources =
         invocation.command == Command::OneShot || invocation.command == Command::Analyse;
