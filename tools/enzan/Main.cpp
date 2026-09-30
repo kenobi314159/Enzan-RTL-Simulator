@@ -488,6 +488,8 @@ std::filesystem::path frontEndProgram() {
     return "enzan-gui";
 }
 
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+
 /// Starts a window attached to `socketPath`, and returns its process id or -1.
 ///
 /// `--gui` is an option of `enzan` rather than a second program to learn, but the two remain
@@ -512,6 +514,8 @@ std::filesystem::path frontEndProgram() {
     std::_Exit(static_cast<int>(ExitStatus::Usage));
 }
 
+#endif // ENZAN_WITH_SYSTEMVERILOG
+
 /// Replaces this process with a window attached to an already-listening kernel.
 ///
 /// `--gui --attach` starts no kernel, so there is nothing here to keep: closing that window
@@ -530,13 +534,6 @@ std::filesystem::path frontEndProgram() {
     std::exit(static_cast<int>(ExitStatus::Usage));
 }
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
-
-/// Builds the session every path shares: analysis and elaboration, once.
-///
-/// One pipeline for the batch run, the served kernel and the script. Three copies of it was
-/// where the differences between them started: a `--listen` that resolved a file differently
-/// differently from another, or a batch run that put the waveform somewhere a served one did not.
 /// Expands the file lists and the sources named directly into one analysis request.
 ///
 /// A list's own options join the ones given on the command line rather than replacing them,
@@ -563,6 +560,13 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
     return true;
 }
 
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+
+/// Builds the session every path shares: analysis and elaboration, once.
+///
+/// One pipeline for the batch run, the served kernel and the script. Three copies of it was
+/// where the differences between them started: a `--listen` that resolved a file differently
+/// differently from another, or a batch run that put the waveform somewhere a served one did not.
 /// Opens the libraries this invocation writes into and reads from.
 bool openLibraries(const Invocation& invocation, enzan::session::Session& session) {
     if (!invocation.outputLibrary.empty() && !session.openOutputLibrary(invocation.outputLibrary))
@@ -733,6 +737,8 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
 
 #endif // ENZAN_WITH_SYSTEMVERILOG
 
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+
 /// Writes a `make`-style dependency file naming every file the analysis read (8.3).
 ///
 /// One target and its prerequisites, continued across lines the way a compiler writes them.
@@ -772,6 +778,8 @@ bool writeDependencyFile(const Invocation& invocation, const enzan::session::Ses
                        invocation.depfilePath.string(), "the dependency file could not be written");
     return false;
 }
+
+#endif // ENZAN_WITH_SYSTEMVERILOG
 
 /// `enzan lib create|list|clean`.
 ExitStatus runLibCommand(const Invocation& invocation, enzan::DiagnosticEngine& diagnostics) {
