@@ -691,7 +691,7 @@ private:
     /// nothing to say so. Deriving it from the values instead gives a specialisation the same
     /// name wherever it is produced, which is what lets a library be instantiated with
     /// parameters chosen by whoever uses it.
-    std::string specialisedModuleName(const ast::InstanceBodySymbol& body);
+    static std::string specialisedModuleName(const ast::InstanceBodySymbol& body);
 
     eir::Design* design;
     ModuleBuilder::Shared shared;
@@ -713,7 +713,7 @@ private:
 };
 
 std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
-    const std::string base(body.getDefinition().name);
+    std::string base(body.getDefinition().name);
 
     // Only the parameters set from outside: a localparam is derived inside the module from
     // those, so two instances agreeing on the ports agree on it, and including it would make

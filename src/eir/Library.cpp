@@ -475,8 +475,12 @@ bool Library::loadAll(Design& design, DiagnosticEngine& diagnostics) const {
 
     for (const std::filesystem::path& entry : entries) {
         const std::optional<std::string> contents = readWholeFile(entry);
-        const std::optional<EntryHeader> header =
-            contents.has_value() ? readEntryHeader(*contents) : std::nullopt;
+        if (!contents.has_value()) {
+            diagnostics.report(DiagCode::LibraryEntryUnreadable, SourceLocation(), entry.string());
+            return false;
+        }
+
+        const std::optional<EntryHeader> header = readEntryHeader(*contents);
         if (!header.has_value()) {
             diagnostics.report(DiagCode::LibraryEntryUnreadable, SourceLocation(), entry.string());
             return false;
@@ -517,8 +521,9 @@ std::vector<std::string> Library::unitNames() const {
         if (entry.path().extension() != ".eirlib") continue;
 
         const std::optional<std::string> contents = readWholeFile(entry.path());
-        const std::optional<EntryHeader> header =
-            contents.has_value() ? readEntryHeader(*contents) : std::nullopt;
+        if (!contents.has_value()) continue;
+
+        const std::optional<EntryHeader> header = readEntryHeader(*contents);
         if (!header.has_value()) continue;
 
         const std::size_t offset = header->keyOffset + DigestHexLength;
