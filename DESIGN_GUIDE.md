@@ -331,17 +331,61 @@ described in the EIR type system (section 4).
 
 ### 3.7 Drivers and resolution
 
-Each process that assigns to a signal owns a **driver** on that signal. A signal
-with exactly one driver takes its driver's value directly. A signal with more
-than one driver computes its value with a resolution function.
+**A driver owns a bit range of a signal, not the whole signal.** Each process that
+assigns to a signal owns a driver covering exactly the bits it assigns. A bit with
+one driver takes that driver's value directly; a bit with more than one computes its
+value with a resolution function.
 
-- VHDL resolution functions are arbitrary user code. They are compiled to EIR
-  like any other subprogram and invoked by the runtime. The runtime MUST NOT
-  assume resolution is a built-in table.
-- SystemVerilog nets (`wire`, `wand`, `wor`, `tri`, `triand`, `trior`, `tri0`,
-  `tri1`, `supply0`, `supply1`) use built-in resolution tables.
-- Single-driver signals MUST bypass resolution entirely. This is the common
-  case and it is on the hot path.
+Granularity is the whole of what makes this section non-trivial, and getting it
+wrong rejects legal designs. The pattern that forces it is the ordinary one:
+
+```systemverilog
+logic [N-1:0] ready;
+for (genvar i = 0; i < N; i++)
+    channel u (.ready(ready[i]));
+```
+
+Every instance drives one bit and no other. Were a driver to own the whole signal,
+these would be `N` drivers of `ready` and resolution would have to invent what each
+contributes to the bits it never touches — so a parameterised number of instances
+connected to an array could not be expressed at all.
+
+**Overlap is what makes a signal multiply driven, not sharing a signal.** Two
+drivers of one signal whose ranges are disjoint are not in conflict and MUST NOT be
+treated as though they were. This distinction is load-bearing in SystemVerilog
+rather than a convenience:
+
+- A **variable** (`logic`, `bit`, `reg`) may be continuously driven by at most one
+  driver *per bit*. Disjoint part-drivers of one variable are legal; overlapping
+  ones are not, and are an error rather than something to resolve.
+- A **net** (`wire`, `wand`, `wor`, `tri`, `triand`, `trior`, `tri0`, `tri1`,
+  `supply0`, `supply1`) may have any number of overlapping drivers, resolved per bit
+  by the built-in table for its kind.
+- A bit of a net with no driver at all is its default — `z` for `wire` and `tri`,
+  and the pull value for `tri0`, `tri1`, `supply0` and `supply1` — and not the value
+  a neighbouring bit happened to resolve to.
+
+Further requirements:
+
+- VHDL resolution functions are arbitrary user code. They are compiled to EIR like
+  any other subprogram and invoked by the runtime. The runtime MUST NOT assume
+  resolution is a built-in table.
+- **Single-driver bits MUST bypass resolution entirely**, and a signal all of whose
+  bits have one driver MUST bypass it as a whole rather than bit by bit. This is the
+  common case and it is on the hot path (13.4).
+- A driver's range is fixed at elaboration. A part-select whose bounds are not
+  constant does not create a driver over the bits it might touch; it is a write
+  through the driver that owns them, and a design that drives one signal from two
+  processes through variable selects is multiply driven for every bit either could
+  reach.
+
+**How drivers are represented is an open decision** *(open)*. A driver carrying an
+offset and width, a per-bit table of owning drivers, and a hybrid that stores a
+range for the common whole-signal case all satisfy this section, and they differ in
+what 4.3's arena has to hold and in what the write path costs. The choice belongs to
+M5 and MUST be made before its driver work begins rather than during it: it decides
+the shape of the arena, and 4.3 fixes offsets at elaboration for everything stored
+there.
 
 ### 3.8 Determinism
 
@@ -422,6 +466,12 @@ The consequences are all deliberate: checkpoint and restore become a memcpy of
 the arena; the waveform database reads values directly out of it without
 indirection; a JIT can burn offsets into generated code as constants; and cache
 locality becomes something that can be optimised by reordering the layout.
+
+What a driver occupies here is not settled, because a driver covers a bit range
+rather than a whole signal (3.7) and the representation of that range is an open
+decision M5 makes. Whatever it is has to be laid out at elaboration like everything
+else: a per-bit structure sized at run time would be allocation on the write path,
+which 13.4 forbids.
 
 ### 4.4 Libraries
 
@@ -2048,11 +2098,27 @@ regions; loading PLI shared objects.
 
 ### M5 — Four-state completion and language breadth
 
-Full four-state throughout; X-propagation; nets, drivers and resolution;
+Full four-state throughout; X-propagation; nets, drivers and resolution per 3.7;
 tasks, functions, packages, interfaces, generate, structs, enums, arrays;
 `sv-tests` pass rate tracked.
 
-**Exit:** picorv32 and Ibex simulate correctly against a reference.
+**The driver representation of 3.7 is decided first.** A driver covers a bit range,
+so how that range is stored — on the driver, as a per-bit table of owners, or a
+hybrid — decides the shape of 4.3's arena and the cost of the signal write path.
+4.3 fixes offsets at elaboration, and 13.4 forbids allocating on the write path, so
+this is not a choice that can be deferred until the code is written against it.
+
+**Driving disjoint parts of one signal is the case to get right**, not an edge. A
+parameterised number of instances with ports connected to an array is ordinary RTL,
+and today it is refused: `ENZ3006` reports the signal as multiply driven because
+drivers are tracked per signal rather than per bit. Overlap, not sharing a signal,
+is what multiple driving means, and a variable driven in disjoint parts is legal
+where an overlapping one is an error.
+
+**Exit:** picorv32 and Ibex simulate correctly against a reference; a design whose
+instance count is a parameter and whose ports are bits of one array simulates, while
+two drivers of one bit are still refused — a variable with an error and a net by
+resolving them.
 
 ### M5.1 — Parameter-generic analysis
 
