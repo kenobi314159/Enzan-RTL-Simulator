@@ -121,6 +121,22 @@ TEST_F(ElaboratorTest, ElaboratesASingleModule) {
     EXPECT_EQ(elaborated->findSlot("/top/a"), 0U);
 }
 
+TEST_F(ElaboratorTest, AParameterisedTopIsNamedAsTheSourceNamesIt) {
+    // Its definition is named for its parameter values (section 8.2); its instance, and so
+    // every path under it, is named for what the user wrote.
+    ModuleDefinition top;
+    top.name = "counter$WIDTH_8";
+    top.sourceName = "counter";
+    top.addObject(Object{.name = "count", .type = Type::bits(8, false, true)});
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("counter");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_EQ(elaborated->instances()[0].path, "/counter");
+    EXPECT_EQ(elaborated->instances()[0].name, "counter");
+    EXPECT_EQ(elaborated->findSlot("/counter/count"), 0U);
+}
+
 TEST_F(ElaboratorTest, ChoosesTheOnlyCandidateTopWhenNoneIsNamed) {
     ModuleDefinition leaf;
     leaf.name = "leaf";

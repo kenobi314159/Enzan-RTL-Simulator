@@ -905,7 +905,9 @@ libraries composable.
 **A parameterised top is named for its values too**, so the name a user writes is the
 one the *source* gave it. A top is therefore resolved by source name when no unit has
 that exact name, and more than one parameterisation of it is reported rather than
-guessed.
+guessed. Its instance takes the source's name as well, so that every hierarchical path
+under it — in a waveform, in the front end, through VPI — starts `/counter` rather than
+with the specialisation's.
 
 **`--context` remains for a source no library holds.** It names a source analysed for
 resolution whose units are not stored — a package shared by libraries that do not
