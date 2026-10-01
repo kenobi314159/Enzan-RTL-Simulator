@@ -85,8 +85,7 @@ this is where that starts.
 
 **Selective capture is a requirement, not a convenience** (section 7.1). On a 100k-LUT
 design, recording everything exhausts memory within seconds of simulated time. The scope
-filter is a path prefix for now; the full `log -r /*` vocabulary arrives with the control
-layer at M3.
+filter is a path prefix for now.
 
 **Every name a signal has is declared.** A collapsed port gives one slot two hierarchical
 names and both are real, so both are emitted as `$var` declarations sharing one identifier.

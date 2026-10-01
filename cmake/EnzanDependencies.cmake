@@ -208,23 +208,21 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
 endif()
 
 # ---------------------------------------------------------------------------
-# Tcl — control and configuration language (DESIGN_GUIDE.md section 8.1)
+# Tcl — the GUI theme language (DESIGN_GUIDE.md section 10.5)
 # ---------------------------------------------------------------------------
 
-# Needed by the GUI as well as by the control layer, and that is not an accident of the
-# implementation. Section 8.1 makes Tcl *the* configuration language with no second format, and
-# names the GUI theme as a Tcl script setting colour variables. The control layer's command
-# vocabulary is M3; the theme is M2, and it needs an interpreter to evaluate.
-if(ENZAN_ENABLE_TCL OR ENZAN_BUILD_GUI)
-  # No version is requested here: CMake's FindTCL module reports no version, so a
-  # version constraint would make the package unfindable rather than
-  # version-checked. The 8.6 requirement is checked in the code that embeds the
-  # interpreter instead, against TCL_MAJOR_VERSION and TCL_MINOR_VERSION from tcl.h.
+# Needed only by the graphical front end, whose theme is a Tcl script.
+#
+# No version is requested here: CMake's FindTCL module reports no version, so a version
+# constraint would make the package unfindable rather than version-checked. The 8.6 requirement
+# is checked in the code that embeds the interpreter instead, against TCL_MAJOR_VERSION and
+# TCL_MINOR_VERSION from tcl.h.
+if(ENZAN_BUILD_GUI)
   find_package(TCL QUIET)
   if(NOT TCL_FOUND)
     enzan_dependency_missing(
       NAME TCL
-      PURPOSE "the embedded Tcl control and configuration layer, including the GUI theme"
+      PURPOSE "the Tcl theme language of the graphical front end"
       ARCH tcl
       DEBIAN tcl-dev
       FEDORA tcl-devel)

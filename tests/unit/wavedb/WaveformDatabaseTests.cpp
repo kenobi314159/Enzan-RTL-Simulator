@@ -159,6 +159,144 @@ TEST(WaveformDatabaseTests, SampleCountsTransitionsInsideABusyColumn) {
     EXPECT_FALSE(columns[0].anyUnknown);
 }
 
+// ---------------------------------------------------------------------------
+// Sampling one bit range of a signal
+// ---------------------------------------------------------------------------
+//
+// A row of the wave window showing one bit of a bus asks about that bit. Summarising the whole
+// signal for it reported a transition in every column in which *any* bit moved, so a constant
+// bit of a busy bus was drawn as a solid busy bar across the width of the window and only became
+// the flat line it always was once the zoom put each column inside a single value.
+
+/// A four-bit counter that steps every five time units, so bit 0 moves every step, bit 3 every
+/// eight, and bit 2 is constant across the first half of the range.
+void appendCountingBus(WaveformDatabase& database, std::uint32_t signal) {
+    for (std::uint64_t step = 0; step < 16; ++step) {
+        appendLiteral(database, signal, 5 + (step * 5),
+                      "4'd" + std::to_string(static_cast<unsigned>(step)));
+    }
+}
+
+TEST(WaveformDatabaseTests, SamplingOneBitCountsThatBitsTransitions) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/count", 4);
+    appendCountingBus(database, signal);
+
+    // One column over the whole run. Sixteen changes fall inside it, and the first of them is the
+    // record's own: it has no predecessor to differ from, so it counts for whatever bits it
+    // covers — which is what the whole-signal pass does too, and the two must agree.
+    std::vector<Sample> whole(1);
+    database.sample(signal, 0, 100, whole);
+    EXPECT_EQ(whole[0].transitions, 16U) << "the bus itself";
+
+    // Bit 3 moves once in a count of sixteen, when it reaches eight; plus the value appearing.
+    std::vector<Sample> bit3(1);
+    database.sample(signal, 0, 100, 3, 3, bit3);
+    EXPECT_EQ(bit3[0].transitions, 2U);
+
+    std::vector<Sample> bit0(1);
+    database.sample(signal, 0, 100, 0, 0, bit0);
+    EXPECT_EQ(bit0[0].transitions, 16U) << "the bit that moves on every count";
+}
+
+TEST(WaveformDatabaseTests, ABitThatNeverChangesSummarisesToNoTransitions) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/count", 4);
+
+    // The low two bits count and the high two never move, which is the shape that made this worth
+    // fixing: the bus is busy in every column and half of it is standing still. The first value
+    // lands before the sampled range, so that what is measured is the standing still rather than
+    // the value appearing.
+    appendLiteral(database, signal, 1, "4'd0");
+    for (std::uint64_t step = 0; step < 40; ++step) {
+        appendLiteral(database, signal, 5 + (step * 5),
+                      "4'd" + std::to_string(static_cast<unsigned>(step % 4)));
+    }
+
+    std::vector<Sample> columns(4);
+    database.sample(signal, 5, 205, 3, 2, columns);
+
+    for (const Sample& column : columns) {
+        EXPECT_EQ(column.transitions, 0U) << "a constant bit range is drawn as a level";
+        EXPECT_NE(column.changeIndex, enzan::wavedb::NoChange);
+    }
+
+    // And the bus itself is busy across the same columns, which is the contrast the row was
+    // being drawn with before.
+    std::vector<Sample> busy(4);
+    database.sample(signal, 5, 205, busy);
+    for (const Sample& column : busy) EXPECT_GT(column.transitions, 0U);
+}
+
+TEST(WaveformDatabaseTests, SamplingTheWholeWidthAgreesWithTheCheaperPass) {
+    // Asking for every bit must give exactly what asking for the signal gives, or the two paths
+    // would disagree about a row depending on whether the reader had sliced it.
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/count", 4);
+    appendCountingBus(database, signal);
+
+    std::vector<Sample> whole(8);
+    std::vector<Sample> ranged(8);
+    database.sample(signal, 0, 100, whole);
+    database.sample(signal, 0, 100, 3, 0, ranged);
+
+    for (std::size_t column = 0; column < whole.size(); ++column) {
+        EXPECT_EQ(ranged[column].transitions, whole[column].transitions) << column;
+        EXPECT_EQ(ranged[column].changeIndex, whole[column].changeIndex) << column;
+        EXPECT_EQ(ranged[column].startTime, whole[column].startTime) << column;
+        EXPECT_EQ(ranged[column].anyUnknown, whole[column].anyUnknown) << column;
+    }
+}
+
+TEST(WaveformDatabaseTests, OnlyTheBitsAskedAboutDecideWhetherAColumnIsUnknown) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/bus", 4);
+    appendLiteral(database, signal, 10, "4'b001x");
+
+    std::vector<Sample> columns(1);
+
+    // The bus has an X, so the bus is unknown.
+    database.sample(signal, 0, 100, columns);
+    EXPECT_TRUE(columns[0].anyUnknown);
+
+    // Bit 0 is the X. The bits above it are not, and a row showing one of them must not be
+    // painted as unknown because a neighbour is.
+    database.sample(signal, 0, 100, 0, 0, columns);
+    EXPECT_TRUE(columns[0].anyUnknown);
+
+    database.sample(signal, 0, 100, 3, 1, columns);
+    EXPECT_FALSE(columns[0].anyUnknown);
+}
+
+TEST(WaveformDatabaseTests, ABitRangeBeforeTheFirstChangeShowsNothing) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/bus", 4);
+    appendLiteral(database, signal, 500, "4'h5");
+
+    std::vector<Sample> columns(2);
+    database.sample(signal, 0, 1000, 2, 2, columns);
+
+    // Nothing is in effect in the first column, exactly as for the whole signal: there is no
+    // value yet, rather than a value of zero.
+    EXPECT_EQ(columns[0].changeIndex, enzan::wavedb::NoChange);
+    EXPECT_EQ(columns[0].transitions, 0U);
+    EXPECT_FALSE(columns[0].anyUnknown);
+}
+
+TEST(WaveformDatabaseTests, TheFirstChangeOfARecordIsATransitionOfTheBitsItCovers) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/bus", 4);
+
+    // Both changes land inside the single column, and the first of them has no predecessor to
+    // differ from: the value appearing is a transition of everything it covers.
+    appendLiteral(database, signal, 10, "4'h4");
+    appendLiteral(database, signal, 20, "4'h0");
+
+    std::vector<Sample> columns(1);
+    database.sample(signal, 0, 100, 2, 2, columns);
+    EXPECT_EQ(columns[0].transitions, 2U);
+}
+
 TEST(WaveformDatabaseTests, SampleColumnsTileTheRangeExactly) {
     WaveformDatabase database;
     const std::uint32_t signal = database.addSignal(0, "/tb/x", 1);

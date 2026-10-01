@@ -5,6 +5,7 @@
 #include "codegen/Bytecode.h"
 #include "common/Assert.h"
 #include "common/Diagnostics.h"
+#include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Process.h"
 #include "runtime/Format.h"
@@ -79,8 +80,29 @@ std::ostream& Kernel::transcriptStream() const {
 void Kernel::initialize() {
     designImage->initializeState(stateArena);
 
+    // Everything a previous run left behind goes with it, because a restart is this method
+    // called a second time and a design put back to time zero must behave exactly
+    // as it did the first time. A clock event still in the time wheel would resume at a
+    // timestamp the design has not reached; a process still holding a resume point would
+    // continue a simulation that no longer exists; an edge subscription would fire for an
+    // edge nothing is waiting for any more. Each of those produces a design that runs and
+    // gives a different answer, which section 1.2 ranks as the worst possible outcome.
+    scheduler.clear();
+    processes.assign(designImage->processes().begin(), designImage->processes().end());
+    for (std::vector<EdgeWaiter>& waiters : edgeWaiters) waiters.clear();
+    std::ranges::fill(frameStorage, eir::Word{});
+
+    // A force does not survive a restart either: a signal still pinned from the last run would
+    // be state the user did not ask to keep.
+    forcedSignals.clear();
+
+    finishRequested = false;
+    errorRequested = false;
+    finishStatus = 0;
+    finalProcessesRun = false;
+    lastStatus = RunStatus::Quiescent;
+
     currentTime = 0;
-    scheduler.resetDeltaCount();
 
     for (std::uint32_t processIndex = 0; processIndex < processes.size(); ++processIndex) {
         const codegen::CompiledProcess& body =
@@ -119,7 +141,7 @@ bool Kernel::runTimeSlot() {
     // schedules Active work sends control back to the top.
     while (true) {
         drain(Region::Active);
-        if (stopping()) return false;
+        if (halted()) return false;
 
         if (!scheduler.empty(Region::Inactive)) {
             scheduler.promote(Region::Inactive, Region::Active);
@@ -129,20 +151,20 @@ bool Kernel::runTimeSlot() {
 
         if (scheduler.hasNonBlockingUpdates()) {
             applyNonBlockingUpdates();
-            if (stopping()) return false;
+            if (halted()) return false;
             if (!countDelta()) return false;
             continue;
         }
 
         if (!scheduler.empty(Region::Observed)) {
             drain(Region::Observed);
-            if (stopping()) return false;
+            if (halted()) return false;
             continue;
         }
 
         if (!scheduler.empty(Region::Reactive)) {
             drain(Region::Reactive);
-            if (stopping()) return false;
+            if (halted()) return false;
             continue;
         }
 
@@ -164,7 +186,7 @@ bool Kernel::runTimeSlot() {
     // Postponed is last and, in the M1 subset, cannot schedule anything: `$monitor` and
     // `cbReadOnlySynch` are read-only by definition.
     drain(Region::Postponed);
-    return !stopping();
+    return !halted();
 }
 
 bool Kernel::countDelta() {
@@ -186,6 +208,7 @@ void Kernel::drain(Region region) {
         processes[processIndex].queued = false;
 
         const ExecutionResult result = interpreter.run(processIndex);
+
         if (result == ExecutionResult::Stopped || stopping()) return;
 
         if (result != ExecutionResult::Completed) continue;
@@ -290,6 +313,8 @@ void Kernel::resume(std::uint32_t processIndex, std::uint32_t resumePc) {
 }
 
 void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
+    if (isForced(signalIndex)) return;
+
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
@@ -310,6 +335,8 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
 
 void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
                              std::uint64_t lowBit) {
+    if (isForced(signalIndex)) return;
+
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
@@ -343,6 +370,31 @@ void Kernel::scheduleNonBlocking(std::uint32_t signalIndex, eir::ConstBitRef val
 void Kernel::scheduleNonBlockingPart(std::uint32_t signalIndex, eir::ConstBitRef value,
                                      std::uint64_t lowBit) {
     scheduler.appendNonBlocking(signalIndex, value, static_cast<std::uint32_t>(lowBit), true);
+}
+
+bool Kernel::isForced(std::uint32_t signalIndex) const noexcept {
+    return !forcedSignals.empty() && forcedSignals[signalIndex];
+}
+
+void Kernel::deposit(std::uint32_t signalIndex, eir::ConstBitRef value) {
+    writeSignal(signalIndex, value);
+}
+
+void Kernel::force(std::uint32_t signalIndex, eir::ConstBitRef value) {
+    // Cleared first so that re-forcing an already-forced signal to a different value writes
+    // rather than being discarded by the force it is replacing.
+    if (!forcedSignals.empty()) forcedSignals[signalIndex] = false;
+
+    writeSignal(signalIndex, value);
+
+    if (forcedSignals.empty()) forcedSignals.assign(designImage->signals().size(), false);
+    forcedSignals[signalIndex] = true;
+}
+
+bool Kernel::release(std::uint32_t signalIndex) {
+    if (!isForced(signalIndex)) return false;
+    forcedSignals[signalIndex] = false;
+    return true;
 }
 
 void Kernel::addListener(ValueChangeListener& newListener) {

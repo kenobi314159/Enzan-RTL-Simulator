@@ -7,19 +7,11 @@
 #include <QString>
 #include <QWidget>
 
-class QLineEdit;
 class QPlainTextEdit;
 
 namespace enzan::gui {
 
-/// The Transcript window: the kernel's output, its diagnostics, and the command entry.
-///
-/// **The command entry is present and disabled**, and that is a milestone decision rather than
-/// an unfinished one. Section 8.1 commits to Tcl with a Questa-style vocabulary as *the*
-/// control language and section 18 puts it in M3; a handful of commands invented here to fill
-/// the gap would be a second control surface that M3 then has to stay compatible with. Showing
-/// the entry with the reason in it is more honest than hiding it and more useful than a set of
-/// commands nobody will keep.
+/// The Transcript window: the kernel's output and its diagnostics.
 class TranscriptView : public QWidget {
     Q_OBJECT
 
@@ -44,7 +36,6 @@ private:
 
     const Theme* theme;
     QPlainTextEdit* output = nullptr;
-    QLineEdit* entry = nullptr;
 
     /// Whatever the kernel wrote without a trailing newline, waiting for the rest of its line.
     QString partialLine;

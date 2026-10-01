@@ -12,6 +12,8 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
                                       enzan::runtime enzan::wavedb enzan::ipc_server)
 endif()
 
+target_link_libraries(enzan PRIVATE enzan::session)
+
 if(ENZAN_BUILD_TESTS)
   # End-to-end checks on the executable itself. The unit tests cover the version
   # strings; these cover the thing a user actually invokes, including the error
@@ -61,4 +63,5 @@ if(ENZAN_BUILD_TESTS)
   add_test(NAME cli.enzan.listen_mentioned_in_help COMMAND enzan --help)
   set_tests_properties(cli.enzan.listen_mentioned_in_help PROPERTIES PASS_REGULAR_EXPRESSION
                                                                      "--listen <socket>")
+
 endif()

@@ -9,12 +9,12 @@ The name is Japanese and carries two readings: *distant peaks* (遠山), for the
 mountain-like horizon of a screen full of waveforms, and *calculation* (演算),
 for the computational work the simulator performs.
 
-**Status: milestone M2.1 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and FST
-waveforms, and has an interactive graphical debugging environment: a design runs under the GUI with
-signals added from the window and the waveform progressing live. A parameterised counter, a
-synchronous FIFO, and a packet router three levels deep that pushes four hundred and eighty
-transfers through three channel instances all run, self-check, and agree with Icarus Verilog. See
-[what works today](#what-works-today) and the roadmap below.
+**Status: milestone M2.1 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and
+FST waveforms, and comes with an interactive graphical debugging environment. A parameterised
+counter, a synchronous FIFO, and a packet router
+three levels deep that pushes four hundred and eighty transfers through three channel instances
+all run, self-check, and agree with Icarus Verilog. See [what works
+today](#what-works-today) and the roadmap below.
 
 ## Building
 
@@ -31,35 +31,37 @@ Enzan targets **Linux only**; Windows and macOS support are explicit non-goals.
 | Python 3 | 3.8 | optional; only for the waveform structure checks in the test suite |
 | GoogleTest | 1.12 | built from source automatically if absent |
 | Qt 6 | 6.4 | only for the GUI, which is off by default |
-| Tcl | 8.6 | only for the GUI, whose theme is a Tcl script |
+| Tcl | 8.6 | the GUI theme; needed only with `-DENZAN_BUILD_GUI=ON` |
 | ccache | any | optional; used automatically when present |
 
 On Arch and derivatives:
 
 ```sh
-sudo pacman -S --needed base-devel cmake ninja zlib gtest ccache
+sudo pacman -S --needed base-devel cmake ninja zlib gtest tcl ccache
 # for the GUI:
-sudo pacman -S --needed qt6-base tcl
+sudo pacman -S --needed qt6-base
 ```
 
 On Debian and Ubuntu:
 
 ```sh
-sudo apt install build-essential cmake ninja-build zlib1g-dev libgtest-dev ccache
+sudo apt install build-essential cmake ninja-build zlib1g-dev libgtest-dev tcl-dev ccache
 # for the GUI:
-sudo apt install qt6-base-dev tcl-dev
+sudo apt install qt6-base-dev
 ```
 
 On Fedora:
 
 ```sh
-sudo dnf install gcc-c++ cmake ninja-build zlib-devel gtest-devel ccache
+sudo dnf install gcc-c++ cmake ninja-build zlib-devel gtest-devel tcl-devel ccache
 # for the GUI:
-sudo dnf install qt6-qtbase-devel tcl-devel
+sudo dnf install qt6-qtbase-devel
 ```
 
 If a dependency is missing, CMake stops with a message naming the package to
 install for your distribution rather than with a link error.
+
+Tcl is needed only for the GUI, whose theme is a Tcl script.
 
 ### Running a simulation
 
@@ -71,20 +73,19 @@ gtkwave wave.fst
 `--vcd` writes a VCD instead, and both may be given at once. Prefer FST unless you want to read or
 diff the file yourself: it is far smaller on a real design and a viewer can seek in it.
 
-`enzan --help` lists the options. The control language is Tcl with a Questa-style command
-vocabulary, and that arrives with M3; the command line is deliberately minimal until then, so
-that there is not a second control surface to keep compatible with it.
+`enzan --help` lists the options.
 
 ### Running a simulation under the GUI
 
-The GUI is built with `-DENZAN_BUILD_GUI=ON` — off by default, because Qt 6 and Tcl are a
-sizeable thing to install for someone working on the kernel. With it built:
+The GUI is built with `-DENZAN_BUILD_GUI=ON` — off by default, because Qt 6 is a sizeable
+thing to install for someone working on the kernel. With it built:
 
 ```sh
-enzan-gui --top tb design.sv testbench.sv
+enzan run --gui --top tb design.sv testbench.sv
 ```
 
-which starts a kernel for the design and attaches to it. Press **Run**, click a scope in
+which elaborates the design, opens a window on it and attaches. `--gui` is an option of `enzan`
+rather than a separate program: the socket, the listening and the attaching are arranged for you. Press **Run**, click a scope in
 **Structure**, select signals in **Objects** and press Ctrl+W to put them in the wave window;
 the traces fill in as the simulation advances.
 
@@ -119,14 +120,19 @@ enzan --top tb --listen /tmp/enzan.sock design.sv testbench.sv
 
 # locally, over a forwarded socket
 ssh -L /tmp/enzan.sock:/tmp/enzan.sock server
-enzan-gui --attach /tmp/enzan.sock
+enzan --gui --attach /tmp/enzan.sock
 ```
 
-Closing a window that started its own kernel stops that kernel; closing one that attached to a
-running kernel only detaches from it, so a long run is left alone and can be looked in on again.
+The flag you choose is the lifetime. `enzan run --gui` starts the kernel, so closing the window
+ends it too. `enzan --gui --attach` finds a kernel it did not start, so closing the window only
+detaches and the run is left alone to be looked in on again.
 
-Colours come from a Tcl theme file and nowhere else. `enzan-gui --write-theme mine.tcl` writes
-the built-in dark theme out as a starting point, and `--theme mine.tcl` — or dropping it at
+Right-clicking in **Objects** offers **Deposit…**, **Force…** and **Release** alongside *Add to
+Wave*. A deposit writes the value now and the next thing that drives the signal overwrites it; a
+force holds it against the design until released.
+
+Colours come from a Tcl theme file and nowhere else. `enzan --write-theme mine.tcl` writes
+the built-in dark theme out as a starting point, and `enzan --gui --theme mine.tcl` — or dropping it at
 `~/.config/enzan-gui/theme.tcl` — loads yours over it, so a file that sets three colours changes
 three colours.
 
@@ -149,9 +155,10 @@ three colours.
 | Wave window: `enum` values shown by name | yes, with the radix menu to see the encoding |
 | Wave window: parameters and localparams as constant rows | yes, listed in Objects beside the signals |
 | Attaching a local GUI to a kernel running elsewhere | yes, over a forwarded socket |
+| `force`, `deposit` and `release` from the Objects window | yes |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
-| Tcl control layer, source stepping, VHDL, VPI | not yet — M3, M3, M6, M4 |
+| The Processes and Source windows, VHDL, VPI | not yet — M6, M4 |
 
 Anything unsupported is reported with a source location and the construct named, never
 mistranslated: a partially translated design would simulate and give the wrong answer, which is
@@ -199,7 +206,6 @@ cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
 | `ENZAN_BUILD_TESTS` | `ON` | build the unit test suites |
 | `ENZAN_ENABLE_SYSTEMVERILOG` | `ON` | build the slang-based frontend (M1) |
 | `ENZAN_ENABLE_VHDL` | `OFF` | build the NVC-based frontend (M6) |
-| `ENZAN_ENABLE_TCL` | `OFF` | build the Tcl control layer (M3) |
 | `ENZAN_BUILD_GUI` | `OFF` | build the Qt 6 front end; needs Qt 6 and Tcl |
 | `ENZAN_ENABLE_JIT` | `OFF` | build the LLVM JIT backend (M8) |
 | `ENZAN_WERROR` | `OFF` | treat warnings as errors, as CI does |
@@ -262,10 +268,11 @@ M1 — a SystemVerilog subset simulating to a VCD or FST waveform, with a counte
 self-check and agree with a reference simulator, and cycles/sec recorded per commit — and so is
 M2, the interactive GUI. Broader language coverage is M5's job rather than a gap in any of them.
 
-M2.1, the wave window's mouse and keyboard model, followed. Next is M3, the Tcl control layer and
-source debugging, then M4 VPI and cocotb, M6 VHDL via NVC, and M7 mixed-language simulation. See
-[`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full roadmap and the exit criteria of
-each milestone.
+M2.1, the wave window's mouse and keyboard model, followed.
+
+Next is M4, VPI and cocotb, then M5 four-state completion and language breadth, M6 VHDL via NVC,
+and M7 mixed-language simulation. See [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the
+full roadmap and the exit criteria of each milestone.
 
 ## License
 

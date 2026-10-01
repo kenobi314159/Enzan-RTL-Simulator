@@ -58,6 +58,12 @@ ENZAN_DIAG(NoTopModule, 3002, Error,
            "no top module was given and the design has {} candidates: {}")
 ENZAN_DIAG(UnresolvedInstance, 3003, Error,
            "instance '{}' refers to module '{}', which has not been analysed")
+ENZAN_DIAG(AmbiguousSpecialisation, 3010, Error,
+           "'{}' is parameterised and the design has more than one of it ({}); name the "
+           "parameterisation meant, or instantiate it from a top level that chooses one")
+ENZAN_DIAG(AmbiguousModule, 3009, Error,
+           "'{}' is defined by more than one library ({}); name the one meant, as "
+           "<library>.{}")
 ENZAN_DIAG(RecursiveInstantiation, 3004, Error,
            "module '{}' instantiates itself, through {}; an unbounded hierarchy cannot be "
            "elaborated")
@@ -85,6 +91,51 @@ ENZAN_DIAG(UserFatal, 5003, Error, "$fatal: {}")
 ENZAN_DIAG(UserError, 5004, Error, "{}")
 ENZAN_DIAG(UserWarning, 5005, Warning, "{}")
 ENZAN_DIAG(UserInfo, 5006, Note, "{}")
+
+// --- 6000-6999: the session and its command line -----------------------------
+
+ENZAN_DIAG(FileListUnknownOption, 6005, Error,
+           "'{}' is not an option Enzan's file lists understand; ignoring it could change what "
+           "is analysed, so it is refused rather than skipped")
+ENZAN_DIAG(FileListMissingValue, 6006, Error, "'{}' needs a value after it")
+ENZAN_DIAG(FileListEmptyOption, 6007, Error, "'{}' lists nothing")
+ENZAN_DIAG(FileListCycle, 6008, Error, "file list '{}' includes itself: {}")
+ENZAN_DIAG(FileListUnterminatedComment, 6009, Error,
+           "this block comment is never closed")
+ENZAN_DIAG(FileListUnterminatedQuote, 6010, Error,
+           "this quoted argument is never closed")
+ENZAN_DIAG(FileListUnterminatedBrace, 6011, Error,
+           "this ${{...}} substitution is missing its closing brace")
+ENZAN_DIAG(EnvironmentVariableNotSet, 6012, Error,
+           "the environment variable '{}' is not set; expanding it to nothing would turn a path "
+           "into one that silently does not exist")
+ENZAN_DIAG(NothingAnalysed, 6014, Error,
+           "no sources have been analysed, so there is nothing to elaborate")
+ENZAN_DIAG(NoSimulation, 6015, Error, "`{}` needs an elaborated design")
+ENZAN_DIAG(WaveformScopeAfterOpen, 6017, Error,
+           "the recording scope cannot be changed once a waveform file is open; the signals a "
+           "file declares are written into its header")
+ENZAN_DIAG(LibraryNotADirectory, 6019, Error,
+           "'{}' exists and is not a directory, so it cannot be an analysis library")
+ENZAN_DIAG(NotALibrary, 6022, Error,
+           "'{}' is not an analysis library; create one with `enzan lib create` before writing "
+           "to it or reading from it")
+ENZAN_DIAG(LibraryVersionMismatch, 6023, Error,
+           "the analysis library '{}' was written with index version {} and this build "
+           "understands {}; create it again")
+ENZAN_DIAG(LibraryBadName, 6024, Error,
+           "'{}' cannot be a library name; a name is a letter or underscore followed by "
+           "letters, digits and underscores, because a design has to be able to write it")
+ENZAN_DIAG(LibraryEntryUnreadable, 6025, Error,
+           "the analysis library entry '{}' could not be read; the library was written by an "
+           "incompatible build or has been damaged, so create it again")
+ENZAN_DIAG(LibraryWriteFailed, 6020, Warning,
+           "the analysis library entry '{}' could not be written; this run is unaffected and "
+           "the next one will analyse from source again")
+ENZAN_DIAG(FileListLibrarySearchIgnored, 6021, Warning,
+           "'{}' is understood but not acted on yet: Enzan analyses every file it is given and "
+           "does not go looking for a module nothing defines, so a module reachable only this "
+           "way will be reported as undefined. Naming the file in the list analyses it")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 

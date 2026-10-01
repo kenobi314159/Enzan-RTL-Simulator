@@ -41,6 +41,21 @@ ENZAN_THEME_COLOR(TranscriptNote, "transcript.note")
 ENZAN_THEME_COLOR(TranscriptWarning, "transcript.warning")
 ENZAN_THEME_COLOR(TranscriptError, "transcript.error")
 
+// --- Source window ---------------------------------------------------------
+
+ENZAN_THEME_COLOR(SourceBackground, "source.background")
+ENZAN_THEME_COLOR(SourceForeground, "source.foreground")
+ENZAN_THEME_COLOR(SourceGutterBackground, "source.gutter.background")
+ENZAN_THEME_COLOR(SourceGutterForeground, "source.gutter.foreground")
+
+// The line the design is stopped on, and its marker in the gutter.
+ENZAN_THEME_COLOR(SourceCurrentLine, "source.current.line")
+ENZAN_THEME_COLOR(SourceCurrentMarker, "source.current.marker")
+
+// A breakpoint's dot, and the paler one a disabled breakpoint keeps.
+ENZAN_THEME_COLOR(SourceBreakpoint, "source.breakpoint")
+ENZAN_THEME_COLOR(SourceBreakpointDisabled, "source.breakpoint.disabled")
+
 // --- Waveform view ---------------------------------------------------------
 //
 // Section 10.5 fixes two of these: a high-contrast black background and light green traces.

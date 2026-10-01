@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "common/SourceLocation.h"
 #include "eir/Design.h"
 
 #include <filesystem>
@@ -27,6 +28,19 @@ namespace enzan::frontend::sv {
 struct Options {
     std::vector<std::filesystem::path> files;
 
+    /// Buffers already holding each file's text, parallel to `files`, or empty.
+    ///
+    /// The caller has already read every source, so handing the buffers over saves the
+    /// frontend reading them again. That is not only about the I/O: the source manager does not
+    /// deduplicate, so a second read leaves *two* buffers per file, and a SourceLocation's
+    /// buffer then depends on which pass produced it.
+    /// Two things downstream compare locations by buffer — the analysis library, which
+    /// attributes units to files, and a source-line breakpoint — and both were silently
+    /// matching nothing.
+    ///
+    /// An entry may be invalid, which makes the frontend read that file itself.
+    std::vector<BufferId> buffers;
+
     /// Macro definitions, each either `NAME` or `NAME=VALUE`.
     std::vector<std::string> defines;
 
@@ -38,6 +52,14 @@ struct Options {
     /// This is slang's notion of a top level, used to decide which instance bodies exist
     /// at all. Enzan's own choice of which one to simulate happens at elaboration.
     std::vector<std::string> topModules;
+
+    /// Receives every file the analysis read, when given.
+    ///
+    /// The sources handed in *and* the files they included, which is the part a caller cannot
+    /// work out for itself: an `` `include `` is resolved by the preprocessor against the
+    /// include path, and a build that does not know which header a source actually opened
+    /// cannot rebuild when that header changes (DESIGN_GUIDE.md section 8.3).
+    std::vector<std::filesystem::path>* filesRead = nullptr;
 };
 
 /// Analyses SystemVerilog sources into EIR.

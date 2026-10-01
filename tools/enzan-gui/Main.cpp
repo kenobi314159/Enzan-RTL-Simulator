@@ -19,9 +19,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QTextStream>
 
 #include <cstdlib>
+#include <optional>
+#include <string_view>
 
 namespace {
 
@@ -36,48 +39,73 @@ QString defaultThemePath() {
     return configuration + QStringLiteral("/theme.tcl");
 }
 
-/// Finds the kernel to launch: beside this executable first, then on the path.
+/// What `--help` prints.
 ///
-/// Beside first so that a build tree runs its own kernel rather than an installed one, which
-/// is what anyone working on Enzan expects and what makes testing a change possible at all.
-QString findKernel() {
-    QString neighbour = QCoreApplication::applicationDirPath() + QStringLiteral("/enzan");
-    if (QFileInfo(neighbour).isExecutable()) return neighbour;
-    return QStringLiteral("enzan");
+/// Short because this is not a program a user drives. `enzan --gui` starts it and passes it a
+/// socket; the options here are the ones that reach it that way (DESIGN_GUIDE.md section 8.4).
+/// Written out rather than generated for the reason 8.5 gives: a generated text does not match
+/// the one beside it.
+constexpr std::string_view UsageText =
+    R"(Usage: enzan-gui --attach <socket>
+
+Enzan's graphical front end. This is what `enzan --gui` starts, not a program to run directly:
+the kernel analyses, elaborates, binds a socket and hands it here. Reach it through
+`enzan --gui` and its options rather than through this.
+
+Options:
+  -h, --help              Print this message and exit.
+  -V, --version           Print version and build information and exit.
+      --attach <socket>   Attach to a kernel listening on this Unix domain socket.
+      --theme <file>      Load colours from this Tcl theme script. The default is
+                          $XDG_CONFIG_HOME/enzan-gui/theme.tcl when it exists.
+      --write-theme <file>
+                          Write the built-in theme to this file and exit.
+
+The normative specification is DESIGN_GUIDE.md in the source tree.
+)";
+
+/// Answers `--help` and `--version` before Qt's parser sees the command line.
+///
+/// Ahead of `QCommandLineParser` because this calls neither `addHelpOption` nor
+/// `addVersionOption`: those generate the divergent help text and bind `-v`, where the rest of
+/// the tool spells it `-V` (8.5).
+std::optional<int> answerHelpOrVersion(int argc, char** argv) {
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument(argv[index]);
+
+        if (argument == "-h" || argument == "--help") {
+            QTextStream(stdout) << QString::fromUtf8(UsageText.data(),
+                                                     static_cast<qsizetype>(UsageText.size()));
+            return EXIT_SUCCESS;
+        }
+        if (argument == "-V" || argument == "--version") {
+            QTextStream(stdout) << QString::fromStdString(enzan::versionNotice("enzan-gui"));
+            return EXIT_SUCCESS;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
+    // Before the QApplication, so that `--help` and `--version` answer with no display attached
+    // and without Qt reporting that it could not connect to one.
+    if (const std::optional<int> status = answerHelpOrVersion(argc, argv)) return *status;
+
     QApplication application(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("enzan-gui"));
     QCoreApplication::setOrganizationName(QStringLiteral("Enzan"));
     QCoreApplication::setApplicationVersion(QString::fromStdString(enzan::versionLine()));
 
+    // Neither `addHelpOption` nor `addVersionOption`: both are answered above, from one text
+    // that matches the kernel's. Adding them here would put `-v` and `--help-all` back.
     QCommandLineParser parser;
-    parser.setApplicationDescription(
-        QStringLiteral("Enzan's graphical debugging environment.\n\n"
-                       "With source files, a kernel is started for them. With --attach, this "
-                       "connects to a kernel already running under `enzan --listen`, which is "
-                       "how a local window drives a simulation on another machine over a "
-                       "forwarded socket."));
-    parser.addHelpOption();
-    parser.addVersionOption();
 
     const QCommandLineOption attachOption(
         QStringLiteral("attach"),
         QStringLiteral("Attach to a kernel listening on this Unix domain socket."),
         QStringLiteral("socket"));
-    const QCommandLineOption topOption(QStringLiteral("top"),
-                                       QStringLiteral("Module to elaborate as the top level."),
-                                       QStringLiteral("module"));
-    const QCommandLineOption timescaleOption(
-        QStringLiteral("timescale"),
-        QStringLiteral("Time unit for delays and reported times: s, ms, us, ns, ps or fs."),
-        QStringLiteral("unit"));
-    const QCommandLineOption scopeOption(
-        QStringLiteral("wave-scope"),
-        QStringLiteral("Record only this subtree, for example /tb/u_dut."), QStringLiteral("path"));
     const QCommandLineOption themeOption(QStringLiteral("theme"),
                                          QStringLiteral("Load colours from this Tcl theme script."),
                                          QStringLiteral("file"));
@@ -86,21 +114,18 @@ int main(int argc, char** argv) {
         QStringLiteral("Write the built-in theme to this file and exit, as a starting point "
                        "for one of your own."),
         QStringLiteral("file"));
-    const QCommandLineOption kernelOption(QStringLiteral("kernel"),
-                                          QStringLiteral("Path to the enzan kernel to start."),
-                                          QStringLiteral("program"));
-
     parser.addOption(attachOption);
-    parser.addOption(topOption);
-    parser.addOption(timescaleOption);
-    parser.addOption(scopeOption);
     parser.addOption(themeOption);
     parser.addOption(writeThemeOption);
-    parser.addOption(kernelOption);
-    parser.addPositionalArgument(QStringLiteral("files"),
-                                 QStringLiteral("HDL source files to simulate."),
-                                 QStringLiteral("[file.sv...]"));
-    parser.process(application);
+    // `enzan run --gui ...` forwards its command word, which this process has no use for: it
+    // starts a kernel, and the kernel is the thing that runs. Dropped rather than refused, so
+    // that both spellings of the same request work (DESIGN_GUIDE.md section 8.4).
+    QStringList forwarded;
+    for (const QString& argument : QCoreApplication::arguments()) {
+        if (argument == QStringLiteral("run") || argument == QStringLiteral("elaborate")) continue;
+        forwarded << argument;
+    }
+    parser.process(forwarded);
 
     // --- the theme ---------------------------------------------------------
 
@@ -157,29 +182,12 @@ int main(int argc, char** argv) {
             window.note(QStringLiteral("Could not attach to %1: %2")
                             .arg(parser.value(attachOption), error));
         }
-    } else if (!parser.positionalArguments().isEmpty()) {
-        QStringList arguments;
-        if (parser.isSet(topOption))
-            arguments << QStringLiteral("--top") << parser.value(topOption);
-        if (parser.isSet(timescaleOption)) {
-            arguments << QStringLiteral("--timescale") << parser.value(timescaleOption);
-        }
-        if (parser.isSet(scopeOption)) {
-            arguments << QStringLiteral("--wave-scope") << parser.value(scopeOption);
-        }
-        arguments << parser.positionalArguments();
-
-        const QString kernel =
-            parser.isSet(kernelOption) ? parser.value(kernelOption) : findKernel();
-        if (!session.launch(kernel, arguments, error)) {
-            window.note(QStringLiteral("Could not start the kernel: %1").arg(error));
-        }
     } else {
-        // Neither a socket nor sources. The window is up and useful — it explains itself —
-        // rather than the program exiting with a usage message at someone who double-clicked.
+        // No socket. The window comes up and explains itself rather than exiting with a usage
+        // message at someone who reached this binary without meaning to.
         window.note(QStringLiteral(
-            "Nothing to simulate yet. Start this with HDL sources to run them, or with "
-            "--attach <socket> to connect to a kernel already running under `enzan --listen`."));
+            "Nothing to show. This is the front end `enzan --gui` starts; run that instead, or "
+            "pass --attach <socket> to reach a kernel already listening."));
     }
 
     return QApplication::exec();

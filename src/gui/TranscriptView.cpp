@@ -3,7 +3,6 @@
 #include "gui/TranscriptView.h"
 
 #include <QFontDatabase>
-#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QTextCharFormat>
@@ -42,17 +41,10 @@ TranscriptView::TranscriptView(const Theme& themeToUse, QWidget* parent)
     output->setLineWrapMode(QPlainTextEdit::NoWrap);
     output->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 
-    entry = new QLineEdit(this);
-    entry->setEnabled(false);
-    entry->setPlaceholderText(
-        tr("The Tcl command line arrives with milestone M3; use the toolbar for now"));
-    entry->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(2);
     layout->addWidget(output, 1);
-    layout->addWidget(entry);
 }
 
 void TranscriptView::append(const QString& text, const QColor& colour, bool ownLine) {

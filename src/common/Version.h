@@ -38,4 +38,16 @@ std::string versionLine();
 /// behaviour being reported.
 std::string buildDescription();
 
+/// Returns everything `--version` prints: the version line, the build
+/// description and the licence notice.
+///
+/// Here rather than in each executable because every Enzan program answers
+/// `--version` and the answer must not depend on which one was asked. The kernel
+/// and the graphical front end had grown separate blocks that already disagreed,
+/// one of them prefixing the application name to a line that names it anyway.
+///
+/// `programName` is the executable the user invoked, which appears in the
+/// notice; the version line names the simulator either way.
+std::string versionNotice(std::string_view programName);
+
 } // namespace enzan

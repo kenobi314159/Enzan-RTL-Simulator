@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "common/SourceLocation.h"
+
 #include <cstdint>
 #include <string_view>
 
@@ -156,13 +158,39 @@ struct Instruction {
     Operand b;
     Operand c;
 
+    /// The statement this instruction came from, for source stepping and for
+    /// breakpoints on HDL source lines (DESIGN_GUIDE.md section 10.4).
+    ///
+    /// Carried here, on EIR-B, and **not** on the bytecode instruction the VM
+    /// executes: codegen turns these into a line table of one entry per change
+    /// (see codegen/Bytecode.h), so the interpreter's inner loop never touches
+    /// it. Statement granularity rather than expression granularity, because a
+    /// source-line debugger stops on lines and a per-expression table would be
+    /// larger and no more useful.
+    ///
+    /// May be invalid: a frontend that has no position for an instruction
+    /// leaves it so, and a breakpoint simply never matches there.
+    SourceLocation location;
+
     static Instruction make(Opcode opcode, Operand dst = {}, Operand a = {}, Operand b = {},
                             Operand c = {}) {
-        return {.opcode = opcode, .isSigned = false, .dst = dst, .a = a, .b = b, .c = c};
+        return {.opcode = opcode,
+                .isSigned = false,
+                .dst = dst,
+                .a = a,
+                .b = b,
+                .c = c,
+                .location = {}};
     }
 
     static Instruction makeSigned(Opcode opcode, Operand dst, Operand a, Operand b = {}) {
-        return {.opcode = opcode, .isSigned = true, .dst = dst, .a = a, .b = b, .c = {}};
+        return {.opcode = opcode,
+                .isSigned = true,
+                .dst = dst,
+                .a = a,
+                .b = b,
+                .c = {},
+                .location = {}};
     }
 };
 

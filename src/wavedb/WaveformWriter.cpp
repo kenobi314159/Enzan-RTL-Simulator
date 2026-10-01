@@ -4,6 +4,7 @@
 
 #include "elab/ElaboratedDesign.h"
 
+#include <algorithm>
 #include <map>
 
 namespace enzan::wavedb {
@@ -41,7 +42,29 @@ WaveformWriter::WaveformWriter(const runtime::Image& designImageToRecord,
 WaveformWriter::~WaveformWriter() = default;
 
 void WaveformWriter::setScope(std::string_view pathPrefix) {
-    scopePrefix = pathPrefix;
+    scopePrefixes.clear();
+    addScope(pathPrefix);
+}
+
+void WaveformWriter::addScope(std::string_view pathPrefix) {
+    // An empty prefix means everything, so it subsumes whatever else was asked for and there
+    // is no point carrying the rest.
+    if (pathPrefix.empty()) {
+        scopePrefixes.clear();
+        return;
+    }
+
+    if (std::ranges::find(scopePrefixes, pathPrefix) != scopePrefixes.end()) return;
+    scopePrefixes.emplace_back(pathPrefix);
+}
+
+bool WaveformWriter::isRecorded(std::string_view path) const {
+    // No prefix at all records the whole design; otherwise any one of them is enough. Once a
+    // prefix is empty `addScope` has already cleared the list, so this needs no empty case.
+    if (scopePrefixes.empty()) return true;
+
+    return std::ranges::any_of(
+        scopePrefixes, [path](const std::string& prefix) { return isWithinScope(path, prefix); });
 }
 
 std::uint32_t WaveformWriter::recordIndexOf(std::uint32_t signalIndex) const noexcept {
@@ -58,7 +81,7 @@ void WaveformWriter::selectSignals() {
 
     for (std::uint32_t signalIndex = 0; signalIndex < designImage->signals().size();
          ++signalIndex) {
-        if (!isWithinScope(designImage->signals()[signalIndex].path, scopePrefix)) continue;
+        if (!isRecorded(designImage->signals()[signalIndex].path)) continue;
 
         recordIndex[signalIndex] = static_cast<std::uint32_t>(recorded.size());
         recorded.push_back(signalIndex);

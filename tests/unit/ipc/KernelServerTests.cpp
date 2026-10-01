@@ -10,7 +10,6 @@
 
 #include "ipc/KernelServer.h"
 
-#include "codegen/Compiler.h"
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
 #include "eir/BitVector.h"
@@ -19,11 +18,11 @@
 #include "eir/Module.h"
 #include "eir/Process.h"
 #include "eir/Type.h"
-#include "elab/Elaborator.h"
 #include "ipc/Protocol.h"
 #include "ipc/Transport.h"
 #include "runtime/Image.h"
 #include "runtime/Time.h"
+#include "session/Session.h"
 
 #include "support/Literals.h"
 #include "support/ProcessBuilder.h"
@@ -34,6 +33,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -48,8 +48,6 @@ namespace {
 
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
-using enzan::codegen::CompiledDesign;
-using enzan::codegen::Compiler;
 using enzan::eir::Design;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
@@ -58,13 +56,13 @@ using enzan::eir::Opcode;
 using enzan::eir::Operand;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
-using enzan::elab::ElaboratedDesign;
-using enzan::elab::Elaborator;
 using enzan::ipc::ByeMessage;
 using enzan::ipc::Connection;
+using enzan::ipc::DepositMessage;
 using enzan::ipc::Descriptor;
 using enzan::ipc::DesignMessage;
 using enzan::ipc::FailureMessage;
+using enzan::ipc::ForceMessage;
 using enzan::ipc::Frame;
 using enzan::ipc::HelloMessage;
 using enzan::ipc::HistoryMessage;
@@ -82,8 +80,9 @@ using enzan::ipc::SubscribeMessage;
 using enzan::ipc::TranscriptMessage;
 using enzan::ipc::ValueChangesMessage;
 using enzan::ipc::WelcomeMessage;
-using enzan::runtime::Image;
 using enzan::runtime::TimeScale;
+using enzan::session::Session;
+using enzan::test::literal;
 using enzan::test::ProcessBuilder;
 
 class DiscardingConsumer final : public enzan::DiagnosticConsumer {
@@ -171,6 +170,58 @@ Design settlingDesign() {
     return design;
 }
 
+/// Stand-in source text for the debugging tests, one line per line number.
+constexpr std::string_view DebugSource = "one\ntwo\nthree\nfour\nfive\n";
+
+/// The byte offset of 1-based `line` in DebugSource.
+constexpr std::uint32_t debugLineOffset(std::uint32_t line) {
+    constexpr std::uint32_t Offsets[] = {0, 0, 4, 8, 14, 19};
+    return Offsets[line];
+}
+
+/// A design whose two statements sit on lines 2 and 3 of `buffer`.
+///
+/// Instructions carry their source location the way the frontend stamps them, which is what a
+/// breakpoint on a line resolves against. Built by hand rather than parsed, so that a failure
+/// here is the server's and not the frontend's.
+Design debuggableDesign(enzan::BufferId buffer) {
+    const auto at = [buffer](std::uint32_t line) {
+        return enzan::SourceLocation(buffer, debugLineOffset(line));
+    };
+
+    ProcessBuilder builder(ProcessKind::Initial, "stepper");
+    const std::uint32_t value = builder.reg(Type::bits(4, false, true));
+    const std::uint32_t first = builder.constant("4'd3");
+    const std::uint32_t second = builder.constant("4'd5");
+
+    builder.block("entry");
+    builder.at(at(2));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(first)));
+    builder.store(0, value);
+
+    builder.at(at(3));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(second)));
+    builder.store(0, value);
+
+    builder.at(at(4));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition top;
+    top.name = "tb";
+    top.sourceName = "tb";
+    top.location = at(1);
+    top.addObject(Object{.name = "q",
+                         .type = Type::bits(4, false, true),
+                         .initialValue = enzan::eir::BitVector::parse("4'd0")});
+    top.processes.push_back(builder.finish());
+
+    Design design;
+    design.addModule(std::move(top));
+    return design;
+}
+
 /// A server with a client attached over a socket pair, and the helpers to talk to it.
 class ServerFixture : public ::testing::Test {
 protected:
@@ -178,32 +229,37 @@ protected:
 
     void SetUp() override { rebuild(tickingDesign()); }
 
-    /// Elaborates, compiles and serves `design`. Called again by a test that needs a design
-    /// the fixture's own does not provide.
+    /// Elaborates and serves `design`. Called again by a test that needs a design the
+    /// fixture's own does not provide.
+    ///
+    /// The design goes through a `session::Session`, which is what the served kernel owns: a
+    /// command typed at a front end and a request from one act on the same simulation, so a
+    /// test that served an image of its own would be testing an arrangement that does not
+    /// exist.
     void rebuild(Design design) {
-        analysed = std::move(design);
-
-        Elaborator elaborator(analysed, engine);
-        elaborated = elaborator.elaborate("tb");
-        ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
-
-        Compiler compiler(engine);
-        compiled = compiler.compile(analysed);
-        ASSERT_NE(compiled, nullptr);
-
-        image = std::make_unique<Image>(analysed, *elaborated, *compiled);
+        // The old server before the old session: the server borrows the session's kernel, and
+        // replacing the session first would leave it pointing at one that has gone.
+        server.reset();
+        session = std::make_unique<Session>(sources, engine);
+        session->setTimeScale(TimeScale(-9));
+        session->setDesign(std::make_unique<Design>(std::move(design)));
+        ASSERT_TRUE(session->elaborate("tb"))
+            << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.front());
 
         ServerOptions options;
         options.kernelVersion = "enzan test";
         options.timeScale = TimeScale(-9);
         options.localTranscript = &localTranscript;
-        server = std::make_unique<KernelServer>(*image, engine, options);
+        server = std::make_unique<KernelServer>(*session, engine, options);
         server->start();
     }
 
     void TearDown() override {
         client.close();
+
+        // The server borrows the session's kernel, so it goes first.
         server.reset();
+        session.reset();
     }
 
     /// Connects a client and completes the handshake.
@@ -293,7 +349,7 @@ protected:
 
     /// The kernel signal index for a hierarchical path.
     [[nodiscard]] std::uint32_t signalIndex(std::string_view path) const {
-        return image->findSignal(path);
+        return session->designImage()->findSignal(path);
     }
 
     struct Captured {
@@ -306,10 +362,7 @@ protected:
     DiscardingConsumer consumer;
     std::ostringstream localTranscript;
 
-    Design analysed;
-    std::unique_ptr<ElaboratedDesign> elaborated;
-    std::unique_ptr<CompiledDesign> compiled;
-    std::unique_ptr<Image> image;
+    std::unique_ptr<Session> session;
     std::unique_ptr<KernelServer> server;
 
     Connection client;
@@ -747,6 +800,112 @@ TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {
 
     const auto failure = expect<FailureMessage>(MessageType::Failure);
     EXPECT_NE(failure.reason.find("no signal"), std::string::npos) << failure.reason;
+}
+
+// ---------------------------------------------------------------------------
+// Writing a signal from outside the simulation (section 10.4)
+// ---------------------------------------------------------------------------
+
+/// A served design a client can write signals in.
+class DebugFixture : public ServerFixture {
+protected:
+    void SetUp() override {
+        sourceBuffer = sources.addBuffer("design.sv", std::string(DebugSource));
+        rebuild(debuggableDesign(sourceBuffer));
+        connectClient();
+    }
+
+    /// The value the client last saw for `/tb/q`, as a binary string.
+    [[nodiscard]] std::string lastSeenQ() {
+        const std::vector<ValueChangesMessage> changes =
+            expectAll<ValueChangesMessage>(MessageType::ValueChanges);
+        std::string latest;
+        for (const ValueChangesMessage& change : changes)
+            for (const auto& update : change.updates)
+                if (update.signalIndex == signalIndex("/tb/q"))
+                    latest = enzan::eir::toString(update.value.ref(), enzan::eir::Radix::Decimal);
+        return latest;
+    }
+
+    enzan::BufferId sourceBuffer;
+};
+
+TEST_F(DebugFixture, TheDesignTreeNamesWhereEachScopeIsDeclared) {
+    enzan::ipc::QueryDesignMessage query;
+    request(MessageType::QueryDesign, query);
+
+    const auto design = expect<DesignMessage>(MessageType::Design);
+    ASSERT_EQ(design.instances.size(), 1U);
+    EXPECT_EQ(design.instances[0].file, "design.sv");
+    EXPECT_EQ(design.instances[0].line, 1U);
+    EXPECT_EQ(design.sourceFiles, (std::vector<std::string>{"design.sv"}));
+}
+
+TEST_F(DebugFixture, ADepositIsWrittenAndTheClientSeesIt) {
+    SubscribeMessage subscribe;
+    subscribe.signalIndices = {signalIndex("/tb/q")};
+    request(MessageType::Subscribe, subscribe);
+    static_cast<void>(expectAll<ValueChangesMessage>(MessageType::ValueChanges));
+
+    DepositMessage deposit;
+    deposit.signalIndex = signalIndex("/tb/q");
+    deposit.value = literal("4'd9");
+    request(MessageType::Deposit, deposit);
+
+    // A deposit between runs produces no time advance, so the change has to be flushed for the
+    // window showing the signal to move at all.
+    EXPECT_EQ(lastSeenQ(), "9");
+}
+
+TEST_F(DebugFixture, AForceHoldsAValueAgainstTheDesignAndAReleaseLetsItGo) {
+    ForceMessage force;
+    force.signalIndex = signalIndex("/tb/q");
+    force.value = literal("4'd1");
+    request(MessageType::Force, force);
+
+    RunMessage run;
+    run.untilFinished = true;
+    request(MessageType::Run, run);
+    static_cast<void>(expectAll<RunStateMessage>(MessageType::RunState));
+
+    // The design wrote 3 and then 5; the force outranks both.
+    enzan::ipc::QueryHistoryMessage query;
+    query.signalIndex = signalIndex("/tb/q");
+    query.toTime = enzan::runtime::NoTime;
+    request(MessageType::QueryHistory, query);
+    const auto history = expect<HistoryMessage>(MessageType::History);
+    ASSERT_FALSE(history.entries.empty());
+    EXPECT_EQ(enzan::eir::toString(history.entries.back().value.ref(), enzan::eir::Radix::Decimal),
+              "1");
+
+    ForceMessage release;
+    release.signalIndex = signalIndex("/tb/q");
+    release.release = true;
+    request(MessageType::Force, release);
+    EXPECT_FALSE(sawAny(MessageType::Failure));
+}
+
+TEST_F(DebugFixture, ReleasingSomethingThatWasNotForcedIsNotAnError) {
+    ForceMessage release;
+    release.signalIndex = signalIndex("/tb/q");
+    release.release = true;
+    request(MessageType::Force, release);
+
+    EXPECT_FALSE(sawAny(MessageType::Failure));
+}
+
+TEST_F(DebugFixture, ADepositOrForceOnASignalThatDoesNotExistIsRefused) {
+    DepositMessage deposit;
+    deposit.signalIndex = 9999;
+    deposit.value = literal("4'd1");
+    request(MessageType::Deposit, deposit);
+    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("9999"), std::string::npos);
+
+    ForceMessage force;
+    force.signalIndex = 9999;
+    force.value = literal("4'd1");
+    request(MessageType::Force, force);
+    EXPECT_NE(expect<FailureMessage>(MessageType::Failure).reason.find("9999"), std::string::npos);
 }
 
 } // namespace

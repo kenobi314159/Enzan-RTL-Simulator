@@ -463,4 +463,44 @@ TEST_F(TextDiagnosticTest, WidensTheGutterForLongFiles) {
     EXPECT_NE(rendered().find("11000 | x\n"), std::string::npos) << rendered();
 }
 
+// ---------------------------------------------------------------------------
+// reportFileReadFailure
+// ---------------------------------------------------------------------------
+
+TEST(ReportFileReadFailure, MapsEachCauseToItsOwnCode) {
+    struct Case {
+        enzan::FileReadStatus status;
+        DiagCode expected;
+    };
+
+    // Success is included deliberately: a caller that forgot to check `ok()` must still get a
+    // diagnostic rather than silence, because the alternative is a phase continuing with an
+    // invalid buffer.
+    constexpr Case Cases[] = {
+        {.status = enzan::FileReadStatus::NotFound, .expected = DiagCode::CannotOpenFile},
+        {.status = enzan::FileReadStatus::NotARegularFile, .expected = DiagCode::NotARegularFile},
+        {.status = enzan::FileReadStatus::TooLarge, .expected = DiagCode::SourceFileTooLarge},
+        {.status = enzan::FileReadStatus::PermissionDenied, .expected = DiagCode::FileReadFailed},
+        {.status = enzan::FileReadStatus::ReadFailed, .expected = DiagCode::FileReadFailed},
+        {.status = enzan::FileReadStatus::Success, .expected = DiagCode::FileReadFailed},
+    };
+
+    for (const Case& testCase : Cases) {
+        const SourceManager sources;
+        DiagnosticEngine engine(sources);
+        CollectingConsumer consumer;
+        engine.addConsumer(consumer);
+
+        enzan::FileReadResult result;
+        result.status = testCase.status;
+        result.systemMessage = "no such file or directory";
+        enzan::reportFileReadFailure(engine, "design.sv", result);
+
+        ASSERT_EQ(consumer.received.size(), 1U);
+        EXPECT_EQ(consumer.received.front().code, testCase.expected);
+        EXPECT_NE(consumer.received.front().message.find("design.sv"), std::string::npos)
+            << consumer.received.front().message;
+    }
+}
+
 } // namespace

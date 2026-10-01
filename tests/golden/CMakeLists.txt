@@ -18,6 +18,16 @@
 # NO_DIFFERENTIAL marks a case where simulators legitimately differ, which section 14.3
 # warns about. Such a case still runs under Enzan; it simply is not held to another tool's
 # behaviour.
+
+# A failure line, anchored to the start of one.
+#
+# The word on its own is not enough. A diagnostic quotes the source line it points at, and a
+# case that deliberately writes an out-of-range select has a `$display("FAIL: ...")` on the
+# very line being quoted — so the transcript contains the word without anything having failed.
+# A real failure is printed by the design and starts its line; a quoted one is indented behind
+# a line-number gutter.
+set(ENZAN_GOLDEN_FAILURE_PATTERN "\nFAIL")
+
 function(enzan_add_golden_test name)
   cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL" "" "")
 
@@ -30,7 +40,7 @@ function(enzan_add_golden_test name)
   set_tests_properties(
     golden.${name}
     PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}"
-               FAIL_REGULAR_EXPRESSION "FAIL"
+               FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
                TIMEOUT 60)
 
   if(arg_NO_DIFFERENTIAL OR NOT ENZAN_REFERENCE_SIMULATOR)
@@ -117,3 +127,26 @@ if(Python3_Interpreter_FOUND AND ENZAN_FST2VCD)
 else()
   message(STATUS "fst2vcd not found; the FST round-trip checks are skipped")
 endif()
+
+# The command line of section 8, driven as a Makefile drives it. A library exists so that what
+# one process analysed another can run, so the separation is what has to be checked and cannot
+# be checked from inside a single invocation.
+add_test(NAME golden.library
+         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh" $<TARGET_FILE:enzan>
+                 "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv")
+set_tests_properties(
+  golden.library
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS library"
+             FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
+             TIMEOUT 120)
+
+# The Makefile of section 8.3, actually run. What only `make` can show is that the right library
+# rebuilds and no other, which rests on the dependency file naming the headers an analysis read
+# — the one thing a build cannot work out for itself.
+add_test(NAME golden.make
+         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-make-check.sh" $<TARGET_FILE:enzan>)
+set_tests_properties(
+  golden.make
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS make"
+             FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
+             TIMEOUT 180)

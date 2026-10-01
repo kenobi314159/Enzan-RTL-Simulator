@@ -211,6 +211,69 @@ void WaveformDatabase::changesIn(std::uint32_t recordIndex, runtime::SimTime fro
 }
 
 void WaveformDatabase::sample(std::uint32_t recordIndex, runtime::SimTime from, runtime::SimTime to,
+                              std::uint32_t highBit, std::uint32_t lowBit,
+                              std::span<Sample> out) const {
+    const SignalStore& store = storeAt(recordIndex);
+    ENZAN_ASSERT(lowBit <= highBit, "a bit range runs from low to high");
+    ENZAN_ASSERT(highBit < store.info.width, "a bit range must lie inside the signal");
+
+    // The whole signal is the cheap case and it is asked for constantly — every row that has not
+    // been sliced. Recognising it here rather than at each call site keeps the callers from
+    // having to know which overload is the expensive one.
+    if (lowBit == 0 && highBit + 1 == store.info.width) {
+        sample(recordIndex, from, to, out);
+        return;
+    }
+
+    sample(recordIndex, from, to, out);
+
+    // What the cheap pass got right: the column boundaries, and which change is in effect at
+    // each. What it could not know: whether any of the changes it counted moved *these* bits.
+    // So each column's count and unknown flag are recomputed from the values, and everything
+    // else it worked out is kept.
+    const auto sliceEquals = [&](std::uint64_t left, std::uint64_t right) {
+        const eir::ConstBitRef a(valueWordsOf(store, left, recordIndex).data(), store.info.width);
+        const eir::ConstBitRef b(valueWordsOf(store, right, recordIndex).data(), store.info.width);
+        for (std::uint32_t bit = lowBit; bit <= highBit; ++bit) {
+            if (a.get(bit) != b.get(bit)) return false;
+        }
+        return true;
+    };
+
+    const auto sliceUnknown = [&](std::uint64_t change) {
+        const eir::ConstBitRef value(valueWordsOf(store, change, recordIndex).data(),
+                                     store.info.width);
+        for (std::uint32_t bit = lowBit; bit <= highBit; ++bit) {
+            const eir::Logic logic = value.get(bit);
+            if (logic == eir::Logic::Unknown || logic == eir::Logic::HighZ) return true;
+        }
+        return false;
+    };
+
+    for (Sample& column : out) {
+        // The changes the cheap pass counted are the ones strictly inside the column, which sit
+        // immediately after the change in effect at its left edge. Recovered from the sample
+        // rather than searched for again, since that pass has just worked it out.
+        const std::uint64_t counted = column.transitions;
+        const std::uint64_t low = column.changeIndex == NoChange ? 0 : column.changeIndex + 1;
+        const std::uint64_t high = low + counted;
+
+        column.transitions = 0;
+
+        // The change in effect at the left edge is part of what the column shows, so it counts
+        // towards the unknown flag — as it does in the whole-signal pass.
+        column.anyUnknown = column.changeIndex != NoChange && sliceUnknown(column.changeIndex);
+
+        for (std::uint64_t change = low; change < high; ++change) {
+            // The very first change of a record has no predecessor to differ from: it is the
+            // value appearing, which is a transition of everything it covers.
+            if (change == 0 || !sliceEquals(change - 1, change)) ++column.transitions;
+            column.anyUnknown = column.anyUnknown || sliceUnknown(change);
+        }
+    }
+}
+
+void WaveformDatabase::sample(std::uint32_t recordIndex, runtime::SimTime from, runtime::SimTime to,
                               std::span<Sample> out) const {
     ENZAN_ASSERT(from < to, "a sampled range must cover some time");
     ENZAN_ASSERT(!out.empty(), "sampling needs somewhere to put the result");

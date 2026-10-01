@@ -18,6 +18,7 @@ class QAction;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QTabWidget;
 class QTableView;
 class QTreeView;
 
@@ -29,10 +30,7 @@ namespace enzan::gui {
 /// Structure, Objects, Wave and Transcript, docked with `QDockWidget` so the arrangement can be
 /// rearranged and is remembered between sessions.
 ///
-/// The Source and Processes windows of section 10.2 are not here. Source browsing is only
-/// useful with the breakpoints and stepping that make it a debugger rather than a file viewer,
-/// and those arrive with M3; a window that showed source and could do nothing with it would be
-/// a worse answer than an editor the user already has.
+/// The Processes window of section 10.2 is not here yet.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -63,6 +61,21 @@ private:
     void onCursorsChanged();
 
     void addSelectedObjectsToWave();
+
+    /// Adds the signals of the scope the reader right-clicked in the Structure window.
+    ///
+    /// `recursive` takes everything below it as well; `grouped` puts each scope's signals in a
+    /// group of their own, named by the scope's path.
+    ///
+    /// Grouped recursion is deliberately *flat*: one group per module, siblings of each other,
+    /// rather than groups nested the way the design is. The hierarchy is what the Structure
+    /// window is for, and a reader who asks a subtree into the wave window is asking to compare
+    /// its modules side by side — which nesting would put behind a disclosure arrow each.
+    void insertScopeSignals(bool recursive, bool grouped);
+
+    /// Adds a scope's signals to `group`, or to the top level when it is -1.
+    void insertObjectsIntoWave(const QVector<enzan::gui::SignalInfo>& objects, int group);
+
     void groupSelectedWaves();
 
     /// Opens the name editor on the row the reader is on.
@@ -92,6 +105,16 @@ private:
     void stopRun();
     void restartRun();
 
+    /// Writes a value into the selected signal, asking for it first.
+    ///
+    /// One dialog for both, with `force` deciding which of them it performs, because the two
+    /// differ only in whether the value is held afterwards and a reader choosing between them
+    /// is choosing between two sentences rather than two operations.
+    void depositOrForceSelectedObject(bool force);
+
+    /// Releases every selected signal that is being forced.
+    void releaseSelectedObjects();
+
     void buildDocks();
     void buildToolBar();
     void buildMenus();
@@ -116,6 +139,10 @@ private:
     WaveformView* waveView = nullptr;
     TranscriptView* transcriptView = nullptr;
 
+    /// The central area's tabs. Each needs the whole width, so they share it in turn rather
+    /// than side by side.
+    QTabWidget* panes = nullptr;
+
     QLineEdit* runLengthEdit = nullptr;
     QLabel* statusTime = nullptr;
     QLabel* statusState = nullptr;
@@ -130,6 +157,30 @@ private:
     /// The signals currently subscribed to, so that a change of what is displayed sends only
     /// the difference rather than resubscribing to everything.
     QVector<std::uint32_t> subscribed;
+
+    /// The scope the Objects window is showing, so that a reply meant for an insert does not
+    /// replace its contents.
+    ///
+    /// A scope's objects arrive by the one message whoever asked for them, and a recursive
+    /// insert asks about every scope in a subtree. Without this, the pane would end up showing
+    /// whichever module answered last — a module the reader never clicked.
+    QString objectsScope;
+
+    /// A scope whose objects have been asked for on behalf of an insert, and the group they are
+    /// destined for.
+    ///
+    /// Insertion cannot be done where the menu is clicked: the objects of a scope come from the
+    /// kernel, which may be on another machine (DESIGN_GUIDE.md section 2.2). The *groups* are
+    /// made immediately and in tree order, though, so that they sit in the order the Structure
+    /// window shows however the replies are interleaved; only their contents wait.
+    struct PendingInsert {
+        QString scope;
+
+        /// The group to fill, or -1 to add at the top level.
+        int group = -1;
+    };
+
+    QVector<PendingInsert> pendingInserts;
 };
 
 } // namespace enzan::gui

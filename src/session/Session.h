@@ -1,0 +1,397 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+#include "eir/BitVector.h"
+#include "eir/Library.h"
+#include "runtime/Kernel.h"
+#include "runtime/Time.h"
+
+#include <cstdint>
+#include <filesystem>
+#include <iosfwd>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace enzan {
+class DiagnosticEngine;
+class SourceManager;
+} // namespace enzan
+
+namespace enzan::codegen {
+class CompiledDesign;
+}
+
+namespace enzan::eir {
+class Design;
+}
+
+namespace enzan::elab {
+class ElaboratedDesign;
+}
+
+namespace enzan::runtime {
+class Image;
+}
+
+namespace enzan::wavedb {
+class WaveformWriter;
+}
+
+namespace enzan::session {
+
+/// The analysis, elaboration and simulation one `enzan` process holds.
+///
+/// One object for all three phases, because the batch driver and the served kernel must be the
+/// same pipeline: two of them would mean two simulations, and a front end would then be showing
+/// a different one from whatever else was driving it.
+///
+/// The three phases of section 2.1 are three distinct states here, and the state machine is
+/// what the commands enforce rather than discover:
+///
+/// - **analysed**: `analyse` has produced EIR. Elaboration needs this.
+/// - **elaborated**: `elaborate` has produced an instance tree, an arena and a kernel. Everything
+///   that touches a signal needs this.
+/// - **running**: between `run` calls. The kernel is stopped whenever a command sees it,
+///   because commands are executed from the loop that drives the kernel and never from
+///   inside it.
+///
+/// Every method reports through the diagnostic engine and returns a bool, rather than
+/// throwing: an unanalysable design is an ordinary user error (section 13.2), and a script
+/// that wants to carry on after one is entitled to.
+class Session {
+public:
+    /// `sources` and `diagnostics` must outlive the session.
+    Session(SourceManager& sourceManager, DiagnosticEngine& engine);
+
+    Session(const Session&) = delete;
+    Session& operator=(const Session&) = delete;
+    Session(Session&&) = delete;
+    Session& operator=(Session&&) = delete;
+    ~Session();
+
+    /// Where `$display`, `run`'s summary line and command output go. Null means standard
+    /// output.
+    ///
+    /// Takes effect immediately, including on a kernel that already exists: a served session
+    /// sends its output to the attached client and the same session run from a script sends it
+    /// to the terminal, and which of those is happening is not known when the kernel is built.
+    void setTranscript(std::ostream* stream) noexcept;
+
+    [[nodiscard]] std::ostream& transcriptStream() const;
+
+    /// The engine every phase of this session reports through.
+    ///
+    /// Exposed so that a command which opens a file of its own — a file list, a do script —
+    /// reports its failure exactly as an analysis failure is reported, through one engine
+    /// (section 10.6) rather than as a bare string.
+    [[nodiscard]] DiagnosticEngine& diagnosticEngine() const noexcept { return diagnostics; }
+
+    /// Sets the time unit delays are counted in. Takes effect at the next elaboration.
+    void setTimeScale(runtime::TimeScale unit) noexcept { scale = unit; }
+
+    [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
+
+    /// Sets the delta cycles allowed at one timestamp. Takes effect at the next elaboration.
+    void setDeltaLimit(std::uint32_t limit) noexcept { deltaLimit = limit; }
+
+    // -----------------------------------------------------------------------
+    // Analysis
+    // -----------------------------------------------------------------------
+
+    /// What one `analyse` call adds.
+    struct AnalysisRequest {
+        std::vector<std::filesystem::path> files;
+
+        /// Sources analysed so that `files` resolve against them, whose units are **not**
+        /// stored in the library (`--context`, section 8.2).
+        ///
+        /// slang type-checks from syntax, so a unit importing a package needs that package's
+        /// source however the package was analysed before. Storing it here as well would put
+        /// the same unit in two libraries, which an unqualified reference then cannot resolve.
+        std::vector<std::filesystem::path> contextFiles;
+
+        /// Sources belonging to the libraries this session resolves against.
+        ///
+        /// Read for the same reason as `contextFiles`, but a *specialisation* created from them
+        /// is stored: a parameterisation the other library does not hold was created for this
+        /// design, and nothing else would hold it. One the other library already has is
+        /// excluded rather than duplicated (8.2).
+        std::vector<std::filesystem::path> libraryFiles;
+        std::vector<std::string> defines;
+        std::vector<std::filesystem::path> includeDirectories;
+    };
+
+    /// Analyses `request` together with everything analysed before it.
+    ///
+    /// Together, rather than incrementally, because analysis currently hands every source to
+    /// one slang compilation. A design that is really analysed once per unit and cached is
+    /// section 4.4's library store; until that exists, re-analysing is the behaviour that is
+    /// *correct*, and the only thing wrong with it is that it is slower than it will be.
+    ///
+    /// When a library is open (`openLibrary`) and every source has a current entry in it, the
+    /// units are loaded from there and the frontend does not run at all. Otherwise everything
+    /// is analysed and every entry rewritten.
+    bool analyse(const AnalysisRequest& request);
+
+    [[nodiscard]] bool hasDesign() const noexcept { return design != nullptr; }
+
+    /// Every file the last `analyse` read: the sources, the files they included, and the
+    /// context and library sources read for resolution.
+    ///
+    /// What `--depfile` writes (8.3). Sorted and free of duplicates.
+    ///
+    /// **Empty when the analysis was served from the library.** Nothing ran the frontend, so
+    /// nothing knows what was included, and a caller MUST write no dependency file rather than
+    /// one missing the headers: a prerequisite that quietly disappears is a rebuild that
+    /// quietly stops happening.
+    [[nodiscard]] std::span<const std::filesystem::path> filesRead() const noexcept {
+        return lastFilesRead;
+    }
+
+    /// Takes `analysed` as this session's design, replacing whatever was there.
+    ///
+    /// The seam for a design that came from somewhere other than this session's own analysis:
+    /// units loaded from a library, a design assembled from two frontends once mixed-language
+    /// simulation arrives (section 3.5), and a test that builds EIR by hand to exercise the
+    /// kernel without depending on a frontend.
+    ///
+    /// Everything elaborated from the previous design is torn down, because a session holding
+    /// a kernel built from a design it no longer has would be a use-after-free waiting for the
+    /// next command.
+    void setDesign(std::unique_ptr<eir::Design> analysed);
+
+    /// Opens `path` as the library analysis is written into, creating it when it is absent.
+    ///
+    /// Creating on absence is what `--out-lib <dir>` means: the library takes the directory's
+    /// own name, and a name that is not an identifier is reported rather than adjusted (8.2).
+    ///
+    /// Opt-in. Section 4.4's store is a cache of what the frontend produced, and a cache that
+    /// served units produced by a different translator would give a different simulation — so a
+    /// user who suspects one has an obvious thing to stop doing. The format version and Enzan's
+    /// version are both in every entry's key, which is the belt to that pair of braces.
+    bool openOutputLibrary(const std::filesystem::path& path);
+
+    /// Opens `path` as a library to resolve against, which MUST already exist.
+    ///
+    /// `name`, when given, overrides the logical name the library carries — for the cases a
+    /// stored name cannot cover: two vendors each shipping a directory called `work`, or a
+    /// path whose basename is not what the design refers to.
+    bool addInputLibrary(const std::filesystem::path& path, std::string_view name = {});
+
+    /// The sources every input library was analysed from, in the order the libraries were given.
+    ///
+    /// What `analyse --in-lib` reads as context: a unit instantiating one from another library
+    /// needs that unit's declaration, because slang type-checks from syntax and EIR does not
+    /// feed back into it (8.2). Reading the declaration is also what keeps a library
+    /// parametrisable — the instantiation resolves its parameters here, rather than being
+    /// limited to whatever parameterisation the other library happened to store.
+    [[nodiscard]] std::vector<std::filesystem::path> inputLibrarySources() const;
+
+    /// The include directories and macros those sources need, in the same order.
+    ///
+    /// A source is no use without them: its `` `include `` directives do not resolve, and a
+    /// macro it was compiled with changes what it means rather than whether it parses.
+    [[nodiscard]] std::vector<std::filesystem::path> inputLibraryIncludeDirectories() const;
+    [[nodiscard]] std::vector<std::string> inputLibraryDefines() const;
+
+    [[nodiscard]] bool hasLibrary() const noexcept { return library.isOpen(); }
+
+    /// True when the last `analyse` came out of the library rather than the frontend.
+    [[nodiscard]] bool reusedLibrary() const noexcept { return loadedFromLibrary; }
+
+    // -----------------------------------------------------------------------
+    // Elaboration
+    // -----------------------------------------------------------------------
+
+    /// Elaborates `topModule`, compiles it and prepares a kernel at time zero.
+    ///
+    /// An empty `topModule` lets elaboration choose, which it does only when the design has
+    /// exactly one candidate. Calling this again replaces the whole simulation, which is what
+    /// re-elaborating a running design means everywhere else.
+    bool elaborate(std::string_view topModule);
+
+    [[nodiscard]] bool isElaborated() const noexcept { return kernel != nullptr; }
+
+    /// Counts how many times this session has thrown an elaboration away.
+    ///
+    /// What something borrowing the kernel compares to find out that what it holds has gone.
+    /// **Pointer identity cannot answer this and must not be used for it.** Tearing an
+    /// elaboration down frees the kernel and building the next one allocates the same sizes in
+    /// the same order, so the allocator routinely hands the replacement the address the old one
+    /// just released — on one machine and not the next, which is the worst way for it to be
+    /// wrong. A borrower comparing addresses then keeps a pointer into a different simulation
+    /// and no sanitiser can see it, because the memory is valid; it is simply someone else's.
+    ///
+    /// Monotonic and never reset, so a comparison cannot come out equal by wrapping.
+    [[nodiscard]] std::uint64_t elaborationGeneration() const noexcept { return generation; }
+
+    // -----------------------------------------------------------------------
+    // Running
+    // -----------------------------------------------------------------------
+
+    /// Runs until `until`, or until the design stops when `until` is absent.
+    ///
+    /// `until` is an absolute time, not a duration: `run 100ns` is turned into an absolute
+    /// limit by the command, because that is where the current time is known and where the
+    /// unit conversion belongs.
+    runtime::RunStatus run(std::optional<runtime::SimTime> until);
+
+    /// Puts the design back to time zero, keeping the elaboration and the waveform files.
+    bool restart();
+
+    [[nodiscard]] runtime::SimTime time() const noexcept;
+
+    /// The status of the last `run`.
+    [[nodiscard]] runtime::RunStatus lastStatus() const noexcept { return status; }
+
+    /// True once `$finish` or `$fatal` has ended the simulation.
+    [[nodiscard]] bool isFinished() const noexcept;
+
+    /// The status `$finish` or `$fatal` asked for.
+    [[nodiscard]] int exitStatus() const noexcept;
+
+    // -----------------------------------------------------------------------
+    // Inspection
+    // -----------------------------------------------------------------------
+
+    /// Returns the signal index for a hierarchical path, or `NoSignal`.
+    [[nodiscard]] std::uint32_t findSignal(std::string_view path) const;
+
+    static constexpr std::uint32_t NoSignal = 0xFFFF'FFFFU;
+
+    /// Renders a signal's current value in `radix`.
+    ///
+    /// An enumerated signal whose value has a name is rendered by that name when `radix` is
+    /// absent, matching what the wave window shows (section 10.3): a reader who asked what a
+    /// state register holds wants `S_SEND`, and gets `3'h2` by asking for a radix.
+    [[nodiscard]] std::string examine(std::uint32_t signalIndex,
+                                      std::optional<eir::Radix> radix) const;
+
+    /// Parses `literal` against a signal's width and writes it once.
+    ///
+    /// Returns false having filled `error` when the literal does not parse. The width is
+    /// taken from the signal, so `deposit /tb/count 5` writes the right number of bits
+    /// without the user counting them.
+    bool deposit(std::uint32_t signalIndex, std::string_view literal, std::string& error);
+
+    /// Parses `literal` and holds the signal at it until `release`.
+    bool force(std::uint32_t signalIndex, std::string_view literal, std::string& error);
+
+    /// Releases a forced signal, returning false when it was not forced.
+    bool release(std::uint32_t signalIndex);
+
+    /// Returns every signal name matching a glob pattern, sorted by path.
+    ///
+    /// `*` matches any run of characters including `/`, and `?` matches one.
+    ///
+    /// Over names rather than over signals: a collapsed port gives one slot two hierarchical
+    /// names, and a user asking about `/tb/u_dut/*` means the DUT's ports whether or not the
+    /// storage for them lives in the parent.
+    [[nodiscard]] std::vector<std::string> findSignals(std::string_view pattern) const;
+
+    /// Returns the paths of every instance matching a glob pattern, in elaboration order.
+    [[nodiscard]] std::vector<std::string> findInstances(std::string_view pattern) const;
+
+    // -----------------------------------------------------------------------
+    // Waveforms
+    // -----------------------------------------------------------------------
+
+    /// Adds `path` and what is inside it to what waveform files record.
+    ///
+    /// This is `log -r` and `add wave`: a selection is built up out of subtrees and individual
+    /// signals, and a signal's own path is a scope holding exactly that signal (section 7.1).
+    /// An empty path means the whole design and replaces everything selected so far.
+    ///
+    /// Refused once a file is open, because the signals a file declares are written into its
+    /// header and cannot be added to afterwards.
+    bool addWaveformScope(std::string_view path);
+
+    [[nodiscard]] std::span<const std::string> waveformScopes() const noexcept { return scopes; }
+
+    /// Opens a VCD file and records into it from now on. Returns false having reported.
+    bool openVcd(const std::filesystem::path& path);
+
+    /// Opens an FST file and records into it from now on. Returns false having reported.
+    bool openFst(const std::filesystem::path& path);
+
+    /// Finishes every open waveform file. Called by `quit` and by the destructor.
+    void closeWaveforms();
+
+    [[nodiscard]] std::size_t openWaveformFiles() const noexcept { return writers.size(); }
+
+    // -----------------------------------------------------------------------
+    // What the GUI and the tests reach for
+    // -----------------------------------------------------------------------
+
+    [[nodiscard]] runtime::Kernel* simulationKernel() const noexcept { return kernel.get(); }
+
+    [[nodiscard]] const runtime::Image* designImage() const noexcept { return image.get(); }
+
+private:
+    /// Drops the kernel, the image and everything they were built from.
+    void discardElaboration();
+
+    /// Parses `literal` to the width of `signalIndex`, reporting through `error`.
+    [[nodiscard]] std::optional<eir::BitVector>
+    parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;
+
+    /// Pairs each analysed file with the buffer holding its text, for the library's keys.
+    [[nodiscard]] static std::vector<eir::LibrarySource>
+    librarySources(std::span<const std::filesystem::path> ordered,
+                   std::span<const BufferId> buffers);
+
+    /// Opens `writer` on `path` and attaches it to the kernel.
+    bool addWriter(std::unique_ptr<wavedb::WaveformWriter> writer,
+                   const std::filesystem::path& path);
+
+    SourceManager& sources;
+    DiagnosticEngine& diagnostics;
+    std::ostream* transcript = nullptr;
+
+    /// Every source given to `analyse`, in the order it was given.
+    std::vector<std::filesystem::path> files;
+
+    /// Sources read for resolution whose units this session does not store.
+    std::vector<std::filesystem::path> contextFiles;
+
+    /// Sources of the libraries this session resolves against.
+    std::vector<std::filesystem::path> libraryFiles;
+
+    /// Every file the last analysis read, for `--depfile`.
+    std::vector<std::filesystem::path> lastFilesRead;
+    std::vector<std::string> defines;
+    std::vector<std::filesystem::path> includeDirectories;
+
+    eir::Library library;
+    bool loadedFromLibrary = false;
+
+    /// Libraries this session resolves against, in the order they were given.
+    std::vector<eir::Library> inputLibraries;
+
+    std::unique_ptr<eir::Design> design;
+    std::unique_ptr<elab::ElaboratedDesign> elaborated;
+    std::unique_ptr<codegen::CompiledDesign> compiled;
+    std::unique_ptr<runtime::Image> image;
+    std::unique_ptr<runtime::Kernel> kernel;
+
+    /// Open waveform files. Owned here so that `quit` and the destructor both finish them.
+    std::vector<std::unique_ptr<wavedb::WaveformWriter>> writers;
+
+    /// What waveform files record, or empty for the whole design.
+    std::vector<std::string> scopes;
+
+    runtime::TimeScale scale;
+    runtime::RunStatus status = runtime::RunStatus::Quiescent;
+    std::uint32_t deltaLimit = 10'000;
+
+    /// Bumped by `discardElaboration`, which every path that replaces the simulation goes
+    /// through. See `elaborationGeneration`.
+    std::uint64_t generation = 0;
+};
+
+} // namespace enzan::session

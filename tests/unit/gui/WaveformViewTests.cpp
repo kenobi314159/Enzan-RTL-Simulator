@@ -495,6 +495,60 @@ TEST_F(WaveformViewTest, TracesArePaintedInTheThemeColour) {
         << "the ruler was not drawn";
 }
 
+TEST_F(WaveformViewTest, AConstantBitOfABusyBusIsDrawnAsALevelAndNotAsABusyBar) {
+    // The complaint this pins: zoomed out far enough that a pixel column spans several changes
+    // of an unpacked bus, every one of its bits was filled as busy — because the row was
+    // summarised over the whole signal rather than over the bit it shows. A bit that never moved
+    // was a solid bar across the window, and only zooming in until each column held one value
+    // resolved it into the flat line it always was.
+    //
+    // A narrow canvas, so that a run short enough to keep the counter's top bit at zero still
+    // puts several changes in every column. The artifact needs columns to be busy; that is the
+    // whole of what "zoomed out" means here.
+    view->resize(100, 400);
+
+    QVector<std::uint32_t> wanted;
+    SignalInfo count;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+        if (info.name == QStringLiteral("count")) count = info;
+        wanted.push_back(info.signalIndex);
+    }
+    ASSERT_EQ(count.width, 8U) << "the fixture's counter is not the width this test assumes";
+    session->subscribe(wanted);
+
+    // 120 increments: the counter reaches 120, so bit 7 never leaves zero while bit 0 moves on
+    // every one of them.
+    constexpr std::uint64_t Duration = 1200;
+    session->run(Duration);
+    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == Duration; }));
+
+    /// Draws one row showing bits [high:low] of the counter, and counts the trace-coloured
+    /// pixels. One row at a time so that the two answers are measured at the same geometry.
+    const auto tracePixelsOfBit = [&](std::uint32_t bit) {
+        model->clear();
+        const int bus = model->addSignal(count);
+        const int slice = model->addSlice(bus, bit, bit);
+        EXPECT_NE(slice, -1);
+        model->removeRow(bus);
+
+        view->zoomFit();
+        treeView->expandAll();
+        QCoreApplication::processEvents();
+
+        return countOf(colourHistogram(render()), theme.color(enzan::gui::ThemeColor::WaveTrace));
+    };
+
+    const int busy = tracePixelsOfBit(0);
+    const int constant = tracePixelsOfBit(7);
+
+    // A level is a line one pixel high; a busy column is filled for the row's whole height. The
+    // two differ by the row height, so an order of magnitude is a safe way to say "a line, not a
+    // block" without depending on the font the row height comes from.
+    EXPECT_GT(busy, 0) << "the bit that changes every count should be busy";
+    EXPECT_LT(constant * 4, busy) << "a constant bit was filled like a busy one: " << constant
+                                  << " against " << busy;
+}
+
 TEST_F(WaveformViewTest, TheActiveCursorIsPainted) {
     showEverythingAndRun(200);
 

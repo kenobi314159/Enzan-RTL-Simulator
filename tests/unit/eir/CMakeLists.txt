@@ -6,6 +6,8 @@ enzan_add_unit_test(
           BitVectorTests.cpp
           DesignTests.cpp
           InstructionTests.cpp
+          LibraryTests.cpp
+          SerializationTests.cpp
           TypeTests.cpp
           VerifierTests.cpp
   DEPENDS enzan::eir)

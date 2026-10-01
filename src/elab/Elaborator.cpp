@@ -19,11 +19,12 @@ namespace enzan::elab {
 namespace {
 
 /// Joins a list of names for a diagnostic, in the order given.
-std::string joinNames(const std::vector<std::string>& names) {
+template<typename Range>
+std::string joinNames(const Range& names) {
     if (names.empty()) return "(none)";
 
     std::string result;
-    for (const std::string& name : names) {
+    for (const std::string_view name : names) {
         if (!result.empty()) result += ", ";
         result += '\'';
         result += name;
@@ -65,7 +66,7 @@ public:
 
         // The top instance's path is its module name, so that a design elaborated
         // with `tb` as its top has `/tb/...` paths — which is what a user typing a
-        // Questa-style `add wave /tb/u_dut/count` expects.
+        // a hierarchical path like /tb/u_dut/count names.
         const std::uint32_t topInstance =
             createInstance("/" + design.module(*topIndex).name, design.module(*topIndex).name,
                            *topIndex, Instance::NoParent);
@@ -80,7 +81,31 @@ public:
 private:
     std::optional<std::uint32_t> resolveTop(std::string_view topModuleName) {
         if (!topModuleName.empty()) {
-            const std::optional<std::uint32_t> index = design.findModuleIndex(topModuleName);
+            std::vector<std::string_view> ambiguity;
+            const std::optional<std::uint32_t> index =
+                design.findModuleIndex(topModuleName, &ambiguity);
+            if (!index.has_value() && !ambiguity.empty()) {
+                diagnostics.report(DiagCode::AmbiguousModule, SourceLocation(), topModuleName,
+                                   joinNames(ambiguity), topModuleName);
+                return std::nullopt;
+            }
+            // A parameterised module is named for its parameter values, so the name a user
+            // wrote is its source name. Tried second, so an exact name still wins.
+            if (!index.has_value()) {
+                const std::vector<std::uint32_t> specialisations =
+                    design.findSpecialisations(topModuleName);
+                if (specialisations.size() == 1) return specialisations.front();
+                if (specialisations.size() > 1) {
+                    std::vector<std::string_view> names;
+                    names.reserve(specialisations.size());
+                    for (const std::uint32_t candidate : specialisations)
+                        names.push_back(design.module(candidate).name);
+                    diagnostics.report(DiagCode::AmbiguousSpecialisation, SourceLocation(),
+                                       topModuleName, joinNames(names));
+                    return std::nullopt;
+                }
+            }
+
             if (!index.has_value()) {
                 std::vector<std::string> names;
                 for (const eir::ModuleDefinition& definition : design.modules())
@@ -203,8 +228,14 @@ private:
     }
 
     bool expandChild(std::uint32_t parentIndex, const eir::Instance& child) {
+        std::vector<std::string_view> ambiguity;
         const std::optional<std::uint32_t> childDefinition =
-            design.findModuleIndex(child.definitionName);
+            design.findModuleIndex(child.definitionName, &ambiguity);
+        if (!childDefinition.has_value() && !ambiguity.empty()) {
+            diagnostics.report(DiagCode::AmbiguousModule, child.location, child.definitionName,
+                               joinNames(ambiguity), child.definitionName);
+            return false;
+        }
         if (!childDefinition.has_value()) {
             diagnostics.report(DiagCode::UnresolvedInstance, child.location, child.name,
                                child.definitionName);

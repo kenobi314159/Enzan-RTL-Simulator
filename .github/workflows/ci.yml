@@ -81,6 +81,7 @@ jobs:
       # dedicated job below. Nothing at M0 links slang, and building it five
       # times per commit would spend most of the CI budget on a dependency that
       # one job proves just as well.
+      #
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
@@ -136,6 +137,7 @@ jobs:
   tidy:
     name: clang-tidy
     runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
@@ -184,9 +186,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Qt 6 for the windows and Tcl for the theme. Section 8.1 makes Tcl the configuration
-      # language for the whole tool, so the theme needs an interpreter even though the control
-      # layer itself is M3.
+      # Qt 6 for the windows and Tcl for the theme.
       - name: Install dependencies
         run: |
           sudo apt-get update

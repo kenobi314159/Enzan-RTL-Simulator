@@ -18,7 +18,6 @@
 #include <optional>
 
 class QSocketNotifier;
-class QProcess;
 
 namespace enzan::gui {
 
@@ -104,19 +103,9 @@ public:
     /// Connects to a kernel already listening on `socketPath` and sends the handshake.
     bool attach(const QString& socketPath, QString& error);
 
-    /// Starts `program` with `arguments` plus a `--listen` on a private socket, then attaches.
-    ///
-    /// The everyday path: a user runs `enzan-gui design.sv` and gets a kernel without having to
-    /// arrange one. A kernel started this way is asked to quit when the window closes, because
-    /// it has no life of its own; one attached to with `--attach` is only detached from.
-    bool launch(const QString& program, const QStringList& arguments, QString& error);
-
     void detach();
 
     [[nodiscard]] bool isAttached() const;
-
-    /// True when this session started the kernel, and so is responsible for ending it.
-    [[nodiscard]] bool ownsKernel() const noexcept { return kernelProcess != nullptr; }
 
     // --- requests ----------------------------------------------------------
 
@@ -128,6 +117,14 @@ public:
     void runUntilFinished();
     void stop();
     void restart();
+
+    /// Writes a signal once. The next thing that drives it overwrites the value.
+    void deposit(std::uint32_t signalIndex, const eir::BitVector& value);
+
+    /// Holds a signal at a value until `release`.
+    void force(std::uint32_t signalIndex, const eir::BitVector& value);
+
+    void release(std::uint32_t signalIndex);
 
     /// Asks the kernel to exit, then waits briefly for it to do so.
     void quitKernel();
@@ -154,6 +151,9 @@ public:
     [[nodiscard]] const QString& topModule() const noexcept { return top; }
 
     [[nodiscard]] const QString& kernelVersion() const noexcept { return version; }
+
+    /// The source files the design was analysed from, in analysis order.
+    [[nodiscard]] const QStringList& sourceFiles() const noexcept { return designSources; }
 
 Q_SIGNALS:
     /// The handshake completed and the kernel described itself.
@@ -226,11 +226,11 @@ private:
     ipc::Connection connection;
     QSocketNotifier* readNotifier = nullptr;
     QSocketNotifier* writeNotifier = nullptr;
-    QProcess* kernelProcess = nullptr;
 
     std::unique_ptr<wavedb::WaveformDatabase> database;
 
     QVector<ipc::InstanceEntry> designInstances;
+    QStringList designSources;
 
     /// Signal metadata by kernel index. Ordered rather than hash-based, because what the GUI
     /// lists is observable and section 3.8 makes observable ordering reproducible.
@@ -242,9 +242,6 @@ private:
     runtime::SimTime kernelTime = 0;
     runtime::SimTime recordedTime = 0;
     ipc::SimulationState simulationState = ipc::SimulationState::Idle;
-
-    /// The socket path this session created for a kernel it launched, removed on the way out.
-    QString launchedSocketPath;
 };
 
 } // namespace enzan::gui

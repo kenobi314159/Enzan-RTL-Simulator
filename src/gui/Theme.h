@@ -41,7 +41,7 @@ constexpr int HighlightSlots = 5;
 /// in as a resource and loaded before any user theme. A default written in C++ would be exactly
 /// the literal the rule forbids, and it would let a half-applied theme go unnoticed.
 ///
-/// Tcl rather than a settings format of its own, because section 8.1 commits to Tcl as *the*
+/// Tcl rather than a settings format of its own, because section 10.5 commits to Tcl as *the*
 /// configuration language with no second format anywhere in the tool. The script gets one
 /// command:
 ///

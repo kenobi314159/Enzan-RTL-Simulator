@@ -9,6 +9,7 @@
 #include "runtime/Image.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
+#include "session/Session.h"
 #include "wavedb/WaveformDatabase.h"
 #include "wavedb/WaveformRecorder.h"
 
@@ -46,12 +47,18 @@ struct ServerOptions {
 
 /// Serves one elaborated design to one attached client.
 ///
-/// This is the kernel end of the split described in section 2.2. It owns the simulation — the
-/// `runtime::Kernel`, the live waveform database and the recorder filling it — and answers a
-/// client's requests about it. Everything that makes the split worth having lives here: the
-/// kernel runs perfectly well with nobody attached, a client may attach and detach while a
-/// simulation is in progress, and a client that stops reading is left behind rather than
-/// allowed to stall the run.
+/// This is the kernel end of the split described in section 2.2. The simulation belongs to a
+/// `session::Session` and the server adds the live
+/// waveform database, the recorder filling it and the answers to a client's requests.
+///
+/// **One session, whichever surface is driving.** A served kernel, a `-do` script and a batch
+/// run are the same pipeline; a server that built a kernel of its own would mean two, and a
+/// command typed at a front end would then be acting on a different simulation from the one on
+/// screen.
+///
+/// Everything that makes the split worth having lives here: the kernel runs perfectly well with
+/// nobody attached, a client may attach and detach while a simulation is in progress, and a
+/// client that stops reading is left behind rather than allowed to stall the run.
 ///
 /// **A run is interruptible, not chopped up.** `run` is called once for the whole requested
 /// span and the server answers the kernel's interrupt poll from inside it, servicing the socket
@@ -64,8 +71,9 @@ struct ServerOptions {
 /// two views of the same run, and nothing asks for that yet.
 class KernelServer final : public runtime::RunInterrupt {
 public:
-    /// `imageToServe` and `diagnostics` must outlive the server.
-    KernelServer(const runtime::Image& imageToServe, DiagnosticEngine& diagnosticEngine,
+    /// `sessionToServe` and `diagnostics` must outlive the server, and the session must
+    /// already have been elaborated.
+    KernelServer(session::Session& sessionToServe, DiagnosticEngine& diagnosticEngine,
                  ServerOptions serverOptions);
 
     KernelServer(const KernelServer&) = delete;
@@ -75,7 +83,7 @@ public:
 
     ~KernelServer() override;
 
-    /// Creates the kernel, writes the time-zero state and begins recording.
+    /// Puts the design at time zero and begins recording.
     ///
     /// Separate from the constructor because it is also what `restart` does, and because the
     /// order — initialise, then start recording — is what makes the values captured at time
@@ -113,6 +121,13 @@ public:
     [[nodiscard]] const wavedb::WaveformDatabase& waveforms() const noexcept { return *database; }
 
     [[nodiscard]] runtime::Kernel& kernel() noexcept { return *simulationKernel; }
+
+    /// Where output has to be written to reach the attached client.
+    ///
+    /// Anything else driving the same session — the interpreter answering a typed command —
+    /// points here too, so that what it prints arrives in the client's transcript rather than
+    /// on a terminal nobody is looking at.
+    [[nodiscard]] std::ostream& transcript() noexcept { return transcriptStream; }
 
     /// The status `$finish` or `$fatal` asked for, or 2 when a run failed.
     [[nodiscard]] int exitStatus() const noexcept { return processExitStatus; }
@@ -176,6 +191,35 @@ private:
     void onQueryHistory(const Frame& frame);
     void onRun(const Frame& frame);
     void onRestart();
+    void onDeposit(const Frame& frame);
+    void onForce(const Frame& frame);
+
+    /// Takes back every registration made against the session's kernel, then drops the
+    /// database, the recorder and the publisher.
+    void detachFromKernel();
+
+    /// What `renewKernelBorrow` found.
+    enum class Borrow : std::uint8_t {
+        /// The session still holds the kernel this server was serving.
+        Unchanged,
+        /// It holds a different one, which this server is now serving from time zero.
+        Renewed,
+        /// It holds none, and the client has been told and dropped.
+        Gone,
+    };
+
+    /// Re-borrows the session's kernel when something has replaced the one being served.
+    ///
+    /// The server borrows a kernel the session owns, and a command is free to destroy it:
+    /// Re-elaborating replaces the whole simulation. Every
+    /// path that reads the kernel after an evaluation has to come through here first, because
+    /// the alternative is reading a freed object.
+    ///
+    /// The question is asked of the session's elaboration generation, never of the pointers:
+    /// the replacement routinely lands at the address the old one just released, which makes a
+    /// pointer comparison answer "unchanged" about a kernel that has gone, on some machines and
+    /// not others.
+    Borrow renewKernelBorrow();
 
     /// Sends everything the client is owed and writes what the socket will take.
     void pump();
@@ -192,6 +236,7 @@ private:
 
     [[nodiscard]] runtime::SimTime latestRecordedTime() const noexcept;
 
+    session::Session* session;
     const runtime::Image* image;
     DiagnosticEngine* diagnostics;
     ServerOptions options;
@@ -200,9 +245,18 @@ private:
     std::ostream transcriptStream;
     DiagnosticRelay diagnosticRelay;
 
-    // Recreated by `start`, because a restart has to reset the arena, the scheduler queues and
-    // every process's resume point, and a fresh kernel is the only way to be sure it has.
-    std::unique_ptr<runtime::Kernel> simulationKernel;
+    /// The session's kernel, not the server's. Borrowed for as long as the session holds it,
+    /// which is what makes a command typed at a front end act on the simulation on screen.
+    runtime::Kernel* simulationKernel = nullptr;
+
+    /// The session's elaboration generation when this borrow was taken.
+    ///
+    /// The only sound way to ask whether the borrow still holds; `Session::elaborationGeneration`
+    /// says why comparing `simulationKernel` against the session's own pointer is not.
+    std::uint64_t borrowedGeneration = 0;
+
+    // Recreated by `start`: a restarted design begins at time zero with nothing recorded, and
+    // the database is where "nothing recorded" lives.
     std::unique_ptr<wavedb::WaveformDatabase> database;
     std::unique_ptr<wavedb::WaveformRecorder> recorder;
     std::unique_ptr<ChangePublisher> publisher;

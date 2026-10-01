@@ -2,9 +2,12 @@
 
 #include "gui/MainWindow.h"
 
+#include "eir/BitOps.h"
+
 #include <QAction>
 #include <QCloseEvent>
 #include <QDockWidget>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QIcon>
 #include <QInputDialog>
@@ -16,6 +19,7 @@
 #include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTableView>
 #include <QToolBar>
 #include <QTreeView>
@@ -23,6 +27,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 
 namespace enzan::gui {
 
@@ -104,7 +109,31 @@ void MainWindow::buildDocks() {
     structureView->setModel(designModel);
     structureView->setHeaderHidden(false);
     structureView->setUniformRowHeights(true);
+    structureView->setContextMenuPolicy(Qt::ActionsContextMenu);
     connect(structureView, &QTreeView::clicked, this, &MainWindow::onScopeSelected);
+
+    // Adding a whole module's signals from here rather than selecting them in the Objects
+    // window: the reader has just found the module in the hierarchy, and making them click it,
+    // move to another pane, select everything and add it is four steps to say one thing.
+    //
+    // Four entries rather than two with modifiers, because each is a different question — this
+    // module or its subtree, kept together or not — and a menu that hides half of its answers
+    // behind a held key is a menu that only its author knows the whole of.
+    struct ScopeInsert {
+        const char* label;
+        bool recursive;
+        bool grouped;
+    };
+
+    for (const ScopeInsert& entry : {ScopeInsert{"Add to wave", false, true},
+                                     ScopeInsert{"Add to wave recursive", true, true}}) {
+        auto* action = new QAction(tr(entry.label), structureView);
+        const bool recursive = entry.recursive;
+        const bool grouped = entry.grouped;
+        connect(action, &QAction::triggered, this,
+                [this, recursive, grouped] { insertScopeSignals(recursive, grouped); });
+        structureView->addAction(action);
+    }
 
     auto* structureDock = new QDockWidget(tr("Structure"), this);
     structureDock->setObjectName(QStringLiteral("structure"));
@@ -127,6 +156,28 @@ void MainWindow::buildDocks() {
     addToWave->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_W));
     connect(addToWave, &QAction::triggered, this, &MainWindow::addSelectedObjectsToWave);
     objectsView->addAction(addToWave);
+
+    // `examine`, `force` and `deposit` are required from the GUI as well as from Tcl (section
+    // 10.4). Examining is what the window already does — the value column *is* an examine that
+    // keeps itself up to date — so what is added here is the two that write.
+    auto* writeSeparator = new QAction(objectsView);
+    writeSeparator->setSeparator(true);
+    objectsView->addAction(writeSeparator);
+
+    auto* depositAction = new QAction(tr("Deposit…"), objectsView);
+    depositAction->setToolTip(tr("Write a value now; the next thing that drives it overwrites"));
+    connect(depositAction, &QAction::triggered, this,
+            [this] { depositOrForceSelectedObject(false); });
+    objectsView->addAction(depositAction);
+
+    auto* forceAction = new QAction(tr("Force…"), objectsView);
+    forceAction->setToolTip(tr("Hold a value against the design until it is released"));
+    connect(forceAction, &QAction::triggered, this, [this] { depositOrForceSelectedObject(true); });
+    objectsView->addAction(forceAction);
+
+    auto* releaseAction = new QAction(tr("Release"), objectsView);
+    connect(releaseAction, &QAction::triggered, this, &MainWindow::releaseSelectedObjects);
+    objectsView->addAction(releaseAction);
 
     auto* objectsDock = new QDockWidget(tr("Objects"), this);
     objectsDock->setObjectName(QStringLiteral("objects"));
@@ -178,7 +229,14 @@ void MainWindow::buildDocks() {
     waveSplitter->setStretchFactor(1, 1);
     waveSplitter->setSizes({340, 900});
 
-    setCentralWidget(waveSplitter);
+    // Wave and Source are tabs of the central area rather than a dock beside it, which is what
+    // Modelsim does and what the two need: each wants the whole width. A waveform squeezed
+    // beside an eighty-column listing leaves too little of either to read, and a reader is
+    // looking at one or the other.
+    panes = new QTabWidget(this);
+    panes->setDocumentMode(true);
+    panes->addTab(waveSplitter, tr("Wave"));
+    setCentralWidget(panes);
 
     const auto addWaveAction = [this](const QString& text, const QKeySequence& shortcut,
                                       auto slot) {
@@ -338,6 +396,12 @@ void MainWindow::onWelcomed() {
 }
 
 void MainWindow::onDesignChanged() {
+    // A new design's scopes are not the old one's, so an insert still waiting on a reply is
+    // waiting for a scope that may no longer exist, and its group belongs to a window that is
+    // about to be rebuilt.
+    pendingInserts.clear();
+    objectsScope.clear();
+
     designModel->setInstances(session->instances());
     structureView->expandToDepth(1);
 
@@ -355,11 +419,34 @@ void MainWindow::onDesignChanged() {
 
 void MainWindow::onScopeSelected(const QModelIndex& index) {
     const QString path = designModel->pathAt(index);
-    if (!path.isEmpty()) session->queryObjects(path);
+    if (path.isEmpty()) return;
+
+    // Recorded before the request, because the reply is what decides whether the pane is
+    // repainted and a reply for some other scope must not be able to.
+    objectsScope = path;
+    session->queryObjects(path);
 }
 
 void MainWindow::onObjectsReceived(const QString& instancePath,
                                    const QVector<SignalInfo>& objects) {
+    // Anything waiting on this scope is served first. More than one insert may be — a reader
+    // can ask for a subtree twice — so every match is taken rather than the first.
+    for (int index = 0; index < pendingInserts.size();) {
+        if (pendingInserts[index].scope != instancePath) {
+            ++index;
+            continue;
+        }
+
+        const int group = pendingInserts[index].group;
+        pendingInserts.removeAt(index);
+        insertObjectsIntoWave(objects, group);
+    }
+
+    // And the Objects window, but only when this is the scope it is showing. A recursive insert
+    // asks about every scope in a subtree, and without this test the pane would end up showing
+    // whichever of them answered last — a module the reader never clicked.
+    if (instancePath != objectsScope) return;
+
     objectsModel->setObjects(instancePath, objects);
     objectsModel->setCursorTime(waveView->activeCursorTime());
     objectsView->resizeColumnsToContents();
@@ -442,6 +529,106 @@ void MainWindow::addSelectedObjectsToWave() {
     // unpacked every bus in the window each time a signal was added, throwing away whatever
     // the reader had chosen to have open. A new signal arrives packed, and what was already
     // there stays as it was.
+}
+
+void MainWindow::insertScopeSignals(bool recursive, bool grouped) {
+    const QString root = designModel->pathAt(structureView->currentIndex());
+    if (root.isEmpty()) return;
+
+    // The scopes to take, in the order the kernel sent the tree — which is elaboration order,
+    // and is the order the Structure window shows them in. Taken from the tree the window
+    // already holds rather than asked for, so that the set is decided at once and the groups
+    // can be made in it before any reply arrives.
+    QStringList scopes;
+    if (!recursive) {
+        scopes << root;
+    } else {
+        const QString prefix = root + QLatin1Char('/');
+        for (const ipc::InstanceEntry& instance : session->instances()) {
+            const QString path = QString::fromStdString(instance.path);
+
+            // The prefix is compared with the separator attached, so that `/tb/u_dut` does not
+            // take `/tb/u_dut2` with it.
+            if (path == root || path.startsWith(prefix)) scopes << path;
+        }
+    }
+
+    for (const QString& scope : scopes) {
+        // The group exists before its contents do, and every group of one insert is made before
+        // any reply can arrive, which is what puts them in tree order rather than in the order
+        // the kernel happened to answer. Flat, by the argument on `insertScopeSignals`.
+        const int group = grouped ? waveModel->addGroup(scope) : -1;
+        pendingInserts.append(PendingInsert{.scope = scope, .group = group});
+        session->queryObjects(scope);
+    }
+}
+
+void MainWindow::insertObjectsIntoWave(const QVector<SignalInfo>& objects, int group) {
+    for (const SignalInfo& info : objects) {
+        waveModel->addSignal(info, group);
+    }
+
+    // A module that declares no signals leaves no group behind. A row named after a scope with
+    // nothing in it says only that the scope was asked about, which is not worth a line.
+    if (group < 0) return;
+    const WaveRow* groupRow = waveModel->row(group);
+    if (groupRow != nullptr && groupRow->children.isEmpty()) waveModel->removeRow(group);
+}
+
+void MainWindow::depositOrForceSelectedObject(bool force) {
+    const QModelIndexList selected = objectsView->selectionModel()->selectedRows();
+    if (selected.isEmpty()) return;
+
+    const SignalInfo* info = objectsModel->objectAt(selected.front().row());
+    if (info == nullptr) return;
+
+    if (info->isParameter()) {
+        // A parameter is a fact about the elaborated design rather than a piece of its state
+        // (section 10.7); there is no storage to write.
+        note(tr("%1 is a parameter, so it has no value to write").arg(info->path));
+        return;
+    }
+
+    bool accepted = false;
+    const QString entered =
+        QInputDialog::getText(this, force ? tr("Force Value") : tr("Deposit Value"),
+                              tr("Value for %1 (%2 bits):").arg(info->path).arg(info->width),
+                              QLineEdit::Normal, QString(), &accepted);
+    if (!accepted || entered.isEmpty()) return;
+
+    // Parsed here rather than sent as text, because the kernel's message carries a value and
+    // the reader should be told about a typo while the dialog they typed it in is still in
+    // mind.
+    const std::optional<eir::BitVector> parsed = eir::BitVector::parse(entered.toStdString());
+    if (!parsed.has_value()) {
+        note(tr("'%1' is not a value Enzan understands").arg(entered));
+        return;
+    }
+
+    // Widened or narrowed to the signal, so that `5` works without the reader counting bits.
+    eir::BitVector sized = eir::BitVector::filled(info->width, eir::Logic::Zero);
+    eir::bitops::extend(sized.mutableRef(), parsed->ref(), false);
+
+    if (force) {
+        session->force(info->signalIndex, sized);
+        note(tr("Forced %1 to %2").arg(info->path, entered));
+        return;
+    }
+
+    session->deposit(info->signalIndex, sized);
+    note(tr("Deposited %1 into %2").arg(entered, info->path));
+}
+
+void MainWindow::releaseSelectedObjects() {
+    const QModelIndexList selected = objectsView->selectionModel()->selectedRows();
+    for (const QModelIndex& index : selected) {
+        const SignalInfo* info = objectsModel->objectAt(index.row());
+        if (info == nullptr || info->isParameter()) continue;
+
+        // Releasing something that was not forced is not an error, so nothing checks first: a
+        // reader clearing a handful of rows should not have to remember which they forced.
+        session->release(info->signalIndex);
+    }
 }
 
 void MainWindow::groupSelectedWaves() {
@@ -658,16 +845,11 @@ void MainWindow::saveLayout() {
 void MainWindow::closeEvent(QCloseEvent* event) {
     saveLayout();
 
-    // A kernel this front end started has no reason to outlive it; one the user attached to is
-    // theirs, and is left running. Getting this backwards would either orphan a process on
-    // every exit or kill a simulation somebody was in the middle of.
-    if (session->isAttached()) {
-        if (session->ownsKernel()) {
-            session->quitKernel();
-        } else {
-            session->detach();
-        }
-    }
+    // Detached from and never ended. A window only ever attaches now (DESIGN_GUIDE.md section
+    // 8.4), so whether the kernel should outlive it is the kernel's decision: one started by
+    // `--gui` waits on this process and goes when it does, and one found with `--attach` keeps
+    // running. Ending it from here would take that decision away from the flag the user chose.
+    if (session->isAttached()) session->detach();
 
     QMainWindow::closeEvent(event);
 }

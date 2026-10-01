@@ -75,7 +75,14 @@ std::uint32_t ProcessTranslator::newBlock(std::string label) {
 }
 
 void ProcessTranslator::emit(const eir::Instruction& instruction) {
-    process.blocks[current].instructions.push_back(instruction);
+    // Every instruction is stamped with the statement being translated, which is the whole of
+    // what source stepping and a line breakpoint need (DESIGN_GUIDE.md section 10.4). Doing it
+    // here rather than at each of the hundred call sites is the only way it stays true: a
+    // single emission that forgot would be a line the debugger can never stop on, and nothing
+    // about the simulation would look wrong.
+    eir::Instruction stamped = instruction;
+    stamped.location = currentStatement;
+    process.blocks[current].instructions.push_back(stamped);
 }
 
 std::uint32_t ProcessTranslator::addConstant(const eir::BitVector& value) {
@@ -218,6 +225,14 @@ bool ProcessTranslator::translateContinuousAssignment(const ast::Expression& ass
 
 bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
     if (failed) return false;
+
+    // Set on the way in and left, rather than saved and restored. A statement's own
+    // instructions are emitted between here and the next statement, and an enclosing
+    // construct that emits again afterwards — a loop's back edge, a conditional's join — is
+    // better attributed to the last statement that ran than to the line of the `for` above
+    // it, which is where a reader would not expect to stop.
+    const SourceLocation location = module->convertLocation(statement.sourceRange.start());
+    if (location.valid()) currentStatement = location;
 
     switch (statement.kind) {
     case ast::StatementKind::Empty:
@@ -1505,9 +1520,9 @@ bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNod
     } else if (name == "$write" || name == "$writeb" || name == "$writeo" || name == "$writeh") {
         kind = eir::SysTaskKind::Write;
     } else if (name == "$finish" || name == "$stop") {
-        // `$stop` would return control to an interactive prompt, which needs the control
-        // layer of M3. Treating it as `$finish` ends the run instead of ignoring it, which
-        // is the safer of the two wrong answers.
+        // `$stop` would return control to an interactive prompt, and there is none. Treating
+        // it as `$finish` ends the run instead of ignoring it, which is the safer of the two
+        // wrong answers.
         kind = eir::SysTaskKind::Finish;
         ignoreArguments = true;
     } else if (name == "$fatal") {

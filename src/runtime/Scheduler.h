@@ -135,6 +135,16 @@ public:
     /// Resets the delta counter, which the kernel does whenever time advances.
     void resetDeltaCount() noexcept { deltas = 0; }
 
+    /// Empties every region, the time wheel and the pending updates.
+    ///
+    /// What a restart needs: a design put back to time zero
+    /// with a clock event still in the wheel from the previous run would resume at a
+    /// timestamp the design has not reached, and a process still queued would run from a
+    /// resume point belonging to a simulation that no longer exists.
+    ///
+    /// Capacity is kept, so a restarted simulation does not pay for its queues twice.
+    void clear() noexcept;
+
 private:
     /// A FIFO that reuses its storage.
     ///
@@ -148,6 +158,20 @@ private:
         [[nodiscard]] bool empty() const noexcept { return head >= entries.size(); }
 
         void push(std::uint32_t value) { entries.push_back(value); }
+
+        /// Puts `value` back at the head, so that the next `pop` returns it.
+        ///
+        /// Only ever used to return a process that was taken and then not run to a stopping
+        /// point — a breakpoint. Pushing it to the *back* instead would let the rest of the
+        /// region overtake it, and the resumed run would then produce a different answer from
+        /// an uninterrupted one, which section 3.8 forbids.
+        void pushFront(std::uint32_t value) {
+            if (head > 0) {
+                entries[--head] = value;
+                return;
+            }
+            entries.insert(entries.begin(), value);
+        }
 
         std::uint32_t pop() { return entries[head++]; }
 

@@ -25,6 +25,7 @@
 #include "ipc/KernelServer.h"
 #include "runtime/Image.h"
 #include "runtime/Time.h"
+#include "session/Session.h"
 
 #include "support/ProcessBuilder.h"
 
@@ -155,24 +156,19 @@ protected:
     SessionFixture() : engine(sources) { engine.addConsumer(consumer); }
 
     void SetUp() override {
-        analysed = guiTestDesign();
-
-        elab::Elaborator elaborator(analysed, engine);
-        elaborated = elaborator.elaborate("tb");
-        ASSERT_NE(elaborated, nullptr)
+        // Through a `session::Session`, which is what a served kernel owns: one simulation for
+        // every surface that drives it.
+        kernelSession = std::make_unique<session::Session>(sources, engine);
+        kernelSession->setTimeScale(runtime::TimeScale(-9));
+        kernelSession->setDesign(std::make_unique<eir::Design>(guiTestDesign()));
+        ASSERT_TRUE(kernelSession->elaborate("tb"))
             << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.front());
-
-        codegen::Compiler compiler(engine);
-        compiled = compiler.compile(analysed);
-        ASSERT_NE(compiled, nullptr);
-
-        image = std::make_unique<runtime::Image>(analysed, *elaborated, *compiled);
 
         ipc::ServerOptions options;
         options.kernelVersion = "enzan test";
         options.timeScale = runtime::TimeScale(-9);
         options.localTranscript = &transcript;
-        server = std::make_unique<ipc::KernelServer>(*image, engine, options);
+        server = std::make_unique<ipc::KernelServer>(*kernelSession, engine, options);
         server->start();
 
         ASSERT_TRUE(directory.isValid());
@@ -193,7 +189,10 @@ protected:
 
     void TearDown() override {
         session.reset();
+
+        // The server borrows the kernel from its session, so it goes first.
         server.reset();
+        kernelSession.reset();
     }
 
     /// Gives both ends a turn: the server steps, then Qt delivers whatever arrived.
@@ -215,18 +214,31 @@ protected:
 
     /// The kernel's signal index for a hierarchical path.
     [[nodiscard]] std::uint32_t signalIndex(std::string_view path) const {
-        return image->findSignal(path);
+        return kernelSession->designImage()->findSignal(path);
     }
 
-    /// Asks for a scope's objects and waits for the answer.
+    /// Asks for a scope's objects and waits for the answer to *that* scope.
+    ///
+    /// The path is compared rather than the first reply taken, because a scope's objects arrive
+    /// by the same message whoever asked for them: with a `MainWindow` in the test, which asks
+    /// about the top level as soon as it has the hierarchy, a reply meant for the window was
+    /// being handed back here as though it were this scope's.
+    ///
+    /// Waiting on a flag rather than on the answer being non-empty, so that a scope which really
+    /// declares nothing returns instead of spinning until the timeout.
     QVector<gui::SignalInfo> objectsOf(const QString& scope) {
         QVector<gui::SignalInfo> received;
-        const auto connection = QObject::connect(
-            session.get(), &gui::KernelSession::objectsReceived,
-            [&](const QString&, const QVector<gui::SignalInfo>& objects) { received = objects; });
+        bool answered = false;
+        const auto connection =
+            QObject::connect(session.get(), &gui::KernelSession::objectsReceived,
+                             [&](const QString& path, const QVector<gui::SignalInfo>& objects) {
+                                 if (path != scope) return;
+                                 received = objects;
+                                 answered = true;
+                             });
 
         session->queryObjects(scope);
-        pumpUntil([&] { return !received.isEmpty(); });
+        pumpUntil([&] { return answered; });
         QObject::disconnect(connection);
         return received;
     }
@@ -236,10 +248,8 @@ protected:
     FixtureConsumer consumer;
     std::ostringstream transcript;
 
-    eir::Design analysed;
-    std::unique_ptr<elab::ElaboratedDesign> elaborated;
-    std::unique_ptr<codegen::CompiledDesign> compiled;
-    std::unique_ptr<runtime::Image> image;
+    /// The kernel end's session, which owns the simulation the server serves.
+    std::unique_ptr<session::Session> kernelSession;
     std::unique_ptr<ipc::KernelServer> server;
     std::unique_ptr<gui::KernelSession> session;
 

@@ -18,7 +18,7 @@ namespace enzan::ipc {
 /// handshake compares it and refuses rather than negotiating: a GUI and a kernel from
 /// different builds that half-understand each other would show wrong values, and section 1.2
 /// puts correctness above convenience.
-constexpr std::uint32_t ProtocolVersion = 3;
+constexpr std::uint32_t ProtocolVersion = 6;
 
 /// What a message is.
 ///
@@ -40,6 +40,8 @@ enum class MessageType : std::uint16_t {
     Restart = 9,
     Quit = 10,
     Detach = 11,
+    Deposit = 12,
+    Force = 13,
 
     // --- kernel to client ---------------------------------------------------
     Welcome = 128,
@@ -138,6 +140,27 @@ struct RestartMessage {};
 /// Asks the kernel to exit once it has stopped.
 struct QuitMessage {};
 
+/// Writes a signal once, from outside the simulation (section 10.4).
+struct DepositMessage {
+    std::uint32_t signalIndex = 0;
+
+    /// Not default-constructible without a width, so an unknown single bit stands in until the
+    /// decoder reads the real one.
+    eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
+};
+
+/// Holds a signal at a value until it is released, or releases it.
+struct ForceMessage {
+    std::uint32_t signalIndex = 0;
+    eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
+
+    /// True to release instead of forcing, in which case `value` is ignored. One message
+    /// rather than two, because a window's force control is one control with two states and a
+    /// client that could force without being able to release would be a bug waiting to be
+    /// filed.
+    bool release = false;
+};
+
 /// Says the client is leaving and the kernel should keep running.
 ///
 /// The counterpart of Quit, and the reason both exist: section 2.2 requires the GUI to detach
@@ -171,6 +194,11 @@ struct InstanceEntry {
     /// Index in this message's own list, or `NoParent` for the top.
     std::uint32_t parent = NoParent;
 
+    /// Where the module this instantiates is declared, so that clicking a scope in the
+    /// Structure window can open its source at the right line. Empty when unknown.
+    std::string file;
+    std::uint32_t line = 0;
+
     static constexpr std::uint32_t NoParent = 0xFFFF'FFFFU;
 };
 
@@ -181,6 +209,12 @@ struct InstanceEntry {
 /// lazily-expanding tree would make the GUI's model depend on round trips.
 struct DesignMessage {
     std::vector<InstanceEntry> instances;
+
+    /// Every source file the design was analysed from, in analysis order.
+    ///
+    /// Sent with the tree because that is when a client is building its windows, and because
+    /// a source window needs a list of what it may open before the user has clicked anything.
+    std::vector<std::string> sourceFiles;
 };
 
 /// One signal visible in a scope.
@@ -394,6 +428,19 @@ void serialize(Archive& /*archive*/, QuitMessage& /*message*/) {}
 template<typename Archive>
 void serialize(Archive& /*archive*/, DetachMessage& /*message*/) {}
 
+template<typename Archive>
+void serialize(Archive& archive, DepositMessage& message) {
+    archive.u32(message.signalIndex);
+    archive.bits(message.value);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, ForceMessage& message) {
+    archive.u32(message.signalIndex);
+    archive.bits(message.value);
+    archive.boolean(message.release);
+}
+
 /// Enumerations travel as a byte and are range-checked on the way in, so that a value from a
 /// newer peer becomes a decode failure rather than an out-of-range enumerator.
 template<typename Archive>
@@ -425,11 +472,14 @@ void serialize(Archive& archive, InstanceEntry& entry) {
     archive.str(entry.path);
     archive.str(entry.name);
     archive.u32(entry.parent);
+    archive.str(entry.file);
+    archive.u32(entry.line);
 }
 
 template<typename Archive>
 void serialize(Archive& archive, DesignMessage& message) {
     archive.list(message.instances);
+    archive.strList(message.sourceFiles);
 }
 
 template<typename Archive>

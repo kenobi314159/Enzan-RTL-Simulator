@@ -8,7 +8,6 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
-#include <QProcess>
 #include <QSocketNotifier>
 #include <QStandardPaths>
 
@@ -17,26 +16,13 @@
 
 namespace enzan::gui {
 
-namespace {
-
-/// How long to wait for a kernel this session started to acknowledge that it is listening.
-constexpr int KernelStartupTimeoutMilliseconds = 10'000;
-
-/// How long to wait for a kernel to exit after being asked to.
-constexpr int KernelShutdownTimeoutMilliseconds = 3'000;
-
-} // namespace
+namespace {} // namespace
 
 KernelSession::KernelSession(QObject* parent)
     : QObject(parent), database(std::make_unique<wavedb::WaveformDatabase>()) {}
 
 KernelSession::~KernelSession() {
     teardown(QString());
-
-    if (kernelProcess != nullptr && kernelProcess->state() != QProcess::NotRunning) {
-        kernelProcess->kill();
-        kernelProcess->waitForFinished(KernelShutdownTimeoutMilliseconds);
-    }
 }
 
 bool KernelSession::isAttached() const {
@@ -57,53 +43,6 @@ bool KernelSession::attach(const QString& socketPath, QString& error) {
     hello.clientName = QCoreApplication::applicationName().toStdString();
     send(ipc::MessageType::Hello, hello);
     return true;
-}
-
-bool KernelSession::launch(const QString& program, const QStringList& arguments, QString& error) {
-    // A socket in the user's runtime directory rather than a shared temporary one: it is
-    // per-user by construction, which is the access control a Unix domain socket gets.
-    QString directory = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    if (directory.isEmpty()) directory = QDir::tempPath();
-
-    launchedSocketPath =
-        QStringLiteral("%1/enzan-%2.sock").arg(directory).arg(QCoreApplication::applicationPid());
-    QFile::remove(launchedSocketPath);
-
-    QStringList full = arguments;
-    full << QStringLiteral("--listen") << launchedSocketPath;
-
-    kernelProcess = new QProcess(this);
-    kernelProcess->setProcessChannelMode(QProcess::ForwardedChannels);
-    kernelProcess->start(program, full);
-
-    if (!kernelProcess->waitForStarted(KernelStartupTimeoutMilliseconds)) {
-        error =
-            QStringLiteral("could not start '%1': %2").arg(program, kernelProcess->errorString());
-        return false;
-    }
-
-    // The kernel has to analyse and elaborate the design before it binds the socket, which on a
-    // real design takes a while, so the wait is for the socket to appear rather than for a
-    // fixed delay. A kernel that dies — because the design did not compile — is noticed here
-    // rather than by waiting out the timeout.
-    QElapsedTimer waited;
-    waited.start();
-    while (waited.elapsed() < KernelStartupTimeoutMilliseconds) {
-        if (kernelProcess->state() == QProcess::NotRunning) {
-            error = QStringLiteral("the kernel exited before it began listening; its output "
-                                   "above says why");
-            return false;
-        }
-        if (QFile::exists(launchedSocketPath) && attach(launchedSocketPath, error)) return true;
-
-        // Waiting inside an event loop rather than sleeping, so that the window that is
-        // already up stays responsive while a large design elaborates.
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-    }
-
-    error = QStringLiteral("the kernel did not begin listening within %1 seconds")
-                .arg(KernelStartupTimeoutMilliseconds / 1000);
-    return false;
 }
 
 void KernelSession::watch() {
@@ -135,11 +74,6 @@ void KernelSession::teardown(const QString& reason) {
     const bool wasOpen = connection.isOpen();
     connection.close();
 
-    if (!launchedSocketPath.isEmpty()) {
-        QFile::remove(launchedSocketPath);
-        launchedSocketPath.clear();
-    }
-
     if (wasOpen) Q_EMIT detached(reason);
 }
 
@@ -152,6 +86,27 @@ void KernelSession::detach() {
     teardown(tr("detached"));
 }
 
+void KernelSession::deposit(std::uint32_t signalIndex, const eir::BitVector& value) {
+    ipc::DepositMessage message;
+    message.signalIndex = signalIndex;
+    message.value = value;
+    send(ipc::MessageType::Deposit, message);
+}
+
+void KernelSession::force(std::uint32_t signalIndex, const eir::BitVector& value) {
+    ipc::ForceMessage message;
+    message.signalIndex = signalIndex;
+    message.value = value;
+    send(ipc::MessageType::Force, message);
+}
+
+void KernelSession::release(std::uint32_t signalIndex) {
+    ipc::ForceMessage message;
+    message.signalIndex = signalIndex;
+    message.release = true;
+    send(ipc::MessageType::Force, message);
+}
+
 void KernelSession::quitKernel() {
     if (connection.isOpen()) {
         ipc::QuitMessage message;
@@ -159,15 +114,6 @@ void KernelSession::quitKernel() {
         static_cast<void>(connection.flushBlocking());
     }
     teardown(tr("the kernel was asked to exit"));
-
-    if (kernelProcess != nullptr) {
-        // Asked first, killed only if it will not go. A kernel in the middle of writing a file
-        // deserves the chance to finish it.
-        if (!kernelProcess->waitForFinished(KernelShutdownTimeoutMilliseconds)) {
-            kernelProcess->kill();
-            kernelProcess->waitForFinished(KernelShutdownTimeoutMilliseconds);
-        }
-    }
 }
 
 void KernelSession::flush() {
@@ -301,6 +247,10 @@ void KernelSession::onDesign(const ipc::Frame& frame) {
     for (ipc::InstanceEntry& entry : message.instances) {
         designInstances.push_back(std::move(entry));
     }
+
+    designSources.clear();
+    for (const std::string& file : message.sourceFiles)
+        designSources.push_back(QString::fromStdString(file));
 
     Q_EMIT designChanged();
 }

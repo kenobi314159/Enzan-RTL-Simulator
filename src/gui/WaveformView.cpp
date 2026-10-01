@@ -726,7 +726,14 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
         if (record == wavedb::WaveformDatabase::NotRecorded) return false;
 
         out.assign(static_cast<std::size_t>(columns), wavedb::Sample{});
-        database.sample(record, timeAxis.start(), timeAxis.end(), out);
+
+        // Summarised over the bits this row shows, which for a slice or an unpacked bit is not
+        // the whole signal. Summarising the signal instead reported a transition in every column
+        // where any bit of the bus moved, so a bit that never changed was drawn as a solid busy
+        // bar across the window and only resolved into the flat line it was once the zoom put
+        // each column inside a single value.
+        const auto [high, low] = WaveformModel::bitRange(*waveRow);
+        database.sample(record, timeAxis.start(), timeAxis.end(), high, low, out);
         return true;
     }
 

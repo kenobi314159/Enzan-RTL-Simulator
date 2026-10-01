@@ -38,6 +38,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -82,9 +83,15 @@ public:
         enzan::SourceManager& sources;
         const slang::SourceManager& slangSources;
 
-        /// Enzan buffer for each file name slang reports, so that a slang location can be
-        /// rendered against the same text Enzan read.
-        const std::map<std::string, BufferId, std::less<>>& buffers;
+        /// Enzan buffer for each slang buffer, so that a slang location can be rendered
+        /// against the same text Enzan read.
+        ///
+        /// Keyed by slang's own buffer identifier rather than by the file name it reports.
+        /// The name is a rendering — slang shortens an absolute path to its last component —
+        /// so a map keyed on it silently missed for every source named by an absolute path,
+        /// which is what a build system passes. The identifier is what the two managers
+        /// actually agree about.
+        const std::map<slang::BufferID, BufferId>& buffers;
     };
 
     ModuleBuilder(Shared& sharedState, std::string name, const ast::InstanceBodySymbol& bodySymbol)
@@ -99,8 +106,16 @@ public:
     bool collectDeclarations();
 
     /// Records the port index of each port symbol, for the parent's connections.
-    [[nodiscard]] const std::map<const ast::Symbol*, std::uint32_t>& portIndices() const {
-        return portIndexBySymbol;
+    /// Records the EIR port index of each port, by name.
+    ///
+    /// By name and not by the `ast::Symbol*`: slang creates a separate port symbol for every
+    /// instance, even instances of one parameterisation, so a map keyed on the pointer is only
+    /// usable for the one body it was built from. Keying it by name is what lets one
+    /// translation serve every instance of a module (see `Walker::bodies`) — and a pointer-keyed
+    /// map shared between bodies does not fail loudly, it silently binds nothing and the design
+    /// simulates to the wrong answer.
+    [[nodiscard]] const std::map<std::string, std::uint32_t, std::less<>>& portIndices() const {
+        return portIndexByName;
     }
 
     /// Translates the procedural blocks and continuous assignments.
@@ -108,7 +123,7 @@ public:
 
     /// Adds an instance of an already-translated module.
     bool addInstance(const ast::InstanceSymbol& instance, const std::string& targetName,
-                     const std::map<const ast::Symbol*, std::uint32_t>& targetPorts);
+                     const std::map<std::string, std::uint32_t, std::less<>>& targetPorts);
 
     eir::ModuleDefinition take() { return std::move(definitionValue); }
 
@@ -162,7 +177,7 @@ private:
     eir::ModuleDefinition definitionValue;
 
     std::map<const ast::ValueSymbol*, std::uint32_t> objectBySymbol;
-    std::map<const ast::Symbol*, std::uint32_t> portIndexBySymbol;
+    std::map<std::string, std::uint32_t, std::less<>> portIndexByName;
 
     std::vector<std::pair<std::string, const ast::ProceduralBlockSymbol*>> proceduralBlocks;
     std::vector<const ast::ContinuousAssignSymbol*> continuousAssignments;
@@ -232,8 +247,7 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
 SourceLocation ModuleBuilder::convertLocation(slang::SourceLocation location) {
     if (!location) return {};
 
-    const std::string_view fileName = shared->slangSources.getFileName(location);
-    const auto found = shared->buffers.find(fileName);
+    const auto found = shared->buffers.find(location.buffer());
     if (found == shared->buffers.end()) return {};
 
     // slang reports a line and a column; Enzan's locations are byte offsets. Going through
@@ -412,8 +426,8 @@ bool ModuleBuilder::collectDeclarations() {
             continue;
         }
 
-        portIndexBySymbol.emplace(portSymbol,
-                                  static_cast<std::uint32_t>(definitionValue.ports.size()));
+        portIndexByName.emplace(std::string(port.name),
+                                static_cast<std::uint32_t>(definitionValue.ports.size()));
         definitionValue.ports.push_back(eir::Port{.name = std::string(port.name),
                                                   .direction = direction,
                                                   .objectIndex = *objectIndex,
@@ -595,15 +609,16 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
     return objectIndex;
 }
 
-bool ModuleBuilder::addInstance(const ast::InstanceSymbol& instance, const std::string& targetName,
-                                const std::map<const ast::Symbol*, std::uint32_t>& targetPorts) {
+bool ModuleBuilder::addInstance(
+    const ast::InstanceSymbol& instance, const std::string& targetName,
+    const std::map<std::string, std::uint32_t, std::less<>>& targetPorts) {
     eir::Instance result;
     result.name = std::string(instance.name);
     result.definitionName = targetName;
     result.location = convertLocation(instance.location);
 
     for (const ast::PortConnection* connection : instance.getPortConnections()) {
-        const auto portIndex = targetPorts.find(&connection->port);
+        const auto portIndex = targetPorts.find(connection->port.name);
         if (portIndex == targetPorts.end()) {
             // A port the child could not translate; the diagnostic was already reported
             // there, and binding it here would only add noise.
@@ -659,37 +674,99 @@ public:
 private:
     struct BodyInfo {
         std::string name;
-        std::map<const ast::Symbol*, std::uint32_t> portIndices;
+        std::map<std::string, std::uint32_t, std::less<>> portIndices;
     };
 
-    /// Returns a module name not already used.
+    /// Returns the EIR name for one parameterisation of a module.
     ///
     /// slang caches one body per distinct parameterisation, so a parameterised module
-    /// produces several. Each becomes its own EIR definition — which is what keeps
-    /// parameters out of EIR entirely (see eir/Module.h) — and a numeric suffix
-    /// distinguishes them. The suffixes are assigned in the order the hierarchy is walked,
-    /// so they are the same on every run.
-    std::string uniqueModuleName(std::string_view preferred);
+    /// produces several. Each becomes its own EIR definition — which is what keeps parameters
+    /// out of EIR entirely (see eir/Module.h) — and a suffix distinguishes them.
+    ///
+    /// **The suffix is a function of the parameter values, not a counter.** A counter numbers
+    /// the parameterisations in the order *this* compilation happened to walk them, which makes
+    /// the name meaningless outside it: `counter$1` from one analysis and `counter$1` from
+    /// another would be different modules wearing one name, and a design assembled from two
+    /// libraries (DESIGN_GUIDE.md section 8.2) would resolve an instance to the wrong body with
+    /// nothing to say so. Deriving it from the values instead gives a specialisation the same
+    /// name wherever it is produced, which is what lets a library be instantiated with
+    /// parameters chosen by whoever uses it.
+    static std::string specialisedModuleName(const ast::InstanceBodySymbol& body);
 
     eir::Design* design;
     ModuleBuilder::Shared shared;
-    std::map<const ast::InstanceBodySymbol*, BodyInfo> bodies;
-    std::map<std::string, unsigned, std::less<>> nameCounters;
+    /// Bodies already translated, by the EIR name they were given.
+    ///
+    /// Keyed by name and not by `InstanceBodySymbol*`: slang hands out a separate body symbol
+    /// per instance even when the parameterisation is identical, so a pointer never matches and
+    /// every instance of a module was translated again and then discarded by the design's
+    /// replace-by-name. The name is a function of the definition and the parameters set on it
+    /// (`specialisedModuleName`), so two bodies sharing a name are the same module and one
+    /// translation serves every instance of it.
+    ///
+    /// This is only sound because `BodyInfo::portIndices` is keyed by port name. A map keyed on
+    /// slang's port symbols belongs to the one body it came from, and reusing it for another
+    /// binds no connections at all — quietly, with the design still elaborating and simulating
+    /// to the wrong answer.
+    std::map<std::string, BodyInfo, std::less<>> bodies;
     bool succeeded = true;
 };
 
-std::string Walker::uniqueModuleName(std::string_view preferred) {
-    std::string base(preferred);
-    const unsigned count = nameCounters[base]++;
-    if (count == 0) return base;
-    return std::format("{}${}", base, count);
+std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
+    std::string base(body.getDefinition().name);
+
+    // Only the parameters set from outside: a localparam is derived inside the module from
+    // those, so two instances agreeing on the ports agree on it, and including it would make
+    // the name longer without making it more specific.
+    std::string values;
+    for (const ast::ParameterSymbolBase* parameter : body.getParameters()) {
+        if (parameter->isLocalParam()) continue;
+
+        const ast::Symbol& symbol = parameter->symbol;
+        std::string rendered;
+        if (symbol.kind == ast::SymbolKind::Parameter) {
+            rendered = symbol.as<ast::ParameterSymbol>().getValue().toString();
+        } else if (symbol.kind == ast::SymbolKind::TypeParameter) {
+            rendered = symbol.as<ast::TypeParameterSymbol>().targetType.getType().toString();
+        } else {
+            continue;
+        }
+
+        if (!values.empty()) values += ',';
+        values += symbol.name;
+        values += '=';
+        values += rendered;
+    }
+
+    if (values.empty()) return base;
+
+    // Readable while it is short, which is what a `lib list` and a waveform hierarchy want; a
+    // digest once it is not, so that a module with many or wide parameters does not produce a
+    // name nothing can display. Either way it is a function of the values alone.
+    std::string suffix;
+    if (values.size() <= 32) {
+        suffix = values;
+        for (char& c : suffix) {
+            const bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                              || (c >= '0' && c <= '9') || c == '_';
+            if (!keep) c = '_';
+        }
+    } else {
+        // FNV-1a over the rendered values. Stable across runs, builds and machines, which a
+        // std::hash is not required to be.
+        std::uint64_t hash = 0xcbf2'9ce4'8422'2325ULL;
+        for (const char c : values) {
+            hash ^= static_cast<unsigned char>(c);
+            hash *= 0x0000'0100'0000'01b3ULL;
+        }
+        suffix = std::format("{:016x}", hash);
+    }
+
+    return std::format("{}${}", base, suffix);
 }
 
 std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance) {
     const ast::InstanceBodySymbol& body = instance.body;
-
-    const auto existing = bodies.find(&body);
-    if (existing != bodies.end()) return existing->second.name;
 
     if (!instance.isModule()) {
         shared.diagnostics.report(DiagCode::UnsupportedConstruct, SourceLocation(),
@@ -698,7 +775,10 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
         return std::nullopt;
     }
 
-    std::string name = uniqueModuleName(instance.getDefinition().name);
+    std::string name = specialisedModuleName(body);
+
+    const auto existing = bodies.find(name);
+    if (existing != bodies.end()) return existing->second.name;
     ModuleBuilder builder(shared, name, body);
 
     if (!builder.collectDeclarations()) {
@@ -709,7 +789,7 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
     // The name is reserved before recursing so that a hierarchy which reaches the same body
     // again — directly or through a cycle slang did not reject — terminates here rather
     // than recursing until the stack runs out.
-    bodies.emplace(&body, BodyInfo{.name = name, .portIndices = builder.portIndices()});
+    bodies.emplace(name, BodyInfo{.name = name, .portIndices = builder.portIndices()});
 
     for (const ast::InstanceSymbol* child : builder.instances) {
         const std::optional<std::string> childName = translate(*child);
@@ -718,7 +798,7 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
             return std::nullopt;
         }
 
-        const auto childInfo = bodies.find(&child->body);
+        const auto childInfo = bodies.find(*childName);
         if (childInfo == bodies.end()) {
             succeeded = false;
             return std::nullopt;
@@ -739,29 +819,6 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
     return name;
 }
 
-/// Reports a file that could not be read, with the reason the source manager gave.
-void reportFileFailure(DiagnosticEngine& diagnostics, const std::filesystem::path& path,
-                       const FileReadResult& result) {
-    const std::string name = path.string();
-    switch (result.status) {
-    case FileReadStatus::NotFound:
-        diagnostics.report(DiagCode::CannotOpenFile, SourceLocation(), name, result.systemMessage);
-        return;
-    case FileReadStatus::NotARegularFile:
-        diagnostics.report(DiagCode::NotARegularFile, SourceLocation(), name);
-        return;
-    case FileReadStatus::TooLarge:
-        diagnostics.report(DiagCode::SourceFileTooLarge, SourceLocation(), name,
-                           SourceManager::MaxBufferSize);
-        return;
-    case FileReadStatus::PermissionDenied:
-    case FileReadStatus::ReadFailed:
-    case FileReadStatus::Success:
-        diagnostics.report(DiagCode::FileReadFailed, SourceLocation(), name, result.systemMessage);
-        return;
-    }
-}
-
 } // namespace
 
 std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sources,
@@ -775,19 +832,26 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     // slang, so that a diagnostic from slang and one from elaboration quote the same bytes
     // and the same snippet. Reading each file twice would be slower and could disagree.
     slang::SourceManager slangSources;
-    std::map<std::string, BufferId, std::less<>> buffers;
+    std::map<slang::BufferID, BufferId> buffers;
     std::vector<slang::SourceBuffer> slangBuffers;
 
-    for (const std::filesystem::path& path : options.files) {
-        const FileReadResult result = sources.readFile(path);
-        if (!result.ok()) {
-            reportFileFailure(diagnostics, path, result);
-            return nullptr;
+    for (std::size_t index = 0; index < options.files.size(); ++index) {
+        const std::filesystem::path& path = options.files[index];
+
+        BufferId text = index < options.buffers.size() ? options.buffers[index] : BufferId();
+        if (!text.valid()) {
+            const FileReadResult result = sources.readFile(path);
+            if (!result.ok()) {
+                reportFileReadFailure(diagnostics, path, result);
+                return nullptr;
+            }
+            text = result.buffer;
         }
 
-        const std::string name = path.string();
-        buffers.emplace(name, result.buffer);
-        slangBuffers.push_back(slangSources.assignText(name, sources.bufferText(result.buffer)));
+        const slang::SourceBuffer buffer =
+            slangSources.assignText(path.string(), sources.bufferText(text));
+        buffers.emplace(buffer.id, text);
+        slangBuffers.push_back(buffer);
     }
 
     slang::Bag bag;
@@ -818,7 +882,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         const std::string message = slangEngine.formatMessage(diagnostic);
         const SourceLocation location = [&] {
             if (!diagnostic.location) return SourceLocation();
-            const auto found = buffers.find(slangSources.getFileName(diagnostic.location));
+            const auto found = buffers.find(diagnostic.location.buffer());
             if (found == buffers.end()) return SourceLocation();
             const SourceLocation start = sources.lineStart(
                 found->second,
@@ -842,6 +906,20 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             break;
         case slang::DiagnosticSeverity::Ignored: break;
         }
+    }
+
+    // Collected whether or not the analysis succeeded: a build that failed because a header
+    // was wrong still has to rebuild when that header is fixed.
+    if (options.filesRead != nullptr) {
+        // Sorted, because slang hands them back in whatever order it opened them and section
+        // 3.8 puts observable ordering beyond that. Duplicates dropped: one file included
+        // twice is one prerequisite.
+        std::set<std::filesystem::path> opened;
+        for (const slang::BufferID buffer : slangSources.getAllBuffers()) {
+            const std::filesystem::path& path = slangSources.getFullPath(buffer);
+            if (!path.empty()) opened.insert(path);
+        }
+        options.filesRead->assign(opened.begin(), opened.end());
     }
 
     if (hasError) return nullptr;

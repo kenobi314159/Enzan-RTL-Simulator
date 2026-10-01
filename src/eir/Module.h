@@ -184,6 +184,16 @@ struct ModuleDefinition {
     /// the hierarchy display.
     std::string sourceName;
 
+    /// The logical library this unit was analysed into, or empty when it was not
+    /// analysed into one.
+    ///
+    /// Carried on the unit rather than held beside the design, because a design
+    /// assembled from several libraries must be able to say which of them each unit
+    /// came from: two libraries may define one name, and resolving that by whichever
+    /// was loaded last — which is what a design keyed on the bare name does — is the
+    /// failure mode section 1.2 ranks worst. Section 8.2 has the resolution rules.
+    std::string library;
+
     SourceLocation location;
 
     std::vector<Object> objects;

@@ -87,8 +87,43 @@ public:
 /// Verifies, elaborates, compiles and runs a one-module design.
 class Simulation {
 public:
+    /// The buffer `Simulation` registers its stand-in source text as.
+    ///
+    /// Always the first buffer of the manager, so that a test can build EIR carrying
+    /// locations into it *before* the simulation that owns the manager exists. Identifiers
+    /// are handed out in the order buffers are added, which is what makes that sound.
+    static constexpr enzan::BufferId SourceBuffer = enzan::BufferId::fromIndex(0);
+
+    /// One line of stand-in source per line number, so that a location is easy to write.
+    static constexpr std::string_view SourceText = "one\ntwo\nthree\nfour\nfive\n";
+
+    /// The byte offset of 1-based `line` in `SourceText`.
+    static constexpr std::uint32_t lineOffset(std::uint32_t line) {
+        constexpr std::uint32_t Offsets[] = {0, 0, 4, 8, 14, 19};
+        return Offsets[line];
+    }
+
+    /// A location on `line` of the stand-in source.
+    static constexpr enzan::SourceLocation at(std::uint32_t line) {
+        return {SourceBuffer, lineOffset(line)};
+    }
+
+    /// A location `column` bytes into `line`, for a test that needs two positions on one line.
+    ///
+    /// Every line of the stand-in source is at least three bytes long, so a small column stays
+    /// on the line it was asked for.
+    static constexpr enzan::SourceLocation at(std::uint32_t line, std::uint32_t column) {
+        return {SourceBuffer, lineOffset(line) + column};
+    }
+
     Simulation(Design design, std::string_view topName)
         : engine(sources), analysed(std::move(design)) {
+        // Added first, so that `SourceBuffer` names it. Every simulation gets one even when
+        // the test does not care, because a fixture whose buffer numbering depends on what
+        // the test asked for is a fixture that breaks the next test to be written.
+        const enzan::BufferId registered = sources.addBuffer("design.sv", std::string(SourceText));
+        EXPECT_EQ(registered, SourceBuffer);
+
         engine.addConsumer(consumer);
 
         // Verifying here means every kernel test also exercises the verifier, and that a
@@ -126,6 +161,13 @@ public:
 
         const auto& signal = image->signals()[signalIndex];
         return enzan::eir::toString(kernel->arena().at(signal.wordOffset, signal.bitWidth), radix);
+    }
+
+    /// The index of a signal by path, failing the test if the design has no such signal.
+    [[nodiscard]] std::uint32_t signal(std::string_view path) const {
+        const std::uint32_t signalIndex = image->findSignal(path);
+        EXPECT_NE(signalIndex, Image::NoSignal) << "no signal named " << path;
+        return signalIndex;
     }
 
     [[nodiscard]] std::string transcript() const { return transcriptStream.str(); }
@@ -1142,6 +1184,224 @@ TEST(Kernel, ResumingAfterAnInterruptMatchesAnUninterruptedRun) {
               straight.simulationKernel().executedInstructions());
     EXPECT_EQ(chopped.simulationKernel().totalDeltaCycles(),
               straight.simulationKernel().totalDeltaCycles());
+}
+
+// ---------------------------------------------------------------------------
+// examine, deposit, force and release (section 10.4)
+// ---------------------------------------------------------------------------
+
+/// The clock-generator design again, so that a force has something to fight with.
+Design makeTogglingDesign() {
+    ProcessBuilder builder(ProcessKind::Always, "clockgen");
+    const std::uint32_t delay = builder.reg(Type::bits(32, false, false));
+    const std::uint32_t value = builder.reg(Type::logic());
+    const std::uint32_t inverted = builder.reg(Type::logic());
+    const std::uint32_t five = builder.constant("32'd5");
+
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(five)));
+    builder.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    builder.block("toggle");
+    builder.readObject(value, 0);
+    builder.emit(Instruction::make(Opcode::Not, Operand::reg(inverted), Operand::reg(value)));
+    builder.store(0, inverted);
+    builder.emit(Instruction::make(Opcode::Jump, {}, Operand::block(0)));
+
+    return designOf(makeTop(
+        {builder.finish()},
+        {Object{.name = "clk", .type = Type::logic(), .initialValue = BitVector::parse("1'b0")}}));
+}
+
+TEST(Kernel, ADepositLandsImmediately) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().deposit(clk, one);
+
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
+TEST(Kernel, ADepositWakesWhatWatchesTheSignal) {
+    Simulation simulation(makeClockedDesign(EdgeKind::Posedge, "1'b0", "1'b0"), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ASSERT_EQ(simulation.run(0), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "0");
+
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().deposit(simulation.signal("/tb/clk"), one);
+    ASSERT_EQ(simulation.run(0), RunStatus::TimeLimitReached);
+
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "1");
+}
+
+TEST(Kernel, ADepositIsOverwrittenByTheNextDrive) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().deposit(simulation.signal("/tb/clk"), one);
+    ASSERT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+
+    // The generator inverted what it found, which is the deposited value.
+    EXPECT_EQ(simulation.value("/tb/clk"), "0");
+}
+
+TEST(Kernel, AForcedSignalIgnoresWhatDrivesIt) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().force(clk, one);
+    EXPECT_TRUE(simulation.simulationKernel().isForced(clk));
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+
+    ASSERT_EQ(simulation.run(20), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
+TEST(Kernel, AForcedSignalIgnoresADeposit) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    const BitVector zero = literal("1'b0");
+    simulation.simulationKernel().force(clk, one);
+    simulation.simulationKernel().deposit(clk, zero);
+
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
+TEST(Kernel, ForcingAgainChangesTheHeldValue) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    const BitVector zero = literal("1'b0");
+    simulation.simulationKernel().force(clk, one);
+    simulation.simulationKernel().force(clk, zero);
+
+    EXPECT_EQ(simulation.value("/tb/clk"), "0");
+    EXPECT_TRUE(simulation.simulationKernel().isForced(clk));
+}
+
+TEST(Kernel, AReleasedSignalIsDrivenAgain) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().force(clk, one);
+    ASSERT_EQ(simulation.run(20), RunStatus::TimeLimitReached);
+
+    EXPECT_TRUE(simulation.simulationKernel().release(clk));
+    EXPECT_FALSE(simulation.simulationKernel().isForced(clk));
+
+    // The value stays where the force left it until something drives the signal, which the
+    // generator does at the next multiple of five.
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
+    ASSERT_EQ(simulation.run(25), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), "0");
+}
+
+TEST(Kernel, ReleasingASignalThatWasNeverForcedSaysSo) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    EXPECT_FALSE(simulation.simulationKernel().release(simulation.signal("/tb/clk")));
+}
+
+TEST(Kernel, NothingIsForcedBeforeAnythingIsForced) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    EXPECT_FALSE(simulation.simulationKernel().isForced(simulation.signal("/tb/clk")));
+}
+
+TEST(Kernel, AForceDoesNotSurviveReinitialisation) {
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    const BitVector one = literal("1'b1");
+    simulation.simulationKernel().force(clk, one);
+
+    simulation.simulationKernel().initialize();
+    EXPECT_FALSE(simulation.simulationKernel().isForced(clk));
+}
+
+TEST(Kernel, AForcedSignalIgnoresANonBlockingUpdate) {
+    Simulation simulation(makeClockedDesign(EdgeKind::Posedge, "1'b0", "1'b1"), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t count = simulation.signal("/tb/count");
+    const BitVector held = literal("8'd99");
+    simulation.simulationKernel().force(count, held);
+
+    ASSERT_EQ(simulation.run(20), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "99");
+}
+
+// ---------------------------------------------------------------------------
+// restart
+// ---------------------------------------------------------------------------
+
+TEST(Kernel, ReinitialisingRunsTheDesignAgainIdentically) {
+    // `restart` is `initialize` called a second time. A design put back to time zero must
+    // behave exactly as it did the first time, which means nothing the first run left in the
+    // time wheel, in a process's resume point or in an edge subscription may survive.
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ASSERT_EQ(simulation.run(12), RunStatus::TimeLimitReached);
+    const std::string afterFirst = simulation.value("/tb/clk");
+
+    simulation.simulationKernel().initialize();
+    EXPECT_EQ(simulation.time(), 0U);
+    EXPECT_EQ(simulation.value("/tb/clk"), "0") << "the declared initial value came back";
+
+    ASSERT_EQ(simulation.run(12), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), afterFirst);
+}
+
+TEST(Kernel, ReinitialisingClearsAFinishedRun) {
+    ProcessBuilder builder(ProcessKind::Initial, "stopper");
+    SysTaskCall call;
+    call.kind = SysTaskKind::Finish;
+    const std::uint32_t descriptor = builder.sysCall(std::move(call));
+
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(descriptor)));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready());
+    ASSERT_EQ(simulation.run(), RunStatus::Finished);
+
+    simulation.simulationKernel().initialize();
+    EXPECT_EQ(simulation.run(), RunStatus::Finished) << "the design stopped a second time";
+}
+
+TEST(Kernel, ReinitialisingAfterASuspensionDoesNotResumeTheOldRun) {
+    // The clock generator suspends inside `WaitTime`. If its resume point survived the
+    // restart it would continue mid-body, toggling on a schedule the new run never set up.
+    Simulation simulation(makeTogglingDesign(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ASSERT_EQ(simulation.run(7), RunStatus::TimeLimitReached);
+    simulation.simulationKernel().initialize();
+
+    // The first edge is at five, not at whatever was left over from before.
+    ASSERT_EQ(simulation.run(4), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), "0");
+    ASSERT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/clk"), "1");
 }
 
 } // namespace

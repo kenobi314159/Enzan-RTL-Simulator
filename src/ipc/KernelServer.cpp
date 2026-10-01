@@ -103,9 +103,10 @@ std::vector<DiagnosticMessage> KernelServer::DiagnosticRelay::take() {
 // Construction
 // ---------------------------------------------------------------------------
 
-KernelServer::KernelServer(const runtime::Image& imageToServe, DiagnosticEngine& diagnosticEngine,
+KernelServer::KernelServer(session::Session& sessionToServe, DiagnosticEngine& diagnosticEngine,
                            ServerOptions serverOptions)
-    : image(&imageToServe),
+    : session(&sessionToServe),
+      image(sessionToServe.designImage()),
       diagnostics(&diagnosticEngine),
       options(std::move(serverOptions)),
       transcriptRelay(options.localTranscript != nullptr ? *options.localTranscript : std::cout),
@@ -116,13 +117,68 @@ KernelServer::KernelServer(const runtime::Image& imageToServe, DiagnosticEngine&
 
 KernelServer::~KernelServer() {
     diagnostics->removeConsumer(diagnosticRelay);
+    detachFromKernel();
 
-    // The kernel must not outlive its listeners, and the recorder flushes into the database as
-    // it closes, so the order is spelled out rather than left to the member declarations.
+    // The relay is about to go, so the session must stop writing into it.
+    session->setTranscript(nullptr);
+}
+
+void KernelServer::detachFromKernel() {
+    // The kernel belongs to the session and outlives this server, so every registration made
+    // against it has to be taken back. A listener destroyed while still registered is a
+    // dangling pointer the *next* run calls through — which is a crash in the middle of a
+    // simulation with nothing in the transcript to explain it.
+    if (simulationKernel != nullptr) {
+        if (recorder != nullptr) simulationKernel->removeListener(*recorder);
+        if (publisher != nullptr) simulationKernel->removeListener(*publisher);
+        simulationKernel->setInterrupt(nullptr);
+    }
+
+    // The recorder flushes into the database as it closes, so the order is spelled out rather
+    // than left to the member declarations.
     publisher.reset();
     recorder.reset();
     database.reset();
-    simulationKernel.reset();
+}
+
+KernelServer::Borrow KernelServer::renewKernelBorrow() {
+    // Asked of the session's own counter, never of the addresses. Freeing one elaboration and
+    // building the next allocates the same sizes in the same order, so the new kernel commonly
+    // lands exactly where the old one was: on this machine the image moved and the kernel did
+    // not, on CI neither moved, and a comparison of pointers therefore answered "nothing has
+    // changed" about a kernel that had been destroyed and replaced.
+    if (session->elaborationGeneration() == borrowedGeneration) return Borrow::Unchanged;
+
+    // The kernel that was being served has been destroyed, and every registration made against
+    // it went with it. The pointers are dropped *before* anything else, because `detachFromKernel`
+    // would otherwise take those registrations back through them; and the publisher goes with
+    // them rather than being carried over, because `start` restores what it had subscribed to
+    // and a different elaboration numbers its signals differently.
+    simulationKernel = nullptr;
+    image = nullptr;
+    publisher.reset();
+    recorder.reset();
+    database.reset();
+
+    if (session->simulationKernel() == nullptr || session->designImage() == nullptr) {
+        borrowedGeneration = session->elaborationGeneration();
+        simulationState = SimulationState::Failed;
+        closeClient("a command discarded the design, so there is nothing left to serve");
+
+        // And the process stops rather than waiting for another client. Every answer the server
+        // gives reads the kernel, so a server that stayed listening with none would greet the
+        // next client and then fail on its first request; there is nothing here to serve and
+        // saying so by exiting is the honest end.
+        exitRequested = true;
+        return Borrow::Gone;
+    }
+
+    // Everything a client holds describes the design that has gone — the instance tree, the
+    // signal indices it subscribed to, the history in its database — so it is sent the new tree
+    // and starts again from it, exactly as a newly attached client does.
+    start();
+    onQueryDesign();
+    return Borrow::Renewed;
 }
 
 void KernelServer::start() {
@@ -132,18 +188,24 @@ void KernelServer::start() {
     std::vector<std::uint32_t> keepSubscribed;
     if (publisher != nullptr) keepSubscribed = publisher->subscribedSignals();
 
-    publisher.reset();
-    recorder.reset();
-    database.reset();
-    simulationKernel.reset();
+    detachFromKernel();
 
-    runtime::KernelOptions kernelOptions;
-    kernelOptions.timeScale = options.timeScale;
-    kernelOptions.deltaLimit = options.deltaLimit;
-    kernelOptions.transcript = &transcriptStream;
+    // The session's kernel, put back to time zero. `initialize` resets everything a run
+    // accumulates — the arena, the queues, the time wheel, each process's resume point — so a
+    // kernel of the server's own would buy nothing and would mean two simulations for the two
+    // surfaces driving them.
+    image = session->designImage();
+    simulationKernel = session->simulationKernel();
+    borrowedGeneration = session->elaborationGeneration();
+    ENZAN_ASSERT(simulationKernel != nullptr && image != nullptr,
+                 "a server needs an elaborated session");
 
-    simulationKernel = std::make_unique<runtime::Kernel>(*image, *diagnostics, kernelOptions);
     simulationKernel->setInterrupt(this);
+
+    // While this server is serving, the session's output belongs to the client. The session may
+    // have been built before the server existed — it has to be, since the server needs it
+    // elaborated — so this cannot be an option handed to its constructor.
+    session->setTranscript(&transcriptStream);
     simulationKernel->initialize();
 
     // Recorder and publisher are both started after `initialize`, so that the values they see
@@ -332,6 +394,9 @@ void KernelServer::handle(const Frame& frame) {
 
     case MessageType::Detach: closeClient("the client detached"); return;
 
+    case MessageType::Deposit: onDeposit(frame); return;
+    case MessageType::Force: onForce(frame); return;
+
     default:
         // An event arriving from the client, or a request from a newer build. Saying so beats
         // ignoring it: the client is waiting for an answer that would never come.
@@ -377,12 +442,84 @@ void KernelServer::onQueryDesign() {
     const std::span<const elab::Instance> instances = image->elaboratedDesign().instances();
     message.instances.reserve(instances.size());
 
+    const SourceManager& sources = diagnostics->sourceManager();
+
+    // The source list is collected from where the definitions actually are, not from every
+    // buffer the manager holds: a kernel driven from a script has the script in there too, and
+    // offering it to a source window as a design file would be a lie about what was analysed.
+    std::vector<std::string> files;
+
     for (const elab::Instance& instance : instances) {
-        message.instances.push_back(
-            InstanceEntry{.path = instance.path, .name = instance.name, .parent = instance.parent});
+        const eir::ModuleDefinition& definition =
+            image->analysedDesign().module(instance.definitionIndex);
+
+        std::string file;
+        std::uint32_t line = 0;
+        if (definition.location.valid()) {
+            file = sources.bufferName(definition.location.buffer());
+            line = sources.lineNumber(definition.location);
+            if (std::ranges::find(files, file) == files.end()) files.push_back(file);
+        }
+
+        message.instances.push_back(InstanceEntry{.path = instance.path,
+                                                  .name = instance.name,
+                                                  .parent = instance.parent,
+                                                  .file = std::move(file),
+                                                  .line = line});
     }
 
+    message.sourceFiles = std::move(files);
     connection.send(MessageType::Design, message);
+}
+
+void KernelServer::onDeposit(const Frame& frame) {
+    DepositMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a deposit could not be decoded");
+        return;
+    }
+
+    if (running) {
+        sendFailure("a run is in progress; stop it before writing a signal");
+        return;
+    }
+    if (request.signalIndex >= image->signals().size()) {
+        sendFailure(std::format("{} is not a signal in this design", request.signalIndex));
+        return;
+    }
+
+    simulationKernel->deposit(request.signalIndex, request.value.ref());
+
+    // The publisher is told so that the window showing the signal updates, because a deposit
+    // between runs produces no time advance for the change to be batched into.
+    publisher->flush();
+}
+
+void KernelServer::onForce(const Frame& frame) {
+    ForceMessage request;
+    if (!decodePayload(frame.payload, request)) {
+        sendFailure("a force could not be decoded");
+        return;
+    }
+
+    if (running) {
+        sendFailure("a run is in progress; stop it before writing a signal");
+        return;
+    }
+    if (request.signalIndex >= image->signals().size()) {
+        sendFailure(std::format("{} is not a signal in this design", request.signalIndex));
+        return;
+    }
+
+    if (request.release) {
+        // Releasing something that was not forced is not an error: a window clearing a set of
+        // signals it may or may not have forced should not have to remember which.
+        simulationKernel->release(request.signalIndex);
+    } else {
+        simulationKernel->force(request.signalIndex, request.value.ref());
+    }
+
+    publisher->flush();
 }
 
 void KernelServer::onQueryObjects(const Frame& frame) {
@@ -577,7 +714,9 @@ void KernelServer::performRun() {
 
     running = true;
     lastPump = std::chrono::steady_clock::now();
+
     const runtime::RunStatus status = simulationKernel->run(until);
+
     running = false;
 
     simulationState = stateAfter(status);
@@ -659,6 +798,7 @@ void KernelServer::sendRunState(std::string reason) {
     message.time = simulationKernel->time();
     message.latestRecordedTime = latestRecordedTime();
     message.reason = std::move(reason);
+
     connection.send(MessageType::RunState, message);
 }
 

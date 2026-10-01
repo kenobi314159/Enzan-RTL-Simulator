@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,7 @@ using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
 using enzan::eir::Design;
+using enzan::eir::Instance;
 using enzan::eir::ModuleDefinition;
 using enzan::test::require;
 
@@ -44,10 +46,12 @@ public:
     void consume(const Diagnostic& diagnostic) override {
         messages.push_back(diagnostic.message);
         codes.push_back(diagnostic.code);
+        received.push_back(diagnostic);
     }
 
     std::vector<std::string> messages;
     std::vector<DiagCode> codes;
+    std::vector<Diagnostic> received;
 };
 
 /// Writes source text to a temporary file and analyses it.
@@ -253,8 +257,10 @@ TEST_F(FrontendTest, AParameterThatIsNotAnIntegerIsSkippedRatherThanRefused) {
     )");
     ASSERT_NE(design, nullptr) << "a string parameter must not fail the analysis";
 
-    const ModuleDefinition* module = design->findModule("m");
-    ASSERT_NE(module, nullptr);
+    // Named for its parameter values, so it is found by the name the source gave it.
+    const std::vector<std::uint32_t> found = design->findSpecialisations("m");
+    ASSERT_EQ(found.size(), 1U);
+    const ModuleDefinition* module = &design->module(found.front());
 
     ASSERT_EQ(module->parameters.size(), 1U);
     EXPECT_EQ(module->parameters[0].name, "SIZE");
@@ -370,11 +376,26 @@ TEST_F(FrontendTest, EachParameterisationBecomesItsOwnDefinition) {
                                                    "top");
     ASSERT_NE(design, nullptr) << consumer.messages.front();
 
-    // Two bodies for one source module, distinguished by a suffix.
-    EXPECT_NE(design->findModule("leaf"), nullptr);
-    EXPECT_NE(design->findModule("leaf$1"), nullptr);
-    EXPECT_EQ(design->findModule("leaf")->sourceName, "leaf");
-    EXPECT_EQ(design->findModule("leaf$1")->sourceName, "leaf");
+    // Two bodies for one source module, each named for its own parameter values rather than
+    // by a counter. The distinction matters beyond this design: a counter numbers the
+    // parameterisations in the order one compilation walked them, so `leaf$1` from another
+    // analysis would be a different module under the same name, and a design assembled from
+    // two libraries (section 8.2) would bind an instance to the wrong body.
+    const std::vector<std::uint32_t> leaves = design->findSpecialisations("leaf");
+    ASSERT_EQ(leaves.size(), 2U);
+
+    std::vector<std::string> names;
+    for (const std::uint32_t index : leaves) {
+        names.push_back(design->module(index).name);
+        EXPECT_EQ(design->module(index).sourceName, "leaf");
+    }
+    std::ranges::sort(names);
+    EXPECT_EQ(names, std::vector<std::string>({"leaf$WIDTH_16", "leaf$WIDTH_8"}))
+        << "the suffix says which parameterisation, not which was seen first";
+
+    // Named by their values, so the same parameterisation is the same name wherever it is
+    // produced, which is what lets a library be instantiated by whoever uses it.
+    EXPECT_NE(design->findModule("leaf$WIDTH_8"), nullptr);
 }
 
 TEST_F(FrontendTest, AConnectionThatIsAnExpressionGetsAnIntermediateAndAnAssignment) {
@@ -538,12 +559,78 @@ TEST_F(FrontendTest, ReportsAnAscendingDeclaredRange) {
 TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {
     // The location has to resolve in Enzan's source manager, or the transcript shows a
     // message with no snippet and the quality that section 10.6 is about is lost.
-    EXPECT_EQ(analyse("module m; initial $random(); endmodule"), nullptr);
+    //
+    // The file is named by an absolute path, which is what a build system passes and what a
+    // file list expands to. slang shortens such a path when it renders a file *name*, so a
+    // conversion that matched names rather than buffers resolved nothing at all here — every
+    // diagnostic in the design lost its file, its line and its caret.
+    EXPECT_EQ(analyse("module m;\n  initial $random();\nendmodule\n"), nullptr);
 
     ASSERT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-
-    // The buffer the frontend read is the one diagnostics resolve against.
     EXPECT_GE(sources.bufferCount(), 1U);
+
+    const Diagnostic* unsupported = nullptr;
+    for (const Diagnostic& diagnostic : consumer.received)
+        if (diagnostic.code == DiagCode::UnsupportedConstruct) unsupported = &diagnostic;
+
+    ASSERT_NE(unsupported, nullptr);
+    ASSERT_TRUE(unsupported->location.valid()) << "the location did not resolve";
+    EXPECT_EQ(sources.lineNumber(unsupported->location), 2U);
+    EXPECT_EQ(sources.bufferName(unsupported->location.buffer()),
+              (directory / "design.sv").string());
+}
+
+TEST_F(FrontendTest, AModuleDefinitionCarriesTheFileItWasWrittenIn) {
+    // The library attributes units to source files by their definition's location (section
+    // 4.4), so a definition with no location is a unit that can never be cached.
+    const std::unique_ptr<Design> design = analyse("module m;\nendmodule\n");
+    ASSERT_NE(design, nullptr);
+    ASSERT_EQ(design->size(), 1U);
+
+    ASSERT_TRUE(design->module(0).location.valid());
+    EXPECT_EQ(sources.bufferName(design->module(0).location.buffer()),
+              (directory / "design.sv").string());
+}
+
+TEST_F(FrontendTest, EveryInstanceOfOneParameterisationSharesOneDefinitionAndIsWiredToIt) {
+    // One translation serves every instance of a parameterisation, which is only sound while
+    // port indices are keyed by port *name*. Keyed by slang's port symbols — a separate object
+    // per instance — the shared map binds nothing, and the design still elaborates and still
+    // simulates, to the wrong answer. So what this pins is the wiring, not the sharing: each
+    // instance must reach its *own* port object.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf #(parameter int WIDTH = 8) (input logic [WIDTH-1:0] d,
+                                                output logic [WIDTH-1:0] q);
+            assign q = d;
+        endmodule
+
+        module top;
+            logic [7:0] a, b, c, ra, rb, rc;
+            leaf #(.WIDTH(8)) u_a (.d(a), .q(ra));
+            leaf #(.WIDTH(8)) u_b (.d(b), .q(rb));
+            leaf #(.WIDTH(8)) u_c (.d(c), .q(rc));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    // Three instances, one definition between them.
+    EXPECT_EQ(design->findSpecialisations("leaf").size(), 1U)
+        << "identical parameterisations must not each get a definition of their own";
+
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+    ASSERT_EQ(top->instances.size(), 3U);
+
+    // Each instance connects both its ports, and no two instances share a port object: that is
+    // the property a pointer-keyed port map destroys.
+    std::set<std::uint32_t> objects;
+    for (const Instance& instance : top->instances) {
+        EXPECT_EQ(instance.connections.size(), 2U)
+            << "instance '" << instance.name << "' lost a connection";
+        for (const auto& connection : instance.connections) objects.insert(connection.objectIndex);
+    }
+    EXPECT_EQ(objects.size(), 6U) << "instances are sharing port storage";
 }
 
 } // namespace

@@ -83,14 +83,21 @@ does not creep into them by accident:
 Enzan is licensed **GPLv3**. This is a consequence of linking NVC, which is
 GPLv3, to provide the VHDL frontend.
 
+**This is a consequence of the choice, not a reason for it.** The licence
+follows from the engineering decision in 5.2 and does not justify it. The only
+serious alternative VHDL frontend, GHDL, is GPL-2.0-or-later and therefore also
+copyleft: it would not have bought a permissive licence, only the freedom to be
+GPLv2-or-later instead of GPLv3. Any future re-examination of the VHDL frontend
+must be argued on the grounds in 5.2, and the licence adjusted to follow.
+
 The dependency stack is internally consistent under GPLv3:
 
 | Dependency | License | Compatible |
 |---|---|---|
-| NVC (VHDL frontend) | GPLv3 | yes, and the reason for the choice |
+| NVC (VHDL frontend) | GPLv3 | yes, and what sets the project's licence |
 | slang (SystemVerilog frontend) | MIT | yes |
 | Qt 6 | LGPLv3 | yes |
-| Tcl | BSD-style | yes |
+| Tcl (GUI theme) | BSD-style | yes |
 | GoogleTest | BSD-3 | yes |
 | FST / libfst | permissive | yes |
 
@@ -147,14 +154,19 @@ feature users of commercial tools rely on daily and will expect.
 
 ```
    ┌──────────────────────┐        Unix domain socket        ┌──────────────────┐
-   │   enzan (kernel)     │ <──────────────────────────────> │   enzan-gui      │
+   │   enzan (kernel)     │ <──────────────────────────────> │   front end      │
    │  headless, batch     │      versioned binary protocol   │   Qt 6 widgets   │
-   │  Tcl control layer   │                                  │   attach/detach  │
+   │  links no Qt         │                                  │   attach/detach  │
    └──────────────────────┘                                  └──────────────────┘
 ```
 
 The GUI MUST be able to attach to an already-running kernel and to detach
 without terminating it.
+
+**The user does not invoke the two separately.** `enzan --gui` starts the front
+end, which is a second process and an implementation detail rather than a second
+program to learn (8.4). Two processes is the architecture; two commands was never
+the point.
 
 ### 2.3 Component map
 
@@ -165,7 +177,7 @@ without terminating it.
         │                   ├──> frontend adapters ──> EIR (analysis output)
         └── NVC ────────────┘                               │
                                                             ▼
-                                                     library store (work/)
+                                                  library store (optional)
                                                             │
                                                             ▼
                                             elaboration ──> instance tree
@@ -178,9 +190,9 @@ without terminating it.
                                      └───────────────────────────────────────────┘
                                         │             │              │
                                         ▼             ▼              ▼
-                                   waveform DB    VPI / VHPI     Tcl control
+                                   waveform DB    VPI / VHPI        IPC
                                         │             │              │
-                                   VCD / FST       cocotb         GUI / scripts
+                                   VCD / FST       cocotb           GUI
 ```
 
 ---
@@ -413,13 +425,55 @@ locality becomes something that can be optimised by reordering the layout.
 
 ### 4.4 Libraries
 
-Analysis output is serialised into a library directory (`work/` by default,
-mirroring the convention users know from Questa). Entries are keyed by a hash of
-the source text plus the analysis options that affect the result, so unchanged
-units are never re-analysed.
+Analysis output is serialised into a library directory, named by the user
+(`work/` is the conventional choice, not a default — see 8.2). Entries carry a
+key over the source text plus the analysis options that affect the result, so
+unchanged units are never re-analysed.
+
+**A library has a logical name as well as a path**, because that is what a design
+refers to: `library ieee;` resolves against a name. The name is fixed when the
+library is created and stored in the library's own index, so that the two ends of a
+build cannot disagree about it; 8.2 covers how it is set and overridden.
+
+**An entry's file name comes from the unit it holds, and its key lives inside
+it.** The two are separate on purpose. A path that were a hash of the source could
+not be named by a Makefile, and a build that cannot predict its own outputs cannot
+be incremental; a key that were only the path could not tell a stale entry from a
+current one. So the name is what `make` depends on and the key is what Enzan
+checks.
+
+**Everything that changes what analysis produces belongs in the key**, not only
+the source text: the macro definitions, the include path, the serialised format
+version and Enzan's own version. A define that is outside the key is a define
+whose change the library cannot see, and the result is a simulation that runs
+and is wrong.
 
 The serialised form MUST carry a format version, and a version mismatch MUST
-cause clean re-analysis rather than a crash or, worse, silent misbehaviour.
+cause clean re-analysis rather than a crash or, worse, silent misbehaviour. The
+same applies to a truncated or corrupted entry, which a checksum detects: an
+interrupted write leaves a file that would otherwise decode into plausible
+nonsense.
+
+**The format version MUST be bumped when the frontend's translation changes**,
+not only when the encoding does. A unit produced by an older translator decodes
+perfectly and simulates differently, which is the harder failure to notice of
+the two.
+
+**Using a library is opt-in, and there is no implicit one.** Nothing is written
+and nothing is consulted until the user names a library (8.2), so a simulation runs
+from a one-time analysis by default. The version is in the key and the format
+version is disciplined, but a cache that can change a simulation result is a thing
+a user must be able to stop doing without having to find it first — and a cache
+that appeared without being asked for is one they would have to find first.
+
+A hit is currently all or nothing, and that is a property of the frontend rather
+than of the store. SystemVerilog analysis hands every source to one slang
+compilation, because a module cannot be type-checked without the packages it
+imports; so either every file's entry is present and current, in which case
+nothing is analysed at all, or one is missing and everything is analysed and
+every entry rewritten. Entries are nonetheless kept **per source file**, because
+that is the shape this section describes and the shape a per-unit frontend will
+want. Only the hit rule changes when one arrives.
 
 ---
 
@@ -446,6 +500,37 @@ slang requires **C++20**, which sets the project's language floor.
 [NVC](https://github.com/nickg/nvc) provides the VHDL frontend. It supports
 almost all of VHDL-2008 and is actively maintained.
 
+**Why NVC and not GHDL.** [GHDL](https://github.com/ghdl/ghdl) is the other
+credible open-source VHDL frontend, and on one axis it is the better candidate:
+it deliberately exposes its analysis frontend as a shared library, `libghdl`,
+which already has third-party consumers — `pyGHDL` and the language server,
+`pyVHDLModel`, and `ghdl-yosys-plugin`, a C++ tool that walks GHDL's analysed
+VHDL and emits an unrelated IR. That last one is almost exactly the job
+`src/frontend/vhdl/` has to do, with years of evidence that it is possible. The
+API-drift risk recorded in section 19 is genuinely lower for GHDL, and this
+section should not pretend otherwise.
+
+NVC wins on everything else, and the balance is not close:
+
+- **GHDL is written in Ada.** Using it puts GNAT in the dependency set for CI
+  and for every contributor, and links the Ada runtime into a C++20 binary —
+  elaboration ordering, a secondary stack, and exceptions at the boundary. It
+  also degrades the sanitiser configuration of 11.4, which would no longer see
+  into the frontend. NVC is C11: one toolchain, one runtime, `extern "C"`.
+- **Only NVC can be consumed in part.** Its analysis stage pulls in no LLVM, so
+  the vendored subset is small (see the integration plan below). GHDL has no
+  equivalent subset; `libghdl` is built whole, with GNAT, or not at all.
+- **`tree_t` is a better tree to walk.** It is arena-allocated behind uniform
+  accessors that assert node kinds at runtime with usable messages. GHDL's `Iir`
+  is an untyped integer handle over several hundred node kinds with heavy field
+  aliasing, and its generated bindings are maintained for Python, not C++.
+- **Coverage and momentum.** NVC covers nearly all of VHDL-2008 except PSL and
+  has VHDL-2019 work landing; GHDL targets VHDL-2008. NVC releases steadily and
+  its maintainer is responsive on frontend-level defects, which matters when the
+  dependency is on internals nobody has promised to keep.
+
+The M6 exit criteria — NEORV32, VUnit, OSVVM — are all first-class NVC targets.
+
 **Understand the integration honestly before working on it.** NVC is not a
 frontend library; it is a complete simulator written in C that lowers VHDL
 through its own `vcode` IR to LLVM and runs it on its own scheduler with its own
@@ -459,6 +544,31 @@ The integration plan is therefore:
 - **Do not** use its `lower`/`vcode`/LLVM path, its runtime, or its scheduler.
 - `src/frontend/vhdl/` walks the analysed tree and emits EIR, exactly as the
   SystemVerilog adapter does.
+
+NVC builds with autotools, which does not compose with the build of 11.1. Since
+the plan uses only the analysis stage, the spike SHOULD establish that Enzan can
+compile that file subset directly with its own CMake target, and record the file
+list in `docs/nvc_integration.md`; driving NVC's `configure` from
+`ExternalProject` is the fallback if it cannot.
+
+**Two costs are larger than they look, and neither is an API problem.**
+
+*Predefined and foreign subprograms.* NVC implements much of `std.standard`,
+`std_logic_1164`, `numeric_std`, `std.textio` and `std.env` as builtins,
+intrinsics or foreign functions that its **runtime** resolves. Discarding that
+runtime means Enzan MUST supply its own implementation of everything the
+analysed tree leaves predefined or foreign, and the set is discovered only by
+walking it. This is more certain than any drift risk and is not avoided by
+choosing a different frontend — GHDL is built the same way — so it is scope for
+M6 rather than an argument about 5.2.
+
+*Semantics that settle only at elaboration.* Consuming trees after
+simplification and bounds checking is the right boundary: it is what section 5
+means by a frontend that does not flatten hierarchy, and Enzan elaborates for
+itself. The consequence is that generic folding, subtype resolution and
+unconstrained arrays sized by a generic are Enzan's work, not NVC's, and the
+VHDL elaborator therefore reimplements them rather than reusing NVC's `elab`.
+The spike MUST size this before the milestone commits to the boundary.
 
 Known risks, to be confirmed by a spike at the start of M6: NVC's internal APIs
 are not stability-guaranteed and will drift; NVC is C and uses its own arena
@@ -555,7 +665,10 @@ not to justify threading the kernel now.
 - **Selective capture.** Only signals within an active logging scope are
   recorded. On a 100k-LUT design, recording everything exhausts memory within
   seconds of simulated time. Logging scope is user-controlled (`log -r /*` and
-  equivalents).
+  equivalents), and is a *list* of paths rather than one: a reader builds a
+  selection out of a subtree and a handful of individual signals, which is what
+  `log -r` and `add wave` respectively name. A path that is a signal's own path
+  selects that signal, so the two cases need no distinction in the writer.
 - **Live streaming.** The GUI displays a waveform while the simulation
   progresses, so the database MUST support concurrent append and read.
 - **Random access by time**, to redraw an arbitrary zoom window without
@@ -584,47 +697,382 @@ GUI, and VCD/FST remain the interchange path permanently.
 
 ---
 
-## 8. Control layer
+## 8. The command line
 
-### 8.1 Tcl
+**The command line is Enzan's control interface, and there is no other.** No
+embedded scripting language, and no vocabulary of the tool's own for driving a
+simulation: what composes invocations is the shell, `make`, or whatever the user
+already builds with. This is a deliberate reversal of the obvious arrangement, and
+the reason is that an interface only the tool can speak has to be kept in step with
+everything the tool can do, while a parameterised command is composable the moment
+it exists.
 
-Tcl is the control and configuration language, matching the convention users
-already know from Questa, Vivado and Xcelium. Tcl 8.6 or later is embedded in
-the kernel.
+A consequence worth stating, because it is the thing a reader will look for: there
+is no way to stop a running simulation and poke at it from a script. Interactive
+inspection is the graphical front end's job (8.4), and programmatic control is
+VPI's (section 9). A third way to do it would be a third set of semantics.
 
-The command vocabulary SHOULD follow Questa/Modelsim naming where practical, so
-that existing user muscle memory and existing scripts transfer with minimal
-friction: `vlog`, `vcom`, `vsim`, `run`, `restart`, `add wave`, `log`, `force`,
-`examine`, `radix`, `find`, `when`, `quit`.
+### 8.1 Shape
 
-**All user configuration is Tcl.** There is no second configuration format. The
-GUI theme is a Tcl script setting colour variables; the window layout is a Tcl
-script. This keeps one configuration language across the whole tool and adds no
-dependency, and it is what commercial EDA tools do.
+One executable with subcommands, rather than one per phase:
 
-### 8.2 File lists
+| Invocation | Does |
+|---|---|
+| `enzan analyse [options] <sources…>` | analyses sources into design units |
+| `enzan elaborate [options] <top>` | elaborates and reports; simulates nothing |
+| `enzan run [options] <top>` | elaborates and simulates |
+| `enzan lib create\|list\|clean <dir>` | manages an analysis library |
+| `enzan [options] <sources…>` | analyses and runs in one process |
 
-Both forms MUST be supported:
+The last form takes no subcommand and is the shorthand every small case wants;
+the first word is read as a subcommand only when it is one of the names above, so
+a source file called `run.sv` is still a source file.
 
-- **`.f` files** (`-f list.f`), the de-facto industry standard. Nearly every
-  open-source design on GitHub ships one. Support `-v`, `-y`, `+incdir+`,
-  `+define+`, `-sv`, comments and nested `-f`. Requiring users to write Tcl
-  wrappers around designs that already ship `.f` lists is pointless friction.
-- **Tcl file lists**, for designs and flows that prefer them.
+**`elaborate` persists nothing.** It exists to answer "does this design build",
+which is what a CI job and a `make check` want, and it MUST NOT be a prerequisite
+of `run`: an elaboration on disk would be a second serialised format to version
+and a second thing to invalidate, and elaboration is not the expensive phase.
 
-### 8.3 Compile-order inference
+**Exit statuses are distinct enough to branch on**, because a Makefile and a CI
+job need to tell a broken invocation from a broken design:
 
-Users MUST NOT be required to specify compile order manually.
+| Status | Meaning |
+|---|---|
+| 0 | success |
+| 1 | the command line was wrong |
+| 2 | analysis or elaboration failed |
+| 3 | the simulation ran and the design failed |
 
-A fast pre-scan pass extracts defined and referenced symbols from each file —
-modules, packages, interfaces, programs, entities, architectures,
-configurations — and builds a dependency graph. Files are then analysed in
-topological order. Genuine dependency cycles are reported as errors with the
-cycle spelled out; legal mutual references that do not require ordering MUST NOT
-be reported as cycles.
+Conflating the last two is the mistake to avoid: a regression script that cannot
+distinguish "the tool could not compile this" from "the testbench reported an
+error" reports both as the same red square.
 
-The pre-scan MUST be much cheaper than full parsing, since it runs over every
-file before any analysis happens.
+### 8.2 Analysis libraries
+
+A library is a directory of serialised design units, as section 4.4 describes.
+This section is about naming them and reaching them.
+
+**Libraries are optional and there is no implicit one.** With no `--out-lib`,
+analysis output lives and dies with the process and a simulation runs from a
+one-time analysis. A directory that appeared because the user ran the tool would be
+a cache they did not ask for, and section 4.4 explains why that is worse than no
+cache: it can change a result, and they would have to find it before they could
+stop using it.
+
+```
+enzan lib create [--name <n>] <dir>   creates a library and fixes its logical name
+enzan lib list <dir>                  what a library holds, and what wrote it
+enzan lib clean <dir>                 empties it, keeping the library
+
+--out-lib <dir>                       the library analysis is written into
+--in-lib <dir>                        a library to read; repeatable
+--in-lib <name>=<dir>                 the same, overriding the name it carries
+--context <file>                      analysed so references resolve; not stored
+```
+
+**The logical name lives in the library, not in the command line.** It is fixed
+when the library is created and read from the library thereafter, so the two ends
+cannot disagree — a name restated at every use is a name that will eventually be
+restated differently, and a design analysed into `uart` and then read back as
+`work` fails to find its own units. `--out-lib` on a directory that does not exist
+creates one named after the basename, and refuses when the basename is not usable
+as an identifier. `<name>=<dir>` exists for the cases a stored name cannot cover:
+two vendors each shipping a directory called `work`, or a path whose basename is
+not the name the design refers to.
+
+**A library therefore carries an index**, holding its logical name and the format
+version. The version belongs there rather than only in each entry so that
+`lib list` can report a library written by an incompatible build without decoding
+an entry to discover it. **A directory with no index is not a library**: libraries
+are opt-in, so a directory that was never created is a mistake to report rather than
+a library to invent.
+
+**Libraries are named because a design refers to them by name.** VHDL requires it —
+`library ieee;` resolves against a name rather than a path — so the map exists from
+the start rather than being retrofitted at M6. For SystemVerilog the same map gives
+the search order for a module nothing analysed defines.
+
+**`--in-lib` is an elaboration-time facility.** It resolves an instantiation of a
+module this design does not define. It **cannot** resolve an analysis-time
+reference — a package import, an interface named in a port list — because slang
+type-checks from syntax and EIR does not feed back into it. Commercial tools manage
+this because their compiled library is a semantic artifact their own front end
+re-consumes; ours is not. A reader who assumes otherwise will write a library split
+that cannot be analysed.
+
+**Libraries are searched in the order given**, left to right.
+
+**A name that two libraries both define is an error, not a silent choice.** The
+message names both, and the fix is to qualify: `uart.fifo`. Picking whichever was
+loaded first is the failure mode 1.2 ranks worst, and it is what happens today —
+`Design::findModule` takes a bare name and `addModule` is additive, so **EIR MUST
+carry the logical library on every unit** for any of this to hold.
+
+**An entry's path MUST be derivable from the source it holds**, not from a hash of
+that source's text. Entries are per source file (4.4), because that is what the
+frontend produces in one piece, so the name comes from the file rather than from any
+one unit inside it. A short digest of the file's *path* disambiguates two sources
+sharing a basename; it never covers the text, so editing a file rewrites its entry
+in place instead of leaving the previous one behind on every save. The text belongs
+in the staleness key *inside* the entry, where it says whether the entry is current
+rather than where it lives.
+
+#### Where a library boundary may fall
+
+**A library records the sources it was analysed from**, and a design analysed against
+it reads them. That is what makes the boundary crossable at all: slang type-checks
+from syntax, so a unit instantiating one from another library needs that unit's
+declaration however it was analysed before, and EIR does not feed back into slang.
+Paths rather than text, because duplicating the RTL into every library that uses it
+would make a library a copy of the design instead of an index of it.
+
+So `--in-lib` on `analyse` means *read these libraries' declarations*, and `--in-lib`
+on `run` means *resolve against these libraries' units*. The two are the same option
+because they name the same thing; what differs is which half of it is wanted.
+
+**A library is instantiable with parameters chosen by whoever uses it.** A
+parameterised module becomes one unit per parameterisation, so a unit is not baked
+with the parameters its library happened to be analysed with: the design that needs
+`Width=8` creates that specialisation from the declarations it read, and stores it in
+its own library. A specialisation the input library already holds is **not** stored a
+second time, because two libraries defining one name is exactly what an unqualified
+reference cannot resolve.
+
+This is what makes a library usable rather than what makes it save work. Reading the
+other library's sources means re-analysing them, so the boundary costs what it would
+have cost without the library. M5.1 removes that by making a unit generic over its
+parameters, and rewrites this subsection and the naming rule below when it lands.
+
+**A specialisation's name MUST be a function of its parameter values.** A counter
+numbers the parameterisations in the order one compilation walked them, which makes
+the name meaningless outside it — `counter$1` from one analysis and `counter$1` from
+another are different modules wearing one name, and an instance binds to the wrong
+body with nothing on screen to say so. Naming it for the values gives a
+specialisation one identity wherever it is produced, which is the whole of what makes
+libraries composable.
+
+**A parameterised top is named for its values too**, so the name a user writes is the
+one the *source* gave it. A top is therefore resolved by source name when no unit has
+that exact name, and more than one parameterisation of it is reported rather than
+guessed.
+
+**`--context` remains for a source no library holds.** It names a source analysed for
+resolution whose units are not stored — a package shared by libraries that do not
+depend on each other, or a vendor header compiled against but not redistributed. A
+context file is a dependency of the library that names it: changing it makes that
+library stale without being stored in it, so it MUST appear in `--depfile` (8.3). It
+buys correct ownership and not speed, since the file is re-parsed by every analysis
+that names it.
+
+### 8.3 File lists
+
+`.f` files are the de-facto industry standard and nearly every open-source design
+ships one. Enzan reads them; it does not write them. Generating a list is what the
+user's own build already does, and a generator here would be a second opinion
+about their source tree.
+
+Supported: `-f` and `-F` including nested, `-v`, `-y`, `+incdir+`, `+define+`,
+`+libext+`, `-sv`, `//` and `/* */` comments, double-quoted arguments, and `$VAR`
+and `${VAR}` substitution from the environment.
+
+**Relative paths follow the convention the existing files were written against.**
+A path inside a list reached by `-f` resolves against the process's working
+directory; one inside a list reached by `-F` resolves against that list's own
+directory. Resolving everything against the containing file would be the better
+rule and would break the designs this feature exists to read. **The two spellings
+MUST differ at the point they are given on the command line as well as when nested**,
+or `-F` becomes a synonym for `-f` exactly where a user is most likely to type it.
+
+**An option the reader does not recognise is an error.** File lists carry
+tool-specific switches that change what is compiled — a timescale, a
+compilation-unit mode, a language version — and skipping one produces a design
+that analyses differently from what was asked for, with nothing on screen to say
+so. The position of the option is reported, so the fix is a visible edit rather
+than a hunt. `-sv` is the one switch accepted and dropped, since it asks for the
+only language the reader reads.
+
+**`$VAR` and `${VAR}` are substituted from the environment, and an unset variable
+is an error.** An empty expansion turns `$RTL_ROOT/cpu.sv` into `/cpu.sv`, which
+is reported as a missing source rather than as the missing variable that caused it.
+
+Two options exist because a list is something a user has to debug:
+
+**`--dry-run` prints the expanded list, in order, and exits.** The first question
+anyone asks of a misbehaving list is what the tool thinks it names, and the answer
+should not require a build.
+
+**`--depfile <file>` writes a `make`-style dependency file**, as a C compiler's
+`-MMD` does. It names **every file the analysis read** — the sources a list expanded
+to, the headers they included, and the context files of 8.2 — not only the includes.
+Listing all of them is what lets a Makefile name a `.f` file as the single
+prerequisite it can see and get the rest back after the first build, exactly as a C
+build bootstraps from a source file to its header dependencies. Without it a build
+cannot know that editing an included header should trigger re-analysis, and the
+incremental build is wrong in the one way that is both silent and expensive.
+
+**`--depfile-target <name>` names the target those prerequisites attach to.** A
+compiler can default this to the object file it is writing; analysis has no single
+output file, so the target has to be given. When it is omitted the `--out-lib`
+directory is used, which is right for a build that treats the library as its output
+and wrong for one that uses a stamp file, so a Makefile should say.
+
+#### A design driven from `make`
+
+The workflow this section exists to serve, in full. Three things are worth reading
+out of it: the library is the unit of rebuild, the `.f` file is the only
+prerequisite written by hand, and the two `run` forms differ by nothing but a flag.
+
+```make
+ENZAN ?= enzan
+PKG   := rtl/pkg/types_pkg.sv
+
+# Libraries are opt-in (8.2), so creating one is a step of its own rather than
+# something that happens because analysis ran.
+libs/%/.created:
+	$(ENZAN) lib create libs/$*
+	@touch $@
+
+# One stamp per library rather than one target per unit: within a library a hit is
+# all or nothing (4.4), so the library is the smallest thing make can rebuild.
+libs/pkg/.stamp: rtl/pkg.f | libs/pkg/.created
+	$(ENZAN) analyse --out-lib libs/pkg -f rtl/pkg.f \
+	         --depfile libs/pkg/deps.d --depfile-target $@
+	@touch $@
+
+# The package is read for resolution and stored only in libs/pkg, so there is
+# exactly one of it to resolve against at elaboration (8.2).
+libs/uart/.stamp: rtl/uart.f | libs/uart/.created
+	$(ENZAN) analyse --out-lib libs/uart -f rtl/uart.f --context $(PKG) \
+	         --depfile libs/uart/deps.d --depfile-target $@
+	@touch $@
+
+libs/tb/.stamp: rtl/tb.f | libs/tb/.created
+	$(ENZAN) analyse --out-lib libs/tb -f rtl/tb.f --context $(PKG) \
+	         --depfile libs/tb/deps.d --depfile-target $@
+	@touch $@
+
+# Every file each analysis read. Until these exist a `.f` file is the only
+# prerequisite make knows about, which is enough, because nothing is built yet.
+-include $(wildcard libs/*/deps.d)
+
+IN     := --in-lib libs/pkg --in-lib libs/uart --in-lib libs/tb
+STAMPS := libs/pkg/.stamp libs/uart/.stamp libs/tb/.stamp
+
+sim: $(STAMPS)
+	$(ENZAN) run $(IN) --timescale ns --fst wave.fst tb
+
+gui: $(STAMPS)
+	$(ENZAN) run --gui $(IN) --timescale ns tb
+
+check: $(STAMPS)
+	$(ENZAN) elaborate $(IN) tb
+
+clean:
+	rm -rf libs
+```
+
+Editing a file in `rtl/uart` rebuilds `libs/uart` and nothing else; editing
+`types_pkg.sv` rebuilds all three, because each named it. `make check` is the
+elaboration-only form of 8.1, which is what a CI job wants when it only needs to
+know that the design still builds.
+
+### 8.4 The graphical front end
+
+**`--gui` is an option of `enzan`, not a second program to learn.** Starting a
+window is not a different activity from starting a simulation — in nearly every
+case the window exists *because* a run was started — so the user says
+`enzan run --gui <top>` and the socket, the listening and the attaching are
+arranged out of sight.
+
+**It remains two processes, and that MUST NOT be collapsed.** Section 2.2's
+reasons are unchanged: the kernel must be usable with no display attached, a
+stalled front end must never stall the kernel, and a local window must be able to
+drive a kernel elsewhere. `--gui` therefore starts the front end rather than
+becoming it, and the kernel binary MUST NOT link Qt — a headless server and a CI
+runner would otherwise install a GUI toolkit to run a batch simulation.
+
+**With `--gui` the design is elaborated and handed over, not run.** The front end
+drives every run. This is not only a preference: serving a session puts the design
+back to time zero and begins recording there, so anything run beforehand would be
+discarded rather than shown. `--run` alongside `--gui` is therefore refused rather
+than silently dropped.
+
+**`--vcd` and `--fst` are allowed with `--gui`.** Someone debugging in a window
+who then wants a file for later should not have to run the design again, so a
+served session records into both the live database and any writer that was opened.
+
+**The kernel parses the command line; the window only attaches.** `--gui` does not
+hand the user's arguments to the front end — it analyses and elaborates here, binds
+a socket the user is not made to think about, starts a window attached to it, and
+ends when that window does. The front end therefore needs to know nothing about
+libraries, file lists or any option added later, and the kernel binary still links
+no Qt.
+
+**The front end's own options travel through `enzan` too.** Its theme is the one
+thing a user configures about it, so `--theme` and `--write-theme` are options of
+`enzan` that are forwarded, and `--write-theme` starts no kernel because writing a
+file out is not a simulation. An option reachable only by running the front end
+directly would make it the second program this section exists to avoid.
+
+**The front end is a separate executable and not a second entry point.** It remains
+a separate *binary* because the kernel MUST NOT link Qt, and a separate *process*
+for 2.2's reasons; neither makes it something to invoke. Its command line is
+therefore only what `enzan` sends it, and when this project gains an install step
+it belongs in `libexec` rather than on a user's `PATH`.
+
+**The lifetime of the kernel follows how the session was started.** The flag a
+user chose is the decision, so there is nothing further to configure:
+
+- **`enzan run --gui <top>`** — the window started the kernel, so closing the
+  window ends the kernel too, and the process's exit status is the simulation's
+  (8.1) rather than the window's. A run nobody is watching, that nobody asked to
+  keep, is a leak.
+- **`enzan --gui --attach <socket>`** — the window did not start the kernel, so
+  closing it only detaches. **`--attach` requires `--gui`**: it is a window that
+  attaches to a running kernel, a kernel has nothing to attach to, and accepting it
+  without one would start a second simulation while the user waited to be shown the
+  first. This is what makes a long run something that can be
+  looked in on and left alone again, and it is the case that the shared lifetime
+  above deliberately gives up.
+
+**A served kernel removes its socket when it is signalled.** An unhandled signal
+ends a process without running a destructor, so the listener's own cleanup never
+happens and the path is left on disk; `SIGINT`, `SIGTERM` and `SIGHUP` are handled
+for that reason. `SIGKILL` cannot be — it is not deliverable to a handler by design
+— so a kernel killed with it always leaves its socket behind. That MUST cost
+nothing: **binding probes an existing path and reclaims one nothing is listening
+on**, refusing only when a live kernel is there. A leftover path is then a file to
+be taken back rather than a state a user has to clear by hand.
+
+`enzan run --listen <socket>` is the other half of the second form: it elaborates
+and waits without starting a window. Between them the two forms cover the two
+things the explicit spelling is for — a kernel that outlives its window, and a
+window on a different machine from its kernel — and nothing else needs it.
+
+### 8.5 One tool, one spelling
+
+Each executable's command line is small, and it is still an interface. The rules
+below exist because the programs had already drifted apart without anyone deciding
+that they should.
+
+**An option two executables share MUST be spelled the same in both**, short forms
+included. `--top`, `--timescale` and `--wave-scope` mean one thing whichever is
+given them, and a user who learns `-t` on one and is refused it by the other has
+been taught something untrue about the tool.
+
+**`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` is not a synonym:
+`.f` lists spell a library file that way (8.3), and binding it to something else on
+one command line invites the two meanings to collide.
+
+**One definition of what `--version` prints**, in `common` rather than in each
+executable. Two copies is how one of them came to print its own name in front of a
+line that already named the simulator.
+
+**A generated usage text is not automatically the right one.** Qt's parser will
+write a help message from the options it was given, and it will not match the one
+beside it: a different wrap width, argv[0] as the program name, and its own
+options offered as though they were Enzan's. Where a generated text and a
+consistent one differ, consistency wins and the text is written out.
 
 ---
 
@@ -685,6 +1133,13 @@ The layout follows Modelsim, which is what users expect:
 Docking uses `QDockWidget`. Layout is persisted and is definable from a Tcl
 configuration script.
 
+**Wave and Source share the central area as tabs**, rather than one of them
+being a dock beside the other. Each wants the whole width: a waveform squeezed
+next to an eighty-column listing leaves too little of either to read, and a
+reader is looking at one or the other. The Source tab is raised automatically
+when the design stops at a line, because the reader asked to stop somewhere and
+the point is to see it.
+
 ### 10.3 Waveform view
 
 A custom `QWidget` with manual painting.
@@ -695,6 +1150,28 @@ column may span millions of transitions; the renderer MUST use per-signal
 downsampling with min/max bucketing rather than iterating transitions. Getting
 this wrong makes the viewer unusable on exactly the large designs Enzan targets,
 and it is difficult to retrofit.
+
+**One exception, and it is a defect to be paid off rather than a design.** A row
+showing a *bit range* of a signal — an unpacked bit, an extracted slice — cannot
+be summarised from the change index, because that index counts changes of the
+signal and records nothing about which bits each of them moved. Summarising the
+whole signal for such a row is wrong in the way that matters: every column in
+which any bit of a bus moved reported a transition, so a bit that never changed
+was drawn as a solid busy bar for the width of the window and became the flat
+line it always was only once the reader zoomed in far enough for each column to
+hold a single value. The same went for the unknown flag — one X bit made every
+bit of the bus look unknown.
+
+So a sliced row is summarised from the values, at a cost proportional to the
+changes in the range, and section 1.2 is what decides that: a wrong picture is
+worse than a slow one. It is bounded twice over — the renderer keeps a summary
+until the time range changes, so scrolling and repainting pay nothing, and only a
+row the reader has deliberately sliced or unpacked takes the path at all.
+
+The way back to the pixel bound is a per-bit change index, which is not built
+because it costs memory for every bit of every recorded signal whether or not
+anyone ever looks at one. Anyone finding this in a profile should build it rather
+than reinstate the whole-signal summary.
 
 That bounds a repaint. What bounds *scrolling* is a second rule: **a vertical
 scroll MUST NOT repaint what it has not changed.** Scrolling moves where each
@@ -738,19 +1215,32 @@ range on its own line (10.7). A dialog asking for `high:low` was the first way
 this worked and has been withdrawn: it was a second way to reach the same place,
 it could only ever produce a contiguous range, and it put a number between the
 reader and a thing they can point at. The model keeps the operation, because the
-control language's `add wave` takes a range as text (8.1) and will call it.
+a front end asks for a range as text and will call it.
 
 Defaults, as specified: multi-bit values display in **hexadecimal**; single-bit
 values display as a line high or low.
 
 What the mouse and the keyboard do with all of this is section 10.7.
 
-### 10.4 Debugging features
+### 10.4 Writing signals from outside
 
 The waveform is the headline feature but not the whole product. Also required:
-source stepping, breakpoints on HDL source lines, run/continue/step controls,
-and `examine`, `force` and `deposit` on signals from both the GUI and Tcl. These
-are what make a simulator usable for debugging rather than merely for watching.
+run/continue controls, and `examine`, `force` and `deposit` on signals from the
+GUI.
+
+**These operations live on the kernel.** The GUI does not reach them through any
+intermediate layer and VPI will not either, and a second implementation of "write
+a signal from outside" would be a second set of semantics to keep in step.
+
+**A force outranks the design; a deposit does not.** Every subsequent write to a
+forced signal is discarded until it is released, which is what makes a force
+useful for pinning a reset or a mode bit. A deposit is written once and whatever
+drives the signal next overwrites it.
+
+**Forcing costs an ordinary run nothing.** The table of forced signals is
+allocated when the first force in a run needs it, so the check on the signal
+write path is a test of one size against zero until then — which is what keeps
+13.4 intact.
 
 ### 10.5 Theme
 
@@ -796,7 +1286,7 @@ is retired by deleting it and never reusing the number; codes are not renumbered
 Numbers are allocated in ranges by the component that emits the diagnostic — 1–999
 for the driver and source handling, 1000–1999 for the SystemVerilog frontend,
 2000–2999 for VHDL, 3000–3999 for elaboration, 4000–4999 for codegen, 5000–5999
-for the runtime, 6000–6999 for the control layer, 7000–7999 for the waveform
+for the runtime, 6000–6999 for the session, 7000–7999 for the waveform
 database, 8000–8999 for the PLI, and 9000–9999 for internal errors. The catalogue
 itself is `src/common/DiagnosticCodes.def`.
 
@@ -1071,7 +1561,7 @@ license check against section 1.4.
 |---|---|---|
 | slang | SystemVerilog frontend | system, FetchContent fallback |
 | NVC | VHDL frontend (M6) | vendored submodule, pinned |
-| Tcl 8.6+ | control language | system |
+| Tcl 8.6+ | GUI theme language (M2) | system |
 | Qt 6 | GUI (M2) | system |
 | GoogleTest | unit tests | system, FetchContent fallback |
 | LLVM | JIT backend (M8, optional) | system, off by default |
@@ -1112,13 +1602,13 @@ Enzan-RTL-Simulator/
 │   ├── codegen/              EIR-B -> bytecode
 │   ├── runtime/              VM, scheduler, value engine, drivers
 │   ├── wavedb/               waveform database, VCD and FST writers
-│   ├── control/              Tcl interpreter, commands, file lists
+│   ├── session/              analysis, elaboration and the kernel, per process
 │   ├── ipc/                  kernel <-> GUI protocol
 │   ├── pli/                  VPI and VHPI
 │   └── gui/                  Qt 6 application code
 ├── tools/
 │   ├── enzan/                headless kernel CLI
-│   └── enzan-gui/            Qt 6 front end
+│   └── enzan-gui/            Qt 6 front end, started by `enzan --gui`
 ├── tests/
 │   ├── unit/                 GoogleTest, mirrors src/ layout
 │   ├── golden/               self-checking HDL cases and expected output
@@ -1238,12 +1728,23 @@ delta-level ordering. Comparisons MUST be made at settled time boundaries, not
 at every delta, or the suite will produce constant false failures and be
 switched off.
 
+**The VHDL references are not interchangeable.** Because NVC supplies Enzan's
+VHDL frontend (5.2), NVC is not an independent oracle for anything the frontend
+decides: a shared parsing or semantic-analysis defect produces the same wrong
+answer on both sides and the comparison passes. **GHDL is therefore the primary
+VHDL differential reference and MUST be part of the suite**, with NVC kept as a
+secondary reference that is still meaningful for everything downstream of EIR.
+The same reasoning will apply to any future frontend dependency.
+
 ### 14.4 Conformance suites
 
 Run against public suites and **track the pass rate as a number over time**:
 `sv-tests` (CHIPS Alliance) for SystemVerilog, `ivtest` for Verilog, and the
 GHDL/NVC VHDL suites plus VUnit and OSVVM for VHDL. A published compliance
 percentage is also a credible public signal of maturity.
+
+The GHDL and NVC suites are both run for the reason given in 14.3: NVC's suite
+cannot exercise a defect Enzan inherited from NVC's own frontend.
 
 **The pass rate MUST NOT regress.** This is a ratchet: a change that lowers it
 is a defect unless the regression is explicitly justified.
@@ -1342,7 +1843,7 @@ genuinely touches just that area; a change spanning several components carries
 the category alone.
 
 Categories: `build`, `ci`, `design`, `docs`, `eir`, `elab`, `frontend`, `gui`,
-`control`, `wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`,
+`session`, `ipc`, `wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`,
 `perf`, `refactor`, `license`.
 
 Examples:
@@ -1473,12 +1974,9 @@ renamed and stepped from edge to edge, and a signal list whose rows can be
 reordered, unpacked into their bits and highlighted. With the database query the
 last of those needs (7.1).
 
-Placed here, between the GUI and the control layer, for three reasons. It is
-contained entirely in the components M2 has just built, while that code is still
-warm. Nothing later blocks on it, so putting it first costs no other milestone
-anything — while M3's command vocabulary will want a settled notion of the
-active cursor and the selected signal, which is an argument for fixing them
-before the commands are written against them rather than after. And design
+Placed here, straight after the GUI, for three reasons. It is contained entirely
+in the components M2 has just built, while that code is still warm. Nothing later
+blocks on it, so putting it first costs no other milestone anything. And design
 priority 1.2 puts usability above both performance and language breadth: the
 wave window is the part of Enzan a user touches most, and leaving its controls
 until after the VHDL frontend would be ordering the work for everything except
@@ -1492,14 +1990,54 @@ window is driven.
 can lock one cursor on an edge, step a second along the same signal with Tab, and
 read both times off their labels without touching the mouse.
 
-### M3 — Control layer and source debugging
+### M3 — Command line, file lists and libraries
 
-Embedded Tcl with the Modelsim-style command vocabulary; `.f` and Tcl file
-lists; compile-order inference; library persistence and reuse; Source window
-with breakpoints, stepping, `examine`, `force` and `deposit`.
+The subcommands and exit statuses of 8.1. File lists with `--dry-run`, `--depfile`
+and `--depfile-target` (8.3). Named, opt-in analysis libraries with `lib create`,
+`lib list`, `lib clean`, `--out-lib`, `--in-lib` and `--context` (8.2, 4.4), which
+requires two things EIR does not have yet: **a logical library on every unit**, so
+that two libraries defining one name collide loudly rather than silently, and **an
+entry path derived from the unit name** rather than from a hash, so that `make` can
+depend on it. A library index carrying the logical name and the format version.
+`--gui` as an option of `enzan`, with the lifetimes of 8.4.
 
-**Exit:** a design driven end to end from a script; libraries reused across
-runs without re-analysis.
+The per-source hit rule of 4.4 is **not** in scope. It is a property of the frontend
+rather than of the store — a module cannot be type-checked without the packages it
+imports, so today one changed file re-analyses all of them — and changing it is
+frontend work that a library's shape does not depend on. What M3 owes is a library
+whose entries `make` can name and a boundary rule a user can follow, so that finer
+incrementality is a frontend change later rather than a redesign.
+
+**Exit:** the Makefile of 8.3 builds and simulates a design split across three
+libraries; editing one library's source rebuilds that library alone, editing a
+context file rebuilds every library that named it, and editing nothing rebuilds
+nothing; two libraries defining one name are reported rather than silently resolved;
+`enzan run --gui` opens a window on a design it elaborated, and closing that window
+ends the kernel, while closing a window that reached the kernel through
+`--gui --attach` leaves it running.
+
+### M3.1 — Analysis cost proportional to the design
+
+One translation per parameterisation rather than per instance. slang creates a
+separate body symbol for each instance, so a module was translated once per
+instance and every translation but one discarded; a hundred instances of one module
+cost a hundred translations of it.
+
+Placed here rather than deferred to M8 because it is not an optimisation of the
+simulation, it is analysis doing a hundred times the work it needs to on any design
+that instantiates anything more than once — which is every real design. M8's subject
+is how fast a *run* is, and none of the measurement discipline there is what this
+needed.
+
+A port map keyed on the frontend's own symbols is what made the naive version
+unsafe: such a map belongs to one instance's body, and sharing it binds no
+connections while leaving the design elaborable and runnable. **A frontend
+structure shared between instances MUST be keyed by something the source names**,
+not by a pointer the frontend happened to produce.
+
+**Exit:** analysing a design whose instances share a parameterisation costs what
+one of them costs, and a test pins each instance reaching its own port storage
+rather than pinning the sharing.
 
 ### M4 — VPI and cocotb
 
@@ -1516,11 +2054,66 @@ tasks, functions, packages, interfaces, generate, structs, enums, arrays;
 
 **Exit:** picorv32 and Ibex simulate correctly against a reference.
 
+### M5.1 — Parameter-generic analysis
+
+**What this closes is a gap between this document and the code, not a new design.**
+2.1 already says analysis output is independent of any particular top level and
+that elaboration is what resolves parameters and generics; 4.1 already lists
+parameters among the things EIR-S describes. Analysis has never worked that way. A
+parameterised module is translated once per parameterisation, with the values baked
+into each unit's types and mangled into its name, so a unit exists only because
+something instantiated it with particular values.
+
+Two consequences follow from that, and they are the reason to do this rather than
+leave the gap open:
+
+- **A library is not reusable, only re-runnable.** A design analysed *against*
+  another library re-reads and re-analyses that library's sources, because the units
+  in it are specialisations of no use to a different instantiation (8.2). The library
+  saves nothing across the boundary; it is a file list with a cache attached.
+- **Analysis cost scales with distinct parameterisations.** M3.1 removed the cost
+  that scaled with *instances*; what remains is genuine work under the current design
+  and unnecessary work under this one — a hundred widths of one module are a hundred
+  translations of it.
+
+**The change.** EIR-S holds one unit per source module, carrying its formal
+parameters. An object's type carries its width as an expression over those
+parameters rather than as a number, and an instance carries the values it sets.
+Elaboration evaluates those expressions and materialises the concrete types, which
+is where 2.1 already says parameter resolution belongs. Everything downstream of
+elaboration — codegen, the runtime, the waveform database — sees what it sees today,
+because it only ever sees elaborated output.
+
+**Before M6, and that is the point of placing it here.** VHDL generics are this
+problem in another language, so an NVC adapter written against parameter-resolved
+EIR would be written twice.
+
+**Spike first, as M6 does.** slang is an elaborating front end: it type-checks a
+body in the context of an instance, because a type can depend on a parameter, and it
+does not offer a parameter-generic typed body. Whether one can be obtained — and
+what the alternative is if not — is the first question this milestone answers, and
+it is answered before the EIR change is committed to rather than discovered
+half way through it.
+
+**What this removes.** The specialisation naming of 8.2 exists only because
+specialisations are units; with generic units there is nothing to name. `--in-lib`
+on `analyse` stops needing to read the other library's sources, so the boundary rule
+of 8.2 loses its exception and `--context` narrows again. Those sections are rewritten
+by this milestone rather than extended.
+
+**Exit:** a library analysed once is instantiated at a width it has never seen
+without re-reading its sources; analysing a design with a hundred distinct
+parameterisations of one module costs what one of them costs; the `.f`-and-library
+Makefile of 8.3 still builds, and the conformance and design regression pass rates
+of 14.4 and 14.5 do not move.
+
 ### M6 — VHDL via NVC
 
 NVC integration spike first, to confirm the approach in 5.2 before committing
 to it; vendored pinned fork; NVC tree to EIR adapter; `std_logic` value model;
-VHDL simulation cycle; VHPI subset for cocotb.
+VHDL generic and subtype elaboration; Enzan's own implementations of the
+predefined and foreign subprograms NVC's runtime would have resolved; VHDL
+simulation cycle; VHPI subset for cocotb.
 
 **Exit:** NEORV32 simulates; the VUnit suite runs.
 
@@ -1551,7 +2144,11 @@ constraint solver); save and restore; multiple clock domain tooling; UVM.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
+| slang cannot yield a parameter-generic typed body | High — blocks M5.1, and a library stays a file list | Spike before committing to the EIR change (M5.1); the fallback is to keep specialisation in analysis and accept that libraries do not save work across a boundary |
 | NVC internal APIs drift or prove unusable as a frontend | High — blocks VHDL | Spike first in M6; pin the revision; thin adapter in one directory; documented co-simulation fallback (5.2) |
+| The predefined and foreign subprograms NVC's runtime resolved are a larger body of work than estimated | High — inflates M6 | Enumerate the set during the M6 spike by walking the analysed tree, before the milestone is planned (5.2) |
+| VHDL generic and subtype elaboration must be reimplemented rather than reused from NVC | Medium — inflates M6 | Sized by the M6 spike; the tree boundary is reconsidered if it proves worse than the alternative (5.2) |
+| A defect inherited from NVC's frontend is invisible to differential testing against NVC | High — silent wrong results | GHDL is the primary VHDL reference and both conformance suites are run (14.3, 14.4) |
 | Mixed-language delta semantics differ from commercial tools | High — silent wrong results | Specify explicitly (3.5); golden tests against references before declaring it working |
 | Event-driven interpretation misses the performance target | Medium | Bytecode VM from the start; JIT-ready EIR; continuous benchmarking from M1 |
 | Waveform memory exhaustion on large designs | Medium | Selective capture and a memory budget with disk spill (7.1) |

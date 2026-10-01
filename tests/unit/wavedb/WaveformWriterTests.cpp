@@ -426,6 +426,53 @@ TEST_F(WaveformWriterTest, ScopeFilteringDoesNotCatchASiblingWithACommonPrefix) 
     EXPECT_EQ(writer->recordedSignals(), 1U) << "u_dut2 is a sibling, not a child";
 }
 
+TEST_F(WaveformWriterTest, SeveralScopesAreRecordedTogether) {
+    // A selection built out of a subtree and one individual signal.
+    build(hierarchicalDesign(), "tb");
+    writer->addScope("/tb/u_dut");
+    writer->addScope("/tb/drive");
+    ASSERT_TRUE(opened());
+
+    EXPECT_EQ(writer->recordedSignals(), 2U);
+    EXPECT_EQ(countOf("declare:internal@"
+                      + std::to_string(writer->recordIndexOf(signalIndex("/tb/u_dut/internal")))),
+              1U);
+    EXPECT_EQ(
+        countOf("declare:drive@" + std::to_string(writer->recordIndexOf(signalIndex("/tb/drive")))),
+        1U);
+}
+
+TEST_F(WaveformWriterTest, AddingTheSameScopeTwiceRecordsItOnce) {
+    build(hierarchicalDesign(), "tb");
+    writer->addScope("/tb/u_dut");
+    writer->addScope("/tb/u_dut");
+    ASSERT_TRUE(opened());
+
+    EXPECT_EQ(writer->recordedSignals(), 1U);
+}
+
+TEST_F(WaveformWriterTest, AnEmptyScopeSubsumesTheOnesBeforeIt) {
+    // `log -r /*` after a narrower selection means the whole design, so keeping the narrow one
+    // as well would be dead weight in the filter and misleading to read.
+    build(hierarchicalDesign(), "tb");
+    writer->addScope("/tb/u_dut");
+    writer->addScope("");
+    ASSERT_TRUE(opened());
+
+    EXPECT_EQ(writer->recordedSignals(), 2U);
+}
+
+TEST_F(WaveformWriterTest, SetScopeReplacesWhatWasSelectedBefore) {
+    build(hierarchicalDesign(), "tb");
+    writer->addScope("/tb/drive");
+    writer->setScope("/tb/u_dut");
+    ASSERT_TRUE(opened());
+
+    EXPECT_EQ(writer->recordedSignals(), 1U);
+    EXPECT_EQ(countOf("declare:internal@0"), 1U);
+    EXPECT_EQ(countOf("declare:drive"), 0U);
+}
+
 TEST_F(WaveformWriterTest, AChangeToAnUnrecordedSignalIsIgnored) {
     build(hierarchicalDesign(), "tb");
     writer->setScope("/tb/u_dut");

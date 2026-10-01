@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <format>
 #include <iosfwd>
 #include <map>
@@ -307,6 +308,17 @@ private:
     unsigned limit = 0;
     bool limitReached = false;
 };
+
+/// Reports a failed `SourceManager::readFile` as the diagnostic that fits its
+/// cause.
+///
+/// Every phase that opens a file wants the same four-way mapping, and each one
+/// writing its own drifts: a missing file, an unreadable one and one too large
+/// to address are different problems with different codes, and collapsing them
+/// into "could not open" is exactly the diagnostic quality section 10.6 exists
+/// to protect. `path` is what the user asked for, so it is what is named.
+void reportFileReadFailure(DiagnosticEngine& diagnostics, const std::filesystem::path& path,
+                           const FileReadResult& result);
 
 /// Renders diagnostics as text, in the style of DESIGN_GUIDE.md section 10.6:
 /// position, severity, message, stable code, then the source line with a caret.

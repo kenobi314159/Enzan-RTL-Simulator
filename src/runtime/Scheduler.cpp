@@ -86,6 +86,13 @@ void Scheduler::appendNonBlocking(std::uint32_t signalIndex, eir::ConstBitRef va
                                                .partial = partial});
 }
 
+void Scheduler::clear() noexcept {
+    for (Queue& queue : queues) queue.clear();
+    timeWheel.clear();
+    clearNonBlocking();
+    deltas = 0;
+}
+
 void Scheduler::clearNonBlocking() {
     pendingUpdates.clear();
     updatePool.clear();
