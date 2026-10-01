@@ -637,7 +637,7 @@ vpiHandle VpiContext::handleByIndex(vpiHandle object, PLI_INT32 index) {
                                    typeName(found->type)));
         return nullptr;
     }
-    if (index < 0 || static_cast<std::uint32_t>(index) >= found->width) {
+    if (index < 0 || std::cmp_greater_equal(index, found->width)) {
         fail(vpiError,
              std::format("vpi_handle_by_index: {} is outside [{}:0]", index, found->width - 1));
         return nullptr;
