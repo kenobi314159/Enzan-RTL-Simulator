@@ -4,6 +4,7 @@
 
 #include "common/Diagnostics.h"
 #include "ipc/ChangePublisher.h"
+#include "ipc/OutputCapture.h"
 #include "ipc/Protocol.h"
 #include "ipc/Transport.h"
 #include "runtime/Image.h"
@@ -129,6 +130,15 @@ public:
     /// on a terminal nobody is looking at.
     [[nodiscard]] std::ostream& transcript() noexcept { return transcriptStream; }
 
+    /// Makes what this process writes to its standard output part of the transcript, as well
+    /// as of the terminal (section 10.2). Returns false having filled `error`.
+    ///
+    /// What a VPI application prints goes to the process's standard output and never through
+    /// Enzan, so without this a front end shows none of it. Called once any child process that
+    /// should not be captured — the front end `--gui` starts — has been started, because a child
+    /// inherits the captured descriptors.
+    bool captureOutput(std::string& error);
+
     /// The status `$finish` or `$fatal` asked for, or 2 when a run failed.
     [[nodiscard]] int exitStatus() const noexcept { return processExitStatus; }
 
@@ -154,6 +164,13 @@ private:
         /// Removes and returns everything written since the last call.
         std::string take();
 
+        /// Stops keeping a copy of what is written, which still reaches the echo stream and is
+        /// flushed there as it is written.
+        ///
+        /// For a capture: the echo stream is then the captured standard output, and keeping a
+        /// copy as well would put every line in the transcript twice.
+        void stopCollecting() noexcept { collecting = false; }
+
     protected:
         int_type overflow(int_type character) override;
         std::streamsize xsputn(const char* text, std::streamsize count) override;
@@ -161,6 +178,7 @@ private:
     private:
         std::ostream* echoTo;
         std::string pending;
+        bool collecting = true;
     };
 
     /// Collects diagnostics for forwarding, flattened for the wire.
@@ -244,6 +262,9 @@ private:
     TranscriptRelay transcriptRelay;
     std::ostream transcriptStream;
     DiagnosticRelay diagnosticRelay;
+
+    /// The process's standard output, once `captureOutput` has been asked for.
+    OutputCapture capture;
 
     /// The session's kernel, not the server's. Borrowed for as long as the session holds it,
     /// which is what makes a command typed at a front end act on the simulation on screen.

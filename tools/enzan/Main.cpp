@@ -806,6 +806,15 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
                   << std::flush;
     }
 
+    // After the window has started, so that the window's own output is not captured into the
+    // transcript it shows. A capture that cannot be set up costs the transcript what the design's
+    // applications print, and nothing else: the run goes ahead.
+    if (!server.captureOutput(error)) {
+        std::cerr << "enzan: what VPI applications print will not appear in the window's "
+                     "transcript: "
+                  << error << '\n';
+    }
+
     const int status = serveUntilDone(server, window);
     if (status != 0) return ExitStatus::SimulationFailed;
     if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;

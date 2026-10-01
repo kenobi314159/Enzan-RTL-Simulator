@@ -1371,6 +1371,32 @@ The layout follows Modelsim, which is what users expect:
 Docking uses `QDockWidget`. Layout is persisted and is definable from a Tcl
 configuration script.
 
+**A served kernel's own output is part of its transcript.** A VPI application prints to the
+process's standard output, never through Enzan — cocotb's whole log is written that way — so a
+transcript holding only `$display` and diagnostics would show a cocotb run as silence. While it
+serves a front end, the kernel therefore captures its standard output, and its standard error
+when that is the same file, and gives the window what the terminal gets. Five rules make it
+behave:
+
+- **The terminal loses nothing.** Everything captured is written on to where it was going, as
+  written; the window gets a copy.
+- **An application sees the kind of output it had.** A terminal is replaced by a
+  pseudo-terminal, not a pipe: a program writing to a pipe buffers in large blocks, Python does,
+  and its lines would reach the window long after the events they describe. Colour codes stay on
+  the terminal and are stripped from the window's copy.
+- **Standard error is merged only when it already was.** Errors the user had sent somewhere
+  other than standard output stay there, and Enzan's own diagnostics stay out of the capture
+  altogether, because they reach the window as diagnostics.
+- **One route, in one order.** The kernel's own transcript is written to the captured standard
+  output and flushed as it is written, so `$display` lines and an application's lines reach the
+  window in the order they reached the terminal.
+- **A thread drains the capture.** One callback can write more than a pseudo-terminal holds, and
+  a write that cannot complete blocks its thread; if that thread were also the one draining the
+  capture, it would wait for itself. The thread copies bytes and touches no simulation state, so
+  the kernel is single-threaded in every sense section 6.4 means.
+
+A batch run captures nothing: with no window, the terminal is the transcript.
+
 **Wave and Source share the central area as tabs**, rather than one of them
 being a dock beside the other. Each wants the whole width: a waveform squeezed
 next to an eighty-column listing leaves too little of either to read, and a
