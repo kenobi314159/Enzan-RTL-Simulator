@@ -87,6 +87,8 @@ const char* typeName(PLI_INT32 type) {
     case vpiNet: return "vpiNet";
     case vpiReg: return "vpiReg";
     case vpiBitVar: return "vpiBitVar";
+    case vpiNetBit: return "vpiNetBit";
+    case vpiRegBit: return "vpiRegBit";
     case vpiParameter: return "vpiParameter";
     case vpiConstant: return "vpiConstant";
     case vpiIterator: return "vpiIterator";
@@ -155,6 +157,10 @@ struct VpiContext::Object {
     std::uint32_t width = 0;
     bool isSigned = false;
 
+    /// For a bit-select, which bit of the signal it is.
+    bool isBit = false;
+    std::uint32_t lowBit = 0;
+
     std::string name;
     std::string fullName;
     std::string definitionName;
@@ -178,6 +184,11 @@ struct VpiContext::Callback final : Object {
     /// Set when the callback has fired for the last time or been removed. It is not freed
     /// until no dispatch can still be holding it.
     bool removed = false;
+
+    /// What the bit a value-change callback on a bit-select watches held when it last fired.
+    /// The kernel reports changes of whole signals, and a change elsewhere in the vector is
+    /// not a change of this bit.
+    eir::Logic lastBit = eir::Logic::Unknown;
 };
 
 /// A module instance or a generate block.
@@ -494,6 +505,24 @@ vpiHandle VpiContext::intern(const Target& target) {
         break;
     }
 
+    case TargetKind::Bit: {
+        // A bit of a signal, named and typed from the signal it selects from.
+        const Object& vector = *reinterpret_cast<const Object*>(
+            intern({.kind = TargetKind::Signal, .first = target.first, .second = target.second}));
+        object->kind = Object::Kind::Signal;
+        object->type = vector.type == vpiNet ? vpiNetBit : vpiRegBit;
+        object->scope = vector.scope;
+        object->signal = vector.signal;
+        object->width = 1;
+        object->isBit = true;
+        object->lowBit = target.bit;
+        object->name = std::format("{}[{}]", vector.name, target.bit);
+        object->fullName = std::format("{}[{}]", vector.fullName, target.bit);
+        object->file = vector.file;
+        object->line = vector.line;
+        break;
+    }
+
     case TargetKind::Parameter: {
         const auto instanceIndex = target.first;
         const auto parameterIndex = static_cast<std::uint32_t>(target.second);
@@ -536,9 +565,11 @@ VpiContext::Object* VpiContext::resolve(vpiHandle handle, std::string_view routi
     return nullptr;
 }
 
-eir::ConstBitRef VpiContext::signalValue(const Object& object) const {
+eir::BitVector VpiContext::readSignal(const Object& object) const {
     const runtime::Signal& signal = image->signals()[object.signal];
-    return kernel->arena().at(signal.wordOffset, signal.bitWidth);
+    const eir::ConstBitRef whole = kernel->arena().at(signal.wordOffset, signal.bitWidth);
+    if (!object.isBit) return eir::BitVector::from(whole);
+    return eir::BitVector::filled(1, whole.get(object.lowBit));
 }
 
 // ---------------------------------------------------------------------------
@@ -596,11 +627,25 @@ vpiHandle VpiContext::handleByName(const char* name, vpiHandle scope) {
 }
 
 vpiHandle VpiContext::handleByIndex(vpiHandle object, PLI_INT32 index) {
-    if (resolve(object, "vpi_handle_by_index") == nullptr) return nullptr;
-    fail(vpiError, std::format("vpi_handle_by_index: selecting element {} is not supported; "
-                               "Enzan offers no handle to part of a signal",
-                               index));
-    return nullptr;
+    const Object* found = resolve(object, "vpi_handle_by_index");
+    if (found == nullptr) return nullptr;
+
+    // A bit of a vector. Its range is `[width-1:0]` (section 9.2), so an index is a bit
+    // position; anything else Enzan has no elements of.
+    if (found->kind != Object::Kind::Signal || found->isBit || found->width < 2) {
+        fail(vpiError, std::format("vpi_handle_by_index: a {} has no elements to select",
+                                   typeName(found->type)));
+        return nullptr;
+    }
+    if (index < 0 || static_cast<std::uint32_t>(index) >= found->width) {
+        fail(vpiError,
+             std::format("vpi_handle_by_index: {} is outside [{}:0]", index, found->width - 1));
+        return nullptr;
+    }
+    return intern({.kind = TargetKind::Bit,
+                   .first = found->target.first,
+                   .second = found->target.second,
+                   .bit = static_cast<std::uint32_t>(index)});
 }
 
 vpiHandle VpiContext::handle(PLI_INT32 type, vpiHandle reference) {
@@ -611,6 +656,12 @@ vpiHandle VpiContext::handle(PLI_INT32 type, vpiHandle reference) {
     switch (type) {
     case vpiParent:
     case vpiScope:
+        // A bit-select's parent is the vector it selects from.
+        if (type == vpiParent && object->isBit) {
+            return intern({.kind = TargetKind::Signal,
+                           .first = object->target.first,
+                           .second = object->target.second});
+        }
         if (object->kind == Object::Kind::Scope) {
             const std::uint32_t parent = scopes[object->scope].parent;
             return parent == NoScope ? nullptr
@@ -634,6 +685,10 @@ vpiHandle VpiContext::handle(PLI_INT32 type, vpiHandle reference) {
         return current == NoScope ? nullptr : intern({.kind = TargetKind::Scope, .first = current});
     }
 
+    case vpiIndex:
+        if (!object->isBit) return nullptr;
+        return intern({.kind = TargetKind::Constant, .first = 0, .second = object->lowBit});
+
     case vpiLeftRange:
     case vpiRightRange:
         // EIR does not keep declared bounds, so a vector is described as `[width-1:0]`
@@ -653,7 +708,13 @@ vpiHandle VpiContext::handle(PLI_INT32 type, vpiHandle reference) {
 vpiHandle VpiContext::iterate(PLI_INT32 type, vpiHandle reference) {
     std::vector<vpiHandle> items;
 
-    if (reference == nullptr) {
+    const Object* object = nullptr;
+    if (reference != nullptr) {
+        object = resolve(reference, "vpi_iterate");
+        if (object == nullptr) return nullptr;
+    }
+
+    if (object == nullptr) {
         // From the root, every top-level instance; Enzan's only kind of instance is a module,
         // so asking for instances in general gets the same answer.
         if ((type == vpiModule || type == vpiInstance) && image != nullptr) {
@@ -662,11 +723,18 @@ vpiHandle VpiContext::iterate(PLI_INT32 type, vpiHandle reference) {
                     items.push_back(intern({.kind = TargetKind::Scope, .first = scope}));
             }
         }
-    } else {
-        const Object* object = resolve(reference, "vpi_iterate");
-        if (object == nullptr) return nullptr;
-        if (object->kind != Object::Kind::Scope) return nullptr;
-
+    } else if (object->kind == Object::Kind::Signal) {
+        // The bits of a vector, left to right as its range `[width-1:0]` runs.
+        const bool bits = type == vpiBit || type == vpiNetBit || type == vpiRegBit;
+        if (bits && !object->isBit && object->width > 1) {
+            for (std::uint32_t bit = object->width; bit-- > 0;) {
+                items.push_back(intern({.kind = TargetKind::Bit,
+                                        .first = object->target.first,
+                                        .second = object->target.second,
+                                        .bit = bit}));
+            }
+        }
+    } else if (object->kind == Object::Kind::Scope) {
         const Scope& scope = scopes[object->scope];
         const auto signalType = [&](std::uint32_t objectIndex) {
             const eir::Object& declared =
@@ -912,7 +980,7 @@ void VpiContext::getValue(vpiHandle object, s_vpi_value* value) {
     bool ok = false;
     switch (found->kind) {
     case Object::Kind::Signal:
-        ok = readValue(signalValue(*found), found->isSigned, *value, values, error);
+        ok = readValue(readSignal(*found).ref(), found->isSigned, *value, values, error);
         break;
 
     case Object::Kind::Parameter: {
@@ -961,12 +1029,19 @@ vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
     const PLI_INT32 mode =
         flags & ~(vpiReturnEvent | vpiUserAllocFlag | vpiOneValue | vpiPropagateOff);
 
+    // A force holds a whole signal (section 10.4), so it is forced and released whole.
+    if ((mode == vpiForceFlag || mode == vpiReleaseFlag) && found->isBit) {
+        fail(vpiError, "vpi_put_value: a bit of a signal cannot be forced or released on its "
+                       "own; force the signal");
+        return nullptr;
+    }
+
     if (mode == vpiReleaseFlag) {
         kernel->release(found->signal);
         if (value != nullptr) {
             std::string ignored;
             static_cast<void>(
-                readValue(signalValue(*found), found->isSigned, *value, values, ignored));
+                readValue(readSignal(*found).ref(), found->isSigned, *value, values, ignored));
         }
         return nullptr;
     }
@@ -985,7 +1060,12 @@ vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
 
     switch (mode) {
     case 0:
-    case vpiNoDelay: kernel->deposit(found->signal, parsed->ref()); return nullptr;
+    case vpiNoDelay:
+        if (found->isBit)
+            kernel->writeSignalPart(found->signal, parsed->ref(), found->lowBit);
+        else
+            kernel->deposit(found->signal, parsed->ref());
+        return nullptr;
 
     case vpiInertialDelay:
     case vpiTransportDelay:
@@ -1002,11 +1082,15 @@ vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
 
         // No delay is a non-blocking assignment; a delay lands at the start of the slot it
         // reaches (section 9.4).
-        if (delay == 0) {
+        if (delay == 0 && found->isBit) {
+            kernel->scheduleNonBlockingPart(found->signal, parsed->ref(), found->lowBit);
+        } else if (delay == 0) {
             kernel->scheduleNonBlocking(found->signal, parsed->ref());
         } else {
-            delayedWrites.emplace(kernel->time() + delay,
-                                  DelayedWrite{.signal = found->signal, .value = *parsed});
+            delayedWrites.emplace(kernel->time() + delay, DelayedWrite{.signal = found->signal,
+                                                                       .value = *parsed,
+                                                                       .lowBit = found->lowBit,
+                                                                       .partial = found->isBit});
         }
         return nullptr;
     }
@@ -1111,6 +1195,9 @@ vpiHandle VpiContext::registerCallback(const s_cb_data* data) {
         callback->signal = subject->signal;
         callback->width = subject->width;
         callback->isSigned = subject->isSigned;
+        callback->isBit = subject->isBit;
+        callback->lowBit = subject->lowBit;
+        if (subject->isBit) callback->lastBit = readSignal(*subject).get(0);
         valueChangeWatchers[subject->signal].push_back(raw);
         break;
     }
@@ -1195,9 +1282,8 @@ void VpiContext::fire(Callback& callback) {
     value.format = callback.valueFormat;
     if (callback.data.reason == cbValueChange && value.format != vpiSuppressVal) {
         std::string ignored;
-        const runtime::Signal& signal = image->signals()[callback.signal];
-        const eir::ConstBitRef bits = kernel->arena().at(signal.wordOffset, signal.bitWidth);
-        static_cast<void>(readValue(bits, callback.isSigned, value, values, ignored));
+        static_cast<void>(
+            readValue(readSignal(callback).ref(), callback.isSigned, value, values, ignored));
     }
     data.value = &value;
 
@@ -1281,7 +1367,15 @@ void VpiContext::valueChanged(std::uint32_t signalIndex) {
     const std::size_t count = valueChangeWatchers[signalIndex].size();
     for (std::size_t index = 0; index < count; ++index) {
         Callback* callback = valueChangeWatchers[signalIndex][index];
-        if (!callback->removed) fire(*callback);
+        if (callback->removed) continue;
+
+        // A change of the vector is a change of a bit only when that bit moved.
+        if (callback->isBit) {
+            const eir::Logic now = readSignal(*callback).get(0);
+            if (now == callback->lastBit) continue;
+            callback->lastBit = now;
+        }
+        fire(*callback);
     }
     --dispatchDepth;
 
@@ -1316,7 +1410,10 @@ void VpiContext::runTimedEvents(runtime::SimTime time) {
     while (!delayedWrites.empty() && delayedWrites.begin()->first <= time) {
         const DelayedWrite write = std::move(delayedWrites.begin()->second);
         delayedWrites.erase(delayedWrites.begin());
-        kernel->deposit(write.signal, write.value.ref());
+        if (write.partial)
+            kernel->writeSignalPart(write.signal, write.value.ref(), write.lowBit);
+        else
+            kernel->deposit(write.signal, write.value.ref());
     }
 
     std::vector<Callback*> due;

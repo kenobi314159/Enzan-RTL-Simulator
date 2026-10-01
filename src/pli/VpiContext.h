@@ -141,7 +141,7 @@ private:
     struct Callback;
 
     /// What a design handle names, which is also what it is interned under.
-    enum class TargetKind : std::uint8_t { Scope, Signal, Parameter, Constant };
+    enum class TargetKind : std::uint8_t { Scope, Signal, Bit, Parameter, Constant };
 
     struct Target {
         TargetKind kind = TargetKind::Scope;
@@ -151,6 +151,9 @@ private:
 
         /// The object or parameter index; or, for a constant, its value.
         std::int64_t second = 0;
+
+        /// The bit a bit-select selects.
+        std::uint32_t bit = 0;
 
         friend auto operator<=>(const Target&, const Target&) = default;
     };
@@ -168,7 +171,8 @@ private:
 
     vpiHandle intern(const Target& target);
     [[nodiscard]] Object* resolve(vpiHandle handle, std::string_view routine);
-    [[nodiscard]] eir::ConstBitRef signalValue(const Object& object) const;
+    /// The value a signal or a bit-select of one holds now.
+    [[nodiscard]] eir::BitVector readSignal(const Object& object) const;
 
     // -- callbacks ----------------------------------------------------------
 
@@ -236,6 +240,10 @@ private:
     struct DelayedWrite {
         std::uint32_t signal = 0;
         eir::BitVector value;
+
+        /// Where in the signal the value goes, for a write through a bit-select.
+        std::uint32_t lowBit = 0;
+        bool partial = false;
     };
 
     std::multimap<runtime::SimTime, DelayedWrite> delayedWrites;

@@ -260,6 +260,58 @@ TEST_F(Vpi, AParameterHasAValueAndCannotBeWritten) {
     EXPECT_EQ(hexOf(byName("tb.WIDTH")), "00000008");
 }
 
+TEST_F(Vpi, ABitOfAVectorCanBeSelectedReadAndWritten) {
+    vpiHandle data = byName("tb.data");
+    vpiHandle bit = vpi_handle_by_index(data, 1);
+    ASSERT_NE(bit, nullptr);
+    EXPECT_EQ(nameOf(bit), "tb.data[1]");
+    EXPECT_EQ(nameOf(bit, vpiName), "data[1]");
+    EXPECT_EQ(vpi_get(vpiType, bit), vpiRegBit);
+    EXPECT_EQ(vpi_get(vpiSize, bit), 1);
+    EXPECT_EQ(vpi_handle(vpiParent, bit), data);
+    EXPECT_EQ(vpi_handle_by_index(data, 1), bit) << "interned like any design handle";
+
+    s_vpi_value index{};
+    index.format = vpiIntVal;
+    vpi_get_value(vpi_handle(vpiIndex, bit), &index);
+    EXPECT_EQ(index.value.integer, 1);
+
+    EXPECT_EQ(hexOf(bit), "1") << "8'h5A has bit 1 set";
+    write(bit, 0, vpiNoDelay);
+    EXPECT_EQ(hexOf(data), "58") << "and only that bit changed";
+}
+
+TEST_F(Vpi, ANetsBitIsANetBit) {
+    EXPECT_EQ(vpi_get(vpiType, vpi_handle_by_index(byName("tb.bus"), 0)), vpiNetBit);
+}
+
+TEST_F(Vpi, AnIndexOutsideTheRangeOrOfAScalarSelectsNothing) {
+    EXPECT_EQ(vpi_handle_by_index(byName("tb.data"), 8), nullptr);
+    EXPECT_EQ(lastErrorLevel(), vpiError);
+    EXPECT_EQ(vpi_handle_by_index(byName("tb.data"), -1), nullptr);
+    EXPECT_EQ(vpi_handle_by_index(byName("tb.clk"), 0), nullptr);
+}
+
+TEST_F(Vpi, TheBitsOfAVectorIterateLeftToRight) {
+    const std::vector<std::string> bits = names(vpiBit, byName("tb.data"));
+    ASSERT_EQ(bits.size(), 8U);
+    EXPECT_EQ(bits.front(), "tb.data[7]");
+    EXPECT_EQ(bits.back(), "tb.data[0]");
+}
+
+TEST_F(Vpi, AnInertialWriteToABitLandsInTheNbaRegion) {
+    write(vpi_handle_by_index(byName("tb.data"), 0), 1, vpiInertialDelay);
+    EXPECT_EQ(hexOf(byName("tb.data")), "5a");
+    simulation.run(0);
+    EXPECT_EQ(hexOf(byName("tb.data")), "5b");
+}
+
+TEST_F(Vpi, ABitCannotBeForcedOnItsOwn) {
+    write(vpi_handle_by_index(byName("tb.data"), 0), 1, vpiForceFlag);
+    EXPECT_EQ(lastErrorLevel(), vpiError);
+    EXPECT_EQ(hexOf(byName("tb.data")), "5a");
+}
+
 // ---------------------------------------------------------------------------
 // Writing (section 9.4)
 // ---------------------------------------------------------------------------
@@ -355,6 +407,24 @@ TEST_F(Vpi, AValueChangeReportsTheNewValueAndTime) {
     EXPECT_EQ(vpi_remove_cb(record.handle), 1);
     simulation.run(40);
     EXPECT_EQ(record.events.size(), 4U) << "removed, so it fired no more";
+}
+
+TEST_F(Vpi, AValueChangeOnABitFiresOnlyWhenThatBitMoves) {
+    // The kernel reports changes of whole signals; a bit's watcher must not hear about a
+    // change somewhere else in its vector, or RisingEdge(dut.bus[0]) fires on every count.
+    Record record;
+    registerCallback(
+        cbValueChange,
+        [](p_cb_data data) -> PLI_INT32 {
+            recordOf(data).events.emplace_back(data->value->value.str);
+            return 0;
+        },
+        record, vpi_handle_by_index(byName("tb.data"), 0), 0, vpiBinStrVal);
+
+    write(byName("tb.data"), 0x5B, vpiNoDelay);
+    write(byName("tb.data"), 0x7B, vpiNoDelay);
+    write(byName("tb.data"), 0x7A, vpiNoDelay);
+    EXPECT_EQ(record.events, (std::vector<std::string>{"1", "0"}));
 }
 
 TEST_F(Vpi, ACallbackMayRemoveItselfWhileItRuns) {

@@ -42,8 +42,8 @@ implements, so that a kernel with nothing loaded pays one null test per hook.
 
 ## Deliberate deferrals
 
-- **No handle to part of a signal.** `vpi_handle_by_index` on a vector fails rather than
-  returning a bit-select, and unpacked arrays do not exist yet (M5).
+- **Single bits only.** `vpi_handle_by_index` selects one bit of a vector; there is no handle
+  to a part-select, and unpacked arrays do not exist yet (M5).
 - **User system tasks.** `vpi_register_systf` fails: a call to one has to be compiled by the
   frontend, and it cannot be.
 - **The three delay modes behave alike** (section 9.4).

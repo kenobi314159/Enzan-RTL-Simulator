@@ -1210,6 +1210,7 @@ from the top, as in `tb.u_dut.count`.
 | net | `vpiNet` |
 | four-state variable | `vpiReg` |
 | two-state variable | `vpiBitVar` |
+| one bit of a vector | `vpiNetBit` or `vpiRegBit`, from `vpi_handle_by_index` or by iterating `vpiBit` |
 | parameter, localparam | `vpiParameter`, with `vpiLocalParam` telling them apart |
 
 **Objects a frontend introduced are not visible.** A port connected to an expression becomes
@@ -1230,6 +1231,12 @@ nobody mistakes them for VPI defects:
   `vpiReg`.
 
 Both are changes to EIR's type rather than to VPI, and belong with M5's type work.
+
+**A bit is a signal of its own to an application.** It reads and writes the one bit, and a
+value-change callback on it fires when that bit changes and not when another bit of its vector
+does — the kernel reports changes of whole signals, and `RisingEdge(dut.bus[0])` that fired on
+every change of `bus` would be wrong in exactly the testbenches that use it. A force holds a
+whole signal (10.4), so a bit is forced by forcing its signal.
 
 **Handles to design objects are interned.** Asking for one twice returns the same handle, and
 freeing one does nothing: a handle names something that exists for the whole elaboration.
