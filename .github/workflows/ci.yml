@@ -237,11 +237,21 @@ jobs:
       # gtkwave is installed for one program: fst2vcd, which is how the suite checks that a
       # reader other than ours can get the design back out of an FST. Without it the FST cases
       # skip, and a writer that produced an unreadable file would go unnoticed here.
+      #
+      # libpython3-dev because cocotb embeds Python into the simulator it is loaded into, and
+      # needs the shared library to do it.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 iverilog gtkwave
+            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 python3-venv \
+            libpython3-dev iverilog gtkwave
+
+      # The cocotb version is named once, in requirements.txt (DESIGN_GUIDE.md section 14.6).
+      - name: Install cocotb
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -r tests/conformance/cocotb/requirements.txt
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -260,11 +270,33 @@ jobs:
       # commit would spend most of the CI budget on one dependency.
       - name: Configure and build with the SystemVerilog frontend enabled
         run: |
-          cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_WERROR=ON
+          cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_WERROR=ON \
+            -DENZAN_COCOTB_PYTHON="$PWD/.venv/bin/python"
           cmake --build --preset gcc-release
 
       - name: Test
         run: ctest --preset gcc-release
+
+      # cocotb's own regression suite (section 14.6). It fails the job when a case passing.txt
+      # lists stops passing, and the pass rate goes into the job summary so that it is tracked
+      # where the run is.
+      - name: cocotb regression suite
+        env:
+          COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          status=0
+          tests/conformance/cocotb/run-suite.sh build/gcc-release/bin/enzan build/cocotb-suite \
+            > build/cocotb-suite.txt 2>&1 || status=$?
+          cat build/cocotb-suite.txt
+          { echo '```'; cat build/cocotb-suite.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Keep the cocotb logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cocotb-suite-logs
+          path: build/cocotb-suite/*.log
 
       # The benchmark is a target rather than a test, because a measurement taken alongside
       # three hundred other tests compares with nothing. It runs here so that a change which
