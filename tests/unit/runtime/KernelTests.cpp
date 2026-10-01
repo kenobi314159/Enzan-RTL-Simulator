@@ -10,19 +10,15 @@
 
 #include "runtime/Kernel.h"
 
-#include "codegen/Compiler.h"
 #include "common/Diagnostics.h"
-#include "common/SourceManager.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
 #include "eir/Module.h"
 #include "eir/Process.h"
-#include "eir/Verifier.h"
-#include "elab/Elaborator.h"
-#include "runtime/Image.h"
 
 #include "support/Literals.h"
 #include "support/ProcessBuilder.h"
+#include "support/Simulation.h"
 
 #include <gtest/gtest.h>
 
@@ -31,7 +27,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,11 +34,6 @@
 namespace {
 
 // NOLINTBEGIN(misc-unused-using-decls)
-using enzan::Diagnostic;
-using enzan::DiagnosticEngine;
-using enzan::SourceManager;
-using enzan::codegen::CompiledDesign;
-using enzan::codegen::Compiler;
 using enzan::eir::BasicBlock;
 using enzan::eir::BitVector;
 using enzan::eir::Design;
@@ -61,11 +51,7 @@ using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
 using enzan::eir::Type;
-using enzan::elab::ElaboratedDesign;
-using enzan::elab::Elaborator;
-using enzan::runtime::Image;
 using enzan::runtime::Kernel;
-using enzan::runtime::KernelOptions;
 using enzan::runtime::NoTime;
 using enzan::runtime::PliHooks;
 using enzan::runtime::RunInterrupt;
@@ -73,135 +59,9 @@ using enzan::runtime::RunStatus;
 using enzan::runtime::SimTime;
 using enzan::test::literal;
 using enzan::test::ProcessBuilder;
+using enzan::test::Simulation;
 
 // NOLINTEND(misc-unused-using-decls)
-
-class CollectingConsumer final : public enzan::DiagnosticConsumer {
-public:
-    void consume(const Diagnostic& diagnostic) override {
-        messages.push_back(diagnostic.message);
-        codes.push_back(diagnostic.code);
-    }
-
-    std::vector<std::string> messages;
-    std::vector<enzan::DiagCode> codes;
-};
-
-/// Verifies, elaborates, compiles and runs a one-module design.
-class Simulation {
-public:
-    /// The buffer `Simulation` registers its stand-in source text as.
-    ///
-    /// Always the first buffer of the manager, so that a test can build EIR carrying
-    /// locations into it *before* the simulation that owns the manager exists. Identifiers
-    /// are handed out in the order buffers are added, which is what makes that sound.
-    static constexpr enzan::BufferId SourceBuffer = enzan::BufferId::fromIndex(0);
-
-    /// One line of stand-in source per line number, so that a location is easy to write.
-    static constexpr std::string_view SourceText = "one\ntwo\nthree\nfour\nfive\n";
-
-    /// The byte offset of 1-based `line` in `SourceText`.
-    static constexpr std::uint32_t lineOffset(std::uint32_t line) {
-        constexpr std::uint32_t Offsets[] = {0, 0, 4, 8, 14, 19};
-        return Offsets[line];
-    }
-
-    /// A location on `line` of the stand-in source.
-    static constexpr enzan::SourceLocation at(std::uint32_t line) {
-        return {SourceBuffer, lineOffset(line)};
-    }
-
-    /// A location `column` bytes into `line`, for a test that needs two positions on one line.
-    ///
-    /// Every line of the stand-in source is at least three bytes long, so a small column stays
-    /// on the line it was asked for.
-    static constexpr enzan::SourceLocation at(std::uint32_t line, std::uint32_t column) {
-        return {SourceBuffer, lineOffset(line) + column};
-    }
-
-    Simulation(Design design, std::string_view topName)
-        : engine(sources), analysed(std::move(design)) {
-        // Added first, so that `SourceBuffer` names it. Every simulation gets one even when
-        // the test does not care, because a fixture whose buffer numbering depends on what
-        // the test asked for is a fixture that breaks the next test to be written.
-        const enzan::BufferId registered = sources.addBuffer("design.sv", std::string(SourceText));
-        EXPECT_EQ(registered, SourceBuffer);
-
-        engine.addConsumer(consumer);
-
-        // Verifying here means every kernel test also exercises the verifier, and that a
-        // test whose hand-built EIR is malformed says so instead of misbehaving.
-        valid = enzan::eir::verify(analysed, engine);
-
-        Elaborator elaborator(analysed, engine);
-        elaborated = elaborator.elaborate(topName);
-        if (elaborated == nullptr) return;
-
-        Compiler compiler(engine);
-        compiled = compiler.compile(analysed);
-        if (compiled == nullptr) return;
-
-        image = std::make_unique<Image>(analysed, *elaborated, *compiled);
-
-        KernelOptions options;
-        options.transcript = &transcriptStream;
-        options.deltaLimit = deltaLimit;
-        kernel = std::make_unique<Kernel>(*image, engine, options);
-        kernel->initialize();
-    }
-
-    [[nodiscard]] bool ready() const noexcept { return kernel != nullptr && valid; }
-
-    RunStatus run(SimTime until = NoTime) { return kernel->run(until); }
-
-    [[nodiscard]] SimTime time() const { return kernel->time(); }
-
-    /// Renders a signal's current value, so that assertions read as the design does.
-    [[nodiscard]] std::string value(std::string_view path, Radix radix = Radix::Binary) const {
-        const std::uint32_t signalIndex = image->findSignal(path);
-        EXPECT_NE(signalIndex, Image::NoSignal) << "no signal named " << path;
-        if (signalIndex == Image::NoSignal) return "<missing>";
-
-        const auto& signal = image->signals()[signalIndex];
-        return enzan::eir::toString(kernel->arena().at(signal.wordOffset, signal.bitWidth), radix);
-    }
-
-    /// The index of a signal by path, failing the test if the design has no such signal.
-    [[nodiscard]] std::uint32_t signal(std::string_view path) const {
-        const std::uint32_t signalIndex = image->findSignal(path);
-        EXPECT_NE(signalIndex, Image::NoSignal) << "no signal named " << path;
-        return signalIndex;
-    }
-
-    [[nodiscard]] std::string transcript() const { return transcriptStream.str(); }
-
-    [[nodiscard]] bool reportedCode(enzan::DiagCode code) const {
-        return std::ranges::find(consumer.codes, code) != consumer.codes.end();
-    }
-
-    [[nodiscard]] const std::vector<std::string>& messages() const { return consumer.messages; }
-
-    Kernel& simulationKernel() { return *kernel; }
-
-    /// Delta limit applied to the kernel. Set before constructing to test the limit
-    /// without waiting for ten thousand iterations.
-    static std::uint32_t deltaLimit;
-
-private:
-    SourceManager sources;
-    DiagnosticEngine engine;
-    CollectingConsumer consumer;
-    std::ostringstream transcriptStream;
-
-    Design analysed;
-    std::unique_ptr<ElaboratedDesign> elaborated;
-    std::unique_ptr<CompiledDesign> compiled;
-    std::unique_ptr<Image> image;
-    std::unique_ptr<Kernel> kernel;
-    bool valid = false;
-};
-
-std::uint32_t Simulation::deltaLimit = 10'000;
 
 /// A module with two 8-bit objects and whatever processes the caller adds.
 ModuleDefinition makeTop(std::vector<Process> processes, std::vector<Object> objects = {}) {
@@ -1501,8 +1361,8 @@ TEST(KernelPli, CallbacksFireWhereSection93PutsThem) {
     hooks.timed.emplace(5, [&] {
         hooks.log.push_back("timed clk=" + simulation.value("/tb/clk"));
         hooks.readWrite.emplace_back(
-            [&] { hooks.log.push_back("read-write clk=" + simulation.value("/tb/clk")); });
-        hooks.readOnly.emplace_back([&] { hooks.log.push_back("read-only"); });
+            [&] { hooks.log.emplace_back("read-write clk=" + simulation.value("/tb/clk")); });
+        hooks.readOnly.emplace_back([&] { hooks.log.emplace_back("read-only"); });
     });
     simulation.simulationKernel().setPliHooks(&hooks);
 
