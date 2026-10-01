@@ -95,6 +95,54 @@ public:
     virtual void onDumpVars() {}
 };
 
+/// The points in the region ordering at which a PLI application runs.
+///
+/// Section 3.3 lets the PLI regions be hook points rather than queues, and section 9.3 says
+/// where each callback fires; this is the kernel's half of that table. An interface rather
+/// than a dependency for the reason `ValueChangeListener` is one: `runtime` must not depend on
+/// `pli`, and a kernel with no application loaded pays one null test per hook and nothing else.
+///
+/// Every hook may re-enter the kernel — write a signal, schedule a non-blocking update, ask
+/// for the run to finish — because that is what an application's callbacks do.
+class PliHooks {
+public:
+    PliHooks() = default;
+    PliHooks(const PliHooks&) = delete;
+    PliHooks& operator=(const PliHooks&) = delete;
+    PliHooks(PliHooks&&) = delete;
+    PliHooks& operator=(PliHooks&&) = delete;
+    virtual ~PliHooks() = default;
+
+    /// Called once a signal has changed: the new value is in the arena, the processes it
+    /// wakes are scheduled and every listener has recorded it. `cbValueChange`.
+    virtual void valueChanged(std::uint32_t signalIndex) = 0;
+
+    /// The earliest time anything the application scheduled is due, or `NoTime`.
+    ///
+    /// Taken into account when the kernel decides whether there is anything left to do,
+    /// because a pending timed callback keeps a simulation running: a testbench written in
+    /// Python is a design that schedules nothing of its own.
+    [[nodiscard]] virtual SimTime nextTimedEvent() const = 0;
+
+    /// Called when time has advanced to `time`, before anything at that time runs.
+    /// `cbNextSimTime`.
+    virtual void timeAdvanced(SimTime time) = 0;
+
+    /// Runs everything due at or before `time`: delayed writes, then `cbAfterDelay` and
+    /// `cbAtStartOfSimTime`.
+    virtual void runTimedEvents(SimTime time) = 0;
+
+    [[nodiscard]] virtual bool hasReadWrite() const = 0;
+
+    /// Runs the pending `cbReadWriteSynch` callbacks, once the slot has settled.
+    virtual void runReadWrite() = 0;
+
+    [[nodiscard]] virtual bool hasReadOnly() const = 0;
+
+    /// Runs the pending `cbReadOnlySynch` callbacks, before the Postponed region.
+    virtual void runReadOnly() = 0;
+};
+
 /// Tunable kernel behaviour.
 struct KernelOptions {
     /// Delta cycles allowed at one timestamp before the run is abandoned.
@@ -222,6 +270,27 @@ public:
     /// kernel — entitled to give it.
     void setInterrupt(RunInterrupt* source) noexcept { interrupt = source; }
 
+    /// Registers the PLI application's hooks, or clears them with a null pointer.
+    ///
+    /// `hooks` must outlive the kernel or be cleared first. One rather than a list, because
+    /// one VPI implementation serves every application a process loads (section 9).
+    void setPliHooks(PliHooks* hooks) noexcept { pliHooks = hooks; }
+
+    /// Ends the simulation as `$finish` does, once whatever is running returns.
+    ///
+    /// `vpi_control(vpiFinish)` (section 9.5). The exit status is untouched, so a run an
+    /// application finishes ends successfully unless something else failed.
+    void requestFinish() noexcept { finishRequested = true; }
+
+    /// Stops the run at the next time-slot boundary, as a `RunInterrupt` would.
+    ///
+    /// `vpi_control(vpiStop)` (section 9.5). The boundary is the one a run can be resumed
+    /// from with the same result, which is the whole reason `RunInterrupt` polls there.
+    void requestStop() noexcept { stopRequested = true; }
+
+    /// The unit every time the kernel reports is counted in.
+    [[nodiscard]] TimeScale timeScale() const noexcept { return options.timeScale; }
+
     /// Total instructions executed, for the benchmark harness.
     [[nodiscard]] std::uint64_t executedInstructions() const noexcept { return instructionCount; }
 
@@ -301,6 +370,9 @@ private:
     /// Runs the design's `final` blocks, once.
     void runFinalProcesses();
 
+    /// True when the PLI application has something to run at the current time.
+    [[nodiscard]] bool pliWorkDue() const;
+
     [[nodiscard]] bool stopping() const noexcept { return finishRequested || errorRequested; }
 
     [[nodiscard]] bool halted() const noexcept { return stopping(); }
@@ -351,11 +423,17 @@ private:
     /// Polled between time slots, or null. Non-owning.
     RunInterrupt* interrupt = nullptr;
 
+    /// The loaded PLI application's hooks, or null. Non-owning.
+    PliHooks* pliHooks = nullptr;
+
     SimTime currentTime = 0;
     RunStatus lastStatus = RunStatus::Quiescent;
     int finishStatus = 0;
     bool finishRequested = false;
     bool errorRequested = false;
+
+    /// Set by `requestStop`, and cleared when the run it stops returns.
+    bool stopRequested = false;
 
     bool finalProcessesRun = false;
 

@@ -27,6 +27,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -65,6 +67,7 @@ using enzan::runtime::Image;
 using enzan::runtime::Kernel;
 using enzan::runtime::KernelOptions;
 using enzan::runtime::NoTime;
+using enzan::runtime::PliHooks;
 using enzan::runtime::RunInterrupt;
 using enzan::runtime::RunStatus;
 using enzan::runtime::SimTime;
@@ -1402,6 +1405,240 @@ TEST(Kernel, ReinitialisingAfterASuspensionDoesNotResumeTheOldRun) {
     EXPECT_EQ(simulation.value("/tb/clk"), "0");
     ASSERT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
     EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
+// ---------------------------------------------------------------------------
+// PLI hooks (section 9.3)
+// ---------------------------------------------------------------------------
+
+/// A PLI application reduced to what the kernel sees of one: queues of things to run at the
+/// points section 9.3 names, plus a log of when each point was reached.
+class ScriptedHooks final : public PliHooks {
+public:
+    using Action = std::function<void()>;
+
+    void valueChanged(std::uint32_t signalIndex) override {
+        if (onValueChange) onValueChange(signalIndex);
+    }
+
+    [[nodiscard]] SimTime nextTimedEvent() const override {
+        return timed.empty() ? NoTime : timed.begin()->first;
+    }
+
+    void timeAdvanced(SimTime time) override { log.push_back("advance " + std::to_string(time)); }
+
+    void runTimedEvents(SimTime time) override {
+        // Taken out before running, so that one scheduling another for the same time is
+        // run on the kernel's next pass rather than inside this one.
+        std::vector<Action> due;
+        while (!timed.empty() && timed.begin()->first <= time) {
+            due.push_back(std::move(timed.begin()->second));
+            timed.erase(timed.begin());
+        }
+        for (const Action& action : due) action();
+    }
+
+    [[nodiscard]] bool hasReadWrite() const override { return !readWrite.empty(); }
+
+    void runReadWrite() override { runAll(readWrite); }
+
+    [[nodiscard]] bool hasReadOnly() const override { return !readOnly.empty(); }
+
+    void runReadOnly() override { runAll(readOnly); }
+
+    std::function<void(std::uint32_t)> onValueChange;
+    std::multimap<SimTime, Action> timed;
+    std::vector<Action> readWrite;
+    std::vector<Action> readOnly;
+    std::vector<std::string> log;
+
+private:
+    static void runAll(std::vector<Action>& actions) {
+        std::vector<Action> taken;
+        taken.swap(actions);
+        for (const Action& action : taken) action();
+    }
+};
+
+/// A process that copies `a` into `b` whenever `a` changes.
+Process copyAToB() {
+    ProcessBuilder builder(ProcessKind::AlwaysComb, "copy");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    builder.block("entry");
+    builder.readObject(value, 0);
+    builder.store(1, value);
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+TEST(KernelPli, APendingTimedEventKeepsAQuietDesignRunning) {
+    // A design that schedules nothing of its own is exactly what a Python testbench drives,
+    // and it must not be declared finished while the testbench still has a timer running.
+    Simulation simulation(designOf(makeTop({})), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    const std::uint32_t a = simulation.signal("/tb/a");
+    hooks.timed.emplace(40, [&] { simulation.simulationKernel().deposit(a, literal("8'h5A")); });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.time(), 40U);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Hexadecimal), "5a");
+}
+
+TEST(KernelPli, CallbacksFireWhereSection93PutsThem) {
+    // At one timestamp: time advances, the timed event runs before the process released at
+    // that time, the clock changes, and only then do read-write and read-only run.
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    hooks.onValueChange = [&](std::uint32_t signal) {
+        if (signal == clk) hooks.log.push_back("change clk=" + simulation.value("/tb/clk"));
+    };
+    hooks.timed.emplace(5, [&] {
+        hooks.log.push_back("timed clk=" + simulation.value("/tb/clk"));
+        hooks.readWrite.emplace_back(
+            [&] { hooks.log.push_back("read-write clk=" + simulation.value("/tb/clk")); });
+        hooks.readOnly.emplace_back([&] { hooks.log.push_back("read-only"); });
+    });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    ASSERT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+    const std::vector<std::string> expected = {"advance 5", "timed clk=0", "change clk=1",
+                                               "read-write clk=1", "read-only"};
+    EXPECT_EQ(hooks.log, expected);
+}
+
+TEST(KernelPli, WhatAReadWriteCallbackWritesSettlesBeforeReadOnly) {
+    Simulation simulation(designOf(makeTop({copyAToB()})), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    const std::uint32_t a = simulation.signal("/tb/a");
+    std::string seenByReadOnly;
+    hooks.readWrite.emplace_back(
+        [&] { simulation.simulationKernel().deposit(a, literal("8'h42")); });
+    hooks.readOnly.emplace_back(
+        [&] { seenByReadOnly = simulation.value("/tb/b", Radix::Hexadecimal); });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(seenByReadOnly, "42") << "the copy ran before the read-only phase";
+}
+
+TEST(KernelPli, ReadWriteAskingForReadWriteForeverIsADeltaLoop) {
+    Simulation::deltaLimit = 16;
+    Simulation simulation(designOf(makeTop({})), "tb");
+    Simulation::deltaLimit = 10'000;
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    std::function<void()> again = [&] { hooks.readWrite.push_back(again); };
+    hooks.readWrite.push_back(again);
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::DeltaLimitExceeded));
+}
+
+TEST(KernelPli, AnUpdateScheduledWhileUpdatesAreAppliedJoinsTheNextPass) {
+    // A value-change callback runs while the NBA batch is being applied, and one that writes
+    // with an inertial delay appends to the very list being applied. The second write must
+    // land, and the first batch must not be disturbed by it.
+    ProcessBuilder builder(ProcessKind::Initial, "nba");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t constant = builder.constant("8'h11");
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(constant)));
+    builder.storeNonBlocking(0, value);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    ScriptedHooks hooks;
+    const std::uint32_t a = simulation.signal("/tb/a");
+    const std::uint32_t b = simulation.signal("/tb/b");
+    const BitVector written = literal("8'h22");
+    hooks.onValueChange = [&](std::uint32_t signal) {
+        if (signal == a) simulation.simulationKernel().scheduleNonBlocking(b, written);
+    };
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Hexadecimal), "11");
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "22");
+}
+
+TEST(KernelPli, AFinishFromACallbackEndsTheRunThere) {
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    hooks.timed.emplace(12, [&] { simulation.simulationKernel().requestFinish(); });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(100), RunStatus::Finished);
+    EXPECT_EQ(simulation.time(), 12U);
+    EXPECT_EQ(simulation.simulationKernel().exitStatus(), 0);
+}
+
+TEST(KernelPli, AFinishAskedForBeforeTheRunEndsItBeforeAnythingRuns) {
+    // What an application does from `cbStartOfSimulation` when it has nothing to test.
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    simulation.simulationKernel().requestFinish();
+    EXPECT_EQ(simulation.run(100), RunStatus::Finished);
+    EXPECT_EQ(simulation.time(), 0U);
+    EXPECT_EQ(simulation.simulationKernel().executedInstructions(), 0U);
+}
+
+TEST(KernelPli, AStopFromACallbackPausesTheRunAndResumingMatchesAStraightRun) {
+    Simulation straight(freeRunningClock(), "tb");
+    ASSERT_TRUE(straight.ready());
+    ASSERT_EQ(straight.run(100), RunStatus::TimeLimitReached);
+
+    Simulation stopped(freeRunningClock(), "tb");
+    ASSERT_TRUE(stopped.ready());
+
+    ScriptedHooks hooks;
+    hooks.timed.emplace(12, [&] { stopped.simulationKernel().requestStop(); });
+    stopped.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(stopped.run(100), RunStatus::Interrupted);
+    EXPECT_LT(stopped.time(), 100U);
+    EXPECT_GE(stopped.time(), 12U);
+
+    EXPECT_EQ(stopped.run(100), RunStatus::TimeLimitReached);
+    EXPECT_EQ(stopped.value("/tb/clk"), straight.value("/tb/clk"));
+    EXPECT_EQ(stopped.simulationKernel().executedInstructions(),
+              straight.simulationKernel().executedInstructions());
+}
+
+TEST(KernelPli, AZeroDelayEventFromReadOnlyRunsInAFurtherSlotAtTheSameTime) {
+    // Read-only is the end of a slot, so something scheduled from it with no delay cannot run
+    // in that slot. It runs in another at the same time, and time is not said to advance.
+    Simulation simulation(designOf(makeTop({})), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    hooks.timed.emplace(10, [&] {
+        hooks.readOnly.emplace_back([&] {
+            hooks.log.emplace_back("read-only");
+            hooks.timed.emplace(10, [&] { hooks.log.emplace_back("after read-only"); });
+        });
+    });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.time(), 10U);
+    const std::vector<std::string> expected = {"advance 10", "read-only", "after read-only"};
+    EXPECT_EQ(hooks.log, expected);
 }
 
 } // namespace

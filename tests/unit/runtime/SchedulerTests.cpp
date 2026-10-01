@@ -223,6 +223,37 @@ TEST(Scheduler, WideUpdatesSurviveThePool) {
         "42");
 }
 
+TEST(Scheduler, TakingUpdatesLeavesThePendingListEmpty) {
+    Scheduler scheduler;
+    const BitVector value = literal("8'h5A");
+    scheduler.appendNonBlocking(7, value.ref(), 0, false);
+
+    const auto taken = scheduler.takeNonBlockingUpdates();
+    ASSERT_EQ(taken.size(), 1U);
+    EXPECT_EQ(taken[0].signalIndex, 7U);
+    EXPECT_EQ(enzan::eir::toString(scheduler.takenValue(taken[0]), enzan::eir::Radix::Hexadecimal),
+              "5a");
+    EXPECT_FALSE(scheduler.hasNonBlockingUpdates());
+}
+
+TEST(Scheduler, AnUpdateAppendedWhileABatchIsAppliedLeavesTheBatchAlone) {
+    // What a VPI callback does while the kernel applies the batch (DESIGN_GUIDE.md section
+    // 9.4): the batch it is iterating must neither move nor change underneath it.
+    Scheduler scheduler;
+    const BitVector first = literal("8'h11");
+    scheduler.appendNonBlocking(1, first.ref(), 0, false);
+
+    const auto taken = scheduler.takeNonBlockingUpdates();
+    const BitVector wide = literal("256'h1");
+    for (std::uint32_t index = 0; index < 64; ++index)
+        scheduler.appendNonBlocking(2, wide.ref(), 0, false);
+
+    ASSERT_EQ(taken.size(), 1U);
+    EXPECT_EQ(enzan::eir::toString(scheduler.takenValue(taken[0]), enzan::eir::Radix::Hexadecimal),
+              "11");
+    EXPECT_EQ(scheduler.nonBlockingUpdates().size(), 64U) << "the new ones wait for the next pass";
+}
+
 // ---------------------------------------------------------------------------
 // Delta counting
 // ---------------------------------------------------------------------------

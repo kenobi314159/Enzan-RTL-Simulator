@@ -98,6 +98,7 @@ void Kernel::initialize() {
 
     finishRequested = false;
     errorRequested = false;
+    stopRequested = false;
     finishStatus = 0;
     finalProcessesRun = false;
     lastStatus = RunStatus::Quiescent;
@@ -117,12 +118,22 @@ RunStatus Kernel::run(SimTime until) {
         // the run's state is in the scheduler and the arena and nothing is half-done. Stopping
         // anywhere else would make resuming produce a different answer from running straight
         // through, which section 3.8 forbids.
-        if (interrupt != nullptr && interrupt->shouldInterrupt()) {
+        if (stopRequested || (interrupt != nullptr && interrupt->shouldInterrupt())) {
+            stopRequested = false;
             lastStatus = RunStatus::Interrupted;
             return lastStatus;
         }
 
-        if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates()) {
+        // A finish asked for outside a time slot — by an application, from a callback that ran
+        // before the run began — ends the run before anything else executes, exactly as one
+        // asked for inside a slot ends it before the next.
+        if (stopping()) {
+            lastStatus = errorRequested ? RunStatus::Error : RunStatus::Finished;
+            runFinalProcesses();
+            return lastStatus;
+        }
+
+        if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates() || pliWorkDue()) {
             if (!runTimeSlot()) {
                 lastStatus = errorRequested ? RunStatus::Error : RunStatus::Finished;
                 runFinalProcesses();
@@ -139,7 +150,21 @@ bool Kernel::runTimeSlot() {
     // fully; only when Active, Inactive and NBA are all empty does the slot move on to
     // Observed, and the Reactive family iterates by the same rule. Anything that
     // schedules Active work sends control back to the top.
+    //
+    // An application's timed events run first, before the Active region is drained, and its
+    // read-write callbacks once everything else has settled (section 9.3).
+    bool firstPass = true;
     while (true) {
+        if (pliHooks != nullptr && pliHooks->nextTimedEvent() <= currentTime) {
+            // On any pass but the first, what is due was scheduled during this slot with no
+            // delay, and running it is a further iteration of the slot. Counting it keeps an
+            // application that does that forever inside the delta limit of section 3.2.
+            if (!firstPass && !countDelta()) return false;
+            pliHooks->runTimedEvents(currentTime);
+            if (halted()) return false;
+        }
+        firstPass = false;
+
         drain(Region::Active);
         if (halted()) return false;
 
@@ -180,13 +205,38 @@ bool Kernel::runTimeSlot() {
             continue;
         }
 
+        // Read-write synchronisation is the application's chance to write once the design has
+        // settled, and whatever it writes has to settle in turn, so it sends control back to
+        // the top like any other region that schedules work. It counts as a delta for the
+        // same reason a `#0` does: an application that asks for read-write from read-write
+        // forever is a delta loop, and the limit is what finds one.
+        if (pliHooks != nullptr && pliHooks->hasReadWrite()) {
+            pliHooks->runReadWrite();
+            if (halted()) return false;
+            if (!countDelta()) return false;
+            continue;
+        }
+
         break;
     }
 
-    // Postponed is last and, in the M1 subset, cannot schedule anything: `$monitor` and
-    // `cbReadOnlySynch` are read-only by definition.
+    // Read-only synchronisation sees the slot's final values, before Postponed. Writes are
+    // refused while it runs (section 9.4), so it cannot send control back.
+    if (pliHooks != nullptr && pliHooks->hasReadOnly()) {
+        pliHooks->runReadOnly();
+        if (halted()) return false;
+    }
+
+    // Postponed is last and, in the M1 subset, cannot schedule anything: `$monitor` is
+    // read-only by definition.
     drain(Region::Postponed);
     return !halted();
+}
+
+bool Kernel::pliWorkDue() const {
+    if (pliHooks == nullptr) return false;
+    return pliHooks->nextTimedEvent() <= currentTime || pliHooks->hasReadWrite()
+           || pliHooks->hasReadOnly();
 }
 
 bool Kernel::countDelta() {
@@ -228,21 +278,34 @@ void Kernel::drain(Region region) {
 }
 
 void Kernel::applyNonBlockingUpdates() {
-    // Applying an update can wake a process, but waking schedules into Active and never
-    // appends to this list, so iterating it while applying is safe.
-    for (const NonBlockingUpdate& update : scheduler.nonBlockingUpdates()) {
+    // Taken as a batch, because applying an update can append another: a write runs the
+    // application's value-change callbacks, and one of those may write with an inertial delay.
+    // That update belongs to the next NBA pass, not to this one.
+    for (const NonBlockingUpdate& update : scheduler.takeNonBlockingUpdates()) {
         if (update.partial) {
-            writeSignalPart(update.signalIndex, scheduler.updateValue(update), update.lowBit);
+            writeSignalPart(update.signalIndex, scheduler.takenValue(update), update.lowBit);
         } else {
-            writeSignal(update.signalIndex, scheduler.updateValue(update));
+            writeSignal(update.signalIndex, scheduler.takenValue(update));
         }
         if (stopping()) break;
     }
-    scheduler.clearNonBlocking();
 }
 
 bool Kernel::advanceTime(SimTime until) {
-    const SimTime next = scheduler.nextEventTime();
+    const SimTime next = std::min(scheduler.nextEventTime(),
+                                  pliHooks != nullptr ? pliHooks->nextTimedEvent() : NoTime);
+
+    // Something the application scheduled with no delay after the slot had settled — from a
+    // read-only callback — is due now. It runs in a further slot at this time, and time has
+    // not advanced, so nothing that reports an advance is told about one. That further slot
+    // is a delta like any other, or an application doing it forever would never be stopped.
+    if (next <= currentTime) {
+        if (countDelta()) return true;
+        lastStatus = RunStatus::Error;
+        runFinalProcesses();
+        return false;
+    }
+
     if (next == NoTime) {
         lastStatus = RunStatus::Quiescent;
         runFinalProcesses();
@@ -258,6 +321,8 @@ bool Kernel::advanceTime(SimTime until) {
     scheduler.resetDeltaCount();
 
     for (ValueChangeListener* listener : listeners) listener->onTimeAdvance(currentTime);
+
+    if (pliHooks != nullptr) pliHooks->timeAdvanced(currentTime);
 
     scheduler.releaseTime(next);
     return true;
@@ -331,6 +396,12 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
     notifyChange(signalIndex, before, after);
+
+    // Last, because an application's callback may write this signal again. Everything about
+    // this change — the edge it was, who it woke, what the listeners recorded — is settled
+    // before that can happen, so a second write is a second change rather than one that
+    // rewrites the first behind its back.
+    if (pliHooks != nullptr) pliHooks->valueChanged(signalIndex);
 }
 
 void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
@@ -361,6 +432,8 @@ void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
     for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
     notifyChange(signalIndex, before, after);
+
+    if (pliHooks != nullptr) pliHooks->valueChanged(signalIndex);
 }
 
 void Kernel::scheduleNonBlocking(std::uint32_t signalIndex, eir::ConstBitRef value) {
