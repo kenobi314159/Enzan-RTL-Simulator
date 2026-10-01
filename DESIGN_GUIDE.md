@@ -1338,6 +1338,13 @@ simulator rather than to whatever another simulator's quirks taught it to tolera
 `COCOTB_HDL_TIMEPRECISION` becomes `--timescale`, since Enzan counts every delay in one unit
 (3.1). It must name a single unit, `1ns` and not `10ns`, which is all `--timescale` accepts.
 
+**A design's own delays are read in that unit too.** The frontend does not yet honour
+`` `timescale `` or a module's `timeunit`, which section 3.1 requires: `#10` is ten of whatever
+`--timescale` says, so a design written for nanoseconds and run at cocotb's default picosecond
+precision runs a thousand times fast. A testbench in cocotb that drives every event itself, as
+most do, is unaffected; a design with delays of its own needs `COCOTB_HDL_TIMEPRECISION` set to
+the unit it was written in until the frontend converts delays as 3.1 says it must.
+
 ---
 
 ## 10. GUI
@@ -2001,6 +2008,12 @@ is tracked like any other conformance number.
 the cocotb installed beside it, runs every directory of `tests/test_cases` with `SIM=enzan`
 exactly as cocotb's own CI runs them, and prints one line per case and a pass rate. A case
 passes when its `make` succeeds, which is cocotb's own definition.
+
+**A pass that never ran a test is said to be one.** Many cases skip themselves for anything
+that is not a VHDL simulator or Verilator, and the ones that expect a run to fail pass when it
+fails at analysis. Both count, because that is cocotb's definition, and both are marked, with a
+second number for the passes in which cocotb actually ran under Enzan: only those say anything
+about VPI.
 
 **The cocotb version lives in one file**, `tests/conformance/cocotb/requirements.txt`, which
 CI installs from. The suite is fetched to match whatever is installed rather than restating

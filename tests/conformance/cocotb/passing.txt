@@ -1,0 +1,35 @@
+# Every case of cocotb's tests/test_cases that passes against Enzan, one per line.
+# run-suite.sh fails when one of these stops passing (DESIGN_GUIDE.md section 14.6).
+test_cocotb_tops
+test_compare
+test_configuration
+test_defaultless_parameter
+test_dumpfile_verilator
+test_exit_error
+test_fatal
+test_gpi_extra_bad_lib
+test_gpi_users_bad_lib
+test_gpi_users_notset
+test_iteration_mixedlang
+test_iteration_vhdl
+test_kill_sim
+test_logic_array_indexing
+test_long_log_msg
+test_module_var_empty
+test_module_var_messy
+test_module_without_tests
+test_null_ranges
+test_packed_union
+test_sv_interface
+test_toplevel_architecture_same_as_entity
+test_toplevel_library
+test_verilator_timing_a
+test_verilator_timing_b
+test_verilator_timing_c
+test_verilator_timing_d
+test_verilog_access
+test_verilog_include_dirs
+test_vhdl_access
+test_vhdl_integer
+test_vhdl_libraries
+test_vhdl_libraries_multiple
