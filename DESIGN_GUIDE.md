@@ -254,7 +254,8 @@ For the initial development arc, Preponed, Active, Inactive, NBA, Observed,
 Reactive and Postponed MUST be implemented. The PLI-specific regions
 (Pre-Active, Pre-NBA, Post-NBA, Pre-Observed, Post-Observed, Pre-Postponed)
 MAY be represented as callback hook points rather than as fully separate queues,
-provided the callbacks fire at the correct point in the ordering.
+provided the callbacks fire at the correct point in the ordering. Section 9.3 says where each
+VPI callback fires.
 
 ### 3.4 VHDL simulation cycle
 
@@ -1157,6 +1158,177 @@ which makes M4 objectively gated rather than a matter of opinion. NVC's VHPI
 subset, sized specifically for cocotb, is useful precedent for the VHDL side
 later.
 
+The implementation lives in `src/pli/`, and the header applications compile against in
+`include/enzan/` (section 12).
+
+### 9.1 Loading an application
+
+`--vpi <library>[:<entry>]` loads a VPI application into the kernel. It is repeatable, and
+libraries are loaded in the order given. With an entry the named function is called; without
+one, the library's `vlog_startup_routines` array is, which is what the standard names and what
+every application provides. A library offering neither is reported, rather than being a library
+that was loaded and silently did nothing.
+
+Libraries are opened with `RTLD_NOW | RTLD_GLOBAL`. *Now*, so that an application calling a
+routine the kernel lacks fails as it is loaded and names the routine, rather than part-way
+through a run. *Global*, because an application commonly loads further libraries that resolve
+symbols against it — cocotb embeds Python that way.
+
+**Applications resolve the `vpi_*` routines against the `enzan` executable, which exports
+those and nothing else.** Exporting everything would put slang's symbols, and the standard
+library's, where an application's own copies of them could collide.
+
+**Every routine the standard declares is defined.** One Enzan does not support fails and
+says why through `vpi_chk_error`, rather than being absent: an absent one would make an
+application unloadable over a routine it might never call.
+
+**Loading precedes analysis**, so that a library that cannot be loaded is reported before a
+long analysis rather than after it, and so that startup routines run before the design exists,
+as the standard orders it. Elaboration then binds the design and raises `cbStartOfSimulation`;
+everything an application does to the design happens from that callback onwards.
+
+**Plusargs.** A command-line word beginning with `+` that is not one of the analysis options
+(`+incdir+`, `+define+`, `+libext+`) is a plusarg. It is accepted, and reaches an application
+through `vpi_get_vlog_info`, which reports the whole command line as it was given. Plusargs
+belong to the design and to its applications; refusing the ones Enzan does not itself
+understand would be refusing all of them.
+
+`--vpi` is an option of `run` and of the one-shot form (8.1). `analyse` and `elaborate` refuse
+it, because neither runs anything an application could observe.
+
+### 9.2 The object model
+
+What VPI shows is the elaborated design, named the way the standard names it: dot-separated
+from the top, as in `tb.u_dut.count`.
+
+| Enzan | VPI type |
+|---|---|
+| instance | `vpiModule` |
+| generate block | `vpiGenScope`, one per index (`gen[0]`); there is no `vpiGenScopeArray` |
+| net | `vpiNet` |
+| four-state variable | `vpiReg` |
+| two-state variable | `vpiBitVar` |
+| parameter, localparam | `vpiParameter`, with `vpiLocalParam` telling them apart |
+
+**Objects a frontend introduced are not visible.** A port connected to an expression becomes
+an extra object and a continuous assignment, named with a `$` so that it cannot collide with
+anything the user wrote, and VPI keeps it out of the user's namespace for the same reason.
+
+**One storage may have several names.** A collapsed port is one slot reachable as the child's
+port and as the parent's signal; both names resolve, and a value-change callback on either
+fires when the slot changes, because they are the same signal.
+
+Two things EIR does not record yet are visible to an application, and are stated so that
+nobody mistakes them for VPI defects:
+
+- **Declared ranges are not kept**, so every vector reports `[width-1:0]`, and a
+  `logic [0:7]` reports `[7:0]`.
+- **Integer atom types are not distinguished.** An `int` is a 32-bit signed two-state vector
+  and is reported as `vpiBitVar` rather than `vpiIntVar`; an `integer` is reported as
+  `vpiReg`.
+
+Both are changes to EIR's type rather than to VPI, and belong with M5's type work.
+
+**Handles to design objects are interned.** Asking for one twice returns the same handle, and
+freeing one does nothing: a handle names something that exists for the whole elaboration.
+Iterators and callback handles are freed as the standard says.
+
+**Every handle is checked before it is used.** One that is stale or was never issued fails the
+call and is reported through `vpi_chk_error`, rather than being dereferenced. A defect in a
+plugin must not become a crash that the user reports as one in the simulator.
+
+### 9.3 Callbacks and the region ordering
+
+Section 3.3 allows the PLI regions to be hook points rather than queues. These are the points:
+
+| Reason | Fires |
+|---|---|
+| `cbStartOfSimulation` | once, after elaboration and before anything at time zero runs |
+| `cbNextSimTime` | when time advances, before anything at the new time runs |
+| `cbAfterDelay`, `cbAtStartOfSimTime` | at the start of their time slot, after `cbNextSimTime` and before the Active region is drained |
+| `cbValueChange` | at the change: once the new value is in the arena, the processes it wakes are scheduled and listeners have recorded it |
+| `cbReadWriteSynch` | when Active, Inactive, NBA, Observed and the Reactive family are all empty; whatever it wakes then runs, and it may fire again in the same slot |
+| `cbReadOnlySynch` | after the last read-write pass of a slot, before Postponed |
+| `cbEndOfSimulation` | once, when the simulation ends, after `final` blocks |
+
+**A callback registered for the phase that is running runs at that phase's next
+occurrence.** A `cbReadWriteSynch` registered from a read-write callback runs in the next
+read-write pass of the same slot, once what the first one woke has settled; a
+`cbReadOnlySynch` registered from a read-only callback runs in the next slot; a `cbAfterDelay`
+of zero registered mid-slot runs before the Active region is next drained. Running any of them
+in the pass that registered it would make the order depend on where in a list a callback
+happened to be appended.
+
+**A read-write pass counts as a delta cycle**, against the limit of 3.2. An application that
+asks for read-write from read-write without ever letting time move is a delta loop, and the
+limit is what finds one.
+
+**A pending timed callback keeps the simulation running.** A design with nothing scheduled
+and a `cbAfterDelay` outstanding has not finished: a testbench written in Python is exactly a
+design that schedules nothing of its own.
+
+**Value-change callbacks are delivered synchronously and may re-enter.** A callback that
+writes a signal with `vpiNoDelay` runs that signal's callbacks before its own write returns,
+as every other simulator does; cocotb queues for exactly this reason.
+
+Callbacks of one reason fire in the order they were registered (3.8).
+
+### 9.4 Writing values
+
+`vpi_put_value` is the kernel's write operations of 10.4, not a second implementation of
+them:
+
+| Flag | Effect |
+|---|---|
+| `vpiNoDelay` | written now, waking whatever watches the signal: a deposit |
+| `vpiInertialDelay`, `vpiTransportDelay`, `vpiPureTransportDelay` with no delay | written in the NBA region of the current slot, as a non-blocking assignment is |
+| the same, with a delay | written at the start of the slot the delay reaches, before that slot's `cbAfterDelay` |
+| `vpiForceFlag` | a force |
+| `vpiReleaseFlag` | a release; `value_p` receives the value the signal keeps |
+
+**The three delay modes are not told apart.** Each schedules its write and none cancels a write
+already pending, so an inertial write behaves as a transport one. Modelling the cancellation
+needs a per-signal record of pending writes that nothing in the M4 subset would exercise;
+cocotb writes with no delay.
+
+`vpiCancelEvent` and `vpiReturnEvent` are refused, and so is any write during
+`cbReadOnlySynch`, as the standard requires: a read-only phase that could be written would
+report values that depend on the order its callbacks ran in.
+
+### 9.5 Ending
+
+**`vpi_control(vpiFinish)` is `$finish`.** The run ends when the current callback returns,
+`final` blocks run, `cbEndOfSimulation` fires and the exit status is 0.
+
+**`vpi_control(vpiStop)` stops the run at the next time-slot boundary**, exactly as the
+front end's Stop does, and for the same reason: that is the only boundary a run can be resumed
+from with the same result (section 2.2, and `RunInterrupt`). A served session then waits for
+its client. A batch run has nothing that could resume it, so it ends there.
+
+**`cbEndOfSimulation` fires once, whichever way the simulation ends**: by `$finish`, by
+running out of events, by an error, or by the process ending while the simulation could still
+have continued — a batch run's `--run` limit. An application that writes its results from
+that callback, as cocotb does, otherwise never writes them.
+
+**A design cannot be restarted while an application is loaded.** Putting it back to time zero
+would leave the application holding the state of a simulation that no longer exists, and
+there is no callback in the standard that tells it so.
+
+### 9.6 cocotb
+
+cocotb chooses a simulator by the name of a makefile in its own directory and has no way to
+add one from outside. `tools/cocotb/Makefile.enzan` is that makefile, and
+`tools/cocotb/makefiles.sh <dir>` writes a copy of cocotb's makefile directory with it added,
+for `make SIM=enzan COCOTB_MAKEFILES_DIR=<dir>`. The harness of 14.6 runs cocotb's own suite
+this way, so what is tested is what a user runs.
+
+**The VPI library is `libcocotbvpi_dsim`**, which is cocotb's VPI layer compiled with no
+simulator-specific workaround in it. Enzan is held to what cocotb expects of a standard
+simulator rather than to whatever another simulator's quirks taught it to tolerate.
+
+`COCOTB_HDL_TIMEPRECISION` becomes `--timescale`, since Enzan counts every delay in one unit
+(3.1). It must name a single unit, `1ns` and not `10ns`, which is all `--timescale` accepts.
+
 ---
 
 ## 10. GUI
@@ -1616,6 +1788,7 @@ license check against section 1.4.
 | GoogleTest | unit tests | system, FetchContent fallback |
 | LLVM | JIT backend (M8, optional) | system, off by default |
 | zlib | FST compression | system |
+| cocotb | the cocotb golden test and regression suite (M4); never linked | `pip`, pinned in `tests/conformance/cocotb/requirements.txt` |
 
 ### 11.4 Build configurations
 
@@ -1641,7 +1814,8 @@ Enzan-RTL-Simulator/
 ├── cmake/                    find modules and helper functions
 ├── include/
 │   └── enzan/                ONLY headers third parties compile against
-│                             (vpi_user.h, vhpi_user.h, svdpi.h, plugin ABI)
+│                             (vpi_user.h, sv_vpi_user.h, later vhpi_user.h and
+│                             svdpi.h)
 ├── src/
 │   ├── common/               diagnostics, source manager, small utilities
 │   ├── eir/                  the internal representation and its type system
@@ -1658,11 +1832,12 @@ Enzan-RTL-Simulator/
 │   └── gui/                  Qt 6 application code
 ├── tools/
 │   ├── enzan/                headless kernel CLI
-│   └── enzan-gui/            Qt 6 front end, started by `enzan --gui`
+│   ├── enzan-gui/            Qt 6 front end, started by `enzan --gui`
+│   └── cocotb/               cocotb's simulator makefile for Enzan (section 9.6)
 ├── tests/
 │   ├── unit/                 GoogleTest, mirrors src/ layout
 │   ├── golden/               self-checking HDL cases and expected output
-│   ├── conformance/          harnesses for sv-tests, ivtest, VHDL suites
+│   ├── conformance/          harnesses for cocotb, sv-tests, ivtest, VHDL suites
 │   └── designs/              scripts fetching external RTL — NEVER vendored
 ├── bench/                    performance benchmarks and result tracking
 ├── docs/                     human documentation, derived from this guide
@@ -1813,6 +1988,27 @@ Start with the small ones and add larger designs as capability grows.
 Once VPI lands (M4), cocotb's own regression suite runs in CI and its pass rate
 is tracked like any other conformance number.
 
+`tests/conformance/cocotb/run-suite.sh` runs it: it fetches cocotb's source at the tag of
+the cocotb installed beside it, runs every directory of `tests/test_cases` with `SIM=enzan`
+exactly as cocotb's own CI runs them, and prints one line per case and a pass rate. A case
+passes when its `make` succeeds, which is cocotb's own definition.
+
+**The cocotb version lives in one file**, `tests/conformance/cocotb/requirements.txt`, which
+CI installs from. The suite is fetched to match whatever is installed rather than restating
+the version, so the two cannot disagree.
+
+**The ratchet of 14.4 is a list, not a number.** `tests/conformance/cocotb/passing.txt` names
+every case that passes, and the run fails when one of them stops passing. A pass rate alone
+would let one case start passing while another stopped and report no change at all. A case
+that newly passes is reported, and is added to the list in the same commit as the change that
+made it pass.
+
+The rate is low until M5, and that is expected rather than a defect of M4: most of cocotb's
+cases share one design that uses unpacked arrays, structs, `real`, `string` and interfaces,
+and a design that does not analyse fails every test in it. The cases that do analyse are what
+exercise VPI, and the golden cocotb test of `tests/golden/` pins the VPI behaviour cocotb
+relies on whatever the rate is.
+
 ### 14.7 Sanitisers and fuzzing
 
 ASan and UBSan run over the unit and golden suites in CI. TSan is added when
@@ -1863,6 +2059,8 @@ Per-commit jobs:
 - Unit and golden test suites.
 - Sanitiser build (ASan+UBSan) over unit and golden suites.
 - `clang-format` and `clang-tidy` checks.
+- cocotb's regression suite (14.6), in the job that already builds the SystemVerilog
+  frontend, since a second job would build slang a second time to run it.
 
 Nightly jobs:
 
