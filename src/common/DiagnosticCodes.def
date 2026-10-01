@@ -137,6 +137,19 @@ ENZAN_DIAG(FileListLibrarySearchIgnored, 6021, Warning,
            "'{}' is understood but not acted on yet: Enzan analyses every file it is given and "
            "does not go looking for a module nothing defines, so a module reachable only this "
            "way will be reported as undefined. Naming the file in the list analyses it")
+ENZAN_DIAG(RestartWithVpiApplication, 6026, Error,
+           "a design cannot be restarted while a VPI application is loaded: the application "
+           "would still hold the state of the simulation being discarded, and nothing in the "
+           "standard tells it so")
+
+// --- 8000-8999: VPI, VHPI and plugin loading --------------------------------
+
+ENZAN_DIAG(VpiLibraryUnloadable, 8001, Error, "the VPI library '{}' could not be loaded: {}")
+ENZAN_DIAG(VpiEntryNotFound, 8002, Error,
+           "the VPI library '{}' has no function called '{}' to start it with")
+ENZAN_DIAG(VpiNoStartupRoutines, 8003, Error,
+           "the VPI library '{}' defines no vlog_startup_routines; if it is started some other "
+           "way, name the function as --vpi <library>:<function>")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 
