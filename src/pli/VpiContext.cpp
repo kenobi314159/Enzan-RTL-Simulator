@@ -1278,9 +1278,13 @@ void VpiContext::fire(Callback& callback) {
     fillTime(time, kernel != nullptr ? kernel->time() : 0);
     data.time = &time;
 
+    // Start and end of simulation fire with no design attached, so the kernel is checked here
+    // as it is for the time above. A value-change callback never meets a null one — detaching
+    // drops them all — but this function must not depend on which reason it was called for.
     s_vpi_value value{};
     value.format = callback.valueFormat;
-    if (callback.data.reason == cbValueChange && value.format != vpiSuppressVal) {
+    if (callback.data.reason == cbValueChange && value.format != vpiSuppressVal
+        && kernel != nullptr) {
         std::string ignored;
         static_cast<void>(
             readValue(readSignal(callback).ref(), callback.isSigned, value, values, ignored));
