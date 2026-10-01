@@ -511,6 +511,8 @@ std::filesystem::path frontEndProgram() {
     return "enzan-gui";
 }
 
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+
 /// The socket a signal handler has to remove, and nothing else.
 ///
 /// A plain buffer rather than a `std::string`, because a handler may only call what POSIX lists
@@ -548,6 +550,8 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
         ::signal(signalNumber, removeSocketOnSignal);
     }
 }
+
+#endif // ENZAN_WITH_SYSTEMVERILOG
 
 /// The window's own options, as the front end spells them.
 ///
