@@ -14,6 +14,9 @@ endif()
 
 target_link_libraries(enzan PRIVATE enzan::session)
 
+# VPI applications loaded with `--vpi` resolve the routines against this executable.
+enzan_export_vpi(enzan)
+
 if(ENZAN_BUILD_TESTS)
   # End-to-end checks on the executable itself. The unit tests cover the version
   # strings; these cover the thing a user actually invokes, including the error

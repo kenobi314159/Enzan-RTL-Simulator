@@ -34,6 +34,10 @@ namespace enzan::elab {
 class ElaboratedDesign;
 }
 
+namespace enzan::pli {
+class VpiContext;
+}
+
 namespace enzan::runtime {
 class Image;
 }
@@ -201,6 +205,23 @@ public:
 
     [[nodiscard]] bool hasLibrary() const noexcept { return library.isOpen(); }
 
+    // -----------------------------------------------------------------------
+    // VPI applications
+    // -----------------------------------------------------------------------
+
+    /// Loads a VPI application and runs its startup routines (DESIGN_GUIDE.md section 9.1).
+    ///
+    /// Called before analysis, so that a library that cannot be loaded is reported before a
+    /// long analysis rather than after it, and so that its startup routines run before the
+    /// design exists, as the standard orders it. Every elaboration from then on is shown to it.
+    ///
+    /// `commandLine` is what `vpi_get_vlog_info` reports, and is taken from the first call:
+    /// one process has one command line however many applications it loads.
+    bool loadVpiApplication(std::string_view specification,
+                            std::span<const std::string> commandLine);
+
+    [[nodiscard]] bool hasVpiApplication() const noexcept;
+
     /// True when the last `analyse` came out of the library rather than the frontend.
     [[nodiscard]] bool reusedLibrary() const noexcept { return loadedFromLibrary; }
 
@@ -242,6 +263,9 @@ public:
     runtime::RunStatus run(std::optional<runtime::SimTime> until);
 
     /// Puts the design back to time zero, keeping the elaboration and the waveform files.
+    ///
+    /// Refused while a VPI application is loaded (section 9.5): it would still hold the state
+    /// of the simulation being discarded.
     bool restart();
 
     [[nodiscard]] runtime::SimTime time() const noexcept;
@@ -336,6 +360,9 @@ private:
     /// Drops the kernel, the image and everything they were built from.
     void discardElaboration();
 
+    /// Tells a loaded application the simulation is over, once (section 9.5).
+    void endVpiSimulation();
+
     /// Parses `literal` to the width of `signalIndex`, reporting through `error`.
     [[nodiscard]] std::optional<eir::BitVector>
     parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;
@@ -378,6 +405,12 @@ private:
     std::unique_ptr<codegen::CompiledDesign> compiled;
     std::unique_ptr<runtime::Image> image;
     std::unique_ptr<runtime::Kernel> kernel;
+
+    /// The loaded VPI applications' view of the simulation, or null when none is loaded.
+    ///
+    /// Declared after the kernel so that it is destroyed first: it holds the kernel's hooks
+    /// and must let go of them before the kernel goes.
+    std::unique_ptr<pli::VpiContext> vpi;
 
     /// Open waveform files. Owned here so that `quit` and the destructor both finish them.
     std::vector<std::unique_ptr<wavedb::WaveformWriter>> writers;

@@ -236,12 +236,19 @@ protected:
     /// command typed at a front end and a request from one act on the same simulation, so a
     /// test that served an image of its own would be testing an arrangement that does not
     /// exist.
-    void rebuild(Design design) {
+    ///
+    /// `withVpiApplication` loads the test plugin first, as `--vpi` would.
+    void rebuild(Design design, bool withVpiApplication = false) {
         // The old server before the old session: the server borrows the session's kernel, and
         // replacing the session first would leave it pointing at one that has gone.
         server.reset();
+        session.reset();
         session = std::make_unique<Session>(sources, engine);
         session->setTimeScale(TimeScale(-9));
+        if (withVpiApplication) {
+            const std::vector<std::string> commandLine = {"enzan"};
+            ASSERT_TRUE(session->loadVpiApplication(ENZAN_TEST_STARTUP_PLUGIN, commandLine));
+        }
         session->setDesign(std::make_unique<Design>(std::move(design)));
         ASSERT_TRUE(session->elaborate("tb"))
             << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.front());
@@ -749,6 +756,25 @@ TEST_F(ServerFixture, RestartReturnsToTimeZeroAndKeepsTheSubscriptions) {
     again.duration = 40;
     request(MessageType::Run, again);
     EXPECT_EQ(server->kernel().time(), 40U);
+}
+
+TEST_F(ServerFixture, RestartIsRefusedWhileAVpiApplicationIsLoaded) {
+    // The client's restart reaches the kernel without going through the session, so the server
+    // has to make the session's refusal itself (DESIGN_GUIDE.md section 9.5).
+    rebuild(tickingDesign(), true);
+    connectClient();
+
+    RunMessage run;
+    run.duration = 100;
+    request(MessageType::Run, run);
+    ASSERT_EQ(server->kernel().time(), 100U);
+
+    enzan::ipc::RestartMessage restart;
+    request(MessageType::Restart, restart);
+
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
+    EXPECT_NE(failure.reason.find("VPI"), std::string::npos) << failure.reason;
+    EXPECT_EQ(server->kernel().time(), 100U) << "nothing was put back";
 }
 
 // ---------------------------------------------------------------------------

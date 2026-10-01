@@ -4,3 +4,5 @@ enzan_add_unit_test(
   ipc
   SOURCES KernelServerTests.cpp ProtocolTests.cpp TransportTests.cpp
   DEPENDS enzan::ipc enzan::ipc_server)
+
+enzan_use_test_plugins(enzan_unittest_ipc)

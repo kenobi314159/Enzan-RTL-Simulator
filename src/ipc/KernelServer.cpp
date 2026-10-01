@@ -679,6 +679,13 @@ void KernelServer::onRestart() {
         return;
     }
 
+    // The same refusal as `Session::restart`, made here because a restart from the client puts
+    // the kernel back to time zero itself rather than through the session (section 9.5).
+    if (session->hasVpiApplication()) {
+        sendFailure("a design with a VPI application loaded cannot be restarted");
+        return;
+    }
+
     start();
 
     // The client learns from the time going backwards that everything it holds is stale, so

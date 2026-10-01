@@ -134,6 +134,9 @@ Simulation:
                           ps or fs. The default is ps.
       --delta-limit <n>   Delta cycles allowed at one timestamp. Default 10000.
       --dump-stats        Print instruction and delta counts when the run ends.
+      --vpi <lib[:entry]> Load a VPI application, such as cocotb's; repeatable.
+                          Without an entry, its vlog_startup_routines are run.
+  +<plusarg>              Passed to the design and to VPI applications.
 
 Graphical front end:
       --gui               Hand the elaborated design to a window rather than
@@ -191,6 +194,12 @@ struct Invocation {
     std::int8_t timeExponent = -12;
     std::uint32_t deltaLimit = 10'000;
     bool dumpStatistics = false;
+
+    /// VPI applications to load, in the order given (DESIGN_GUIDE.md section 9.1).
+    std::vector<std::string> vpiApplications;
+
+    /// The command line as it was given, which is what `vpi_get_vlog_info` reports.
+    std::vector<std::string> commandLine;
 };
 
 /// Parses a time unit name into its power-of-ten exponent.
@@ -382,6 +391,13 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
+        if (argument == "--vpi") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.vpiApplications.emplace_back(value);
+            continue;
+        }
+
         if (argument == "--out-lib") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
@@ -489,6 +505,13 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         // `-sv` asks for the only language this build reads, so it is accepted and dropped
         // exactly as the file-list reader treats it.
         if (argument == "-sv") continue;
+
+        // Any other `+` word is a plusarg. It belongs to the design and its VPI applications,
+        // which read it from the command line `vpi_get_vlog_info` reports (section 9.1), so it
+        // is accepted here and needs nothing further. The analysis options above are the
+        // exception, and `+libext+` stays refused below because it names a file-list feature
+        // that this command line does not have.
+        if (argument.starts_with('+') && !argument.starts_with("+libext+")) continue;
 
         if (argument.starts_with('-') || argument.starts_with('+')) {
             std::cerr << "enzan: unrecognised option '" << argument << "'\n"
@@ -793,6 +816,14 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
 ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                     enzan::DiagnosticEngine& diagnostics) {
     enzan::session::Session session(sources, diagnostics);
+
+    // Before analysis, so that a library that cannot be loaded is reported before a long
+    // analysis rather than after it (section 9.1).
+    for (const std::string& application : invocation.vpiApplications) {
+        if (!session.loadVpiApplication(application, invocation.commandLine))
+            return ExitStatus::AnalysisFailed;
+    }
+
     if (!prepare(invocation, session, sources, diagnostics)) return ExitStatus::AnalysisFailed;
 
     // Opened before serving as well as before running: a served session records into the live
@@ -955,6 +986,7 @@ int main(int argc, char** argv) {
     }
 
     Invocation invocation;
+    invocation.commandLine.assign(rawArguments.begin(), rawArguments.end());
     const std::size_t consumed = readCommand(arguments, invocation);
     switch (parseCommandLine(arguments.subspan(consumed), invocation)) {
     case ParseOutcome::PrintedHelp: return static_cast<int>(ExitStatus::Success);
@@ -978,6 +1010,14 @@ int main(int argc, char** argv) {
     }
 
     if (!invocation.writeThemePath.empty()) becomeFrontEnd(frontEndOptions(invocation));
+
+    // An application observes a simulation, and these commands run none (section 9.1).
+    if (!invocation.vpiApplications.empty() && invocation.command != Command::Run
+        && invocation.command != Command::OneShot) {
+        std::cerr << "enzan: '--vpi' needs a simulation to load into; give it to `run` or to "
+                     "the one-shot form\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
 
     if (!invocation.themePath.empty() && !invocation.useGui) {
         std::cerr << "enzan: '--theme' needs '--gui'; it colours a window, and a headless run "

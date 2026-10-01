@@ -8,4 +8,6 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
     session
     SOURCES FileListTests.cpp SessionTests.cpp
     DEPENDS enzan::session)
+
+  enzan_use_test_plugins(enzan_unittest_session)
 endif()
