@@ -324,7 +324,7 @@ private:
     /// The budget keeps one keypress bounded on a trace with millions of them; past it the
     /// cursor lands on a real transition of something in the row, which is a worse answer than
     /// the exact one and a far better answer than a frozen window.
-    static constexpr int EdgeSearchBudget = 512;
+    static constexpr int EdgeSearchBudget = 65536;
 
     /// Tells `fromRow` and everything above it that the value they show has changed.
     ///
