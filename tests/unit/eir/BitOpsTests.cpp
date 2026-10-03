@@ -13,6 +13,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -115,6 +118,55 @@ TEST(BitOpsMovement, SetUnknownCoversTheWholeWidth) {
     bitops::setUnknown(value.mutableRef());
 
     EXPECT_TRUE(value.ref().isAll(Logic::Unknown));
+}
+
+TEST(BitOpsMovement, ExtendMatchesABitAtATimeAcrossWordBoundaries) {
+    // Extension works a word at a time, so what can go wrong is at the edges of words: a
+    // source or destination ending exactly on one, a step across one, a top word partly
+    // used. Every pair of these widths is checked against the definition, a bit at a time,
+    // for each value the sign bit can hold, into a destination that starts as all X so that
+    // a bit left behind shows.
+    constexpr std::array<std::uint32_t, 11> Widths = {1, 2, 7, 63, 64, 65, 100, 127, 128, 129, 200};
+    static constexpr std::array<Logic, 4> Values = {Logic::Zero, Logic::One, Logic::HighZ,
+                                                    Logic::Unknown};
+
+    std::uint64_t state = 0x9E37'79B9'7F4A'7C15U;
+    const auto next = [&state] {
+        state = (state * 6364136223846793005U) + 1442695040888963407U;
+        return Values[(state >> 33U) % 4];
+    };
+
+    for (const std::uint32_t sourceWidth : Widths) {
+        for (const Logic sign : Values) {
+            BitVector source = BitVector::filled(sourceWidth, Logic::Zero);
+            for (std::uint32_t bit = 0; bit + 1 < sourceWidth; ++bit) source.set(bit, next());
+            source.set(sourceWidth - 1, sign);
+
+            for (const std::uint32_t destinationWidth : Widths) {
+                for (const bool signExtend : {false, true}) {
+                    BitVector destination(destinationWidth);
+                    bitops::extend(destination.mutableRef(), source.ref(), signExtend);
+
+                    BitVector expected = BitVector::filled(destinationWidth, Logic::Zero);
+                    for (std::uint32_t bit = 0; bit < destinationWidth; ++bit) {
+                        if (bit < sourceWidth)
+                            expected.set(bit, source.get(bit));
+                        else if (signExtend)
+                            expected.set(bit, sign);
+                    }
+
+                    EXPECT_EQ(binary(destination.ref()), binary(expected.ref()))
+                        << sourceWidth << " bits to " << destinationWidth
+                        << (signExtend ? ", sign-extended" : ", zero-extended");
+                    EXPECT_TRUE(std::ranges::equal(destination.ref().avalWords(),
+                                                   expected.ref().avalWords())
+                                && std::ranges::equal(destination.ref().bvalWords(),
+                                                      expected.ref().bvalWords()))
+                        << "canonical form, " << sourceWidth << " bits to " << destinationWidth;
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
