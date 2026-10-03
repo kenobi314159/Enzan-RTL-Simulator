@@ -159,6 +159,20 @@ bool OutputCapture::start(std::string& error) {
     capturedError = sameFile(STDOUT_FILENO, STDERR_FILENO);
     if (capturedError) originalError = ::fcntl(STDERR_FILENO, F_DUPFD_CLOEXEC, 3);
 
+    // Without a copy of where the output went there is nowhere to echo it and nothing for
+    // `stop` to put back, so the descriptors are left alone rather than lost.
+    if (originalOutput < 0 || (capturedError && originalError < 0)) {
+        error = std::string("could not duplicate the standard output: ") + std::strerror(errno);
+        for (int& descriptor : wake) closeIfOpen(descriptor);
+        for (int& descriptor : stopping) closeIfOpen(descriptor);
+        closeIfOpen(reading);
+        closeIfOpen(writing);
+        closeIfOpen(originalOutput);
+        closeIfOpen(originalError);
+        capturedError = false;
+        return false;
+    }
+
     readEnd = reading;
     writeEnd = writing;
     wakeRead = wake[0];
