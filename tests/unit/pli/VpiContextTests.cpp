@@ -443,6 +443,104 @@ TEST_F(Vpi, ACallbackMayRemoveItselfWhileItRuns) {
     EXPECT_EQ(record.events.size(), 1U);
 }
 
+TEST_F(Vpi, ACallbackMayRemoveAnotherBeingDeliveredTheSameChange) {
+    // The second is in the list being walked when the first removes it; it must be skipped
+    // rather than fired, and freed only once the walk is over.
+    Record record;
+    registerCallback(
+        cbValueChange,
+        [](p_cb_data data) -> PLI_INT32 {
+            Record& self = recordOf(data);
+            self.events.emplace_back("first");
+            if (self.handle != nullptr) vpi_remove_cb(self.handle);
+            self.handle = nullptr;
+            return 0;
+        },
+        record, byName("tb.clk"));
+    record.handle = registerCallback(
+        cbValueChange,
+        [](p_cb_data data) -> PLI_INT32 {
+            recordOf(data).events.emplace_back("second");
+            return 0;
+        },
+        record, byName("tb.clk"));
+
+    simulation.run(10);
+    EXPECT_EQ(record.events, (std::vector<std::string>{"first", "first"}));
+}
+
+TEST_F(Vpi, AValueChangeRegisteredDuringAChangeWaitsForTheNext) {
+    Record record;
+    registerCallback(
+        cbValueChange,
+        [](p_cb_data data) -> PLI_INT32 {
+            Record& self = recordOf(data);
+            self.events.emplace_back("outer");
+            registerCallback(
+                cbValueChange,
+                [](p_cb_data inner) -> PLI_INT32 {
+                    recordOf(inner).events.emplace_back("inner");
+                    return 0;
+                },
+                self, byName("tb.data"));
+            return 0;
+        },
+        record, byName("tb.data"));
+
+    write(byName("tb.data"), 0x01, vpiNoDelay);
+    write(byName("tb.data"), 0x02, vpiNoDelay);
+    EXPECT_EQ(record.events, (std::vector<std::string>{"outer", "outer", "inner"}));
+}
+
+TEST_F(Vpi, ReadOnlyRegisteredFromReadOnlyRunsInTheNextSlot) {
+    Record record;
+    registerCallback(
+        cbReadOnlySynch,
+        [](p_cb_data data) -> PLI_INT32 {
+            Record& self = recordOf(data);
+            self.events.push_back(at(data, "first"));
+            registerCallback(
+                cbReadOnlySynch,
+                [](p_cb_data inner) -> PLI_INT32 {
+                    recordOf(inner).events.push_back(at(inner, "second"));
+                    return 0;
+                },
+                self);
+            return 0;
+        },
+        record);
+
+    simulation.run(12);
+    EXPECT_EQ(record.events, (std::vector<std::string>{"0 first", "5 second"}));
+}
+
+TEST_F(Vpi, ADelayedWriteLandsBeforeTheSlotsAfterDelay) {
+    write(byName("tb.data"), 0x21, vpiTransportDelay, 7);
+
+    Record record;
+    registerCallback(
+        cbAfterDelay,
+        [](p_cb_data data) -> PLI_INT32 {
+            recordOf(data).events.emplace_back(hexOf(byName("tb.data")));
+            return 0;
+        },
+        record, nullptr, 7);
+
+    simulation.run(10);
+    EXPECT_EQ(record.events, std::vector<std::string>{"21"});
+}
+
+TEST_F(Vpi, AStartOfSimTimeAlreadyPastIsRefused) {
+    ASSERT_EQ(simulation.run(10), RunStatus::TimeLimitReached);
+
+    Record record;
+    EXPECT_EQ(registerCallback(
+                  cbAtStartOfSimTime, [](p_cb_data /*data*/) -> PLI_INT32 { return 0; }, record,
+                  nullptr, 3),
+              nullptr);
+    EXPECT_EQ(lastErrorLevel(), vpiError);
+}
+
 TEST_F(Vpi, AfterDelayFiresAtItsTime) {
     Record record;
     registerCallback(
