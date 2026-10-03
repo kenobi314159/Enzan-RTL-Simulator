@@ -313,8 +313,11 @@ void VpiContext::attach(const runtime::Image& designImage, runtime::Kernel& simu
     kernel->setPliHooks(this);
 
     // A finish asked for before there was anything to finish — by a startup routine that
-    // found nothing to do — still ends the run.
-    if (finishBeforeAttach) kernel->requestFinish();
+    // found nothing to do — still ends the run. That run, and not every one after it.
+    if (finishBeforeAttach) {
+        kernel->requestFinish();
+        finishBeforeAttach = false;
+    }
 }
 
 void VpiContext::detach() {

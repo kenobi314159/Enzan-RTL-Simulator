@@ -254,7 +254,7 @@ private:
     bool started = false;
     bool ended = false;
 
-    /// `vpi_control(vpiFinish)` before a design was attached, applied when one is.
+    /// `vpi_control(vpiFinish)` before a design was attached, applied to the next one that is.
     bool finishBeforeAttach = false;
 
     /// Callbacks that have fired or been removed, freed once no dispatch can still hold them.

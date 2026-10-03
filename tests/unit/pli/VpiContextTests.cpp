@@ -552,6 +552,20 @@ TEST_F(Vpi, FinishFromACallbackEndsTheRun) {
     EXPECT_EQ(simulation.time(), 12U);
 }
 
+TEST_F(Vpi, AFinishBeforeThereIsADesignEndsTheFirstRunOnly) {
+    context.detach();
+    vpi_control(vpiFinish, 1);
+
+    context.attach(simulation.designImage(), simulation.simulationKernel());
+    EXPECT_EQ(simulation.run(100), RunStatus::Finished);
+    EXPECT_EQ(simulation.time(), 0U);
+
+    context.detach();
+    simulation.simulationKernel().initialize();
+    context.attach(simulation.designImage(), simulation.simulationKernel());
+    EXPECT_EQ(simulation.run(100), RunStatus::TimeLimitReached);
+}
+
 TEST_F(Vpi, AValueChangeOnAParameterIsRefused) {
     Record record;
     EXPECT_EQ(registerCallback(
