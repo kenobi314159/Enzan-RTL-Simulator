@@ -6,6 +6,8 @@ waveform view and the transcript (DESIGN_GUIDE.md section 10).
 ## Responsibility
 
 - **The theme** (`Theme.h`) — the colours everything here paints with, loaded from a Tcl script.
+- **Signal lists** (`SignalList.h`) — reading, resolving and writing the wave window's list as a
+  file (DESIGN_GUIDE.md section 10.8).
 - **The session** (`KernelSession.h`) — the GUI's end of the connection, on Qt's event loop, and
   the client-side copy of the waveform it is drawing.
 - **The models** (`DesignTreeModel.h`, `ObjectsModel.h`, `WaveformModel.h`) — the hierarchy, the
@@ -37,6 +39,16 @@ black rectangle on someone's screen.
 one purpose. The script gets one command and nothing else: a theme is a
 list of colours, and an interpreter that also offered file access would make "copy this theme
 from the internet" a more exciting decision than it should be.
+
+**A signal list is not even that.** It is split into commands by `Tcl_ParseCommand` and never
+evaluated, so there is no interpreter for a list to reach. That is also what lets the window
+write one back out: a program cannot be saved from what it produced, and a list can.
+
+**Every row is made one way.** `WaveformModel::rowFor`, `sliceOf` and `bitOf` are how a row is
+made from a signal, a range of one or a bit of one, and adding from the Objects window, pasting
+and loading a list all go through them and through `insertSignalRows`. The Structure window's
+*Add to wave* entries go further: they run the signal list command `add wave ?-r? <scope>`, so
+the menu and the file cannot come to disagree about what a scope adds.
 
 **Rendering is bounded by pixels, not by transitions** (section 10.3). Each trace is drawn by
 asking the waveform database for one summary per pixel column, which it answers from its resident

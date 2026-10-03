@@ -32,7 +32,7 @@ Enzan targets **Linux only**; Windows and macOS support are explicit non-goals.
 | Python 3 | 3.8 | optional; only for the waveform structure checks in the test suite |
 | GoogleTest | 1.12 | built from source automatically if absent |
 | Qt 6 | 6.4 | only for the GUI, which is off by default |
-| Tcl | 8.6 | the GUI theme; needed only with `-DENZAN_BUILD_GUI=ON` |
+| Tcl | 8.6 | the GUI theme and signal lists; needed only with `-DENZAN_BUILD_GUI=ON` |
 | ccache | any | optional; used automatically when present |
 
 On Arch and derivatives:
@@ -62,7 +62,8 @@ sudo dnf install qt6-qtbase-devel
 If a dependency is missing, CMake stops with a message naming the package to
 install for your distribution rather than with a link error.
 
-Tcl is needed only for the GUI, whose theme is a Tcl script.
+Tcl is needed only for the GUI, whose theme is a Tcl script and whose signal lists are read
+with Tcl's parser.
 
 ### Running a simulation
 
@@ -136,6 +137,22 @@ Colours come from a Tcl theme file and nowhere else. `enzan --write-theme mine.t
 the built-in dark theme out as a starting point, and `enzan --gui --theme mine.tcl` — or dropping it at
 `~/.config/enzan-gui/theme.tcl` — loads yours over it, so a file that sets three colours changes
 three colours.
+
+What the wave window shows can be kept. *Wave → Save Signal List…* writes it to a file, and
+*Load Signal List…* or `enzan run --gui --wave-list signals.tcl` puts it back. The file is a short
+list of `add wave` and `group` commands, written in Tcl's syntax but never run as Tcl, and easy
+to write by hand:
+
+```tcl
+add wave /tb/clk /tb/rst_n
+add wave -radix dec -label count /tb/u_dut/count
+group "The FIFO" {
+    add wave -r /tb/u_fifo
+}
+```
+
+Adding signals in the window writes the matching command into the transcript, ready to copy.
+DESIGN_GUIDE.md section 10.8 has the whole format.
 
 ### Running a cocotb testbench
 

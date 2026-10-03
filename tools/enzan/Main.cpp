@@ -150,6 +150,8 @@ Graphical front end:
       --write-theme <file>
                           Write the built-in theme out as a starting point for
                           one of your own, and exit.
+      --wave-list <file>  Open the wave window with this signal list in it.
+                          The window's Wave menu saves one.
 
   -h, --help              Print this message and exit.
   -V, --version           Print version and build information and exit.
@@ -183,6 +185,9 @@ struct Invocation {
     std::string libraryName;
     std::filesystem::path themePath;
     std::filesystem::path writeThemePath;
+
+    /// A signal list the window starts with (DESIGN_GUIDE.md section 10.8).
+    std::filesystem::path waveListPath;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
     std::string topModule;
@@ -480,6 +485,13 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
+        if (argument == "--wave-list") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.waveListPath = value;
+            continue;
+        }
+
         if (argument == "--dry-run") {
             invocation.dryRun = true;
             continue;
@@ -579,8 +591,9 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
 /// The window's own options, as the front end spells them.
 ///
 /// `--gui` is the only way in (8.4), so anything the window needs has to travel through here.
-/// Its theme is the one thing a user configures about it, and leaving that reachable only by
-/// running the front end directly would make it a second program to learn after all.
+/// Its theme and the signal list it starts with are what a user configures about it, and
+/// leaving those reachable only by running the front end directly would make it a second
+/// program to learn after all.
 std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::vector<std::string> options;
     if (!invocation.themePath.empty()) {
@@ -590,6 +603,10 @@ std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     if (!invocation.writeThemePath.empty()) {
         options.emplace_back("--write-theme");
         options.push_back(invocation.writeThemePath.string());
+    }
+    if (!invocation.waveListPath.empty()) {
+        options.emplace_back("--wave-list");
+        options.push_back(invocation.waveListPath.string());
     }
     return options;
 }
@@ -1031,6 +1048,12 @@ int main(int argc, char** argv) {
     if (!invocation.themePath.empty() && !invocation.useGui) {
         std::cerr << "enzan: '--theme' needs '--gui'; it colours a window, and a headless run "
                      "has none\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
+    if (!invocation.waveListPath.empty() && !invocation.useGui) {
+        std::cerr << "enzan: '--wave-list' needs '--gui'; it fills a wave window, and a headless "
+                     "run has none. What a batch run records is chosen with --wave-scope\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 

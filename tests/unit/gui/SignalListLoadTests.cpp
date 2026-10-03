@@ -1,0 +1,337 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Signal list files in a real window against the real session of SessionFixture
+// (DESIGN_GUIDE.md section 10.8).
+//
+// Through the window rather than the model, because what is worth testing is the join: a list
+// names scopes whose objects come from the kernel a message at a time, and the rows must end up
+// as the file describes them whatever order those messages arrive in. The file format on its
+// own is SignalListTests.
+
+#include "gui/DesignTreeModel.h"
+#include "gui/KernelSession.h"
+#include "gui/MainWindow.h"
+#include "gui/ObjectsModel.h"
+#include "gui/Theme.h"
+#include "gui/WaveformModel.h"
+
+#include "SessionFixture.h"
+
+#include <gtest/gtest.h>
+
+#include <QAction>
+#include <QCoreApplication>
+#include <QDockWidget>
+#include <QFile>
+#include <QItemSelectionModel>
+#include <QPlainTextEdit>
+#include <QTableView>
+#include <QTemporaryDir>
+#include <QTreeView>
+
+#include <algorithm>
+#include <memory>
+
+namespace {
+
+using enzan::eir::Radix;
+using enzan::gui::DesignTreeModel;
+using enzan::gui::KernelSession;
+using enzan::gui::MainWindow;
+using enzan::gui::ObjectsModel;
+using enzan::gui::SignalInfo;
+using enzan::gui::Theme;
+using enzan::gui::WaveformModel;
+using enzan::gui::WaveRow;
+
+class SignalListLoadTest : public enzan::test::SessionFixture {
+protected:
+    void SetUp() override {
+        // A settings identity of the suite's own, so that the layout the window restores is not
+        // whatever the developer running this last saved.
+        QCoreApplication::setOrganizationName(QStringLiteral("enzan-tests"));
+        QCoreApplication::setApplicationName(QStringLiteral("gui-tests"));
+
+        SessionFixture::SetUp();
+        theme.loadBuiltIn();
+        window = std::make_unique<MainWindow>(*session, theme);
+
+        // The fixture waits for the hierarchy before the window exists, so the window missed it.
+        session->queryDesign();
+        ASSERT_TRUE(pumpUntil([this] { return design()->rowCount() > 0; }));
+        ASSERT_TRUE(files.isValid());
+    }
+
+    void TearDown() override {
+        window.reset();
+        SessionFixture::TearDown();
+    }
+
+    [[nodiscard]] WaveformModel* waves() const { return window->findChild<WaveformModel*>(); }
+
+    [[nodiscard]] DesignTreeModel* design() const { return window->findChild<DesignTreeModel*>(); }
+
+    [[nodiscard]] QString transcript() const {
+        const auto* text = window->findChild<QPlainTextEdit*>();
+        return text != nullptr ? text->toPlainText() : QString();
+    }
+
+    /// Writes `text` to a file of its own and returns its path.
+    QString write(const QString& name, const QByteArray& text) {
+        const QString path = files.filePath(name);
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(text);
+        return path;
+    }
+
+    /// Loads `text` and waits for the load to finish, which the transcript's note marks.
+    ::testing::AssertionResult load(const QByteArray& text) {
+        const QString path = write(QStringLiteral("list-%1.tcl").arg(++loads), text);
+        const bool accepted = window->loadSignalList(path);
+        if (accepted && pumpUntil([this, &path] {
+                return transcript().contains(QStringLiteral("Loaded the signal list %1").arg(path));
+            })) {
+            return ::testing::AssertionSuccess();
+        }
+        return ::testing::AssertionFailure() << "the transcript says:\n"
+                                             << transcript().toStdString();
+    }
+
+    [[nodiscard]] QVector<int> topRows() const {
+        QVector<int> rows;
+        for (int index = 0; index < waves()->rowCount(); ++index)
+            rows.append(waves()->data(waves()->index(index, 0), WaveformModel::RowIdRole).toInt());
+        return rows;
+    }
+
+    [[nodiscard]] const WaveRow& rowAt(int rowId) const { return *waves()->row(rowId); }
+
+    [[nodiscard]] SignalInfo info(const QString& scope, const QString& name) {
+        for (const SignalInfo& candidate : objectsOf(scope)) {
+            if (candidate.name == name) return candidate;
+        }
+        ADD_FAILURE() << "no object " << name.toStdString() << " in " << scope.toStdString();
+        return {};
+    }
+
+    /// Triggers the Structure window's `label` entry on `scope`.
+    void insert(const QString& scope, const QString& label) {
+        QTreeView* tree = nullptr;
+        for (const QDockWidget* dock : window->findChildren<QDockWidget*>()) {
+            if (dock->objectName() == QStringLiteral("structure"))
+                tree = qobject_cast<QTreeView*>(dock->widget());
+        }
+        ASSERT_NE(tree, nullptr);
+        tree->setCurrentIndex(design()->indexOfPath(scope));
+        for (QAction* action : tree->actions()) {
+            if (action->text() == label) action->trigger();
+        }
+    }
+
+    Theme theme;
+    std::unique_ptr<MainWindow> window;
+    QTemporaryDir files;
+    int loads = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------
+
+TEST_F(SignalListLoadTest, ALoadedListHasTheRowsItDescribes) {
+    ASSERT_TRUE(load(R"(
+        add wave /tb/clk
+        add wave -radix dec -label n /tb/count
+        add wave /tb/count[3:0]
+        group Control {
+            add wave -radix bin -symbolic /tb/state
+            add wave /tb/u_dut/WIDTH
+        }
+        add wave -highlight 2 -expand /tb/u_dut/q
+    )"));
+
+    const QVector<int> rows = topRows();
+    ASSERT_EQ(rows.size(), 5);
+
+    EXPECT_EQ(rowAt(rows[0]).label, QStringLiteral("clk"));
+
+    EXPECT_EQ(rowAt(rows[1]).label, QStringLiteral("n"));
+    EXPECT_EQ(rowAt(rows[1]).radix, Radix::Decimal);
+    EXPECT_FALSE(rowAt(rows[1]).symbolic) << "a radix asks for the number, as the menu does";
+
+    EXPECT_TRUE(rowAt(rows[2]).sliced);
+    EXPECT_EQ(rowAt(rows[2]).highBit, 3U);
+    EXPECT_EQ(rowAt(rows[2]).lowBit, 0U);
+    EXPECT_EQ(rowAt(rows[2]).label, QStringLiteral("count[3:0]"));
+
+    const WaveRow& control = rowAt(rows[3]);
+    EXPECT_EQ(control.kind, WaveRow::Kind::Group);
+    ASSERT_EQ(control.children.size(), 2);
+    EXPECT_EQ(rowAt(control.children[0]).radix, Radix::Binary);
+    EXPECT_TRUE(rowAt(control.children[0]).symbolic) << "-symbolic applies after -radix";
+    EXPECT_EQ(rowAt(control.children[1]).kind, WaveRow::Kind::Parameter);
+
+    const WaveRow& q = rowAt(rows[4]);
+    EXPECT_TRUE(q.unpacked);
+    ASSERT_EQ(q.children.size(), 4) << "one row per bit, as unpacking makes them";
+    EXPECT_EQ(rowAt(q.children.front()).highBit, 3U);
+    EXPECT_EQ(rowAt(q.children.front()).highlight, 2) << "each bit takes the signal's highlight";
+}
+
+TEST_F(SignalListLoadTest, AScopeAddsWhatTheMenuEntryAdds) {
+    insert(QStringLiteral("/tb"), QStringLiteral("Add to wave recursive"));
+    ASSERT_TRUE(pumpUntil([this] { return topRows().size() == 2; }))
+        << topRows().size() << " rows; the transcript says:\n"
+        << transcript().toStdString();
+    const QString byMenu = waves()->writeSignalList();
+
+    ASSERT_TRUE(load("add wave -r /tb\n"));
+    EXPECT_EQ(waves()->writeSignalList(), byMenu);
+}
+
+TEST_F(SignalListLoadTest, AMissingPathIsSkippedWithAWarningNamingItsLine) {
+    ASSERT_TRUE(load("add wave /tb/clk\n"
+                     "add wave /tb/no_such_signal\n"
+                     "add wave /tb/count\n"));
+
+    EXPECT_EQ(topRows().size(), 2) << "the rest load";
+    EXPECT_TRUE(transcript().contains(QStringLiteral(":2: /tb/no_such_signal names nothing")))
+        << transcript().toStdString();
+}
+
+TEST_F(SignalListLoadTest, AMistakeLoadsNothingAndKeepsTheList) {
+    waves()->addSignal(info(QStringLiteral("/tb"), QStringLiteral("clk")));
+
+    const QString path = write(QStringLiteral("bad.tcl"), "add wave /tb/count\n"
+                                                          "add wave -colour red /tb/clk\n");
+    EXPECT_FALSE(window->loadSignalList(path));
+    pump();
+
+    ASSERT_EQ(topRows().size(), 1) << "the list the reader had is still there";
+    EXPECT_EQ(rowAt(topRows().front()).label, QStringLiteral("clk"));
+    EXPECT_TRUE(transcript().contains(QStringLiteral("bad.tcl:2: '-colour'")))
+        << transcript().toStdString();
+}
+
+TEST_F(SignalListLoadTest, AMistakeFoundOnlyOnceThePathsAreKnownLoadsNothingEither) {
+    // Whether `-label` is right depends on whether its path is a scope, which the parser
+    // cannot know; it is still a mistake in the file, not a missing path.
+    waves()->addSignal(info(QStringLiteral("/tb"), QStringLiteral("clk")));
+
+    const QString path = write(QStringLiteral("scope.tcl"), "add wave -label x /tb\n");
+    ASSERT_TRUE(window->loadSignalList(path));
+    ASSERT_TRUE(pumpUntil([this] { return transcript().contains(QStringLiteral("Nothing was")); }));
+
+    EXPECT_EQ(topRows().size(), 1);
+}
+
+TEST_F(SignalListLoadTest, AListNamedBeforeTheDesignArrivesLoadsWhenItDoes) {
+    // What `enzan run --gui --wave-list` does: the window reads the file before the kernel has
+    // described anything. Only one client may attach at a time, so the fixture's steps aside.
+    session->detach();
+    pump();
+
+    KernelSession late;
+    MainWindow lateWindow(late, theme);
+    const QString path = write(QStringLiteral("startup.tcl"), "add wave /tb/clk /tb/count\n");
+    ASSERT_TRUE(lateWindow.loadSignalList(path)) << "read and checked, and waiting";
+
+    QString error;
+    ASSERT_TRUE(late.attach(socketPath, error)) << error.toStdString();
+    auto* lateWaves = lateWindow.findChild<WaveformModel*>();
+    ASSERT_TRUE(pumpUntil([lateWaves] { return lateWaves->rowCount() == 2; }));
+}
+
+// ---------------------------------------------------------------------------
+// Saving
+// ---------------------------------------------------------------------------
+
+TEST_F(SignalListLoadTest, ASavedListLoadsBackAsItWasAndSavesTheSameBytes) {
+    WaveformModel* model = waves();
+
+    // Something of everything a row can carry.
+    const int clock = model->addSignal(info(QStringLiteral("/tb"), QStringLiteral("clk")));
+    model->setHighlight(clock, 1);
+
+    const int group = model->addGroup(QStringLiteral("State and parameters"));
+    model->addSignal(info(QStringLiteral("/tb"), QStringLiteral("state")), group);
+    model->addSignal(info(QStringLiteral("/tb/u_dut"), QStringLiteral("WIDTH")), group);
+    model->addGroup(QStringLiteral("empty"), group);
+
+    const int bus = model->addSignal(info(QStringLiteral("/tb"), QStringLiteral("count")));
+    model->setLabel(bus, QStringLiteral("the {count}"));
+    model->setRadixRecursive(bus, Radix::Decimal);
+    model->unpack(bus);
+    model->removeRow(model->row(bus)->children[1]);
+    model->setRadix(model->row(bus)->children[0], Radix::Binary);
+    static_cast<void>(model->moveRowsTo({model->row(bus)->children[2]}, bus, 0));
+
+    const int q = model->addSignal(info(QStringLiteral("/tb/u_dut"), QStringLiteral("q")));
+    model->unpack(q);
+
+    const int slice = model->addSlice(
+        model->addSignal(info(QStringLiteral("/tb"), QStringLiteral("count"))), 5, 2);
+    model->setLabel(slice, QStringLiteral("middle"));
+
+    const QString saved = files.filePath(QStringLiteral("saved.tcl"));
+    ASSERT_TRUE(window->saveSignalList(saved));
+    QFile first(saved);
+    ASSERT_TRUE(first.open(QIODevice::ReadOnly));
+    const QByteArray written = first.readAll();
+    first.close();
+
+    // What the window had made of it, to compare the reload against.
+    const QString before = model->writeSignalList();
+    EXPECT_TRUE(before.contains(QStringLiteral("-contents"))) << before.toStdString();
+    EXPECT_TRUE(before.contains(QStringLiteral("-expand"))) << before.toStdString();
+
+    ASSERT_TRUE(window->loadSignalList(saved));
+    ASSERT_TRUE(pumpUntil([this, &saved] {
+        return transcript().contains(QStringLiteral("Loaded the signal list %1").arg(saved));
+    }));
+
+    EXPECT_EQ(model->writeSignalList(), before);
+
+    ASSERT_TRUE(window->saveSignalList(saved));
+    QFile second(saved);
+    ASSERT_TRUE(second.open(QIODevice::ReadOnly));
+    EXPECT_EQ(second.readAll(), written) << "the same window saves the same bytes";
+}
+
+// ---------------------------------------------------------------------------
+// The transcript says what was done
+// ---------------------------------------------------------------------------
+
+TEST_F(SignalListLoadTest, TheMenuEntriesEchoTheirCommand) {
+    insert(QStringLiteral("/tb"), QStringLiteral("Add to wave"));
+    insert(QStringLiteral("/tb/u_dut"), QStringLiteral("Add to wave recursive"));
+    pump();
+
+    EXPECT_TRUE(transcript().contains(QStringLiteral("add wave /tb\n")))
+        << transcript().toStdString();
+    EXPECT_TRUE(transcript().contains(QStringLiteral("add wave -r /tb/u_dut")));
+}
+
+TEST_F(SignalListLoadTest, AddingFromTheObjectsWindowEchoesItsCommand) {
+    auto* objectsView = window->findChild<QTableView*>();
+    auto* objects = window->findChild<ObjectsModel*>();
+    ASSERT_NE(objectsView, nullptr);
+    ASSERT_TRUE(pumpUntil([objects] { return objects->rowCount() > 0; }));
+
+    int clockRow = -1;
+    for (int row = 0; row < objects->rowCount(); ++row) {
+        if (objects->objectAt(row)->name == QStringLiteral("clk")) clockRow = row;
+    }
+    ASSERT_GE(clockRow, 0);
+
+    const QModelIndex index = objects->index(clockRow, 0);
+    objectsView->selectionModel()->select(index, QItemSelectionModel::ClearAndSelect
+                                                     | QItemSelectionModel::Rows);
+    Q_EMIT objectsView->doubleClicked(index);
+
+    EXPECT_TRUE(transcript().contains(QStringLiteral("add wave /tb/clk")))
+        << transcript().toStdString();
+}
+
+} // namespace
