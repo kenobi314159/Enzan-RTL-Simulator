@@ -370,15 +370,23 @@ void VpiContext::buildScopes() {
         const elab::Instance& instance = elaborated.instances()[instanceIndex];
         const eir::ModuleDefinition& definition = design.module(instance.definitionIndex);
 
+        // An instance inside a generate block is named for the block, as an object is, and is
+        // a child of the block rather than of the module. Found first, because finding it may
+        // create the block's scope.
+        std::uint32_t enclosing = NoScope;
+        if (instance.parent != elab::Instance::NoParent)
+            enclosing = scopeFor(moduleScopeOfInstance[instance.parent], instance.name);
+
         const auto scopeIndex = static_cast<std::uint32_t>(scopes.size());
         Scope scope;
         scope.isModule = true;
         scope.instance = instanceIndex;
-        scope.name = instance.name;
+        scope.name = enclosing != NoScope ? instance.name.substr(scopes[enclosing].prefix.size())
+                                          : instance.name;
         scope.fullName = dottedPath(instance.path);
-        if (instance.parent != elab::Instance::NoParent) {
-            scope.parent = moduleScopeOfInstance[instance.parent];
-            scopes[scope.parent].children.push_back(scopeIndex);
+        if (enclosing != NoScope) {
+            scope.parent = enclosing;
+            scopes[enclosing].children.push_back(scopeIndex);
         }
         byFullName.emplace(scope.fullName, Target{.kind = TargetKind::Scope, .first = scopeIndex});
         scopes.push_back(std::move(scope));

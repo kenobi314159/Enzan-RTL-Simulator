@@ -44,8 +44,8 @@ using enzan::test::ProcessBuilder;
 using enzan::test::Simulation;
 
 /// `tb`, with a clock toggling every five units, one object of each kind section 9.2 maps,
-/// a generate block two deep, an object a frontend made up, and a child whose port is
-/// collapsed onto `data`.
+/// a generate block two deep, an object a frontend made up, a child whose port is collapsed
+/// onto `data`, and a second child inside the generate block.
 Design makeDesign() {
     ModuleDefinition child;
     child.name = "child";
@@ -94,6 +94,12 @@ Design makeDesign() {
     instance.definitionName = "child";
     instance.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 1});
     top.instances.push_back(std::move(instance));
+
+    enzan::eir::Instance generated;
+    generated.name = "gen[0].u_gen";
+    generated.definitionName = "child";
+    generated.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 1});
+    top.instances.push_back(std::move(generated));
 
     Design design;
     design.addModule(std::move(child));
@@ -198,6 +204,17 @@ TEST_F(Vpi, GenerateBlocksAreScopesOfTheirOwn) {
     EXPECT_EQ(names(vpiInternalScope, byName("tb")),
               (std::vector<std::string>{"tb.gen[0]", "tb.u_child"}));
     EXPECT_EQ(names(vpiParameter, byName("tb.gen[0]")), std::vector<std::string>{"tb.gen[0].P"});
+}
+
+TEST_F(Vpi, AnInstanceInAGenerateBlockIsInsideIt) {
+    vpiHandle instance = byName("tb.gen[0].u_gen");
+    ASSERT_NE(instance, nullptr);
+    EXPECT_EQ(vpi_get(vpiType, instance), vpiModule);
+    EXPECT_EQ(nameOf(instance, vpiName), "u_gen");
+    EXPECT_EQ(vpi_handle(vpiScope, instance), byName("tb.gen[0]"));
+    EXPECT_EQ(vpi_handle(vpiModule, instance), byName("tb")) << "through the generate block";
+    EXPECT_EQ(names(vpiModule, byName("tb.gen[0]")), std::vector<std::string>{"tb.gen[0].u_gen"});
+    EXPECT_EQ(byName("in", instance), byName("tb.gen[0].u_gen.in"));
 }
 
 TEST_F(Vpi, HandlesToTheDesignAreInterned) {
