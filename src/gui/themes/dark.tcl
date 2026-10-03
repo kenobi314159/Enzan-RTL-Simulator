@@ -7,8 +7,8 @@
 # widget code, so there is no fallback in C++ to fall back to: if a key below is missing, the
 # widget asking for it gets nothing.
 #
-# Section 8.1 makes Tcl the configuration language for the whole tool, with no second format, so
-# this is a Tcl script rather than an ini file. It gets one command:
+# Section 10.5 makes Tcl the theme language, so this is a Tcl script rather than an ini file. It
+# gets one command:
 #
 #     theme <key> <colour>
 #

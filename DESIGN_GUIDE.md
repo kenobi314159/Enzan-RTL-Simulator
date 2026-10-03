@@ -97,7 +97,7 @@ The dependency stack is internally consistent under GPLv3:
 | NVC (VHDL frontend) | GPLv3 | yes, and what sets the project's licence |
 | slang (SystemVerilog frontend) | MIT | yes |
 | Qt 6 | LGPLv3 | yes |
-| Tcl (GUI theme) | BSD-style | yes |
+| Tcl (GUI theme and signal lists) | BSD-style | yes |
 | GoogleTest | BSD-3 | yes |
 | FST / libfst | permissive | yes |
 
@@ -1069,9 +1069,9 @@ ends when that window does. The front end therefore needs to know nothing about
 libraries, file lists or any option added later, and the kernel binary still links
 no Qt.
 
-**The front end's own options travel through `enzan` too.** Its theme is the one
-thing a user configures about it, so `--theme` and `--write-theme` are options of
-`enzan` that are forwarded, and `--write-theme` starts no kernel because writing a
+**The front end's own options travel through `enzan` too.** Its theme and the signal
+list it starts with (10.8) are what a user configures about it, so `--theme`,
+`--write-theme` and `--wave-list` are options of `enzan` that are forwarded, and `--write-theme` starts no kernel because writing a
 file out is not a simulation. An option reachable only by running the front end
 directly would make it the second program this section exists to avoid.
 
@@ -1798,6 +1798,135 @@ Panning is the middle button's alone. Ctrl+drag used to pan as well, and no
 longer does: Ctrl means *zoom* on the wheel, and a modifier that meant zoom under
 one hand and pan under the other is a coin toss every time it is reached for.
 
+### 10.8 Signal list files
+
+What the wave window shows can be saved to a file and loaded again, from the window or
+when it starts. A reader who has spent twenty minutes arranging a large design's signals
+must not have to do it again after every run, and a team must be able to keep the
+arrangement for a block beside its sources.
+
+**The syntax is Tcl's; the language is not.** A signal list is split into commands by
+Tcl's own parser (`Tcl_ParseCommand`, from the library the theme already needs) and is
+never evaluated. Quoting, braces, backslashes, line continuation and comments therefore
+behave as in Tcl, without a lexer of Enzan's to keep in step with it. Nothing else does:
+
+- **There are two commands**, below, and any other word in command position is an error.
+  `set`, `foreach`, `proc` and `source` are not Tcl that is not supported yet; they are not
+  part of the format. A signal list is a list, not a program — which is what lets the
+  window write one back out, and what makes loading a list someone sent you a read rather
+  than running their code.
+- **There is no substitution.** `$` and `[…]` are ordinary characters, so a path through a
+  generate block, `/tb/gen[0].q`, is written as it is printed and needs no braces.
+- **`#` starts a comment only where a command could start**, as in Tcl. A comment after a
+  command on the same line is written `;# …`.
+
+**Two commands.**
+
+```tcl
+add wave ?options? path ?path …?
+group ?options? name body
+```
+
+```tcl
+# The control signals, then the counters.
+add wave /tb/clk /tb/rst_n
+add wave -radix dec -label lin0 /tb/cntr_lin_gen[0].count
+group "Recursive counters" {
+    add wave -r /tb/cntr_rec_i
+    add wave -radix bin -contents {
+        add wave /tb/bus[7]
+        add wave -highlight 2 /tb/bus[3]
+    } /tb/bus
+}
+```
+
+What `add wave` adds depends on what the path names:
+
+- **A signal or a parameter**, by the path the Objects window shows for it, adds one row.
+- **A signal with `[h:l]` or `[n]` after it** adds a row showing that bit range (10.3). The
+  whole path is looked up as a signal first, so a name that itself ends in brackets is never
+  taken for a range.
+- **A scope** adds what *Add to wave* on that scope in the Structure window adds: a group
+  named by the scope's path, holding its signals. With `-r` it adds what *Add to wave
+  recursive* adds: one such group for each scope of the subtree, side by side, in the
+  Structure window's order. Both are defined as those menu entries rather than beside them,
+  so that the two cannot come to disagree.
+
+`group` adds a group named `name` holding the rows its body describes. The body is a
+signal list of its own — `add wave` and `group` commands — and it may be empty, which is
+why a group is a block rather than an option on each of the lines inside it.
+
+| Option | Meaning |
+|---|---|
+| `-radix bin\|oct\|dec\|hex` | the radix, and the number rather than an enumeration's name, as choosing a radix from the menu does |
+| `-symbolic` | an enumeration's names after all; applied after `-radix` wherever it is written |
+| `-label <text>` | the row's name, for a single signal path only |
+| `-highlight <1–5>` | the row's background (10.7) |
+| `-expand` | unpacked into its bits, exactly as unpacking leaves it |
+| `-contents <body>` | unpacked, with exactly the rows `body` describes beneath it |
+| `-r` | for a scope path, the whole subtree |
+
+An option applies to every row its command adds. `group` takes `-radix`, `-symbolic` and
+`-highlight`, which are what a group's own line carries.
+
+An unpacked signal is a body rather than a list of bit numbers because that is what the
+window lets it become: its bits can be deleted and reordered, and other rows can be dragged
+into it (10.7). `-contents` describes any of that with the same two commands, each bit with
+its own radix, label and highlight, so nothing the window can show is beyond the file.
+
+**Saving writes what the window shows.** *Save signal list…* writes every row, top to
+bottom, so that loading the file rebuilds the same list:
+
+- a label only where the row was renamed, `-expand` for a signal exactly as unpacking left
+  it and `-contents` for one that has been changed since;
+- signals, ranges and parameters by path, never a scope or `-r`, because by then the rows
+  exist one by one and may have been rearranged;
+- words quoted as Tcl quotes a list element, and only when they must be;
+- nothing that varies from one save to the next — no date, no time, no user — so that
+  saving an unchanged window writes the same bytes, and a list kept in version control
+  shows a change only when the list changed.
+
+Cursors, zoom and which groups are collapsed are not part of a signal list. They are where
+the reader is looking rather than what they are looking at, and may follow as commands of
+their own.
+
+**Loading is pasting.** A file is read into the same pending rows a paste builds, and they
+go into the window the way a paste puts them there. So:
+
+- nothing already in the window collapses or expands (10.7);
+- rows arrive in file order, whatever order the kernel answers in — a scope's objects come
+  from the kernel, which may be on another machine (2.2);
+- the whole file is read, and every path looked up, before any row is added, so a file
+  with a mistake in it changes nothing rather than half of the window.
+
+*Load signal list…* replaces the window's list. Adding one list to another is what copying
+and pasting are for.
+
+**A mistake in the file is an error; a path the design lacks is not.** An unknown command,
+an unknown option, a bad value or an unbalanced brace is reported with its file and line,
+and nothing is loaded. A path that names nothing in this design is a warning, with its file
+and line, and that row is skipped while the rest load. A list outlives the version of the
+design it was saved from, and refusing a whole arrangement because one signal was renamed
+would make the file useless at exactly the moment it is needed.
+
+**From the command line, `--wave-list <file>`**, an option of `enzan` forwarded to the front
+end as `--theme` is (8.4): `enzan run --gui --wave-list <file> <top>`, or with `--gui
+--attach`. Without `--gui` it is refused, because there is no window to show the list in.
+A file that cannot be read is reported and the window comes up empty, as a theme that
+cannot be read leaves the built-in colours.
+
+**The window says what it did.** Adding signals from the Structure or Objects window writes
+the `add wave` command that does the same into the transcript. The format is learnt by
+using the window, and a line can be copied straight into a file. Only additions from the
+design are echoed: moving, renaming and unpacking change rows already there, and saving is
+how a whole arrangement is captured.
+
+**It is not ModelSim's `wave.do`.** The commands are shaped like ModelSim's so that they
+read familiarly, but its files are not loaded. A `wave.do` is a Tcl program, written by its
+window, full of that window's own commands (`WaveRestoreCursors`, `configure wave`), and its
+paths separate a generate block with `/` where Enzan's use `.` (5.1). Loading some of them
+would be promising all of them.
+
 ---
 
 ## 11. Build system and dependencies
@@ -1833,7 +1962,7 @@ license check against section 1.4.
 |---|---|---|
 | slang | SystemVerilog frontend | system, FetchContent fallback |
 | NVC | VHDL frontend (M6) | vendored submodule, pinned |
-| Tcl 8.6+ | GUI theme language (M2) | system |
+| Tcl 8.6+ | GUI theme language (M2); signal list syntax (M2.2) | system |
 | Qt 6 | GUI (M2) | system |
 | GoogleTest | unit tests | system, FetchContent fallback |
 | LLVM | JIT backend (M8, optional) | system, off by default |
@@ -2301,6 +2430,23 @@ window is driven.
 **Exit:** every gesture in section 10.7 works and is covered by a test; a reader
 can lock one cursor on an edge, step a second along the same signal with Tab, and
 read both times off their labels without touching the mouse.
+
+### M2.2 — Signal list files
+
+The signal list files of section 10.8: saving the wave window's list and loading it again
+from the window or with `--wave-list`, and the `add wave` echo in the transcript.
+
+Numbered with the window it belongs to, and placed after M4 because that is when large
+designs made it needed: arranging two hundred signals by hand on every run is the cost a
+reader pays for not having it. Like M2.1 it is a point release — it changes nothing Enzan
+can simulate, record or export — and it is contained in the front end and one forwarded
+option, so nothing waits on it or is held up by it.
+
+**Exit:** a list saved from the window and loaded into a fresh one gives the same rows, with
+the same labels, radices, highlights, ranges and unpacked contents, and saving that again
+writes the same bytes; a file written by hand with a scope, `-r` and a nested group loads;
+a path the design lacks is skipped with a warning naming its line, and a syntax error loads
+nothing; `enzan run --gui --wave-list` opens with the list in place.
 
 ### M3 — Command line, file lists and libraries
 
