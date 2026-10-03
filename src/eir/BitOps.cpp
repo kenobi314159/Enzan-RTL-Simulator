@@ -192,19 +192,36 @@ void extend(BitRef dst, ConstBitRef source, bool signExtend) {
         return;
     }
 
+    // A word at a time rather than a bit at a time. This runs for every assignment whose two
+    // sides differ in width, which in RTL is most of them (`count <= count + 1'b1` widens the
+    // `1'b1`), and a bit at a time cost two calls per bit.
+    const std::uint32_t sourceWords = source.words();
+    const std::uint32_t dstWords = dst.words();
+    const std::uint32_t shared = std::min(sourceWords, dstWords);
+    std::copy_n(source.aval(), shared, dst.aval());
+    std::copy_n(source.bval(), shared, dst.bval());
+
     if (dst.width() < source.width()) {
-        // Truncation: take the low bits and drop the rest.
-        for (std::uint32_t index = 0; index < dst.width(); ++index)
-            dst.set(index, source.get(index));
+        // Truncation: the low words, less whatever of the last one lies above the width.
+        dst.canonicalize();
         return;
     }
 
     // An unknown sign bit makes every extended bit unknown, which is the
     // pessimistic answer the standard requires.
-    const Logic fill = signExtend ? source.get(source.width() - 1) : Logic::Zero;
-    for (std::uint32_t index = 0; index < source.width(); ++index)
-        dst.set(index, source.get(index));
-    for (std::uint32_t index = source.width(); index < dst.width(); ++index) dst.set(index, fill);
+    const auto fill =
+        static_cast<std::uint8_t>(signExtend ? source.get(source.width() - 1) : Logic::Zero);
+    const Word fillA = (fill & 1U) != 0 ? ~Word{0} : Word{0};
+    const Word fillB = (fill & 2U) != 0 ? ~Word{0} : Word{0};
+
+    // The source's last word is canonical, zero above its width, so the fill is ORed into it.
+    // The mask is empty when the source ends exactly on a word.
+    const Word above = ~topWordMask(source.width());
+    dst.aval()[sourceWords - 1] |= fillA & above;
+    dst.bval()[sourceWords - 1] |= fillB & above;
+    std::fill(dst.aval() + sourceWords, dst.aval() + dstWords, fillA);
+    std::fill(dst.bval() + sourceWords, dst.bval() + dstWords, fillB);
+    dst.canonicalize();
 }
 
 void setUnknown(BitRef dst) {
