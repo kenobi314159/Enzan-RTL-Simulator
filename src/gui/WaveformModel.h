@@ -38,6 +38,12 @@ struct WaveRow {
     /// them apart.
     QString label;
 
+    /// Where a signal or parameter row's value comes from, by the path the Objects window
+    /// showed for it. Kept on the row rather than looked up, because a slot reachable under two
+    /// names has one index, and a saved signal list must name the one the reader chose
+    /// (DESIGN_GUIDE.md section 10.8). Empty for a group.
+    QString path;
+
     std::uint32_t signalIndex = 0;
 
     /// Full width of the underlying signal, whatever this row displays of it.
@@ -125,6 +131,32 @@ public:
     /// allows exactly one place for a colour to come from.
     WaveformModel(const KernelSession& session, const Theme& theme, QObject* parent = nullptr);
 
+    /// A subtree not yet in the model: read off the clipboard, or out of a signal list.
+    ///
+    /// Building and inserting are separate so that input that turns out to be bad changes
+    /// nothing, and so that inserting can be done row by row: a reset would make the view
+    /// forget every expansion in the window, which is not what adding one signal should cost.
+    struct PendingRow {
+        WaveRow row;
+        std::vector<PendingRow> children;
+    };
+
+    // --- making rows ------------------------------------------------------
+    //
+    // How a row is made from a signal, a range of one, or one bit of one, defined once: the
+    // window, the clipboard and a signal list all go through these, so a row loaded from a file
+    // is the row the window would have made.
+
+    /// The row `addSignal` adds for `info`, not yet anywhere.
+    [[nodiscard]] static WaveRow rowFor(const SignalInfo& info);
+
+    /// A row showing bits `[high:low]` of what `source` shows, in either order.
+    [[nodiscard]] static WaveRow sliceOf(const WaveRow& source, std::uint32_t high,
+                                         std::uint32_t low);
+
+    /// The row unpacking `source` makes for bit `bit` of it.
+    [[nodiscard]] static WaveRow bitOf(const WaveRow& source, std::uint32_t bit);
+
     // --- editing -----------------------------------------------------------
 
     /// Adds a row for `info`, inside `parentGroup` when it names one. Returns its row number.
@@ -205,14 +237,25 @@ public:
     [[nodiscard]] bool childrenReconstituteParent(int rowId) const;
 
     /// Copies rows, and everything below them, to the clipboard.
-    void copyRows(const QVector<int>& rowIds) const;
+    void copySignalRows(const QVector<int>& rowIds) const;
 
     /// Pastes the clipboard into `targetGroup` at `position`, or at the end when negative.
     /// Returns the rows created, in the order they were added.
-    QVector<int> pasteRows(int targetGroup, int position);
+    QVector<int> pasteSignalRows(int targetGroup, int position);
 
     /// True when the clipboard holds rows this window put there.
     [[nodiscard]] static bool clipboardHasRows();
+
+    /// Puts subtrees into `targetGroup` at `position`, or at the end when it is negative, the
+    /// way a paste puts them there. Returns the rows created, in order.
+    QVector<int> insertSignalRows(const std::vector<PendingRow>& pending, int targetGroup,
+                                  int position);
+
+    /// The whole list as a signal list file, top to bottom (DESIGN_GUIDE.md section 10.8).
+    ///
+    /// Deterministic: the same rows always give the same text, so that a list kept in version
+    /// control changes only when the list does.
+    [[nodiscard]] QString writeSignalList() const;
 
     // --- reading -----------------------------------------------------------
 
@@ -333,16 +376,6 @@ private:
     /// showing the value it had while the bit was still there.
     void notifyValueChangedUpwards(int fromRow);
 
-    /// A subtree read off the clipboard and not yet in the model.
-    ///
-    /// Reading and inserting are separate so that a truncated clipboard changes nothing, and
-    /// so that inserting can be done row by row: a reset would make the view forget every
-    /// expansion in the window, which is not what pasting one signal should cost.
-    struct PendingRow {
-        WaveRow row;
-        std::vector<PendingRow> children;
-    };
-
     void writeRow(QDataStream& stream, int rowId) const;
 
     /// Reads one subtree. Returns false when the clipboard ran out or made no sense.
@@ -351,6 +384,13 @@ private:
     /// Puts a subtree into the model under `parentRow` at `position`, or at the end when that
     /// is negative. Returns the row created.
     int materialise(const PendingRow& pending, int parentRow, int position);
+
+    /// Writes `rowId` and everything below it as signal list commands, indented by `depth`.
+    void writeSignalListRow(QString& text, int rowId, int depth) const;
+
+    /// True when a row's children are what unpacking it would make now, so that `-expand`
+    /// describes them.
+    [[nodiscard]] bool childrenAreAsUnpacked(int rowId) const;
 
     const KernelSession* kernelSession;
     const Theme* theme;

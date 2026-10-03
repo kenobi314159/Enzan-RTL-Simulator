@@ -2,6 +2,8 @@
 
 #include "gui/WaveformModel.h"
 
+#include "gui/SignalList.h"
+
 #include "wavedb/WaveformDatabase.h"
 
 #include <QApplication>
@@ -66,14 +68,51 @@ QModelIndex WaveformModel::indexOfRow(int rowId) const {
 // Editing
 // ---------------------------------------------------------------------------
 
+WaveRow WaveformModel::rowFor(const SignalInfo& info) {
+    WaveRow made;
+    made.kind = info.isParameter() ? WaveRow::Kind::Parameter : WaveRow::Kind::Signal;
+    made.label = info.name.isEmpty() ? info.path : info.name;
+    made.path = info.path;
+    made.signalIndex = info.signalIndex;
+    made.signalWidth = info.width;
+    made.constantValue = info.constantValue;
+    made.localParameter = info.isLocalParameter;
+    return made;
+}
+
+WaveRow WaveformModel::sliceOf(const WaveRow& source, std::uint32_t high, std::uint32_t low) {
+    const std::uint32_t top = std::max(high, low);
+    const std::uint32_t bottom = std::min(high, low);
+
+    WaveRow made = source;
+    made.children.clear();
+    made.parent = -1;
+    made.unpacked = false;
+    made.sliced = true;
+    made.highBit = top;
+    made.lowBit = bottom;
+    made.label = top == bottom ? QStringLiteral("%1[%2]").arg(source.label).arg(top)
+                               : QStringLiteral("%1[%2:%3]").arg(source.label).arg(top).arg(bottom);
+    return made;
+}
+
+WaveRow WaveformModel::bitOf(const WaveRow& source, std::uint32_t bit) {
+    WaveRow made;
+    made.kind = WaveRow::Kind::Signal;
+    made.path = source.path;
+    made.signalIndex = source.signalIndex;
+    made.signalWidth = source.signalWidth;
+    made.radix = source.radix;
+    made.highlight = source.highlight;
+    made.sliced = true;
+    made.highBit = bit;
+    made.lowBit = bit;
+    made.label = QStringLiteral("%1[%2]").arg(source.label).arg(bit);
+    return made;
+}
+
 int WaveformModel::addSignal(const SignalInfo& info, int parentGroup) {
-    WaveRow added;
-    added.kind = info.isParameter() ? WaveRow::Kind::Parameter : WaveRow::Kind::Signal;
-    added.label = info.name.isEmpty() ? info.path : info.name;
-    added.signalIndex = info.signalIndex;
-    added.signalWidth = info.width;
-    added.constantValue = info.constantValue;
-    added.localParameter = info.isLocalParameter;
+    WaveRow added = rowFor(info);
     added.parent = showsChildren(parentGroup) ? parentGroup : -1;
 
     const int rowId = static_cast<int>(rows.size());
@@ -118,22 +157,14 @@ int WaveformModel::addSlice(int rowId, std::uint32_t high, std::uint32_t low) {
     const WaveRow* source = row(rowId);
     if (source == nullptr || source->kind != WaveRow::Kind::Signal) return -1;
 
-    const std::uint32_t top = std::max(high, low);
-    const std::uint32_t bottom = std::min(high, low);
-    if (top >= source->signalWidth) return -1;
+    if (std::max(high, low) >= source->signalWidth) return -1;
 
-    WaveRow added = *source;
-    added.children.clear();
-    added.sliced = true;
-    added.highBit = top;
-    added.lowBit = bottom;
-    added.label = top == bottom
-                      ? QStringLiteral("%1[%2]").arg(source->label).arg(top)
-                      : QStringLiteral("%1[%2:%3]").arg(source->label).arg(top).arg(bottom);
+    WaveRow added = sliceOf(*source, high, low);
 
     // Placed beside the signal it came from rather than at the end, because that is where the
     // user is looking when they ask for it.
     const int parentGroup = source->parent;
+    added.parent = parentGroup;
     const int at = rowOf(rowId) + 1;
 
     const int newId = static_cast<int>(rows.size());
@@ -247,16 +278,7 @@ void WaveformModel::unpack(int rowId) {
 
     rows[rowId].unpacked = true;
     for (std::uint32_t bit = high + 1; bit-- > low;) {
-        WaveRow child;
-        child.kind = WaveRow::Kind::Signal;
-        child.signalIndex = rows[rowId].signalIndex;
-        child.signalWidth = rows[rowId].signalWidth;
-        child.radix = rows[rowId].radix;
-        child.highlight = rows[rowId].highlight;
-        child.sliced = true;
-        child.highBit = bit;
-        child.lowBit = bit;
-        child.label = QStringLiteral("%1[%2]").arg(rows[rowId].label).arg(bit);
+        WaveRow child = bitOf(rows[rowId], bit);
         child.parent = rowId;
 
         const int childId = static_cast<int>(rows.size());
@@ -331,7 +353,7 @@ void WaveformModel::notifyValueChangedUpwards(int fromRow) {
 void WaveformModel::writeRow(QDataStream& stream, int rowId) const {
     const WaveRow& waveRow = rows[rowId];
 
-    stream << static_cast<quint8>(waveRow.kind) << waveRow.label
+    stream << static_cast<quint8>(waveRow.kind) << waveRow.label << waveRow.path
            << static_cast<quint32>(waveRow.signalIndex) << static_cast<quint32>(waveRow.signalWidth)
            << static_cast<quint8>(waveRow.radix) << waveRow.symbolic << waveRow.sliced
            << static_cast<quint32>(waveRow.highBit) << static_cast<quint32>(waveRow.lowBit)
@@ -366,7 +388,7 @@ bool WaveformModel::readPending(QDataStream& stream, PendingRow& pending) {
     QString constantBits;
     quint32 constantWidth = 0;
 
-    stream >> kind >> pending.row.label >> signalIndex >> signalWidth >> radix
+    stream >> kind >> pending.row.label >> pending.row.path >> signalIndex >> signalWidth >> radix
         >> pending.row.symbolic >> pending.row.sliced >> highBit >> lowBit >> highlight
         >> pending.row.unpacked >> pending.row.localParameter >> hasConstant;
     if (stream.status() != QDataStream::Ok) return false;
@@ -435,7 +457,7 @@ int WaveformModel::materialise(const PendingRow& pending, int parentRow, int pos
     return rowId;
 }
 
-void WaveformModel::copyRows(const QVector<int>& rowIds) const {
+void WaveformModel::copySignalRows(const QVector<int>& rowIds) const {
     QByteArray encoded;
     QDataStream stream(&encoded, QIODevice::WriteOnly);
 
@@ -473,13 +495,11 @@ bool WaveformModel::clipboardHasRows() {
     return data != nullptr && data->hasFormat(QString::fromUtf8(RowMimeType));
 }
 
-QVector<int> WaveformModel::pasteRows(int targetGroup, int position) {
+QVector<int> WaveformModel::pasteSignalRows(int targetGroup, int position) {
     QVector<int> pasted;
 
     const QMimeData* data = QApplication::clipboard()->mimeData();
     if (data == nullptr || !data->hasFormat(QString::fromUtf8(RowMimeType))) return pasted;
-
-    if (targetGroup >= 0 && !showsChildren(targetGroup)) targetGroup = -1;
 
     QByteArray encoded = data->data(QString::fromUtf8(RowMimeType));
     QDataStream stream(&encoded, QIODevice::ReadOnly);
@@ -497,8 +517,16 @@ QVector<int> WaveformModel::pasteRows(int targetGroup, int position) {
         if (!readPending(stream, pending)) return pasted;
     }
 
+    return insertSignalRows(arriving, targetGroup, position);
+}
+
+QVector<int> WaveformModel::insertSignalRows(const std::vector<PendingRow>& pending,
+                                             int targetGroup, int position) {
+    QVector<int> pasted;
+    if (targetGroup >= 0 && !showsChildren(targetGroup)) targetGroup = -1;
+
     const QModelIndex parentIndex = targetGroup < 0 ? QModelIndex() : indexOfRow(targetGroup);
-    for (const PendingRow& pending : arriving) {
+    for (const PendingRow& arriving : pending) {
         const int siblingCount = targetGroup < 0
                                      ? static_cast<int>(roots.size())
                                      : static_cast<int>(rows[targetGroup].children.size());
@@ -510,13 +538,110 @@ QVector<int> WaveformModel::pasteRows(int targetGroup, int position) {
                            : siblingCount;
 
         beginInsertRows(parentIndex, at, at);
-        pasted.push_back(materialise(pending, targetGroup, at));
+        pasted.push_back(materialise(arriving, targetGroup, at));
         endInsertRows();
     }
 
     notifyValueChangedUpwards(targetGroup);
     Q_EMIT displayedSignalsChanged();
     return pasted;
+}
+
+// ---------------------------------------------------------------------------
+// Signal list files
+// ---------------------------------------------------------------------------
+
+QString WaveformModel::writeSignalList() const {
+    // Nothing that varies between saves — no date, no user — so that saving an unchanged window
+    // writes the same bytes (DESIGN_GUIDE.md section 10.8).
+    QString text = QStringLiteral("# Enzan signal list (DESIGN_GUIDE.md section 10.8)\n");
+    for (const int root : roots) writeSignalListRow(text, root, 0);
+    return text;
+}
+
+bool WaveformModel::childrenAreAsUnpacked(int rowId) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr || !waveRow->unpacked || !childrenReconstituteParent(rowId))
+        return false;
+
+    return std::ranges::all_of(waveRow->children, [this, waveRow](int child) {
+        const WaveRow& bit = rows[child];
+        const WaveRow made = bitOf(*waveRow, bit.highBit);
+        return bit.label == made.label && bit.path == made.path && bit.radix == made.radix
+               && bit.symbolic == made.symbolic && bit.highlight == made.highlight && !bit.unpacked;
+    });
+}
+
+void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr) return;
+
+    const QString indent(static_cast<qsizetype>(depth) * 4, u' ');
+
+    // A body is written in braces with its rows indented beneath, and an empty one as `{}`.
+    const auto body = [this, &indent, depth](const QVector<int>& children) {
+        if (children.isEmpty()) return QStringLiteral("{}");
+        QString inner = QStringLiteral("{\n");
+        for (const int child : children) writeSignalListRow(inner, child, depth + 1);
+        return inner + indent + u'}';
+    };
+
+    // The radix as the menu sets it: choosing one turns the names off, and `-symbolic` turns
+    // them back on. A row as it was added — hexadecimal, names on — needs neither.
+    QStringList words;
+    if (!waveRow->symbolic) {
+        words << QStringLiteral("-radix") << radixWord(waveRow->radix);
+    } else if (waveRow->radix != eir::Radix::Hexadecimal) {
+        words << QStringLiteral("-radix") << radixWord(waveRow->radix)
+              << QStringLiteral("-symbolic");
+    }
+
+    if (waveRow->kind == WaveRow::Kind::Group) {
+        if (waveRow->highlight != 0)
+            words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
+        words.prepend(QStringLiteral("group"));
+        words << quoteSignalListWord(waveRow->label) << body(waveRow->children);
+        text += indent + words.join(u' ') + u'\n';
+        return;
+    }
+
+    QString path = waveRow->path;
+    if (path.isEmpty() && waveRow->kind == WaveRow::Kind::Signal) {
+        if (const SignalInfo* info = kernelSession->signalInfo(waveRow->signalIndex))
+            path = info->path;
+    }
+
+    // A row that cannot be named cannot be written; leaving it out beats writing a line that
+    // loads as something else.
+    if (path.isEmpty()) return;
+
+    QString leaf = path.mid(path.lastIndexOf(u'/') + 1);
+    if (leaf.isEmpty()) leaf = path;
+    QString range;
+    if (waveRow->sliced) {
+        range = waveRow->highBit == waveRow->lowBit
+                    ? QStringLiteral("[%1]").arg(waveRow->highBit)
+                    : QStringLiteral("[%1:%2]").arg(waveRow->highBit).arg(waveRow->lowBit);
+    }
+
+    // The label only when the reader changed it: one the window would have made again is not
+    // worth a word, and leaving it out is what keeps a hand-written list short.
+    if (waveRow->label != leaf + range)
+        words << QStringLiteral("-label") << quoteSignalListWord(waveRow->label);
+    if (waveRow->highlight != 0)
+        words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
+
+    if (waveRow->unpacked) {
+        if (childrenAreAsUnpacked(rowId)) {
+            words << QStringLiteral("-expand");
+        } else {
+            words << QStringLiteral("-contents") << body(waveRow->children);
+        }
+    }
+
+    words.prepend(QStringLiteral("add wave"));
+    words << quoteSignalListWord(path + range);
+    text += indent + words.join(u' ') + u'\n';
 }
 
 void WaveformModel::detach(int rowId) {

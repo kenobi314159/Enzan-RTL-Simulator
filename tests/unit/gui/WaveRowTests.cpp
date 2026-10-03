@@ -370,10 +370,10 @@ TEST_F(WaveRowTest, ARowCopiesAndPastes) {
     model->setRadix(original, Radix::Binary);
     model->setHighlight(original, 3);
 
-    model->copyRows({original});
+    model->copySignalRows({original});
     EXPECT_TRUE(WaveformModel::clipboardHasRows());
 
-    const QVector<int> pasted = model->pasteRows(-1, -1);
+    const QVector<int> pasted = model->pasteSignalRows(-1, -1);
     ASSERT_EQ(pasted.size(), 1);
 
     const WaveRow* copy = model->row(pasted.front());
@@ -390,8 +390,8 @@ TEST_F(WaveRowTest, CopyingAGroupCopiesWhatIsInIt) {
     model->addSignal(clock, group);
     model->addSignal(counter, group);
 
-    model->copyRows({group});
-    const QVector<int> pasted = model->pasteRows(-1, -1);
+    model->copySignalRows({group});
+    const QVector<int> pasted = model->pasteSignalRows(-1, -1);
     ASSERT_EQ(pasted.size(), 1);
 
     const int copiedGroup = pasted.front();
@@ -406,8 +406,8 @@ TEST_F(WaveRowTest, AnUnpackedBusCopiesWithTheBitsItHasLeft) {
     model->unpack(bus);
     model->removeRow(childOf(bus, 4));
 
-    model->copyRows({bus});
-    const QVector<int> pasted = model->pasteRows(-1, -1);
+    model->copySignalRows({bus});
+    const QVector<int> pasted = model->pasteSignalRows(-1, -1);
     ASSERT_EQ(pasted.size(), 1);
 
     EXPECT_EQ(model->rowCount(model->indexOfRow(pasted.front())), 7);
@@ -419,8 +419,8 @@ TEST_F(WaveRowTest, PastingIntoAGroupPutsTheRowsInside) {
     const int original = model->addSignal(clock);
     const int group = model->addGroup(QStringLiteral("Bus"));
 
-    model->copyRows({original});
-    const QVector<int> pasted = model->pasteRows(group, -1);
+    model->copySignalRows({original});
+    const QVector<int> pasted = model->pasteSignalRows(group, -1);
 
     ASSERT_EQ(pasted.size(), 1);
     EXPECT_EQ(model->row(pasted.front())->parent, group);
@@ -430,8 +430,8 @@ TEST_F(WaveRowTest, PastingAtAPositionLandsThere) {
     const int first = model->addSignal(clock);
     model->addSignal(counter);
 
-    model->copyRows({first});
-    const QVector<int> pasted = model->pasteRows(-1, 1);
+    model->copySignalRows({first});
+    const QVector<int> pasted = model->pasteSignalRows(-1, 1);
 
     ASSERT_EQ(pasted.size(), 1);
     EXPECT_EQ(model->indexOfRow(pasted.front()).row(), 1)
@@ -440,11 +440,11 @@ TEST_F(WaveRowTest, PastingAtAPositionLandsThere) {
 
 TEST_F(WaveRowTest, PastingSubscribesToWhatArrived) {
     const int original = model->addSignal(counter);
-    model->copyRows({original});
+    model->copySignalRows({original});
     model->removeRow(original);
     ASSERT_TRUE(model->displayedSignals().isEmpty());
 
-    model->pasteRows(-1, -1);
+    model->pasteSignalRows(-1, -1);
     EXPECT_EQ(model->displayedSignals(), QVector<std::uint32_t>{counter.signalIndex});
 }
 
@@ -455,8 +455,8 @@ TEST_F(WaveRowTest, PastingKeepsTheRowsThatWereAlreadyThere) {
     model->unpack(first);
     model->setHighlight(first, 2);
 
-    model->copyRows({first});
-    const QVector<int> pasted = model->pasteRows(-1, -1);
+    model->copySignalRows({first});
+    const QVector<int> pasted = model->pasteSignalRows(-1, -1);
     ASSERT_EQ(pasted.size(), 1);
 
     ASSERT_NE(model->row(first), nullptr);
@@ -471,14 +471,14 @@ TEST_F(WaveRowTest, PastingAnEmptyClipboardDoesNothing) {
     QApplication::clipboard()->setText(QStringLiteral("not a wave row"));
 
     EXPECT_FALSE(WaveformModel::clipboardHasRows());
-    EXPECT_TRUE(model->pasteRows(-1, -1).isEmpty());
+    EXPECT_TRUE(model->pasteSignalRows(-1, -1).isEmpty());
     EXPECT_EQ(model->rowCount(), 0);
 }
 
 TEST_F(WaveRowTest, CopyingAlsoLeavesThePathsAsText) {
     // So that the clipboard is worth something outside this window too.
     const int original = model->addSignal(counter);
-    model->copyRows({original});
+    model->copySignalRows({original});
 
     EXPECT_EQ(QApplication::clipboard()->text(), QStringLiteral("/tb/count"));
 }

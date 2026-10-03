@@ -501,8 +501,8 @@ TEST_F(InteractionTest, PastingRedrawsTheCanvasAndKeepsWhatWasOpen) {
     PaintCounter counter;
     view->installEventFilter(&counter);
 
-    model->copyRows({rowOf.value(QStringLiteral("clk"))});
-    const QVector<int> pasted = model->pasteRows(-1, -1);
+    model->copySignalRows({rowOf.value(QStringLiteral("clk"))});
+    const QVector<int> pasted = model->pasteSignalRows(-1, -1);
     QCoreApplication::processEvents();
 
     ASSERT_EQ(pasted.size(), 1);
