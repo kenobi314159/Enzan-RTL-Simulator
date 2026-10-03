@@ -141,7 +141,12 @@ RunStatus Kernel::run(SimTime until) {
             }
         }
 
-        if (!advanceTime(until)) return lastStatus;
+        // A stop asked for in the last slot is a stop of this run, which has ended anyway. Kept,
+        // it would end the next run before that run had done anything.
+        if (!advanceTime(until)) {
+            stopRequested = false;
+            return lastStatus;
+        }
     }
 }
 

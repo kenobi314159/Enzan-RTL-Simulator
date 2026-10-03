@@ -1480,6 +1480,21 @@ TEST(KernelPli, AStopFromACallbackPausesTheRunAndResumingMatchesAStraightRun) {
               straight.simulationKernel().executedInstructions());
 }
 
+TEST(KernelPli, AStopTheRunEndedBeforeReachingDoesNotStopTheNextRun) {
+    // Asked for at 12, with the next edge at 15 past the limit: the run ends at its limit, and
+    // the stop it never reached ends with it rather than cutting the next run short at once.
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    hooks.timed.emplace(12, [&] { simulation.simulationKernel().requestStop(); });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    ASSERT_EQ(simulation.run(14), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.run(30), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.time(), 30U);
+}
+
 TEST(KernelPli, AZeroDelayEventFromReadOnlyRunsInAFurtherSlotAtTheSameTime) {
     // Read-only is the end of a slot, so something scheduled from it with no delay cannot run
     // in that slot. It runs in another at the same time, and time is not said to advance.
