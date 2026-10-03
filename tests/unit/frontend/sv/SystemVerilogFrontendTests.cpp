@@ -445,12 +445,54 @@ TEST_F(FrontendTest, GenerateBlocksAreHoistedWithTheirScopeInTheName) {
     const ModuleDefinition* module = design->findModule("m");
     ASSERT_NE(module, nullptr);
 
-    // Two blocks declaring `value` must not collide, and the name must still be recognisable.
-    std::size_t hoisted = 0;
-    for (const enzan::eir::Object& object : module->objects) {
-        if (object.name.find("value") != std::string::npos) ++hoisted;
-    }
-    EXPECT_EQ(hoisted, 2U) << "both generate iterations should declare their own object";
+    // Two blocks declaring `value` must not collide, and each is named for its iteration as the
+    // standard names it, so that a reader can tell which is which.
+    EXPECT_TRUE(module->findObject("g_loop[0].value").has_value());
+    EXPECT_TRUE(module->findObject("g_loop[1].value").has_value());
+}
+
+TEST_F(FrontendTest, AnUnnamedGenerateBlockIsNamedAsTheStandardNamesIt) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            localparam int P = 1;
+            if (P == 1) begin
+                logic x;
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+    EXPECT_TRUE(module->findObject("genblk1.x").has_value()) << "IEEE 1800 section 27.6";
+}
+
+TEST_F(FrontendTest, AnInstanceInAGenerateBlockHasTheBlockInItsName) {
+    // Without the block in it, every iteration's instance has the same name and so the same
+    // path, and nothing can tell them apart.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf (input logic a);
+        endmodule
+        module m;
+            logic a;
+            for (genvar i = 0; i < 2; i++) begin : g_loop
+                leaf u_leaf (.a(a));
+            end
+            if (1) begin : g_if
+                leaf u_leaf (.a(a));
+            end
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+    std::vector<std::string> names;
+    names.reserve(module->instances.size());
+    for (const enzan::eir::Instance& instance : module->instances) names.push_back(instance.name);
+    EXPECT_EQ(names,
+              (std::vector<std::string>{"g_loop[0].u_leaf", "g_loop[1].u_leaf", "g_if.u_leaf"}));
 }
 
 // ---------------------------------------------------------------------------

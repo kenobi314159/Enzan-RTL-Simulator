@@ -544,6 +544,14 @@ slang provides an elaborated AST with parameters resolved and generate blocks
 expanded. `src/frontend/sv/` walks that AST and emits EIR. slang performs no
 simulation, so everything from EIR onwards is Enzan's own work.
 
+**A generate block is part of the name of everything inside it**, objects and instances
+alike, joined with a dot: `/tb/gen[0].q` and `/tb/gen[0].u_dut/count`. A block is named as
+IEEE 1800 section 27.6 names it — its label, `genblk<n>` when it has none, and for one
+iteration of a loop the loop's label and the iteration's index. Without the block, two
+iterations instantiating `u_dut` would be two instances with one path, and nothing in a
+waveform, the front end or VPI could tell them apart. Changing how a block is named changes
+the EIR the frontend produces, so it bumps the serialisation version of 4.4.
+
 slang requires **C++20**, which sets the project's language floor.
 
 ### 5.2 VHDL via NVC

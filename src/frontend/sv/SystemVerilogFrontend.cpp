@@ -121,8 +121,9 @@ public:
     /// Translates the procedural blocks and continuous assignments.
     bool translateProcesses();
 
-    /// Adds an instance of an already-translated module.
-    bool addInstance(const ast::InstanceSymbol& instance, const std::string& targetName,
+    /// Adds an instance of an already-translated module, named `prefix` and its own name.
+    bool addInstance(const ast::InstanceSymbol& instance, const std::string& prefix,
+                     const std::string& targetName,
                      const std::map<std::string, std::uint32_t, std::less<>>& targetPorts);
 
     eir::ModuleDefinition take() { return std::move(definitionValue); }
@@ -185,8 +186,15 @@ private:
     bool failed = false;
 
 public:
+    /// An instance found while collecting, with the generate blocks it is inside.
+    struct CollectedInstance {
+        /// What its name begins with, as an object's does: `gen[0].` inside a generate block.
+        std::string prefix;
+        const ast::InstanceSymbol* symbol = nullptr;
+    };
+
     /// Instances found while collecting, in declaration order.
-    std::vector<const ast::InstanceSymbol*> instances;
+    std::vector<CollectedInstance> instances;
 };
 
 std::string ModuleBuilder::uniqueObjectName(std::string_view preferred) {
@@ -357,24 +365,36 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             break;
 
         case slang::ast::SymbolKind::Instance:
-            instances.push_back(&member.as<ast::InstanceSymbol>());
+            instances.push_back(
+                CollectedInstance{.prefix = prefix, .symbol = &member.as<ast::InstanceSymbol>()});
             break;
 
         case slang::ast::SymbolKind::GenerateBlock: {
             // slang has already decided which generate branch is taken; an
             // uninstantiated one is the branch that was not, and must be skipped
             // rather than translated.
+            //
+            // An unnamed block is named `genblk<n>`, as IEEE 1800 section 27.6 names it.
             const auto& block = member.as<ast::GenerateBlockSymbol>();
             if (block.isUninstantiated) break;
-            if (!collectScope(block, prefix + std::string(block.name) + ".")) return false;
+            if (!collectScope(block, prefix + block.getExternalName() + ".")) return false;
             break;
         }
 
         case slang::ast::SymbolKind::GenerateBlockArray: {
+            // An iteration of a loop has no name of its own: it is the loop's name and its
+            // index, `gen[0]`, which is how the standard names it and how slang paths it.
             const auto& array = member.as<ast::GenerateBlockArraySymbol>();
+            const std::string arrayName = array.getExternalName();
             for (const ast::GenerateBlockSymbol* entry : array.entries) {
                 if (entry->isUninstantiated) continue;
-                if (!collectScope(*entry, prefix + std::string(entry->name) + ".")) return false;
+                const slang::SVInt* index = entry->getArrayIndex();
+                const std::string entryName =
+                    index != nullptr
+                        ? std::format("{}[{}]", arrayName,
+                                      index->toString(slang::LiteralBase::Decimal, false))
+                        : arrayName;
+                if (!collectScope(*entry, prefix + entryName + ".")) return false;
             }
             break;
         }
@@ -610,10 +630,12 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
 }
 
 bool ModuleBuilder::addInstance(
-    const ast::InstanceSymbol& instance, const std::string& targetName,
+    const ast::InstanceSymbol& instance, const std::string& prefix, const std::string& targetName,
     const std::map<std::string, std::uint32_t, std::less<>>& targetPorts) {
+    // Named with the generate blocks it is inside, as an object is: two iterations of a loop
+    // each instantiating `u` are otherwise two instances with one name, and one path.
     eir::Instance result;
-    result.name = std::string(instance.name);
+    result.name = prefix + std::string(instance.name);
     result.definitionName = targetName;
     result.location = convertLocation(instance.location);
 
@@ -791,7 +813,8 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
     // than recursing until the stack runs out.
     bodies.emplace(name, BodyInfo{.name = name, .portIndices = builder.portIndices()});
 
-    for (const ast::InstanceSymbol* child : builder.instances) {
+    for (const ModuleBuilder::CollectedInstance& collected : builder.instances) {
+        const ast::InstanceSymbol* child = collected.symbol;
         const std::optional<std::string> childName = translate(*child);
         if (!childName.has_value()) {
             succeeded = false;
@@ -804,7 +827,8 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
             return std::nullopt;
         }
 
-        if (!builder.addInstance(*child, *childName, childInfo->second.portIndices)) {
+        if (!builder.addInstance(*child, collected.prefix, *childName,
+                                 childInfo->second.portIndices)) {
             succeeded = false;
             return std::nullopt;
         }
