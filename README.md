@@ -208,8 +208,12 @@ The binary lands at `build/gcc-debug/bin/enzan`:
 
 `cmake --list-presets` shows them all. There are `gcc-` and `clang-` variants of
 `debug`, `release` and `relwithdebinfo`, plus `clang-sanitize` for the
-AddressSanitizer and UndefinedBehaviorSanitizer configuration that CI runs.
+AddressSanitizer and UndefinedBehaviorSanitizer configuration that CI runs, and
+`gcc-profile` for profiling: `relwithdebinfo` with frame pointers kept everywhere, so
+that `perf record --call-graph fp` and `samply` get whole stacks cheaply.
 Each preset builds into its own directory under `build/`, so several can coexist.
+Time a simulation in an optimised build only; a debug build is an order of magnitude
+slower, and what dominates its profile is mostly what the optimiser would remove.
 
 ### First build takes a while
 

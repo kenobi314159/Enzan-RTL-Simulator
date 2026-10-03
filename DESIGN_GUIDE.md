@@ -1838,6 +1838,14 @@ license check against section 1.4.
 configuration used by CI. A `TSan` configuration is added when threading
 arrives.
 
+**Performance is measured in an optimised build, never in `Debug`.** A debug build of the
+kernel runs an order of magnitude slower than an optimised one, and not uniformly: what
+dominates its profile is what the optimiser removes, so tuning against it tunes the wrong code.
+The profiling configuration is `RelWithDebInfo` with frame pointers kept throughout, the
+dependencies included, so that a sampling profiler can walk a stack cheaply and without
+recording each one whole. It is a local configuration rather than a CI job: a profile is read
+by the person who took it.
+
 ---
 
 ## 12. Repository layout
