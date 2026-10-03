@@ -271,14 +271,15 @@ bool VpiContext::load(std::string_view specification) {
         return false;
     }
 
-    ++loadedLibraries;
-
+    // Counted once something in it is started, and not merely opened: a library whose entry
+    // is missing was reported and never ran, and is not an application the session holds.
     if (!entry.empty()) {
         void* symbol = ::dlsym(opened, entry.c_str());
         if (symbol == nullptr) {
             diagnostics.report(DiagCode::VpiEntryNotFound, SourceLocation(), library, entry);
             return false;
         }
+        ++loadedLibraries;
         reinterpret_cast<void (*)()>(symbol)();
         return true;
     }
@@ -289,6 +290,7 @@ bool VpiContext::load(std::string_view specification) {
         return false;
     }
 
+    ++loadedLibraries;
     auto* const* table = reinterpret_cast<void (*const*)()>(routines);
     for (std::size_t index = 0; table[index] != nullptr; ++index) table[index]();
     return true;

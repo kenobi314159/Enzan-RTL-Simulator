@@ -60,11 +60,13 @@ TEST_F(VpiLoading, ALibraryThatCannotBeOpenedIsReported) {
 TEST_F(VpiLoading, AnEntryTheLibraryLacksIsReported) {
     EXPECT_FALSE(context.load(std::string(ENZAN_TEST_STARTUP_PLUGIN) + ":no_such_entry"));
     EXPECT_TRUE(reported(DiagCode::VpiEntryNotFound));
+    EXPECT_FALSE(context.hasApplications()) << "opened, but nothing in it was started";
 }
 
 TEST_F(VpiLoading, ALibraryWithNoStartupRoutinesIsReported) {
     EXPECT_FALSE(context.load(ENZAN_TEST_SILENT_PLUGIN));
     EXPECT_TRUE(reported(DiagCode::VpiNoStartupRoutines));
+    EXPECT_FALSE(context.hasApplications()) << "opened, but nothing in it was started";
 }
 
 } // namespace
