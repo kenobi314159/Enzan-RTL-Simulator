@@ -61,16 +61,17 @@ public:
         const std::optional<std::uint32_t> topIndex = resolveTop(topModuleName);
         if (!topIndex.has_value()) return nullptr;
 
-        result = std::make_unique<ElaboratedDesign>();
-        result->topName = design.module(*topIndex).name;
-
         // The top instance is named for the module as the source names it, so that a design
         // elaborated with `tb` as its top has `/tb/...` paths — which is what a user typing a
         // hierarchical path like /tb/u_dut/count names. The source's name rather than the
         // definition's, because a parameterised top's definition is named for its values
-        // (section 8.2), and `/counter$WIDTH_8/count` is a path nobody would write.
+        // (section 8.2), and `/counter$WIDTH_8/count` is a path nobody would write. The design
+        // reports its top by the same name, since that is the name a front end shows.
         const eir::ModuleDefinition& top = design.module(*topIndex);
         const std::string& topName = top.sourceName.empty() ? top.name : top.sourceName;
+
+        result = std::make_unique<ElaboratedDesign>();
+        result->topName = topName;
         const std::uint32_t topInstance =
             createInstance("/" + topName, topName, *topIndex, Instance::NoParent);
         if (!expand(topInstance)) return nullptr;

@@ -134,6 +134,7 @@ TEST_F(ElaboratorTest, AParameterisedTopIsNamedAsTheSourceNamesIt) {
     ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
     EXPECT_EQ(elaborated->instances()[0].path, "/counter");
     EXPECT_EQ(elaborated->instances()[0].name, "counter");
+    EXPECT_EQ(elaborated->topModuleName(), "counter") << "the name a window title shows";
     EXPECT_EQ(elaborated->findSlot("/counter/count"), 0U);
 }
 
