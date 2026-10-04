@@ -215,11 +215,11 @@ TEST_F(SignalListLoadTest, AMistakeLoadsNothingAndKeepsTheList) {
 }
 
 TEST_F(SignalListLoadTest, AMistakeFoundOnlyOnceThePathsAreKnownLoadsNothingEither) {
-    // Whether `-label` is right depends on whether its path is a scope, which the parser
-    // cannot know; it is still a mistake in the file, not a missing path.
+    // Whether `-expand` is right depends on whether its path is a scope,
+    // which the parser cannot know; it is still a mistake in the file, not a missing path.
     waves()->addSignal(info(QStringLiteral("/tb"), QStringLiteral("clk")));
 
-    const QString path = write(QStringLiteral("scope.tcl"), "add wave -label x /tb\n");
+    const QString path = write(QStringLiteral("scope.tcl"), "add wave -expand /tb\n");
     ASSERT_TRUE(window->loadSignalList(path));
     ASSERT_TRUE(pumpUntil([this] { return transcript().contains(QStringLiteral("Nothing was")); }));
 

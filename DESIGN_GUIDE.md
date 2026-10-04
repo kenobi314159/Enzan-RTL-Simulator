@@ -1860,7 +1860,7 @@ why a group is a block rather than an option on each of the lines inside it.
 |---|---|
 | `-radix bin\|oct\|dec\|hex` | the radix, and the number rather than an enumeration's name, as choosing a radix from the menu does |
 | `-symbolic` | an enumeration's names after all; applied after `-radix` wherever it is written |
-| `-label <text>` | the row's name, for a single signal path only |
+| `-label <text>` | the row's name, for a single signal or a non-recursive scope |
 | `-highlight <1–5>` | the row's background (10.7) |
 | `-expand` | unpacked into its bits, exactly as unpacking leaves it |
 | `-contents <body>` | unpacked, with exactly the rows `body` describes beneath it |

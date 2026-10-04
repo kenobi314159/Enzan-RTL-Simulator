@@ -450,9 +450,15 @@ private:
 
     void scope(const SignalListEntry& entry, const QString& path,
                std::vector<WaveformModel::PendingRow>& out) {
-        if (entry.label.has_value() || entry.expand || entry.contents) {
-            error(entry.line, QStringLiteral("%1 is a scope; -label, -expand and -contents apply "
+        if (entry.expand || entry.contents) {
+            error(entry.line, QStringLiteral("%1 is a scope; -expand and -contents apply "
                                              "to a signal")
+                                  .arg(path));
+            return;
+        }
+        if (entry.label.has_value() && entry.recursive) {
+            error(entry.line, QStringLiteral("-label cannot be applied to a scope %1"
+                                             "inserted recursively with -r")
                                   .arg(path));
             return;
         }
@@ -470,7 +476,7 @@ private:
 
             WaveformModel::PendingRow group;
             group.row.kind = WaveRow::Kind::Group;
-            group.row.label = candidate;
+            group.row.label = (entry.label.has_value()) ? *entry.label : candidate;
             apply(entry, group.row);
             for (const SignalInfo& info : found) {
                 WaveformModel::PendingRow child;
