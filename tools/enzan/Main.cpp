@@ -912,9 +912,11 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                   << enzan::runtime::toString(status) << ")\n";
     }
 
-    if (status == enzan::runtime::RunStatus::Error || session.exitStatus() != 0)
+    // Analysis and elaboration have succeeded by here, so an error reported since — an `$error`,
+    // a failed assertion — is the design failing in simulation, which is status 3 (8.1).
+    if (status == enzan::runtime::RunStatus::Error || session.exitStatus() != 0
+        || diagnostics.hasErrors())
         return ExitStatus::SimulationFailed;
-    if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;
     return ExitStatus::Success;
 }
 
