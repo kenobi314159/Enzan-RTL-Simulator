@@ -440,6 +440,29 @@ bool ProcessTranslator::translateForLoop(const ast::Statement& statement) {
         if (!translateExpression(*initializer).has_value() && failed) return false;
     }
 
+    // A variable declared in the header, `for (int i = 0; ...)`, is automatic and starts again
+    // every time the loop does. Its initialiser is therefore an assignment at the loop's entry,
+    // not only a value at time zero: without one an inner loop runs once, on the first pass of
+    // the loop around it, and finds its variable already at its limit on every later pass.
+    for (const ast::VariableSymbol* variable : loop.loopVars) {
+        const ast::Expression* initializer = variable->getInitializer();
+        if (initializer == nullptr) continue;
+
+        const std::optional<std::uint32_t> objectIndex = module->objectFor(*variable);
+        if (!objectIndex.has_value()) {
+            failed = true;
+            return false;
+        }
+        const std::optional<Value> value = translateExpression(*initializer);
+        if (!value.has_value()) return false;
+
+        const eir::Type objectType = module->definition().objects[*objectIndex].type;
+        const Value stored = coerceState(coerce(*value, objectType), objectType);
+        noteWholeWrite(*objectIndex);
+        emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(*objectIndex),
+                                    eir::Operand::reg(stored.reg)));
+    }
+
     const std::uint32_t testBlock = newBlock("for-test");
     const std::uint32_t bodyBlock = newBlock("for-body");
     const std::uint32_t stepBlock = newBlock("for-step");

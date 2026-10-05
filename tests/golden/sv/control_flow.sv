@@ -91,6 +91,16 @@ module tb;
             failures = failures + 1;
         end
 
+        // A nested loop starts its variable again on every pass of the loop around it.
+        sum = 8'd0;
+        for (int i = 0; i < 3; i = i + 1)
+            for (int j = 0; j < 4; j = j + 1)
+                sum = sum + 8'd1;
+        if (sum !== 8'd12) begin
+            $display("FAIL: a nested loop ran %0d times instead of 12", sum);
+            failures = failures + 1;
+        end
+
         // --- while and repeat ---------------------------------------------
         sum = 8'd0;
         while (sum < 8'd9)
