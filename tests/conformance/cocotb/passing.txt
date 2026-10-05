@@ -19,6 +19,7 @@ test_long_log_msg
 test_module_var_empty
 test_module_var_messy
 test_module_without_tests
+test_multi_dimension_array
 test_null_ranges
 test_packed_union
 test_similar_scope_name

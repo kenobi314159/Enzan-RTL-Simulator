@@ -42,8 +42,10 @@ implements, so that a kernel with nothing loaded pays one null test per hook.
 
 ## Deliberate deferrals
 
-- **Single bits only.** `vpi_handle_by_index` selects one bit of a vector; there is no handle
-  to a part-select, and unpacked arrays do not exist yet (M5).
+- **No part-selects.** `vpi_handle_by_index` selects one bit of a vector or one element of an
+  array; there is no handle to a part-select.
+- **No structs.** A packed or unpacked struct is the vector of its bits, with no members to
+  iterate.
 - **User system tasks.** `vpi_register_systf` fails: a call to one has to be compiled by the
   frontend, and it cannot be.
 - **The three delay modes behave alike** (section 9.4).

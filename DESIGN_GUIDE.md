@@ -1310,6 +1310,8 @@ from the top, as in `tb.u_dut.count`.
 | four-state variable | `vpiReg` |
 | two-state variable | `vpiBitVar` |
 | one bit of a vector | `vpiNetBit` or `vpiRegBit`, from `vpi_handle_by_index` or by iterating `vpiBit` |
+| unpacked array | `vpiRegArray`, or `vpiNetArray` for nets, with `vpiSize` its element count |
+| element of an array | as a vector, or an array again while dimensions remain, from `vpi_handle_by_index` by declared index or by iterating |
 | parameter, localparam | `vpiParameter`, with `vpiLocalParam` telling them apart |
 
 **Objects a frontend introduced are not visible.** A port connected to an expression becomes
@@ -1331,11 +1333,13 @@ nobody mistakes them for VPI defects:
 
 Both are changes to EIR's type rather than to VPI, and belong with M5's type work.
 
-**A bit is a signal of its own to an application.** It reads and writes the one bit, and a
-value-change callback on it fires when that bit changes and not when another bit of its vector
-does — the kernel reports changes of whole signals, and `RisingEdge(dut.bus[0])` that fired on
-every change of `bus` would be wrong in exactly the testbenches that use it. A force holds a
-whole signal (10.4), so a bit is forced by forcing its signal.
+**A bit is a signal of its own to an application, and so is an element.** Each reads and
+writes its own bits, and a value-change callback on one fires when those bits change and not
+when others of the signal do — the kernel reports changes of whole signals, and
+`RisingEdge(dut.bus[0])` that fired on every change of `bus` would be wrong in exactly the
+testbenches that use it. A force holds a whole signal (10.4), so a bit or an element is forced
+by forcing its signal. An array has elements and no value of its own: reading or writing one
+is an error that says to use its elements.
 
 **Handles to design objects are interned.** Asking for one twice returns the same handle, and
 freeing one does nothing: a handle names something that exists for the whole elaboration.

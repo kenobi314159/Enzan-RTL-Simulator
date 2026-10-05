@@ -6,6 +6,7 @@
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
 #include "common/Version.h"
+#include "eir/BitOps.h"
 #include "eir/Design.h"
 #include "eir/Module.h"
 #include "elab/ElaboratedDesign.h"
@@ -89,6 +90,8 @@ const char* typeName(PLI_INT32 type) {
     case vpiBitVar: return "vpiBitVar";
     case vpiNetBit: return "vpiNetBit";
     case vpiRegBit: return "vpiRegBit";
+    case vpiRegArray: return "vpiRegArray";
+    case vpiNetArray: return "vpiNetArray";
     case vpiParameter: return "vpiParameter";
     case vpiConstant: return "vpiConstant";
     case vpiIterator: return "vpiIterator";
@@ -157,9 +160,23 @@ struct VpiContext::Object {
     std::uint32_t width = 0;
     bool isSigned = false;
 
-    /// For a bit-select, which bit of the signal it is.
-    bool isBit = false;
+    /// For a bit-select or an element of an array, the window of the signal it is: `width`
+    /// bits from `lowBit`.
+    bool isWindow = false;
+    bool isElement = false;
     std::uint32_t lowBit = 0;
+
+    /// For an array, the unpacked dimensions not yet indexed, outermost first; its own bounds
+    /// are the first one's. An array has elements and no value of its own: arrays themselves
+    /// while dimensions remain below them, vectors `elementWidth` wide at the last.
+    bool isArray = false;
+    std::vector<eir::UnpackedDimension> dimensions;
+    std::int64_t left = 0;
+    std::int64_t right = 0;
+    std::uint32_t elementWidth = 0;
+
+    /// An element's index in the dimension it was selected from, as declared.
+    std::int64_t index = 0;
 
     std::string name;
     std::string fullName;
@@ -185,10 +202,10 @@ struct VpiContext::Callback final : Object {
     /// until no dispatch can still be holding it.
     bool removed = false;
 
-    /// What the bit a value-change callback on a bit-select watches held when it last fired.
-    /// The kernel reports changes of whole signals, and a change elsewhere in the vector is
-    /// not a change of this bit.
-    eir::Logic lastBit = eir::Logic::Unknown;
+    /// What the window a value-change callback on a bit-select or an element watches held when
+    /// it last fired. The kernel reports changes of whole signals, and a change elsewhere in
+    /// the signal is not a change of this window.
+    eir::BitVector lastValue{1};
 };
 
 /// A module instance or a generate block.
@@ -513,6 +530,16 @@ vpiHandle VpiContext::intern(const Target& target) {
             object->type = vpiNet;
         else
             object->type = declared.type.isFourState() ? vpiReg : vpiBitVar;
+        // An unpacked array is an array of its elements, which are arrays in turn while
+        // dimensions remain.
+        if (!declared.unpackedDimensions.empty()) {
+            object->type = declared.kind == eir::ObjectKind::Net ? vpiNetArray : vpiRegArray;
+            object->isArray = true;
+            object->dimensions = declared.unpackedDimensions;
+            object->left = declared.unpackedDimensions.front().left;
+            object->right = declared.unpackedDimensions.front().right;
+            object->elementWidth = declared.elementWidth;
+        }
         object->scope = owner;
         object->signal = instance.objectSlots[objectIndex];
         object->width = declared.type.bitWidth();
@@ -533,12 +560,74 @@ vpiHandle VpiContext::intern(const Target& target) {
         object->scope = vector.scope;
         object->signal = vector.signal;
         object->width = 1;
-        object->isBit = true;
+        object->isWindow = true;
         object->lowBit = target.bit;
         object->name = std::format("{}[{}]", vector.name, target.bit);
         object->fullName = std::format("{}[{}]", vector.fullName, target.bit);
         object->file = vector.file;
         object->line = vector.line;
+        break;
+    }
+
+    case TargetKind::Element: {
+        // An element of an array, reached through `depth` indices: a window of the array's
+        // storage, the left element highest (section 4.3). It is an array itself while
+        // dimensions remain below it.
+        const Object& whole = *reinterpret_cast<const Object*>(
+            intern({.kind = TargetKind::Signal, .first = target.first, .second = target.second}));
+        const std::uint8_t depth = target.depth;
+        const std::uint32_t parentSize = whole.dimensions[depth - 1U].size();
+        const Object& parent = *reinterpret_cast<const Object*>(
+            depth == 1
+                ? intern(
+                      {.kind = TargetKind::Signal, .first = target.first, .second = target.second})
+                : intern({.kind = TargetKind::Element,
+                          .first = target.first,
+                          .second = target.second,
+                          .bit = target.bit / parentSize,
+                          .depth = static_cast<std::uint8_t>(depth - 1U)}));
+
+        std::uint32_t blocks = 1;
+        for (std::uint8_t level = 0; level < depth; ++level)
+            blocks *= whole.dimensions[level].size();
+        std::uint32_t blockWidth = whole.elementWidth;
+        for (std::size_t level = depth; level < whole.dimensions.size(); ++level)
+            blockWidth *= whole.dimensions[level].size();
+
+        const eir::UnpackedDimension& selectedFrom = whole.dimensions[depth - 1U];
+        const std::uint32_t offset = target.bit % parentSize;
+
+        object->kind = Object::Kind::Signal;
+        object->scope = whole.scope;
+        object->signal = whole.signal;
+        object->width = blockWidth;
+        object->isWindow = true;
+        object->isElement = true;
+        object->lowBit = (blocks - 1 - target.bit) * blockWidth;
+        object->index = selectedFrom.left <= selectedFrom.right
+                            ? std::int64_t{selectedFrom.left} + offset
+                            : std::int64_t{selectedFrom.left} - offset;
+        object->elementWidth = whole.elementWidth;
+        object->dimensions.assign(whole.dimensions.begin() + depth, whole.dimensions.end());
+        if (object->dimensions.empty()) {
+            const elab::Instance& instance = image->elaboratedDesign().instances()[target.first];
+            const eir::Object& declared = image->analysedDesign()
+                                              .module(instance.definitionIndex)
+                                              .objects[static_cast<std::size_t>(target.second)];
+            if (declared.kind == eir::ObjectKind::Net)
+                object->type = vpiNet;
+            else
+                object->type = declared.type.isFourState() ? vpiReg : vpiBitVar;
+        } else {
+            object->type = whole.type;
+            object->isArray = true;
+            object->left = object->dimensions.front().left;
+            object->right = object->dimensions.front().right;
+        }
+        object->name = std::format("{}[{}]", parent.name, object->index);
+        object->fullName = std::format("{}[{}]", parent.fullName, object->index);
+        object->file = whole.file;
+        object->line = whole.line;
         break;
     }
 
@@ -587,8 +676,10 @@ VpiContext::Object* VpiContext::resolve(vpiHandle handle, std::string_view routi
 eir::BitVector VpiContext::readSignal(const Object& object) const {
     const runtime::Signal& signal = image->signals()[object.signal];
     const eir::ConstBitRef whole = kernel->arena().at(signal.wordOffset, signal.bitWidth);
-    if (!object.isBit) return eir::BitVector::from(whole);
-    return eir::BitVector::filled(1, whole.get(object.lowBit));
+    if (!object.isWindow) return eir::BitVector::from(whole);
+    eir::BitVector window(object.width);
+    eir::bitops::partSelectAt(window.mutableRef(), whole, object.lowBit);
+    return window;
 }
 
 // ---------------------------------------------------------------------------
@@ -649,9 +740,26 @@ vpiHandle VpiContext::handleByIndex(vpiHandle object, PLI_INT32 index) {
     const Object* found = resolve(object, "vpi_handle_by_index");
     if (found == nullptr) return nullptr;
 
+    // An element of an array, by its declared index.
+    if (found->isArray) {
+        if (index < std::min(found->left, found->right)
+            || index > std::max(found->left, found->right)) {
+            fail(vpiError, std::format("vpi_handle_by_index: {} is outside [{}:{}]", index,
+                                       found->left, found->right));
+            return nullptr;
+        }
+        const auto offset = static_cast<std::uint32_t>(
+            found->left <= found->right ? index - found->left : found->left - index);
+        return intern({.kind = TargetKind::Element,
+                       .first = found->target.first,
+                       .second = found->target.second,
+                       .bit = (found->target.bit * found->dimensions.front().size()) + offset,
+                       .depth = static_cast<std::uint8_t>(found->target.depth + 1U)});
+    }
+
     // A bit of a vector. Its range is `[width-1:0]` (section 9.2), so an index is a bit
     // position; anything else Enzan has no elements of.
-    if (found->kind != Object::Kind::Signal || found->isBit || found->width < 2) {
+    if (found->kind != Object::Kind::Signal || found->isWindow || found->width < 2) {
         fail(vpiError, std::format("vpi_handle_by_index: a {} has no elements to select",
                                    typeName(found->type)));
         return nullptr;
@@ -675,8 +783,20 @@ vpiHandle VpiContext::handle(PLI_INT32 type, vpiHandle reference) {
     switch (type) {
     case vpiParent:
     case vpiScope:
-        // A bit-select's parent is the vector it selects from.
-        if (type == vpiParent && object->isBit) {
+        // A bit-select's parent is the vector it selects from, and an element's its array.
+        if (type == vpiParent && object->isWindow) {
+            if (object->target.depth > 1) {
+                const Object& whole =
+                    *reinterpret_cast<const Object*>(intern({.kind = TargetKind::Signal,
+                                                             .first = object->target.first,
+                                                             .second = object->target.second}));
+                return intern(
+                    {.kind = TargetKind::Element,
+                     .first = object->target.first,
+                     .second = object->target.second,
+                     .bit = object->target.bit / whole.dimensions[object->target.depth - 1U].size(),
+                     .depth = static_cast<std::uint8_t>(object->target.depth - 1U)});
+            }
             return intern({.kind = TargetKind::Signal,
                            .first = object->target.first,
                            .second = object->target.second});
@@ -705,11 +825,18 @@ vpiHandle VpiContext::handle(PLI_INT32 type, vpiHandle reference) {
     }
 
     case vpiIndex:
-        if (!object->isBit) return nullptr;
+        if (object->isElement)
+            return intern({.kind = TargetKind::Constant, .first = 0, .second = object->index});
+        if (!object->isWindow) return nullptr;
         return intern({.kind = TargetKind::Constant, .first = 0, .second = object->lowBit});
 
     case vpiLeftRange:
     case vpiRightRange:
+        if (object->isArray) {
+            return intern({.kind = TargetKind::Constant,
+                           .first = 0,
+                           .second = type == vpiLeftRange ? object->left : object->right});
+        }
         // EIR does not keep declared bounds, so a vector is described as `[width-1:0]`
         // (section 9.2), and a scalar has no range at all.
         if ((object->kind != Object::Kind::Signal && object->kind != Object::Kind::Parameter)
@@ -743,10 +870,28 @@ vpiHandle VpiContext::iterate(PLI_INT32 type, vpiHandle reference) {
                     items.push_back(intern({.kind = TargetKind::Scope, .first = scope}));
             }
         }
+    } else if (object->kind == Object::Kind::Signal && object->isArray) {
+        // The elements of an array, left to right as its range runs: vectors, or arrays while
+        // dimensions remain below it.
+        const bool leaves = object->dimensions.size() == 1;
+        const bool wanted =
+            leaves ? type == vpiReg || type == vpiNet || type == vpiBitVar || type == vpiMemoryWord
+                   : type == vpiRegArray || type == vpiNetArray;
+        if (wanted) {
+            const std::uint32_t count = object->dimensions.front().size();
+            for (std::uint32_t offset = 0; offset < count; ++offset) {
+                items.push_back(
+                    intern({.kind = TargetKind::Element,
+                            .first = object->target.first,
+                            .second = object->target.second,
+                            .bit = (object->target.bit * count) + offset,
+                            .depth = static_cast<std::uint8_t>(object->target.depth + 1U)}));
+            }
+        }
     } else if (object->kind == Object::Kind::Signal) {
         // The bits of a vector, left to right as its range `[width-1:0]` runs.
         const bool bits = type == vpiBit || type == vpiNetBit || type == vpiRegBit;
-        if (bits && !object->isBit && object->width > 1) {
+        if (bits && !object->isWindow && object->width > 1) {
             for (std::uint32_t bit = object->width; bit-- > 0;) {
                 items.push_back(intern({.kind = TargetKind::Bit,
                                         .first = object->target.first,
@@ -761,6 +906,8 @@ vpiHandle VpiContext::iterate(PLI_INT32 type, vpiHandle reference) {
                 image->analysedDesign()
                     .module(image->elaboratedDesign().instances()[scope.instance].definitionIndex)
                     .objects[objectIndex];
+            if (!declared.unpackedDimensions.empty())
+                return declared.kind == eir::ObjectKind::Net ? vpiNetArray : vpiRegArray;
             if (declared.kind == eir::ObjectKind::Net) return vpiNet;
             return declared.type.isFourState() ? vpiReg : vpiBitVar;
         };
@@ -777,10 +924,16 @@ vpiHandle VpiContext::iterate(PLI_INT32 type, vpiHandle reference) {
         case vpiNet:
         case vpiReg:
         case vpiBitVar:
+        case vpiRegArray:
+        case vpiNetArray:
+        case vpiMemory:
         case vpiVariables:
             for (const std::uint32_t objectIndex : scope.signals) {
                 const PLI_INT32 actual = signalType(objectIndex);
-                const bool wanted = type == vpiVariables ? actual != vpiNet : actual == type;
+                // An IEEE 1364 memory is an array of variables.
+                bool wanted = actual == type;
+                if (type == vpiVariables) wanted = actual != vpiNet && actual != vpiNetArray;
+                if (type == vpiMemory) wanted = actual == vpiRegArray;
                 if (!wanted) continue;
                 items.push_back(intern(
                     {.kind = TargetKind::Signal, .first = scope.instance, .second = objectIndex}));
@@ -872,6 +1025,8 @@ PLI_INT32 VpiContext::get(PLI_INT32 property, vpiHandle object) {
     case vpiType: return found->type;
 
     case vpiSize:
+        // An array's size is how many elements it has (IEEE 1800 section 37.17).
+        if (found->isArray) return static_cast<PLI_INT32>(found->dimensions.front().size());
         if (hasValue) return static_cast<PLI_INT32>(found->width);
         break;
 
@@ -930,10 +1085,11 @@ PLI_INT32 VpiContext::get(PLI_INT32 property, vpiHandle object) {
         if (found->kind == Object::Kind::Iterator) return found->iteratorType;
         break;
 
+    case vpiArray: return found->isArray ? 1 : 0;
+    case vpiMultiArray: return found->isArray && found->dimensions.size() > 1 ? 1 : 0;
+    case vpiIsMemory: return found->isArray && found->type == vpiRegArray ? 1 : 0;
+
     // Properties of constructs Enzan's subset has none of, whose answer is therefore no.
-    case vpiArray:
-    case vpiMultiArray:
-    case vpiIsMemory:
     case vpiPacked:
     case vpiCellInstance:
     case vpiProtected:
@@ -1003,6 +1159,10 @@ void VpiContext::getValue(vpiHandle object, s_vpi_value* value) {
     bool ok = false;
     switch (found->kind) {
     case Object::Kind::Signal:
+        if (found->isArray) {
+            error = "an array has no value of its own; read its elements";
+            break;
+        }
         ok = readValue(readSignal(*found).ref(), found->isSigned, *value, values, error);
         break;
 
@@ -1032,8 +1192,9 @@ vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
                                PLI_INT32 flags) {
     const Object* found = resolve(object, "vpi_put_value");
     if (found == nullptr) return nullptr;
-    if (found->kind != Object::Kind::Signal) {
-        fail(vpiError, std::format("vpi_put_value: a {} cannot be written", typeName(found->type)));
+    if (found->kind != Object::Kind::Signal || found->isArray) {
+        fail(vpiError, std::format("vpi_put_value: a {} cannot be written{}", typeName(found->type),
+                                   found->isArray ? "; write its elements" : ""));
         return nullptr;
     }
 
@@ -1053,9 +1214,9 @@ vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
         flags & ~(vpiReturnEvent | vpiUserAllocFlag | vpiOneValue | vpiPropagateOff);
 
     // A force holds a whole signal (section 10.4), so it is forced and released whole.
-    if ((mode == vpiForceFlag || mode == vpiReleaseFlag) && found->isBit) {
-        fail(vpiError, "vpi_put_value: a bit of a signal cannot be forced or released on its "
-                       "own; force the signal");
+    if ((mode == vpiForceFlag || mode == vpiReleaseFlag) && found->isWindow) {
+        fail(vpiError, "vpi_put_value: a bit or an element of a signal cannot be forced or "
+                       "released on its own; force the signal");
         return nullptr;
     }
 
@@ -1084,7 +1245,7 @@ vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
     switch (mode) {
     case 0:
     case vpiNoDelay:
-        if (found->isBit)
+        if (found->isWindow)
             kernel->writeSignalPart(found->signal, parsed->ref(), found->lowBit);
         else
             kernel->deposit(found->signal, parsed->ref());
@@ -1105,7 +1266,7 @@ vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
 
         // No delay is a non-blocking assignment; a delay lands at the start of the slot it
         // reaches (section 9.4).
-        if (delay == 0 && found->isBit) {
+        if (delay == 0 && found->isWindow) {
             kernel->scheduleNonBlockingPart(found->signal, parsed->ref(), found->lowBit);
         } else if (delay == 0) {
             kernel->scheduleNonBlocking(found->signal, parsed->ref());
@@ -1113,7 +1274,7 @@ vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
             delayedWrites.emplace(kernel->time() + delay, DelayedWrite{.signal = found->signal,
                                                                        .value = *parsed,
                                                                        .lowBit = found->lowBit,
-                                                                       .partial = found->isBit});
+                                                                       .partial = found->isWindow});
         }
         return nullptr;
     }
@@ -1210,7 +1371,7 @@ vpiHandle VpiContext::registerCallback(const s_cb_data* data) {
     case cbValueChange: {
         const Object* subject = resolve(data->obj, "vpi_register_cb");
         if (subject == nullptr) return nullptr;
-        if (subject->kind != Object::Kind::Signal) {
+        if (subject->kind != Object::Kind::Signal || subject->isArray) {
             fail(vpiError, std::format("vpi_register_cb: a {} has no value to change",
                                        typeName(subject->type)));
             return nullptr;
@@ -1218,9 +1379,9 @@ vpiHandle VpiContext::registerCallback(const s_cb_data* data) {
         callback->signal = subject->signal;
         callback->width = subject->width;
         callback->isSigned = subject->isSigned;
-        callback->isBit = subject->isBit;
+        callback->isWindow = subject->isWindow;
         callback->lowBit = subject->lowBit;
-        if (subject->isBit) callback->lastBit = readSignal(*subject).get(0);
+        if (subject->isWindow) callback->lastValue = readSignal(*subject);
         valueChangeWatchers[subject->signal].push_back(raw);
         break;
     }
@@ -1396,11 +1557,11 @@ void VpiContext::valueChanged(std::uint32_t signalIndex) {
         Callback* callback = valueChangeWatchers[signalIndex][index];
         if (callback->removed) continue;
 
-        // A change of the vector is a change of a bit only when that bit moved.
-        if (callback->isBit) {
-            const eir::Logic now = readSignal(*callback).get(0);
-            if (now == callback->lastBit) continue;
-            callback->lastBit = now;
+        // A change of the signal is a change of a window only when the window moved.
+        if (callback->isWindow) {
+            eir::BitVector now = readSignal(*callback);
+            if (now.ref().identicalTo(callback->lastValue.ref())) continue;
+            callback->lastValue = std::move(now);
         }
         fire(*callback);
     }

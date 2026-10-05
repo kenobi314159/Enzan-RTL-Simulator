@@ -81,6 +81,20 @@ Design makeDesign() {
     top.addObject(Object{.name = "gen[0].q", .type = Type::logic()});
     top.addObject(Object{.name = "gen[0].inner.r", .type = Type::bits(4, true, true)});
     top.addObject(Object{.name = "u_child$in", .type = Type::bits(8, false, true)});
+    // `logic [7:0] mem [3:0]`, stored flat with the left element, mem[3], highest.
+    Object memory{.name = "mem",
+                  .type = Type::bits(32, false, true),
+                  .initialValue = literal("32'h33221100")};
+    memory.unpackedDimensions.push_back(enzan::eir::UnpackedDimension{.left = 3, .right = 0});
+    memory.elementWidth = 8;
+    top.addObject(std::move(memory));
+    // `logic [3:0] grid [0:1][2:0]`: grid[0][2] highest, then grid[0][1], ... grid[1][0].
+    Object grid{
+        .name = "grid", .type = Type::bits(24, false, true), .initialValue = literal("24'h012345")};
+    grid.unpackedDimensions.push_back(enzan::eir::UnpackedDimension{.left = 0, .right = 1});
+    grid.unpackedDimensions.push_back(enzan::eir::UnpackedDimension{.left = 2, .right = 0});
+    grid.elementWidth = 4;
+    top.addObject(std::move(grid));
     // A package's variable, so that the package has an instance at the root beside `tb`.
     top.addObject(Object{.name = "ref$/config/mode",
                          .type = Type::bits(2, false, true),
@@ -254,10 +268,12 @@ TEST_F(Vpi, WhatAFrontendMadeUpIsNotVisible) {
 TEST_F(Vpi, IterationSelectsByKind) {
     vpiHandle top = byName("tb");
     EXPECT_EQ(names(vpiNet, top), std::vector<std::string>{"tb.bus"});
-    EXPECT_EQ(names(vpiVariables, top), (std::vector<std::string>{"tb.clk", "tb.data", "tb.flag"}));
+    EXPECT_EQ(names(vpiVariables, top),
+              (std::vector<std::string>{"tb.clk", "tb.data", "tb.flag", "tb.mem", "tb.grid"}));
+    EXPECT_EQ(names(vpiRegArray, top), (std::vector<std::string>{"tb.mem", "tb.grid"}));
     EXPECT_EQ(names(vpiParameter, top), (std::vector<std::string>{"tb.WIDTH", "tb.DEPTH"}));
     EXPECT_EQ(names(vpiModule, top), std::vector<std::string>{"tb.u_child"});
-    EXPECT_EQ(vpi_iterate(vpiMemory, top), nullptr) << "nothing to iterate is no iterator";
+    EXPECT_EQ(vpi_iterate(vpiNetArray, top), nullptr) << "nothing to iterate is no iterator";
 }
 
 TEST_F(Vpi, AVectorDescribesItselfAndItsRange) {
@@ -326,6 +342,83 @@ TEST_F(Vpi, TheBitsOfAVectorIterateLeftToRight) {
     ASSERT_EQ(bits.size(), 8U);
     EXPECT_EQ(bits.front(), "tb.data[7]");
     EXPECT_EQ(bits.back(), "tb.data[0]");
+}
+
+TEST_F(Vpi, AnArrayDescribesItselfAndHasElementsRatherThanAValue) {
+    vpiHandle memory = byName("tb.mem");
+    ASSERT_NE(memory, nullptr);
+    EXPECT_EQ(vpi_get(vpiType, memory), vpiRegArray);
+    EXPECT_EQ(vpi_get(vpiSize, memory), 4) << "an array's size counts its elements";
+    EXPECT_EQ(vpi_get(vpiArray, memory), 1);
+
+    s_vpi_value bound{};
+    bound.format = vpiIntVal;
+    vpi_get_value(vpi_handle(vpiLeftRange, memory), &bound);
+    EXPECT_EQ(bound.value.integer, 3);
+    vpi_get_value(vpi_handle(vpiRightRange, memory), &bound);
+    EXPECT_EQ(bound.value.integer, 0);
+
+    s_vpi_value value{};
+    value.format = vpiHexStrVal;
+    vpi_get_value(memory, &value);
+    EXPECT_EQ(lastErrorLevel(), vpiError);
+}
+
+TEST_F(Vpi, AnElementOfAnArrayIsSelectedByItsDeclaredIndex) {
+    vpiHandle memory = byName("tb.mem");
+    vpiHandle element = vpi_handle_by_index(memory, 2);
+    ASSERT_NE(element, nullptr);
+    EXPECT_EQ(nameOf(element), "tb.mem[2]");
+    EXPECT_EQ(vpi_get(vpiType, element), vpiReg);
+    EXPECT_EQ(vpi_get(vpiSize, element), 8);
+    EXPECT_EQ(vpi_handle(vpiParent, element), memory);
+    EXPECT_EQ(hexOf(element), "22");
+
+    s_vpi_value index{};
+    index.format = vpiIntVal;
+    vpi_get_value(vpi_handle(vpiIndex, element), &index);
+    EXPECT_EQ(index.value.integer, 2);
+
+    // Writing it changes that element alone.
+    write(element, 0xAB, vpiNoDelay);
+    EXPECT_EQ(hexOf(vpi_handle_by_index(memory, 3)), "33");
+    EXPECT_EQ(hexOf(element), "ab");
+    EXPECT_EQ(hexOf(vpi_handle_by_index(memory, 1)), "11");
+
+    EXPECT_EQ(vpi_handle_by_index(memory, 4), nullptr);
+    EXPECT_EQ(lastErrorLevel(), vpiError);
+}
+
+TEST_F(Vpi, AnArrayOfTwoDimensionsIsAnArrayOfArrays) {
+    vpiHandle grid = byName("tb.grid");
+    EXPECT_EQ(vpi_get(vpiType, grid), vpiRegArray);
+    EXPECT_EQ(vpi_get(vpiMultiArray, grid), 1);
+    EXPECT_EQ(vpi_get(vpiSize, grid), 2);
+    EXPECT_EQ(names(vpiRegArray, grid), (std::vector<std::string>{"tb.grid[0]", "tb.grid[1]"}));
+
+    vpiHandle row = vpi_handle_by_index(grid, 1);
+    ASSERT_NE(row, nullptr);
+    EXPECT_EQ(vpi_get(vpiType, row), vpiRegArray);
+    EXPECT_EQ(vpi_get(vpiSize, row), 3);
+    EXPECT_EQ(vpi_handle(vpiParent, row), grid);
+    EXPECT_EQ(names(vpiReg, row),
+              (std::vector<std::string>{"tb.grid[1][2]", "tb.grid[1][1]", "tb.grid[1][0]"}));
+
+    vpiHandle cell = vpi_handle_by_index(row, 0);
+    ASSERT_NE(cell, nullptr);
+    EXPECT_EQ(vpi_get(vpiType, cell), vpiReg);
+    EXPECT_EQ(vpi_handle(vpiParent, cell), row);
+    EXPECT_EQ(hexOf(cell), "5");
+    EXPECT_EQ(hexOf(vpi_handle_by_index(vpi_handle_by_index(grid, 0), 2)), "0");
+
+    write(cell, 0xC, vpiNoDelay);
+    EXPECT_EQ(hexOf(cell), "c");
+    EXPECT_EQ(hexOf(vpi_handle_by_index(row, 1)), "4") << "and only that cell changed";
+}
+
+TEST_F(Vpi, TheElementsOfAnArrayIterateLeftToRight) {
+    EXPECT_EQ(names(vpiReg, byName("tb.mem")),
+              (std::vector<std::string>{"tb.mem[3]", "tb.mem[2]", "tb.mem[1]", "tb.mem[0]"}));
 }
 
 TEST_F(Vpi, AnInertialWriteToABitLandsInTheNbaRegion) {
@@ -454,6 +547,21 @@ TEST_F(Vpi, AValueChangeOnABitFiresOnlyWhenThatBitMoves) {
     write(byName("tb.data"), 0x7B, vpiNoDelay);
     write(byName("tb.data"), 0x7A, vpiNoDelay);
     EXPECT_EQ(record.events, (std::vector<std::string>{"1", "0"}));
+}
+
+TEST_F(Vpi, AValueChangeOnAnElementFiresOnlyWhenThatElementMoves) {
+    Record record;
+    registerCallback(
+        cbValueChange,
+        [](p_cb_data data) -> PLI_INT32 {
+            recordOf(data).events.emplace_back(data->value->value.str);
+            return 0;
+        },
+        record, vpi_handle_by_index(byName("tb.mem"), 0), 0, vpiHexStrVal);
+
+    write(vpi_handle_by_index(byName("tb.mem"), 1), 0x99, vpiNoDelay);
+    write(vpi_handle_by_index(byName("tb.mem"), 0), 0x42, vpiNoDelay);
+    EXPECT_EQ(record.events, std::vector<std::string>{"42"});
 }
 
 TEST_F(Vpi, ACallbackMayRemoveItselfWhileItRuns) {

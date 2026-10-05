@@ -141,7 +141,7 @@ private:
     struct Callback;
 
     /// What a design handle names, which is also what it is interned under.
-    enum class TargetKind : std::uint8_t { Scope, Signal, Bit, Parameter, Constant };
+    enum class TargetKind : std::uint8_t { Scope, Signal, Bit, Element, Parameter, Constant };
 
     struct Target {
         TargetKind kind = TargetKind::Scope;
@@ -152,8 +152,12 @@ private:
         /// The object or parameter index; or, for a constant, its value.
         std::int64_t second = 0;
 
-        /// The bit a bit-select selects.
+        /// The bit a bit-select selects, or an element's position among the elements at its
+        /// depth, counted from the left of the outermost dimension.
         std::uint32_t bit = 0;
+
+        /// For an element, how many unpacked dimensions have been indexed to reach it.
+        std::uint8_t depth = 0;
 
         friend auto operator<=>(const Target&, const Target&) = default;
     };
