@@ -144,6 +144,15 @@ enzan_add_golden_test(type_parameters NO_DIFFERENTIAL)
 # Packages, and package variables shared by every module that uses them.
 enzan_add_golden_test(packages)
 
+# File output, compared file by file with what Icarus Verilog writes, so it needs one.
+if(ENZAN_REFERENCE_SIMULATOR)
+  add_test(NAME golden.files
+           COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/files.sh" $<TARGET_FILE:enzan>
+                   "${ENZAN_REFERENCE_SIMULATOR}" "${CMAKE_CURRENT_SOURCE_DIR}/sv/files.sv"
+                   "${CMAKE_CURRENT_BINARY_DIR}/files")
+  set_tests_properties(golden.files PROPERTIES PASS_REGULAR_EXPRESSION "PASS files")
+endif()
+
 # Random numbers: `$random` against Icarus Verilog, and the seed and random stability.
 enzan_add_golden_test(random)
 add_test(NAME golden.random_stability

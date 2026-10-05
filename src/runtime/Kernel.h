@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <map>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -465,6 +466,31 @@ private:
     /// A windowed signal's old value, kept across its write for the comparison, sized once
     /// for the widest windowed signal.
     std::vector<eir::Word> windowScratch;
+
+    /// A file the design opened with `$fopen`: by descriptor, `0x8000'0000` with a number
+    /// above the standard streams' 0 to 2, or by one channel bit of a multichannel descriptor
+    /// when it was opened with no mode (IEEE 1800 section 21.3.1).
+    struct OpenFile {
+        std::uint32_t descriptor = 0;
+        std::unique_ptr<std::ostream> stream;
+    };
+
+    std::vector<OpenFile> openFiles;
+    std::uint32_t nextFileNumber = 3;
+    std::uint32_t nextChannel = 1;
+
+    /// Opens `name` for `$fopen`, and returns its descriptor or 0.
+    std::uint32_t openFile(const std::string& name, const std::string& mode,
+                           SourceLocation location);
+
+    /// Writes `text` to every file and standard stream `descriptor` names. `task` and
+    /// `location` are for the warning a descriptor that is not open gets.
+    void writeToDescriptor(std::uint32_t descriptor, std::string_view text, std::string_view task,
+                           SourceLocation location);
+
+    /// The open file `descriptor` names on its own, or nothing: a standard stream, a
+    /// multichannel descriptor and one not open are not.
+    OpenFile* fileFor(std::uint32_t descriptor);
 
     /// `$random`'s seed when it is called without one of its own.
     std::int32_t randomSeed = 0;

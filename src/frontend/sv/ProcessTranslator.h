@@ -251,6 +251,10 @@ private:
     std::optional<Value> translateReplication(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
 
+    /// `$fopen`, whose descriptor the runtime chooses.
+    std::optional<Value> translateFileOpen(const slang::ast::CallExpression& call,
+                                           const slang::ast::Expression& expression);
+
     /// `$random`, `$urandom` and `$urandom_range`, which the runtime draws.
     std::optional<Value> translateRandom(std::string_view name,
                                          const slang::ast::CallExpression& call,

@@ -145,6 +145,8 @@ chapter-21/21.2--display-boh.sv
 chapter-21/21.2--display.sv
 chapter-21/21.2--write-boh.sv
 chapter-21/21.2--write.sv
+chapter-21/21.3--fflush.sv
+chapter-21/21.3--file.sv
 chapter-21/21.7--dumpfile.sv
 chapter-22/22.3--resetall_basic.sv
 chapter-22/22.3--resetall_illegal.sv

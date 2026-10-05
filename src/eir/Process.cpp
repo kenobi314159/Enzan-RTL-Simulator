@@ -43,7 +43,7 @@ std::vector<std::uint32_t> writtenObjects(const std::vector<WriteExtent>& writeS
 
 bool isSystemFunction(SysTaskKind kind) noexcept {
     return kind == SysTaskKind::Random || kind == SysTaskKind::URandom
-           || kind == SysTaskKind::URandomRange;
+           || kind == SysTaskKind::URandomRange || kind == SysTaskKind::FileOpen;
 }
 
 std::string_view toString(SysTaskKind kind) noexcept {
@@ -60,6 +60,11 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::Random: return "$random";
     case SysTaskKind::URandom: return "$urandom";
     case SysTaskKind::URandomRange: return "$urandom_range";
+    case SysTaskKind::FileDisplay: return "$fdisplay";
+    case SysTaskKind::FileWrite: return "$fwrite";
+    case SysTaskKind::FileClose: return "$fclose";
+    case SysTaskKind::FileFlush: return "$fflush";
+    case SysTaskKind::FileOpen: return "$fopen";
     }
     return "$unknown";
 }

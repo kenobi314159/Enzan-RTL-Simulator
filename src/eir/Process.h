@@ -36,6 +36,14 @@ enum class SysTaskKind : std::uint8_t {
     DumpFile,
     /// `$dumpvars`: opens a logging scope.
     DumpVars,
+    /// `$fdisplay` and `$fwrite`: as Display and Write, to the file descriptor or channels
+    /// that are the first argument.
+    FileDisplay,
+    FileWrite,
+    /// `$fclose(descriptor)`.
+    FileClose,
+    /// `$fflush`, of one descriptor or, with no argument, of every file.
+    FileFlush,
 
     // System functions, run by SysFunction, which have a result.
 
@@ -48,6 +56,9 @@ enum class SysTaskKind : std::uint8_t {
     URandom,
     /// `$urandom_range(max, min)`: a draw between the two, either way round.
     URandomRange,
+    /// `$fopen(name, mode)`: a file descriptor, or with no mode a channel of a multichannel
+    /// descriptor; 0 when the file cannot be opened.
+    FileOpen,
 };
 
 std::string_view toString(SysTaskKind kind) noexcept;

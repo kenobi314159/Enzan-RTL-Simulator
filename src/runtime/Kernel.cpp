@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -152,6 +153,11 @@ void Kernel::initialize() {
         state.randomState = processRandomState(options.seed, state.name);
     randomSeed = static_cast<std::int32_t>(options.seed);
     seedReported = false;
+    // Files a previous run opened are closed, which flushes what it wrote, and are opened
+    // again, from the start, by the run that follows.
+    openFiles.clear();
+    nextFileNumber = 3;
+    nextChannel = 1;
     for (std::vector<EdgeWaiter>& waiters : edgeWaiters) waiters.clear();
     std::ranges::fill(frameStorage, eir::Word{});
 
@@ -826,6 +832,19 @@ void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallInde
         arguments.push_back(FormatArgument{.value = value, .isSigned = argument.isSigned});
     }
 
+    // The file tasks take a descriptor first, which is not part of what they print. An
+    // unknown bit in it names no file.
+    const bool toFile = descriptor.kind == eir::SysTaskKind::FileDisplay
+                        || descriptor.kind == eir::SysTaskKind::FileWrite
+                        || descriptor.kind == eir::SysTaskKind::FileClose
+                        || descriptor.kind == eir::SysTaskKind::FileFlush;
+    std::uint32_t fileDescriptor = 0;
+    if (toFile && !arguments.empty()) {
+        const eir::ConstBitRef value = arguments.front().value;
+        fileDescriptor = static_cast<std::uint32_t>(value.aval()[0] & ~value.bval()[0]);
+        arguments.erase(arguments.begin());
+    }
+
     const elab::Instance& instance =
         designImage->elaboratedDesign().instances()[state.instanceIndex];
     const FormatContext context{
@@ -870,9 +889,40 @@ void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallInde
         for (ValueChangeListener* listener : listeners) listener->onDumpVars();
         return;
 
+    case eir::SysTaskKind::FileDisplay:
+        writeToDescriptor(fileDescriptor, text + '\n', "$fdisplay", descriptor.location);
+        return;
+
+    case eir::SysTaskKind::FileWrite:
+        writeToDescriptor(fileDescriptor, text, "$fwrite", descriptor.location);
+        return;
+
+    case eir::SysTaskKind::FileClose:
+        if (fileFor(fileDescriptor) != nullptr) {
+            std::erase_if(openFiles, [fileDescriptor](const OpenFile& file) {
+                return file.descriptor == fileDescriptor;
+            });
+        } else {
+            diagnostics.report(DiagCode::FileNotOpen, descriptor.location, "$fclose",
+                               fileDescriptor);
+        }
+        return;
+
+    case eir::SysTaskKind::FileFlush:
+        if (descriptor.arguments.empty()) {
+            transcriptStream().flush();
+            for (OpenFile& file : openFiles) file.stream->flush();
+        } else if (OpenFile* file = fileFor(fileDescriptor)) {
+            file->stream->flush();
+        } else {
+            transcriptStream().flush();
+        }
+        return;
+
     case eir::SysTaskKind::Random:
     case eir::SysTaskKind::URandom:
     case eir::SysTaskKind::URandomRange:
+    case eir::SysTaskKind::FileOpen:
         ENZAN_ASSERT(false, "a system function run as a system task; run the EIR verifier");
         return;
     }
@@ -894,6 +944,24 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCall
         if (value.width() < 64) number &= (std::uint64_t{1} << value.width()) - 1;
         return number;
     };
+
+    if (descriptor.kind == eir::SysTaskKind::FileOpen) {
+        const auto text = [&](std::size_t index) {
+            const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[index];
+            return toAsciiString(
+                compiled.isConstant
+                    ? body.constant(compiled.location)
+                    : frameAt(state.frameOffset + compiled.location, compiled.bitWidth));
+        };
+        const std::uint32_t opened =
+            openFile(text(0), descriptor.arguments.size() > 1 ? text(1) : std::string(),
+                     descriptor.location);
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        result.aval()[0] = opened;
+        result.canonicalize();
+        return;
+    }
 
     if (!seedReported) {
         diagnostics.report(DiagCode::RandomSeed, descriptor.location, options.seed);
@@ -934,6 +1002,65 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCall
     std::ranges::fill(result.bvalWords(), 0);
     result.aval()[0] = value;
     result.canonicalize();
+}
+
+std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,
+                               SourceLocation location) {
+    // Writing only: a file opened for reading has nothing that reads it yet, and opening one
+    // anyway would let a testbench read as if it had read nothing.
+    const bool channel = mode.empty();
+    if (!channel && !mode.starts_with('w') && !mode.starts_with('a')) {
+        diagnostics.report(DiagCode::FileNotOpened, location, name, mode,
+                           "Enzan opens files for writing only");
+        return 0;
+    }
+    if (channel && nextChannel > 30) {
+        diagnostics.report(DiagCode::FileNotOpened, location, name, mode,
+                           "all 30 channels of a multichannel descriptor are in use");
+        return 0;
+    }
+
+    auto stream = std::make_unique<std::ofstream>(
+        name, mode.starts_with('a') ? std::ios::out | std::ios::app : std::ios::out);
+    if (!stream->is_open()) {
+        diagnostics.report(DiagCode::FileNotOpened, location, name, mode,
+                           "the file could not be created");
+        return 0;
+    }
+
+    const std::uint32_t descriptor =
+        channel ? std::uint32_t{1} << nextChannel++ : 0x8000'0000U | nextFileNumber++;
+    openFiles.push_back(OpenFile{.descriptor = descriptor, .stream = std::move(stream)});
+    return descriptor;
+}
+
+Kernel::OpenFile* Kernel::fileFor(std::uint32_t descriptor) {
+    const auto found = std::ranges::find(openFiles, descriptor, &OpenFile::descriptor);
+    return found != openFiles.end() ? &*found : nullptr;
+}
+
+void Kernel::writeToDescriptor(std::uint32_t descriptor, std::string_view text,
+                               std::string_view task, SourceLocation location) {
+    if ((descriptor & 0x8000'0000U) != 0) {
+        // A file descriptor: the standard streams, or one file.
+        if (descriptor == 0x8000'0001U) {
+            transcriptStream() << text;
+        } else if (descriptor == 0x8000'0002U) {
+            std::cerr << text;
+        } else if (OpenFile* file = fileFor(descriptor)) {
+            *file->stream << text;
+        } else {
+            diagnostics.report(DiagCode::FileNotOpen, location, task, descriptor);
+        }
+        return;
+    }
+
+    // A multichannel descriptor: bit 0 is the standard output, each other bit one file.
+    if ((descriptor & 1U) != 0) transcriptStream() << text;
+    for (OpenFile& file : openFiles) {
+        if ((file.descriptor & 0x8000'0000U) == 0 && (descriptor & file.descriptor) != 0)
+            *file.stream << text;
+    }
 }
 
 void Kernel::reportDeltaLimit() {

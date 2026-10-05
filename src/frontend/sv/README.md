@@ -93,8 +93,9 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - deferred assertions (`assert #0`, `assert final`) and concurrent ones (`assert property`),
   which are SVA; immediate assertions work;
 - every system function but `$time`, `$signed`, `$unsigned`, `$bits`, `$clog2`, `$isunknown`,
-  `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom` and `$urandom_range`, and those
-  slang folds to a constant;
+  `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom`, `$urandom_range` and `$fopen`,
+  and those slang folds to a constant. Files are written, with `$fdisplay`, `$fwrite`,
+  `$fflush` and `$fclose`, and not read: `$fopen` for reading gives 0 with a warning;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
 - an event control on an expression other than a signal or a constant select of one, such
   as `@(a & b)` or `@(posedge clk[i])` with `i` a variable;

@@ -55,6 +55,18 @@ std::optional<eir::EdgeKind> toEdgeKind(ast::EdgeKind edge) {
     return std::nullopt;
 }
 
+/// The string literal `expression` is, under any conversions slang wrapped it in, or null.
+///
+/// A literal passed where a `string` is expected arrives converted to one, and a system task
+/// that reads its format or file name from a literal has to see through that.
+const ast::StringLiteral* stringLiteralOf(const ast::Expression& expression) {
+    const ast::Expression* current = &expression;
+    while (current->kind == ast::ExpressionKind::Conversion)
+        current = &current->as<ast::ConversionExpression>().operand();
+    return current->kind == ast::ExpressionKind::StringLiteral ? &current->as<ast::StringLiteral>()
+                                                               : nullptr;
+}
+
 /// True when evaluating `expression` can change something: an assignment, an increment or a
 /// decrement, or a call, other than to a system function that only computes. An operand the
 /// language may leave unevaluated must not be evaluated when this holds, since its effect
@@ -2221,6 +2233,35 @@ bool ProcessTranslator::refuseDelayedWrite(const ast::Expression& target) {
 }
 
 std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateFileOpen(const ast::CallExpression& call,
+                                     const ast::Expression& expression) {
+    // The name and the mode are each a string literal or a vector holding one, which the
+    // runtime reads as characters.
+    eir::SysTaskCall descriptor;
+    descriptor.kind = eir::SysTaskKind::FileOpen;
+    descriptor.location = module->convertLocation(expression.sourceRange.start());
+    for (const ast::Expression* argument : call.arguments()) {
+        // slang converts a literal to `string`, which has no storage here; its characters do.
+        const ast::StringLiteral* literal = stringLiteralOf(*argument);
+        const std::optional<Value> value =
+            translateExpression(literal != nullptr ? *literal : *argument);
+        if (!value.has_value()) return std::nullopt;
+        descriptor.arguments.push_back(
+            eir::SysTaskArgument{.value = eir::Operand::reg(value->reg), .type = value->type});
+    }
+
+    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    if (!resultType.has_value()) return std::nullopt;
+    const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
+    process.sysCalls.push_back(std::move(descriptor));
+    const eir::Type word = eir::Type::bits(32, false, false);
+    const std::uint32_t result = newRegister(word);
+    emit(eir::Instruction::make(eir::Opcode::SysFunction, eir::Operand::reg(result),
+                                eir::Operand::sysCall(index)));
+    return coerce(Value{.reg = result, .type = word}, *resultType);
+}
+
+std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateRandom(std::string_view name, const ast::CallExpression& call,
                                    const ast::Expression& expression) {
     eir::SysTaskCall descriptor;
@@ -2327,6 +2368,7 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
 
         if (name == "$random" || name == "$urandom" || name == "$urandom_range")
             return translateRandom(name, call, expression);
+        if (name == "$fopen") return translateFileOpen(call, expression);
 
         // `$clog2` of a variable, such as a loop index; slang has folded every constant one.
         if (name == "$clog2" && call.arguments().size() == 1) {
@@ -2702,22 +2744,6 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
     return false;
 }
 
-namespace {
-
-/// The string literal `expression` is, under any conversions slang wrapped it in, or null.
-///
-/// A literal passed where a `string` is expected arrives converted to one, and a system task
-/// that reads its format or file name from a literal has to see through that.
-const ast::StringLiteral* stringLiteralOf(const ast::Expression& expression) {
-    const ast::Expression* current = &expression;
-    while (current->kind == ast::ExpressionKind::Conversion)
-        current = &current->as<ast::ConversionExpression>().operand();
-    return current->kind == ast::ExpressionKind::StringLiteral ? &current->as<ast::StringLiteral>()
-                                                               : nullptr;
-}
-
-} // namespace
-
 bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNode) {
     const auto& call = expressionNode.as<ast::CallExpression>();
     const std::string_view name = call.getSubroutineName();
@@ -2725,11 +2751,27 @@ bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNod
     eir::SysTaskKind kind = eir::SysTaskKind::Display;
     bool skipFirstArgument = false;
     bool ignoreArguments = false;
+    // A file task's first argument is the descriptor, a value even when a format follows.
+    bool descriptorFirst = false;
 
     if (name == "$display" || name == "$displayb" || name == "$displayo" || name == "$displayh") {
         kind = eir::SysTaskKind::Display;
     } else if (name == "$write" || name == "$writeb" || name == "$writeo" || name == "$writeh") {
         kind = eir::SysTaskKind::Write;
+    } else if (name == "$fdisplay" || name == "$fdisplayb" || name == "$fdisplayo"
+               || name == "$fdisplayh") {
+        kind = eir::SysTaskKind::FileDisplay;
+        descriptorFirst = true;
+    } else if (name == "$fwrite" || name == "$fwriteb" || name == "$fwriteo"
+               || name == "$fwriteh") {
+        kind = eir::SysTaskKind::FileWrite;
+        descriptorFirst = true;
+    } else if (name == "$fclose") {
+        kind = eir::SysTaskKind::FileClose;
+        descriptorFirst = true;
+    } else if (name == "$fflush") {
+        kind = eir::SysTaskKind::FileFlush;
+        descriptorFirst = true;
     } else if (name == "$finish" || name == "$stop") {
         // `$stop` would return control to an interactive prompt, and there is none. Treating
         // it as `$finish` ends the run instead of ignoring it, which is the safer of the two
@@ -2773,6 +2815,13 @@ bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNod
 
     if (!ignoreArguments) {
         bool first = true;
+        if (descriptorFirst && !arguments.empty()) {
+            const std::optional<Value> value = translateExpression(*arguments.front());
+            if (!value.has_value()) return false;
+            descriptor.arguments.push_back(
+                eir::SysTaskArgument{.value = eir::Operand::reg(value->reg), .type = value->type});
+            arguments = arguments.subspan(1);
+        }
         for (const ast::Expression* argument : arguments) {
             if (const ast::StringLiteral* literal = stringLiteralOf(*argument);
                 first && literal != nullptr) {
