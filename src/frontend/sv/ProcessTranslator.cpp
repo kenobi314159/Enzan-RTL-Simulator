@@ -1234,6 +1234,11 @@ ProcessTranslator::translateConcatenation(const ast::Expression& expression) {
     // Operands are written most significant first, which is the order they appear in.
     std::uint32_t offset = resultType->bitWidth();
     for (const ast::Expression* operand : concatenation.operands()) {
+        // A replication with a count of zero contributes nothing, which IEEE 1800 section
+        // 11.4.12.1 allows inside a larger concatenation; a parameterised width that comes to
+        // zero is how one usually appears.
+        if (operand->type->isVoid() || operand->type->getBitWidth() == 0) continue;
+
         const std::optional<Value> value = translateExpression(*operand);
         if (!value.has_value()) return std::nullopt;
 

@@ -6,6 +6,7 @@
 
 module tb;
     int failures = 0;
+    localparam int NONE = 0;
 
     task automatic expect_eq8(input logic [7:0] got, input logic [7:0] want,
                               input int line_number);
@@ -166,6 +167,12 @@ module tb;
         r = {narrow, 4'b0101};
         if (r !== 8'b1010_0101) begin
             $display("FAIL: concatenation, got %b", r);
+            failures = failures + 1;
+        end
+        // A replication counted to zero adds nothing to the concatenation around it.
+        r = {narrow, {NONE{1'b1}}, 4'b0101};
+        if (r !== 8'b1010_0101) begin
+            $display("FAIL: a zero-count replication, got %b", r);
             failures = failures + 1;
         end
         r = {2{4'b1100}};
