@@ -38,17 +38,10 @@ if ! "$python" -c 'import psutil' 2>/dev/null; then
     exit 1
 fi
 
-# The suite at the pinned revision, fetched once and kept: a commit never moves.
+# The suite at the pinned revision, fetched once and kept.
 readonly source="$work/sv-tests-$revision"
-if [[ ! -f "$source/tools/runner" ]]; then
-    rm -rf "$source"
-    mkdir -p "$source"
-    { git -C "$source" init --quiet \
-        && git -C "$source" fetch --quiet --depth 1 https://github.com/chipsalliance/sv-tests.git \
-            "$revision" \
-        && git -C "$source" checkout --quiet FETCH_HEAD; } \
-        || { printf 'could not fetch sv-tests %s\n' "$revision" >&2; exit 1; }
-fi
+"$here/../../fetch-revision.sh" https://github.com/chipsalliance/sv-tests.git "$revision" \
+    "$source" || exit 1
 
 readonly results="$work/results"
 rm -rf "$results" "$work/out"
