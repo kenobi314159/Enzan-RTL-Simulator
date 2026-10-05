@@ -233,6 +233,10 @@ private:
     bool translateReturn(const slang::ast::Statement& statement);
     bool translateImmediateAssertion(const slang::ast::Statement& statement);
 
+    /// `wait (condition) statement`: tests the condition and, while it is not true, waits for
+    /// a change to anything it reads and tests it again (IEEE 1800 section 9.4.3).
+    bool translateWait(const slang::ast::Statement& statement);
+
     /// Emits the suspension for a timing control. Returns false on an unsupported one.
     bool translateTimingControl(const slang::ast::TimingControl& timing);
 

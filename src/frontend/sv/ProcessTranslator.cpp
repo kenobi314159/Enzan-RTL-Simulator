@@ -423,12 +423,55 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
 
     case ast::StatementKind::Timed: return translateTimed(statement);
 
+    case ast::StatementKind::Wait: return translateWait(statement);
+
     default:
         module->reportUnsupported(statement.sourceRange.start(),
                                   std::string(toString(statement.kind)) + " statements");
         failed = true;
         return false;
     }
+}
+
+bool ProcessTranslator::translateWait(const ast::Statement& statement) {
+    const auto& wait = statement.as<ast::WaitStatement>();
+
+    const std::uint32_t test = newBlock("wait-test");
+    const std::uint32_t blocked = newBlock("wait-blocked");
+    const std::uint32_t resume = newBlock("wait-done");
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(test)));
+
+    // What the condition reads is what can make it true, so those are what it waits on.
+    selectBlock(test);
+    const std::size_t readsBefore = reads.size();
+    const std::optional<Value> condition = translateExpression(wait.cond);
+    if (!condition.has_value()) return false;
+    std::vector<std::uint32_t> watched(reads.begin() + static_cast<std::ptrdiff_t>(readsBefore),
+                                       reads.end());
+    std::ranges::sort(watched);
+    const auto duplicates = std::ranges::unique(watched);
+    watched.erase(duplicates.begin(), duplicates.end());
+    emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(condition->reg),
+                                eir::Operand::block(resume), eir::Operand::block(blocked)));
+
+    // A condition that reads nothing never changes, so a false one waits for ever, which is
+    // what ending the process amounts to.
+    selectBlock(blocked);
+    if (watched.empty()) {
+        emit(eir::Instruction::make(eir::Opcode::Return));
+    } else {
+        std::vector<eir::SensitivityEntry> entries;
+        entries.reserve(watched.size());
+        for (const std::uint32_t objectIndex : watched)
+            entries.push_back(eir::SensitivityEntry{.objectIndex = objectIndex});
+        const auto list = static_cast<std::uint32_t>(process.eventLists.size());
+        process.eventLists.push_back(std::move(entries));
+        emit(eir::Instruction::make(eir::Opcode::WaitEvents, {}, eir::Operand::immediate(list),
+                                    eir::Operand::block(test)));
+    }
+
+    selectBlock(resume);
+    return translateStatement(wait.stmt);
 }
 
 bool ProcessTranslator::translateReturn(const ast::Statement& statement) {
