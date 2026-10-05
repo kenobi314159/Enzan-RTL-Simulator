@@ -562,6 +562,70 @@ void modulo(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned) {
     copy(dst, remainder.ref());
 }
 
+void power(BitRef dst, ConstBitRef base, ConstBitRef exponent, bool baseSigned,
+           bool exponentSigned) {
+    ENZAN_ASSERT(dst.width() == base.width(), "power requires the base and result to be equal");
+
+    if (base.hasUnknown() || exponent.hasUnknown()) {
+        setUnknown(dst);
+        return;
+    }
+
+    const auto setInteger = [&dst](std::int64_t value) {
+        std::ranges::fill(dst.bvalWords(), 0);
+        std::ranges::fill(dst.avalWords(), value < 0 ? ~Word{0} : 0);
+        dst.aval()[0] = static_cast<Word>(value);
+        dst.canonicalize();
+    };
+
+    // A negative exponent, which only a signed one can be: IEEE 1800 table 11-4.
+    if (exponentSigned && exponent.get(exponent.width() - 1) == Logic::One) {
+        const bool isOne = base.aval()[0] == 1
+                           && std::all_of(base.avalWords().begin() + 1, base.avalWords().end(),
+                                          [](Word word) { return word == 0; });
+        if (base.isZero()) {
+            setUnknown(dst);
+        } else if (isOne) {
+            setInteger(1);
+        } else if (baseSigned && base.isAll(Logic::One)) {
+            setInteger((exponent.aval()[0] & 1U) != 0 ? -1 : 1);
+        } else {
+            setInteger(0);
+        }
+        return;
+    }
+
+    // Square and multiply from the exponent's top set bit down, modulo 2 to the width.
+    std::uint32_t top = exponent.width();
+    while (top > 0 && exponent.get(top - 1) == Logic::Zero) --top;
+
+    if (dst.width() <= BitsPerWord) {
+        const Word factor = base.aval()[0];
+        Word result = 1;
+        for (std::uint32_t bit = top; bit > 0; --bit) {
+            result *= result;
+            if (exponent.get(bit - 1) == Logic::One) result *= factor;
+        }
+        dst.aval()[0] = result;
+        dst.bval()[0] = 0;
+        dst.canonicalize();
+        return;
+    }
+
+    // Wide values go through `multiply`, which allocates, as it does for every wide product.
+    BitVector result = BitVector::fromUInt64(1, dst.width());
+    BitVector product(dst.width());
+    for (std::uint32_t bit = top; bit > 0; --bit) {
+        multiply(product.mutableRef(), result.ref(), result.ref());
+        copy(result.mutableRef(), product.ref());
+        if (exponent.get(bit - 1) == Logic::One) {
+            multiply(product.mutableRef(), result.ref(), base);
+            copy(result.mutableRef(), product.ref());
+        }
+    }
+    copy(dst, result.ref());
+}
+
 void negate(BitRef dst, ConstBitRef a) {
     ENZAN_ASSERT(dst.width() == a.width(), "negate requires equal widths");
 

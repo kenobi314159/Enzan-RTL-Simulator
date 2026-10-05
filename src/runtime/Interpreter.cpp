@@ -282,6 +282,14 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
                                      reg(instruction.b, instruction.bWidth));
             break;
 
+        case eir::Opcode::Power:
+            // The third operand is an immediate saying whether the exponent is signed, which
+            // the one signedness flag of an instruction cannot also carry.
+            bitops::power(
+                reg(instruction.dst, instruction.dstWidth), reg(instruction.a, instruction.aWidth),
+                reg(instruction.b, instruction.bWidth), instruction.isSigned, instruction.c != 0);
+            break;
+
         case eir::Opcode::CaseZMatch:
             bitops::caseZMatch(reg(instruction.dst, instruction.dstWidth),
                                reg(instruction.a, instruction.aWidth),

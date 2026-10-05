@@ -124,6 +124,12 @@ ENZAN_OPCODE(Divide, "div", true, 2,
              "rather than as undefined behaviour")
 ENZAN_OPCODE(Modulo, "mod", true, 2, "as Divide with `urem` or `srem`")
 ENZAN_OPCODE(Negate, "neg", true, 1, "as Add with `sub` from zero")
+ENZAN_OPCODE(Power, "pow", true, 3,
+             "a branch on either operand's bval plane to the all-X path, a branch on the "
+             "exponent's sign when the immediate third operand says it is signed to the "
+             "table of IEEE 1800 section 11.4.3 for a negative exponent, then square and "
+             "multiply over the exponent's bits with `mul`; wide values call the runtime "
+             "helper, as Multiply does")
 
 // --- Shifts ----------------------------------------------------------------
 

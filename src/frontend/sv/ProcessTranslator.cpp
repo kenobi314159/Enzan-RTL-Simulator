@@ -941,6 +941,20 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
         // zeroes in from the right.
         return shift(eir::Opcode::ShiftLeft);
     case ast::BinaryOperator::LogicalShiftRight: return shift(eir::Opcode::ShiftRightLogical);
+
+    case ast::BinaryOperator::Power: {
+        // The exponent is self-determined, as a shift amount is, and its signedness decides
+        // what a negative one means, so it travels as an immediate.
+        const Value base = coerce(*left, *resultType);
+        const std::uint32_t result = newRegister(*resultType);
+        eir::Instruction instruction =
+            eir::Instruction::make(eir::Opcode::Power, eir::Operand::reg(result),
+                                   eir::Operand::reg(base.reg), eir::Operand::reg(right->reg),
+                                   eir::Operand::immediate(right->type.isSigned() ? 1U : 0U));
+        instruction.isSigned = resultType->isSigned();
+        emit(instruction);
+        return Value{.reg = result, .type = *resultType};
+    }
     case ast::BinaryOperator::ArithmeticShiftRight:
         return shift(left->type.isSigned() ? eir::Opcode::ShiftRightArithmetic
                                            : eir::Opcode::ShiftRightLogical);

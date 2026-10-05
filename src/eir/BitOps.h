@@ -135,6 +135,14 @@ void divide(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned);
 /// `dst = a % b`, with the sign of `a` when signed. A zero divisor yields all X.
 void modulo(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned);
 
+/// `dst = base ** exponent`, which IEEE 1800 section 11.4.3 defines in full: X when either
+/// operand has an unknown bit; for a negative exponent, which only a signed one can be, X for
+/// a zero base, 1 for a base of 1, alternately -1 and 1 for a signed base of -1, and 0 for any
+/// other; otherwise the power modulo 2 to the width. `dst` and `base` have one width, and the
+/// exponent is self-determined.
+void power(BitRef dst, ConstBitRef base, ConstBitRef exponent, bool baseSigned,
+           bool exponentSigned);
+
 /// `dst = -a`, two's complement, wrapping at the width.
 void negate(BitRef dst, ConstBitRef a);
 

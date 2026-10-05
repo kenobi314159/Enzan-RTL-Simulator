@@ -73,4 +73,3 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - `trireg`, `interconnect` and user-defined nettypes, which have no resolution table;
 - a drive strength other than strong, such as `assign (weak0, weak1) w = a`, because
   resolution has no strength model;
-- `**`.

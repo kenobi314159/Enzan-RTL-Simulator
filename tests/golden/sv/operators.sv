@@ -189,6 +189,14 @@ module tb;
             failures = failures + 1;
         end
 
+        // `**` wraps at the width, and an unknown operand makes it x.
+        a = 8'd3;
+        narrow = 4'd4;
+        if ((a ** narrow) !== 8'd81 || (a ** 4'bx000) !== 8'bxxxx_xxxx) begin
+            $display("FAIL: 3 ** 4 should be 81, got %0d", a ** narrow);
+            failures = failures + 1;
+        end
+
         // A bit known on both sides and different settles `==` whatever the unknown bits hold,
         // where a relation they could decide is x (IEEE 1800 section 11.4.5).
         narrow = 4'b1x00;

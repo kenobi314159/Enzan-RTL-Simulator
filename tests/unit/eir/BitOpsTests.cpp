@@ -776,6 +776,54 @@ TEST(BitOpsConditional, MergeAcrossLimbs) {
 }
 
 // ---------------------------------------------------------------------------
+// Power (IEEE 1800 section 11.4.3, table 11-4)
+// ---------------------------------------------------------------------------
+
+std::string applyPower(std::string_view base, std::string_view exponent, bool baseSigned,
+                       bool exponentSigned) {
+    const BitVector a = literal(base);
+    const BitVector b = literal(exponent);
+    BitVector result(a.width());
+    bitops::power(result.mutableRef(), a.ref(), b.ref(), baseSigned, exponentSigned);
+    return binary(result.ref());
+}
+
+TEST(BitOpsPower, RaisesModuloTheWidth) {
+    EXPECT_EQ(applyPower("8'd3", "4'd4", false, false), "01010001"); // 81
+    EXPECT_EQ(applyPower("8'd2", "4'd9", false, false), "00000000"); // 512 wraps to 0
+    EXPECT_EQ(applyPower("8'd7", "4'd0", false, false), "00000001");
+    EXPECT_EQ(applyPower("8'd0", "4'd0", false, false), "00000001");
+    EXPECT_EQ(applyPower("8'd0", "4'd3", false, false), "00000000");
+}
+
+TEST(BitOpsPower, AnUnknownOperandMakesTheWholeResultX) {
+    EXPECT_EQ(applyPower("8'd3", "4'b0x01", false, false), "xxxxxxxx");
+    EXPECT_EQ(applyPower("8'b0000001z", "4'd2", false, false), "xxxxxxxx");
+}
+
+TEST(BitOpsPower, ANegativeExponentFollowsTheStandardsTable) {
+    // Only a signed exponent can be negative; 4'b1101 is -3 signed and 13 unsigned.
+    EXPECT_EQ(applyPower("8'd0", "4'b1101", true, true), "xxxxxxxx");
+    EXPECT_EQ(applyPower("8'd1", "4'b1101", true, true), "00000001");
+    EXPECT_EQ(applyPower("8'hff", "4'b1101", true, true), "11111111"); // -1 ** odd
+    EXPECT_EQ(applyPower("8'hff", "4'b1110", true, true), "00000001"); // -1 ** even
+    EXPECT_EQ(applyPower("8'd5", "4'b1101", true, true), "00000000");
+    // An unsigned base of all ones is 255, not -1.
+    EXPECT_EQ(applyPower("8'hff", "4'b1101", false, true), "00000000");
+    // The same bits as an unsigned exponent are 13.
+    EXPECT_EQ(applyPower("8'd1", "4'b1101", false, false), "00000001");
+}
+
+TEST(BitOpsPower, WideValuesGiveTheSameAnswerAsNarrowOnes) {
+    // 3 ** 50 modulo 2 ** 96, checked against Icarus Verilog.
+    const BitVector base = literal("96'd3");
+    const BitVector exponent = literal("7'd50");
+    BitVector result(96);
+    bitops::power(result.mutableRef(), base.ref(), exponent.ref(), false, false);
+    EXPECT_EQ(enzan::eir::toString(result.ref(), Radix::Hexadecimal), "0000980553f0db2fd09de3c9");
+}
+
+// ---------------------------------------------------------------------------
 // Resolution (DESIGN_GUIDE.md section 3.7; IEEE 1800 tables 6-2 to 6-4)
 // ---------------------------------------------------------------------------
 
