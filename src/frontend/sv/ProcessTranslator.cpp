@@ -286,13 +286,30 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
 
     case ast::StatementKind::VariableDeclaration: {
         // A declaration's storage is created on demand when something references it, and an
-        // initialiser on a procedural variable is its time-zero value. A local of an inlined
-        // subroutine is automatic instead, and its initialiser runs where it is declared, on
-        // every call.
+        // initialiser on a static procedural variable is its time-zero value. An automatic
+        // variable's initialiser runs where it is declared, every time: into its register for a
+        // local of an inlined subroutine, and by a store for one that is state.
         const ast::VariableSymbol& variable = statement.as<ast::VariableDeclStatement>().symbol;
         const Value* local = localFor(variable);
         const ast::Expression* initializer = variable.getInitializer();
-        if (local == nullptr || initializer == nullptr) return true;
+        if (initializer == nullptr) return true;
+
+        if (local == nullptr) {
+            if (variable.lifetime != ast::VariableLifetime::Automatic) return true;
+            const std::optional<std::uint32_t> objectIndex = module->objectFor(variable);
+            if (!objectIndex.has_value()) {
+                failed = true;
+                return false;
+            }
+            const std::optional<Value> value = translateExpression(*initializer);
+            if (!value.has_value()) return false;
+            const eir::Type objectType = module->definition().objects[*objectIndex].type;
+            const Value stored = coerceState(coerce(*value, objectType), objectType);
+            noteWholeWrite(*objectIndex);
+            emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(*objectIndex),
+                                        eir::Operand::reg(stored.reg)));
+            return true;
+        }
 
         const Value target = *local;
         const std::optional<Value> value = translateExpression(*initializer);

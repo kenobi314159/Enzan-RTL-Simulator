@@ -655,13 +655,18 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     }
 
     // A net's initialiser is a continuous assignment, `wire w = a & b;`, translated with the
-    // module's other continuous assignments. A variable's is a time-zero value when it is
-    // constant. A non-constant one is a static initialisation that has to run, which needs the
-    // process machinery an `initial` block gets and is reported rather than silently dropped.
+    // module's other continuous assignments. An automatic variable's runs where it is declared,
+    // every time, and the process translator emits it there. A static variable's is a time-zero
+    // value when it is constant. A non-constant one is a static initialisation that has to run,
+    // which needs the process machinery an `initial` block gets and is reported rather than
+    // silently dropped.
     const ast::Expression* initializer = symbol.getInitializer();
+    const bool automatic =
+        ast::VariableSymbol::isKind(symbol.kind)
+        && symbol.as<ast::VariableSymbol>().lifetime == ast::VariableLifetime::Automatic;
     if (initializer != nullptr && symbol.kind == slang::ast::SymbolKind::Net) {
         netAssignments.push_back(&symbol.as<ast::NetSymbol>());
-    } else if (initializer != nullptr) {
+    } else if (initializer != nullptr && !automatic) {
         ast::EvalContext evalContext(symbol);
         const slang::ConstantValue value = initializer->eval(evalContext);
         if (std::optional<eir::BitVector> initial = constantBits(value, symbol.getType())) {

@@ -120,6 +120,9 @@ enzan_add_golden_test(interfaces NO_DIFFERENTIAL)
 # Arrays of instances, with connections split across the elements.
 enzan_add_golden_test(instance_arrays)
 
+# Automatic variables in blocks of static processes, which Icarus Verilog does not implement.
+enzan_add_golden_test(automatic NO_DIFFERENTIAL)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------
