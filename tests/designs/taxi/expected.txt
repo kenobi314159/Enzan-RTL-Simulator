@@ -1,0 +1,15 @@
+# taxi AXI-stream testbenches and test cases that are not expected to pass under Enzan, each with
+# the reason. Anything else that fails is a regression.
+#
+#   <testbench>                  the whole testbench is not run
+#   <testbench> <test case>      the case runs and its failure is expected
+#
+# slang refuses the design: it reads interface parameters through a modport and through an array
+# of interfaces without an index, which IEEE 1800 does not allow and Verilator accepts.
+taxi_axis_switch
+#
+# The first case of each reads the sink's tready on the first clock edge, before the sink has
+# ever driven it. It is X in a four-state simulator; taxi is run against Verilator, which has no
+# X, and the cases after the first find it already driven.
+taxi_axis_adapter run_test/payload_lengths=size_list/payload_data=incrementing_payload/idle_inserter=None/backpressure_inserter=None
+taxi_axis_pad run_test/payload_lengths=size_list/payload_data=incrementing_payload/pad_en=True/idle_inserter=None/backpressure_inserter=None

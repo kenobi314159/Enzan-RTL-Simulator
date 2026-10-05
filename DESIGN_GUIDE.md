@@ -2257,7 +2257,10 @@ Each design is a directory under `tests/designs/` holding the revision it is pin
 own testbenches and says PASS or FAIL for each. A testbench passes when it reports success
 and, where Icarus Verilog runs it, when Enzan's transcript is the reference's line for line, so
 a pass is a design checking its own answers and two simulators agreeing on them. Testbenches
-the reference cannot run are held to their own verdicts alone, and the harness says why.
+the reference cannot run are held to their own verdicts alone, and the harness says why. A
+testbench or a case that cannot pass for a reason outside Enzan — a design slang rightly
+refuses, a testbench that assumes a two-state simulator — is named, with the reason, in the
+design's `expected.txt`; any other failure fails the run.
 
 ### 14.6 cocotb regression
 

@@ -253,7 +253,7 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/pip install --quiet -r tests/conformance/cocotb/requirements.txt \
-            -r tests/conformance/sv-tests/requirements.txt
+            -r tests/conformance/sv-tests/requirements.txt -r tests/designs/taxi/requirements.txt
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -323,14 +323,23 @@ jobs:
       # The design regression (section 14.5): each design's own testbenches, held to their own
       # verdicts and, where Icarus Verilog can run them, to its transcript. Under a second here.
       - name: Design regression
-        run: tests/designs/aes/run.sh build/gcc-release/bin/enzan "$(command -v iverilog)" build/designs
+        env:
+          COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          status=0
+          tests/designs/aes/run.sh build/gcc-release/bin/enzan "$(command -v iverilog)" \
+            build/designs/aes || status=1
+          tests/designs/taxi/run.sh build/gcc-release/bin/enzan build/designs/taxi || status=1
+          exit "$status"
 
       - name: Keep the design regression logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: design-regression-logs
-          path: build/designs/*.*
+          path: |
+            build/designs/aes/*.*
+            build/designs/taxi/*.log
 
       # The benchmark is a target rather than a test, because a measurement taken alongside
       # three hundred other tests compares with nothing. It runs here so that a change which
