@@ -400,8 +400,10 @@ bool ProcessTranslator::translateCase(const ast::Statement& statement) {
             const Value left = coerce(*selector, comparisonType);
             const Value right = coerce(*itemValue, comparisonType);
 
+            // An item matches by `===`, not `==` (IEEE 1800 section 12.5): `2'bx1` matches a
+            // selector of `2'bx1`, and an unknown selector matches no item that differs from it.
             const std::uint32_t matched = newRegister(eir::Type::logic());
-            emit(eir::Instruction::make(eir::Opcode::Equal, eir::Operand::reg(matched),
+            emit(eir::Instruction::make(eir::Opcode::CaseEqual, eir::Operand::reg(matched),
                                         eir::Operand::reg(left.reg), eir::Operand::reg(right.reg)));
 
             const std::uint32_t nextTest = newBlock("case-test");

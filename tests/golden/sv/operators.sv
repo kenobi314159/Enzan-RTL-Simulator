@@ -199,6 +199,19 @@ module tb;
             failures = failures + 1;
         end
 
+        // A case item matches by ===, so an item with x or z matches a selector holding the same.
+        narrow = 4'b10x1;
+        bit_result = 1'b0;
+        case (narrow)
+            4'b1001: bit_result = 1'b0;
+            4'b10x1: bit_result = 1'b1;
+            default: bit_result = 1'b0;
+        endcase
+        if (bit_result !== 1'b1) begin
+            $display("FAIL: a case item with x did not match a selector holding it");
+            failures = failures + 1;
+        end
+
         // A literal's z is z, not x: `===` tells them apart.
         narrow = 4'bz01x;
         if (narrow === 4'bx01x || narrow !== 4'bz01x) begin
