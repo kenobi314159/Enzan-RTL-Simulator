@@ -1516,4 +1516,62 @@ TEST(KernelPli, AZeroDelayEventFromReadOnlyRunsInAFurtherSlotAtTheSameTime) {
     EXPECT_EQ(hooks.log, expected);
 }
 
+// ---------------------------------------------------------------------------
+// Resolution (DESIGN_GUIDE.md section 3.7)
+// ---------------------------------------------------------------------------
+
+/// A continuous assignment of all of one one-bit object to another.
+Process continuousCopy(std::uint32_t from, std::uint32_t to) {
+    ProcessBuilder builder(ProcessKind::ContinuousAssign, "assign");
+    const std::uint32_t value = builder.reg(Type::logic());
+    builder.block("entry");
+    builder.readObject(value, from);
+    builder.store(to, value);
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+/// `wire n; assign n = a; assign n = b;`, with `a` and `b` starting at the given values.
+Simulation twoDrivers(std::string_view a, std::string_view b) {
+    ModuleDefinition definition =
+        makeTop({continuousCopy(0, 2), continuousCopy(1, 2)},
+                {Object{.name = "a", .type = Type::logic(), .initialValue = literal(a)},
+                 Object{.name = "b", .type = Type::logic(), .initialValue = literal(b)},
+                 Object{.name = "n", .type = Type::logic(), .kind = enzan::eir::ObjectKind::Net}});
+    return Simulation(designOf(std::move(definition)), "tb");
+}
+
+TEST(Kernel, TwoDriversOfANetResolveAndReResolveWhenEitherChanges) {
+    Simulation simulation = twoDrivers("1'b1", "1'bz");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "1") << "z yields to the other driver";
+
+    simulation.simulationKernel().deposit(simulation.signal("/tb/b"), literal("1'b0"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "x") << "two strong drivers disagreeing are X";
+
+    simulation.simulationKernel().deposit(simulation.signal("/tb/a"), literal("1'bz"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "0");
+}
+
+TEST(Kernel, ADepositOnAResolvedNetHoldsOnlyUntilADriverChanges) {
+    // A deposit writes the net, not a driver, so the next driver update resolves it again from
+    // what the drivers drive. That is what `vpi_put_value` without a force means, and what a
+    // cocotb test writing to a bus that the design also drives sees.
+    Simulation simulation = twoDrivers("1'b1", "1'bz");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+
+    simulation.simulationKernel().deposit(simulation.signal("/tb/n"), literal("1'b0"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "0");
+
+    simulation.simulationKernel().deposit(simulation.signal("/tb/b"), literal("1'b1"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "1");
+}
+
 } // namespace
