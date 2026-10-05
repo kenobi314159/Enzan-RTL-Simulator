@@ -1165,7 +1165,10 @@ ProcessTranslator::lowBitOfRangeSelect(const ast::RangeSelectExpression& select,
             failed = true;
             return std::nullopt;
         }
-        return constantOffset(std::min(*left, *right) - rangeLow);
+        // The bounds are element indices, so the offset is scaled as a variable one is: on a
+        // packed array of bytes, [2:1] starts at bit 8, not at bit 1.
+        return constantOffset((std::min(*left, *right) - rangeLow)
+                              * static_cast<std::int64_t>(elementBits));
     }
 
     case ast::RangeSelectionKind::IndexedUp: {

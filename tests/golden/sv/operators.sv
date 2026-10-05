@@ -20,6 +20,7 @@ module tb;
     logic [7:0] r;
     logic [3:0] narrow;
     logic       bit_result;
+    logic [3:0][7:0] bytes;
 
     initial begin
         // --- arithmetic ---------------------------------------------------
@@ -185,6 +186,19 @@ module tb;
         {narrow, r[3:0]} = 8'b1001_0110;
         if (narrow !== 4'b1001 || r[3:0] !== 4'b0110) begin
             $display("FAIL: concatenation write, got %b and %b", narrow, r[3:0]);
+            failures = failures + 1;
+        end
+
+        // A constant part select of a packed array counts in elements, not bits: [2:1] of
+        // four bytes is the middle two bytes.
+        bytes = 32'h4433_2211;
+        if (bytes[2:1] !== 16'h3322) begin
+            $display("FAIL: packed-array part select, got %h", bytes[2:1]);
+            failures = failures + 1;
+        end
+        bytes[2:1] = 16'hbbaa;
+        if (bytes !== 32'h44bb_aa11) begin
+            $display("FAIL: packed-array part-select write, got %h", bytes);
             failures = failures + 1;
         end
 
