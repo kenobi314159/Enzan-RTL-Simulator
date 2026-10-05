@@ -382,6 +382,10 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             return kernel.errorRequested ? ExecutionResult::Stopped : ExecutionResult::Suspended;
         }
 
+        case eir::Opcode::WaitEvents:
+            kernel.suspendForEvents(processIndex, instruction.a, instruction.b);
+            return ExecutionResult::Suspended;
+
         case eir::Opcode::WaitEdge:
             kernel.suspendForEdge(processIndex, state.objectSignals[instruction.a],
                                   static_cast<eir::EdgeKind>(instruction.b), instruction.c);

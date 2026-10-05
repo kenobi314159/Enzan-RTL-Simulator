@@ -347,6 +347,10 @@ public:
     void suspendForEdge(std::uint32_t processIndex, std::uint32_t signalIndex, eir::EdgeKind edge,
                         std::uint32_t resumePc);
 
+    /// Suspends `processIndex` until any entry of its event list `listIndex` happens.
+    void suspendForEvents(std::uint32_t processIndex, std::uint32_t listIndex,
+                          std::uint32_t resumePc);
+
     /// Performs a system task call.
     void runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallIndex);
 
@@ -387,7 +391,15 @@ private:
     [[nodiscard]] bool halted() const noexcept { return stopping(); }
 
     /// Wakes whatever is waiting on a transition of `signalIndex`.
-    void notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after);
+    /// Wakes and resumes what the change of `signalIndex` concerns. `before` and `after` are its
+    /// lowest bit either side of the write; `previous` is its whole old value when the signal is
+    /// windowed and empty otherwise, and `current` its new one.
+    void notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after,
+                      eir::ConstBitRef previous, eir::ConstBitRef current);
+
+    /// Copies a windowed signal's value before a write changes it, and returns the copy; returns
+    /// an empty view for a signal nothing watches by window.
+    eir::ConstBitRef keepPrevious(const Signal& signal, eir::ConstBitRef target);
 
     /// Resolves every segment `driverIndex` covers and writes the result into its signal.
     void resolveDriver(std::uint32_t driverIndex);
@@ -424,8 +436,13 @@ private:
     /// segment being folded, and the driver being folded into it. Resolution runs on the
     /// write path, which section 13.4 forbids allocating on.
     std::vector<eir::Word> resolvedScratch;
+
     std::vector<eir::Word> segmentScratch;
     std::vector<eir::Word> driverScratch;
+
+    /// A windowed signal's old value, kept across its write for the comparison, sized once
+    /// for the widest windowed signal.
+    std::vector<eir::Word> windowScratch;
 
     /// Dynamic edge subscriptions created by `WaitEdge`, indexed by signal.
     ///
@@ -436,6 +453,14 @@ private:
         std::uint32_t processIndex = 0;
         eir::EdgeKind edge = eir::EdgeKind::AnyChange;
         std::uint32_t resumePc = 0;
+
+        /// The process's wait generation when it armed this, which no longer matches once
+        /// another entry of the same wait has fired.
+        std::uint32_t generation = 0;
+
+        /// The window watched; a width of 0 is the whole signal.
+        std::uint32_t lowBit = 0;
+        std::uint32_t width = 0;
     };
 
     std::vector<std::vector<EdgeWaiter>> edgeWaiters;

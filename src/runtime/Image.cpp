@@ -111,9 +111,18 @@ void Image::buildProcesses() {
             }
         } else {
             for (const eir::SensitivityEntry& entry : body.sensitivity) {
-                signalList[state.objectSignals[entry.objectIndex]].subscribers.push_back(
-                    Signal::Subscriber{.processIndex = processIndex, .edge = entry.edge});
+                Signal& signal = signalList[state.objectSignals[entry.objectIndex]];
+                signal.subscribers.push_back(Signal::Subscriber{.processIndex = processIndex,
+                                                                .edge = entry.edge,
+                                                                .lowBit = entry.lowBit,
+                                                                .width = entry.width});
+                if (entry.width != 0) signal.windowed = true;
             }
+        }
+        for (const std::vector<eir::SensitivityEntry>& list : body.eventLists) {
+            for (const eir::SensitivityEntry& entry : list)
+                if (entry.width != 0)
+                    signalList[state.objectSignals[entry.objectIndex]].windowed = true;
         }
 
         processList.push_back(std::move(state));

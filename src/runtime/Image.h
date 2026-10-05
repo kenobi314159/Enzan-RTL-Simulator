@@ -33,9 +33,20 @@ struct Signal {
     struct Subscriber {
         std::uint32_t processIndex = 0;
         eir::EdgeKind edge = eir::EdgeKind::AnyChange;
+
+        /// The window watched; a width of 0 is the whole signal (see eir::SensitivityEntry).
+        std::uint32_t lowBit = 0;
+        std::uint32_t width = 0;
     };
 
     std::vector<Subscriber> subscribers;
+
+    /// True when something watches a window of this signal other than its lowest bit, which
+    /// means a write has to keep the old value to compare the window against.
+    ///
+    /// Known when the image is built, from every process's sensitivity and event lists, so a
+    /// signal nobody watches by window pays nothing on its write path.
+    bool windowed = false;
 };
 
 /// Where a process's stores to one object go (DESIGN_GUIDE.md section 3.7).
@@ -88,6 +99,11 @@ struct ProcessState {
 
     /// Instruction index to resume at. Zero means "start from the beginning".
     std::uint32_t resumePc = 0;
+
+    /// Counts the process's waits on edges. A wait on an event list arms one subscription per
+    /// entry under the current count, and the first to fire advances it, which is what makes
+    /// the others stale rather than able to resume the process a second time.
+    std::uint32_t waitGeneration = 0;
 
     /// True while the process sits in one of the scheduler's queues, so that a signal
     /// changing twice in one region does not enqueue it twice.

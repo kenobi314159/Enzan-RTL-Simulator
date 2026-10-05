@@ -89,8 +89,8 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   which are SVA; immediate assertions work;
 - every system function but `$time`, `$isunknown`, `$countones`, `$onehot` and `$onehot0`;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
-- an event control on an expression, or an event list inside a body rather than on a block
-  header;
+- an event control on an expression other than a signal or a constant select of one, such
+  as `@(a & b)` or `@(posedge clk[i])` with `i` a variable;
 - a timing control on an assignment, such as `a <= #5 b`, and a delay on a continuous
   assignment or a net, such as `assign #5 a = b` or `wire #5 w`;
 - `trireg`, `interconnect` and user-defined nettypes, which have no resolution table;

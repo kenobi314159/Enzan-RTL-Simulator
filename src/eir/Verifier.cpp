@@ -187,6 +187,32 @@ private:
         }
     }
 
+    void checkSensitivityEntry(const ModuleDefinition& definition, const Process& process,
+                               const SensitivityEntry& entry) {
+        if (entry.objectIndex >= definition.objects.size()) {
+            reportProcess(definition, process,
+                          std::format("is sensitive to object {}, but the module has {} objects",
+                                      entry.objectIndex, definition.objects.size()));
+            return;
+        }
+        // A process triggered by a signal depends on that signal's value, so the signal
+        // belongs in the read set; otherwise activity-based scheduling and partitioning would
+        // both draw the dependency graph wrongly.
+        const Object& object = definition.objects[entry.objectIndex];
+        if (!std::ranges::binary_search(process.readSet, entry.objectIndex)) {
+            reportProcess(definition, process,
+                          std::format("is sensitive to '{}' but does not declare it in its read "
+                                      "set",
+                                      object.name));
+        }
+        if (entry.width != 0 && entry.lowBit + entry.width > object.type.bitWidth()) {
+            reportProcess(definition, process,
+                          std::format("is sensitive to bits [{}:{}] of '{}', which is {} bits wide",
+                                      entry.lowBit + entry.width - 1, entry.lowBit, object.name,
+                                      object.type.bitWidth()));
+        }
+    }
+
     /// Returns the width of an operand that must be a register, or 0 when it is not
     /// usable, having reported why.
     std::uint32_t registerWidth(const ModuleDefinition& definition, const Process& process,
@@ -240,23 +266,12 @@ private:
             return;
         }
 
-        for (const SensitivityEntry& entry : process.sensitivity) {
-            if (entry.objectIndex >= definition.objects.size()) {
-                reportProcess(definition, process,
-                              std::format("is sensitive to object {}, but the module has {} "
-                                          "objects",
-                                          entry.objectIndex, definition.objects.size()));
-                continue;
-            }
-            // A process triggered by a signal depends on that signal's value, so the
-            // signal belongs in the read set; otherwise activity-based scheduling
-            // and partitioning would both draw the dependency graph wrongly.
-            if (!std::ranges::binary_search(process.readSet, entry.objectIndex)) {
-                reportProcess(definition, process,
-                              std::format("is sensitive to '{}' but does not declare it in its "
-                                          "read set",
-                                          definition.objects[entry.objectIndex].name));
-            }
+        for (const SensitivityEntry& entry : process.sensitivity)
+            checkSensitivityEntry(definition, process, entry);
+        for (const std::vector<SensitivityEntry>& list : process.eventLists) {
+            if (list.empty()) reportProcess(definition, process, "has an empty event list");
+            for (const SensitivityEntry& entry : list)
+                checkSensitivityEntry(definition, process, entry);
         }
 
         for (std::size_t blockIndex = 0; blockIndex < process.blocks.size(); ++blockIndex)
@@ -398,6 +413,15 @@ private:
 
         case Opcode::WaitEdge:
             checkObjectAccess(definition, process, instruction.a, false, where);
+            break;
+
+        case Opcode::WaitEvents:
+            if (instruction.a.kind() != Operand::Kind::Immediate
+                || instruction.a.index() >= process.eventLists.size()) {
+                reportProcess(
+                    definition, process,
+                    std::format("{} names an event list the process does not have", where));
+            }
             break;
 
         // Equal-width binary operations. The frontend inserts the extensions

@@ -213,6 +213,10 @@ ENZAN_OPCODE(SysTask, "systask", false, 1,
 ENZAN_OPCODE(WaitTime, "waittime", false, 2,
              "a call to the scheduler to re-arm this process after the given delay, "
              "a store of the resume index, then ret void")
+ENZAN_OPCODE(WaitEvents, "waitevents", false, 2,
+             "a call to the scheduler to subscribe to every entry of the event list the "
+             "immediate first operand names, under one wait generation so that the first "
+             "to fire discards the rest, a store of the resume index, then ret void")
 ENZAN_OPCODE(WaitEdge, "waitedge", false, 3,
              "a call to the scheduler to subscribe to the given edge on the given "
              "object, a store of the resume index, then ret void")

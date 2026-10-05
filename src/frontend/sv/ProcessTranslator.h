@@ -22,6 +22,7 @@ class SourceLocation;
 }
 
 namespace slang::ast {
+enum class EdgeKind;
 class CallExpression;
 class Scope;
 class SubroutineSymbol;
@@ -134,6 +135,13 @@ public:
     /// control, because a sensitivity list belongs to the process rather than to a
     /// statement inside it.
     void setSensitivity(std::vector<eir::SensitivityEntry> sensitivity);
+
+    /// The sensitivity entry an event control on `expression` is: the whole of an object, or a
+    /// constant window of one, such as `posedge clk[2]` (IEEE 1800 section 9.4.2). Nothing for
+    /// any other expression, which would need a temporary the scheduler could watch; the
+    /// caller reports it.
+    std::optional<eir::SensitivityEntry> eventEntry(const slang::ast::Expression& expression,
+                                                    slang::ast::EdgeKind edge);
 
     /// Hands over the finished process. The translator must not be used afterwards.
     eir::Process take();

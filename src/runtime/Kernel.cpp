@@ -49,6 +49,14 @@ bool isNegedge(eir::Logic before, eir::Logic after) noexcept {
     return before == eir::Logic::One || after == eir::Logic::Zero;
 }
 
+/// The words a windowed signal's old value needs, for the widest such signal.
+std::size_t windowScratchWords(const Image& image) {
+    std::uint32_t widest = 0;
+    for (const Signal& signal : image.signals())
+        if (signal.windowed) widest = std::max(widest, signal.bitWidth);
+    return eir::storageWordsFor(widest);
+}
+
 bool edgeMatches(eir::EdgeKind edge, eir::Logic before, eir::Logic after) noexcept {
     switch (edge) {
     case eir::EdgeKind::AnyChange:
@@ -72,6 +80,7 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
       resolvedScratch(eir::storageWordsFor(designImageToRun.elaboratedDesign().widestDriver()), 0),
       segmentScratch(resolvedScratch.size(), 0),
       driverScratch(resolvedScratch.size(), 0),
+      windowScratch(windowScratchWords(designImageToRun), 0),
       edgeWaiters(designImageToRun.signals().size()) {}
 
 Kernel::~Kernel() = default;
@@ -405,13 +414,14 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     // assigned.
     if (value.width() == target.width() && eir::ConstBitRef(target).identicalTo(value)) return;
 
+    const eir::ConstBitRef previous = keepPrevious(signal, target);
     const eir::Logic before = target.get(0);
     bitops::extend(target, value, false);
     const eir::Logic after = target.get(0);
 
     for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
-    notifyChange(signalIndex, before, after);
+    notifyChange(signalIndex, before, after, previous, target);
 
     // Last, because an application's callback may write this signal again. Everything about
     // this change — the edge it was, who it woke, what the listeners recorded — is settled
@@ -441,13 +451,14 @@ void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
     }
     if (!changed) return;
 
+    const eir::ConstBitRef previous = keepPrevious(signal, target);
     const eir::Logic before = target.get(0);
     bitops::assignPartAt(target, value, lowBit);
     const eir::Logic after = target.get(0);
 
     for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
-    notifyChange(signalIndex, before, after);
+    notifyChange(signalIndex, before, after, previous, target);
 
     if (pliHooks != nullptr) pliHooks->valueChanged(signalIndex);
 }
@@ -583,19 +594,43 @@ void Kernel::removeListener(ValueChangeListener& listener) {
     if (position != listeners.end()) listeners.erase(position);
 }
 
-void Kernel::notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after) {
+eir::ConstBitRef Kernel::keepPrevious(const Signal& signal, eir::ConstBitRef target) {
+    if (!signal.windowed) return {};
+    const eir::BitRef kept(windowScratch.data(), signal.bitWidth);
+    bitops::copy(kept, target);
+    return kept;
+}
+
+void Kernel::notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after,
+                          eir::ConstBitRef previous, eir::ConstBitRef current) {
+    // A whole-signal entry looks at the lowest bit for an edge and needs nothing for a change;
+    // a window looks at its own lowest bit, or compares its bits, against the kept old value.
+    const auto matches = [&](eir::EdgeKind edge, std::uint32_t lowBit, std::uint32_t width) {
+        if (width == 0) return edgeMatches(edge, before, after);
+        if (edge != eir::EdgeKind::AnyChange)
+            return edgeMatches(edge, previous.get(lowBit), current.get(lowBit));
+        for (std::uint32_t bit = lowBit; bit < lowBit + width; ++bit)
+            if (previous.get(bit) != current.get(bit)) return true;
+        return false;
+    };
+
     for (const Signal::Subscriber& subscriber : designImage->signals()[signalIndex].subscribers) {
-        if (edgeMatches(subscriber.edge, before, after)) wake(subscriber.processIndex);
+        if (matches(subscriber.edge, subscriber.lowBit, subscriber.width))
+            wake(subscriber.processIndex);
     }
 
     // Dynamic subscriptions are consumed when they fire: a process that waited for one
     // edge is not waiting for the next until it asks again. Rewritten in place rather
-    // than erased one by one, so that the common case of nothing matching costs one pass.
+    // than erased one by one, so that the common case of nothing matching costs one pass. One
+    // armed by a wait another entry of which has already fired is stale, and goes.
     std::vector<EdgeWaiter>& waiters = edgeWaiters[signalIndex];
     std::size_t kept = 0;
     for (std::size_t index = 0; index < waiters.size(); ++index) {
         const EdgeWaiter waiter = waiters[index];
-        if (edgeMatches(waiter.edge, before, after)) {
+        ProcessState& state = processes[waiter.processIndex];
+        if (waiter.generation != state.waitGeneration) continue;
+        if (matches(waiter.edge, waiter.lowBit, waiter.width)) {
+            ++state.waitGeneration;
             resume(waiter.processIndex, waiter.resumePc);
         } else {
             waiters[kept++] = waiter;
@@ -629,9 +664,28 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
 
 void Kernel::suspendForEdge(std::uint32_t processIndex, std::uint32_t signalIndex,
                             eir::EdgeKind edge, std::uint32_t resumePc) {
-    processes[processIndex].resumePc = resumePc;
-    edgeWaiters[signalIndex].push_back(
-        EdgeWaiter{.processIndex = processIndex, .edge = edge, .resumePc = resumePc});
+    ProcessState& state = processes[processIndex];
+    state.resumePc = resumePc;
+    edgeWaiters[signalIndex].push_back(EdgeWaiter{.processIndex = processIndex,
+                                                  .edge = edge,
+                                                  .resumePc = resumePc,
+                                                  .generation = state.waitGeneration});
+}
+
+void Kernel::suspendForEvents(std::uint32_t processIndex, std::uint32_t listIndex,
+                              std::uint32_t resumePc) {
+    ProcessState& state = processes[processIndex];
+    state.resumePc = resumePc;
+    const codegen::CompiledProcess& body = designImage->compiledDesign().body(state.bodyIndex);
+    for (const eir::SensitivityEntry& entry : body.eventLists[listIndex]) {
+        edgeWaiters[state.objectSignals[entry.objectIndex]].push_back(
+            EdgeWaiter{.processIndex = processIndex,
+                       .edge = entry.edge,
+                       .resumePc = resumePc,
+                       .generation = state.waitGeneration,
+                       .lowBit = entry.lowBit,
+                       .width = entry.width});
+    }
 }
 
 void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallIndex) {

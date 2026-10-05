@@ -124,6 +124,13 @@ struct SensitivityEntry {
 
     EdgeKind edge = EdgeKind::AnyChange;
 
+    /// The window of the object watched, for an event on a select such as `posedge clk[2]`:
+    /// its lowest bit and its width, or a width of 0 for the whole object. An edge is the edge
+    /// of the window's lowest bit, as IEEE 1800 section 9.4.2 takes an edge of a vector to be
+    /// the edge of its least significant bit; any change is a change to any bit of it.
+    std::uint32_t lowBit = 0;
+    std::uint32_t width = 0;
+
     friend bool operator==(SensitivityEntry, SensitivityEntry) noexcept = default;
 };
 
@@ -212,6 +219,10 @@ struct Process {
     /// Explicit sensitivity. Empty for `initial`, `final` and `always_comb`, whose
     /// triggering is derived from the kind and the read set instead.
     std::vector<SensitivityEntry> sensitivity;
+
+    /// The event lists `WaitEvents` waits on, by index: `@(posedge a or negedge b)` inside a
+    /// body is one, and resumes on whichever of its entries happens first.
+    std::vector<std::vector<SensitivityEntry>> eventLists;
 
     /// Object indices this process reads. Sorted and duplicate-free, so that
     /// comparing or intersecting two processes' sets is cheap and so that iteration

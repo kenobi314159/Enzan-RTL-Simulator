@@ -334,7 +334,8 @@ private:
         Implicit,
     };
 
-    SensitivityForm extractSensitivity(const ast::TimingControl& timing,
+    SensitivityForm extractSensitivity(ProcessTranslator& translator,
+                                       const ast::TimingControl& timing,
                                        std::vector<eir::SensitivityEntry>& into);
 
     Shared* shared;
@@ -866,7 +867,7 @@ bool ModuleBuilder::translateProcesses() {
         if (bodyStatement->kind == ast::StatementKind::Timed) {
             const auto& timed = bodyStatement->as<ast::TimedStatement>();
             std::vector<eir::SensitivityEntry> sensitivity;
-            switch (extractSensitivity(timed.timing, sensitivity)) {
+            switch (extractSensitivity(translator, timed.timing, sensitivity)) {
             case SensitivityForm::Explicit:
                 translator.setSensitivity(std::move(sensitivity));
                 bodyStatement = &timed.stmt;
@@ -1055,40 +1056,26 @@ bool ModuleBuilder::checkDriveStrength(
 }
 
 ModuleBuilder::SensitivityForm
-ModuleBuilder::extractSensitivity(const ast::TimingControl& timing,
+ModuleBuilder::extractSensitivity(ProcessTranslator& translator, const ast::TimingControl& timing,
                                   std::vector<eir::SensitivityEntry>& into) {
     switch (timing.kind) {
     case ast::TimingControlKind::SignalEvent: {
         const auto& event = timing.as<ast::SignalEventControl>();
         if (event.iffCondition != nullptr) return SensitivityForm::NotAnEventControl;
 
-        const ast::Expression& reference = withoutConversions(event.expr);
-        if (reference.kind != ast::ExpressionKind::NamedValue
-            && reference.kind != ast::ExpressionKind::HierarchicalValue) {
-            // An event on an expression — `@(a & b)` — is legal and needs a temporary
-            // the scheduler can watch. Left to the body, which reports it.
-            return SensitivityForm::NotAnEventControl;
-        }
-
-        const std::optional<std::uint32_t> objectIndex =
-            objectFor(reference.as<ast::ValueExpressionBase>().symbol);
-        if (!objectIndex.has_value()) return SensitivityForm::NotAnEventControl;
-
-        eir::EdgeKind edge = eir::EdgeKind::AnyChange;
-        switch (event.edge) {
-        case ast::EdgeKind::PosEdge: edge = eir::EdgeKind::Posedge; break;
-        case ast::EdgeKind::NegEdge: edge = eir::EdgeKind::Negedge; break;
-        case ast::EdgeKind::None:
-        case ast::EdgeKind::BothEdges: edge = eir::EdgeKind::AnyChange; break;
-        }
-
-        into.push_back(eir::SensitivityEntry{.objectIndex = *objectIndex, .edge = edge});
+        // A signal, or a constant select of one. An event on any other expression — `@(a &
+        // b)` — is legal and needs a temporary the scheduler can watch; it is left to the body,
+        // which reports it.
+        const std::optional<eir::SensitivityEntry> entry =
+            translator.eventEntry(event.expr, event.edge);
+        if (!entry.has_value()) return SensitivityForm::NotAnEventControl;
+        into.push_back(*entry);
         return SensitivityForm::Explicit;
     }
 
     case ast::TimingControlKind::EventList: {
         for (const ast::TimingControl* event : timing.as<ast::EventListControl>().events) {
-            if (extractSensitivity(*event, into) != SensitivityForm::Explicit)
+            if (extractSensitivity(translator, *event, into) != SensitivityForm::Explicit)
                 return SensitivityForm::NotAnEventControl;
         }
         return SensitivityForm::Explicit;

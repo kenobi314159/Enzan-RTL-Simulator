@@ -104,6 +104,7 @@ bool Compiler::compileProcess(const eir::ModuleDefinition& definition, const eir
     out.name = process.name;
     out.location = process.location;
     out.sensitivity = process.sensitivity;
+    out.eventLists = process.eventLists;
     out.readSet = process.readSet;
     out.writeSet = process.writeSet;
     out.startsAtTimeZero = eir::startsAtTimeZero(process);

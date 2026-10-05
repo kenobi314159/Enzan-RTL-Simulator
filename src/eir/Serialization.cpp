@@ -279,9 +279,17 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     }
 
     out.u32(static_cast<std::uint32_t>(process.sensitivity.size()));
-    for (const SensitivityEntry& entry : process.sensitivity) {
+    const auto writeEntry = [&out](const SensitivityEntry& entry) {
         out.u32(entry.objectIndex);
         out.u8(static_cast<std::uint8_t>(entry.edge));
+        out.u32(entry.lowBit);
+        out.u32(entry.width);
+    };
+    for (const SensitivityEntry& entry : process.sensitivity) writeEntry(entry);
+    out.u32(static_cast<std::uint32_t>(process.eventLists.size()));
+    for (const std::vector<SensitivityEntry>& list : process.eventLists) {
+        out.u32(static_cast<std::uint32_t>(list.size()));
+        for (const SensitivityEntry& entry : list) writeEntry(entry);
     }
 
     out.u32(static_cast<std::uint32_t>(process.readSet.size()));
@@ -520,10 +528,18 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
         }
     }
 
-    process.sensitivity.resize(in.count());
-    for (SensitivityEntry& entry : process.sensitivity) {
+    const auto readEntry = [&in](SensitivityEntry& entry) {
         entry.objectIndex = in.u32();
         entry.edge = static_cast<EdgeKind>(in.u8());
+        entry.lowBit = in.u32();
+        entry.width = in.u32();
+    };
+    process.sensitivity.resize(in.count());
+    for (SensitivityEntry& entry : process.sensitivity) readEntry(entry);
+    process.eventLists.resize(in.count());
+    for (std::vector<SensitivityEntry>& list : process.eventLists) {
+        list.resize(in.count());
+        for (SensitivityEntry& entry : list) readEntry(entry);
     }
 
     process.readSet.resize(in.count());

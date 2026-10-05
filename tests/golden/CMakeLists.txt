@@ -126,6 +126,9 @@ enzan_add_golden_test(automatic NO_DIFFERENTIAL)
 # Immediate assertions. Icarus Verilog does not run a cover's action, so the case checks itself.
 enzan_add_golden_test(assertions NO_DIFFERENTIAL)
 
+# Event controls on selects, and event lists inside a body.
+enzan_add_golden_test(events)
+
 # An error reported while the design runs is the design failing in simulation: status 3.
 add_test(NAME golden.runtime_error_status
          COMMAND sh -c "\"$1\" --top tb \"$2\" >/dev/null 2>&1; test $? -eq 3" sh

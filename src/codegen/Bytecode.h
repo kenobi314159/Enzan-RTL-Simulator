@@ -138,6 +138,7 @@ struct CompiledProcess {
     std::string name;
     SourceLocation location;
     std::vector<eir::SensitivityEntry> sensitivity;
+    std::vector<std::vector<eir::SensitivityEntry>> eventLists;
     std::vector<std::uint32_t> readSet;
     std::vector<eir::WriteExtent> writeSet;
 

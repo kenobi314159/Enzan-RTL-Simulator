@@ -190,6 +190,46 @@ void ProcessTranslator::setSensitivity(std::vector<eir::SensitivityEntry> sensit
     for (const eir::SensitivityEntry& entry : process.sensitivity) noteRead(entry.objectIndex);
 }
 
+std::optional<eir::SensitivityEntry>
+ProcessTranslator::eventEntry(const ast::Expression& expression, ast::EdgeKind edge) {
+    const std::optional<eir::EdgeKind> kind = toEdgeKind(edge);
+    if (!kind.has_value()) return std::nullopt;
+
+    const ast::Expression* reference = &expression;
+    while (reference->kind == ast::ExpressionKind::Conversion)
+        reference = &reference->as<ast::ConversionExpression>().operand();
+
+    switch (reference->kind) {
+    case ast::ExpressionKind::NamedValue:
+    case ast::ExpressionKind::HierarchicalValue: {
+        const ast::ValueSymbol& symbol = reference->as<ast::ValueExpressionBase>().symbol;
+        if (localFor(symbol) != nullptr) return std::nullopt;
+        const std::optional<std::uint32_t> objectIndex = module->objectFor(symbol);
+        if (!objectIndex.has_value()) return std::nullopt;
+        noteRead(*objectIndex);
+        return eir::SensitivityEntry{.objectIndex = *objectIndex, .edge = *kind};
+    }
+
+    case ast::ExpressionKind::ElementSelect:
+    case ast::ExpressionKind::RangeSelect:
+    case ast::ExpressionKind::MemberAccess: {
+        // A constant select places its window without emitting anything, which is what lets a
+        // block header's event control be read before the body exists.
+        const std::optional<Location> location = locate(*reference);
+        if (!location.has_value() || !location->inObject() || location->outOfRange
+            || !location->constantLow.has_value())
+            return std::nullopt;
+        noteRead(location->objectIndex);
+        return eir::SensitivityEntry{.objectIndex = location->objectIndex,
+                                     .edge = *kind,
+                                     .lowBit = static_cast<std::uint32_t>(*location->constantLow),
+                                     .width = location->type.bitWidth()};
+    }
+
+    default: return std::nullopt;
+    }
+}
+
 eir::Process ProcessTranslator::take() {
     std::ranges::sort(reads);
     reads.erase(std::ranges::unique(reads).begin(), reads.end());
@@ -770,50 +810,60 @@ bool ProcessTranslator::translateTimingControl(const ast::TimingControl& timing)
         return true;
     }
 
-    case ast::TimingControlKind::SignalEvent: {
-        const auto& event = timing.as<ast::SignalEventControl>();
-        if (event.iffCondition != nullptr) {
-            module->reportUnsupported(timing.sourceRange.start(), "`iff` on an event control");
+    case ast::TimingControlKind::SignalEvent:
+    case ast::TimingControlKind::EventList: {
+        // One entry or several; a list resumes on whichever happens first.
+        std::vector<eir::SensitivityEntry> entries;
+        const auto add = [&](const ast::TimingControl& one) {
+            if (one.kind != ast::TimingControlKind::SignalEvent) {
+                module->reportUnsupported(one.sourceRange.start(),
+                                          std::string(toString(one.kind)) + " in an event list");
+                return false;
+            }
+            const auto& event = one.as<ast::SignalEventControl>();
+            if (event.iffCondition != nullptr) {
+                module->reportUnsupported(one.sourceRange.start(), "`iff` on an event control");
+                return false;
+            }
+            const std::optional<eir::SensitivityEntry> entry = eventEntry(event.expr, event.edge);
+            if (!entry.has_value()) {
+                if (!failed) {
+                    module->reportUnsupported(one.sourceRange.start(),
+                                              "an event control on an expression rather than a "
+                                              "signal or a constant select of one");
+                }
+                return false;
+            }
+            entries.push_back(*entry);
+            return true;
+        };
+        const bool collected =
+            timing.kind == ast::TimingControlKind::SignalEvent
+                ? add(timing)
+                : std::ranges::all_of(timing.as<ast::EventListControl>().events,
+                                      [&add](const ast::TimingControl* one) { return add(*one); });
+        if (!collected) {
             failed = true;
             return false;
         }
 
-        if (event.expr.kind != ast::ExpressionKind::NamedValue
-            && event.expr.kind != ast::ExpressionKind::HierarchicalValue) {
-            module->reportUnsupported(timing.sourceRange.start(),
-                                      "an event control on an expression rather than a signal");
-            failed = true;
-            return false;
-        }
-
-        const std::optional<std::uint32_t> objectIndex =
-            module->objectFor(event.expr.as<ast::ValueExpressionBase>().symbol);
-        if (!objectIndex.has_value()) {
-            failed = true;
-            return false;
-        }
-
-        const std::optional<eir::EdgeKind> edge = toEdgeKind(event.edge);
-        if (!edge.has_value()) {
-            module->reportUnsupported(timing.sourceRange.start(), "this edge specifier");
-            failed = true;
-            return false;
-        }
-
-        noteRead(*objectIndex);
         const std::uint32_t resume = newBlock("after-edge");
-        emit(eir::Instruction::make(eir::Opcode::WaitEdge, {}, eir::Operand::object(*objectIndex),
-                                    eir::Operand::immediate(static_cast<std::uint32_t>(*edge)),
-                                    eir::Operand::block(resume)));
+        if (entries.size() == 1 && entries.front().width == 0) {
+            emit(eir::Instruction::make(
+                eir::Opcode::WaitEdge, {}, eir::Operand::object(entries.front().objectIndex),
+                eir::Operand::immediate(static_cast<std::uint32_t>(entries.front().edge)),
+                eir::Operand::block(resume)));
+        } else {
+            const auto list = static_cast<std::uint32_t>(process.eventLists.size());
+            process.eventLists.push_back(std::move(entries));
+            emit(eir::Instruction::make(eir::Opcode::WaitEvents, {}, eir::Operand::immediate(list),
+                                        eir::Operand::block(resume)));
+        }
         selectBlock(resume);
         return true;
     }
 
     default:
-        // An event list inside a body would need the scheduler to subscribe a process to
-        // several signals at once and then unsubscribe it from all of them. That is
-        // worth doing, but it is not the common case: an event list almost always sits
-        // on the block header, where it becomes the process's static sensitivity.
         module->reportUnsupported(timing.sourceRange.start(),
                                   std::string(toString(timing.kind)) + " timing controls");
         failed = true;
