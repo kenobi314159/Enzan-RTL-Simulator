@@ -363,15 +363,17 @@ bool ProcessTranslator::translateConditional(const ast::Statement& statement) {
 bool ProcessTranslator::translateCase(const ast::Statement& statement) {
     const auto& caseStatement = statement.as<ast::CaseStatement>();
 
-    if (caseStatement.condition != ast::CaseStatementCondition::Normal) {
-        // `casez` and `casex` need the wildcard comparison of `==?`, which the value engine
-        // does not implement yet. Reported rather than approximated with `==`, because an
-        // approximated wildcard silently takes the wrong branch.
-        module->reportUnsupported(statement.sourceRange.start(),
-                                  "`casez`, `casex` and `case ... inside`");
-        failed = true;
-        return false;
+    // How an item is compared with the selector (IEEE 1800 section 12.5): exactly for `case`,
+    // with Z, or X and Z, on either side as a don't-care for `casez` and `casex`, and as
+    // `inside` compares for `case ... inside`.
+    eir::Opcode matchOpcode = eir::Opcode::CaseEqual;
+    switch (caseStatement.condition) {
+    case ast::CaseStatementCondition::Normal: matchOpcode = eir::Opcode::CaseEqual; break;
+    case ast::CaseStatementCondition::WildcardJustZ: matchOpcode = eir::Opcode::CaseZMatch; break;
+    case ast::CaseStatementCondition::WildcardXOrZ: matchOpcode = eir::Opcode::CaseXMatch; break;
+    case ast::CaseStatementCondition::Inside: break;
     }
+    const bool inside = caseStatement.condition == ast::CaseStatementCondition::Inside;
 
     const std::optional<Value> selector = translateExpression(caseStatement.expr);
     if (!selector.has_value()) return false;
@@ -390,21 +392,19 @@ bool ProcessTranslator::translateCase(const ast::Statement& statement) {
     for (std::size_t index = 0; index < caseStatement.items.size(); ++index) {
         const ast::CaseStatement::ItemGroup& group = caseStatement.items[index];
         for (const ast::Expression* item : group.expressions) {
-            const std::optional<Value> itemValue = translateExpression(*item);
-            if (!itemValue.has_value()) return false;
-
-            const std::uint32_t width =
-                std::max(selector->type.bitWidth(), itemValue->type.bitWidth());
-            const eir::Type comparisonType = eir::Type::bits(
-                width, selector->type.isSigned() && itemValue->type.isSigned(), true);
-            const Value left = coerce(*selector, comparisonType);
-            const Value right = coerce(*itemValue, comparisonType);
-
-            // An item matches by `===`, not `==` (IEEE 1800 section 12.5): `2'bx1` matches a
-            // selector of `2'bx1`, and an unknown selector matches no item that differs from it.
-            const std::uint32_t matched = newRegister(eir::Type::logic());
-            emit(eir::Instruction::make(eir::Opcode::CaseEqual, eir::Operand::reg(matched),
-                                        eir::Operand::reg(left.reg), eir::Operand::reg(right.reg)));
+            // An item of a plain `case` matches by `===`, not `==`: `2'bx1` matches a selector
+            // of `2'bx1`, and an unknown selector matches no item that differs from it. An X
+            // from `case ... inside` takes the branch no more than an `if` would.
+            std::optional<Value> matchedValue;
+            if (inside) {
+                matchedValue = insideItem(*selector, *item);
+            } else {
+                const std::optional<Value> itemValue = translateExpression(*item);
+                if (itemValue.has_value())
+                    matchedValue = compare(matchOpcode, *selector, *itemValue);
+            }
+            if (!matchedValue.has_value()) return false;
+            const std::uint32_t matched = matchedValue->reg;
 
             const std::uint32_t nextTest = newBlock("case-test");
             emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(matched),
@@ -761,6 +761,8 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
 
     case ast::ExpressionKind::Call: return translateCall(expression);
 
+    case ast::ExpressionKind::Inside: return translateInside(expression);
+
     case ast::ExpressionKind::Conversion: {
         // slang inserts a conversion wherever the language's width and signedness rules
         // change a value, so honouring it is what makes the widths downstream correct.
@@ -779,6 +781,80 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         failed = true;
     }
     return std::nullopt;
+}
+
+ProcessTranslator::Value ProcessTranslator::compare(eir::Opcode opcode, const Value& left,
+                                                    const Value& right) {
+    // Comparison operands keep their own width, extended to whichever is wider, because the
+    // result is one bit and the comparison itself decides the signedness.
+    const bool isSigned = left.type.isSigned() && right.type.isSigned();
+    const std::uint32_t width = std::max(left.type.bitWidth(), right.type.bitWidth());
+    const eir::Type operandType = eir::Type::bits(width, isSigned, true);
+
+    const Value a = coerce(left, operandType);
+    const Value b = coerce(right, operandType);
+    const std::uint32_t result = newRegister(eir::Type::logic());
+    eir::Instruction instruction = eir::Instruction::make(
+        opcode, eir::Operand::reg(result), eir::Operand::reg(a.reg), eir::Operand::reg(b.reg));
+    instruction.isSigned = isSigned;
+    emit(instruction);
+    return Value{.reg = result, .type = eir::Type::logic()};
+}
+
+std::optional<ProcessTranslator::Value> ProcessTranslator::insideItem(const Value& value,
+                                                                      const ast::Expression& item) {
+    if (item.kind == ast::ExpressionKind::ValueRange) {
+        const auto& range = item.as<ast::ValueRangeExpression>();
+        if (range.rangeKind != ast::ValueRangeKind::Simple) {
+            module->reportUnsupported(item.sourceRange.start(), "a tolerance range");
+            failed = true;
+            return std::nullopt;
+        }
+        const std::optional<Value> low = translateExpression(range.left());
+        if (!low.has_value()) return std::nullopt;
+        const std::optional<Value> high = translateExpression(range.right());
+        if (!high.has_value()) return std::nullopt;
+
+        // `low <= value && value <= high`, four-state, so that an unknown bound or value
+        // gives X rather than a guess.
+        const Value aboveLow = compare(eir::Opcode::LessEqual, *low, value);
+        const Value belowHigh = compare(eir::Opcode::LessEqual, value, *high);
+        const std::uint32_t result = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::And, eir::Operand::reg(result),
+                                    eir::Operand::reg(aboveLow.reg),
+                                    eir::Operand::reg(belowHigh.reg)));
+        return Value{.reg = result, .type = eir::Type::logic()};
+    }
+
+    const std::optional<Value> itemValue = translateExpression(item);
+    if (!itemValue.has_value()) return std::nullopt;
+    return compare(eir::Opcode::WildcardEqual, value, *itemValue);
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateInside(const ast::Expression& expression) {
+    const auto& inside = expression.as<ast::InsideExpression>();
+
+    const std::optional<Value> value = translateExpression(inside.left());
+    if (!value.has_value()) return std::nullopt;
+
+    // The items are combined with a four-state OR: 1 if any matches, otherwise X if any could,
+    // otherwise 0, which is the result IEEE 1800 section 11.4.13 defines.
+    std::optional<Value> result;
+    for (const ast::Expression* item : inside.rangeList()) {
+        const std::optional<Value> matched = insideItem(*value, *item);
+        if (!matched.has_value()) return std::nullopt;
+        if (!result.has_value()) {
+            result = matched;
+            continue;
+        }
+        const std::uint32_t combined = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::Or, eir::Operand::reg(combined),
+                                    eir::Operand::reg(result->reg),
+                                    eir::Operand::reg(matched->reg)));
+        result = Value{.reg = combined, .type = eir::Type::logic()};
+    }
+    return result;
 }
 
 std::optional<ProcessTranslator::Value>
@@ -808,21 +884,8 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
         return Value{.reg = result, .type = *resultType};
     };
 
-    // Comparison operands keep their own width, extended to whichever is wider, because the
-    // result is one bit and the comparison itself decides the signedness.
     const auto comparison = [&](eir::Opcode opcode, bool swapOperands) -> std::optional<Value> {
-        const bool isSigned = left->type.isSigned() && right->type.isSigned();
-        const std::uint32_t width = std::max(left->type.bitWidth(), right->type.bitWidth());
-        const eir::Type operandType = eir::Type::bits(width, isSigned, true);
-
-        const Value a = coerce(swapOperands ? *right : *left, operandType);
-        const Value b = coerce(swapOperands ? *left : *right, operandType);
-        const std::uint32_t result = newRegister(eir::Type::logic());
-        eir::Instruction instruction = eir::Instruction::make(
-            opcode, eir::Operand::reg(result), eir::Operand::reg(a.reg), eir::Operand::reg(b.reg));
-        instruction.isSigned = isSigned;
-        emit(instruction);
-        return Value{.reg = result, .type = eir::Type::logic()};
+        return compare(opcode, swapOperands ? *right : *left, swapOperands ? *left : *right);
     };
 
     const auto shift = [&](eir::Opcode opcode) -> std::optional<Value> {
@@ -857,6 +920,10 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
     case ast::BinaryOperator::Inequality: return comparison(eir::Opcode::NotEqual, false);
     case ast::BinaryOperator::CaseEquality: return comparison(eir::Opcode::CaseEqual, false);
     case ast::BinaryOperator::CaseInequality: return comparison(eir::Opcode::CaseNotEqual, false);
+    case ast::BinaryOperator::WildcardEquality:
+        return comparison(eir::Opcode::WildcardEqual, false);
+    case ast::BinaryOperator::WildcardInequality:
+        return comparison(eir::Opcode::WildcardNotEqual, false);
     case ast::BinaryOperator::LessThan: return comparison(eir::Opcode::LessThan, false);
     case ast::BinaryOperator::LessThanEqual: return comparison(eir::Opcode::LessEqual, false);
 

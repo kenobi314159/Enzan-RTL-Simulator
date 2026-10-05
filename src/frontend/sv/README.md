@@ -64,7 +64,7 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - unpacked arrays, `real`, `string` and class types (packed vectors, structs, arrays and
   enums all work, because slang makes them integral);
 - user-defined tasks and functions, and every system function but `$time`;
-- `casez`, `casex` and `case ... inside`, which need the wildcard comparison of `==?`;
+- a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
 - an ascending declared range such as `logic [0:7]`;
 - an event control on an expression, or an event list inside a body rather than on a block
   header;
@@ -73,4 +73,4 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - `trireg`, `interconnect` and user-defined nettypes, which have no resolution table;
 - a drive strength other than strong, such as `assign (weak0, weak1) w = a`, because
   resolution has no strength model;
-- `**`, and the wildcard equality operators.
+- `**`.

@@ -216,6 +216,16 @@ private:
     std::optional<Value> translateElementSelect(const slang::ast::Expression& expression);
     std::optional<Value> translateRangeSelect(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
+    std::optional<Value> translateInside(const slang::ast::Expression& expression);
+
+    /// Emits a comparison of two values, each extended to the wider of the two and compared
+    /// as signed only when both are, and returns its one-bit result.
+    Value compare(eir::Opcode opcode, const Value& left, const Value& right);
+
+    /// Emits whether `value` matches one item of an `inside` set or a `case ... inside`: by
+    /// `==?` for a value, so that an X or Z bit of the item matches anything, and by bounds for
+    /// a range `[low:high]` (IEEE 1800 section 11.4.13).
+    std::optional<Value> insideItem(const Value& value, const slang::ast::Expression& item);
     std::optional<Value> translateAssignment(const slang::ast::Expression& expression);
 
     /// Writes `value` into the location `target` designates.

@@ -675,6 +675,59 @@ void caseNotEqual(BitRef dst, ConstBitRef a, ConstBitRef b) {
     setBit(dst, a.identicalTo(b) ? Logic::Zero : Logic::One);
 }
 
+void wildcardEqual(BitRef dst, ConstBitRef a, ConstBitRef b) {
+    checkPredicate(dst, a, b);
+
+    // As `equal`, over only the bits where `b` is known.
+    bool unknown = false;
+    for (std::uint32_t index = 0; index < a.words(); ++index) {
+        const Word compared = ~b.bval()[index];
+        const Word known = compared & ~a.bval()[index];
+        if (((a.aval()[index] ^ b.aval()[index]) & known) != 0) {
+            setBit(dst, Logic::Zero);
+            return;
+        }
+        if ((a.bval()[index] & compared) != 0) unknown = true;
+    }
+    setBit(dst, unknown ? Logic::Unknown : Logic::One);
+}
+
+void wildcardNotEqual(BitRef dst, ConstBitRef a, ConstBitRef b) {
+    wildcardEqual(dst, a, b);
+    if (dst.get(0) != Logic::Unknown)
+        dst.set(0, dst.get(0) == Logic::One ? Logic::Zero : Logic::One);
+}
+
+void caseZMatch(BitRef dst, ConstBitRef a, ConstBitRef b) {
+    checkPredicate(dst, a, b);
+
+    for (std::uint32_t index = 0; index < a.words(); ++index) {
+        // Z is (aval 0, bval 1).
+        const Word highZ =
+            (~a.aval()[index] & a.bval()[index]) | (~b.aval()[index] & b.bval()[index]);
+        const Word differs =
+            (a.aval()[index] ^ b.aval()[index]) | (a.bval()[index] ^ b.bval()[index]);
+        if ((differs & ~highZ) != 0) {
+            setBit(dst, Logic::Zero);
+            return;
+        }
+    }
+    setBit(dst, Logic::One);
+}
+
+void caseXMatch(BitRef dst, ConstBitRef a, ConstBitRef b) {
+    checkPredicate(dst, a, b);
+
+    for (std::uint32_t index = 0; index < a.words(); ++index) {
+        const Word unknown = a.bval()[index] | b.bval()[index];
+        if (((a.aval()[index] ^ b.aval()[index]) & ~unknown) != 0) {
+            setBit(dst, Logic::Zero);
+            return;
+        }
+    }
+    setBit(dst, Logic::One);
+}
+
 void lessThan(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned) {
     checkPredicate(dst, a, b);
 

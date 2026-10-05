@@ -527,6 +527,55 @@ TEST(BitOpsCompare, AKnownMismatchSettlesEqualityAcrossLimbs) {
     EXPECT_EQ(result.get(0), Logic::Unknown);
 }
 
+TEST(BitOpsCompare, WildcardEqualityTreatsTheRightOperandsUnknownsAsAnything) {
+    // IEEE 1800 section 11.4.6.
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b1010", "4'b1x1z"), '1');
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b0010", "4'b1x1z"), '0');
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b1010", "4'b1010"), '1');
+
+    // The left operand's unknowns are not wildcards: where they meet a known bit the result
+    // is x, unless a known mismatch elsewhere settles it.
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b1x10", "4'b1010"), 'x');
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b1x10", "4'b1x10"), '1');
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b0x10", "4'b1010"), '0');
+
+    EXPECT_EQ(applyPredicate(bitops::wildcardNotEqual, "4'b0010", "4'b1x1z"), '1');
+    EXPECT_EQ(applyPredicate(bitops::wildcardNotEqual, "4'b1010", "4'b1x1z"), '0');
+    EXPECT_EQ(applyPredicate(bitops::wildcardNotEqual, "4'b1x10", "4'b1010"), 'x');
+}
+
+TEST(BitOpsCompare, CasezIgnoresZOnEitherSideAndComparesXExactly) {
+    // IEEE 1800 section 12.5.1: z in the selector or the item is a don't-care; x is a value.
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1010", "4'b1z1z"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1z1z", "4'b1010"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1010", "4'b0z1z"), '0');
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1x10", "4'b1x10"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1x10", "4'b1010"), '0');
+}
+
+TEST(BitOpsCompare, CasexIgnoresXAndZOnEitherSide) {
+    EXPECT_EQ(applyPredicate(bitops::caseXMatch, "4'b1010", "4'b1x1z"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseXMatch, "4'b1x10", "4'b1010"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseXMatch, "4'b1010", "4'b0x1z"), '0');
+}
+
+TEST(BitOpsCompare, WildcardComparisonsWorkAcrossLimbs) {
+    BitVector a = BitVector::filled(130, Logic::Zero);
+    BitVector b = BitVector::filled(130, Logic::Zero);
+    a.set(129, Logic::One);
+    b.set(129, Logic::HighZ);
+
+    BitVector result(1);
+    bitops::wildcardEqual(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::One);
+    bitops::caseZMatch(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::One);
+
+    b.set(129, Logic::Zero);
+    bitops::caseXMatch(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::Zero);
+}
+
 TEST(BitOpsCompare, CaseEqualityNeverProducesUnknown) {
     // `===` compares the encoding, which is why it distinguishes x from z and is
     // the only comparison usable in a testbench check against an unknown.

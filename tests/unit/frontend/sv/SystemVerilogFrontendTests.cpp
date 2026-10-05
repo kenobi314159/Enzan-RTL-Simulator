@@ -851,23 +851,50 @@ TEST_F(FrontendTest, ReportsAnUnsupportedSystemTaskByName) {
     EXPECT_TRUE(reported("$random")) << "the diagnostic must name the task";
 }
 
-TEST_F(FrontendTest, ReportsCasezBecauseWildcardComparisonIsNotImplemented) {
-    // Approximating a wildcard compare with `==` would silently take the wrong branch.
+TEST_F(FrontendTest, EachCaseFormComparesItsItemsWithItsOwnOpcode) {
+    // A wildcard compare approximated with `==` would silently take the wrong branch, so each
+    // form is pinned to the comparison IEEE 1800 section 12.5 gives it.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic [3:0] s;
+            logic       y;
+            always_comb case (s)   4'b1x0z: y = 1'b1; default: y = 1'b0; endcase
+            always_comb casez (s)  4'b1???: y = 1'b1; default: y = 1'b0; endcase
+            always_comb casex (s)  4'b1xxx: y = 1'b1; default: y = 1'b0; endcase
+            always_comb case (s) inside 4'b1???: y = 1'b1; default: y = 1'b0; endcase
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 4U);
+
+    const auto uses = [](const enzan::eir::Process& process, enzan::eir::Opcode opcode) {
+        return std::ranges::any_of(process.blocks, [opcode](const enzan::eir::BasicBlock& block) {
+            return std::ranges::any_of(block.instructions,
+                                       [opcode](const enzan::eir::Instruction& instruction) {
+                                           return instruction.opcode == opcode;
+                                       });
+        });
+    };
+    EXPECT_TRUE(uses(found->processes[0], enzan::eir::Opcode::CaseEqual));
+    EXPECT_TRUE(uses(found->processes[1], enzan::eir::Opcode::CaseZMatch));
+    EXPECT_TRUE(uses(found->processes[2], enzan::eir::Opcode::CaseXMatch));
+    EXPECT_TRUE(uses(found->processes[3], enzan::eir::Opcode::WildcardEqual));
+}
+
+TEST_F(FrontendTest, AToleranceRangeInAnInsideSetIsRefused) {
+    // A tolerance range is IEEE 1800-2023 syntax, which slang refuses in the 2017 mode Enzan
+    // runs it in. The frontend refuses it as well, so that selecting a later standard reports
+    // it rather than comparing against the bounds as though they were a plain range.
     EXPECT_EQ(analyse(R"(
         module m;
-            logic [3:0] s = 4'b0000;
+            logic [7:0] v;
             logic       y;
-            always_comb begin
-                casez (s)
-                    4'b1???: y = 1'b1;
-                    default: y = 1'b0;
-                endcase
-            end
+            always_comb y = v inside {[8'd10 +/- 8'd2]};
         endmodule
     )"),
               nullptr);
-    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-    EXPECT_TRUE(reported("casez"));
 }
 
 TEST_F(FrontendTest, ReportsAnAscendingDeclaredRange) {

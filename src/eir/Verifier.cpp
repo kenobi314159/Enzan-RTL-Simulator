@@ -426,6 +426,10 @@ private:
         case Opcode::NotEqual:
         case Opcode::CaseEqual:
         case Opcode::CaseNotEqual:
+        case Opcode::WildcardEqual:
+        case Opcode::WildcardNotEqual:
+        case Opcode::CaseZMatch:
+        case Opcode::CaseXMatch:
         case Opcode::LessThan:
         case Opcode::LessEqual:
         case Opcode::ReduceAnd:

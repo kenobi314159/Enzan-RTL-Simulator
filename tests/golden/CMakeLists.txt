@@ -92,6 +92,13 @@ enzan_add_golden_test(nets)
 # Nets with several drivers, resolved per bit: tristate buses, wired logic, pulls and supplies.
 enzan_add_golden_test(resolution)
 
+# The comparisons with don't-care bits: ==?, casez and casex.
+enzan_add_golden_test(wildcards)
+
+# `inside` and `case ... inside`, which Icarus Verilog does not implement, so the case checks
+# itself against the values IEEE 1800 sections 11.4.13 and 12.5.4 give.
+enzan_add_golden_test(inside NO_DIFFERENTIAL)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------

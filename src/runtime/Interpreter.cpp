@@ -270,6 +270,30 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
                                  reg(instruction.b, instruction.bWidth));
             break;
 
+        case eir::Opcode::WildcardEqual:
+            bitops::wildcardEqual(reg(instruction.dst, instruction.dstWidth),
+                                  reg(instruction.a, instruction.aWidth),
+                                  reg(instruction.b, instruction.bWidth));
+            break;
+
+        case eir::Opcode::WildcardNotEqual:
+            bitops::wildcardNotEqual(reg(instruction.dst, instruction.dstWidth),
+                                     reg(instruction.a, instruction.aWidth),
+                                     reg(instruction.b, instruction.bWidth));
+            break;
+
+        case eir::Opcode::CaseZMatch:
+            bitops::caseZMatch(reg(instruction.dst, instruction.dstWidth),
+                               reg(instruction.a, instruction.aWidth),
+                               reg(instruction.b, instruction.bWidth));
+            break;
+
+        case eir::Opcode::CaseXMatch:
+            bitops::caseXMatch(reg(instruction.dst, instruction.dstWidth),
+                               reg(instruction.a, instruction.aWidth),
+                               reg(instruction.b, instruction.bWidth));
+            break;
+
         case eir::Opcode::LessThan:
             bitops::lessThan(reg(instruction.dst, instruction.dstWidth),
                              reg(instruction.a, instruction.aWidth),

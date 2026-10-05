@@ -146,6 +146,16 @@ ENZAN_OPCODE(CaseEqual, "ceq", true, 2,
              "icmp eq on both planes with no unknown check at all; this is `===`, "
              "which never yields X")
 ENZAN_OPCODE(CaseNotEqual, "cne", true, 2, "as CaseEqual negated")
+ENZAN_OPCODE(WildcardEqual, "weq", true, 2,
+             "as Equal with both planes masked to the bits where the right operand's "
+             "bval is clear, so that its X and Z bits compare as anything; `==?`")
+ENZAN_OPCODE(WildcardNotEqual, "wne", true, 2, "as WildcardEqual negated; `!=?`")
+ENZAN_OPCODE(CaseZMatch, "czmatch", true, 2,
+             "icmp eq of both planes masked to the bits that are Z in neither operand, "
+             "which is how `casez` compares an item with its selector")
+ENZAN_OPCODE(CaseXMatch, "cxmatch", true, 2,
+             "icmp eq of the aval planes masked to the bits where neither operand's bval "
+             "is set, which is how `casex` compares an item with its selector")
 ENZAN_OPCODE(LessThan, "lt", true, 2,
              "a branch on the combined bval planes to the X result, then icmp ult or "
              "icmp slt on the aval planes according to the signed flag")

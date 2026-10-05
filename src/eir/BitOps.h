@@ -175,6 +175,23 @@ void caseEqual(BitRef dst, ConstBitRef a, ConstBitRef b);
 /// `dst`, one bit wide, receives `a !== b`.
 void caseNotEqual(BitRef dst, ConstBitRef a, ConstBitRef b);
 
+/// `dst`, one bit wide, receives `a ==? b`: as `==`, except that an X or Z bit of `b` matches
+/// anything (IEEE 1800 section 11.4.6). One of `a` is not a wildcard, and makes the result
+/// Unknown where it is compared with a known bit of `b` that no known mismatch has settled.
+void wildcardEqual(BitRef dst, ConstBitRef a, ConstBitRef b);
+
+/// `dst`, one bit wide, receives `a !=? b`.
+void wildcardNotEqual(BitRef dst, ConstBitRef a, ConstBitRef b);
+
+/// `dst`, one bit wide, receives whether a `casez` item matches its selector: every bit that is
+/// Z in neither is identical in both, X included (IEEE 1800 section 12.5.1). Never Unknown,
+/// and symmetric, as the standard makes a Z in either side a don't-care.
+void caseZMatch(BitRef dst, ConstBitRef a, ConstBitRef b);
+
+/// `dst`, one bit wide, receives whether a `casex` item matches its selector: every bit that is
+/// X or Z in neither is equal in both. Never Unknown.
+void caseXMatch(BitRef dst, ConstBitRef a, ConstBitRef b);
+
 /// `dst`, one bit wide, receives `a < b`. Unknown when either operand has an
 /// unknown bit.
 void lessThan(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned);
