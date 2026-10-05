@@ -320,6 +320,18 @@ jobs:
           name: sv-tests-logs
           path: build/sv-tests/out/logs
 
+      # The design regression (section 14.5): each design's own testbenches, held to their own
+      # verdicts and, where Icarus Verilog can run them, to its transcript. Under a second here.
+      - name: Design regression
+        run: tests/designs/aes/run.sh build/gcc-release/bin/enzan "$(command -v iverilog)" build/designs
+
+      - name: Keep the design regression logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: design-regression-logs
+          path: build/designs/*.*
+
       # The benchmark is a target rather than a test, because a measurement taken alongside
       # three hundred other tests compares with nothing. It runs here so that a change which
       # breaks the harness is caught, and so that a number is recorded per commit as section

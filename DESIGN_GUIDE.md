@@ -2237,6 +2237,13 @@ Real designs, fetched at pinned revisions:
 
 Start with the small ones and add larger designs as capability grows.
 
+Each design is a directory under `tests/designs/` holding the revision it is pinned at and a
+`run.sh` that fetches it there (`tests/fetch-revision.sh`, which every suite shares), runs its
+own testbenches and says PASS or FAIL for each. A testbench passes when it reports success
+and, where Icarus Verilog runs it, when Enzan's transcript is the reference's line for line, so
+a pass is a design checking its own answers and two simulators agreeing on them. Testbenches
+the reference cannot run are held to their own verdicts alone, and the harness says why.
+
 ### 14.6 cocotb regression
 
 Once VPI lands (M4), cocotb's own regression suite runs in CI and its pass rate
