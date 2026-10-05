@@ -1051,6 +1051,18 @@ TEST_F(FrontendTest, AnOverrideNamingNoParameterIsReported) {
     EXPECT_TRUE(reportedCode(DiagCode::UnusedParameterOverride));
 }
 
+TEST_F(FrontendTest, ReportsADeferredAssertion) {
+    // Evaluated on the spot it would report the glitches it exists to filter out.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            always_comb assert #0 (a);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a deferred assertion"));
+}
+
 TEST_F(FrontendTest, ReportsARecursiveCall) {
     // An inlined body cannot contain itself.
     EXPECT_EQ(analyse(R"(

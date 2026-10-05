@@ -85,6 +85,8 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   (packed vectors, structs and arrays, enums, and fixed-size unpacked arrays and structs all
   work);
 - a recursive call, which slang does not fold to a constant, and a `ref` argument;
+- deferred assertions (`assert #0`, `assert final`) and concurrent ones (`assert property`),
+  which are SVA; immediate assertions work;
 - every system function but `$time`, `$isunknown`, `$countones`, `$onehot` and `$onehot0`;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
 - an event control on an expression, or an event list inside a body rather than on a block

@@ -322,6 +322,8 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
 
     case ast::StatementKind::Return: return translateReturn(statement);
 
+    case ast::StatementKind::ImmediateAssertion: return translateImmediateAssertion(statement);
+
     case ast::StatementKind::List:
     case ast::StatementKind::Block: return translateBlock(statement);
 
@@ -424,6 +426,63 @@ bool ProcessTranslator::translateConditional(const ast::Statement& statement) {
 
     selectBlock(elseBlock);
     if (conditional.ifFalse != nullptr && !translateStatement(*conditional.ifFalse)) return false;
+    if (!currentBlockTerminated())
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(joinBlock)));
+
+    selectBlock(joinBlock);
+    return true;
+}
+
+bool ProcessTranslator::translateImmediateAssertion(const ast::Statement& statement) {
+    const auto& assertion = statement.as<ast::ImmediateAssertionStatement>();
+
+    // A deferred assertion reports in the Observed or Postponed region and only for the last
+    // evaluation in a time slot, which is what filters out a glitch; evaluating it on the spot
+    // would report the glitches it exists to ignore.
+    if (assertion.isDeferred || assertion.isFinal) {
+        module->reportUnsupported(statement.sourceRange.start(), "a deferred assertion");
+        failed = true;
+        return false;
+    }
+    const bool cover = assertion.assertionKind == ast::AssertionKind::CoverProperty;
+    if (!cover && assertion.assertionKind != ast::AssertionKind::Assert
+        && assertion.assertionKind != ast::AssertionKind::Assume) {
+        module->reportUnsupported(statement.sourceRange.start(), "this kind of assertion");
+        failed = true;
+        return false;
+    }
+
+    const std::optional<Value> condition = translateExpression(assertion.cond);
+    if (!condition.has_value()) return false;
+
+    // An assertion holds when its expression is true; 0, X and Z all fail it (IEEE 1800
+    // section 16.3), which is what the branch's treatment of an unknown condition gives.
+    const std::uint32_t passBlock = newBlock("assert-pass");
+    const std::uint32_t failBlock = newBlock("assert-fail");
+    const std::uint32_t joinBlock = newBlock("assert-join");
+    emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(condition->reg),
+                                eir::Operand::block(passBlock), eir::Operand::block(failBlock)));
+
+    selectBlock(passBlock);
+    if (assertion.ifTrue != nullptr && !translateStatement(*assertion.ifTrue)) return false;
+    if (!currentBlockTerminated())
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(joinBlock)));
+
+    selectBlock(failBlock);
+    if (assertion.ifFalse != nullptr) {
+        if (!translateStatement(*assertion.ifFalse)) return false;
+    } else if (!cover) {
+        // With no action of its own, a failing assertion is an `$error` (section 16.3).
+        eir::SysTaskCall report;
+        report.kind = eir::SysTaskKind::Error;
+        report.formatIndex = addString(std::string(
+            assertion.assertionKind == ast::AssertionKind::Assume ? "assumption failed"
+                                                                  : "assertion failed"));
+        report.location = module->convertLocation(statement.sourceRange.start());
+        const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
+        process.sysCalls.push_back(std::move(report));
+        emit(eir::Instruction::make(eir::Opcode::SysTask, {}, eir::Operand::sysCall(index)));
+    }
     if (!currentBlockTerminated())
         emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(joinBlock)));
 

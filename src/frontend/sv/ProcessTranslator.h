@@ -216,6 +216,7 @@ private:
     bool translateForeverLoop(const slang::ast::Statement& statement);
     bool translateTimed(const slang::ast::Statement& statement);
     bool translateReturn(const slang::ast::Statement& statement);
+    bool translateImmediateAssertion(const slang::ast::Statement& statement);
 
     /// Emits the suspension for a timing control. Returns false on an unsupported one.
     bool translateTimingControl(const slang::ast::TimingControl& timing);
