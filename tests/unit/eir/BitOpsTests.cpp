@@ -707,4 +707,90 @@ TEST(BitOpsConditional, MergeAcrossLimbs) {
     EXPECT_EQ(result.get(129), Logic::Unknown) << "the differing bit becomes x";
 }
 
+// ---------------------------------------------------------------------------
+// Resolution (DESIGN_GUIDE.md section 3.7; IEEE 1800 tables 6-2 to 6-4)
+// ---------------------------------------------------------------------------
+
+/// A resolution table as the standard prints it: the row is the first driver and the column
+/// the second, both in the order 0, 1, x, z.
+using ResolutionTable = std::array<std::string_view, 4>;
+
+constexpr std::array<Logic, 4> TableOrder = {Logic::Zero, Logic::One, Logic::Unknown, Logic::HighZ};
+
+Logic fromTableChar(char value) {
+    switch (value) {
+    case '0': return Logic::Zero;
+    case '1': return Logic::One;
+    case 'z': return Logic::HighZ;
+    default: return Logic::Unknown;
+    }
+}
+
+template<typename Resolve>
+void expectTable(Resolve resolveFunction, const ResolutionTable& table) {
+    for (std::size_t row = 0; row < 4; ++row) {
+        for (std::size_t column = 0; column < 4; ++column) {
+            BitVector acc(1);
+            acc.set(0, TableOrder[row]);
+            BitVector driver(1);
+            driver.set(0, TableOrder[column]);
+            resolveFunction(acc.mutableRef(), driver.ref());
+
+            EXPECT_EQ(acc.get(0), fromTableChar(table[row][column]))
+                << "row " << enzan::eir::toChar(TableOrder[row]) << ", column "
+                << enzan::eir::toChar(TableOrder[column]);
+        }
+    }
+}
+
+TEST(BitOpsResolution, WireMatchesTheStandardsTable) {
+    //                    0      1      x      z
+    expectTable(bitops::resolveWire, {"0xx0", "x1x1", "xxxx", "01xz"});
+}
+
+TEST(BitOpsResolution, WiredAndMatchesTheStandardsTable) {
+    expectTable(bitops::resolveWiredAnd, {"0000", "01x1", "0xxx", "01xz"});
+}
+
+TEST(BitOpsResolution, WiredOrMatchesTheStandardsTable) {
+    expectTable(bitops::resolveWiredOr, {"01x0", "1111", "x1xx", "01xz"});
+}
+
+TEST(BitOpsResolution, PullReplacesOnlyHighImpedance) {
+    BitVector value = literal("4'bz01x");
+    bitops::pullHighImpedance(value.mutableRef(), Logic::Zero);
+    EXPECT_EQ(binary(value.ref()), "001x");
+
+    value = literal("4'bz01x");
+    bitops::pullHighImpedance(value.mutableRef(), Logic::One);
+    EXPECT_EQ(binary(value.ref()), "101x");
+}
+
+TEST(BitOpsResolution, WideVectorsResolveBitByBitAcrossLimbs) {
+    // Every pairing of the four values at every position, over three limbs, compared with the
+    // single-bit result of the same table.
+    constexpr std::uint32_t Width = 150;
+    BitVector left(Width);
+    BitVector right(Width);
+    for (std::uint32_t bit = 0; bit < Width; ++bit) {
+        left.set(bit, TableOrder[bit % 4]);
+        right.set(bit, TableOrder[(bit / 4) % 4]);
+    }
+
+    for (const auto resolveFunction :
+         {bitops::resolveWire, bitops::resolveWiredAnd, bitops::resolveWiredOr}) {
+        BitVector acc = left;
+        resolveFunction(acc.mutableRef(), right.ref());
+
+        for (std::uint32_t bit = 0; bit < Width; ++bit) {
+            BitVector oneLeft(1);
+            oneLeft.set(0, left.get(bit));
+            BitVector oneRight(1);
+            oneRight.set(0, right.get(bit));
+            resolveFunction(oneLeft.mutableRef(), oneRight.ref());
+            ASSERT_EQ(acc.get(bit), oneLeft.get(0)) << "bit " << bit;
+        }
+    }
+}
+
 } // namespace

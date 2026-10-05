@@ -769,4 +769,87 @@ void conditional(BitRef dst, ConstBitRef condition, ConstBitRef whenTrue, ConstB
     dst.canonicalize();
 }
 
+// ---------------------------------------------------------------------------
+// Resolution
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A limb decomposed into the four values, which resolution needs apart because `z` and X,
+/// one "unknown" to every other operation, behave differently here.
+struct ResolutionMasks {
+    Word isZero;
+    Word isOne;
+    Word isHighZ;
+};
+
+ResolutionMasks decomposeForResolution(Word aval, Word bval) noexcept {
+    return {.isZero = ~aval & ~bval, .isOne = aval & ~bval, .isHighZ = ~aval & bval};
+}
+
+/// Writes a resolved limb from the bits that are 0, 1 and `z`; every other bit is X.
+void composeResolved(Word& aval, Word& bval, Word isZero, Word isOne, Word isHighZ) noexcept {
+    const Word isUnknown = ~(isZero | isOne | isHighZ);
+    aval = isOne | isUnknown;
+    bval = isHighZ | isUnknown;
+}
+
+enum class Dominant : std::uint8_t { None, Zero, One };
+
+/// The three tables differ only in which value, if any, wins over a conflict.
+void resolve(BitRef acc, ConstBitRef driver, Dominant dominant) {
+    ENZAN_ASSERT(acc.width() == driver.width(), "resolution needs equal widths");
+
+    const std::uint32_t count = acc.words();
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const ResolutionMasks left = decomposeForResolution(acc.aval()[index], acc.bval()[index]);
+        const ResolutionMasks right =
+            decomposeForResolution(driver.aval()[index], driver.bval()[index]);
+
+        // A value survives where the other side agrees with it or is z.
+        Word isZero =
+            (left.isZero & (right.isZero | right.isHighZ)) | (left.isHighZ & right.isZero);
+        Word isOne = (left.isOne & (right.isOne | right.isHighZ)) | (left.isHighZ & right.isOne);
+        const Word isHighZ = left.isHighZ & right.isHighZ;
+
+        // A dominant value wins wherever either side holds it, X and its opposite included.
+        if (dominant == Dominant::Zero) {
+            isZero = left.isZero | right.isZero;
+            isOne &= ~isZero;
+        } else if (dominant == Dominant::One) {
+            isOne = left.isOne | right.isOne;
+            isZero &= ~isOne;
+        }
+
+        composeResolved(acc.aval()[index], acc.bval()[index], isZero, isOne, isHighZ);
+    }
+    acc.canonicalize();
+}
+
+} // namespace
+
+void resolveWire(BitRef acc, ConstBitRef driver) {
+    resolve(acc, driver, Dominant::None);
+}
+
+void resolveWiredAnd(BitRef acc, ConstBitRef driver) {
+    resolve(acc, driver, Dominant::Zero);
+}
+
+void resolveWiredOr(BitRef acc, ConstBitRef driver) {
+    resolve(acc, driver, Dominant::One);
+}
+
+void pullHighImpedance(BitRef value, Logic pull) {
+    ENZAN_ASSERT(pull == Logic::Zero || pull == Logic::One, "a pull is 0 or 1");
+
+    const std::uint32_t count = value.words();
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const Word isHighZ = ~value.aval()[index] & value.bval()[index];
+        value.bval()[index] &= ~isHighZ;
+        if (pull == Logic::One) value.aval()[index] |= isHighZ;
+    }
+    value.canonicalize();
+}
+
 } // namespace enzan::eir::bitops

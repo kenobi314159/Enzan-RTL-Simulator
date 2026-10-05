@@ -228,4 +228,31 @@ void assignPart(BitRef dst, ConstBitRef source, ConstBitRef lowIndex);
 /// would have driven the same value.
 void conditional(BitRef dst, ConstBitRef condition, ConstBitRef whenTrue, ConstBitRef whenFalse);
 
+// ---------------------------------------------------------------------------
+// Resolution
+// ---------------------------------------------------------------------------
+//
+// How a bit of a net with several drivers takes its value (DESIGN_GUIDE.md section 3.7). Each
+// function folds one more driver into an accumulator that holds what the drivers so far
+// resolved to, so a bit with `n` drivers costs `n - 1` calls. `acc` and `driver` must have the
+// same width and must not overlap. Strength is not modelled: every driver is strong, which the
+// frontend guarantees by refusing any other.
+//
+// `z` is the identity of all three, so an accumulator starts as the first driver's value.
+
+/// `wire`, `tri` and `uwire`: a bit two drivers agree on keeps its value, `z` yields to the
+/// other driver, and any other disagreement is X.
+void resolveWire(BitRef acc, ConstBitRef driver);
+
+/// `wand` and `triand`: 0 wins over everything but `z`, two 1s give 1, and X with anything
+/// but 0 or `z` is X.
+void resolveWiredAnd(BitRef acc, ConstBitRef driver);
+
+/// `wor` and `trior`: the dual of `resolveWiredAnd`, with 1 winning.
+void resolveWiredOr(BitRef acc, ConstBitRef driver);
+
+/// Replaces each `z` bit of `value` with `pull`, which must be 0 or 1: what a `tri0` or `tri1`
+/// does to a bit every driver leaves undriven.
+void pullHighImpedance(BitRef value, Logic pull);
+
 } // namespace enzan::eir::bitops
