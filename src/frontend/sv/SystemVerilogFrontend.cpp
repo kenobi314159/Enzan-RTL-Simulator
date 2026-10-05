@@ -1262,7 +1262,10 @@ std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
         if (symbol.kind == ast::SymbolKind::Parameter) {
             rendered = symbol.as<ast::ParameterSymbol>().getValue().toString();
         } else if (symbol.kind == ast::SymbolKind::TypeParameter) {
-            rendered = symbol.as<ast::TypeParameterSymbol>().targetType.getType().toString();
+            rendered = symbol.as<ast::TypeParameterSymbol>()
+                           .targetType.getType()
+                           .getCanonicalType()
+                           .toString();
         } else {
             continue;
         }
