@@ -1538,7 +1538,7 @@ Simulation readWindowAt(std::string_view offset) {
                                             .type = Type::bits(16, false, true),
                                             .initialValue = literal("16'hA55A")},
                                      Object{.name = "result", .type = Type::bits(8, false, true)}});
-    return Simulation(designOf(std::move(definition)), "tb");
+    return {designOf(std::move(definition)), "tb"};
 }
 
 TEST(Kernel, AWindowOfAnObjectIsReadAtItsOffset) {
@@ -1584,7 +1584,7 @@ Simulation twoDrivers(std::string_view a, std::string_view b) {
                 {Object{.name = "a", .type = Type::logic(), .initialValue = literal(a)},
                  Object{.name = "b", .type = Type::logic(), .initialValue = literal(b)},
                  Object{.name = "n", .type = Type::logic(), .kind = enzan::eir::ObjectKind::Net}});
-    return Simulation(designOf(std::move(definition)), "tb");
+    return {designOf(std::move(definition)), "tb"};
 }
 
 TEST(Kernel, TwoDriversOfANetResolveAndReResolveWhenEitherChanges) {
