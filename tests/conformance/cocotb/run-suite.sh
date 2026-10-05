@@ -88,20 +88,6 @@ total=$((${#passed[@]} + ${#failed[@]}))
 printf '\ncocotb %s regression: %d of %d cases pass (%d%%), %d of them with cocotb running\n' \
     "$version" "${#passed[@]}" "$total" $((100 * ${#passed[@]} / total)) "$simulated"
 
-# The ratchet.
-status=0
-while read -r expected; do
-    [[ -z "$expected" || "$expected" == \#* ]] && continue
-    if [[ ! " ${passed[*]} " == *" $expected "* ]]; then
-        printf 'REGRESSED %s, which passing.txt lists as passing\n' "$expected"
-        status=1
-    fi
-done <"$here/passing.txt"
-
-for name in "${passed[@]}"; do
-    if ! grep -qx "$name" "$here/passing.txt"; then
-        printf 'NEW %s passes; add it to %s\n' "$name" "$here/passing.txt"
-    fi
-done
-
-exit "$status"
+# The ratchet, shared with the other suites.
+printf '%s\n' "${passed[@]}" >"$work/passed.txt"
+exec "$here/../ratchet.sh" "$here/passing.txt" "$work/passed.txt"
