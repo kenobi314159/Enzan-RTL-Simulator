@@ -319,6 +319,15 @@ public:
     /// Writes a whole signal, detecting change and waking its subscribers.
     void writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value);
 
+    /// Writes `value` through the driver of `route` whose range holds bit `lowBit` of the
+    /// signal, and resolves what that changes (DESIGN_GUIDE.md section 3.7).
+    ///
+    /// Only the segments that driver covers are resolved, and the result reaches the signal
+    /// through `writeSignalPart`, so a contended bit wakes nothing unless its resolved value
+    /// moves. A write that lands in no driver's range is outside the signal and is dropped,
+    /// as a write through an out-of-range select is.
+    void writeThroughDrivers(const WriteRoute& route, eir::ConstBitRef value, std::uint64_t lowBit);
+
     /// Writes `value` into a signal starting at bit `lowBit`, leaving the rest alone.
     void writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value, std::uint64_t lowBit);
 
@@ -380,6 +389,9 @@ private:
     /// Wakes whatever is waiting on a transition of `signalIndex`.
     void notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after);
 
+    /// Resolves every segment `driverIndex` covers and writes the result into its signal.
+    void resolveDriver(std::uint32_t driverIndex);
+
     /// Reports the delta limit being exceeded, naming what is still active.
     void reportDeltaLimit();
 
@@ -402,6 +414,13 @@ private:
     /// Empty rather than sized at construction so that the check on the signal write path is
     /// a test of one size against zero for the whole of an ordinary run.
     std::vector<bool> forcedSignals;
+
+    /// Scratch for resolution, sized once for the widest driver: the resolved range, the
+    /// segment being folded, and the driver being folded into it. Resolution runs on the
+    /// write path, which section 13.4 forbids allocating on.
+    std::vector<eir::Word> resolvedScratch;
+    std::vector<eir::Word> segmentScratch;
+    std::vector<eir::Word> driverScratch;
 
     /// Dynamic edge subscriptions created by `WaitEdge`, indexed by signal.
     ///

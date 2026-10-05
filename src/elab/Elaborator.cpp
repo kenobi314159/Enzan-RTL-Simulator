@@ -338,16 +338,16 @@ private:
         }
     }
 
-    /// Finds bits with more than one driver and reports those the language does not allow
-    /// (DESIGN_GUIDE.md section 3.7).
+    /// Finds bits with more than one driver, reports those the language does not allow, and
+    /// builds the drivers and segments of the signals that resolve (DESIGN_GUIDE.md section
+    /// 3.7).
     ///
     /// Overlap is what counts, not sharing a signal: `N` instances each driving one bit of an
     /// array are `N` drivers of disjoint ranges and no conflict at all. Several procedural
     /// writers of one bit are legal too — `initial clk = 0;` beside `always #5 clk = ~clk;`
     /// is in almost every testbench — and the last write wins. What is refused is a bit of a
-    /// variable with two continuous drivers, or with a continuous driver and a procedural
-    /// writer. Overlapping drivers of a net are legal and resolved, which the runtime does
-    /// not do yet, so they are refused as unimplemented rather than left to the last write.
+    /// variable or a `uwire` with two continuous drivers, or with a continuous driver and a
+    /// procedural writer. Overlapping drivers of any other net are legal and resolved.
     ///
     /// One diagnostic per slot, for the overlap at its lowest bit: the first conflict names
     /// the signal and both drivers, and a list of every pair on a wide bus would bury it.
@@ -371,26 +371,31 @@ private:
         }
 
         bool ok = true;
+        std::vector<bool> resolved(rangesBySlot.size(), false);
         for (std::uint32_t slotIndex = 0; slotIndex < rangesBySlot.size(); ++slotIndex) {
             std::vector<DriverRange>& ranges = rangesBySlot[slotIndex];
-            if (!checkPulledNet(slotIndex, ranges)) {
-                ok = false;
-                continue;
-            }
-            if (ranges.size() < 2) continue;
 
             // Stable, so that ranges starting at one bit keep process order and the pair a
             // diagnostic names is the same on every run (section 3.8).
             std::ranges::stable_sort(ranges, {}, &DriverRange::lowBit);
-            if (!checkSlotDrivers(slotIndex, ranges)) ok = false;
+            if (!checkSlotDrivers(slotIndex, ranges)) {
+                ok = false;
+                continue;
+            }
+            resolved[slotIndex] = resolves(slotIndex, ranges);
         }
-        return ok;
+        if (!ok) return false;
+
+        buildDrivers(resolved);
+        return true;
     }
 
     /// Reports the first conflicting overlap among `ranges`, which are ordered by low bit,
     /// and returns false if there was one.
     bool checkSlotDrivers(std::uint32_t slotIndex, const std::vector<DriverRange>& ranges) {
         const Slot& slot = result->slotList[slotIndex];
+        const bool singleDriver =
+            slot.kind == eir::ObjectKind::Variable || slot.netKind == eir::NetKind::UWire;
 
         for (std::size_t later = 1; later < ranges.size(); ++later) {
             for (std::size_t earlier = 0; earlier < later; ++earlier) {
@@ -398,6 +403,7 @@ private:
                 const DriverRange& second = ranges[later];
                 if (first.endBit() <= second.lowBit) continue;
                 if (!first.continuous && !second.continuous) continue;
+                if (first.continuous && second.continuous && !singleDriver) continue;
 
                 const std::string bits = describeBits(
                     second.lowBit, std::min(first.endBit(), second.endBit()), slot.type.bitWidth());
@@ -409,20 +415,12 @@ private:
                     diagnostics.report(DiagCode::MixedDriverKinds, secondProcess.location,
                                        slot.path, bits, describeProcess(driver.process),
                                        describeProcess(writer.process));
-                } else if (slot.kind == eir::ObjectKind::Variable
-                           || slot.netKind == eir::NetKind::UWire) {
+                } else {
                     const std::string_view kind =
                         slot.kind == eir::ObjectKind::Variable ? "variable" : "uwire net";
                     diagnostics.report(DiagCode::MultipleContinuousDrivers, secondProcess.location,
                                        kind, slot.path, bits, describeProcess(first.process),
                                        describeProcess(second.process), kind);
-                } else {
-                    diagnostics.report(
-                        DiagCode::NotYetImplemented, secondProcess.location,
-                        std::format("resolving net '{}', whose {} {} driven by both {} and {},",
-                                    slot.path, bits, bits.starts_with("bits") ? "are" : "is",
-                                    describeProcess(first.process),
-                                    describeProcess(second.process)));
                 }
                 return false;
             }
@@ -430,24 +428,121 @@ private:
         return true;
     }
 
-    /// Refuses a pulled or supply net with any continuous driver, and returns false if it did.
-    ///
-    /// Such a net resolves even a single driver — a `tri0` driven to `z` reads 0 — which the
-    /// runtime does not do yet. Writing the driver's value straight into the net would show
-    /// the `z`.
-    bool checkPulledNet(std::uint32_t slotIndex, const std::vector<DriverRange>& ranges) {
+    /// True when a slot's drivers have to be resolved rather than written straight into it: a
+    /// net with a bit driven twice, or a pulled or supply net with any driver at all, since a
+    /// `tri0` driven to `z` reads 0.
+    [[nodiscard]] bool resolves(std::uint32_t slotIndex,
+                                const std::vector<DriverRange>& ranges) const {
         const Slot& slot = result->slotList[slotIndex];
-        if (slot.kind != eir::ObjectKind::Net || !eir::resolvesSingleDrivers(slot.netKind))
-            return true;
+        if (slot.kind != eir::ObjectKind::Net) return false;
 
-        const auto driver = std::ranges::find_if(ranges, &DriverRange::continuous);
-        if (driver == ranges.end()) return true;
+        std::uint32_t reached = 0;
+        bool anyDriver = false;
+        for (const DriverRange& range : ranges) {
+            if (!range.continuous) continue;
+            if (anyDriver && range.lowBit < reached) return true;
+            reached = std::max(reached, range.endBit());
+            anyDriver = true;
+        }
+        return anyDriver && eir::resolvesSingleDrivers(slot.netKind);
+    }
 
-        diagnostics.report(
-            DiagCode::NotYetImplemented, processOf(result->processList[driver->process]).location,
-            std::format("resolving the driver {} of {} net '{}'", describeProcess(driver->process),
-                        eir::toString(slot.netKind), slot.path));
-        return false;
+    /// Gives every continuous write of a resolved slot a driver with its own value in the
+    /// arena, and splits each resolved slot into segments.
+    ///
+    /// Drivers are made in process order, and within a process in write-set order, so that a
+    /// process's drivers through one object are contiguous: that run is what a store is routed
+    /// to (section 3.7).
+    void buildDrivers(const std::vector<bool>& resolved) {
+        std::vector<std::vector<std::uint32_t>> driversBySlot(result->slotList.size());
+
+        for (std::uint32_t processIndex = 0; processIndex < result->processList.size();
+             ++processIndex) {
+            const ProcessInstance& processInstance = result->processList[processIndex];
+            const eir::Process& process = processOf(processInstance);
+            if (process.kind != eir::ProcessKind::ContinuousAssign) continue;
+
+            const Instance& instance = result->instanceList[processInstance.instanceIndex];
+            for (const eir::WriteExtent& extent : process.writeSet) {
+                const std::uint32_t slotIndex = instance.objectSlots[extent.objectIndex];
+                if (!resolved[slotIndex]) continue;
+
+                driversBySlot[slotIndex].push_back(
+                    static_cast<std::uint32_t>(result->driverList.size()));
+                result->driverList.push_back(Driver{.slot = slotIndex,
+                                                    .lowBit = extent.lowBit,
+                                                    .width = extent.width,
+                                                    .process = processIndex,
+                                                    .objectIndex = extent.objectIndex,
+                                                    .wordOffset = result->arenaSize});
+                result->arenaSize += eir::storageWordsFor(extent.width);
+                result->widestDriverBits = std::max(result->widestDriverBits, extent.width);
+            }
+        }
+
+        for (std::uint32_t slotIndex = 0; slotIndex < driversBySlot.size(); ++slotIndex) {
+            if (!driversBySlot[slotIndex].empty())
+                buildSegments(slotIndex, driversBySlot[slotIndex]);
+        }
+    }
+
+    /// Splits a resolved slot into maximal runs of bits with one set of drivers, and tells each
+    /// driver which of them it covers.
+    ///
+    /// A bit no driver covers belongs to no segment: nothing ever writes it, so it keeps the
+    /// undriven value it started with.
+    void buildSegments(std::uint32_t slotIndex, const std::vector<std::uint32_t>& drivers) {
+        std::vector<std::uint32_t> boundaries;
+        for (const std::uint32_t driverIndex : drivers) {
+            boundaries.push_back(result->driverList[driverIndex].lowBit);
+            boundaries.push_back(result->driverList[driverIndex].endBit());
+        }
+        std::ranges::sort(boundaries);
+        boundaries.erase(std::ranges::unique(boundaries).begin(), boundaries.end());
+
+        const auto firstSegment = static_cast<std::uint32_t>(result->segmentList.size());
+        std::vector<std::uint32_t> previousSet;
+        for (std::size_t index = 0; index + 1 < boundaries.size(); ++index) {
+            const std::uint32_t low = boundaries[index];
+            const std::uint32_t end = boundaries[index + 1];
+
+            std::vector<std::uint32_t> covering;
+            for (const std::uint32_t driverIndex : drivers) {
+                const Driver& driver = result->driverList[driverIndex];
+                if (driver.lowBit <= low && end <= driver.endBit()) covering.push_back(driverIndex);
+            }
+            if (covering.empty()) {
+                previousSet.clear();
+                continue;
+            }
+
+            if (covering == previousSet) {
+                result->segmentList.back().width += end - low;
+                continue;
+            }
+
+            result->segmentList.push_back(
+                Segment{.slot = slotIndex,
+                        .lowBit = low,
+                        .width = end - low,
+                        .firstDriver = static_cast<std::uint32_t>(result->segmentDriverList.size()),
+                        .driverCount = static_cast<std::uint32_t>(covering.size()),
+                        .netKind = result->slotList[slotIndex].netKind});
+            result->segmentDriverList.insert(result->segmentDriverList.end(), covering.begin(),
+                                             covering.end());
+            previousSet = std::move(covering);
+        }
+
+        for (const std::uint32_t driverIndex : drivers) {
+            Driver& driver = result->driverList[driverIndex];
+            for (auto segment = firstSegment; segment < result->segmentList.size(); ++segment) {
+                const Segment& candidate = result->segmentList[segment];
+                if (candidate.lowBit + candidate.width <= driver.lowBit) continue;
+                if (candidate.lowBit >= driver.endBit()) break;
+                if (driver.segmentCount == 0) driver.firstSegment = segment;
+                ++driver.segmentCount;
+            }
+        }
     }
 
     [[nodiscard]] const eir::Process& processOf(const ProcessInstance& processInstance) const {

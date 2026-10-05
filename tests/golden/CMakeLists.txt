@@ -89,6 +89,9 @@ enzan_add_golden_test(drivers)
 # What each kind of net holds where nothing drives it.
 enzan_add_golden_test(nets)
 
+# Nets with several drivers, resolved per bit: tristate buses, wired logic, pulls and supplies.
+enzan_add_golden_test(resolution)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------

@@ -641,18 +641,76 @@ TEST_F(ElaboratorTest, AProceduralWriterOfAContinuouslyDrivenBitIsRefused) {
         << consumer.messages.front();
 }
 
-TEST_F(ElaboratorTest, OverlappingDriversOfANetAreRefusedUntilResolutionExists) {
-    // A net resolves them, which the runtime does not do yet; letting the last write win would
-    // be a plausible wrong answer.
+TEST_F(ElaboratorTest, OverlappingDriversOfANetAreResolvedRatherThanRefused) {
     ModuleDefinition top = partTarget(ObjectKind::Net);
     top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 5, 1));
     top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 5, 1));
     design.addModule(std::move(top));
 
-    EXPECT_EQ(elaborate("tb"), nullptr);
-    EXPECT_TRUE(reportedCode(enzan::DiagCode::NotYetImplemented));
-    EXPECT_TRUE(reported("resolving net '/tb/x', whose bit 5 is driven by both"))
-        << consumer.messages.front();
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+
+    // Each driver has its own value in the arena, past every slot.
+    ASSERT_EQ(elaborated->drivers().size(), 2U);
+    const std::uint32_t slot = require(elaborated->findSlot("/tb/x"));
+    for (const enzan::elab::Driver& driver : elaborated->drivers()) {
+        EXPECT_EQ(driver.slot, slot);
+        EXPECT_EQ(driver.lowBit, 5U);
+        EXPECT_EQ(driver.width, 1U);
+        EXPECT_GE(driver.wordOffset, elaborated->slots().back().wordOffset + 2);
+    }
+    EXPECT_NE(elaborated->drivers()[0].wordOffset, elaborated->drivers()[1].wordOffset);
+
+    ASSERT_EQ(elaborated->segments().size(), 1U);
+    EXPECT_EQ(elaborated->segments()[0].lowBit, 5U);
+    EXPECT_EQ(elaborated->segments()[0].driverCount, 2U);
+}
+
+TEST_F(ElaboratorTest, PartlyOverlappingDriversSplitIntoSegments) {
+    // Bits [3:0] and [5:2]: bits 1 and 0 have the first alone, 3 and 2 have both, and 5 and 4
+    // the second alone. Bits 7 and 6 have none and are in no segment.
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.addObject(Object{.name = "nibble", .type = Type::bits(4, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 0, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 2, 4));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+
+    const auto segments = elaborated->segments();
+    ASSERT_EQ(segments.size(), 3U);
+    EXPECT_EQ(segments[0].lowBit, 0U);
+    EXPECT_EQ(segments[0].width, 2U);
+    EXPECT_EQ(segments[0].driverCount, 1U);
+    EXPECT_EQ(segments[1].lowBit, 2U);
+    EXPECT_EQ(segments[1].width, 2U);
+    EXPECT_EQ(segments[1].driverCount, 2U);
+    EXPECT_EQ(segments[2].lowBit, 4U);
+    EXPECT_EQ(segments[2].width, 2U);
+    EXPECT_EQ(segments[2].driverCount, 1U);
+
+    // Each driver covers exactly the segments inside its range.
+    const auto drivers = elaborated->drivers();
+    ASSERT_EQ(drivers.size(), 2U);
+    EXPECT_EQ(drivers[0].firstSegment, 0U);
+    EXPECT_EQ(drivers[0].segmentCount, 2U);
+    EXPECT_EQ(drivers[1].firstSegment, 1U);
+    EXPECT_EQ(drivers[1].segmentCount, 2U);
+    EXPECT_EQ(elaborated->widestDriver(), 4U);
+}
+
+TEST_F(ElaboratorTest, ANetWithOneDriverPerBitHasNoDrivers) {
+    // The common case bypasses resolution as a whole: its stores go straight into the slot.
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    for (std::uint32_t bit = 0; bit < 8; ++bit)
+        top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, bit, 1));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(elaborated->drivers().empty());
+    EXPECT_TRUE(elaborated->segments().empty());
 }
 
 TEST_F(ElaboratorTest, PortsOfManyInstancesDrivingBitsOfOneArrayAreAllowed) {
@@ -697,16 +755,18 @@ TEST_F(ElaboratorTest, OverlappingDriversOfAUwireAreAnErrorAsForAVariable) {
     EXPECT_TRUE(reported("uwire net '/tb/x' has bit 2")) << consumer.messages.front();
 }
 
-TEST_F(ElaboratorTest, ADrivenPulledNetIsRefusedUntilResolutionExists) {
-    // A tri0 driven to z reads 0, so even its one driver has to be resolved.
+TEST_F(ElaboratorTest, APulledNetResolvesEvenASingleDriver) {
+    // A tri0 driven to z reads 0, so its one driver is resolved like several would be.
     ModuleDefinition top = partTarget(ObjectKind::Net);
     top.objects[1].netKind = enzan::eir::NetKind::Tri0;
     top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 0, 1));
     design.addModule(std::move(top));
 
-    EXPECT_EQ(elaborate("tb"), nullptr);
-    EXPECT_TRUE(reported("resolving the driver part0 in /tb of tri0 net '/tb/x'"))
-        << consumer.messages.front();
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->drivers().size(), 1U);
+    ASSERT_EQ(elaborated->segments().size(), 1U);
+    EXPECT_EQ(elaborated->segments()[0].netKind, enzan::eir::NetKind::Tri0);
 }
 
 TEST_F(ElaboratorTest, AnUndrivenPulledNetNeedsNoResolution) {

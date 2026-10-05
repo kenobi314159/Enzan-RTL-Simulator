@@ -32,6 +32,15 @@ bool writesObject(const std::vector<WriteExtent>& writeSet, std::uint32_t object
     return found != writeSet.end() && found->objectIndex == objectIndex;
 }
 
+std::vector<std::uint32_t> writtenObjects(const std::vector<WriteExtent>& writeSet) {
+    std::vector<std::uint32_t> objects;
+    for (const WriteExtent& extent : writeSet) {
+        if (objects.empty() || objects.back() != extent.objectIndex)
+            objects.push_back(extent.objectIndex);
+    }
+    return objects;
+}
+
 std::string_view toString(SysTaskKind kind) noexcept {
     switch (kind) {
     case SysTaskKind::Display: return "$display";

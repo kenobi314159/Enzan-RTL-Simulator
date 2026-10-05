@@ -401,9 +401,11 @@ about ownership changes once elaboration is done.
 - **Whether a store goes through a driver depends on the instance, not the body.** A
   compiled body is shared by every instance of its module, and one instance's output
   may land on a resolved net where another's does not. A store therefore names its
-  target by its position in the process's write set, and each bound process carries a
-  table from that position to the signal itself or to a driver. A JIT, which
-  specialises a process per instance, burns the answer in as a constant.
+  target by the position of its object among the objects the process writes, and each
+  bound process carries a table from that position to the signal itself or to its
+  drivers of it — more than one when it writes separate ranges of the object, in which
+  case a part store goes through the one holding its bits. A JIT, which specialises a
+  process per instance, burns the answer in as a constant.
 
 A per-bit table of owning drivers was rejected because it holds at run time a fact
 that is fixed at elaboration, and pays a lookup on every write, single-driver ones

@@ -59,10 +59,14 @@ ENZAN_OPCODE(ReadObject, "read", true, 1,
 ENZAN_OPCODE(Store, "store", false, 2,
              "a call to the runtime update helper, which compares the new value "
              "against the old and schedules the processes sensitive to it; the "
-             "comparison inlines to an icmp pair for widths up to 64")
+             "comparison inlines to an icmp pair for widths up to 64. Where the bound "
+             "process's route for the object names drivers, a call to the driver "
+             "helper instead, which resolves; a JIT specialises per instance and so "
+             "emits only the call that applies")
 ENZAN_OPCODE(StorePart, "storepart", false, 3,
              "as Store, with a mask and shift computed from the offset operand so "
-             "that only the selected bits change")
+             "that only the selected bits change; through drivers, the offset also "
+             "chooses the driver whose range holds it")
 ENZAN_OPCODE(StoreNonBlocking, "nbstore", false, 2,
              "a call to the runtime helper that appends a non-blocking update "
              "record to the NBA region's queue")

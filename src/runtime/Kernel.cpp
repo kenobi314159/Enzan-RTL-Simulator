@@ -69,6 +69,9 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
       stateArena(designImageToRun.arenaWords()),
       frameStorage(designImageToRun.frameWords(), 0),
       processes(designImageToRun.processes().begin(), designImageToRun.processes().end()),
+      resolvedScratch(eir::storageWordsFor(designImageToRun.elaboratedDesign().widestDriver()), 0),
+      segmentScratch(resolvedScratch.size(), 0),
+      driverScratch(resolvedScratch.size(), 0),
       edgeWaiters(designImageToRun.signals().size()) {}
 
 Kernel::~Kernel() = default;
@@ -439,6 +442,94 @@ void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
     notifyChange(signalIndex, before, after);
 
     if (pliHooks != nullptr) pliHooks->valueChanged(signalIndex);
+}
+
+void Kernel::writeThroughDrivers(const WriteRoute& route, eir::ConstBitRef value,
+                                 std::uint64_t lowBit) {
+    const std::span<const elab::Driver> drivers = designImage->elaboratedDesign().drivers();
+
+    for (std::uint32_t index = route.firstDriver; index < route.firstDriver + route.driverCount;
+         ++index) {
+        const elab::Driver& driver = drivers[index];
+        if (lowBit < driver.lowBit || lowBit >= driver.endBit()) continue;
+
+        const eir::BitRef storage = stateArena.at(driver.wordOffset, driver.width);
+        const std::uint64_t offset = lowBit - driver.lowBit;
+
+        // A driver that did not change changes nothing it resolves into, so the common case
+        // of a continuous assignment re-evaluating to the value it already drives stops here.
+        bool changed = false;
+        for (std::uint32_t bit = 0; bit < value.width() && offset + bit < driver.width; ++bit) {
+            if (storage.get(static_cast<std::uint32_t>(offset + bit)) != value.get(bit)) {
+                changed = true;
+                break;
+            }
+        }
+        if (!changed) return;
+
+        bitops::assignPartAt(storage, value, offset);
+        resolveDriver(index);
+        return;
+    }
+}
+
+void Kernel::resolveDriver(std::uint32_t driverIndex) {
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    const elab::Driver& written = elaborated.drivers()[driverIndex];
+    const eir::BitRef resolved(resolvedScratch.data(), written.width);
+
+    for (std::uint32_t segmentIndex = written.firstSegment;
+         segmentIndex < written.firstSegment + written.segmentCount; ++segmentIndex) {
+        const elab::Segment& segment = elaborated.segments()[segmentIndex];
+        const eir::BitRef acc(segmentScratch.data(), segment.width);
+        const eir::BitRef next(driverScratch.data(), segment.width);
+
+        const auto sliceOf = [&](std::uint32_t segmentDriver, eir::BitRef into) {
+            const elab::Driver& driver =
+                elaborated.drivers()[elaborated.segmentDrivers()[segmentDriver]];
+            bitops::partSelectAt(into, stateArena.at(driver.wordOffset, driver.width),
+                                 segment.lowBit - driver.lowBit);
+        };
+
+        sliceOf(segment.firstDriver, acc);
+        for (std::uint32_t other = segment.firstDriver + 1;
+             other < segment.firstDriver + segment.driverCount; ++other) {
+            sliceOf(other, next);
+            switch (segment.netKind) {
+            case eir::NetKind::WiredAnd:
+            case eir::NetKind::TriAnd: bitops::resolveWiredAnd(acc, next); break;
+            case eir::NetKind::WiredOr:
+            case eir::NetKind::TriOr: bitops::resolveWiredOr(acc, next); break;
+            case eir::NetKind::Wire:
+            case eir::NetKind::Tri:
+            case eir::NetKind::Tri0:
+            case eir::NetKind::Tri1:
+            case eir::NetKind::Supply0:
+            case eir::NetKind::Supply1:
+            case eir::NetKind::UWire: bitops::resolveWire(acc, next); break;
+            }
+        }
+
+        // What the net itself contributes: a pull where every driver is `z`, or a supply that
+        // no strong driver can move.
+        switch (segment.netKind) {
+        case eir::NetKind::Tri0: bitops::pullHighImpedance(acc, eir::Logic::Zero); break;
+        case eir::NetKind::Tri1: bitops::pullHighImpedance(acc, eir::Logic::One); break;
+        case eir::NetKind::Supply0: acc.fill(eir::Logic::Zero); break;
+        case eir::NetKind::Supply1: acc.fill(eir::Logic::One); break;
+        case eir::NetKind::Wire:
+        case eir::NetKind::Tri:
+        case eir::NetKind::WiredAnd:
+        case eir::NetKind::WiredOr:
+        case eir::NetKind::TriAnd:
+        case eir::NetKind::TriOr:
+        case eir::NetKind::UWire: break;
+        }
+
+        bitops::assignPartAt(resolved, acc, segment.lowBit - written.lowBit);
+    }
+
+    writeSignalPart(written.slot, resolved, written.lowBit);
 }
 
 void Kernel::scheduleNonBlocking(std::uint32_t signalIndex, eir::ConstBitRef value) {

@@ -87,10 +87,19 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             bitops::copy(reg(instruction.dst, instruction.dstWidth), objectValue(instruction.a));
             break;
 
-        case eir::Opcode::Store:
-            kernel.writeSignal(state.objectSignals[instruction.a],
-                               reg(instruction.b, instruction.bWidth));
+        case eir::Opcode::Store: {
+            // A store goes straight into the signal unless what it writes is resolved with
+            // other drivers, in which case it goes through this process's driver (section
+            // 3.7). One load and a compare on the common path.
+            const WriteRoute& route = state.writeRoutes[instruction.dst];
+            if (route.direct()) {
+                kernel.writeSignal(state.objectSignals[instruction.a],
+                                   reg(instruction.b, instruction.bWidth));
+            } else {
+                kernel.writeThroughDrivers(route, reg(instruction.b, instruction.bWidth), 0);
+            }
             break;
+        }
 
         case eir::Opcode::StorePart: {
             const eir::ConstBitRef index = reg(instruction.c, instruction.cWidth);
@@ -98,8 +107,14 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
                 // The target of the write is unknown, so nothing may be written.
                 break;
             }
-            kernel.writeSignalPart(state.objectSignals[instruction.a],
-                                   reg(instruction.b, instruction.bWidth), index.toUInt64());
+            const WriteRoute& route = state.writeRoutes[instruction.dst];
+            if (route.direct()) {
+                kernel.writeSignalPart(state.objectSignals[instruction.a],
+                                       reg(instruction.b, instruction.bWidth), index.toUInt64());
+            } else {
+                kernel.writeThroughDrivers(route, reg(instruction.b, instruction.bWidth),
+                                           index.toUInt64());
+            }
             break;
         }
 

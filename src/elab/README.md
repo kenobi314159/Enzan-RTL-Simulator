@@ -13,11 +13,14 @@ ports and computes the flat state layout (DESIGN_GUIDE.md section 2.1).
   port costs nothing at run time.
 - Produce the list of processes to schedule, as (instance, process) pairs.
 - Find bits with more than one driver, per bit rather than per signal (DESIGN_GUIDE.md
-  section 3.7), and refuse those the language does not allow: a bit of a variable with two
-  continuous drivers, or with a continuous driver and a procedural writer.
-- Reject the cases that would need features later milestones bring — port width
-  conversion, resolving a net with overlapping drivers — rather than let them simulate to
-  a plausible wrong answer.
+  section 3.7), and refuse those the language does not allow: a bit of a variable or a
+  `uwire` with two continuous drivers, or with a continuous driver and a procedural writer.
+- Give each continuous write of a net that resolves — one with a bit driven twice, or a
+  pulled or supply net with any driver — a **driver** with its own value in the arena, and
+  split the net into **segments** with one set of drivers each. Every other signal has no
+  driver state and is written straight into its slot.
+- Reject the cases that would need features later milestones bring, such as port width
+  conversion, rather than let them simulate to a plausible wrong answer.
 
 ## What elaboration is not
 

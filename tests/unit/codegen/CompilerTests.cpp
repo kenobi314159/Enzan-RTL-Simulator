@@ -141,6 +141,31 @@ TEST_F(CompilerTest, RegistersBecomeFrameOffsetsAndCarryTheirWidths) {
     EXPECT_EQ(body.code[0].dstWidth, 1U);
 }
 
+TEST_F(CompilerTest, AStoreCarriesItsObjectsPositionAmongTheObjectsWritten) {
+    // The runtime routes a store by this position (DESIGN_GUIDE.md section 3.7), so it counts
+    // objects, not extents: object 1 is written in two ranges and is still position 0.
+    Process process = makeCopyProcess();
+    process.writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
+                        WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 4},
+                        WriteExtent::whole(2, 8)};
+    process.blocks[0].instructions.insert(
+        process.blocks[0].instructions.begin() + 2,
+        Instruction::make(Opcode::Store, {}, Operand::object(2), Operand::reg(0)));
+
+    ModuleDefinition definition = makeModule(std::move(process));
+    definition.addObject(Object{.name = "c", .type = Type::bits(8, false, true)});
+    design.addModule(std::move(definition));
+
+    const std::unique_ptr<CompiledDesign> compiled = compile();
+    ASSERT_NE(compiled, nullptr) << consumer.messages.front();
+
+    const auto& body = compiled->body(0);
+    ASSERT_EQ(body.code[1].opcode, Opcode::Store);
+    EXPECT_EQ(body.code[1].dst, 0U);
+    ASSERT_EQ(body.code[2].opcode, Opcode::Store);
+    EXPECT_EQ(body.code[2].dst, 1U);
+}
+
 TEST_F(CompilerTest, NonRegisterOperandsKeepTheirIndexAndHaveNoWidth) {
     design.addModule(makeModule(makeCopyProcess()));
 

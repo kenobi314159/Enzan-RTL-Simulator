@@ -52,6 +52,11 @@ void Image::buildInstanceTables() {
 
 void Image::buildProcesses() {
     processList.reserve(elaborated->processes().size());
+    processWriteRoutes.resize(elaborated->processes().size());
+
+    // Drivers are ordered by process, then object, so one pass hands each process its runs.
+    const std::span<const elab::Driver> drivers = elaborated->drivers();
+    std::size_t nextDriver = 0;
 
     for (const elab::ProcessInstance& processInstance : elaborated->processes()) {
         const elab::Instance& instance = elaborated->instances()[processInstance.instanceIndex];
@@ -72,6 +77,22 @@ void Image::buildProcesses() {
         frameSize += body.frameWords;
 
         const auto processIndex = static_cast<std::uint32_t>(processList.size());
+
+        std::vector<WriteRoute>& routes = processWriteRoutes[processIndex];
+        for (const std::uint32_t objectIndex : eir::writtenObjects(body.writeSet)) {
+            WriteRoute route{.firstDriver = static_cast<std::uint32_t>(nextDriver),
+                             .driverCount = 0};
+            while (nextDriver < drivers.size() && drivers[nextDriver].process == processIndex
+                   && drivers[nextDriver].objectIndex == objectIndex) {
+                ++route.driverCount;
+                ++nextDriver;
+            }
+            routes.push_back(route);
+        }
+        ENZAN_ALWAYS_ASSERT(nextDriver == drivers.size()
+                                || drivers[nextDriver].process != processIndex,
+                            "every driver of a process is reached through one of its routes");
+        state.writeRoutes = routes;
 
         // Static sensitivity. An explicit list is used as written; a process whose
         // triggering is implicit — `always_comb`, `always_latch`, a continuous
@@ -155,6 +176,11 @@ void Image::initializeState(Arena& arena) const {
     // whichever side of the port connection declared it.
     visit(true);
     visit(false);
+
+    // A driver that has not run yet drives nothing, which is `z`; resolution then leaves the
+    // net at its undriven value until it does.
+    for (const elab::Driver& driver : elaborated->drivers())
+        arena.at(driver.wordOffset, driver.width).fill(eir::Logic::HighZ);
 }
 
 std::uint32_t Image::findSignal(std::string_view path) const {

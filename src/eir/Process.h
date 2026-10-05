@@ -165,6 +165,13 @@ void normaliseWriteSet(std::vector<WriteExtent>& extents);
 [[nodiscard]] bool writesObject(const std::vector<WriteExtent>& writeSet,
                                 std::uint32_t objectIndex) noexcept;
 
+/// The objects `writeSet` writes, each once and in order.
+///
+/// A store is routed by its object's position in this list (DESIGN_GUIDE.md section 3.7), so
+/// codegen, which numbers the stores, and the runtime, which routes them, both take the list
+/// from here.
+[[nodiscard]] std::vector<std::uint32_t> writtenObjects(const std::vector<WriteExtent>& writeSet);
+
 /// An EIR-B process: the body of one procedural block, as a control-flow graph.
 ///
 /// **The core invariant.** A process is expressible as a pure function over an
