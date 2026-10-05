@@ -44,6 +44,11 @@ enum class SysTaskKind : std::uint8_t {
     FileClose,
     /// `$fflush`, of one descriptor or, with no argument, of every file.
     FileFlush,
+    /// `$readmemh` and `$readmemb`: load the memory that is the call's target object from the
+    /// file named by the first argument, between the optional start and end addresses that
+    /// follow (IEEE 1800 section 21.4).
+    ReadMemHex,
+    ReadMemBinary,
 
     // System functions, run by SysFunction, which have a result.
 
@@ -91,11 +96,16 @@ struct SysTaskCall {
 
     std::vector<SysTaskArgument> arguments;
 
+    /// The object a call writes, `$readmemh`'s memory, or `NoObject`. An object rather than
+    /// an argument, because what the call needs is where the memory is, not its value.
+    std::uint32_t objectIndex = NoObject;
+
     /// Where the call appears, so that a malformed format string can be reported
     /// against the user's source rather than against the generated code.
     SourceLocation location;
 
     static constexpr std::uint32_t NoFormat = 0xFFFF'FFFFU;
+    static constexpr std::uint32_t NoObject = 0xFFFF'FFFFU;
 
     [[nodiscard]] bool hasFormat() const noexcept { return formatIndex != NoFormat; }
 };

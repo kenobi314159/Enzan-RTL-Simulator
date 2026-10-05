@@ -230,6 +230,7 @@ bool Compiler::compileSysTaskCalls(const eir::ModuleDefinition& definition,
         SysTaskDescriptor descriptor;
         descriptor.kind = call.kind;
         descriptor.formatIndex = call.formatIndex;
+        descriptor.objectIndex = call.objectIndex;
         descriptor.location = call.location;
 
         if (call.hasFormat() && call.formatIndex >= process.strings.size()) {

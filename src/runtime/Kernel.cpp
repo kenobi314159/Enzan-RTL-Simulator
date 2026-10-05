@@ -10,12 +10,14 @@
 #include "eir/Process.h"
 #include "runtime/Format.h"
 #include "runtime/Interpreter.h"
+#include "runtime/ReadMem.h"
 
 #include <algorithm>
 #include <cstring>
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -919,6 +921,9 @@ void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallInde
         }
         return;
 
+    case eir::SysTaskKind::ReadMemHex:
+    case eir::SysTaskKind::ReadMemBinary: readMemory(processIndex, descriptor, arguments); return;
+
     case eir::SysTaskKind::Random:
     case eir::SysTaskKind::URandom:
     case eir::SysTaskKind::URandomRange:
@@ -1002,6 +1007,43 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCall
     std::ranges::fill(result.bvalWords(), 0);
     result.aval()[0] = value;
     result.canonicalize();
+}
+
+void Kernel::readMemory(std::uint32_t processIndex, const codegen::SysTaskDescriptor& descriptor,
+                        std::span<const FormatArgument> arguments) {
+    const std::string task(eir::toString(descriptor.kind));
+    const std::string name = toAsciiString(arguments[0].value);
+    const auto address = [&](std::size_t index) -> std::optional<std::int64_t> {
+        if (arguments.size() <= index || arguments[index].value.hasUnknown()) return std::nullopt;
+        return arguments[index].isSigned
+                   ? arguments[index].value.toInt64()
+                   : static_cast<std::int64_t>(arguments[index].value.toUInt64());
+    };
+
+    const std::ifstream file(name);
+    if (!file) {
+        diagnostics.report(DiagCode::ReadMemProblem, descriptor.location, task, name,
+                           "the file could not be opened");
+        return;
+    }
+    std::ostringstream contents;
+    contents << file.rdbuf();
+
+    // The memory as it is, so that what the file does not reach keeps its value, written back
+    // whole: one change, which wakes what reads the memory once.
+    const std::uint32_t signalIndex = processes[processIndex].objectSignals[descriptor.objectIndex];
+    const elab::Slot& slot = designImage->elaboratedDesign().slots()[signalIndex];
+    const Signal& signal = designImage->signals()[signalIndex];
+    eir::BitVector memory = eir::BitVector::from(stateArena.at(signal.wordOffset, signal.bitWidth));
+    const MemoryShape shape{.left = slot.unpackedDimensions.front().left,
+                            .right = slot.unpackedDimensions.front().right,
+                            .elementWidth = slot.elementWidth};
+
+    for (const std::string& problem :
+         loadMemoryImage(contents.str(), descriptor.kind == eir::SysTaskKind::ReadMemHex, shape,
+                         address(1), address(2), memory.mutableRef()))
+        diagnostics.report(DiagCode::ReadMemProblem, descriptor.location, task, name, problem);
+    writeSignal(signalIndex, memory.ref());
 }
 
 std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,

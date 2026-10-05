@@ -261,6 +261,15 @@ private:
         checkDeclaredSet(definition, process, process.readSet, "read set");
         checkWriteSet(definition, process);
 
+        // A call that writes an object writes it as a store does, so the object must be in the
+        // write set, or the drivers and the scheduler would not know the process writes it.
+        for (const SysTaskCall& call : process.sysCalls) {
+            if (call.objectIndex != SysTaskCall::NoObject) {
+                checkObjectAccess(definition, process, Operand::object(call.objectIndex), true,
+                                  toString(call.kind));
+            }
+        }
+
         if (process.blocks.empty()) {
             reportProcess(definition, process, "has no basic blocks");
             return;

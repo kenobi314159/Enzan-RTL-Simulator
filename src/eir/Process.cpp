@@ -64,6 +64,8 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::FileWrite: return "$fwrite";
     case SysTaskKind::FileClose: return "$fclose";
     case SysTaskKind::FileFlush: return "$fflush";
+    case SysTaskKind::ReadMemHex: return "$readmemh";
+    case SysTaskKind::ReadMemBinary: return "$readmemb";
     case SysTaskKind::FileOpen: return "$fopen";
     }
     return "$unknown";

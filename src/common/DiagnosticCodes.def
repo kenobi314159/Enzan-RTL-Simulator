@@ -102,6 +102,7 @@ ENZAN_DIAG(RandomSeed, 5007, Note,
            "random numbers are drawn from seed {}; `--seed` chooses another")
 ENZAN_DIAG(FileNotOpened, 5008, Warning, "$fopen could not open '{}' with mode '{}': {}")
 ENZAN_DIAG(FileNotOpen, 5009, Warning, "{} names file descriptor {:#x}, which is not open")
+ENZAN_DIAG(ReadMemProblem, 5010, Warning, "{} of '{}': {}")
 
 // --- 6000-6999: the session and its command line -----------------------------
 

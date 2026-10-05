@@ -1086,6 +1086,19 @@ TEST_F(FrontendTest, ReportsSeparateRiseAndFallDelays) {
     EXPECT_TRUE(reported("separate rise, fall and turn-off delays"));
 }
 
+TEST_F(FrontendTest, ReportsReadingAMemoryOfTwoDimensions) {
+    // The file's words follow one address; which of two dimensions they would run along is
+    // not something to guess.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] grid [0:3][0:3];
+            initial $readmemh("grid.hex", grid);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a memory of other than one unpacked dimension"));
+}
+
 TEST_F(FrontendTest, ReportsADeferredAssertion) {
     // Evaluated on the spot it would report the glitches it exists to filter out.
     EXPECT_EQ(analyse(R"(

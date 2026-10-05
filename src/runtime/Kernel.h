@@ -5,6 +5,7 @@
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
 #include "runtime/Arena.h"
+#include "runtime/Format.h"
 #include "runtime/Image.h"
 #include "runtime/Scheduler.h"
 #include "runtime/Time.h"
@@ -13,6 +14,7 @@
 #include <iosfwd>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -478,6 +480,11 @@ private:
     std::vector<OpenFile> openFiles;
     std::uint32_t nextFileNumber = 3;
     std::uint32_t nextChannel = 1;
+
+    /// Runs `$readmemh` or `$readmemb`, whose arguments are the file name and the optional
+    /// start and end addresses.
+    void readMemory(std::uint32_t processIndex, const codegen::SysTaskDescriptor& descriptor,
+                    std::span<const FormatArgument> arguments);
 
     /// Opens `name` for `$fopen`, and returns its descriptor or 0.
     std::uint32_t openFile(const std::string& name, const std::string& mode,

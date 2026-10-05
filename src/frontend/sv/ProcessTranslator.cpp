@@ -2744,9 +2744,66 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
     return false;
 }
 
+bool ProcessTranslator::translateReadMem(std::string_view name, const ast::CallExpression& call) {
+    const slang::SourceLocation where = call.sourceRange.start();
+    const auto refuse = [&](std::string_view what) {
+        module->reportUnsupported(where, std::format("{} into {}", name, what));
+        failed = true;
+        return false;
+    };
+
+    const std::span<const ast::Expression* const> arguments = call.arguments();
+    if (arguments.size() < 2) return refuse("nothing");
+
+    // The memory is written whole, so it has to be one: a whole one-dimensional array. slang
+    // makes an output argument an assignment to it.
+    const ast::Expression* target = arguments[1];
+    if (target->kind == ast::ExpressionKind::Assignment)
+        target = &target->as<ast::AssignmentExpression>().left();
+    while (target->kind == ast::ExpressionKind::Conversion)
+        target = &target->as<ast::ConversionExpression>().operand();
+    if (target->kind != ast::ExpressionKind::NamedValue
+        && target->kind != ast::ExpressionKind::HierarchicalValue)
+        return refuse("anything but a whole memory");
+    const std::optional<std::uint32_t> objectIndex =
+        module->objectFor(target->as<ast::ValueExpressionBase>().symbol);
+    if (!objectIndex.has_value()) {
+        failed = true;
+        return false;
+    }
+    if (module->definition().objects[*objectIndex].unpackedDimensions.size() != 1)
+        return refuse("a memory of other than one unpacked dimension");
+
+    eir::SysTaskCall descriptor;
+    descriptor.kind =
+        name == "$readmemh" ? eir::SysTaskKind::ReadMemHex : eir::SysTaskKind::ReadMemBinary;
+    descriptor.location = module->convertLocation(where);
+    descriptor.objectIndex = *objectIndex;
+
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        if (index == 1) continue;
+        // The file name is a literal, which slang converts to `string`; its characters are
+        // what the runtime reads.
+        const ast::StringLiteral* literal = index == 0 ? stringLiteralOf(*arguments[0]) : nullptr;
+        const std::optional<Value> value =
+            translateExpression(literal != nullptr ? *literal : *arguments[index]);
+        if (!value.has_value()) return false;
+        descriptor.arguments.push_back(
+            eir::SysTaskArgument{.value = eir::Operand::reg(value->reg), .type = value->type});
+    }
+
+    noteWholeWrite(*objectIndex);
+    const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
+    process.sysCalls.push_back(std::move(descriptor));
+    emit(eir::Instruction::make(eir::Opcode::SysTask, {}, eir::Operand::sysCall(index)));
+    return true;
+}
+
 bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNode) {
     const auto& call = expressionNode.as<ast::CallExpression>();
     const std::string_view name = call.getSubroutineName();
+
+    if (name == "$readmemh" || name == "$readmemb") return translateReadMem(name, call);
 
     eir::SysTaskKind kind = eir::SysTaskKind::Display;
     bool skipFirstArgument = false;

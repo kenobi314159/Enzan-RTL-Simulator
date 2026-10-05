@@ -96,6 +96,9 @@ struct SysTaskDescriptor {
 
     std::vector<Argument> arguments;
 
+    /// The object the call writes, or `eir::SysTaskCall::NoObject`.
+    std::uint32_t objectIndex = eir::SysTaskCall::NoObject;
+
     SourceLocation location;
 
     [[nodiscard]] bool hasFormat() const noexcept {

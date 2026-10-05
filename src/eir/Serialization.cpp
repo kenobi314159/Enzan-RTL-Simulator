@@ -270,6 +270,7 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     for (const SysTaskCall& call : process.sysCalls) {
         out.u8(static_cast<std::uint8_t>(call.kind));
         out.u32(call.formatIndex);
+        out.u32(call.objectIndex);
         writeLocation(out, names, call.location);
         out.u32(static_cast<std::uint32_t>(call.arguments.size()));
         for (const SysTaskArgument& argument : call.arguments) {
@@ -521,6 +522,7 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     for (SysTaskCall& call : process.sysCalls) {
         call.kind = static_cast<SysTaskKind>(in.u8());
         call.formatIndex = in.u32();
+        call.objectIndex = in.u32();
         call.location = readLocation(in, buffers);
         call.arguments.resize(in.count());
         for (SysTaskArgument& argument : call.arguments) {

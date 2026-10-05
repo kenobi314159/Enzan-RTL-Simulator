@@ -95,7 +95,8 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - every system function but `$time`, `$signed`, `$unsigned`, `$bits`, `$clog2`, `$isunknown`,
   `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom`, `$urandom_range` and `$fopen`,
   and those slang folds to a constant. Files are written, with `$fdisplay`, `$fwrite`,
-  `$fflush` and `$fclose`, and not read: `$fopen` for reading gives 0 with a warning;
+  `$fflush` and `$fclose`, and read only by `$readmemh` and `$readmemb`, into a whole memory of
+  one unpacked dimension: `$fopen` for reading gives 0 with a warning;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
 - an event control on an expression other than a signal or a constant select of one, such
   as `@(a & b)` or `@(posedge clk[i])` with `i` a variable;

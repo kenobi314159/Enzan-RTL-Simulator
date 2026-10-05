@@ -251,6 +251,9 @@ private:
     std::optional<Value> translateReplication(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
 
+    /// `$readmemh` and `$readmemb`, which write a whole memory from a file.
+    bool translateReadMem(std::string_view name, const slang::ast::CallExpression& call);
+
     /// `$fopen`, whose descriptor the runtime chooses.
     std::optional<Value> translateFileOpen(const slang::ast::CallExpression& call,
                                            const slang::ast::Expression& expression);
