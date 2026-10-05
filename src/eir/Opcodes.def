@@ -56,6 +56,11 @@ ENZAN_OPCODE(CoerceTwoState, "twostate", true, 1,
 ENZAN_OPCODE(ReadObject, "read", true, 1,
              "getelementptr on the arena base with a constant offset, then a load "
              "of each plane")
+ENZAN_OPCODE(ReadObjectPart, "readpart", true, 2,
+             "getelementptr on the arena base to the object, then a load of the words "
+             "holding the window at the offset operand and a funnel shift of each plane; "
+             "an offset with an unknown bit, or a window past the object, fills X. This "
+             "is how an element of an array is read without copying the array")
 ENZAN_OPCODE(Store, "store", false, 2,
              "a call to the runtime update helper, which compares the new value "
              "against the old and schedules the processes sensitive to it; the "

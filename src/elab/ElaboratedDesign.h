@@ -41,6 +41,11 @@ struct Slot {
     /// The kind of net, when `kind` is `Net`.
     eir::NetKind netKind = eir::NetKind::Wire;
 
+    /// The unpacked dimensions and element width of the object that declared this slot, when
+    /// it is an unpacked array; see `eir::Object`.
+    std::vector<eir::UnpackedDimension> unpackedDimensions;
+    std::uint32_t elementWidth = 0;
+
     /// The hierarchical path of the object that declared this slot, for diagnostics
     /// and for the waveform database's default name.
     std::string path;

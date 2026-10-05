@@ -378,6 +378,11 @@ private:
             checkObjectWidth(definition, process, instruction.a, instruction.dst, where);
             break;
 
+        // A window of an object, which may be narrower than it, so only the object is checked.
+        case Opcode::ReadObjectPart:
+            checkObjectAccess(definition, process, instruction.a, false, where);
+            break;
+
         case Opcode::Store:
         case Opcode::StoreNonBlocking:
             checkObjectAccess(definition, process, instruction.a, true, where);

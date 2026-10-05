@@ -85,6 +85,16 @@ public:
                                     eir::Operand::object(objectIndex)));
     }
 
+    /// Reads the window of `objectIndex` as wide as `destination`, at the offset in
+    /// `offsetRegister`.
+    void readObjectPart(std::uint32_t destination, std::uint32_t objectIndex,
+                        std::uint32_t offsetRegister) {
+        reads.push_back(objectIndex);
+        emit(eir::Instruction::make(eir::Opcode::ReadObjectPart, eir::Operand::reg(destination),
+                                    eir::Operand::object(objectIndex),
+                                    eir::Operand::reg(offsetRegister)));
+    }
+
     void store(std::uint32_t objectIndex, std::uint32_t source) {
         writes.push_back(eir::WriteExtent::whole(objectIndex, widthOf(source)));
         emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(objectIndex),

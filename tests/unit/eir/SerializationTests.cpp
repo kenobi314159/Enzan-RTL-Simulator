@@ -51,6 +51,7 @@ using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
 using enzan::eir::Type;
+using enzan::eir::UnpackedDimension;
 using enzan::eir::WriteExtent;
 using enzan::test::literal;
 
@@ -96,7 +97,10 @@ ModuleDefinition richModule(BufferId buffer) {
                                 .type = Type::logic(),
                                 .kind = ObjectKind::Net,
                                 .netKind = NetKind::Tri1,
-                                .location = SourceLocation(buffer, 11)});
+                                .location = SourceLocation(buffer, 11),
+                                .unpackedDimensions = {UnpackedDimension{.left = 0, .right = 3},
+                                                       UnpackedDimension{.left = 7, .right = -1}},
+                                .elementWidth = 1});
     definition.addObject(Object{.name = "count",
                                 .type = Type::bits(8, true, true),
                                 .kind = ObjectKind::Variable,
@@ -208,6 +212,10 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     EXPECT_EQ(definition.objects[0].name, "clk");
     EXPECT_EQ(definition.objects[0].kind, ObjectKind::Net);
     EXPECT_EQ(definition.objects[0].netKind, NetKind::Tri1);
+    EXPECT_EQ(definition.objects[0].unpackedDimensions,
+              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 0, .right = 3},
+                                              UnpackedDimension{.left = 7, .right = -1}}));
+    EXPECT_EQ(definition.objects[0].elementWidth, 1U);
     EXPECT_FALSE(definition.objects[0].initialValue.has_value());
     EXPECT_EQ(definition.objects[0].enumIndex, Object::NoEnum);
 

@@ -1517,6 +1517,52 @@ TEST(KernelPli, AZeroDelayEventFromReadOnlyRunsInAFurtherSlotAtTheSameTime) {
 }
 
 // ---------------------------------------------------------------------------
+// Reading a window of an object
+// ---------------------------------------------------------------------------
+
+/// `result = source[offset +: 8]`, read with ReadObjectPart, with `offset` as given.
+Simulation readWindowAt(std::string_view offset) {
+    ProcessBuilder builder(ProcessKind::Initial, "window");
+    const std::uint32_t window = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t at = builder.reg(Type::bits(32, false, true));
+    const std::uint32_t offsetConstant = builder.constant(offset);
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(at),
+                                   Operand::constant(offsetConstant)));
+    builder.readObjectPart(window, 0, at);
+    builder.store(1, window);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition =
+        makeTop({builder.finish()}, {Object{.name = "source",
+                                            .type = Type::bits(16, false, true),
+                                            .initialValue = literal("16'hA55A")},
+                                     Object{.name = "result", .type = Type::bits(8, false, true)}});
+    return Simulation(designOf(std::move(definition)), "tb");
+}
+
+TEST(Kernel, AWindowOfAnObjectIsReadAtItsOffset) {
+    Simulation simulation = readWindowAt("32'd4");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/result", Radix::Hexadecimal), "55");
+}
+
+TEST(Kernel, AWindowPastTheEndOfAnObjectReadsXThere) {
+    Simulation simulation = readWindowAt("32'd12");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/result"), "xxxx1010");
+}
+
+TEST(Kernel, AWindowAtAnUnknownOffsetIsX) {
+    Simulation simulation = readWindowAt("32'bx");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/result"), "xxxxxxxx");
+}
+
+// ---------------------------------------------------------------------------
 // Resolution (DESIGN_GUIDE.md section 3.7)
 // ---------------------------------------------------------------------------
 

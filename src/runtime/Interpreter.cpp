@@ -87,6 +87,19 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             bitops::copy(reg(instruction.dst, instruction.dstWidth), objectValue(instruction.a));
             break;
 
+        case eir::Opcode::ReadObjectPart: {
+            // A window of the object at a run-time offset, read straight from the arena: an
+            // element of a memory costs its own width, not the memory's.
+            const eir::BitRef destination = reg(instruction.dst, instruction.dstWidth);
+            const eir::ConstBitRef offset = reg(instruction.b, instruction.bWidth);
+            if (offset.hasUnknown()) {
+                bitops::setUnknown(destination);
+                break;
+            }
+            bitops::partSelectAt(destination, objectValue(instruction.a), offset.toUInt64());
+            break;
+        }
+
         case eir::Opcode::Store: {
             // A store goes straight into the signal unless what it writes is resolved with
             // other drivers, in which case it goes through this process's driver (section

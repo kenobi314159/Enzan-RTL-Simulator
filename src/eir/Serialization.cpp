@@ -311,6 +311,12 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         if (object.initialValue.has_value()) writeVector(out, *object.initialValue);
         out.boolean(object.isAlias);
         out.u32(object.enumIndex);
+        out.u32(static_cast<std::uint32_t>(object.unpackedDimensions.size()));
+        for (const UnpackedDimension& dimension : object.unpackedDimensions) {
+            out.u32(static_cast<std::uint32_t>(dimension.left));
+            out.u32(static_cast<std::uint32_t>(dimension.right));
+        }
+        out.u32(object.elementWidth);
     }
 
     out.u32(static_cast<std::uint32_t>(definition.ports.size()));
@@ -543,6 +549,12 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         if (in.boolean()) object.initialValue = readVector(in);
         object.isAlias = in.boolean();
         object.enumIndex = in.u32();
+        object.unpackedDimensions.resize(in.count());
+        for (UnpackedDimension& dimension : object.unpackedDimensions) {
+            dimension.left = static_cast<std::int32_t>(in.u32());
+            dimension.right = static_cast<std::int32_t>(in.u32());
+        }
+        object.elementWidth = in.u32();
     }
 
     definition.ports.resize(in.count());
