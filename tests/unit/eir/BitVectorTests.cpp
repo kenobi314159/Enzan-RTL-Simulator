@@ -377,6 +377,9 @@ TEST(BitVectorToString, DecimalUnknownIsNotLocalised) {
     EXPECT_EQ(enzan::eir::toString(literal("8'bxxxxxxxx").ref(), Radix::Decimal), "x");
     EXPECT_EQ(enzan::eir::toString(literal("8'bzzzzzzzz").ref(), Radix::Decimal), "z");
     EXPECT_EQ(enzan::eir::toString(literal("8'b1010101x").ref(), Radix::Decimal), "X");
+    EXPECT_EQ(enzan::eir::toString(literal("8'b1z10101x").ref(), Radix::Decimal), "X");
+    // Some bits Z and none X is Z (IEEE 1800 section 21.2.1.3).
+    EXPECT_EQ(enzan::eir::toString(literal("8'bzzzz0001").ref(), Radix::Decimal), "Z");
 }
 
 TEST(BitVectorToString, WideDecimal) {

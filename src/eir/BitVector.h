@@ -273,8 +273,8 @@ enum class Radix : std::uint8_t { Binary, Octal, Decimal, Hexadecimal };
 /// In binary, octal and hexadecimal each digit covers a fixed number of bits and
 /// is rendered `x` or `z` when *all* of those bits are X or Z, and `X` or `Z` when
 /// only some of them are. In decimal the whole value is `x` when every bit is X,
-/// `z` when every bit is Z, and `X` when some bits are unknown, because a decimal
-/// rendering cannot localise the unknown to a digit.
+/// `z` when every bit is Z, `X` when some bits are X, and `Z` when some are Z and
+/// none X, because a decimal rendering cannot localise the unknown to a digit.
 ///
 /// Binary, octal and hexadecimal render every digit of the vector's width, which
 /// is what a sized value displays as and what the waveform view needs. Decimal

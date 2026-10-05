@@ -438,7 +438,14 @@ std::string toString(ConstBitRef value, Radix radix, bool isSigned) {
 
     if (value.isAll(Logic::Unknown)) return "x";
     if (value.isAll(Logic::HighZ)) return "z";
-    if (value.hasUnknown()) return "X";
+    if (value.hasUnknown()) {
+        // X when any bit is X, and Z when the unknown bits are all Z (IEEE 1800 section
+        // 21.2.1.3). X is (1,1) in the two planes.
+        for (std::uint32_t index = 0; index < value.words(); ++index) {
+            if ((value.aval()[index] & value.bval()[index]) != 0) return "X";
+        }
+        return "Z";
+    }
 
     // Two's-complement negation before rendering, so that a signed value prints
     // its magnitude behind a sign rather than as a huge positive number.
