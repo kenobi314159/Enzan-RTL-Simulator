@@ -25,6 +25,42 @@ enum class ObjectKind : std::uint8_t { Net, Variable };
 
 std::string_view toString(ObjectKind kind) noexcept;
 
+/// Which kind of net a net is, which decides how a bit with several drivers resolves and what
+/// a bit with none holds (DESIGN_GUIDE.md section 3.7).
+///
+/// `tri` is kept apart from `wire`, and `triand` and `trior` from `wand` and `wor`, although
+/// each pair behaves identically: a reader is shown the kind they declared.
+enum class NetKind : std::uint8_t {
+    Wire,
+    Tri,
+    WiredAnd,
+    WiredOr,
+    TriAnd,
+    TriOr,
+    /// Pulled to 0 where nothing drives it, and where every driver is `z`.
+    Tri0,
+    /// Pulled to 1 likewise.
+    Tri1,
+    /// Always 0. Its supply strength beats every driver Enzan can model, all of which are
+    /// strong.
+    Supply0,
+    /// Always 1.
+    Supply1,
+    /// A net that may have one driver per bit, as a variable may.
+    UWire,
+};
+
+/// The keyword that declares `kind`, for diagnostics and the GUI.
+std::string_view toString(NetKind kind) noexcept;
+
+/// The value of a bit of a `kind` net that nothing drives: `z`, or the value it is pulled or
+/// tied to.
+Logic undrivenValue(NetKind kind) noexcept;
+
+/// True when even one driver's value has to be resolved before it reaches the net: a pulled
+/// net turns a driven `z` into its pull, and a supply net ignores its drivers.
+bool resolvesSingleDrivers(NetKind kind) noexcept;
+
 /// One name an enumeration gives to one value.
 struct EnumMember {
     std::string name;
@@ -63,6 +99,10 @@ struct Object {
     std::string name;
     Type type;
     ObjectKind kind = ObjectKind::Variable;
+
+    /// The kind of net, when `kind` is `Net`; ignored for a variable.
+    NetKind netKind = NetKind::Wire;
+
     SourceLocation location;
 
     /// The value at time zero, when the declaration supplied one.

@@ -305,6 +305,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.text(object.name);
         writeType(out, object.type);
         out.u8(static_cast<std::uint8_t>(object.kind));
+        out.u8(static_cast<std::uint8_t>(object.netKind));
         writeLocation(out, names, object.location);
         out.boolean(object.initialValue.has_value());
         if (object.initialValue.has_value()) writeVector(out, *object.initialValue);
@@ -537,6 +538,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         object.name = in.text();
         object.type = readType(in);
         object.kind = static_cast<ObjectKind>(in.u8());
+        object.netKind = static_cast<NetKind>(in.u8());
         object.location = readLocation(in, buffers);
         if (in.boolean()) object.initialValue = readVector(in);
         object.isAlias = in.boolean();

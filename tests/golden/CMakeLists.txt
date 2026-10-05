@@ -86,6 +86,9 @@ enzan_add_golden_test(router)
 # parameterised number of instances whose outputs are bits and slices of one array.
 enzan_add_golden_test(drivers)
 
+# What each kind of net holds where nothing drives it.
+enzan_add_golden_test(nets)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------

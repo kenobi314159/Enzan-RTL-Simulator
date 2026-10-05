@@ -27,6 +27,7 @@
 #include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/AllTypes.h"
+#include "slang/ast/types/NetType.h"
 #include "slang/ast/types/Type.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/Diagnostics.h"
@@ -145,6 +146,9 @@ public:
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
+
+    /// The EIR kind of a slang net kind, or nothing for one Enzan cannot resolve.
+    static std::optional<eir::NetKind> convertNetKind(ast::NetType::NetKind kind);
 
     /// Reports a drive strength other than the default and returns false.
     ///
@@ -309,6 +313,15 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
 
     if (symbol.kind == slang::ast::SymbolKind::Net) {
         const auto& net = symbol.as<ast::NetSymbol>();
+        const std::optional<eir::NetKind> netKind = convertNetKind(net.netType.netKind);
+        if (!netKind.has_value()) {
+            reportUnsupported(symbol.location,
+                              std::format("a '{}' net", net.netType.name.empty()
+                                                            ? std::string_view("user-defined")
+                                                            : net.netType.name));
+            return std::nullopt;
+        }
+        object.netKind = *netKind;
         // A net delay postpones every change by an inertial delay; dropping it would make the
         // net change early and the design simulate to an answer that looks plausible.
         if (net.getDelay() != nullptr) {
@@ -589,6 +602,29 @@ bool ModuleBuilder::translateProcesses() {
     }
 
     return !failed;
+}
+
+std::optional<eir::NetKind> ModuleBuilder::convertNetKind(ast::NetType::NetKind kind) {
+    switch (kind) {
+    case ast::NetType::Wire: return eir::NetKind::Wire;
+    case ast::NetType::Tri: return eir::NetKind::Tri;
+    case ast::NetType::WAnd: return eir::NetKind::WiredAnd;
+    case ast::NetType::WOr: return eir::NetKind::WiredOr;
+    case ast::NetType::TriAnd: return eir::NetKind::TriAnd;
+    case ast::NetType::TriOr: return eir::NetKind::TriOr;
+    case ast::NetType::Tri0: return eir::NetKind::Tri0;
+    case ast::NetType::Tri1: return eir::NetKind::Tri1;
+    case ast::NetType::Supply0: return eir::NetKind::Supply0;
+    case ast::NetType::Supply1: return eir::NetKind::Supply1;
+    case ast::NetType::UWire: return eir::NetKind::UWire;
+    // A trireg stores charge, an interconnect has no type of its own, and a user-defined
+    // nettype resolves with a function of its own; none of them is a table Enzan has.
+    case ast::NetType::TriReg:
+    case ast::NetType::Interconnect:
+    case ast::NetType::UserDefined:
+    case ast::NetType::Unknown: return std::nullopt;
+    }
+    return std::nullopt;
 }
 
 bool ModuleBuilder::checkDriveStrength(

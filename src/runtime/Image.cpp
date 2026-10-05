@@ -135,10 +135,18 @@ void Image::initializeState(Arena& arena) const {
                     continue;
                 }
 
-                // No declared initialiser: X for a four-state object, zero for a two-state
-                // one (section 3.9). A four-state object that defaulted to zero would hide
-                // exactly the bugs X exists to reveal.
-                target.fill(object.type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero);
+                // No declared initialiser: a net's bits hold what an undriven bit of its kind
+                // holds, `z` or its pull, until a driver says otherwise (section 3.7). A
+                // variable is X when four-state and zero when two-state (section 3.9); one
+                // that defaulted to zero would hide exactly the bugs X exists to reveal. The
+                // slot's kind decides, not the object's, since a collapsed port's object is
+                // only another name for its parent's declaration.
+                const elab::Slot& slot = elaborated->slots()[slotIndex];
+                if (slot.kind == eir::ObjectKind::Net) {
+                    target.fill(eir::undrivenValue(slot.netKind));
+                } else {
+                    target.fill(object.type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero);
+                }
             }
         }
     };

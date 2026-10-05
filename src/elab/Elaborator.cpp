@@ -170,6 +170,7 @@ private:
         Slot slot;
         slot.type = object.type;
         slot.kind = object.kind;
+        slot.netKind = object.netKind;
         slot.wordOffset = result->arenaSize;
         slot.path = instance.path + '/' + object.name;
         slot.enumIndex = internEnum(definition, object.enumIndex);
@@ -372,6 +373,10 @@ private:
         bool ok = true;
         for (std::uint32_t slotIndex = 0; slotIndex < rangesBySlot.size(); ++slotIndex) {
             std::vector<DriverRange>& ranges = rangesBySlot[slotIndex];
+            if (!checkPulledNet(slotIndex, ranges)) {
+                ok = false;
+                continue;
+            }
             if (ranges.size() < 2) continue;
 
             // Stable, so that ranges starting at one bit keep process order and the pair a
@@ -404,10 +409,13 @@ private:
                     diagnostics.report(DiagCode::MixedDriverKinds, secondProcess.location,
                                        slot.path, bits, describeProcess(driver.process),
                                        describeProcess(writer.process));
-                } else if (slot.kind == eir::ObjectKind::Variable) {
+                } else if (slot.kind == eir::ObjectKind::Variable
+                           || slot.netKind == eir::NetKind::UWire) {
+                    const std::string_view kind =
+                        slot.kind == eir::ObjectKind::Variable ? "variable" : "uwire net";
                     diagnostics.report(DiagCode::MultipleContinuousDrivers, secondProcess.location,
-                                       slot.path, bits, describeProcess(first.process),
-                                       describeProcess(second.process));
+                                       kind, slot.path, bits, describeProcess(first.process),
+                                       describeProcess(second.process), kind);
                 } else {
                     diagnostics.report(
                         DiagCode::NotYetImplemented, secondProcess.location,
@@ -420,6 +428,26 @@ private:
             }
         }
         return true;
+    }
+
+    /// Refuses a pulled or supply net with any continuous driver, and returns false if it did.
+    ///
+    /// Such a net resolves even a single driver — a `tri0` driven to `z` reads 0 — which the
+    /// runtime does not do yet. Writing the driver's value straight into the net would show
+    /// the `z`.
+    bool checkPulledNet(std::uint32_t slotIndex, const std::vector<DriverRange>& ranges) {
+        const Slot& slot = result->slotList[slotIndex];
+        if (slot.kind != eir::ObjectKind::Net || !eir::resolvesSingleDrivers(slot.netKind))
+            return true;
+
+        const auto driver = std::ranges::find_if(ranges, &DriverRange::continuous);
+        if (driver == ranges.end()) return true;
+
+        diagnostics.report(
+            DiagCode::NotYetImplemented, processOf(result->processList[driver->process]).location,
+            std::format("resolving the driver {} of {} net '{}'", describeProcess(driver->process),
+                        eir::toString(slot.netKind), slot.path));
+        return false;
     }
 
     [[nodiscard]] const eir::Process& processOf(const ProcessInstance& processInstance) const {

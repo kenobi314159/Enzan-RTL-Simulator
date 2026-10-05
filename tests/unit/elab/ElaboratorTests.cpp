@@ -685,4 +685,40 @@ TEST_F(ElaboratorTest, PortsOfManyInstancesDrivingBitsOfOneArrayAreAllowed) {
     EXPECT_NE(elaborate("tb"), nullptr) << consumer.messages.front();
 }
 
+TEST_F(ElaboratorTest, OverlappingDriversOfAUwireAreAnErrorAsForAVariable) {
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.objects[1].netKind = enzan::eir::NetKind::UWire;
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 2, 1));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 2, 1));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+    EXPECT_TRUE(reported("uwire net '/tb/x' has bit 2")) << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, ADrivenPulledNetIsRefusedUntilResolutionExists) {
+    // A tri0 driven to z reads 0, so even its one driver has to be resolved.
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.objects[1].netKind = enzan::eir::NetKind::Tri0;
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 0, 1));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reported("resolving the driver part0 in /tb of tri0 net '/tb/x'"))
+        << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, AnUndrivenPulledNetNeedsNoResolution) {
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.objects[1].netKind = enzan::eir::NetKind::Supply1;
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    const std::uint32_t slot = require(elaborated->findSlot("/tb/x"));
+    EXPECT_EQ(elaborated->slots()[slot].kind, ObjectKind::Net);
+    EXPECT_EQ(elaborated->slots()[slot].netKind, enzan::eir::NetKind::Supply1);
+}
+
 } // namespace

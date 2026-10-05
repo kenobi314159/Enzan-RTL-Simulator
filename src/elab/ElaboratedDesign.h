@@ -38,6 +38,9 @@ struct Slot {
     /// whether two drivers of one bit are resolved or refused (DESIGN_GUIDE.md section 3.7).
     eir::ObjectKind kind = eir::ObjectKind::Variable;
 
+    /// The kind of net, when `kind` is `Net`.
+    eir::NetKind netKind = eir::NetKind::Wire;
+
     /// The hierarchical path of the object that declared this slot, for diagnostics
     /// and for the waveform database's default name.
     std::string path;

@@ -543,6 +543,48 @@ TEST_F(FrontendTest, AWholeAssignmentWritesEveryBit) {
               (std::vector<std::vector<WriteExtent>>{{extent(top, "x", 0, 8)}}));
 }
 
+TEST_F(FrontendTest, ANetRecordsTheKindItWasDeclaredAs) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            wire    a;
+            wand    b;
+            trior   c;
+            tri1    d;
+            supply0 e;
+            uwire   f;
+            logic   g;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+
+    using enzan::eir::NetKind;
+    const auto kindOf = [found](std::string_view name) {
+        return found->objects[require(found->findObject(name))].netKind;
+    };
+    EXPECT_EQ(kindOf("a"), NetKind::Wire);
+    EXPECT_EQ(kindOf("b"), NetKind::WiredAnd);
+    EXPECT_EQ(kindOf("c"), NetKind::TriOr);
+    EXPECT_EQ(kindOf("d"), NetKind::Tri1);
+    EXPECT_EQ(kindOf("e"), NetKind::Supply0);
+    EXPECT_EQ(kindOf("f"), NetKind::UWire);
+    EXPECT_EQ(found->objects[require(found->findObject("g"))].kind,
+              enzan::eir::ObjectKind::Variable);
+}
+
+TEST_F(FrontendTest, ANetWithNoResolutionTableIsReported) {
+    // A trireg stores charge, which Enzan has no model of; treating it as a wire would lose
+    // the stored value the moment its drivers let go.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            trireg t;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a 'trireg' net"));
+}
+
 TEST_F(FrontendTest, ANetDeclarationAssignmentIsAContinuousAssignment) {
     // `wire w = a & b;` drives the net for the whole run, not only at time zero.
     const std::unique_ptr<Design> design = analyse(R"(

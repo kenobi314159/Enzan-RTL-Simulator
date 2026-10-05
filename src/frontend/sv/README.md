@@ -70,6 +70,7 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   header;
 - a timing control on an assignment, such as `a <= #5 b`, and a delay on a continuous
   assignment or a net, such as `assign #5 a = b` or `wire #5 w`;
+- `trireg`, `interconnect` and user-defined nettypes, which have no resolution table;
 - a drive strength other than strong, such as `assign (weak0, weak1) w = a`, because
   resolution has no strength model;
 - `**`, and the wildcard equality operators.

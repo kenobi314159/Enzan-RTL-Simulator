@@ -35,6 +35,7 @@ using enzan::eir::EnumMember;
 using enzan::eir::Instance;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
+using enzan::eir::NetKind;
 using enzan::eir::Object;
 using enzan::eir::ObjectKind;
 using enzan::eir::Opcode;
@@ -94,6 +95,7 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.addObject(Object{.name = "clk",
                                 .type = Type::logic(),
                                 .kind = ObjectKind::Net,
+                                .netKind = NetKind::Tri1,
                                 .location = SourceLocation(buffer, 11)});
     definition.addObject(Object{.name = "count",
                                 .type = Type::bits(8, true, true),
@@ -205,6 +207,7 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     ASSERT_EQ(definition.objects.size(), 2U);
     EXPECT_EQ(definition.objects[0].name, "clk");
     EXPECT_EQ(definition.objects[0].kind, ObjectKind::Net);
+    EXPECT_EQ(definition.objects[0].netKind, NetKind::Tri1);
     EXPECT_FALSE(definition.objects[0].initialValue.has_value());
     EXPECT_EQ(definition.objects[0].enumIndex, Object::NoEnum);
 
