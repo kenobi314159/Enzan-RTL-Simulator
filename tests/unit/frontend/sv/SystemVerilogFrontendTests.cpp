@@ -907,6 +907,62 @@ TEST_F(FrontendTest, AnExplicitStrongDriveIsTheDefaultAndAccepted) {
     EXPECT_NE(design, nullptr) << consumer.messages.front();
 }
 
+TEST_F(FrontendTest, ACalledFunctionIsInlinedAndItsReadsAreTheCallers) {
+    // The body becomes part of the process that calls it, so what it reads is in that process's
+    // read set, and an always_comb calling it is sensitive to it (DESIGN_GUIDE.md section 4.2).
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [7:0] scale;
+            logic [7:0] b;
+            logic [7:0] y;
+            function automatic logic [7:0] times_scale(input logic [7:0] value);
+                return value * scale;
+            endfunction
+            always_comb y = times_scale(b);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 1U);
+
+    const std::vector<std::uint32_t>& reads = found->processes[0].readSet;
+    EXPECT_TRUE(std::ranges::binary_search(reads, require(found->findObject("scale"))));
+    EXPECT_TRUE(std::ranges::binary_search(reads, require(found->findObject("b"))));
+    // The function's own variables are registers, not state.
+    EXPECT_FALSE(found->findObject("value").has_value());
+}
+
+TEST_F(FrontendTest, ReportsARecursiveCall) {
+    // An inlined body cannot contain itself.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] n;
+            logic [7:0] y;
+            function automatic logic [7:0] factorial(input logic [7:0] k);
+                return k <= 1 ? 8'd1 : k * factorial(k - 1);
+            endfunction
+            always_comb y = factorial(n);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a recursive call of 'factorial'"));
+}
+
+TEST_F(FrontendTest, ReportsARefArgument) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] v;
+            task automatic bump(ref logic [7:0] target);
+                target = target + 1;
+            endtask
+            initial bump(v);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a `ref` argument"));
+}
+
 TEST_F(FrontendTest, ReportsAnUnsupportedSystemTaskByName) {
     EXPECT_EQ(analyse(R"(
         module m;

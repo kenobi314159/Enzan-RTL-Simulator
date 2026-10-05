@@ -587,6 +587,14 @@ iterations instantiating `u_dut` would be two instances with one path, and nothi
 waveform, the front end or VPI could tell them apart. Changing how a block is named changes
 the EIR the frontend produces, so it bumps the serialisation version of 4.4.
 
+**A function or task is inlined into the process that calls it.** The body is translated in
+place, its variables bound to registers, so a task's delays suspend the caller as its own
+statements would, the caller's read and write sets are exactly what the call touches (4.2),
+and nothing at run time keeps a call stack. A recursive call is refused, since an inlined
+body cannot contain itself; slang folds a recursive call with constant arguments before
+Enzan sees it, which is where recursion in RTL usually is. EIR gains a callable subprogram
+when one is needed rather than sooner: VHDL resolution functions are the first case (3.7, M6).
+
 slang requires **C++20**, which sets the project's language floor.
 
 ### 5.2 VHDL via NVC

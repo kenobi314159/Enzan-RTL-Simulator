@@ -84,9 +84,21 @@ chapter-12/12.5.4--case_set.sv
 chapter-12/12.5--case.sv
 chapter-12/12.7.1--for.sv
 chapter-12/12.7.2--repeat.sv
+chapter-12/12.8--return.sv
+chapter-12/12.8--return_val.sv
+chapter-13/13.3.1--task-automatic.sv
+chapter-13/13.3--task-label.sv
+chapter-13/13.3--task.sv
+chapter-13/13.4.1--function-return-assignment.sv
+chapter-13/13.4.1--function-return.sv
 chapter-13/13.4.1--function-void-return.sv
+chapter-13/13.4.2--function-automatic.sv
+chapter-13/13.4.2--function-static.sv
 chapter-13/13.4.3--const-function.sv
 chapter-13/13.4.4--fork-invalid.sv
+chapter-13/13.4.4--fork-valid.sv
+chapter-13/13.4--function-label.sv
+chapter-13/13.4--function.sv
 chapter-14/14.3--clocking-block-signals-error.sv
 chapter-14/14.3--clocking-block-signals.sv
 chapter-14/14.3--clocking-block.sv
@@ -123,6 +135,7 @@ chapter-21/21.2--display-boh.sv
 chapter-21/21.2--display.sv
 chapter-21/21.2--write-boh.sv
 chapter-21/21.2--write.sv
+chapter-21/21.7--dumpfile.sv
 chapter-22/22.3--resetall_basic.sv
 chapter-22/22.3--resetall_illegal.sv
 chapter-22/22.3--resetall_multiple.sv
@@ -142,6 +155,7 @@ chapter-23/23.2--macromodule-definition.sv
 chapter-23/23.2--module-definition.sv
 chapter-23/23.2--module-label.sv
 chapter-26/26.2--package-decl.sv
+chapter-26/26.3--package-ref.sv
 chapter-5/5.10-structure-arrays-illegal.sv
 chapter-5/5.10-structure-arrays.sv
 chapter-5/5.10-structure-replication.sv
@@ -190,6 +204,7 @@ chapter-6/6.10--implicit_port.sv
 chapter-6/6.12--real_bit_select_idx.sv
 chapter-6/6.12--real_bit_select.sv
 chapter-6/6.12--real_edge.sv
+chapter-6/6.13--void.sv
 chapter-6/6.18--typedef.sv
 chapter-6/6.19.1--enum_typedef.sv
 chapter-6/6.19.2--enum_sequence_range.sv
@@ -250,6 +265,7 @@ chapter-7/arrays/unpacked/onebit.sv
 chapter-7/arrays/unpacked/operations.sv
 chapter-7/arrays/unpacked/slice-equality.sv
 chapter-7/arrays/unpacked/slice.sv
+chapter-7/arrays/unpacked/subroutines.sv
 chapter-7/arrays/unpacked/variable-slice.sv
 chapter-7/memories/basic.sv
 chapter-7/memories/read-write.sv
@@ -265,6 +281,7 @@ chapter-8/8.18--var_protected.sv
 chapter-8/8.19--global_constant.sv
 chapter-8/8.19--instance_constant.sv
 chapter-8/8.21--abstract_class_inst.sv
+chapter-8/8.23--scope_resolution.sv
 chapter-8/8.25.1--parametrized_class_invalid_scope_resolution.sv
 chapter-8/8.26.3--type_access_extends.sv
 chapter-8/8.26.3--type_access_implements_invalid.sv

@@ -50,6 +50,13 @@ need the assignment to run the other way.
 body would produce a design that simulates and gives the wrong answer, which section 1.2
 ranks as the worst possible outcome. Refusing to elaborate is the safe failure.
 
+**A function or task call is inlined.** The body is translated into the process that calls
+it, with its arguments, return variable and locals bound to registers, so a task's delays
+suspend the caller as its own statements would and the caller's read and write sets are
+exactly what the call touches. A static subroutine's variables are treated as automatic,
+which differs only for a design that reads a local before writing it and relies on the value
+a previous call left there.
+
 **A select or member access is a window of bits.** Unpacked arrays and structs are stored
 flat (DESIGN_GUIDE.md section 4.3), so `mem[i].field[3:0]` composes into one offset into one
 object and is read with `ReadObjectPart` and written with a part store. An index that could
@@ -70,8 +77,8 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - dynamic and associative arrays, queues, unpacked unions, `real`, `string` and class types
   (packed vectors, structs and arrays, enums, and fixed-size unpacked arrays and structs all
   work);
-- user-defined tasks and functions, and every system function but `$time`, `$isunknown`,
-  `$countones`, `$onehot` and `$onehot0`;
+- a recursive call, which slang does not fold to a constant, and a `ref` argument;
+- every system function but `$time`, `$isunknown`, `$countones`, `$onehot` and `$onehot0`;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
 - an event control on an expression, or an event list inside a body rather than on a block
   header;

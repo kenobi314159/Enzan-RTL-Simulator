@@ -21,7 +21,9 @@
 #include "slang/ast/statements/ConditionalStatements.h"
 #include "slang/ast/statements/LoopStatements.h"
 #include "slang/ast/statements/MiscStatements.h"
+#include "slang/ast/symbols/BlockSymbols.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/AllTypes.h"
@@ -29,6 +31,8 @@
 #include "slang/numeric/SVInt.h"
 
 #include <algorithm>
+#include <format>
+#include <map>
 #include <tuple>
 #include <utility>
 
@@ -278,12 +282,28 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
     if (location.valid()) currentStatement = location;
 
     switch (statement.kind) {
-    case ast::StatementKind::Empty:
-    case ast::StatementKind::VariableDeclaration:
-        // A declaration's storage is created on demand when something references it,
-        // and an initialiser on a procedural variable is handled by the declaration's
-        // own assignment expression.
+    case ast::StatementKind::Empty: return true;
+
+    case ast::StatementKind::VariableDeclaration: {
+        // A declaration's storage is created on demand when something references it, and an
+        // initialiser on a procedural variable is its time-zero value. A local of an inlined
+        // subroutine is automatic instead, and its initialiser runs where it is declared, on
+        // every call.
+        const ast::VariableSymbol& variable = statement.as<ast::VariableDeclStatement>().symbol;
+        const Value* local = localFor(variable);
+        const ast::Expression* initializer = variable.getInitializer();
+        if (local == nullptr || initializer == nullptr) return true;
+
+        const Value target = *local;
+        const std::optional<Value> value = translateExpression(*initializer);
+        if (!value.has_value()) return false;
+        const Value stored = coerceState(coerce(*value, target.type), target.type);
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(target.reg),
+                                    eir::Operand::reg(stored.reg)));
         return true;
+    }
+
+    case ast::StatementKind::Return: return translateReturn(statement);
 
     case ast::StatementKind::List:
     case ast::StatementKind::Block: return translateBlock(statement);
@@ -313,6 +333,37 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
         failed = true;
         return false;
     }
+}
+
+bool ProcessTranslator::translateReturn(const ast::Statement& statement) {
+    if (inlineFrames.empty()) {
+        module->reportUnsupported(statement.sourceRange.start(),
+                                  "a `return` outside a function or task");
+        failed = true;
+        return false;
+    }
+    const InlineFrame& frame = inlineFrames.back();
+    const ast::Expression* expression = statement.as<ast::ReturnStatement>().expr;
+
+    if (expression != nullptr && frame.returnVariable != nullptr) {
+        const Value* returned = localFor(*frame.returnVariable);
+        if (returned == nullptr) {
+            failed = true;
+            return false;
+        }
+        const Value target = *returned;
+        const std::optional<Value> value = translateExpression(*expression);
+        if (!value.has_value()) return false;
+        const Value stored = coerceState(coerce(*value, target.type), target.type);
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(target.reg),
+                                    eir::Operand::reg(stored.reg)));
+    }
+
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(frame.exitBlock)));
+
+    // Anything after a `return` is unreachable but still has to be emitted somewhere.
+    selectBlock(newBlock("after-return"));
+    return true;
 }
 
 bool ProcessTranslator::translateBlock(const ast::Statement& statement) {
@@ -450,6 +501,18 @@ bool ProcessTranslator::translateForLoop(const ast::Statement& statement) {
     for (const ast::VariableSymbol* variable : loop.loopVars) {
         const ast::Expression* initializer = variable->getInitializer();
         if (initializer == nullptr) continue;
+
+        // Inside an inlined subroutine the variable is a local, bound to a register.
+        if (const Value* local = localFor(*variable)) {
+            // Copied first: a call in the initialiser rebinds the locals on its way out.
+            const Value target = *local;
+            const std::optional<Value> value = translateExpression(*initializer);
+            if (!value.has_value()) return false;
+            const Value stored = coerceState(coerce(*value, target.type), target.type);
+            emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(target.reg),
+                                        eir::Operand::reg(stored.reg)));
+            continue;
+        }
 
         const std::optional<std::uint32_t> objectIndex = module->objectFor(*variable);
         if (!objectIndex.has_value()) {
@@ -687,6 +750,10 @@ bool ProcessTranslator::translateExpressionStatement(const ast::Expression& expr
         && expression.as<ast::CallExpression>().isSystemCall() && expression.type->isVoid()) {
         return translateSystemTask(expression);
     }
+    if (expression.kind == ast::ExpressionKind::Call
+        && !expression.as<ast::CallExpression>().isSystemCall()) {
+        return inlineCall(expression.as<ast::CallExpression>(), expression).has_value();
+    }
 
     return translateExpression(expression).has_value() || !failed;
 }
@@ -737,6 +804,9 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
     case ast::ExpressionKind::NamedValue:
     case ast::ExpressionKind::HierarchicalValue: {
         const ast::ValueSymbol& symbol = expression.as<ast::ValueExpressionBase>().symbol;
+
+        // A local of a subroutine being inlined lives in a register.
+        if (const Value* local = localFor(symbol)) return copyOf(*local);
 
         // A parameter is a constant, not state: reading it must not create an object,
         // because an object would be a per-instance slot for a value that never changes.
@@ -1439,6 +1509,13 @@ ProcessTranslator::locate(const ast::Expression& expression) {
     case ast::ExpressionKind::NamedValue:
     case ast::ExpressionKind::HierarchicalValue: {
         const ast::ValueSymbol& symbol = expression.as<ast::ValueExpressionBase>().symbol;
+        if (const Value* local = localFor(symbol)) {
+            return Location{.root = *local,
+                            .type = local->type,
+                            .constantLow = 0,
+                            .reachWidth = local->type.bitWidth(),
+                            .rootIsLocal = true};
+        }
         if (symbol.kind == slang::ast::SymbolKind::Parameter) break;
 
         const std::optional<std::uint32_t> objectIndex = module->objectFor(symbol);
@@ -1676,7 +1753,8 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::readLocation(const Lo
     }
 
     if (location.whole) {
-        if (!location.inObject()) return location.root;
+        if (!location.inObject())
+            return location.rootIsLocal ? copyOf(location.root) : location.root;
         noteRead(location.objectIndex);
         const std::uint32_t result = newRegister(type);
         emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(result),
@@ -1701,6 +1779,21 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::readLocation(const Lo
 
 bool ProcessTranslator::writeLocation(const ast::Expression& target, const Location& location,
                                       const Value& value, bool nonBlocking) {
+    if (!location.inObject() && location.rootIsLocal) {
+        // A window of a local is spliced into its register, which is all a local is.
+        if (location.outOfRange) return true;
+        const Value stored = coerceState(coerce(value, location.type), location.type);
+        if (location.whole) {
+            emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(location.root.reg),
+                                        eir::Operand::reg(stored.reg)));
+            return true;
+        }
+        const Value low = lowOf(location);
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(location.root.reg),
+                                    eir::Operand::reg(stored.reg), eir::Operand::reg(low.reg)));
+        return true;
+    }
+
     if (!location.inObject()) {
         module->reportUnsupported(target.sourceRange.start(),
                                   "writing through anything but a plain signal reference");
@@ -1776,9 +1869,148 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
         return std::nullopt;
     }
 
-    module->reportUnsupported(expression.sourceRange.start(), "user-defined tasks and functions");
-    failed = true;
-    return std::nullopt;
+    return inlineCall(call, expression);
+}
+
+const ProcessTranslator::Value* ProcessTranslator::localFor(const ast::ValueSymbol& symbol) const {
+    const auto found = locals.find(&symbol);
+    return found != locals.end() ? &found->second : nullptr;
+}
+
+ProcessTranslator::Value ProcessTranslator::copyOf(const Value& value) {
+    const std::uint32_t result = newRegister(value.type);
+    emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(result),
+                                eir::Operand::reg(value.reg)));
+    return Value{.reg = result, .type = value.type};
+}
+
+ProcessTranslator::Value ProcessTranslator::defaultValue(eir::Type type) {
+    const std::uint32_t constant = addConstant(eir::BitVector::filled(
+        type.bitWidth(), type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero));
+    const std::uint32_t result = newRegister(type);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(constant)));
+    return Value{.reg = result, .type = type};
+}
+
+void ProcessTranslator::bindLocals(const ast::Scope& scope) {
+    for (const ast::Symbol& member : scope.members()) {
+        if (member.kind == slang::ast::SymbolKind::StatementBlock) {
+            bindLocals(member.as<ast::StatementBlockSymbol>());
+            continue;
+        }
+        if (member.kind != slang::ast::SymbolKind::Variable
+            && member.kind != slang::ast::SymbolKind::FormalArgument)
+            continue;
+
+        const auto& variable = member.as<ast::VariableSymbol>();
+        const std::optional<eir::Type> type = module->convertType(variable.getType());
+        if (!type.has_value()) {
+            module->reportUnsupported(variable.location,
+                                      std::format("the type of '{}'", variable.name));
+            failed = true;
+            return;
+        }
+        // Every call starts its locals afresh, at their type's default; a declaration with an
+        // initialiser sets it where the declaration is (see translateStatement).
+        locals.insert_or_assign(&variable, defaultValue(*type));
+    }
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::inlineCall(const ast::CallExpression& call, const ast::Expression& expression) {
+    const ast::SubroutineSymbol& subroutine = *std::get<0>(call.subroutine);
+
+    if (std::ranges::any_of(inlineFrames, [&subroutine](const InlineFrame& frame) {
+            return frame.subroutine == &subroutine;
+        })) {
+        module->reportUnsupported(expression.sourceRange.start(),
+                                  std::format("a recursive call of '{}'", subroutine.name));
+        failed = true;
+        return std::nullopt;
+    }
+
+    // The arguments are evaluated where the call is, before anything of the callee is bound,
+    // so that an argument naming a variable the callee also declares means the caller's.
+    const auto formals = subroutine.getArguments();
+    const auto actuals = call.arguments();
+    if (formals.size() != actuals.size()) {
+        module->reportUnsupported(expression.sourceRange.start(), "this call's arguments");
+        failed = true;
+        return std::nullopt;
+    }
+
+    // An output's actual is the left side of an assignment slang builds for it.
+    const auto targetOf = [](const ast::Expression* actual) -> const ast::Expression* {
+        if (actual->kind == ast::ExpressionKind::Assignment)
+            return &actual->as<ast::AssignmentExpression>().left();
+        return actual;
+    };
+
+    std::vector<std::optional<Value>> inputs(formals.size());
+    for (std::size_t index = 0; index < formals.size(); ++index) {
+        const ast::ArgumentDirection direction = formals[index]->direction;
+        if (direction == ast::ArgumentDirection::Ref) {
+            module->reportUnsupported(actuals[index]->sourceRange.start(), "a `ref` argument");
+            failed = true;
+            return std::nullopt;
+        }
+        if (direction == ast::ArgumentDirection::Out) continue;
+
+        const ast::Expression* source =
+            direction == ast::ArgumentDirection::InOut ? targetOf(actuals[index]) : actuals[index];
+        inputs[index] = translateExpression(*source);
+        if (!inputs[index].has_value()) return std::nullopt;
+    }
+
+    // Bind the callee's variables, keeping whatever they shadow for after the call.
+    const std::map<const ast::ValueSymbol*, Value> outer = locals;
+    bindLocals(subroutine);
+    if (failed) return std::nullopt;
+
+    for (std::size_t index = 0; index < formals.size(); ++index) {
+        const std::optional<Value>& input = inputs[index];
+        if (!input.has_value()) continue;
+        const Value& bound = locals.at(formals[index]);
+        const Value converted = coerceState(coerce(*input, bound.type), bound.type);
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(bound.reg),
+                                    eir::Operand::reg(converted.reg)));
+    }
+
+    const std::uint32_t exitBlock = newBlock("return");
+    inlineFrames.push_back(InlineFrame{.subroutine = &subroutine,
+                                       .exitBlock = exitBlock,
+                                       .returnVariable = subroutine.returnValVar});
+    const bool translated = translateStatement(subroutine.getBody());
+    inlineFrames.pop_back();
+    if (!translated) return std::nullopt;
+    if (!currentBlockTerminated())
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(exitBlock)));
+    selectBlock(exitBlock);
+
+    // What the call returns and what it writes back are read before the callee's bindings
+    // are dropped; the outputs are assigned with the caller's bindings back in place, since
+    // their targets are the caller's.
+    std::optional<Value> result;
+    if (subroutine.returnValVar != nullptr) {
+        if (const Value* returned = localFor(*subroutine.returnValVar)) result = copyOf(*returned);
+    }
+    std::vector<std::pair<std::size_t, Value>> outputs;
+    for (std::size_t index = 0; index < formals.size(); ++index) {
+        const ast::ArgumentDirection direction = formals[index]->direction;
+        if (direction == ast::ArgumentDirection::Out || direction == ast::ArgumentDirection::InOut)
+            outputs.emplace_back(index, copyOf(locals.at(formals[index])));
+    }
+    locals = outer;
+
+    for (const auto& [index, value] : outputs) {
+        if (!assignTo(*targetOf(actuals[index]), value, false)) return std::nullopt;
+    }
+
+    if (result.has_value()) return result;
+    // A task or a void function produces nothing; a placeholder keeps the callers that expect
+    // a value, an expression statement among them, from having to tell two absences apart.
+    return defaultValue(eir::Type::logic());
 }
 
 std::optional<ProcessTranslator::Value>
@@ -1877,6 +2109,13 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
     switch (target.kind) {
     case ast::ExpressionKind::NamedValue:
     case ast::ExpressionKind::HierarchicalValue: {
+        if (const Value* local = localFor(target.as<ast::ValueExpressionBase>().symbol)) {
+            const Value stored = coerceState(coerce(value, local->type), local->type);
+            emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(local->reg),
+                                        eir::Operand::reg(stored.reg)));
+            return true;
+        }
+
         const std::optional<std::uint32_t> objectIndex =
             module->objectFor(target.as<ast::ValueExpressionBase>().symbol);
         if (!objectIndex.has_value()) {
@@ -1954,6 +2193,22 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
     return false;
 }
 
+namespace {
+
+/// The string literal `expression` is, under any conversions slang wrapped it in, or null.
+///
+/// A literal passed where a `string` is expected arrives converted to one, and a system task
+/// that reads its format or file name from a literal has to see through that.
+const ast::StringLiteral* stringLiteralOf(const ast::Expression& expression) {
+    const ast::Expression* current = &expression;
+    while (current->kind == ast::ExpressionKind::Conversion)
+        current = &current->as<ast::ConversionExpression>().operand();
+    return current->kind == ast::ExpressionKind::StringLiteral ? &current->as<ast::StringLiteral>()
+                                                               : nullptr;
+}
+
+} // namespace
+
 bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNode) {
     const auto& call = expressionNode.as<ast::CallExpression>();
     const std::string_view name = call.getSubroutineName();
@@ -1975,8 +2230,8 @@ bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNod
     } else if (name == "$fatal") {
         kind = eir::SysTaskKind::Fatal;
         // `$fatal`'s first argument is the finish code, not part of the message.
-        skipFirstArgument = !call.arguments().empty()
-                            && call.arguments()[0]->kind != ast::ExpressionKind::StringLiteral;
+        skipFirstArgument =
+            !call.arguments().empty() && stringLiteralOf(*call.arguments()[0]) == nullptr;
     } else if (name == "$error") {
         kind = eir::SysTaskKind::Error;
     } else if (name == "$warning") {
@@ -2010,9 +2265,9 @@ bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNod
     if (!ignoreArguments) {
         bool first = true;
         for (const ast::Expression* argument : arguments) {
-            if (first && argument->kind == ast::ExpressionKind::StringLiteral) {
-                descriptor.formatIndex =
-                    addString(std::string(argument->as<ast::StringLiteral>().getValue()));
+            if (const ast::StringLiteral* literal = stringLiteralOf(*argument);
+                first && literal != nullptr) {
+                descriptor.formatIndex = addString(std::string(literal->getValue()));
                 first = false;
                 continue;
             }
@@ -2024,9 +2279,8 @@ bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNod
             descriptor.arguments.push_back(
                 eir::SysTaskArgument{.value = eir::Operand::reg(value->reg), .type = value->type});
         }
-    } else if (!arguments.empty() && arguments[0]->kind == ast::ExpressionKind::StringLiteral) {
-        descriptor.formatIndex =
-            addString(std::string(arguments[0]->as<ast::StringLiteral>().getValue()));
+    } else if (!arguments.empty() && stringLiteralOf(*arguments[0]) != nullptr) {
+        descriptor.formatIndex = addString(std::string(stringLiteralOf(*arguments[0])->getValue()));
     }
 
     const auto index = static_cast<std::uint32_t>(process.sysCalls.size());

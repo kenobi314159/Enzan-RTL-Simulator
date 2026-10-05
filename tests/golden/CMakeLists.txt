@@ -107,6 +107,9 @@ enzan_add_golden_test(arrays)
 # next row where IEEE 1800 section 7.4.6 makes it out of range.
 enzan_add_golden_test(aggregates NO_DIFFERENTIAL)
 
+# Functions and tasks, inlined into the processes that call them.
+enzan_add_golden_test(subroutines)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------

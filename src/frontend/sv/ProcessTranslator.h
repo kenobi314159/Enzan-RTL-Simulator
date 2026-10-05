@@ -10,6 +10,7 @@
 #include "slang/numeric/ConstantValue.h"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -22,6 +23,9 @@ class SourceLocation;
 
 namespace slang::ast {
 class CallExpression;
+class Scope;
+class SubroutineSymbol;
+class VariableSymbol;
 class ElementSelectExpression;
 class Expression;
 class MemberAccessExpression;
@@ -211,6 +215,7 @@ private:
     bool translateRepeatLoop(const slang::ast::Statement& statement);
     bool translateForeverLoop(const slang::ast::Statement& statement);
     bool translateTimed(const slang::ast::Statement& statement);
+    bool translateReturn(const slang::ast::Statement& statement);
 
     /// Emits the suspension for a timing control. Returns false on an unsupported one.
     bool translateTimingControl(const slang::ast::TimingControl& timing);
@@ -226,6 +231,30 @@ private:
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
     std::optional<Value> translateInside(const slang::ast::Expression& expression);
     std::optional<Value> translateAssignmentPattern(const slang::ast::Expression& expression);
+
+    /// Inlines a call of a user-defined function or task into this process, and returns the
+    /// function's value, or a placeholder for a task or a void function.
+    ///
+    /// Inlined rather than called: the body becomes part of the process that calls it, so a
+    /// task's delays suspend that process as any of its own statements would, its read and
+    /// write sets are exactly what the call touches (DESIGN_GUIDE.md section 4.2), and nothing
+    /// at run time keeps a call stack. A recursive call is refused, as is a `ref` argument.
+    std::optional<Value> inlineCall(const slang::ast::CallExpression& call,
+                                    const slang::ast::Expression& expression);
+
+    /// Binds every variable of `scope` and the scopes inside it — arguments, the return
+    /// variable, locals — to a register, which is what an automatic variable is.
+    void bindLocals(const slang::ast::Scope& scope);
+
+    /// The register bound to `symbol` while a subroutine that declares it is being inlined.
+    [[nodiscard]] const Value* localFor(const slang::ast::ValueSymbol& symbol) const;
+
+    /// A copy of a register, so that a later assignment to a local does not reach back into a
+    /// value already read from it.
+    Value copyOf(const Value& value);
+
+    /// A register holding a type's default: X when four-state, zero when two-state.
+    Value defaultValue(eir::Type type);
 
     /// `$isunknown`, `$countones`, `$onehot` and `$onehot0` (IEEE 1800 section 20.9).
     std::optional<Value> translateBitCount(std::string_view name,
@@ -296,6 +325,10 @@ private:
         std::int64_t reachLow = 0;
         std::int64_t reachWidth = 0;
 
+        /// True when `root` is the register of an inlined subroutine's local, which a write
+        /// may change in place.
+        bool rootIsLocal = false;
+
         static constexpr std::uint32_t NoObject = 0xFFFF'FFFFU;
 
         [[nodiscard]] bool inObject() const noexcept { return objectIndex != NoObject; }
@@ -334,6 +367,23 @@ private:
 
     /// `offset` where `index` lies within `range`, and X where it does not.
     Value checkedOffset(const Value& offset, const Value& index, slang::ConstantRange range);
+
+    /// A subroutine being inlined: where a `return` in its body goes.
+    struct InlineFrame {
+        const slang::ast::SubroutineSymbol* subroutine = nullptr;
+        std::uint32_t exitBlock = 0;
+        const slang::ast::VariableSymbol* returnVariable = nullptr;
+    };
+
+    /// The subroutines being inlined, innermost last, for `return` and to refuse recursion.
+    std::vector<InlineFrame> inlineFrames;
+
+    /// The registers the locals of the subroutines being inlined are bound to.
+    ///
+    /// Keyed on slang's symbols, which is sound here and only here: the map lives for one
+    /// translation of one body and is never shared between instances (DESIGN_GUIDE.md section
+    /// 18, M3.1).
+    std::map<const slang::ast::ValueSymbol*, Value> locals;
 
     ModuleContext* module;
 
