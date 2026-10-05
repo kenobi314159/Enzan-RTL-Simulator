@@ -189,6 +189,13 @@ module tb;
             failures = failures + 1;
         end
 
+        // A literal's z is z, not x: `===` tells them apart.
+        narrow = 4'bz01x;
+        if (narrow === 4'bx01x || narrow !== 4'bz01x) begin
+            $display("FAIL: a z in a literal, got %b", narrow);
+            failures = failures + 1;
+        end
+
         // A constant part select of a packed array counts in elements, not bits: [2:1] of
         // four bytes is the middle two bytes.
         bytes = 32'h4433_2211;
