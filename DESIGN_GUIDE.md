@@ -2189,7 +2189,9 @@ is a defect unless the regression is explicitly justified.
 
 Real designs, fetched at pinned revisions:
 
-- SystemVerilog: picorv32, VexRiscv (generated), Ibex, CVA6.
+- SystemVerilog: secworks `aes`, fpganinja `taxi`, PULP `common_cells`; then the
+  processors picorv32, VexRiscv (generated), Ibex and CVA6, which each need a program
+  compiled for them.
 - VHDL: NEORV32, plus the VUnit and OSVVM suites.
 
 Start with the small ones and add larger designs as capability grows.
@@ -2531,8 +2533,28 @@ regions; loading PLI shared objects.
 ### M5 — Four-state completion and language breadth
 
 Full four-state throughout; X-propagation; nets, drivers and resolution per 3.7;
-tasks, functions, packages, interfaces, generate, structs, enums, arrays;
-`sv-tests` pass rate tracked.
+tasks, functions, packages, interfaces, generate, structs, enums, arrays; the top
+level's parameters set from the command line; `sv-tests` pass rate tracked.
+
+**`string` stays a literal.** A string variable has no fixed size, while 4.3 lays out
+all state at elaboration and 13.4 forbids allocating on the write path, so storing one
+is a design of its own. The exit designs below are chosen to need none, and the cocotb
+cases whose shared design declares one keep failing until it is taken up (14.6).
+
+**The exit designs need no program to run.** A processor tests a simulator only as
+well as the software it is given, and running one would bring a cross-compiler into CI
+and, for a core iverilog cannot read, a second reference simulator. Three designs cover
+the language M5 adds without either:
+
+- **secworks `aes`**: Verilog with functions and memories, and a self-checking
+  testbench against the NIST vectors that iverilog also runs, so it is compared
+  differentially (14.3).
+- **The AXI-stream components of fpganinja `taxi`**: interfaces and modports, enums
+  and generate. Each is tested by its own cocotb testbench, which needs
+  `cocotbext-axi` beside cocotb and sets the top level's parameters from its makefile.
+- **PULP `common_cells`**: packages and packed structs, which `taxi` does not use.
+  Tested by those of its own testbenches that use no classes, and by self-checking
+  ones kept beside its fetch script for further modules.
 
 **Driving disjoint parts of one signal is the case to get right**, not an edge. A
 parameterised number of instances with ports connected to an array is ordinary RTL,
@@ -2541,10 +2563,10 @@ drivers are tracked per signal rather than per bit. Overlap, not sharing a signa
 is what multiple driving means, and a variable driven in disjoint parts is legal
 where an overlapping one is an error.
 
-**Exit:** picorv32 and Ibex simulate correctly against a reference; a design whose
-instance count is a parameter and whose ports are bits of one array simulates, while
-two drivers of one bit are still refused — a variable with an error and a net by
-resolving them.
+**Exit:** `aes` matches iverilog; the `taxi` AXI-stream tests and the `common_cells`
+testbenches above pass under Enzan; a design whose instance count is a
+parameter and whose ports are bits of one array simulates, while two drivers of one
+bit are still refused — a variable with an error and a net by resolving them.
 
 ### M5.1 — Parameter-generic analysis
 
