@@ -247,11 +247,13 @@ jobs:
             cmake ninja-build ccache libgtest-dev zlib1g-dev python3 python3-venv \
             libpython3-dev iverilog gtkwave
 
-      # The cocotb version is named once, in requirements.txt (DESIGN_GUIDE.md section 14.6).
-      - name: Install cocotb
+      # The cocotb version is named once, in requirements.txt (DESIGN_GUIDE.md section 14.6), and
+      # so is what sv-tests' driver needs (section 14.4).
+      - name: Install cocotb and sv-tests' driver requirements
         run: |
           python3 -m venv .venv
-          .venv/bin/pip install --quiet -r tests/conformance/cocotb/requirements.txt
+          .venv/bin/pip install --quiet -r tests/conformance/cocotb/requirements.txt \
+            -r tests/conformance/sv-tests/requirements.txt
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -297,6 +299,26 @@ jobs:
         with:
           name: cocotb-suite-logs
           path: build/cocotb-suite/*.log
+
+      # The sv-tests conformance suite (section 14.4), held to its pass list as cocotb's is. It
+      # runs here rather than nightly because it takes well under a minute against this build.
+      - name: sv-tests conformance suite
+        env:
+          SVTESTS_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          status=0
+          tests/conformance/sv-tests/run-suite.sh build/gcc-release/bin/enzan build/sv-tests \
+            > build/sv-tests.txt 2>&1 || status=$?
+          grep -v '^FAIL ' build/sv-tests.txt
+          { echo '```'; grep -v '^FAIL ' build/sv-tests.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Keep the sv-tests logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sv-tests-logs
+          path: build/sv-tests/out/logs
 
       # The benchmark is a target rather than a test, because a measurement taken alongside
       # three hundred other tests compares with nothing. It runs here so that a change which
