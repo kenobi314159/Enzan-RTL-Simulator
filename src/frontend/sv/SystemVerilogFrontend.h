@@ -54,6 +54,9 @@ struct Options {
     /// at all. Enzan's own choice of which one to simulate happens at elaboration.
     std::vector<std::string> topModules;
 
+    /// Overrides of the top level's parameters, each `NAME=VALUE` (`enzan -G`).
+    std::vector<std::string> parameterOverrides;
+
     /// The time unit, as a power of ten of a second, that a design element without a
     /// `` `timescale `` or `timeunit` of its own is taken to be in.
     ///

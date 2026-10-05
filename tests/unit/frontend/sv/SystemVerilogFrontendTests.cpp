@@ -97,7 +97,8 @@ protected:
     }
 
     /// Analyses `text` as a single file. Returns nullptr when analysis failed.
-    std::unique_ptr<Design> analyse(std::string_view text, std::string_view top = "") {
+    std::unique_ptr<Design> analyse(std::string_view text, std::string_view top = "",
+                                    std::vector<std::string> parameters = {}) {
         const std::filesystem::path path = directory / "design.sv";
         std::ofstream file(path);
         file << text;
@@ -106,6 +107,7 @@ protected:
         enzan::frontend::sv::Options options;
         options.files.push_back(path);
         if (!top.empty()) options.topModules.emplace_back(top);
+        options.parameterOverrides = std::move(parameters);
 
         return enzan::frontend::sv::analyse(options, sources, engine);
     }
@@ -1029,6 +1031,24 @@ TEST_F(FrontendTest, AMemberReachedThroughAnInterfacePortGoesThroughThePort) {
               (std::vector<InterfaceBinding>{InterfaceBinding{.port = "in", .target = "bus"}}));
     EXPECT_EQ(bindingsOf(*middle, "u_leaf"),
               (std::vector<InterfaceBinding>{InterfaceBinding{.port = "in", .target = "@in"}}));
+}
+
+TEST_F(FrontendTest, AParameterOverrideSetsTheTopLevelsParameter) {
+    const std::unique_ptr<Design> design =
+        analyse("module top #(parameter int W = 4); endmodule\n", "top", {"W=9"});
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    ASSERT_EQ(design->modules().size(), 1U);
+    const ModuleDefinition& top = design->modules().front();
+    ASSERT_EQ(top.parameters.size(), 1U);
+    EXPECT_EQ(top.parameters[0].value.ref().toUInt64(), 9U);
+}
+
+TEST_F(FrontendTest, AnOverrideNamingNoParameterIsReported) {
+    // slang ignores it, which would let a misspelt `-G` change nothing without a word.
+    const std::unique_ptr<Design> design =
+        analyse("module top #(parameter int W = 4); endmodule\n", "top", {"WIDTH=9"});
+    EXPECT_NE(design, nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::UnusedParameterOverride));
 }
 
 TEST_F(FrontendTest, ReportsARecursiveCall) {

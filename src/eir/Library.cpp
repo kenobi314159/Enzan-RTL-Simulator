@@ -286,7 +286,8 @@ bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& 
 }
 
 void Library::setOptions(std::span<const std::string> defines,
-                         std::span<const std::filesystem::path> includeDirectories) {
+                         std::span<const std::filesystem::path> includeDirectories,
+                         std::span<const std::string> parameters) {
     // Kept as well as hashed: the hash says whether an entry is current, and these say how to
     // read the sources again from somewhere else.
     recordedDefines.assign(defines.begin(), defines.end());
@@ -302,6 +303,8 @@ void Library::setOptions(std::span<const std::string> defines,
 
     for (const std::string& define : defines) digest.add(define);
     for (const std::filesystem::path& include : includeDirectories) digest.add(include.string());
+    // Marked, so that an override cannot hash the same as a define spelt like it.
+    for (const std::string& parameter : parameters) digest.add("-G" + parameter);
 
     optionsDigest = digest.hex();
 }

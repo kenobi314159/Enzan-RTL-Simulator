@@ -113,6 +113,8 @@ Sources:
   -D, --define <NAME[=V]> Define a preprocessor macro. +define+ is also accepted.
   -I, --incdir <dir>      Add a directory to the `include search path. +incdir+
                           is also accepted.
+  -G <NAME=VALUE>         Set a parameter of the top level, overriding its
+                          default. -GNAME=VALUE is also accepted.
 
 Libraries:
       --out-lib <dir>     The library analysis is written into, created when it
@@ -190,6 +192,9 @@ struct Invocation {
     std::filesystem::path waveListPath;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
+
+    /// Top-level parameter overrides, each `NAME=VALUE`.
+    std::vector<std::string> parameters;
     std::string topModule;
     std::optional<std::uint64_t> runUntil;
     std::filesystem::path vcdPath;
@@ -381,6 +386,19 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             invocation.defines.emplace_back(value);
+            continue;
+        }
+
+        // `-G NAME=VALUE`, or `-GNAME=VALUE` as Verilator spells it and as cocotb's makefiles
+        // pass it.
+        if (argument == "-G") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.parameters.emplace_back(value);
+            continue;
+        }
+        if (argument.starts_with("-G") && argument.size() > 2) {
+            invocation.parameters.emplace_back(argument.substr(2));
             continue;
         }
 
@@ -699,6 +717,8 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
     for (const std::string& define : invocation.defines) request.defines.push_back(define);
     for (const std::filesystem::path& directory : invocation.includeDirectories)
         request.includeDirectories.push_back(directory);
+    for (const std::string& parameter : invocation.parameters)
+        request.parameters.push_back(parameter);
 
     request.contextFiles = invocation.contextFiles;
     return true;

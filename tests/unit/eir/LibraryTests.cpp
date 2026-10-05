@@ -281,6 +281,27 @@ TEST_F(StoredLibraryTest, TwoOptionsThatConcatenateAlikeAreDistinguished) {
     EXPECT_FALSE(library.load({&file, 1}, sources, loaded));
 }
 
+TEST_F(StoredLibraryTest, AParameterOverrideIsPartOfTheKey) {
+    // slang applies `-G` while analysing, so a unit analysed with an override is not the one
+    // analysed without, and an override must not hash as the define spelt like it.
+    const LibrarySource file = source("a.sv", "module a; endmodule\n");
+    const std::vector<std::string> width{"WIDTH=8"};
+    library.setOptions({}, {}, width);
+    ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
+
+    library.setOptions({}, {});
+    Design without;
+    EXPECT_FALSE(library.load({&file, 1}, sources, without));
+
+    library.setOptions(width, {});
+    Design asDefine;
+    EXPECT_FALSE(library.load({&file, 1}, sources, asDefine));
+
+    library.setOptions({}, {}, width);
+    Design same;
+    EXPECT_TRUE(library.load({&file, 1}, sources, same));
+}
+
 TEST_F(StoredLibraryTest, OneMissingFileMakesTheWholeLoadAMiss) {
     const LibrarySource first = source("a.sv", "module a; endmodule\n");
     const LibrarySource second = source("b.sv", "module b; endmodule\n");

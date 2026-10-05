@@ -97,8 +97,11 @@ public:
     /// Anything that changes what analysis produces belongs here. A define that is not in the
     /// key is a define whose change is invisible to the cache, which is a wrong simulation
     /// rather than a slow one.
+    /// Top-level parameter overrides are among them: slang applies them while analysing, so a
+    /// unit analysed with one is not the unit analysed without it.
     void setOptions(std::span<const std::string> defines,
-                    std::span<const std::filesystem::path> includeDirectories);
+                    std::span<const std::filesystem::path> includeDirectories,
+                    std::span<const std::string> parameters = {});
 
     /// Loads every source's units into `design`, or reports why it could not.
     ///

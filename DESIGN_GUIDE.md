@@ -853,6 +853,11 @@ which is what a CI job and a `make check` want, and it MUST NOT be a prerequisit
 of `run`: an elaboration on disk would be a second serialised format to version
 and a second thing to invalidate, and elaboration is not the expensive phase.
 
+**A top level's parameters are set with `-G NAME=VALUE`**, or `-GNAME=VALUE` as Verilator and
+cocotb's makefiles spell it. slang applies an override while analysing, so it is in a library
+entry's key as a define is (4.4). One that names no parameter of a top level changes nothing,
+and is reported rather than ignored, since a misspelt override is otherwise invisible.
+
 **Exit statuses are distinct enough to branch on**, because a Makefile and a CI
 job need to tell a broken invocation from a broken design:
 

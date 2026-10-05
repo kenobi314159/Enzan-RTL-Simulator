@@ -128,6 +128,9 @@ public:
         std::vector<std::filesystem::path> libraryFiles;
         std::vector<std::string> defines;
         std::vector<std::filesystem::path> includeDirectories;
+
+        /// Top-level parameter overrides, each `NAME=VALUE`.
+        std::vector<std::string> parameters;
     };
 
     /// Analyses `request` together with everything analysed before it.
@@ -392,6 +395,7 @@ private:
     /// Every file the last analysis read, for `--depfile`.
     std::vector<std::filesystem::path> lastFilesRead;
     std::vector<std::string> defines;
+    std::vector<std::string> parameters;
     std::vector<std::filesystem::path> includeDirectories;
 
     eir::Library library;

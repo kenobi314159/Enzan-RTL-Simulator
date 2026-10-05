@@ -101,6 +101,7 @@ bool Session::analyse(const AnalysisRequest& request) {
     for (const std::string& define : request.defines) defines.push_back(define);
     for (const std::filesystem::path& directory : request.includeDirectories)
         includeDirectories.push_back(directory);
+    for (const std::string& parameter : request.parameters) parameters.push_back(parameter);
 
     if (files.empty()) {
         diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
@@ -152,7 +153,7 @@ bool Session::analyse(const AnalysisRequest& request) {
 
     loadedFromLibrary = false;
     if (library.isOpen()) {
-        library.setOptions(defines, includeDirectories);
+        library.setOptions(defines, includeDirectories, parameters);
 
         auto reused = std::make_unique<eir::Design>();
         if (library.load(stored, sources, *reused)) {
@@ -177,6 +178,7 @@ bool Session::analyse(const AnalysisRequest& request) {
     options.defines = defines;
     options.includeDirectories = includeDirectories;
     options.timeUnitExponent = scale.precisionExponent();
+    options.parameterOverrides = parameters;
 
     std::unique_ptr<eir::Design> analysed = frontend::sv::analyse(options, sources, diagnostics);
     if (analysed == nullptr) return false;

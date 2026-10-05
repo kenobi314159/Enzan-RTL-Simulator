@@ -1306,6 +1306,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
 
     slang::ast::CompilationOptions compilationOptions;
     for (const std::string& top : options.topModules) compilationOptions.topModules.insert(top);
+    compilationOptions.paramOverrides = options.parameterOverrides;
     if (const std::optional<slang::TimeUnit> unit = timeUnitOf(options.timeUnitExponent)) {
         const slang::TimeScaleValue value(*unit, slang::TimeScaleMagnitude::One);
         compilationOptions.defaultTimeScale = slang::TimeScale(value, value);
@@ -1373,6 +1374,20 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     if (hasError) return nullptr;
 
     const slang::ast::RootSymbol& root = compilation.getRoot();
+
+    // slang applies an override to whichever top level has the parameter and ignores one that
+    // none has, which would let a misspelt `-G` change nothing without a word.
+    for (const std::string& override : options.parameterOverrides) {
+        const std::string_view name = std::string_view(override).substr(0, override.find('='));
+        const bool used = std::ranges::any_of(
+            root.topInstances, [name](const slang::ast::InstanceSymbol* instance) {
+                const slang::ast::Symbol* found = instance->body.find(name);
+                return found != nullptr && found->kind == slang::ast::SymbolKind::Parameter;
+            });
+        if (!used)
+            diagnostics.report(DiagCode::UnusedParameterOverride, SourceLocation(), override);
+    }
+
     if (root.topInstances.empty()) {
         diagnostics.report(DiagCode::NoTopLevelFound, SourceLocation());
         return nullptr;
