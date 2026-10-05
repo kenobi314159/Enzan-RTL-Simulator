@@ -2187,6 +2187,18 @@ cannot exercise a defect Enzan inherited from NVC's own frontend.
 **The pass rate MUST NOT regress.** This is a ratchet: a change that lowers it
 is a defect unless the regression is explicitly justified.
 
+`tests/conformance/sv-tests/run-suite.sh` runs sv-tests. It fetches the suite at the revision
+named in `revision.txt` beside it, the one place that revision is written, and runs every case
+under the suite's `tests/` through **sv-tests' own driver** with an Enzan runner. So a case
+passes by sv-tests' rules — the tool succeeding or failing as the case expects, and every
+`:assert:` a simulation prints holding — rather than by a reading of them. A preprocessing-only
+case is skipped, as sv-tests skips a case of a kind a tool does not run, and is in neither
+count. A case that expects the tool to fail passes whenever Enzan fails, an unsupported construct
+included; those passes count, being sv-tests' definition, and are reported as a second number.
+
+The ratchet is a list for each suite, as 14.6 describes, and one script,
+`tests/conformance/ratchet.sh`, holds every suite to its list.
+
 ### 14.5 Design regression
 
 Real designs, fetched at pinned revisions:
@@ -2219,7 +2231,8 @@ CI installs from. The suite is fetched to match whatever is installed rather tha
 the version, so the two cannot disagree.
 
 **The ratchet of 14.4 is a list, not a number.** `tests/conformance/cocotb/passing.txt` names
-every case that passes, and the run fails when one of them stops passing. A pass rate alone
+every case that passes, and the run fails when one of them stops passing; the check is
+`tests/conformance/ratchet.sh`, which sv-tests uses too. A pass rate alone
 would let one case start passing while another stopped and report no change at all. A case
 that newly passes is reported, and is added to the list in the same commit as the change that
 made it pass.
@@ -2280,8 +2293,8 @@ Per-commit jobs:
 - Unit and golden test suites.
 - Sanitiser build (ASan+UBSan) over unit and golden suites.
 - `clang-format` and `clang-tidy` checks.
-- cocotb's regression suite (14.6), in the job that already builds the SystemVerilog
-  frontend, since a second job would build slang a second time to run it.
+- cocotb's regression suite (14.6) and sv-tests (14.4), in the job that already builds the
+  SystemVerilog frontend, since a second job would build slang a second time to run them.
 
 Nightly jobs:
 
