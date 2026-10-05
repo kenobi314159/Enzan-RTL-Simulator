@@ -213,6 +213,10 @@ ENZAN_OPCODE(SysTask, "systask", false, 1,
              "a call to the runtime with the call descriptor's index; system tasks "
              "are never inlined, because their cost is dominated by formatting and "
              "I/O rather than by the call")
+ENZAN_OPCODE(SysFunction, "sysfunc", true, 1,
+             "as SysTask, with a pointer to the result register as a second argument; "
+             "a system function's result depends on state the runtime keeps, such as "
+             "a random generator")
 
 // --- Suspension ------------------------------------------------------------
 //

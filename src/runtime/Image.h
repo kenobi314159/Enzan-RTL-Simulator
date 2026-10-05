@@ -105,6 +105,11 @@ struct ProcessState {
     /// the others stale rather than able to resume the process a second time.
     std::uint32_t waitGeneration = 0;
 
+    /// The state of this process's `$urandom` generator, derived from the seed and the
+    /// process's name so that what one process draws does not depend on what any other does
+    /// (IEEE 1800 section 18.14). Set when the kernel starts.
+    std::uint64_t randomState = 0;
+
     /// True while the process sits in one of the scheduler's queues, so that a signal
     /// changing twice in one region does not enqueue it twice.
     bool queued = false;

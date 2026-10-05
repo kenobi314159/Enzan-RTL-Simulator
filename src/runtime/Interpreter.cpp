@@ -383,6 +383,11 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             break;
         }
 
+        case eir::Opcode::SysFunction:
+            kernel.runSystemFunction(processIndex, instruction.a,
+                                     reg(instruction.dst, instruction.dstWidth));
+            break;
+
         case eir::Opcode::SysTask:
             kernel.runSystemTask(processIndex, instruction.a);
             if (kernel.finishRequested || kernel.errorRequested) return ExecutionResult::Stopped;

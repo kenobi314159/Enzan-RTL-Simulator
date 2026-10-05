@@ -98,6 +98,8 @@ ENZAN_DIAG(UserFatal, 5003, Error, "$fatal: {}")
 ENZAN_DIAG(UserError, 5004, Error, "{}")
 ENZAN_DIAG(UserWarning, 5005, Warning, "{}")
 ENZAN_DIAG(UserInfo, 5006, Note, "{}")
+ENZAN_DIAG(RandomSeed, 5007, Note,
+           "random numbers are drawn from seed {}; `--seed` chooses another")
 
 // --- 6000-6999: the session and its command line -----------------------------
 

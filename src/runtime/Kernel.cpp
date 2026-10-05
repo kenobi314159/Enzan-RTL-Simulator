@@ -12,6 +12,7 @@
 #include "runtime/Interpreter.h"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
 #include <iostream>
 #include <string>
@@ -55,6 +56,50 @@ std::size_t windowScratchWords(const Image& image) {
     for (const Signal& signal : image.signals())
         if (signal.windowed) widest = std::max(widest, signal.bitWidth);
     return eir::storageWordsFor(widest);
+}
+
+/// IEEE 1364's `$random`: the reference C code the standard gives for its distribution
+/// functions, `rtl_dist_uniform`, over the whole 32-bit range. The seed advances as a linear
+/// congruential generator and the draw is computed from it in floating point. Kept bit for bit,
+/// because every simulator that follows it, Icarus Verilog among them, draws the same sequence
+/// from the same seed.
+std::int32_t ieeeRandom(std::int32_t& seed) {
+    if (seed == 0) seed = 259'341'593;
+    seed = static_cast<std::int32_t>((69069U * static_cast<std::uint32_t>(seed)) + 1U);
+
+    const std::uint32_t bits = (static_cast<std::uint32_t>(seed) >> 9U) | 0x3f80'0000U;
+    float single = 0;
+    std::memcpy(&single, &bits, sizeof single);
+    auto fraction = static_cast<double>(single);
+    fraction += fraction * 0.00000011920928955078125;
+
+    const double low = -2147483648.0;
+    const double high = 2147483647.0;
+    double draw = ((high - low) * (fraction - 1.0)) + low;
+    draw = (draw + 2147483648.0) / 4294967295.0;
+    draw = (draw * 4294967296.0) - 2147483648.0;
+    return static_cast<std::int32_t>(draw >= 0 ? draw : draw - 1);
+}
+
+/// SplitMix64, for `$urandom`: small, fast and well distributed, which is all a process's
+/// stimulus needs.
+std::uint64_t splitMix(std::uint64_t& state) {
+    state += 0x9e37'79b9'7f4a'7c15ULL;
+    std::uint64_t mixed = state;
+    mixed = (mixed ^ (mixed >> 30U)) * 0xbf58'476d'1ce4'e5b9ULL;
+    mixed = (mixed ^ (mixed >> 27U)) * 0x94d0'49bb'1331'11ebULL;
+    return mixed ^ (mixed >> 31U);
+}
+
+/// A process's generator state from the seed and its name, which stay the same from run to
+/// run whatever else the design does.
+std::uint64_t processRandomState(std::uint32_t seed, std::string_view name) {
+    std::uint64_t hash = 0xcbf2'9ce4'8422'2325ULL;
+    for (const char c : name) {
+        hash ^= static_cast<unsigned char>(c);
+        hash *= 0x0000'0100'0000'01b3ULL;
+    }
+    return hash ^ (std::uint64_t{seed} * 0x9e37'79b9'7f4a'7c15ULL);
 }
 
 bool edgeMatches(eir::EdgeKind edge, eir::Logic before, eir::Logic after) noexcept {
@@ -103,6 +148,10 @@ void Kernel::initialize() {
     delayedWrites.clear();
     pendingInertial.clear();
     processes.assign(designImage->processes().begin(), designImage->processes().end());
+    for (ProcessState& state : processes)
+        state.randomState = processRandomState(options.seed, state.name);
+    randomSeed = static_cast<std::int32_t>(options.seed);
+    seedReported = false;
     for (std::vector<EdgeWaiter>& waiters : edgeWaiters) waiters.clear();
     std::ranges::fill(frameStorage, eir::Word{});
 
@@ -820,7 +869,71 @@ void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallInde
     case eir::SysTaskKind::DumpVars:
         for (ValueChangeListener* listener : listeners) listener->onDumpVars();
         return;
+
+    case eir::SysTaskKind::Random:
+    case eir::SysTaskKind::URandom:
+    case eir::SysTaskKind::URandomRange:
+        ENZAN_ASSERT(false, "a system function run as a system task; run the EIR verifier");
+        return;
     }
+}
+
+void Kernel::runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCallIndex,
+                               eir::BitRef result) {
+    ProcessState& state = processes[processIndex];
+    const codegen::CompiledProcess& body = designImage->compiledDesign().body(state.bodyIndex);
+    const codegen::SysTaskDescriptor& descriptor = body.sysCalls[sysCallIndex];
+
+    // An argument as a number; an unknown bit reads as 0, as other simulators read it.
+    const auto argument = [&](std::size_t index) -> std::uint64_t {
+        const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[index];
+        const eir::ConstBitRef value =
+            compiled.isConstant ? body.constant(compiled.location)
+                                : frameAt(state.frameOffset + compiled.location, compiled.bitWidth);
+        std::uint64_t number = value.aval()[0] & ~value.bval()[0];
+        if (value.width() < 64) number &= (std::uint64_t{1} << value.width()) - 1;
+        return number;
+    };
+
+    if (!seedReported) {
+        diagnostics.report(DiagCode::RandomSeed, descriptor.location, options.seed);
+        seedReported = true;
+    }
+
+    std::uint64_t value = 0;
+    switch (descriptor.kind) {
+    case eir::SysTaskKind::Random:
+        if (descriptor.arguments.empty()) {
+            value = static_cast<std::uint32_t>(ieeeRandom(randomSeed));
+        } else {
+            auto seed = static_cast<std::int32_t>(static_cast<std::uint32_t>(argument(0)));
+            const std::int32_t draw = ieeeRandom(seed);
+            value = (std::uint64_t{static_cast<std::uint32_t>(seed)} << 32U)
+                    | static_cast<std::uint32_t>(draw);
+        }
+        break;
+
+    case eir::SysTaskKind::URandom:
+        if (!descriptor.arguments.empty())
+            state.randomState = processRandomState(static_cast<std::uint32_t>(argument(0)), {});
+        value = splitMix(state.randomState) & 0xFFFF'FFFFU;
+        break;
+
+    case eir::SysTaskKind::URandomRange: {
+        std::uint64_t high = argument(0) & 0xFFFF'FFFFU;
+        std::uint64_t low = descriptor.arguments.size() > 1 ? argument(1) & 0xFFFF'FFFFU : 0;
+        if (low > high) std::swap(low, high);
+        value = low + (splitMix(state.randomState) % (high - low + 1));
+        break;
+    }
+
+    default: ENZAN_ASSERT(false, "a system task run as a system function"); break;
+    }
+
+    std::ranges::fill(result.avalWords(), 0);
+    std::ranges::fill(result.bvalWords(), 0);
+    result.aval()[0] = value;
+    result.canonicalize();
 }
 
 void Kernel::reportDeltaLimit() {

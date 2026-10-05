@@ -135,6 +135,7 @@ Simulation:
       --timescale <unit>  Time unit for delays and reported times: s, ms, us, ns,
                           ps or fs. The default is ps.
       --delta-limit <n>   Delta cycles allowed at one timestamp. Default 10000.
+      --seed <n>          The seed random numbers are drawn from. Default 0.
       --dump-stats        Print instruction and delta counts when the run ends.
       --vpi <lib[:entry]> Load a VPI application, such as cocotb's; repeatable.
                           Without an entry, its vlog_startup_routines are run.
@@ -203,6 +204,7 @@ struct Invocation {
     std::filesystem::path listenPath;
     std::int8_t timeExponent = -12;
     std::uint32_t deltaLimit = 10'000;
+    std::uint32_t seed = 0;
     bool dumpStatistics = false;
 
     /// VPI applications to load, in the order given (DESIGN_GUIDE.md section 9.1).
@@ -379,6 +381,18 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
                 return ParseOutcome::BadUsage;
             }
             invocation.deltaLimit = static_cast<std::uint32_t>(*parsed);
+            continue;
+        }
+
+        if (argument == "--seed") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            const std::optional<std::uint64_t> parsed = parseUnsigned(value);
+            if (!parsed.has_value() || *parsed > 0xFFFF'FFFFU) {
+                std::cerr << "enzan: '" << value << "' is not a seed from 0 to 4294967295\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.seed = static_cast<std::uint32_t>(*parsed);
             continue;
         }
 
@@ -747,6 +761,7 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
                  enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
     session.setTimeScale(enzan::runtime::TimeScale(invocation.timeExponent));
     session.setDeltaLimit(invocation.deltaLimit);
+    session.setSeed(invocation.seed);
 
     if (!openLibraries(invocation, session)) return false;
 

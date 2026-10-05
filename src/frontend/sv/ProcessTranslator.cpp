@@ -2221,6 +2221,59 @@ bool ProcessTranslator::refuseDelayedWrite(const ast::Expression& target) {
 }
 
 std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateRandom(std::string_view name, const ast::CallExpression& call,
+                                   const ast::Expression& expression) {
+    eir::SysTaskCall descriptor;
+    if (name == "$random") {
+        descriptor.kind = eir::SysTaskKind::Random;
+    } else if (name == "$urandom") {
+        descriptor.kind = eir::SysTaskKind::URandom;
+    } else {
+        descriptor.kind = eir::SysTaskKind::URandomRange;
+    }
+    descriptor.location = module->convertLocation(expression.sourceRange.start());
+    for (const ast::Expression* argument : call.arguments()) {
+        const std::optional<Value> value = translateExpression(*argument);
+        if (!value.has_value()) return std::nullopt;
+        descriptor.arguments.push_back(
+            eir::SysTaskArgument{.value = eir::Operand::reg(value->reg), .type = value->type});
+    }
+
+    // `$random(seed)` also updates its seed, which is what makes the next call draw something
+    // else: the runtime returns the new seed above the draw, and it is written back here.
+    const bool isRandom = descriptor.kind == eir::SysTaskKind::Random;
+    const bool seeded = isRandom && !call.arguments().empty();
+    const eir::Type drawn = eir::Type::bits(seeded ? 64 : 32, false, false);
+    const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
+    process.sysCalls.push_back(std::move(descriptor));
+    const std::uint32_t result = newRegister(drawn);
+    emit(eir::Instruction::make(eir::Opcode::SysFunction, eir::Operand::reg(result),
+                                eir::Operand::sysCall(index)));
+
+    const eir::Type word = eir::Type::bits(32, isRandom, false);
+    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    if (!resultType.has_value()) return std::nullopt;
+    if (!seeded) return coerce(Value{.reg = result, .type = word}, *resultType);
+
+    const auto part = [&](std::uint32_t low) {
+        const std::uint32_t offset = newRegister(eir::Type::intType());
+        emit(eir::Instruction::make(
+            eir::Opcode::LoadConstant, eir::Operand::reg(offset),
+            eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(low, 32)))));
+        const std::uint32_t piece = newRegister(word);
+        emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(piece),
+                                    eir::Operand::reg(result), eir::Operand::reg(offset)));
+        return Value{.reg = piece, .type = word};
+    };
+    // slang converts the seed to `$random`'s 32-bit integer, so the variable is underneath.
+    const ast::Expression* seedVariable = call.arguments()[0];
+    while (seedVariable->kind == ast::ExpressionKind::Conversion)
+        seedVariable = &seedVariable->as<ast::ConversionExpression>().operand();
+    if (!assignTo(*seedVariable, part(32), false)) return std::nullopt;
+    return coerce(part(0), *resultType);
+}
+
+std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateCall(const ast::Expression& expression) {
     const auto& call = expression.as<ast::CallExpression>();
 
@@ -2271,6 +2324,9 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
                                         eir::Operand::constant(index)));
             return Value{.reg = result, .type = *type};
         }
+
+        if (name == "$random" || name == "$urandom" || name == "$urandom_range")
+            return translateRandom(name, call, expression);
 
         // `$clog2` of a variable, such as a loop index; slang has folded every constant one.
         if (name == "$clog2" && call.arguments().size() == 1) {

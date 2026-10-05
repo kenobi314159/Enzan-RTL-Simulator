@@ -334,6 +334,7 @@ bool Session::elaborate(std::string_view topModule) {
     options.timeScale = scale;
     options.deltaLimit = deltaLimit;
     options.transcript = transcript;
+    options.seed = seed;
 
     kernel = std::make_unique<runtime::Kernel>(*image, diagnostics, options);
     kernel->initialize();

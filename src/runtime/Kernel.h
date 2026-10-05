@@ -156,6 +156,11 @@ struct KernelOptions {
 
     /// Where `$display` and the severity tasks write. Null means the standard output.
     std::ostream* transcript = nullptr;
+
+    /// What every random draw starts from (section 3.8): `$random`'s own seed, and what each
+    /// process's `$urandom` generator is derived from. Zero by default, which is where other
+    /// simulators start `$random` too.
+    std::uint32_t seed = 0;
 };
 
 /// The simulation kernel: one time wheel, one event queue, one arena.
@@ -367,6 +372,10 @@ public:
     /// Performs a system task call.
     void runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallIndex);
 
+    /// Performs a system function call, writing its result to `result`.
+    void runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCallIndex,
+                           eir::BitRef result);
+
 private:
     /// Runs one timestamp to completion, iterating the regions per section 3.3.
     /// Returns false when the run must stop.
@@ -456,6 +465,12 @@ private:
     /// A windowed signal's old value, kept across its write for the comparison, sized once
     /// for the widest windowed signal.
     std::vector<eir::Word> windowScratch;
+
+    /// `$random`'s seed when it is called without one of its own.
+    std::int32_t randomSeed = 0;
+
+    /// Whether the seed has been reported, which happens once, at the first draw.
+    bool seedReported = false;
 
     /// A write scheduled by `scheduleDelayedWrite`, waiting for its time.
     ///

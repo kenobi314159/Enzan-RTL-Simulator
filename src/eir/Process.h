@@ -36,9 +36,24 @@ enum class SysTaskKind : std::uint8_t {
     DumpFile,
     /// `$dumpvars`: opens a logging scope.
     DumpVars,
+
+    // System functions, run by SysFunction, which have a result.
+
+    /// `$random`, IEEE 1364's generator. With no argument it draws from the simulation's
+    /// own seed and its result is 32 bits; given its seed's value, it is 64 bits: the seed
+    /// the caller writes back, above the 32-bit draw.
+    Random,
+    /// `$urandom`: 32 unsigned bits from the calling process's own generator, which a seed
+    /// argument resets first (IEEE 1800 section 18.13.1).
+    URandom,
+    /// `$urandom_range(max, min)`: a draw between the two, either way round.
+    URandomRange,
 };
 
 std::string_view toString(SysTaskKind kind) noexcept;
+
+/// True for the kinds a SysFunction runs, which have a result; the rest are SysTask's.
+[[nodiscard]] bool isSystemFunction(SysTaskKind kind) noexcept;
 
 /// One argument of a system task call.
 struct SysTaskArgument {

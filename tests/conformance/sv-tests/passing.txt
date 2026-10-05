@@ -129,6 +129,7 @@ chapter-20/20.10--error.sv
 chapter-20/20.10--fatal.sv
 chapter-20/20.10--info.sv
 chapter-20/20.10--warning.sv
+chapter-20/20.15--random.sv
 chapter-20/20.2--finish.sv
 chapter-20/20.2--stop.sv
 chapter-20/20.3--realtime.sv

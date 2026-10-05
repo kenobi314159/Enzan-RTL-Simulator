@@ -1131,12 +1131,12 @@ TEST_F(FrontendTest, ReportsARefArgument) {
 TEST_F(FrontendTest, ReportsAnUnsupportedSystemTaskByName) {
     EXPECT_EQ(analyse(R"(
         module m;
-            initial $random();
+            initial $sdf_annotate("timing.sdf");
         endmodule
     )"),
               nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-    EXPECT_TRUE(reported("$random")) << "the diagnostic must name the task";
+    EXPECT_TRUE(reported("$sdf_annotate")) << "the diagnostic must name the task";
 }
 
 TEST_F(FrontendTest, EachCaseFormComparesItsItemsWithItsOwnOpcode) {
@@ -1193,7 +1193,7 @@ TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {
     // file list expands to. slang shortens such a path when it renders a file *name*, so a
     // conversion that matched names rather than buffers resolved nothing at all here — every
     // diagnostic in the design lost its file, its line and its caret.
-    EXPECT_EQ(analyse("module m;\n  initial $random();\nendmodule\n"), nullptr);
+    EXPECT_EQ(analyse("module m;\n  initial $sdf_annotate(\"timing.sdf\");\nendmodule\n"), nullptr);
 
     ASSERT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
     EXPECT_GE(sources.bufferCount(), 1U);

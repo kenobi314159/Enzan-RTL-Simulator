@@ -251,6 +251,11 @@ private:
     std::optional<Value> translateReplication(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
 
+    /// `$random`, `$urandom` and `$urandom_range`, which the runtime draws.
+    std::optional<Value> translateRandom(std::string_view name,
+                                         const slang::ast::CallExpression& call,
+                                         const slang::ast::Expression& expression);
+
     /// `&&` or `||` whose right operand has side effects, which it evaluates only when the
     /// left one does not decide the result (IEEE 1800 section 11.4.7): not when the left is
     /// known 0 for `&&` or known 1 for `||`. An unknown left decides nothing.

@@ -418,6 +418,20 @@ private:
             checkObjectAccess(definition, process, instruction.a, true, where);
             break;
 
+        // A system task has no result and a system function has one, so each opcode runs only
+        // its own kind of call.
+        case Opcode::SysTask:
+        case Opcode::SysFunction:
+            if (instruction.a.kind() == Operand::Kind::SysCall
+                && instruction.a.index() < process.sysCalls.size()
+                && isSystemFunction(process.sysCalls[instruction.a.index()].kind)
+                       != (instruction.opcode == Opcode::SysFunction)) {
+                reportProcess(definition, process,
+                              std::format("{} runs {} with the wrong opcode", where,
+                                          toString(process.sysCalls[instruction.a.index()].kind)));
+            }
+            break;
+
         case Opcode::WaitEdge:
             checkObjectAccess(definition, process, instruction.a, false, where);
             break;

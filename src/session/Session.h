@@ -103,6 +103,9 @@ public:
     /// Sets the delta cycles allowed at one timestamp. Takes effect at the next elaboration.
     void setDeltaLimit(std::uint32_t limit) noexcept { deltaLimit = limit; }
 
+    /// The seed random draws start from (DESIGN_GUIDE.md section 3.8).
+    void setSeed(std::uint32_t value) noexcept { seed = value; }
+
     // -----------------------------------------------------------------------
     // Analysis
     // -----------------------------------------------------------------------
@@ -425,6 +428,7 @@ private:
     runtime::TimeScale scale;
     runtime::RunStatus status = runtime::RunStatus::Quiescent;
     std::uint32_t deltaLimit = 10'000;
+    std::uint32_t seed = 0;
 
     /// Bumped by `discardElaboration`, which every path that replaces the simulation goes
     /// through. See `elaborationGeneration`.

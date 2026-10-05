@@ -144,6 +144,15 @@ enzan_add_golden_test(type_parameters NO_DIFFERENTIAL)
 # Packages, and package variables shared by every module that uses them.
 enzan_add_golden_test(packages)
 
+# Random numbers: `$random` against Icarus Verilog, and the seed and random stability.
+enzan_add_golden_test(random)
+add_test(NAME golden.random_stability
+         COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/random_stability.sh" $<TARGET_FILE:enzan>
+                 "${CMAKE_CURRENT_SOURCE_DIR}/sv/random_stability.sv"
+                 "${CMAKE_CURRENT_BINARY_DIR}/random_stability")
+set_tests_properties(golden.random_stability PROPERTIES PASS_REGULAR_EXPRESSION
+                                                        "PASS random_stability")
+
 # An error reported while the design runs is the design failing in simulation: status 3.
 add_test(NAME golden.runtime_error_status
          COMMAND sh -c "\"$1\" --top tb \"$2\" >/dev/null 2>&1; test $? -eq 3" sh
