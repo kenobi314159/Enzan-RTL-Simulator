@@ -37,6 +37,7 @@ using enzan::eir::PortDirection;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
+using enzan::eir::WriteExtent;
 using enzan::elab::ElaboratedDesign;
 using enzan::elab::Elaborator;
 using enzan::elab::Instance;
@@ -61,7 +62,7 @@ Process makeCopyProcess(ProcessKind kind, std::uint32_t from, std::uint32_t to, 
     process.name = "copy";
     process.registerTypes.push_back(type);
     process.readSet = {from};
-    process.writeSet = {to};
+    process.writeSet = {WriteExtent::whole(to, type.bitWidth())};
 
     BasicBlock entry;
     entry.label = "entry";

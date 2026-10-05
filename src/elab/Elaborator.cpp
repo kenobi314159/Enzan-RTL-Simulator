@@ -340,8 +340,14 @@ private:
             const eir::Process& process = definition.processes[processInstance.processIndex];
             const bool continuous = process.kind == eir::ProcessKind::ContinuousAssign;
 
-            for (const std::uint32_t objectIndex : process.writeSet) {
-                const std::uint32_t slotIndex = instance.objectSlots[objectIndex];
+            std::uint32_t previousObject = NoSlot;
+            for (const eir::WriteExtent& extent : process.writeSet) {
+                // Extents are ordered by object, and two extents of one object are still one
+                // process writing it.
+                if (extent.objectIndex == previousObject) continue;
+                previousObject = extent.objectIndex;
+
+                const std::uint32_t slotIndex = instance.objectSlots[extent.objectIndex];
                 DriverKind& kind = drivers[slotIndex];
 
                 if (kind == DriverKind::None) {

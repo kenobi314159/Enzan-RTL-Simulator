@@ -134,7 +134,7 @@ struct CompiledProcess {
     SourceLocation location;
     std::vector<eir::SensitivityEntry> sensitivity;
     std::vector<std::uint32_t> readSet;
-    std::vector<std::uint32_t> writeSet;
+    std::vector<eir::WriteExtent> writeSet;
 
     /// True when the process must be scheduled once at time zero.
     bool startsAtTimeZero = false;

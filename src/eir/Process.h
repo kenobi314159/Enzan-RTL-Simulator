@@ -127,6 +127,44 @@ struct SensitivityEntry {
     friend bool operator==(SensitivityEntry, SensitivityEntry) noexcept = default;
 };
 
+/// The bits of one object a process writes.
+///
+/// A range rather than the object alone, because a driver owns the bits it assigns and not
+/// the signal they are part of (DESIGN_GUIDE.md section 3.7): `N` instances each driving one
+/// bit of `ready` are `N` disjoint drivers, and a write set that named only `ready` would make
+/// them `N` drivers of one signal. A select whose position is not constant records every bit
+/// it could reach, since a driver's range is fixed before anything runs.
+struct WriteExtent {
+    std::uint32_t objectIndex = 0;
+
+    /// The lowest bit written, counted from the least significant bit of the storage.
+    std::uint32_t lowBit = 0;
+
+    /// How many bits, from `lowBit` upwards. Never zero.
+    std::uint32_t width = 0;
+
+    [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + width; }
+
+    /// Every bit of an object `width` bits wide.
+    static WriteExtent whole(std::uint32_t objectIndex, std::uint32_t width) noexcept {
+        return {.objectIndex = objectIndex, .lowBit = 0, .width = width};
+    }
+
+    friend bool operator==(WriteExtent, WriteExtent) noexcept = default;
+};
+
+/// Puts extents into the form a write set holds: ordered by object and then by low bit, with
+/// extents of one object that overlap or touch merged into one.
+///
+/// Touching extents are merged as well as overlapping ones because both belong to one
+/// process, so splitting them distinguishes nothing, and one canonical form means two
+/// processes that write the same bits declare the same set (section 3.8).
+void normaliseWriteSet(std::vector<WriteExtent>& extents);
+
+/// True when `writeSet`, which must be normalised, has an extent of `objectIndex`.
+[[nodiscard]] bool writesObject(const std::vector<WriteExtent>& writeSet,
+                                std::uint32_t objectIndex) noexcept;
+
 /// An EIR-B process: the body of one procedural block, as a control-flow graph.
 ///
 /// **The core invariant.** A process is expressible as a pure function over an
@@ -173,8 +211,9 @@ struct Process {
     /// order cannot vary between runs (section 3.8).
     std::vector<std::uint32_t> readSet;
 
-    /// Object indices this process writes, with the same guarantees.
-    std::vector<std::uint32_t> writeSet;
+    /// The bits this process writes, normalised by `normaliseWriteSet` so that the same
+    /// guarantees hold.
+    std::vector<WriteExtent> writeSet;
 };
 
 /// True when `process` must be scheduled once at time zero, before anything it

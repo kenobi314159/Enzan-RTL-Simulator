@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace slang {
@@ -147,9 +148,34 @@ private:
     /// True when the current block already ends in a terminator.
     [[nodiscard]] bool currentBlockTerminated() const;
 
-    /// Records that the process reads or writes an object.
+    /// Records that the process reads an object.
     void noteRead(std::uint32_t objectIndex);
-    void noteWrite(std::uint32_t objectIndex);
+
+    /// Records that the process writes `width` bits of an object from `lowBit` upwards, and
+    /// returns false when none of them lie inside it.
+    ///
+    /// Signed and 64 bits wide so that a select below or beyond the declared range arrives
+    /// as written: such a write is discarded by the language, so only the bits inside the
+    /// object are recorded, and a write with none inside should not be emitted at all.
+    bool noteWrite(std::uint32_t objectIndex, std::int64_t lowBit, std::int64_t width);
+
+    /// Records that the process writes every bit of an object.
+    void noteWholeWrite(std::uint32_t objectIndex);
+
+    /// The bits a select whose position is not constant could write, as a low bit and a
+    /// width.
+    ///
+    /// A driver's range is fixed at elaboration, so a variable select drives every bit it
+    /// could reach (DESIGN_GUIDE.md section 3.7). What it could reach is bounded by the
+    /// index's type: a two-bit index into a byte reaches four positions, not eight. An index
+    /// of 32 bits or more reaches anything, since no object is wider than a 32-bit count of
+    /// bits.
+    ///
+    /// `downward` is the `-:` form, whose low bit is `width - 1` below its base.
+    [[nodiscard]] static std::pair<std::int64_t, std::int64_t>
+    reachOfSelect(const slang::ast::Expression& index, std::int32_t rangeLow,
+                  std::uint32_t elementBits, std::uint32_t width, bool downward,
+                  std::uint32_t objectWidth);
 
     /// Returns `value` widened or narrowed to `type`, emitting an extension if needed.
     Value coerce(const Value& value, eir::Type type);
@@ -233,6 +259,13 @@ private:
                                              std::int32_t rangeLow, eir::Type partType,
                                              std::uint32_t elementBits);
 
+    /// The bits a write through a range select drives, as a low bit and a width: exactly its
+    /// bits when its position is constant, and everything it could reach when it is not.
+    std::pair<std::int64_t, std::int64_t>
+    writtenBitsOfRangeSelect(const slang::ast::RangeSelectExpression& select, std::int32_t rangeLow,
+                             std::uint32_t elementBits, std::uint32_t width,
+                             std::uint32_t objectWidth);
+
     /// Returns the object a select is being written through, or nothing having reported
     /// why.
     ///
@@ -255,7 +288,7 @@ private:
     std::uint32_t current = 0;
 
     std::vector<std::uint32_t> reads;
-    std::vector<std::uint32_t> writes;
+    std::vector<eir::WriteExtent> writes;
 
     bool failed = false;
 };

@@ -2,7 +2,35 @@
 
 #include "eir/Process.h"
 
+#include <algorithm>
+
 namespace enzan::eir {
+
+void normaliseWriteSet(std::vector<WriteExtent>& extents) {
+    std::ranges::sort(extents, [](const WriteExtent& left, const WriteExtent& right) {
+        if (left.objectIndex != right.objectIndex) return left.objectIndex < right.objectIndex;
+        return left.lowBit < right.lowBit;
+    });
+
+    std::vector<WriteExtent> merged;
+    merged.reserve(extents.size());
+    for (const WriteExtent& extent : extents) {
+        if (!merged.empty() && merged.back().objectIndex == extent.objectIndex
+            && extent.lowBit <= merged.back().endBit()) {
+            WriteExtent& last = merged.back();
+            last.width = std::max(last.endBit(), extent.endBit()) - last.lowBit;
+            continue;
+        }
+        merged.push_back(extent);
+    }
+    extents = std::move(merged);
+}
+
+bool writesObject(const std::vector<WriteExtent>& writeSet, std::uint32_t objectIndex) noexcept {
+    const auto found =
+        std::ranges::lower_bound(writeSet, objectIndex, {}, &WriteExtent::objectIndex);
+    return found != writeSet.end() && found->objectIndex == objectIndex;
+}
 
 std::string_view toString(SysTaskKind kind) noexcept {
     switch (kind) {

@@ -288,7 +288,11 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     for (const std::uint32_t index : process.readSet) out.u32(index);
 
     out.u32(static_cast<std::uint32_t>(process.writeSet.size()));
-    for (const std::uint32_t index : process.writeSet) out.u32(index);
+    for (const WriteExtent& extent : process.writeSet) {
+        out.u32(extent.objectIndex);
+        out.u32(extent.lowBit);
+        out.u32(extent.width);
+    }
 }
 
 void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definition) {
@@ -513,7 +517,11 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     for (std::uint32_t& index : process.readSet) index = in.u32();
 
     process.writeSet.resize(in.count());
-    for (std::uint32_t& index : process.writeSet) index = in.u32();
+    for (WriteExtent& extent : process.writeSet) {
+        extent.objectIndex = in.u32();
+        extent.lowBit = in.u32();
+        extent.width = in.u32();
+    }
 
     return process;
 }

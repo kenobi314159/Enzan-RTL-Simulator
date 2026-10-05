@@ -222,12 +222,12 @@ TEST(Kernel, TwoPartialNonBlockingUpdatesBothTakeEffect) {
         Instruction::make(Opcode::LoadConstant, Operand::reg(nibble), Operand::constant(lowValue)));
     builder.emit(
         Instruction::make(Opcode::LoadConstant, Operand::reg(index), Operand::constant(zero)));
-    builder.storePartNonBlocking(0, nibble, index);
+    builder.storePartNonBlocking(0, nibble, index, 8);
     builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(nibble),
                                    Operand::constant(highValue)));
     builder.emit(
         Instruction::make(Opcode::LoadConstant, Operand::reg(index), Operand::constant(four)));
-    builder.storePartNonBlocking(0, nibble, index);
+    builder.storePartNonBlocking(0, nibble, index, 8);
     builder.emit(Instruction::make(Opcode::Return));
 
     ModuleDefinition definition = makeTop({builder.finish()});

@@ -36,6 +36,7 @@ using enzan::eir::Operand;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
+using enzan::eir::WriteExtent;
 using enzan::test::literal;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
@@ -83,7 +84,7 @@ Process makeCopyProcess() {
     process.name = "copy";
     process.registerTypes.push_back(Type::bits(8, false, true));
     process.readSet = {0};
-    process.writeSet = {1};
+    process.writeSet = {WriteExtent::whole(1, 8)};
 
     BasicBlock entry;
     entry.label = "entry";

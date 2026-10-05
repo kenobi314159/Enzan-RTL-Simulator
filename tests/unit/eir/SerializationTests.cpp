@@ -50,6 +50,7 @@ using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
 using enzan::eir::Type;
+using enzan::eir::WriteExtent;
 using enzan::test::literal;
 
 class SerializationTest : public ::testing::Test {
@@ -165,7 +166,10 @@ ModuleDefinition richModule(BufferId buffer) {
 
     process.sensitivity.push_back(SensitivityEntry{.objectIndex = 0, .edge = EdgeKind::Posedge});
     process.readSet = {0, 1};
-    process.writeSet = {1};
+    // Two extents of one object, with every field different, so that a field written in the
+    // wrong order or an extent dropped shows up.
+    process.writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
+                        WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}};
     definition.processes.push_back(std::move(process));
 
     definition.parameters.push_back(Parameter{.name = "WIDTH",
@@ -272,7 +276,9 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     ASSERT_EQ(process.sensitivity.size(), 1U);
     EXPECT_EQ(process.sensitivity[0].edge, EdgeKind::Posedge);
     EXPECT_EQ(process.readSet, (std::vector<std::uint32_t>{0, 1}));
-    EXPECT_EQ(process.writeSet, (std::vector<std::uint32_t>{1}));
+    EXPECT_EQ(process.writeSet,
+              (std::vector<WriteExtent>{WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
+                                        WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}}));
 }
 
 TEST_F(SerializationTest, InstructionLocationsRoundTrip) {

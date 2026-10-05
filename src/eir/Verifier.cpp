@@ -92,8 +92,7 @@ private:
 
     /// Checks that an object index is in range and is declared in the given set.
     void checkObjectAccess(const ModuleDefinition& definition, const Process& process,
-                           Operand operand, const std::vector<std::uint32_t>& declared,
-                           std::string_view setName, std::string_view where) {
+                           Operand operand, bool isWrite, std::string_view where) {
         if (operand.kind() != Operand::Kind::Object) {
             reportProcess(definition, process, std::format("{} expects an object operand", where));
             return;
@@ -108,10 +107,14 @@ private:
         // The core invariant of section 4.2. A process that touches an object it did
         // not declare is not a pure function over a known slice of the arena, and
         // every optimisation that depends on read/write sets would then be unsound.
-        if (!std::ranges::binary_search(declared, operand.index())) {
+        const bool declared = isWrite
+                                  ? writesObject(process.writeSet, operand.index())
+                                  : std::ranges::binary_search(process.readSet, operand.index());
+        if (!declared) {
             reportProcess(definition, process,
                           std::format("{} touches object '{}' which is not in the declared {}",
-                                      where, definition.objects[operand.index()].name, setName));
+                                      where, definition.objects[operand.index()].name,
+                                      isWrite ? "write set" : "read set"));
         }
     }
 
@@ -134,6 +137,53 @@ private:
                                           "{} objects",
                                           name, index, definition.objects.size()));
             }
+        }
+    }
+
+    /// Checks that the write set is in the form `normaliseWriteSet` produces and that every
+    /// extent lies inside its object.
+    ///
+    /// The form is checked rather than restored, because elaboration finds overlapping drivers
+    /// by comparing extents (section 3.7): two touching extents of one process would be read as
+    /// two drivers of that process, and an extent past the end of its object would claim bits
+    /// that do not exist.
+    void checkWriteSet(const ModuleDefinition& definition, const Process& process) {
+        const WriteExtent* previous = nullptr;
+        for (const WriteExtent& extent : process.writeSet) {
+            if (extent.objectIndex >= definition.objects.size()) {
+                reportProcess(definition, process,
+                              std::format("the declared write set names object {}, but the module "
+                                          "has {} objects",
+                                          extent.objectIndex, definition.objects.size()));
+                return;
+            }
+            const Object& object = definition.objects[extent.objectIndex];
+
+            if (extent.width == 0) {
+                reportProcess(
+                    definition, process,
+                    std::format("the declared write set has an empty extent of '{}'", object.name));
+            } else if (extent.endBit() > object.type.bitWidth()) {
+                reportProcess(definition, process,
+                              std::format("the declared write set writes bits [{}:{}] of '{}', "
+                                          "which is {} bits wide",
+                                          extent.endBit() - 1, extent.lowBit, object.name,
+                                          object.type.bitWidth()));
+            }
+
+            if (previous != nullptr) {
+                const bool ordered = previous->objectIndex < extent.objectIndex
+                                     || (previous->objectIndex == extent.objectIndex
+                                         && previous->endBit() < extent.lowBit);
+                if (!ordered) {
+                    reportProcess(definition, process,
+                                  std::format("the declared write set is not normalised at '{}'; "
+                                              "extents must be ordered, and one object's must "
+                                              "neither overlap nor touch",
+                                              object.name));
+                }
+            }
+            previous = &extent;
         }
     }
 
@@ -183,7 +233,7 @@ private:
 
     void checkProcess(const ModuleDefinition& definition, const Process& process) {
         checkDeclaredSet(definition, process, process.readSet, "read set");
-        checkDeclaredSet(definition, process, process.writeSet, "write set");
+        checkWriteSet(definition, process);
 
         if (process.blocks.empty()) {
             reportProcess(definition, process, "has no basic blocks");
@@ -324,15 +374,13 @@ private:
                               const Instruction& instruction, const std::string& where) {
         switch (instruction.opcode) {
         case Opcode::ReadObject:
-            checkObjectAccess(definition, process, instruction.a, process.readSet, "read set",
-                              where);
+            checkObjectAccess(definition, process, instruction.a, false, where);
             checkObjectWidth(definition, process, instruction.a, instruction.dst, where);
             break;
 
         case Opcode::Store:
         case Opcode::StoreNonBlocking:
-            checkObjectAccess(definition, process, instruction.a, process.writeSet, "write set",
-                              where);
+            checkObjectAccess(definition, process, instruction.a, true, where);
             checkObjectWidth(definition, process, instruction.a, instruction.b, where);
             break;
 
@@ -340,13 +388,11 @@ private:
         // so only the object itself is checked.
         case Opcode::StorePart:
         case Opcode::StorePartNonBlocking:
-            checkObjectAccess(definition, process, instruction.a, process.writeSet, "write set",
-                              where);
+            checkObjectAccess(definition, process, instruction.a, true, where);
             break;
 
         case Opcode::WaitEdge:
-            checkObjectAccess(definition, process, instruction.a, process.readSet, "read set",
-                              where);
+            checkObjectAccess(definition, process, instruction.a, false, where);
             break;
 
         // Equal-width binary operations. The frontend inserts the extensions

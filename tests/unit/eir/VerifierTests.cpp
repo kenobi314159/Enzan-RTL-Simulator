@@ -34,6 +34,7 @@ using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::SensitivityEntry;
 using enzan::eir::Type;
+using enzan::eir::WriteExtent;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -61,7 +62,7 @@ protected:
         process.name = "always_comb@copier";
         process.registerTypes.push_back(Type::bits(8, false, true));
         process.readSet = {0};
-        process.writeSet = {1};
+        process.writeSet = {WriteExtent::whole(1, 8)};
 
         BasicBlock entry;
         entry.label = "entry";
@@ -137,7 +138,7 @@ TEST_F(VerifierTest, RejectsReadingAnObjectDeclaredOnlyAsWritten) {
     // the dependency graph point the wrong way.
     ModuleDefinition definition = makeValidModule();
     definition.processes[0].readSet = {1};
-    definition.processes[0].writeSet = {0};
+    definition.processes[0].writeSet = {WriteExtent::whole(0, 8)};
 
     EXPECT_FALSE(check(definition));
 }
@@ -147,7 +148,7 @@ TEST_F(VerifierTest, RejectsAnUnsortedDeclaredSet) {
     // the scheduler, and it makes iteration order reproducible (section 3.8).
     ModuleDefinition definition = makeValidModule();
     definition.processes[0].readSet = {1, 0};
-    definition.processes[0].writeSet = {1};
+    definition.processes[0].writeSet = {WriteExtent::whole(1, 8)};
     definition.processes[0].blocks[0].instructions[0].a = Operand::object(1);
 
     EXPECT_FALSE(check(definition));
@@ -160,6 +161,55 @@ TEST_F(VerifierTest, RejectsADuplicateInADeclaredSet) {
 
     EXPECT_FALSE(check(definition));
     EXPECT_TRUE(reported("duplicate"));
+}
+
+TEST_F(VerifierTest, AcceptsAWriteSetOfSeveralDisjointExtentsOfOneObject) {
+    ModuleDefinition definition = makeValidModule();
+    definition.processes[0].writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
+                                        WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 4}};
+
+    EXPECT_TRUE(check(definition)) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, RejectsAnExtentPastTheEndOfItsObject) {
+    // An extent claiming bits the object does not have would be a driver of nothing, and
+    // elaboration would compare it against drivers of real bits.
+    ModuleDefinition definition = makeValidModule();
+    definition.processes[0].writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 5}};
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("bits [8:4] of 'sink'"));
+}
+
+TEST_F(VerifierTest, RejectsAnEmptyExtent) {
+    ModuleDefinition definition = makeValidModule();
+    definition.processes[0].writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 0}};
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("empty extent"));
+}
+
+TEST_F(VerifierTest, RejectsTouchingExtentsOfOneObject) {
+    // Normalisation merges them, so an unmerged pair is a write set nobody normalised, and
+    // elaboration would take one process for two drivers.
+    ModuleDefinition definition = makeValidModule();
+    definition.processes[0].writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 4},
+                                        WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 4}};
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("not normalised"));
+}
+
+TEST_F(VerifierTest, RejectsUnorderedExtents) {
+    ModuleDefinition definition = makeValidModule();
+    definition.processes[0].readSet = {};
+    definition.processes[0].blocks[0].instructions.erase(
+        definition.processes[0].blocks[0].instructions.begin());
+    definition.processes[0].blocks[0].instructions[0].b = Operand::reg(0);
+    definition.processes[0].writeSet = {WriteExtent::whole(1, 8), WriteExtent::whole(0, 8)};
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("not normalised"));
 }
 
 TEST_F(VerifierTest, RejectsADeclaredSetNamingANonexistentObject) {

@@ -108,8 +108,49 @@ void ProcessTranslator::noteRead(std::uint32_t objectIndex) {
     reads.push_back(objectIndex);
 }
 
-void ProcessTranslator::noteWrite(std::uint32_t objectIndex) {
-    writes.push_back(objectIndex);
+bool ProcessTranslator::noteWrite(std::uint32_t objectIndex, std::int64_t lowBit,
+                                  std::int64_t width) {
+    const std::int64_t objectWidth = module->definition().objects[objectIndex].type.bitWidth();
+    const std::int64_t low = std::max<std::int64_t>(lowBit, 0);
+    const std::int64_t end = std::min(lowBit + width, objectWidth);
+    if (end <= low) return false;
+
+    writes.push_back(eir::WriteExtent{.objectIndex = objectIndex,
+                                      .lowBit = static_cast<std::uint32_t>(low),
+                                      .width = static_cast<std::uint32_t>(end - low)});
+    return true;
+}
+
+void ProcessTranslator::noteWholeWrite(std::uint32_t objectIndex) {
+    writes.push_back(eir::WriteExtent::whole(
+        objectIndex, module->definition().objects[objectIndex].type.bitWidth()));
+}
+
+std::pair<std::int64_t, std::int64_t>
+ProcessTranslator::reachOfSelect(const ast::Expression& index, std::int32_t rangeLow,
+                                 std::uint32_t elementBits, std::uint32_t width, bool downward,
+                                 std::uint32_t objectWidth) {
+    const std::uint32_t indexBits = index.type->getBitWidth();
+    if (indexBits == 0 || indexBits >= 32) return {0, objectWidth};
+
+    const bool isSigned = index.type->isSigned();
+    const std::int64_t lowest = isSigned ? -(std::int64_t{1} << (indexBits - 1)) : 0;
+    const std::int64_t highest =
+        isSigned ? (std::int64_t{1} << (indexBits - 1)) - 1 : (std::int64_t{1} << indexBits) - 1;
+
+    // Element positions are clamped to one past either end of the object before they are
+    // scaled, which keeps the product inside 64 bits for any element width and changes
+    // nothing that survives the clamp to the object afterwards.
+    const std::int64_t elements = objectWidth / std::max<std::uint32_t>(elementBits, 1);
+    const auto bitOf = [&](std::int64_t position) {
+        const std::int64_t clamped =
+            std::clamp<std::int64_t>(position - rangeLow, -elements - 1, elements + 1);
+        const std::int64_t bit = clamped * elementBits;
+        return downward ? bit - static_cast<std::int64_t>(width) + 1 : bit;
+    };
+
+    const std::int64_t low = bitOf(lowest);
+    return {low, bitOf(highest) + width - low};
 }
 
 ProcessTranslator::Value ProcessTranslator::coerce(const Value& value, eir::Type type) {
@@ -145,8 +186,7 @@ void ProcessTranslator::setSensitivity(std::vector<eir::SensitivityEntry> sensit
 eir::Process ProcessTranslator::take() {
     std::ranges::sort(reads);
     reads.erase(std::ranges::unique(reads).begin(), reads.end());
-    std::ranges::sort(writes);
-    writes.erase(std::ranges::unique(writes).begin(), writes.end());
+    eir::normaliseWriteSet(writes);
 
     process.readSet = reads;
     process.writeSet = writes;
@@ -174,7 +214,7 @@ bool ProcessTranslator::translateExpressionInto(std::uint32_t objectIndex,
     const Value widened = coerce(*value, objectType);
     const Value stored = coerceState(widened, objectType);
 
-    noteWrite(objectIndex);
+    noteWholeWrite(objectIndex);
     emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(objectIndex),
                                 eir::Operand::reg(stored.reg)));
 
@@ -1206,6 +1246,38 @@ ProcessTranslator::lowBitOfRangeSelect(const ast::RangeSelectExpression& select,
     return std::nullopt;
 }
 
+std::pair<std::int64_t, std::int64_t>
+ProcessTranslator::writtenBitsOfRangeSelect(const ast::RangeSelectExpression& select,
+                                            std::int32_t rangeLow, std::uint32_t elementBits,
+                                            std::uint32_t width, std::uint32_t objectWidth) {
+    const auto scaled = [&](std::int64_t position) {
+        return (position - rangeLow) * static_cast<std::int64_t>(elementBits);
+    };
+    const auto partWidth = static_cast<std::int64_t>(width);
+
+    switch (select.getSelectionKind()) {
+    case ast::RangeSelectionKind::Simple: {
+        const std::optional<std::int64_t> left = constantValueOf(select.left());
+        const std::optional<std::int64_t> right = constantValueOf(select.right());
+        if (left.has_value() && right.has_value())
+            return {scaled(std::min(*left, *right)), partWidth};
+        break;
+    }
+
+    case ast::RangeSelectionKind::IndexedUp:
+        if (const std::optional<std::int64_t> base = constantValueOf(select.left()))
+            return {scaled(*base), partWidth};
+        return reachOfSelect(select.left(), rangeLow, elementBits, width, false, objectWidth);
+
+    case ast::RangeSelectionKind::IndexedDown:
+        if (const std::optional<std::int64_t> base = constantValueOf(select.left()))
+            return {scaled(*base) - partWidth + 1, partWidth};
+        return reachOfSelect(select.left(), rangeLow, elementBits, width, true, objectWidth);
+    }
+
+    return {0, objectWidth};
+}
+
 std::optional<std::uint32_t> ProcessTranslator::objectOfLValue(const ast::Expression& base) {
     if (base.kind != ast::ExpressionKind::NamedValue
         && base.kind != ast::ExpressionKind::HierarchicalValue) {
@@ -1383,7 +1455,7 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
         const Value widened = coerce(value, objectType);
         const Value stored = coerceState(widened, objectType);
 
-        noteWrite(*objectIndex);
+        noteWholeWrite(*objectIndex);
         emit(eir::Instruction::make(
             nonBlocking ? eir::Opcode::StoreNonBlocking : eir::Opcode::Store, {},
             eir::Operand::object(*objectIndex), eir::Operand::reg(stored.reg)));
@@ -1417,8 +1489,22 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
             scaleIndexToBitOffset(*index, range.right, elementBitsOf(*select.value().type));
         if (!offset.has_value()) return false;
 
+        // The bits written, for the driver this process is (section 3.7). A constant index
+        // outside the declared range writes nothing, so nothing is emitted for it.
+        const std::uint32_t elementBits = elementBitsOf(*select.value().type);
+        const std::uint32_t objectWidth =
+            module->definition().objects[*objectIndex].type.bitWidth();
+        const std::optional<std::int64_t> constantIndex = constantValueOf(select.selector());
+        const auto [lowBit, width] =
+            constantIndex.has_value()
+                ? std::pair<std::int64_t, std::int64_t>{(*constantIndex - range.right)
+                                                            * std::int64_t{elementBits},
+                                                        elementType->bitWidth()}
+                : reachOfSelect(select.selector(), range.right, elementBits,
+                                elementType->bitWidth(), false, objectWidth);
+        if (!noteWrite(*objectIndex, lowBit, width)) return true;
+
         const Value element = coerce(value, *elementType);
-        noteWrite(*objectIndex);
         emit(eir::Instruction::make(
             nonBlocking ? eir::Opcode::StorePartNonBlocking : eir::Opcode::StorePart, {},
             eir::Operand::object(*objectIndex), eir::Operand::reg(element.reg),
@@ -1450,8 +1536,14 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
                                                              elementBitsOf(*select.value().type));
         if (!low.has_value()) return false;
 
+        const std::uint32_t elementBits = elementBitsOf(*select.value().type);
+        const std::uint32_t objectWidth =
+            module->definition().objects[*objectIndex].type.bitWidth();
+        const auto [lowBit, width] = writtenBitsOfRangeSelect(select, range.right, elementBits,
+                                                              partType->bitWidth(), objectWidth);
+        if (!noteWrite(*objectIndex, lowBit, width)) return true;
+
         const Value part = coerce(value, *partType);
-        noteWrite(*objectIndex);
         emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlocking
                                                 : eir::Opcode::StorePart,
                                     {}, eir::Operand::object(*objectIndex),

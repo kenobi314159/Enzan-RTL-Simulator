@@ -39,7 +39,30 @@ using enzan::SourceManager;
 using enzan::eir::Design;
 using enzan::eir::Instance;
 using enzan::eir::ModuleDefinition;
+using enzan::eir::WriteExtent;
 using enzan::test::require;
+
+/// Every process's extents of the object called `name`, one list per process that writes it,
+/// in process order.
+std::vector<std::vector<WriteExtent>> extentsOf(const ModuleDefinition& definition,
+                                                std::string_view name) {
+    const std::uint32_t objectIndex = require(definition.findObject(name));
+    std::vector<std::vector<WriteExtent>> result;
+    for (const enzan::eir::Process& process : definition.processes) {
+        std::vector<WriteExtent> extents;
+        std::ranges::copy_if(
+            process.writeSet, std::back_inserter(extents),
+            [objectIndex](const WriteExtent& extent) { return extent.objectIndex == objectIndex; });
+        if (!extents.empty()) result.push_back(std::move(extents));
+    }
+    return result;
+}
+
+/// An extent of the object called `name` in `definition`.
+WriteExtent extent(const ModuleDefinition& definition, std::string_view name, std::uint32_t lowBit,
+                   std::uint32_t width) {
+    return {.objectIndex = require(definition.findObject(name)), .lowBit = lowBit, .width = width};
+}
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -493,6 +516,157 @@ TEST_F(FrontendTest, AnInstanceInAGenerateBlockHasTheBlockInItsName) {
     for (const enzan::eir::Instance& instance : module->instances) names.push_back(instance.name);
     EXPECT_EQ(names,
               (std::vector<std::string>{"g_loop[0].u_leaf", "g_loop[1].u_leaf", "g_if.u_leaf"}));
+}
+
+// ---------------------------------------------------------------------------
+// Write sets
+// ---------------------------------------------------------------------------
+//
+// A write set records the bits a process writes, because a driver owns bits rather than a
+// signal (DESIGN_GUIDE.md section 3.7). What these pin is which bits: elaboration decides
+// whether two processes are in conflict by comparing them.
+
+TEST_F(FrontendTest, AWholeAssignmentWritesEveryBit) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [7:0] a;
+            logic [7:0] x;
+            assign x = a;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    EXPECT_EQ(extentsOf(top, "x"),
+              (std::vector<std::vector<WriteExtent>>{{extent(top, "x", 0, 8)}}));
+}
+
+TEST_F(FrontendTest, ConstantSelectsWriteExactlyTheirBitsAndTouchingOnesMerge) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic       a;
+            logic [7:0] x;
+            always_comb begin
+                x[0] = a;
+                x[1] = a;
+                x[5:4] = {a, a};
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    EXPECT_EQ(extentsOf(top, "x"), (std::vector<std::vector<WriteExtent>>{
+                                       {extent(top, "x", 0, 2), extent(top, "x", 4, 2)}}));
+}
+
+TEST_F(FrontendTest, ASelectOfAPackedArrayOrAnOffsetRangeWritesTheBitsItNames) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [7:0]      a;
+            logic [3:0][7:0] bytes;
+            logic [15:8]     high;
+            logic [7:0]      up;
+            logic [7:0]      down;
+            assign bytes[2] = a;
+            assign high[13:10] = a[3:0];
+            assign up[1 +: 2] = a[1:0];
+            assign down[6 -: 3] = a[2:0];
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    using Extents = std::vector<std::vector<WriteExtent>>;
+    EXPECT_EQ(extentsOf(top, "bytes"), (Extents{{extent(top, "bytes", 16, 8)}}));
+    EXPECT_EQ(extentsOf(top, "high"), (Extents{{extent(top, "high", 2, 4)}}));
+    EXPECT_EQ(extentsOf(top, "up"), (Extents{{extent(top, "up", 1, 2)}}));
+    EXPECT_EQ(extentsOf(top, "down"), (Extents{{extent(top, "down", 4, 3)}}));
+}
+
+TEST_F(FrontendTest, AVariableSelectWritesEveryBitItsIndexCanReach) {
+    // A two-bit index reaches four positions of a sixteen-bit vector, and nothing past them;
+    // an `int` index reaches anything.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [1:0]  i;
+            int          j;
+            logic        a;
+            logic [15:0] narrow;
+            logic [15:0] wide;
+            logic [3:0][7:0] bytes;
+            always_comb narrow[i] = a;
+            always_comb wide[j] = a;
+            always_comb bytes[i + 2'd0] = {8{a}};
+            always_comb narrow[i + 4'd8 +: 2] = {a, a};
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    using Extents = std::vector<std::vector<WriteExtent>>;
+    EXPECT_EQ(extentsOf(top, "narrow"),
+              (Extents{{extent(top, "narrow", 0, 4)}, {extent(top, "narrow", 0, 16)}}));
+    EXPECT_EQ(extentsOf(top, "wide"), (Extents{{extent(top, "wide", 0, 16)}}));
+    EXPECT_EQ(extentsOf(top, "bytes"), (Extents{{extent(top, "bytes", 0, 32)}}));
+}
+
+TEST_F(FrontendTest, AConstantSelectOutsideTheObjectWritesNothing) {
+    // The language discards such a write, so it drives no bit and is not emitted at all.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [3:0] n;
+            logic       a;
+            always_comb begin
+                n[1] = a;
+                n[7] = a;
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    EXPECT_EQ(extentsOf(top, "n"),
+              (std::vector<std::vector<WriteExtent>>{{extent(top, "n", 1, 1)}}));
+}
+
+TEST_F(FrontendTest, EachInstanceOfAGeneratedArrayDrivesItsOwnBit) {
+    // The case section 3.7 is written around: a parameterised number of instances whose
+    // outputs are bits of one array. Each connection drives one bit and no other.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module channel (output logic ready);
+            assign ready = 1'b1;
+        endmodule
+
+        module top;
+            logic [3:0] ready;
+            for (genvar i = 0; i < 4; i++) begin : gen
+                channel u (.ready(ready[i]));
+            end
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    EXPECT_EQ(extentsOf(top, "ready"), (std::vector<std::vector<WriteExtent>>{
+                                           {extent(top, "ready", 0, 1)},
+                                           {extent(top, "ready", 1, 1)},
+                                           {extent(top, "ready", 2, 1)},
+                                           {extent(top, "ready", 3, 1)},
+                                       }));
 }
 
 // ---------------------------------------------------------------------------
