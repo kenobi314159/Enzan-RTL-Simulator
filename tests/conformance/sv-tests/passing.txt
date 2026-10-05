@@ -154,6 +154,7 @@ chapter-22/22.9--unconnected_drive-invalid-3.sv
 chapter-23/23.2--macromodule-definition.sv
 chapter-23/23.2--module-definition.sv
 chapter-23/23.2--module-label.sv
+chapter-25/25.3-interface.sv
 chapter-26/26.2--package-decl.sv
 chapter-26/26.3--package-ref.sv
 chapter-5/5.10-structure-arrays-illegal.sv

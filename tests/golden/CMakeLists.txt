@@ -113,6 +113,10 @@ enzan_add_golden_test(subroutines)
 # Hierarchical references, down, up and across, from a definition two instances share.
 enzan_add_golden_test(hierarchical)
 
+# Interfaces, with their own logic, modports, and an interface passed down through a module.
+# Icarus Verilog cannot parse an interface with ports or modports, so the case checks itself.
+enzan_add_golden_test(interfaces NO_DIFFERENTIAL)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------

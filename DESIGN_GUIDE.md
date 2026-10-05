@@ -597,6 +597,14 @@ relative — down as `core/state`, up and across as `../u_peer/ready` — becaus
 definition serves every instance of a parameterisation (M3.1), and a path from the root
 would be right for only one of them. A path that names nothing is an elaboration error.
 
+**An interface instance is an instance**, its body a definition like a module's and its signals
+stored under its own path, `/tb/bus/data`. A member a module reaches through an interface port
+is a reference through that port, `@in/data`, and each instance records what its interface
+ports are connected to — an interface instance of its parent, or the parent's own port, which
+is how an interface is passed down. Elaboration follows those bindings, so two instances of
+one definition on two interfaces each reach their own. A modport restricts what a module may
+touch, which slang checks, and changes nothing about where a signal is.
+
 **A function or task is inlined into the process that calls it.** The body is translated in
 place, its variables bound to registers, so a task's delays suspend the caller as its own
 statements would, the caller's read and write sets are exactly what the call touches (4.2),

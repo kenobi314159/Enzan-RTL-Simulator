@@ -153,7 +153,8 @@ struct Object {
     /// The path is relative to the instance holding this object — `dut/core/state` down,
     /// `../u_peer/ready` up and across — because one definition serves every instance of a
     /// parameterisation (DESIGN_GUIDE.md section 18, M3.1), and a path from the root would be
-    /// right for only one of them.
+    /// right for only one of them. A path beginning `@port/` goes through an interface port of
+    /// the instance holding it, to whichever interface that instance's parent connected.
     std::string hierarchicalPath;
 
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
@@ -216,6 +217,18 @@ struct PortConnection {
     [[nodiscard]] bool connected() const noexcept { return objectIndex != Unconnected; }
 };
 
+/// What an instance's interface port is connected to (IEEE 1800 section 25).
+///
+/// The target is named from the instantiating module, as a hierarchical reference's path is: an
+/// interface instance in it, by the name it has there, or `@port` for an interface port of its
+/// own, which is how an interface is passed down through several levels.
+struct InterfaceBinding {
+    std::string port;
+    std::string target;
+
+    friend bool operator==(const InterfaceBinding&, const InterfaceBinding&) = default;
+};
+
 /// An instantiation of one module definition inside another.
 struct Instance {
     /// The instance name, as it appears in the hierarchical path.
@@ -231,6 +244,9 @@ struct Instance {
     std::string definitionName;
 
     std::vector<PortConnection> connections;
+
+    /// The instance's interface ports, by name, and what each is connected to.
+    std::vector<InterfaceBinding> interfaceBindings;
 
     SourceLocation location;
 };

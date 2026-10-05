@@ -254,6 +254,14 @@ private:
                                              const ast::InstanceBodySymbol& owner,
                                              const std::string& name, eir::Type type);
 
+    /// Records what `connection`, an interface port of `instance`, is connected to here.
+    bool bindInterface(const ast::InstanceSymbol& instance, const ast::PortConnection& connection,
+                       eir::Instance& result);
+
+    /// Creates the object for a reference whose path is already known.
+    std::optional<std::uint32_t> referenceThrough(const ast::ValueSymbol& symbol, std::string path,
+                                                  eir::Type type);
+
     /// Reports a drive strength other than the default and returns false.
     ///
     /// Enzan resolves drivers without a strength model (DESIGN_GUIDE.md section 3.7), which
@@ -299,6 +307,19 @@ private:
 
     std::vector<std::pair<std::string, const ast::ProceduralBlockSymbol*>> proceduralBlocks;
     std::vector<const ast::ContinuousAssignSymbol*> continuousAssignments;
+
+    /// The interface ports of this body, in declaration order.
+    std::vector<const ast::InterfacePortSymbol*> interfacePorts;
+
+    /// The interface port of this body that reaches `instance`, or null.
+    [[nodiscard]] const ast::InterfacePortSymbol*
+    portReaching(const ast::InstanceSymbol& instance) const {
+        for (const ast::InterfacePortSymbol* port : interfacePorts) {
+            const ast::Symbol* connected = port->getConnection().first;
+            if (connected == &instance) return port;
+        }
+        return nullptr;
+    }
 
     /// Nets declared with an assignment, `wire w = a & b;`, which is a continuous assignment
     /// written in the declaration rather than a time-zero value.
@@ -460,6 +481,19 @@ void ModuleBuilder::reportUnsupported(slang::SourceLocation location, std::strin
 }
 
 std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& symbol) {
+    // A member reached through a modport is the modport's stand-in for the interface's own
+    // variable or net, which is what has storage.
+    if (symbol.kind == slang::ast::SymbolKind::ModportPort) {
+        const ast::Symbol* internal = symbol.as<ast::ModportPortSymbol>().internalSymbol;
+        if (internal == nullptr || !ast::ValueSymbol::isKind(internal->kind)) {
+            reportUnsupported(
+                symbol.location,
+                std::format("the modport port '{}', which names no signal", symbol.name));
+            return std::nullopt;
+        }
+        return objectFor(internal->as<ast::ValueSymbol>());
+    }
+
     const auto found = objectBySymbol.find(&symbol);
     if (found != objectBySymbol.end()) return found->second;
 
@@ -482,7 +516,18 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
             std::format("a reference to '{}', which is not declared in a module", symbol.name));
         return std::nullopt;
     }
-    if (owner != body) return referenceTo(symbol, *owner, *nameThere, *type);
+    if (owner != body) {
+        // Reached through an interface port, the reference names the port rather than the
+        // interface it happens to be connected to here: one definition serves every instance,
+        // and each may be connected to a different one.
+        if (owner->parentInstance != nullptr) {
+            if (const ast::InterfacePortSymbol* port = portReaching(*owner->parentInstance)) {
+                return referenceThrough(symbol, std::format("@{}/{}", port->name, *nameThere),
+                                        *type);
+            }
+        }
+        return referenceTo(symbol, *owner, *nameThere, *type);
+    }
 
     eir::Object object;
     object.name = uniqueObjectName(symbol.name);
@@ -654,8 +699,12 @@ bool ModuleBuilder::collectDeclarations() {
     if (!collectScope(*body, "")) return false;
 
     for (const ast::Symbol* portSymbol : body->getPortList()) {
+        if (portSymbol->kind == slang::ast::SymbolKind::InterfacePort) {
+            interfacePorts.push_back(&portSymbol->as<ast::InterfacePortSymbol>());
+            continue;
+        }
         if (portSymbol->kind != slang::ast::SymbolKind::Port) {
-            reportUnsupported(portSymbol->location, "interface ports and multi-ports");
+            reportUnsupported(portSymbol->location, "multi-ports");
             continue;
         }
 
@@ -796,6 +845,30 @@ bool ModuleBuilder::translateProcesses() {
     return !failed;
 }
 
+bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
+                                  const ast::PortConnection& connection, eir::Instance& result) {
+    const ast::Symbol* connected = connection.getIfaceConn().first;
+    std::string target;
+    if (connected != nullptr && connected->kind == slang::ast::SymbolKind::Instance) {
+        const auto& interface = connected->as<ast::InstanceSymbol>();
+        const ast::InstanceBodySymbol* owner = nullptr;
+        const std::optional<std::string> name = nameWithinBody(interface, owner);
+        if (name.has_value() && owner == body) {
+            target = *name;
+        } else if (const ast::InterfacePortSymbol* port = portReaching(interface)) {
+            target = std::format("@{}", port->name);
+        }
+    }
+    if (target.empty()) {
+        reportUnsupported(instance.location, std::format("the connection of interface port '{}'",
+                                                         connection.port.name));
+        return false;
+    }
+    result.interfaceBindings.push_back(
+        eir::InterfaceBinding{.port = std::string(connection.port.name), .target = target});
+    return true;
+}
+
 std::optional<std::uint32_t> ModuleBuilder::referenceTo(const ast::ValueSymbol& symbol,
                                                         const ast::InstanceBodySymbol& owner,
                                                         const std::string& name, eir::Type type) {
@@ -816,6 +889,11 @@ std::optional<std::uint32_t> ModuleBuilder::referenceTo(const ast::ValueSymbol& 
     for (std::size_t level = common; level < there->size(); ++level) path += (*there)[level] + "/";
     path += name;
 
+    return referenceThrough(symbol, std::move(path), type);
+}
+
+std::optional<std::uint32_t> ModuleBuilder::referenceThrough(const ast::ValueSymbol& symbol,
+                                                             std::string path, eir::Type type) {
     eir::Object object;
     // A `$` keeps the made-up name out of the user's namespace, as a connection's is.
     object.name = uniqueObjectName(std::format("ref${}", path));
@@ -970,6 +1048,11 @@ bool ModuleBuilder::addInstance(
     result.location = convertLocation(instance.location);
 
     for (const ast::PortConnection* connection : instance.getPortConnections()) {
+        if (connection->port.kind == slang::ast::SymbolKind::InterfacePort) {
+            if (!bindInterface(instance, *connection, result)) return false;
+            continue;
+        }
+
         const auto portIndex = targetPorts.find(connection->port.name);
         if (portIndex == targetPorts.end()) {
             // A port the child could not translate; the diagnostic was already reported
@@ -1125,9 +1208,11 @@ std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
 std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance) {
     const ast::InstanceBodySymbol& body = instance.body;
 
-    if (!instance.isModule()) {
+    // An interface instance is an instance like any other: its body becomes a definition, its
+    // signals get storage of their own, and what reaches them through a port is a reference.
+    if (!instance.isModule() && !instance.isInterface()) {
         shared.diagnostics.report(DiagCode::UnsupportedConstruct, SourceLocation(),
-                                  "interface and program instances");
+                                  "program instances");
         succeeded = false;
         return std::nullopt;
     }

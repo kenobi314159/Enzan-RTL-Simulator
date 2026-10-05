@@ -275,6 +275,7 @@ private:
         const std::string path = result->instanceList[parentIndex].path + '/' + child.name;
         const std::uint32_t childIndex =
             createInstance(path, child.name, *childDefinition, parentIndex);
+        if (!bindInterfaces(parentIndex, childIndex, child)) return false;
 
         if (!bindPorts(parentIndex, childIndex, child)) return false;
 
@@ -331,6 +332,29 @@ private:
         });
     }
 
+    /// Resolves what each of a child's interface ports reaches: an interface instance in the
+    /// parent, or whatever the parent's own interface port of that name reaches.
+    bool bindInterfaces(std::uint32_t parentIndex, std::uint32_t childIndex,
+                        const eir::Instance& child) {
+        for (const eir::InterfaceBinding& binding : child.interfaceBindings) {
+            std::string target;
+            if (binding.target.starts_with('@')) {
+                const auto& through = result->instanceList[parentIndex].interfaces;
+                const auto found = through.find(std::string_view(binding.target).substr(1));
+                if (found == through.end()) {
+                    diagnostics.report(DiagCode::UnresolvedHierarchicalReference, child.location,
+                                       binding.target, result->instanceList[parentIndex].path);
+                    return false;
+                }
+                target = found->second;
+            } else {
+                target = result->instanceList[parentIndex].path + '/' + binding.target;
+            }
+            result->instanceList[childIndex].interfaces.insert_or_assign(binding.port, target);
+        }
+        return true;
+    }
+
     /// Binds every hierarchical reference to the slot of the object it names.
     bool bindHierarchicalReferences() {
         bool ok = true;
@@ -341,9 +365,17 @@ private:
                 const std::string& reference = definition.objects[objectIndex].hierarchicalPath;
                 if (reference.empty()) continue;
 
-                // Each leading `../` climbs one instance from the one holding the reference.
+                // `@port/` starts from the interface that port reaches, and each leading `../`
+                // climbs one instance from the one holding the reference.
                 std::string base = instance.path;
                 std::string_view rest = reference;
+                if (rest.starts_with('@')) {
+                    const std::size_t slash = rest.find('/');
+                    const auto found = instance.interfaces.find(rest.substr(1, slash - 1));
+                    base = found != instance.interfaces.end() ? found->second : std::string();
+                    rest = slash == std::string_view::npos ? std::string_view()
+                                                           : rest.substr(slash + 1);
+                }
                 while (rest.starts_with("../")) {
                     rest.remove_prefix(3);
                     const std::size_t slash = base.rfind('/');

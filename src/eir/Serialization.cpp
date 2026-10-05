@@ -338,6 +338,11 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
             out.u32(connection.portIndex);
             out.u32(connection.objectIndex);
         }
+        out.u32(static_cast<std::uint32_t>(instance.interfaceBindings.size()));
+        for (const InterfaceBinding& binding : instance.interfaceBindings) {
+            out.text(binding.port);
+            out.text(binding.target);
+        }
     }
 
     out.u32(static_cast<std::uint32_t>(definition.processes.size()));
@@ -576,6 +581,11 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         for (PortConnection& connection : instance.connections) {
             connection.portIndex = in.u32();
             connection.objectIndex = in.u32();
+        }
+        instance.interfaceBindings.resize(in.count());
+        for (InterfaceBinding& binding : instance.interfaceBindings) {
+            binding.port = in.text();
+            binding.target = in.text();
         }
     }
 

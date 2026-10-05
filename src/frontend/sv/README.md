@@ -54,6 +54,9 @@ ranks as the worst possible outcome. Refusing to elaborate is the safe failure.
 path and no storage, which elaboration binds. Creating storage for it instead would make
 `dut.state` a copy nothing ever writes.
 
+**An interface is an instance, and a member through an interface port is a reference through
+the port** (`@in/data`); each instance records what its interface ports are connected to.
+
 **A function or task call is inlined.** The body is translated into the process that calls
 it, with its arguments, return variable and locals bound to registers, so a task's delays
 suspend the caller as its own statements would and the caller's read and write sets are

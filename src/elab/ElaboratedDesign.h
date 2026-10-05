@@ -95,6 +95,10 @@ struct Instance {
     /// absolute offsets in as constants, which is what section 4.3 anticipates.
     std::vector<std::uint32_t> objectSlots;
 
+    /// Each interface port, by name, and the path of the interface instance it reaches, for
+    /// the hierarchical references that go through it.
+    std::map<std::string, std::string, std::less<>> interfaces;
+
     static constexpr std::uint32_t NoParent = 0xFFFF'FFFFU;
 };
 

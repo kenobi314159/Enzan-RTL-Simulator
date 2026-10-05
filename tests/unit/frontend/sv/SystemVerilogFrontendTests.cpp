@@ -983,6 +983,54 @@ TEST_F(FrontendTest, AModuleWithoutATimescaleBesideOneWithIsAccepted) {
     EXPECT_NE(design, nullptr) << consumer.messages.front();
 }
 
+TEST_F(FrontendTest, AMemberReachedThroughAnInterfacePortGoesThroughThePort) {
+    // The reference names the port, not the interface it is connected to in one instance, and
+    // the instance records what each of its interface ports is connected to.
+    const std::unique_ptr<Design> design = analyse(R"(
+        interface bus_if;
+            logic [3:0] data;
+            modport sink (input data);
+        endinterface
+
+        module leaf (bus_if.sink in, output logic [3:0] copy);
+            assign copy = in.data;
+        endmodule
+
+        module middle (bus_if.sink in, output logic [3:0] copy);
+            leaf u_leaf (.in(in), .copy(copy));
+        endmodule
+
+        module top;
+            bus_if bus ();
+            logic [3:0] copy;
+            middle u_middle (.in(bus), .copy(copy));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* leaf = design->findModule("leaf");
+    ASSERT_NE(leaf, nullptr);
+    EXPECT_TRUE(std::ranges::any_of(leaf->objects, [](const enzan::eir::Object& object) {
+        return object.hierarchicalPath == "@in/data";
+    }));
+
+    using enzan::eir::InterfaceBinding;
+    const ModuleDefinition* top = design->findModule("top");
+    const ModuleDefinition* middle = design->findModule("middle");
+    ASSERT_NE(top, nullptr);
+    ASSERT_NE(middle, nullptr);
+    const auto bindingsOf = [](const ModuleDefinition& definition, std::string_view instance) {
+        for (const enzan::eir::Instance& child : definition.instances)
+            if (child.name == instance) return child.interfaceBindings;
+        return std::vector<InterfaceBinding>{};
+    };
+    EXPECT_EQ(bindingsOf(*top, "u_middle"),
+              (std::vector<InterfaceBinding>{InterfaceBinding{.port = "in", .target = "bus"}}));
+    EXPECT_EQ(bindingsOf(*middle, "u_leaf"),
+              (std::vector<InterfaceBinding>{InterfaceBinding{.port = "in", .target = "@in"}}));
+}
+
 TEST_F(FrontendTest, ReportsARecursiveCall) {
     // An inlined body cannot contain itself.
     EXPECT_EQ(analyse(R"(
