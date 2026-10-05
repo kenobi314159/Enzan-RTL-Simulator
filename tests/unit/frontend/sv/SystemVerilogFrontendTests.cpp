@@ -1051,6 +1051,28 @@ TEST_F(FrontendTest, AnOverrideNamingNoParameterIsReported) {
     EXPECT_TRUE(reportedCode(DiagCode::UnusedParameterOverride));
 }
 
+TEST_F(FrontendTest, FoldsAComparisonOfConstantTimes) {
+    // `2ps` is a real; with a parameter on the other side the comparison is a constant.
+    const auto design = analyse(R"(
+        module m #(parameter time Period = 10ns);
+            logic ok;
+            initial ok = Period >= 2ps && Period * 1.5 > 14;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, ReportsARealComputationOnAVariable) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] x;
+            logic ok;
+            initial ok = x * 1.5 > 2;
+        endmodule
+    )"),
+              nullptr);
+}
+
 TEST_F(FrontendTest, ReportsADeferredAssertion) {
     // Evaluated on the spot it would report the glitches it exists to filter out.
     EXPECT_EQ(analyse(R"(

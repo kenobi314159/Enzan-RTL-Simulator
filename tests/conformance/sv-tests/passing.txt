@@ -132,6 +132,9 @@ chapter-20/20.2--stop.sv
 chapter-20/20.3--realtime.sv
 chapter-20/20.3--stime.sv
 chapter-20/20.3--time.sv
+chapter-20/20.6--bits.sv
+chapter-20/20.6--bits_type.sv
+chapter-20/20.8--clog2.sv
 chapter-20/20.9--isunknown.sv
 chapter-20/20.9--onehot0.sv
 chapter-20/20.9--onehot.sv
@@ -198,6 +201,8 @@ chapter-5/5.7.1--integers-underscores.sv
 chapter-5/5.7.1--integers-unsized-illegal.sv
 chapter-5/5.7.1--integers-unsized.sv
 chapter-5/5.7.2-real-constants-illegal.sv
+chapter-5/5.7.2-real-constants.sv
+chapter-5/5.8-time-literals.sv
 chapter-5/5.9.1-string-special-chars.sv
 chapter-5/5.9-string-assignment.sv
 chapter-5/5.9-string-basics.sv

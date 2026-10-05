@@ -139,6 +139,11 @@ void modulo(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned);
 /// `$countones` returns (IEEE 1800 section 20.9), with X and Z bits counted as not 1.
 void countOnes(BitRef dst, ConstBitRef a);
 
+/// `dst` receives the ceiling of the base-2 logarithm of `a`, read as unsigned, as a two-state
+/// number: what `$clog2` returns (IEEE 1800 section 20.8.1), with 0 for an `a` of 0. An `a`
+/// with an X or Z bit has no logarithm, and yields all X.
+void ceilLog2(BitRef dst, ConstBitRef a);
+
 /// `dst = base ** exponent`, which IEEE 1800 section 11.4.3 defines in full: X when either
 /// operand has an unknown bit; for a negative exponent, which only a signed one can be, X for
 /// a zero base, 1 for a base of 1, alternately -1 and 1 for a signed base of -1, and 0 for any

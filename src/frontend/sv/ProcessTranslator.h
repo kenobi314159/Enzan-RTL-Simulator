@@ -23,6 +23,7 @@ class SourceLocation;
 
 namespace slang::ast {
 enum class EdgeKind;
+class Symbol;
 class CallExpression;
 class Scope;
 class SubroutineSymbol;
@@ -80,6 +81,9 @@ public:
 
     /// The module being built, for object types and widths.
     [[nodiscard]] virtual const eir::ModuleDefinition& definition() const = 0;
+
+    /// The instance body, in whose scope an expression of constants is evaluated.
+    [[nodiscard]] virtual const slang::ast::Symbol& evaluationScope() const = 0;
 };
 
 /// Translates one procedural block or continuous assignment into an EIR process.
@@ -238,6 +242,12 @@ private:
     std::optional<Value> translateConcatenation(const slang::ast::Expression& expression);
     std::optional<Value> translateReplication(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
+
+    /// The value of an integral `expression` that computes with reals, which have no runtime
+    /// representation yet, when every operand is a constant: `ClkPeriod >= 2ps` with
+    /// `ClkPeriod` a parameter. Nothing when some operand is not a constant.
+    std::optional<Value> foldThroughReals(const slang::ast::Expression& expression,
+                                          const eir::Type& type);
     std::optional<Value> translateInside(const slang::ast::Expression& expression);
     std::optional<Value> translateAssignmentPattern(const slang::ast::Expression& expression);
 

@@ -775,6 +775,28 @@ TEST(BitOpsConditional, MergeAcrossLimbs) {
     EXPECT_EQ(result.get(129), Logic::Unknown) << "the differing bit becomes x";
 }
 
+TEST(BitOpsCount, CeilLog2RoundsUpAndIsZeroForZeroAndOne) {
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd0"), "00000000");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd1"), "00000000");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd2"), "00000001");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd5"), "00000011");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd128"), "00000111");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd129"), "00001000");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'b0000_01x1"), "xxxxxxxx");
+}
+
+TEST(BitOpsCount, CeilLog2LooksAcrossWords) {
+    // 2**64 is a power of two in the second word; one more bit in the first rounds it up.
+    BitVector value = BitVector::filled(100, Logic::Zero);
+    value.mutableRef().set(64, Logic::One);
+    BitVector result(32);
+    bitops::ceilLog2(result.mutableRef(), value.ref());
+    EXPECT_EQ(result.ref().toUInt64(), 64U);
+    value.mutableRef().set(3, Logic::One);
+    bitops::ceilLog2(result.mutableRef(), value.ref());
+    EXPECT_EQ(result.ref().toUInt64(), 65U);
+}
+
 TEST(BitOpsCount, CountOnesCountsOnlyBitsThatAreExactlyOne) {
     EXPECT_EQ(applyUnary(bitops::countOnes, "8'b1010_0x1z"), "00000011");
     EXPECT_EQ(applyUnary(bitops::countOnes, "8'b0000_0000"), "00000000");

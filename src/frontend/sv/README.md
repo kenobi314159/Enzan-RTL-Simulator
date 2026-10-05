@@ -83,11 +83,13 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 
 - dynamic and associative arrays, queues, unpacked unions, `real`, `string` and class types
   (packed vectors, structs and arrays, enums, and fixed-size unpacked arrays and structs all
-  work);
+  work). A computation with reals whose operands are all constants, such as `Period >= 2ps`
+  with `Period` a parameter, is folded to its integral result;
 - a recursive call, which slang does not fold to a constant, and a `ref` argument;
 - deferred assertions (`assert #0`, `assert final`) and concurrent ones (`assert property`),
   which are SVA; immediate assertions work;
-- every system function but `$time`, `$isunknown`, `$countones`, `$onehot` and `$onehot0`;
+- every system function but `$time`, `$signed`, `$unsigned`, `$bits`, `$clog2`, `$isunknown`,
+  `$countones`, `$onehot` and `$onehot0`, and those slang folds to a constant;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
 - an event control on an expression other than a signal or a constant select of one, such
   as `@(a & b)` or `@(posedge clk[i])` with `i` a variable;

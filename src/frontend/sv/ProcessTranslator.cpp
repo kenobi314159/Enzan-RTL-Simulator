@@ -6,6 +6,7 @@
 #include "eir/Instruction.h"
 #include "frontend/sv/SvIntConversion.h"
 
+#include "slang/ast/EvalContext.h"
 #include "slang/ast/Expression.h"
 #include "slang/ast/SemanticFacts.h"
 #include "slang/ast/Statement.h"
@@ -188,6 +189,21 @@ ProcessTranslator::Value ProcessTranslator::coerceState(const Value& value, eir:
 void ProcessTranslator::setSensitivity(std::vector<eir::SensitivityEntry> sensitivity) {
     process.sensitivity = std::move(sensitivity);
     for (const eir::SensitivityEntry& entry : process.sensitivity) noteRead(entry.objectIndex);
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::foldThroughReals(const ast::Expression& expression, const eir::Type& type) {
+    ast::EvalContext context(module->evaluationScope());
+    const slang::ConstantValue value = expression.eval(context);
+    if (!value.isInteger()) return std::nullopt;
+    const std::optional<eir::BitVector> bits = module->constantBits(value, *expression.type);
+    if (!bits.has_value()) return std::nullopt;
+
+    const std::uint32_t index = addConstant(*bits);
+    const std::uint32_t result = newRegister(type);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(index)));
+    return Value{.reg = result, .type = type};
 }
 
 std::optional<eir::SensitivityEntry>
@@ -893,6 +909,20 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
     if (failed) return std::nullopt;
 
     const std::optional<eir::Type> type = module->convertType(*expression.type);
+
+    // Where an integral value comes out of a real computation, either the whole computation is
+    // a constant or it cannot be translated; folding it is the one way it can work.
+    const auto realOperand = [](const ast::Expression& operand) {
+        return operand.type->isFloating();
+    };
+    const bool fromReals = (expression.kind == ast::ExpressionKind::Conversion
+                            && realOperand(expression.as<ast::ConversionExpression>().operand()))
+                           || (expression.kind == ast::ExpressionKind::BinaryOp
+                               && (realOperand(expression.as<ast::BinaryExpression>().left())
+                                   || realOperand(expression.as<ast::BinaryExpression>().right())));
+    if (fromReals && type.has_value()) {
+        if (std::optional<Value> folded = foldThroughReals(expression, *type)) return folded;
+    }
 
     switch (expression.kind) {
     case ast::ExpressionKind::IntegerLiteral: {
@@ -2002,6 +2032,32 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
             const std::optional<Value> operand = translateExpression(*call.arguments()[0]);
             if (!operand.has_value() || !type.has_value()) return std::nullopt;
             return coerce(*operand, *type);
+        }
+
+        // slang folds `$bits` only where a constant is required, as in a declaration, but a
+        // fixed-size argument's width is known regardless, as in a loop bound such as
+        // `i < $bits(parity_t)`. The argument is not evaluated (IEEE 1800 section 20.6.2).
+        if (name == "$bits" && call.arguments().size() == 1
+            && call.arguments()[0]->type->isFixedSize()) {
+            const std::optional<eir::Type> type = module->convertType(*expression.type);
+            if (!type.has_value()) return std::nullopt;
+            const std::uint32_t index = addConstant(eir::BitVector::fromUInt64(
+                call.arguments()[0]->type->getBitstreamWidth(), type->bitWidth()));
+            const std::uint32_t result = newRegister(*type);
+            emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                        eir::Operand::constant(index)));
+            return Value{.reg = result, .type = *type};
+        }
+
+        // `$clog2` of a variable, such as a loop index; slang has folded every constant one.
+        if (name == "$clog2" && call.arguments().size() == 1) {
+            const std::optional<Value> operand = translateExpression(*call.arguments()[0]);
+            const std::optional<eir::Type> type = module->convertType(*expression.type);
+            if (!operand.has_value() || !type.has_value()) return std::nullopt;
+            const std::uint32_t result = newRegister(*type);
+            emit(eir::Instruction::make(eir::Opcode::CeilLog2, eir::Operand::reg(result),
+                                        eir::Operand::reg(operand->reg)));
+            return Value{.reg = result, .type = *type};
         }
 
         if (name == "$isunknown" || name == "$countones" || name == "$onehot"

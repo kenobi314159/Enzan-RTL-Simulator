@@ -205,6 +205,15 @@ module tb;
             failures = failures + 1;
         end
 
+        // `$clog2` and `$bits` of something that is not a constant, as in a loop bound: the
+        // logarithm rounds up and is 0 for 0, and `$bits` is the width without evaluating.
+        a = 8'd5;
+        b = 8'd128;
+        if ($clog2(a) != 3 || $clog2(b) != 7 || $clog2(a - 8'd5) != 0 || $bits(a + b) != 8) begin
+            $display("FAIL: $clog2 of %0d or %0d, or $bits of a sum", a, b);
+            failures = failures + 1;
+        end
+
         // `**` wraps at the width, and an unknown operand makes it x.
         a = 8'd3;
         narrow = 4'd4;

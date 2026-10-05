@@ -103,6 +103,10 @@ ENZAN_OPCODE(ReduceXor, "rxor", true, 1,
 ENZAN_OPCODE(CountOnes, "cntones", true, 1,
              "llvm.ctpop of `aval & ~bval` per limb, summed, which counts the bits that are "
              "exactly 1 and so leaves X and Z out, as `$countones` does")
+ENZAN_OPCODE(CeilLog2, "clog2", true, 1,
+             "the position of the highest set bit, found by llvm.ctlz per limb, plus one "
+             "unless the operand is a power of two; 0 for 0 and 1, and X for an operand "
+             "with an X or Z bit, as `$clog2` does")
 ENZAN_OPCODE(LogicalAnd, "land", true, 2,
              "the truth values of both operands combined by the three-valued AND "
              "table; the compiler emits branches for short-circuit evaluation and "

@@ -268,6 +268,8 @@ public:
         return definitionValue;
     }
 
+    [[nodiscard]] const ast::Symbol& evaluationScope() const override { return *body; }
+
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);

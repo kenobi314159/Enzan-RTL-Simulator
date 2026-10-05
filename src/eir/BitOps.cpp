@@ -574,6 +574,33 @@ void countOnes(BitRef dst, ConstBitRef a) {
     dst.canonicalize();
 }
 
+void ceilLog2(BitRef dst, ConstBitRef a) {
+    if (a.hasUnknown()) {
+        setUnknown(dst);
+        return;
+    }
+
+    // The highest set bit gives the floor; one more unless no other bit is set.
+    std::uint64_t result = 0;
+    bool otherBits = false;
+    for (std::uint32_t index = a.words(); index-- > 0;) {
+        const Word word = a.aval()[index];
+        if (word == 0) continue;
+        const auto top = static_cast<std::uint32_t>(std::bit_width(word) - 1);
+        result = (std::uint64_t{index} * 64) + top;
+        otherBits = (word & ~(Word{1} << top)) != 0;
+        for (std::uint32_t lower = 0; lower < index && !otherBits; ++lower)
+            otherBits = a.aval()[lower] != 0;
+        if (otherBits) ++result;
+        break;
+    }
+
+    std::ranges::fill(dst.avalWords(), 0);
+    std::ranges::fill(dst.bvalWords(), 0);
+    dst.aval()[0] = result;
+    dst.canonicalize();
+}
+
 void power(BitRef dst, ConstBitRef base, ConstBitRef exponent, bool baseSigned,
            bool exponentSigned) {
     ENZAN_ASSERT(dst.width() == base.width(), "power requires the base and result to be equal");
