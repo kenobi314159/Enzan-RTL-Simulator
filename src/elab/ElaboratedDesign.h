@@ -5,6 +5,7 @@
 #include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Module.h"
+#include "eir/Process.h"
 #include "eir/Type.h"
 
 #include <cstdint>
@@ -40,6 +41,11 @@ struct Slot {
 
     /// The kind of net, when `kind` is `Net`.
     eir::NetKind netKind = eir::NetKind::Wire;
+
+    /// For a net, the bits some continuous assignment drives, as merged extents of this slot.
+    /// They start at X, as a variable does, until their driver first runs; the bits outside
+    /// them hold the net's undriven value for good (DESIGN_GUIDE.md section 3.7).
+    std::vector<eir::WriteExtent> drivenBits;
 
     /// The unpacked dimensions and element width of the object that declared this slot, when
     /// it is an unpacked array; see `eir::Object`.

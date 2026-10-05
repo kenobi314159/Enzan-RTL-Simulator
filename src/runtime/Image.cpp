@@ -165,6 +165,10 @@ void Image::initializeState(Arena& arena) const {
                 const elab::Slot& slot = elaborated->slots()[slotIndex];
                 if (slot.kind == eir::ObjectKind::Net) {
                     target.fill(eir::undrivenValue(slot.netKind));
+                    for (const eir::WriteExtent& driven : slot.drivenBits) {
+                        eir::bitops::assignPartAt(target, eir::BitVector(driven.width).ref(),
+                                                  driven.lowBit);
+                    }
                 } else {
                     target.fill(object.type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero);
                 }
@@ -177,10 +181,10 @@ void Image::initializeState(Arena& arena) const {
     visit(true);
     visit(false);
 
-    // A driver that has not run yet drives nothing, which is `z`; resolution then leaves the
-    // net at its undriven value until it does.
+    // A driver that has not run yet has no value the design gave it, so it starts at X, as the
+    // net's driven bits do.
     for (const elab::Driver& driver : elaborated->drivers())
-        arena.at(driver.wordOffset, driver.width).fill(eir::Logic::HighZ);
+        arena.at(driver.wordOffset, driver.width).fill(eir::Logic::Unknown);
 }
 
 std::uint32_t Image::findSignal(std::string_view path) const {

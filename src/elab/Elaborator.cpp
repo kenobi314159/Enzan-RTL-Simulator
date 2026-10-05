@@ -424,6 +424,7 @@ private:
                 continue;
             }
             resolved[slotIndex] = resolves(slotIndex, ranges);
+            recordDrivenBits(slotIndex, ranges);
         }
         if (!ok) return false;
 
@@ -467,6 +468,18 @@ private:
             }
         }
         return true;
+    }
+
+    /// Records which bits of a net its continuous drivers cover.
+    void recordDrivenBits(std::uint32_t slotIndex, const std::vector<DriverRange>& ranges) {
+        Slot& slot = result->slotList[slotIndex];
+        if (slot.kind != eir::ObjectKind::Net) return;
+        for (const DriverRange& range : ranges) {
+            if (range.continuous)
+                slot.drivenBits.push_back(eir::WriteExtent{
+                    .objectIndex = 0, .lowBit = range.lowBit, .width = range.width});
+        }
+        eir::normaliseWriteSet(slot.drivenBits);
     }
 
     /// True when a slot's drivers have to be resolved rather than written straight into it: a

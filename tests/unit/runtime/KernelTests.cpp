@@ -1624,6 +1624,21 @@ Simulation twoDrivers(std::string_view a, std::string_view b) {
     return {designOf(std::move(definition)), "tb"};
 }
 
+TEST(Kernel, ADrivenNetIsXUntilItsDriverRunsAndAnUndrivenOneIsItsDefault) {
+    // Before anything runs: a driven bit holds no value the design gave it, so X, as a variable
+    // would; `z` would claim nothing drives it (DESIGN_GUIDE.md section 3.7).
+    Simulation driven = twoDrivers("1'b1", "1'bz");
+    ASSERT_TRUE(driven.ready()) << driven.messages().front();
+    EXPECT_EQ(driven.value("/tb/n"), "x");
+
+    ModuleDefinition definition = makeTop({}, {Object{.name = "n",
+                                                      .type = Type::bits(4, false, true),
+                                                      .kind = enzan::eir::ObjectKind::Net}});
+    const Simulation undriven(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(undriven.ready());
+    EXPECT_EQ(undriven.value("/tb/n"), "zzzz");
+}
+
 TEST(Kernel, TwoDriversOfANetResolveAndReResolveWhenEitherChanges) {
     Simulation simulation = twoDrivers("1'b1", "1'bz");
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();

@@ -364,7 +364,9 @@ rather than a convenience:
   by the built-in table for its kind.
 - A bit of a net with no driver at all is its default — `z` for `wire` and `tri`,
   and the pull value for `tri0`, `tri1`, `supply0` and `supply1` — and not the value
-  a neighbouring bit happened to resolve to.
+  a neighbouring bit happened to resolve to. A bit that has a driver is X until that
+  driver first runs, as a variable is: before then it holds no value the design gave
+  it, and `z` would claim that nothing drives it.
 
 Further requirements:
 
