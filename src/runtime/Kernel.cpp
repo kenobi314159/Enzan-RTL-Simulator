@@ -265,7 +265,9 @@ void Kernel::drain(Region region) {
         const std::uint32_t processIndex = scheduler.take(region);
         processes[processIndex].queued = false;
 
+        runningProcess = processIndex;
         const ExecutionResult result = interpreter.run(processIndex);
+        runningProcess = NoProcess;
 
         if (result == ExecutionResult::Stopped || stopping()) return;
 
@@ -369,6 +371,12 @@ void Kernel::runFinalProcesses() {
 void Kernel::wake(std::uint32_t processIndex) {
     ProcessState& state = processes[processIndex];
     if (state.queued) return;
+
+    // A process is not waiting on its event control while it runs, so what it writes then
+    // cannot wake it. Without this an `always @*` that sets a temporary and reads it back —
+    // `k = 0; ... k = a ^ b; y = k;`, which is ordinary Verilog — is sensitive to its own
+    // writes, wakes itself on every run, and never lets the time slot end.
+    if (processIndex == runningProcess) return;
 
     state.resumePc = 0;
     state.queued = true;

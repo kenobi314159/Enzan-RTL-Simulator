@@ -415,6 +415,11 @@ private:
     /// a test of one size against zero for the whole of an ordinary run.
     std::vector<bool> forcedSignals;
 
+    /// The process the interpreter is running, which its own writes do not wake, or
+    /// `NoProcess` between processes.
+    std::uint32_t runningProcess = NoProcess;
+    static constexpr std::uint32_t NoProcess = 0xFFFF'FFFFU;
+
     /// Scratch for resolution, sized once for the widest driver: the resolved range, the
     /// segment being folded, and the driver being folded into it. Resolution runs on the
     /// write path, which section 13.4 forbids allocating on.

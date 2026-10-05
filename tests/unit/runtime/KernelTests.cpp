@@ -1516,6 +1516,43 @@ TEST(KernelPli, AZeroDelayEventFromReadOnlyRunsInAFurtherSlotAtTheSameTime) {
     EXPECT_EQ(hooks.log, expected);
 }
 
+TEST(Kernel, AProcessIsNotWokenByWhatItWritesWhileItRuns) {
+    // `always @* begin t = 0; t = x; y = t; end`: the inferred sensitivity includes the
+    // temporary, which the process changes twice on every run. A process is not waiting on its
+    // event control while it runs, so those changes must not schedule it again; if they did,
+    // the time slot would never end.
+    ProcessBuilder builder(ProcessKind::AlwaysComb, "temporaries");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t zero = builder.constant("8'd0");
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(zero)));
+    builder.store(1, value);
+    builder.readObject(value, 0);
+    builder.store(1, value);
+    builder.readObject(value, 1);
+    builder.store(2, value);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop(
+        {builder.finish()},
+        {Object{.name = "x", .type = Type::bits(8, false, true), .initialValue = literal("8'd7")},
+         Object{.name = "t", .type = Type::bits(8, false, true)},
+         Object{.name = "y", .type = Type::bits(8, false, true)}});
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/y", Radix::Decimal), "7");
+
+    // It runs once at time zero, and once more for each change of what it reads from outside.
+    const std::uint64_t once = simulation.simulationKernel().executedInstructions();
+    simulation.simulationKernel().deposit(simulation.signal("/tb/x"), literal("8'd9"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/y", Radix::Decimal), "9");
+    EXPECT_EQ(simulation.simulationKernel().executedInstructions(), 2 * once);
+}
+
 // ---------------------------------------------------------------------------
 // Reading a window of an object
 // ---------------------------------------------------------------------------
