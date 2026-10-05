@@ -85,6 +85,7 @@ public:
         const std::uint32_t topInstance =
             createInstance("/" + topName, topName, *topIndex, Instance::NoParent);
         if (!expand(topInstance)) return nullptr;
+        if (!bindHierarchicalReferences()) return nullptr;
 
         collectProcesses();
         if (!checkDrivers()) return nullptr;
@@ -232,6 +233,9 @@ private:
         for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
              ++objectIndex) {
             if (result->instanceList[instanceIndex].objectSlots[objectIndex] != NoSlot) continue;
+            // A hierarchical reference has no storage of its own; it is bound once the whole
+            // tree exists, since what it names may be in a part not yet expanded.
+            if (!definition.objects[objectIndex].hierarchicalPath.empty()) continue;
 
             const std::uint32_t slotIndex = allocateSlot(instanceIndex, objectIndex);
             result->instanceList[instanceIndex].objectSlots[objectIndex] = slotIndex;
@@ -325,6 +329,41 @@ private:
                      parentSlot);
             return true;
         });
+    }
+
+    /// Binds every hierarchical reference to the slot of the object it names.
+    bool bindHierarchicalReferences() {
+        bool ok = true;
+        for (Instance& instance : result->instanceList) {
+            const eir::ModuleDefinition& definition = design.module(instance.definitionIndex);
+            for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
+                 ++objectIndex) {
+                const std::string& reference = definition.objects[objectIndex].hierarchicalPath;
+                if (reference.empty()) continue;
+
+                // Each leading `../` climbs one instance from the one holding the reference.
+                std::string base = instance.path;
+                std::string_view rest = reference;
+                while (rest.starts_with("../")) {
+                    rest.remove_prefix(3);
+                    const std::size_t slash = base.rfind('/');
+                    base = slash == 0 || slash == std::string::npos ? std::string()
+                                                                    : base.substr(0, slash);
+                }
+                const std::string path = base + '/' + std::string(rest);
+
+                const auto found = result->slotsByPath.find(path);
+                if (base.empty() || found == result->slotsByPath.end()) {
+                    diagnostics.report(DiagCode::UnresolvedHierarchicalReference,
+                                       definition.objects[objectIndex].location, reference,
+                                       instance.path);
+                    ok = false;
+                    continue;
+                }
+                instance.objectSlots[objectIndex] = found->second;
+            }
+        }
+        return ok;
     }
 
     void collectProcesses() {

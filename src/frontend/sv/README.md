@@ -50,6 +50,10 @@ need the assignment to run the other way.
 body would produce a design that simulates and gives the wrong answer, which section 1.2
 ranks as the worst possible outcome. Refusing to elaborate is the safe failure.
 
+**A reference into another instance is a hierarchical reference**, an object with a relative
+path and no storage, which elaboration binds. Creating storage for it instead would make
+`dut.state` a copy nothing ever writes.
+
 **A function or task call is inlined.** The body is translated into the process that calls
 it, with its arguments, return variable and locals bound to registers, so a task's delays
 suspend the caller as its own statements would and the caller's read and write sets are

@@ -147,6 +147,15 @@ struct Object {
     /// The width of one element, when `unpackedDimensions` is not empty.
     std::uint32_t elementWidth = 0;
 
+    /// When not empty, the object is a hierarchical reference: a name here for an object of
+    /// another instance, which elaboration binds to that object's storage.
+    ///
+    /// The path is relative to the instance holding this object — `dut/core/state` down,
+    /// `../u_peer/ready` up and across — because one definition serves every instance of a
+    /// parameterisation (DESIGN_GUIDE.md section 18, M3.1), and a path from the root would be
+    /// right for only one of them.
+    std::string hierarchicalPath;
+
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
 };
 

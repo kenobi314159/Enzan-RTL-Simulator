@@ -76,6 +76,8 @@ ENZAN_DIAG(MultipleContinuousDrivers, 3006, Error,
 ENZAN_DIAG(MixedDriverKinds, 3007, Error,
            "'{}' has {} driven by the continuous assignment {} and also written by {}; a bit "
            "that is driven continuously may not be written procedurally")
+ENZAN_DIAG(UnresolvedHierarchicalReference, 3011, Error,
+           "the hierarchical reference '{}' in '{}' names nothing in the elaborated design")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 

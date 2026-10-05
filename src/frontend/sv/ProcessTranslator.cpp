@@ -808,10 +808,14 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         // A local of a subroutine being inlined lives in a register.
         if (const Value* local = localFor(symbol)) return copyOf(*local);
 
-        // A parameter is a constant, not state: reading it must not create an object,
-        // because an object would be a per-instance slot for a value that never changes.
-        if (symbol.kind == slang::ast::SymbolKind::Parameter) {
-            const slang::ConstantValue& value = symbol.as<ast::ParameterSymbol>().getValue();
+        // A parameter or an enumeration's value is a constant, not state: reading it must not
+        // create an object, because an object would be a per-instance slot for a value that
+        // never changes.
+        if (symbol.kind == slang::ast::SymbolKind::Parameter
+            || symbol.kind == slang::ast::SymbolKind::EnumValue) {
+            const slang::ConstantValue& value = symbol.kind == slang::ast::SymbolKind::Parameter
+                                                    ? symbol.as<ast::ParameterSymbol>().getValue()
+                                                    : symbol.as<ast::EnumValueSymbol>().getValue();
             if (!type.has_value()) break;
             const std::optional<eir::BitVector> bits =
                 module->constantBits(value, *expression.type);
@@ -1516,7 +1520,9 @@ ProcessTranslator::locate(const ast::Expression& expression) {
                             .reachWidth = local->type.bitWidth(),
                             .rootIsLocal = true};
         }
-        if (symbol.kind == slang::ast::SymbolKind::Parameter) break;
+        if (symbol.kind == slang::ast::SymbolKind::Parameter
+            || symbol.kind == slang::ast::SymbolKind::EnumValue)
+            break;
 
         const std::optional<std::uint32_t> objectIndex = module->objectFor(symbol);
         if (!objectIndex.has_value()) {

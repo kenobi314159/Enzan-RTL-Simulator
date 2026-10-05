@@ -933,6 +933,40 @@ TEST_F(FrontendTest, ACalledFunctionIsInlinedAndItsReadsAreTheCallers) {
     EXPECT_FALSE(found->findObject("value").has_value());
 }
 
+TEST_F(FrontendTest, AHierarchicalReferenceIsAPathFromTheInstanceHoldingIt) {
+    // Down from the testbench, and up and across from one leaf to another. One definition
+    // serves both leaves, so the path is relative rather than from the root.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf;
+            logic [3:0] value;
+            logic [3:0] seen;
+            assign seen = tb.u_other.value;
+        endmodule
+
+        module tb;
+            leaf u_one ();
+            leaf u_other ();
+            logic [3:0] copy;
+            assign copy = u_one.value;
+        endmodule
+    )",
+                                                   "tb");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const auto referencesOf = [](const ModuleDefinition& definition) {
+        std::vector<std::string> paths;
+        for (const enzan::eir::Object& object : definition.objects)
+            if (!object.hierarchicalPath.empty()) paths.push_back(object.hierarchicalPath);
+        return paths;
+    };
+    const ModuleDefinition* tb = design->findModule("tb");
+    const ModuleDefinition* leaf = design->findModule("leaf");
+    ASSERT_NE(tb, nullptr);
+    ASSERT_NE(leaf, nullptr);
+    EXPECT_EQ(referencesOf(*tb), (std::vector<std::string>{"u_one/value"}));
+    EXPECT_EQ(referencesOf(*leaf), (std::vector<std::string>{"../u_other/value"}));
+}
+
 TEST_F(FrontendTest, ReportsARecursiveCall) {
     // An inlined body cannot contain itself.
     EXPECT_EQ(analyse(R"(

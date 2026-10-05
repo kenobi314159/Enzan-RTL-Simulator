@@ -110,6 +110,9 @@ enzan_add_golden_test(aggregates NO_DIFFERENTIAL)
 # Functions and tasks, inlined into the processes that call them.
 enzan_add_golden_test(subroutines)
 
+# Hierarchical references, down, up and across, from a definition two instances share.
+enzan_add_golden_test(hierarchical)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------

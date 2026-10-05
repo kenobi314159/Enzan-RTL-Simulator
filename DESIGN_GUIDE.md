@@ -587,6 +587,14 @@ iterations instantiating `u_dut` would be two instances with one path, and nothi
 waveform, the front end or VPI could tell them apart. Changing how a block is named changes
 the EIR the frontend produces, so it bumps the serialisation version of 4.4.
 
+**A hierarchical reference is an object with a path and no storage.** A testbench reading
+`dut.core.state` gets an object whose path leads from the referencing instance to the one
+that declares `state`, and elaboration binds it to that object's slot once the whole tree
+exists, so reads, writes, sensitivity and drivers all see the real signal. The path is
+relative — down as `core/state`, up and across as `../u_peer/ready` — because one
+definition serves every instance of a parameterisation (M3.1), and a path from the root
+would be right for only one of them. A path that names nothing is an elaboration error.
+
 **A function or task is inlined into the process that calls it.** The body is translated in
 place, its variables bound to registers, so a task's delays suspend the caller as its own
 statements would, the caller's read and write sets are exactly what the call touches (4.2),

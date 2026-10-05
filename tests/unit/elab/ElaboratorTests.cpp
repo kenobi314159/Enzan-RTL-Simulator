@@ -781,4 +781,56 @@ TEST_F(ElaboratorTest, AnUndrivenPulledNetNeedsNoResolution) {
     EXPECT_EQ(elaborated->slots()[slot].netKind, enzan::eir::NetKind::Supply1);
 }
 
+// ---------------------------------------------------------------------------
+// Hierarchical references
+// ---------------------------------------------------------------------------
+
+/// `tb` holding `left` and `right`, both of `leaf`, whose one object is `value`; `right` also
+/// declares a reference to `../left/value`.
+void addReferencingDesign(Design& design, std::string_view reference) {
+    ModuleDefinition leaf;
+    leaf.name = "leaf";
+    leaf.addObject(Object{.name = "value", .type = Type::bits(4, false, true)});
+    design.addModule(std::move(leaf));
+
+    ModuleDefinition peer;
+    peer.name = "peer";
+    peer.addObject(Object{.name = "value", .type = Type::bits(4, false, true)});
+    peer.addObject(Object{.name = "ref$value",
+                          .type = Type::bits(4, false, true),
+                          .hierarchicalPath = std::string(reference)});
+    design.addModule(std::move(peer));
+
+    ModuleDefinition top;
+    top.name = "tb";
+    for (const auto& [name, definition] : {std::pair{"left", "leaf"}, std::pair{"right", "peer"}}) {
+        enzan::eir::Instance instance;
+        instance.name = name;
+        instance.definitionName = definition;
+        top.instances.push_back(std::move(instance));
+    }
+    design.addModule(std::move(top));
+}
+
+TEST_F(ElaboratorTest, AHierarchicalReferenceIsTheStorageItNames) {
+    addReferencingDesign(design, "../left/value");
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+
+    const std::uint32_t target = require(elaborated->findSlot("/tb/left/value"));
+    const Instance& right = elaborated->instances()[require(elaborated->findInstance("/tb/right"))];
+    EXPECT_EQ(right.objectSlots[1], target);
+    // A reference has no storage and no name of its own.
+    EXPECT_FALSE(elaborated->findSlot("/tb/right/ref$value").has_value());
+}
+
+TEST_F(ElaboratorTest, AHierarchicalReferenceToNothingIsReported) {
+    addReferencingDesign(design, "../middle/value");
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::UnresolvedHierarchicalReference));
+    EXPECT_TRUE(reported("'../middle/value' in '/tb/right'")) << consumer.messages.front();
+}
+
 } // namespace

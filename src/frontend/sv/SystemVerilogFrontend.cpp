@@ -37,6 +37,7 @@
 #include "slang/text/SourceManager.h"
 #include "slang/util/Bag.h"
 
+#include <algorithm>
 #include <format>
 #include <limits>
 #include <map>
@@ -45,6 +46,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace enzan::frontend::sv {
 
@@ -75,6 +77,82 @@ const ast::Expression& externalSideOf(const ast::Expression& expression,
     const ast::Expression& external =
         direction == slang::ast::ArgumentDirection::Out ? assignment.left() : assignment.right();
     return withoutConversions(external);
+}
+
+/// The name `symbol` has in the module that declares it, its generate blocks joined to it with
+/// dots as `collectScope` names a hoisted object or an instance (DESIGN_GUIDE.md section 5.1),
+/// and the body that module's instance has; null for the top level's instance, which no body
+/// holds. Nothing when the symbol is somewhere a name cannot reach, a subroutine or a package.
+std::optional<std::string> nameWithinBody(const ast::Symbol& symbol,
+                                          const ast::InstanceBodySymbol*& owner) {
+    std::string prefix;
+    const ast::Scope* scope = symbol.getParentScope();
+    while (scope != nullptr) {
+        const ast::Symbol& parent = scope->asSymbol();
+        switch (parent.kind) {
+        case slang::ast::SymbolKind::InstanceBody:
+            owner = &parent.as<ast::InstanceBodySymbol>();
+            return prefix + std::string(symbol.name);
+
+        case slang::ast::SymbolKind::Root:
+        case slang::ast::SymbolKind::CompilationUnit:
+            if (symbol.kind != slang::ast::SymbolKind::Instance) return std::nullopt;
+            owner = nullptr;
+            return std::string(symbol.name);
+
+        case slang::ast::SymbolKind::GenerateBlock: {
+            const auto& block = parent.as<ast::GenerateBlockSymbol>();
+            const ast::Scope* above = block.getParentScope();
+            if (above != nullptr
+                && above->asSymbol().kind == slang::ast::SymbolKind::GenerateBlockArray) {
+                const auto& array = above->asSymbol().as<ast::GenerateBlockArraySymbol>();
+                const slang::SVInt* index = block.getArrayIndex();
+                const std::string entry =
+                    index != nullptr
+                        ? std::format("{}[{}]", array.getExternalName(),
+                                      index->toString(slang::LiteralBase::Decimal, false))
+                        : array.getExternalName();
+                prefix.insert(0, ".");
+                prefix.insert(0, entry);
+                scope = array.getParentScope();
+            } else {
+                prefix.insert(0, ".");
+                prefix.insert(0, block.getExternalName());
+                scope = above;
+            }
+            break;
+        }
+
+        case slang::ast::SymbolKind::StatementBlock: scope = parent.getParentScope(); break;
+
+        // A static property of a class declared in a module is that module's storage, named
+        // with its class.
+        case slang::ast::SymbolKind::ClassType:
+            prefix.insert(0, "::");
+            prefix.insert(0, parent.name);
+            scope = parent.getParentScope();
+            break;
+
+        default: return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+/// The instances from the top level down to the one whose body is `body`, by the names
+/// `nameWithinBody` gives them.
+std::optional<std::vector<std::string>> instanceChain(const ast::InstanceBodySymbol& body) {
+    std::vector<std::string> chain;
+    const ast::InstanceBodySymbol* current = &body;
+    while (current != nullptr && current->parentInstance != nullptr) {
+        const ast::InstanceBodySymbol* owner = nullptr;
+        const std::optional<std::string> name = nameWithinBody(*current->parentInstance, owner);
+        if (!name.has_value()) return std::nullopt;
+        chain.push_back(*name);
+        current = owner;
+    }
+    std::ranges::reverse(chain);
+    return chain;
 }
 
 /// Translates one analysed module body into an EIR module definition.
@@ -155,6 +233,12 @@ private:
 
     /// The EIR kind of a slang net kind, or nothing for one Enzan cannot resolve.
     static std::optional<eir::NetKind> convertNetKind(ast::NetType::NetKind kind);
+
+    /// Creates the object a hierarchical reference to `symbol`, declared in `owner` as `name`,
+    /// is: one with no storage and a path from this instance to that object.
+    std::optional<std::uint32_t> referenceTo(const ast::ValueSymbol& symbol,
+                                             const ast::InstanceBodySymbol& owner,
+                                             const std::string& name, eir::Type type);
 
     /// Reports a drive strength other than the default and returns false.
     ///
@@ -372,6 +456,19 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
             std::format("the type of '{}', which is not a packed integral type", symbol.name));
         return std::nullopt;
     }
+
+    // A symbol another instance declares is a hierarchical reference, a name here for that
+    // instance's object, and gets no storage of its own: elaboration binds it. Giving it storage
+    // would make a testbench reading `dut.state` read a copy nothing ever writes.
+    const ast::InstanceBodySymbol* owner = nullptr;
+    const std::optional<std::string> nameThere = nameWithinBody(symbol, owner);
+    if (!nameThere.has_value() || owner == nullptr) {
+        reportUnsupported(
+            symbol.location,
+            std::format("a reference to '{}', which is not declared in a module", symbol.name));
+        return std::nullopt;
+    }
+    if (owner != body) return referenceTo(symbol, *owner, *nameThere, *type);
 
     eir::Object object;
     object.name = uniqueObjectName(symbol.name);
@@ -685,6 +782,40 @@ bool ModuleBuilder::translateProcesses() {
     return !failed;
 }
 
+std::optional<std::uint32_t> ModuleBuilder::referenceTo(const ast::ValueSymbol& symbol,
+                                                        const ast::InstanceBodySymbol& owner,
+                                                        const std::string& name, eir::Type type) {
+    const std::optional<std::vector<std::string>> here = instanceChain(*body);
+    const std::optional<std::vector<std::string>> there = instanceChain(owner);
+    if (!here.has_value() || !there.has_value()) {
+        reportUnsupported(symbol.location,
+                          std::format("the hierarchical reference to '{}'", symbol.name));
+        return std::nullopt;
+    }
+
+    // Up from here to the instance both paths share, then down to the one declaring it.
+    std::size_t common = 0;
+    while (common < here->size() && common < there->size() && (*here)[common] == (*there)[common])
+        ++common;
+    std::string path;
+    for (std::size_t level = common; level < here->size(); ++level) path += "../";
+    for (std::size_t level = common; level < there->size(); ++level) path += (*there)[level] + "/";
+    path += name;
+
+    eir::Object object;
+    // A `$` keeps the made-up name out of the user's namespace, as a connection's is.
+    object.name = uniqueObjectName(std::format("ref${}", path));
+    object.type = type;
+    object.kind = symbol.kind == slang::ast::SymbolKind::Net ? eir::ObjectKind::Net
+                                                             : eir::ObjectKind::Variable;
+    object.location = convertLocation(symbol.location);
+    object.hierarchicalPath = std::move(path);
+
+    const std::uint32_t index = definitionValue.addObject(std::move(object));
+    objectBySymbol.emplace(&symbol, index);
+    return index;
+}
+
 std::optional<eir::NetKind> ModuleBuilder::convertNetKind(ast::NetType::NetKind kind) {
     switch (kind) {
     case ast::NetType::Wire: return eir::NetKind::Wire;
@@ -850,6 +981,11 @@ bool ModuleBuilder::addInstance(
         if (reference.kind == ast::ExpressionKind::NamedValue
             || reference.kind == ast::ExpressionKind::HierarchicalValue) {
             objectIndex = objectFor(reference.as<ast::ValueExpressionBase>().symbol);
+            // A hierarchical reference has no storage until elaboration binds it, so a port
+            // cannot be collapsed onto it; it is connected through an assignment instead.
+            if (objectIndex.has_value()
+                && !definitionValue.objects[*objectIndex].hierarchicalPath.empty())
+                objectIndex = materialiseConnection(instance, port, reference);
         } else {
             objectIndex = materialiseConnection(instance, port, reference);
         }
