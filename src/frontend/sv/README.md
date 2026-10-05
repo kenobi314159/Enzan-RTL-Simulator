@@ -68,5 +68,8 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - an ascending declared range such as `logic [0:7]`;
 - an event control on an expression, or an event list inside a body rather than on a block
   header;
-- a timing control on an assignment, such as `a <= #5 b`;
+- a timing control on an assignment, such as `a <= #5 b`, and a delay on a continuous
+  assignment or a net, such as `assign #5 a = b` or `wire #5 w`;
+- a drive strength other than strong, such as `assign (weak0, weak1) w = a`, because
+  resolution has no strength model;
 - `**`, and the wildcard equality operators.

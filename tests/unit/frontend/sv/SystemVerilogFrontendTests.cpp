@@ -543,6 +543,28 @@ TEST_F(FrontendTest, AWholeAssignmentWritesEveryBit) {
               (std::vector<std::vector<WriteExtent>>{{extent(top, "x", 0, 8)}}));
 }
 
+TEST_F(FrontendTest, ANetDeclarationAssignmentIsAContinuousAssignment) {
+    // `wire w = a & b;` drives the net for the whole run, not only at time zero.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [3:0] a;
+            logic [3:0] b;
+            wire  [3:0] w = a & b;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    const std::uint32_t w = require(top.findObject("w"));
+    EXPECT_FALSE(top.objects[w].initialValue.has_value());
+    ASSERT_EQ(top.processes.size(), 1U);
+    EXPECT_EQ(top.processes[0].kind, enzan::eir::ProcessKind::ContinuousAssign);
+    EXPECT_EQ(extentsOf(top, "w"),
+              (std::vector<std::vector<WriteExtent>>{{extent(top, "w", 0, 4)}}));
+}
+
 TEST_F(FrontendTest, ConstantSelectsWriteExactlyTheirBitsAndTouchingOnesMerge) {
     const std::unique_ptr<Design> design = analyse(R"(
         module top;
@@ -725,6 +747,55 @@ TEST_F(FrontendTest, ReportsAnUnsupportedConstructRatherThanMistranslatingIt) {
     )"),
               nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
+}
+
+TEST_F(FrontendTest, ReportsADelayOnAContinuousAssignment) {
+    // Dropping it would let the target change early: a plausible wrong answer.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a, b;
+            assign #5 b = a;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a delay on a continuous assignment"));
+}
+
+TEST_F(FrontendTest, ReportsADelayOnANet) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            wire #5 w;
+            assign w = a;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a delay on a net"));
+}
+
+TEST_F(FrontendTest, ReportsADriveStrengthOtherThanStrong) {
+    // Resolution has no strength model, so a weak driver would lose to nothing and tie with a
+    // strong one.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            wire w;
+            assign (weak0, weak1) w = a;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a drive strength other than strong"));
+}
+
+TEST_F(FrontendTest, AnExplicitStrongDriveIsTheDefaultAndAccepted) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic a;
+            wire w;
+            assign (strong0, strong1) w = a;
+        endmodule
+    )");
+    EXPECT_NE(design, nullptr) << consumer.messages.front();
 }
 
 TEST_F(FrontendTest, ReportsAnUnsupportedSystemTaskByName) {

@@ -51,6 +51,9 @@ module tb;
     assign split[7:4] = high;
     assign split[3:0] = low;
 
+    // A net declared with an assignment is driven by it for the whole run.
+    wire [7:0] inverted = ~split;
+
     always #5 clk = ~clk;
 
     initial begin
@@ -81,9 +84,13 @@ module tb;
         // Changing one half moves only that half.
         low = 4'h3;
         #1;
-        $display("t=%0d split=%h", $time, split);
+        $display("t=%0d split=%h inverted=%h", $time, split, inverted);
         if (split !== 8'ha3) begin
             $display("FAIL: split is %h after changing its low half", split);
+            failures = failures + 1;
+        end
+        if (inverted !== 8'h5c) begin
+            $display("FAIL: inverted is %h", inverted);
             failures = failures + 1;
         end
 

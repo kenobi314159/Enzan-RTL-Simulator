@@ -146,6 +146,15 @@ private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
 
+    /// Reports a drive strength other than the default and returns false.
+    ///
+    /// Enzan resolves drivers without a strength model (DESIGN_GUIDE.md section 3.7), which
+    /// gives the right answer only when every driver is strong: a `weak` driver contending with
+    /// a strong one would resolve to X where the strong one should win.
+    bool checkDriveStrength(
+        std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
+        slang::SourceLocation location);
+
     /// Returns a name not already used by an object in this module.
     std::string uniqueObjectName(std::string_view preferred);
 
@@ -182,6 +191,10 @@ private:
 
     std::vector<std::pair<std::string, const ast::ProceduralBlockSymbol*>> proceduralBlocks;
     std::vector<const ast::ContinuousAssignSymbol*> continuousAssignments;
+
+    /// Nets declared with an assignment, `wire w = a & b;`, which is a continuous assignment
+    /// written in the declaration rather than a time-zero value.
+    std::vector<const ast::NetSymbol*> netAssignments;
 
     bool failed = false;
 
@@ -294,10 +307,25 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     object.location = convertLocation(symbol.location);
     object.enumIndex = enumFor(symbol.getType());
 
-    // A declaration initialiser is a time-zero value when it is constant. A non-constant
-    // one is a static initialisation that has to run, which needs the process machinery an
-    // `initial` block gets and is reported rather than silently dropped.
-    if (const ast::Expression* initializer = symbol.getInitializer(); initializer != nullptr) {
+    if (symbol.kind == slang::ast::SymbolKind::Net) {
+        const auto& net = symbol.as<ast::NetSymbol>();
+        // A net delay postpones every change by an inertial delay; dropping it would make the
+        // net change early and the design simulate to an answer that looks plausible.
+        if (net.getDelay() != nullptr) {
+            reportUnsupported(symbol.location, "a delay on a net");
+            return std::nullopt;
+        }
+        if (!checkDriveStrength(net.getDriveStrength(), symbol.location)) return std::nullopt;
+    }
+
+    // A net's initialiser is a continuous assignment, `wire w = a & b;`, translated with the
+    // module's other continuous assignments. A variable's is a time-zero value when it is
+    // constant. A non-constant one is a static initialisation that has to run, which needs the
+    // process machinery an `initial` block gets and is reported rather than silently dropped.
+    const ast::Expression* initializer = symbol.getInitializer();
+    if (initializer != nullptr && symbol.kind == slang::ast::SymbolKind::Net) {
+        netAssignments.push_back(&symbol.as<ast::NetSymbol>());
+    } else if (initializer != nullptr) {
         ast::EvalContext evalContext(symbol);
         const slang::ConstantValue value = initializer->eval(evalContext);
         if (value.isInteger()) {
@@ -517,6 +545,14 @@ bool ModuleBuilder::translateProcesses() {
     }
 
     for (const ast::ContinuousAssignSymbol* assignment : continuousAssignments) {
+        // An assignment delay is inertial and postpones every change; dropping it would let
+        // the target change early, which simulates to a plausible wrong answer.
+        if (assignment->getDelay() != nullptr) {
+            reportUnsupported(assignment->location, "a delay on a continuous assignment");
+            continue;
+        }
+        if (!checkDriveStrength(assignment->getDriveStrength(), assignment->location)) continue;
+
         const SourceLocation location = convertLocation(assignment->location);
         ProcessTranslator translator(
             *this, eir::ProcessKind::ContinuousAssign,
@@ -532,7 +568,39 @@ bool ModuleBuilder::translateProcesses() {
         definitionValue.processes.push_back(translator.take());
     }
 
+    // By index, because translating one initialiser may meet a net not yet seen and add it,
+    // which would invalidate a range-for's iterators.
+    // NOLINTNEXTLINE(modernize-loop-convert) — see above
+    for (std::size_t index = 0; index < netAssignments.size(); ++index) {
+        const ast::NetSymbol& net = *netAssignments[index];
+        const std::uint32_t objectIndex = objectBySymbol.at(&net);
+        ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
+                                     std::format("assign@{}:{}",
+                                                 shared->slangSources.getFileName(net.location),
+                                                 shared->slangSources.getLineNumber(net.location)),
+                                     convertLocation(net.location));
+
+        if (!translator.translateExpressionInto(objectIndex, *net.getInitializer())) {
+            failed = true;
+            continue;
+        }
+
+        definitionValue.processes.push_back(translator.take());
+    }
+
     return !failed;
+}
+
+bool ModuleBuilder::checkDriveStrength(
+    std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
+    slang::SourceLocation location) {
+    const auto isDefault = [](std::optional<ast::DriveStrength> value) {
+        return !value.has_value() || *value == ast::DriveStrength::Strong;
+    };
+    if (isDefault(strength.first) && isDefault(strength.second)) return true;
+
+    reportUnsupported(location, "a drive strength other than strong");
+    return false;
 }
 
 ModuleBuilder::SensitivityForm
