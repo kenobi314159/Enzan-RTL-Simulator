@@ -35,6 +35,12 @@ module consumer (input logic clk, stream_if.sink in, output logic [7:0] last);
     always_ff @(posedge clk) if (in.valid) last <= in.data;
 endmodule
 
+// Takes an array of interfaces, and reads each element; an interface array's index is a
+// constant, so each is named.
+module counter_bank (stream_if in[2], output logic [7:0] total);
+    assign total = in[0].beats + in[1].beats;
+endmodule
+
 // Passes its interface port straight down to the module that uses it.
 module wrapper (input logic clk, stream_if.sink in, output logic [7:0] last);
     consumer u_consumer (.clk(clk), .in(in), .last(last));
@@ -48,17 +54,30 @@ module tb;
 
     stream_if a (.clk(clk));
     stream_if b (.clk(clk));
+    stream_if bank [2] (.clk(clk));
+    logic [7:0] bank_total;
 
     producer #(.START(8'd10)) u_producer_a (.clk(clk), .out(a));
     producer #(.START(8'd10)) u_producer_b (.clk(clk), .out(b));
     consumer u_consumer_a (.clk(clk), .in(a), .last(last_a));
     wrapper u_wrapper_b (.clk(clk), .in(b), .last(last_b));
+    counter_bank u_bank (.in(bank), .total(bank_total));
 
     always #5 clk = ~clk;
 
     initial begin
         b.valid = 1'b0;
-        #61;
+        bank[0].valid = 1'b0;
+        bank[1].valid = 1'b0;
+        #1;
+        bank[0].beats = 8'd3;
+        bank[1].beats = 8'd4;
+        #1;
+        if (bank_total !== 8'd7) begin
+            $display("FAIL: an array of interfaces through an array port, got %0d", bank_total);
+            failures = failures + 1;
+        end
+        #59;
         $display("a.data=%0d a.beats=%0d last_a=%0d last_b=%0d", a.data, a.beats, last_a,
                  last_b);
         if (a.data !== 8'd15 || last_a !== 8'd14 || last_b !== 8'd14) begin

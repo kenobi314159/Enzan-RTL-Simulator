@@ -1869,6 +1869,15 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
             return Value{.reg = result, .type = resultType};
         }
 
+        // A cast in the form of a call: the bits are the argument's, and only the type that
+        // reads them changes.
+        if ((name == "$signed" || name == "$unsigned") && call.arguments().size() == 1) {
+            const std::optional<eir::Type> type = module->convertType(*expression.type);
+            const std::optional<Value> operand = translateExpression(*call.arguments()[0]);
+            if (!operand.has_value() || !type.has_value()) return std::nullopt;
+            return coerce(*operand, *type);
+        }
+
         if (name == "$isunknown" || name == "$countones" || name == "$onehot"
             || name == "$onehot0") {
             return translateBitCount(name, call, expression);

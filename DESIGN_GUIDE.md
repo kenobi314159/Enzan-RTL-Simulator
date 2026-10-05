@@ -601,7 +601,9 @@ would be right for only one of them. A path that names nothing is an elaboration
 stored under its own path, `/tb/bus/data`. A member a module reaches through an interface port
 is a reference through that port, `@in/data`, and each instance records what its interface
 ports are connected to — an interface instance of its parent, or the parent's own port, which
-is how an interface is passed down. Elaboration follows those bindings, so two instances of
+is how an interface is passed down. An element of an array of instances or interfaces is an
+instance named with its index, `u[2]`, and a port that takes an array reaches its elements as
+`@in[2]/data`. Elaboration follows those bindings, so two instances of
 one definition on two interfaces each reach their own. A modport restricts what a module may
 touch, which slang checks, and changes nothing about where a signal is.
 

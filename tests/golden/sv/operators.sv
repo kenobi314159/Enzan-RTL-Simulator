@@ -257,6 +257,11 @@ module tb;
         end
 
         // --- signedness ---------------------------------------------------
+        if ($signed(4'b1111) >= 0 || $unsigned(-4'sd1) != 4'd15) begin
+            $display("FAIL: $signed and $unsigned");
+            failures = failures + 1;
+        end
+
         if ($signed(8'hFF) >= 0) begin
             $display("FAIL: 8'hff should be negative when signed");
             failures = failures + 1;

@@ -93,6 +93,27 @@ std::optional<slang::TimeUnit> timeUnitOf(std::int8_t exponent) {
     }
 }
 
+/// The index part of an instance's name when it is an element of an instance array, `[2]` or
+/// `[1][0]`, as IEEE 1800 section 23.3.3.5 names it; empty for an instance of its own.
+std::string arraySuffixOf(const ast::InstanceSymbol& instance) {
+    if (instance.arrayPath.empty()) return {};
+    slang::SmallVector<slang::ConstantRange, 4> dimensions;
+    instance.getArrayDimensions(dimensions);
+    std::string suffix;
+    for (std::size_t index = 0; index < instance.arrayPath.size() && index < dimensions.size();
+         ++index) {
+        suffix += std::format("[{}]", static_cast<std::int32_t>(instance.arrayPath[index])
+                                          + dimensions[index].lower());
+    }
+    return suffix;
+}
+
+/// The name an instance has in the module holding it: its own, or its array's with its index.
+std::string instanceName(const ast::InstanceSymbol& instance) {
+    if (instance.arrayPath.empty()) return std::string(instance.name);
+    return std::string(instance.getArrayName()) + arraySuffixOf(instance);
+}
+
 /// The name `symbol` has in the module that declares it, its generate blocks joined to it with
 /// dots as `collectScope` names a hoisted object or an instance (DESIGN_GUIDE.md section 5.1),
 /// and the body that module's instance has; null for the top level's instance, which no body
@@ -100,19 +121,22 @@ std::optional<slang::TimeUnit> timeUnitOf(std::int8_t exponent) {
 std::optional<std::string> nameWithinBody(const ast::Symbol& symbol,
                                           const ast::InstanceBodySymbol*& owner) {
     std::string prefix;
+    std::string ownName = symbol.kind == slang::ast::SymbolKind::Instance
+                              ? instanceName(symbol.as<ast::InstanceSymbol>())
+                              : std::string(symbol.name);
     const ast::Scope* scope = symbol.getParentScope();
     while (scope != nullptr) {
         const ast::Symbol& parent = scope->asSymbol();
         switch (parent.kind) {
         case slang::ast::SymbolKind::InstanceBody:
             owner = &parent.as<ast::InstanceBodySymbol>();
-            return prefix + std::string(symbol.name);
+            return prefix + ownName;
 
         case slang::ast::SymbolKind::Root:
         case slang::ast::SymbolKind::CompilationUnit:
             if (symbol.kind != slang::ast::SymbolKind::Instance) return std::nullopt;
             owner = nullptr;
-            return std::string(symbol.name);
+            return ownName;
 
         case slang::ast::SymbolKind::GenerateBlock: {
             const auto& block = parent.as<ast::GenerateBlockSymbol>();
@@ -137,7 +161,10 @@ std::optional<std::string> nameWithinBody(const ast::Symbol& symbol,
             break;
         }
 
-        case slang::ast::SymbolKind::StatementBlock: scope = parent.getParentScope(); break;
+        // A procedural block's locals are named without it, as collectScope names them, and an
+        // element of an instance array carries its index in its own name already.
+        case slang::ast::SymbolKind::StatementBlock:
+        case slang::ast::SymbolKind::InstanceArray: scope = parent.getParentScope(); break;
 
         // A static property of a class declared in a module is that module's storage, named
         // with its class.
@@ -271,6 +298,18 @@ private:
         std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
         slang::SourceLocation location);
 
+    /// Collects the elements of an instance array, and of the arrays nested in it.
+    void collectInstanceArray(const ast::InstanceArraySymbol& array, const std::string& prefix) {
+        for (const ast::Symbol* element : array.elements) {
+            if (element->kind == slang::ast::SymbolKind::InstanceArray) {
+                collectInstanceArray(element->as<ast::InstanceArraySymbol>(), prefix);
+            } else if (element->kind == slang::ast::SymbolKind::Instance) {
+                instances.push_back(CollectedInstance{
+                    .prefix = prefix, .symbol = &element->as<ast::InstanceSymbol>()});
+            }
+        }
+    }
+
     /// Returns a name not already used by an object in this module.
     std::string uniqueObjectName(std::string_view preferred);
 
@@ -311,14 +350,60 @@ private:
     /// The interface ports of this body, in declaration order.
     std::vector<const ast::InterfacePortSymbol*> interfacePorts;
 
-    /// The interface port of this body that reaches `instance`, or null.
-    [[nodiscard]] const ast::InterfacePortSymbol*
-    portReaching(const ast::InstanceSymbol& instance) const {
+    /// How this body reaches `instance` through one of its interface ports: `@port`, or
+    /// `@port[2]` when the port is an array and the instance one of its elements. Empty when no
+    /// interface port reaches it.
+    [[nodiscard]] std::string portReaching(const ast::InstanceSymbol& instance) const {
         for (const ast::InterfacePortSymbol* port : interfacePorts) {
             const ast::Symbol* connected = port->getConnection().first;
-            if (connected == &instance) return port;
+            if (connected == &instance) return std::format("@{}", port->name);
+            if (connected != nullptr && connected->kind == slang::ast::SymbolKind::InstanceArray
+                && containsElement(connected->as<ast::InstanceArraySymbol>(), instance)) {
+                return std::format("@{}{}", port->name, arraySuffixOf(instance));
+            }
         }
-        return nullptr;
+        return {};
+    }
+
+    /// The instance array, declared in some body, holding exactly the elements of `array`, or
+    /// null: an array slice holds only some of them, and is not supported.
+    static const ast::InstanceArraySymbol* declaredArrayOf(const ast::InstanceArraySymbol& array) {
+        if (array.getParentScope() != nullptr) return &array;
+
+        const ast::Symbol* leaf = &array;
+        while (leaf->kind == slang::ast::SymbolKind::InstanceArray) {
+            const auto& elements = leaf->as<ast::InstanceArraySymbol>().elements;
+            if (elements.empty()) return nullptr;
+            leaf = elements.front();
+        }
+        const ast::Scope* scope = leaf->getParentScope();
+        const ast::InstanceArraySymbol* declared = nullptr;
+        while (scope != nullptr
+               && scope->asSymbol().kind == slang::ast::SymbolKind::InstanceArray) {
+            declared = &scope->asSymbol().as<ast::InstanceArraySymbol>();
+            scope = declared->getParentScope();
+        }
+        if (declared == nullptr || countElements(*declared) != countElements(array)) return nullptr;
+        return declared;
+    }
+
+    static std::size_t countElements(const ast::InstanceArraySymbol& array) {
+        std::size_t count = 0;
+        for (const ast::Symbol* element : array.elements) {
+            count += element->kind == slang::ast::SymbolKind::InstanceArray
+                         ? countElements(element->as<ast::InstanceArraySymbol>())
+                         : 1;
+        }
+        return count;
+    }
+
+    static bool containsElement(const ast::InstanceArraySymbol& array,
+                                const ast::InstanceSymbol& instance) {
+        return std::ranges::any_of(array.elements, [&instance](const ast::Symbol* element) {
+            if (element == &instance) return true;
+            return element->kind == slang::ast::SymbolKind::InstanceArray
+                   && containsElement(element->as<ast::InstanceArraySymbol>(), instance);
+        });
     }
 
     /// Nets declared with an assignment, `wire w = a & b;`, which is a continuous assignment
@@ -521,10 +606,8 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
         // interface it happens to be connected to here: one definition serves every instance,
         // and each may be connected to a different one.
         if (owner->parentInstance != nullptr) {
-            if (const ast::InterfacePortSymbol* port = portReaching(*owner->parentInstance)) {
-                return referenceThrough(symbol, std::format("@{}/{}", port->name, *nameThere),
-                                        *type);
-            }
+            if (const std::string port = portReaching(*owner->parentInstance); !port.empty())
+                return referenceThrough(symbol, std::format("{}/{}", port, *nameThere), *type);
         }
         return referenceTo(symbol, *owner, *nameThere, *type);
     }
@@ -645,6 +728,11 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
         case slang::ast::SymbolKind::Instance:
             instances.push_back(
                 CollectedInstance{.prefix = prefix, .symbol = &member.as<ast::InstanceSymbol>()});
+            break;
+
+        case slang::ast::SymbolKind::InstanceArray:
+            // Each element is an instance of its own, named with its index.
+            collectInstanceArray(member.as<ast::InstanceArraySymbol>(), prefix);
             break;
 
         case slang::ast::SymbolKind::GenerateBlock: {
@@ -853,15 +941,33 @@ bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
         const auto& interface = connected->as<ast::InstanceSymbol>();
         const ast::InstanceBodySymbol* owner = nullptr;
         const std::optional<std::string> name = nameWithinBody(interface, owner);
-        if (name.has_value() && owner == body) {
-            target = *name;
-        } else if (const ast::InterfacePortSymbol* port = portReaching(interface)) {
-            target = std::format("@{}", port->name);
+        target = name.has_value() && owner == body ? *name : portReaching(interface);
+    } else if (connected != nullptr && connected->kind == slang::ast::SymbolKind::InstanceArray) {
+        // A whole array, to an array port: what the elements are called here, or the port of
+        // this body it arrived through. slang hands the connection over as an array of its own,
+        // outside any scope, so the array is found through its elements.
+        if (const ast::InstanceArraySymbol* array =
+                declaredArrayOf(connected->as<ast::InstanceArraySymbol>())) {
+            const ast::InstanceBodySymbol* owner = nullptr;
+            const std::optional<std::string> name = nameWithinBody(*array, owner);
+            if (name.has_value() && owner == body) {
+                target = *name;
+            } else {
+                for (const ast::InterfacePortSymbol* port : interfacePorts) {
+                    const ast::Symbol* reached = port->getConnection().first;
+                    if (reached != nullptr && reached->kind == slang::ast::SymbolKind::InstanceArray
+                        && declaredArrayOf(reached->as<ast::InstanceArraySymbol>()) == array)
+                        target = std::format("@{}", port->name);
+                }
+            }
         }
     }
     if (target.empty()) {
-        reportUnsupported(instance.location, std::format("the connection of interface port '{}'",
-                                                         connection.port.name));
+        reportUnsupported(
+            instance.location,
+            std::format("the connection of interface port '{}' to {}", connection.port.name,
+                        connected == nullptr ? std::string_view("nothing")
+                                             : slang::ast::toString(connected->kind)));
         return false;
     }
     result.interfaceBindings.push_back(
@@ -1043,7 +1149,7 @@ bool ModuleBuilder::addInstance(
     // Named with the generate blocks it is inside, as an object is: two iterations of a loop
     // each instantiating `u` are otherwise two instances with one name, and one path.
     eir::Instance result;
-    result.name = prefix + std::string(instance.name);
+    result.name = prefix + instanceName(instance);
     result.definitionName = targetName;
     result.location = convertLocation(instance.location);
 

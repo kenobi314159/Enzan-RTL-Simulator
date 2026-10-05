@@ -339,14 +339,19 @@ private:
         for (const eir::InterfaceBinding& binding : child.interfaceBindings) {
             std::string target;
             if (binding.target.starts_with('@')) {
-                const auto& through = result->instanceList[parentIndex].interfaces;
-                const auto found = through.find(std::string_view(binding.target).substr(1));
-                if (found == through.end()) {
+                // `@port`, or `@port[2]` for an element of an interface array the parent
+                // received through an array port.
+                const std::string_view through = std::string_view(binding.target).substr(1);
+                const std::size_t index = through.find('[');
+                const auto& bound = result->instanceList[parentIndex].interfaces;
+                const auto found = bound.find(through.substr(0, index));
+                if (found == bound.end()) {
                     diagnostics.report(DiagCode::UnresolvedHierarchicalReference, child.location,
                                        binding.target, result->instanceList[parentIndex].path);
                     return false;
                 }
                 target = found->second;
+                if (index != std::string_view::npos) target += through.substr(index);
             } else {
                 target = result->instanceList[parentIndex].path + '/' + binding.target;
             }
@@ -370,9 +375,14 @@ private:
                 std::string base = instance.path;
                 std::string_view rest = reference;
                 if (rest.starts_with('@')) {
+                    // The port's name runs to an index, `@in[2]/data`, or to the member.
                     const std::size_t slash = rest.find('/');
-                    const auto found = instance.interfaces.find(rest.substr(1, slash - 1));
+                    const std::string_view through = rest.substr(1, slash - 1);
+                    const std::size_t index = through.find('[');
+                    const auto found = instance.interfaces.find(through.substr(0, index));
                     base = found != instance.interfaces.end() ? found->second : std::string();
+                    if (!base.empty() && index != std::string_view::npos)
+                        base += through.substr(index);
                     rest = slash == std::string_view::npos ? std::string_view()
                                                            : rest.substr(slash + 1);
                 }

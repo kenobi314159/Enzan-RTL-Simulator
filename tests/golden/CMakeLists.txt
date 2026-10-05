@@ -117,6 +117,9 @@ enzan_add_golden_test(hierarchical)
 # Icarus Verilog cannot parse an interface with ports or modports, so the case checks itself.
 enzan_add_golden_test(interfaces NO_DIFFERENTIAL)
 
+# Arrays of instances, with connections split across the elements.
+enzan_add_golden_test(instance_arrays)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------
