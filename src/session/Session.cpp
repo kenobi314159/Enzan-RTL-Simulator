@@ -176,6 +176,7 @@ bool Session::analyse(const AnalysisRequest& request) {
     options.buffers = buffers;
     options.defines = defines;
     options.includeDirectories = includeDirectories;
+    options.timeUnitExponent = scale.precisionExponent();
 
     std::unique_ptr<eir::Design> analysed = frontend::sv::analyse(options, sources, diagnostics);
     if (analysed == nullptr) return false;

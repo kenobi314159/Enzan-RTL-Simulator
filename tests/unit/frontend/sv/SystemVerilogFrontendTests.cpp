@@ -967,6 +967,22 @@ TEST_F(FrontendTest, AHierarchicalReferenceIsAPathFromTheInstanceHoldingIt) {
     EXPECT_EQ(referencesOf(*leaf), (std::vector<std::string>{"../u_other/value"}));
 }
 
+TEST_F(FrontendTest, AModuleWithoutATimescaleBesideOneWithIsAccepted) {
+    // IEEE 1800 makes the mixture an error and slang enforces it, but simulators warn and real
+    // designs rely on that; Enzan counts delays in its own unit, which is the default given.
+    const std::unique_ptr<Design> design = analyse(R"(
+        `timescale 1ns / 1ps
+        module top;
+            leaf u ();
+        endmodule
+        `resetall
+        module leaf;
+        endmodule
+    )",
+                                                   "top");
+    EXPECT_NE(design, nullptr) << consumer.messages.front();
+}
+
 TEST_F(FrontendTest, ReportsARecursiveCall) {
     // An inlined body cannot contain itself.
     EXPECT_EQ(analyse(R"(

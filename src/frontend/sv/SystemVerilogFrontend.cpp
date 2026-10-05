@@ -32,6 +32,7 @@
 #include "slang/ast/types/Type.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/Diagnostics.h"
+#include "slang/numeric/Time.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/SourceManager.h"
@@ -77,6 +78,19 @@ const ast::Expression& externalSideOf(const ast::Expression& expression,
     const ast::Expression& external =
         direction == slang::ast::ArgumentDirection::Out ? assignment.left() : assignment.right();
     return withoutConversions(external);
+}
+
+/// slang's unit for a power of ten of a second, when it has one.
+std::optional<slang::TimeUnit> timeUnitOf(std::int8_t exponent) {
+    switch (exponent) {
+    case 0: return slang::TimeUnit::Seconds;
+    case -3: return slang::TimeUnit::Milliseconds;
+    case -6: return slang::TimeUnit::Microseconds;
+    case -9: return slang::TimeUnit::Nanoseconds;
+    case -12: return slang::TimeUnit::Picoseconds;
+    case -15: return slang::TimeUnit::Femtoseconds;
+    default: return std::nullopt;
+    }
 }
 
 /// The name `symbol` has in the module that declares it, its generate blocks joined to it with
@@ -1207,6 +1221,10 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
 
     slang::ast::CompilationOptions compilationOptions;
     for (const std::string& top : options.topModules) compilationOptions.topModules.insert(top);
+    if (const std::optional<slang::TimeUnit> unit = timeUnitOf(options.timeUnitExponent)) {
+        const slang::TimeScaleValue value(*unit, slang::TimeScaleMagnitude::One);
+        compilationOptions.defaultTimeScale = slang::TimeScale(value, value);
+    }
     bag.set(compilationOptions);
 
     slang::ast::Compilation compilation(bag);
