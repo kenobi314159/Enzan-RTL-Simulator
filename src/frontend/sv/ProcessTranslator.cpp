@@ -474,6 +474,10 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
 
     case ast::StatementKind::Wait: return translateWait(statement);
 
+    case ast::StatementKind::ForeachLoop: return translateForeachLoop(statement);
+    case ast::StatementKind::Break: return translateLoopJump(statement, true);
+    case ast::StatementKind::Continue: return translateLoopJump(statement, false);
+
     default:
         module->reportUnsupported(statement.sourceRange.start(),
                                   std::string(toString(statement.kind)) + " statements");
@@ -793,7 +797,10 @@ bool ProcessTranslator::translateForLoop(const ast::Statement& statement) {
     }
 
     selectBlock(bodyBlock);
-    if (!translateStatement(loop.body)) return false;
+    loopTargets.push_back(LoopTargets{.continueBlock = stepBlock, .breakBlock = exitBlock});
+    const bool translated = translateStatement(loop.body);
+    loopTargets.pop_back();
+    if (!translated) return false;
     if (!currentBlockTerminated())
         emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(stepBlock)));
 
@@ -837,7 +844,10 @@ bool ProcessTranslator::translateWhileLoop(const ast::Statement& statement, bool
                                 eir::Operand::block(bodyBlock), eir::Operand::block(exitBlock)));
 
     selectBlock(bodyBlock);
-    if (!translateStatement(*body)) return false;
+    loopTargets.push_back(LoopTargets{.continueBlock = testBlock, .breakBlock = exitBlock});
+    const bool translated = translateStatement(*body);
+    loopTargets.pop_back();
+    if (!translated) return false;
     if (!currentBlockTerminated())
         emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(testBlock)));
 
@@ -867,6 +877,7 @@ bool ProcessTranslator::translateRepeatLoop(const ast::Statement& statement) {
 
     const std::uint32_t testBlock = newBlock("repeat-test");
     const std::uint32_t bodyBlock = newBlock("repeat-body");
+    const std::uint32_t stepBlock = newBlock("repeat-step");
     const std::uint32_t exitBlock = newBlock("repeat-exit");
 
     emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(oneRegister),
@@ -883,15 +894,20 @@ bool ProcessTranslator::translateRepeatLoop(const ast::Statement& statement) {
                                 eir::Operand::block(bodyBlock), eir::Operand::block(exitBlock)));
 
     selectBlock(bodyBlock);
-    if (!translateStatement(loop.body)) return false;
-    if (!currentBlockTerminated()) {
-        const std::uint32_t decremented = newRegister(counterType);
-        emit(eir::Instruction::make(eir::Opcode::Subtract, eir::Operand::reg(decremented),
-                                    eir::Operand::reg(counter), eir::Operand::reg(oneRegister)));
-        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(counter),
-                                    eir::Operand::reg(decremented)));
-        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(testBlock)));
-    }
+    loopTargets.push_back(LoopTargets{.continueBlock = stepBlock, .breakBlock = exitBlock});
+    const bool translated = translateStatement(loop.body);
+    loopTargets.pop_back();
+    if (!translated) return false;
+    if (!currentBlockTerminated())
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(stepBlock)));
+
+    selectBlock(stepBlock);
+    const std::uint32_t decremented = newRegister(counterType);
+    emit(eir::Instruction::make(eir::Opcode::Subtract, eir::Operand::reg(decremented),
+                                eir::Operand::reg(counter), eir::Operand::reg(oneRegister)));
+    emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(counter),
+                                eir::Operand::reg(decremented)));
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(testBlock)));
 
     selectBlock(exitBlock);
     return true;
@@ -901,19 +917,122 @@ bool ProcessTranslator::translateForeverLoop(const ast::Statement& statement) {
     const auto& loop = statement.as<ast::ForeverLoopStatement>();
 
     const std::uint32_t bodyBlock = newBlock("forever-body");
+    const std::uint32_t exitBlock = newBlock("forever-exit");
     emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(bodyBlock)));
 
     selectBlock(bodyBlock);
-    if (!translateStatement(loop.body)) return false;
+    loopTargets.push_back(LoopTargets{.continueBlock = bodyBlock, .breakBlock = exitBlock});
+    const bool translated = translateStatement(loop.body);
+    loopTargets.pop_back();
+    if (!translated) return false;
     if (!currentBlockTerminated())
         emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(bodyBlock)));
 
-    // Nothing follows a `forever` loop, so a fresh block is created only so that the
-    // caller has an unterminated one to continue in; it stays empty and is removed by
-    // being unreachable. Emitting a Return keeps every block well formed.
-    const std::uint32_t afterBlock = newBlock("forever-after");
-    selectBlock(afterBlock);
-    emit(eir::Instruction::make(eir::Opcode::Return));
+    // Only a `break` reaches what follows a `forever`.
+    selectBlock(exitBlock);
+    return true;
+}
+
+bool ProcessTranslator::translateForeachLoop(const ast::Statement& statement) {
+    const auto& loop = statement.as<ast::ForeachLoopStatement>();
+
+    // The dimensions it names; a skipped one, `foreach (a[, j])`, takes no loop.
+    std::vector<std::pair<const ast::IteratorSymbol*, slang::ConstantRange>> dimensions;
+    for (const ast::ForeachLoopStatement::LoopDim& dimension : loop.loopDims) {
+        if (dimension.loopVar == nullptr) continue;
+        if (!dimension.range.has_value()) {
+            module->reportUnsupported(statement.sourceRange.start(),
+                                      "`foreach` over a dimension of no fixed size");
+            failed = true;
+            return false;
+        }
+        dimensions.emplace_back(dimension.loopVar, *dimension.range);
+    }
+
+    // `break` leaves the whole statement, however many dimensions it runs over.
+    const std::uint32_t exitBlock = newBlock("foreach-exit");
+
+    // One counting loop per dimension, outermost first, each restarting the one inside it.
+    std::vector<std::uint32_t> stepBlocks;
+    for (const auto& [loopVariable, range] : dimensions) {
+        const std::optional<eir::Type> type = module->convertType(loopVariable->getType());
+        if (!type.has_value()) {
+            failed = true;
+            return false;
+        }
+        const std::uint32_t iterator = newRegister(*type);
+        locals[loopVariable] = Value{.reg = iterator, .type = *type};
+
+        const std::int64_t left = range.left;
+        const std::int64_t right = range.right;
+        const auto load = [&](std::int64_t value) {
+            const std::uint32_t result = newRegister(*type);
+            emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                        eir::Operand::constant(addConstant(
+                                            eir::BitVector::fromInt64(value, type->bitWidth())))));
+            return Value{.reg = result, .type = *type};
+        };
+
+        const Value start = load(left);
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(iterator),
+                                    eir::Operand::reg(start.reg)));
+
+        const std::uint32_t testBlock = newBlock("foreach-test");
+        const std::uint32_t bodyBlock = newBlock("foreach-body");
+        const std::uint32_t stepBlock = newBlock("foreach-step");
+        const std::uint32_t outer = stepBlocks.empty() ? exitBlock : stepBlocks.back();
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(testBlock)));
+
+        // From the left bound to the right, counting up or down as they lie.
+        selectBlock(testBlock);
+        const Value bound = load(right);
+        const Value inside = compare(eir::Opcode::LessEqual,
+                                     left <= right ? Value{.reg = iterator, .type = *type} : bound,
+                                     left <= right ? bound : Value{.reg = iterator, .type = *type});
+        emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(inside.reg),
+                                    eir::Operand::block(bodyBlock), eir::Operand::block(outer)));
+
+        selectBlock(stepBlock);
+        const Value step = load(left <= right ? 1 : -1);
+        const std::uint32_t next = newRegister(*type);
+        emit(eir::Instruction::make(eir::Opcode::Add, eir::Operand::reg(next),
+                                    eir::Operand::reg(iterator), eir::Operand::reg(step.reg)));
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(iterator),
+                                    eir::Operand::reg(next)));
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(testBlock)));
+
+        stepBlocks.push_back(stepBlock);
+        selectBlock(bodyBlock);
+    }
+
+    const std::uint32_t innermost = stepBlocks.empty() ? exitBlock : stepBlocks.back();
+    loopTargets.push_back(LoopTargets{.continueBlock = innermost, .breakBlock = exitBlock});
+    const bool translated = translateStatement(loop.body);
+    loopTargets.pop_back();
+    if (!translated) return false;
+    if (!currentBlockTerminated())
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(innermost)));
+
+    selectBlock(exitBlock);
+    return true;
+}
+
+bool ProcessTranslator::translateLoopJump(const ast::Statement& statement, bool isBreak) {
+    // slang refuses either outside a loop; one inside a subroutine called from a loop is
+    // outside it too, since a subroutine is no part of the loop that calls it.
+    if (loopTargets.empty()) {
+        module->reportUnsupported(statement.sourceRange.start(),
+                                  isBreak ? "`break` outside a loop" : "`continue` outside a loop");
+        failed = true;
+        return false;
+    }
+    const LoopTargets& targets = loopTargets.back();
+    emit(eir::Instruction::make(
+        eir::Opcode::Jump, {},
+        eir::Operand::block(isBreak ? targets.breakBlock : targets.continueBlock)));
+
+    // Anything after it is unreachable but still has to be emitted somewhere.
+    selectBlock(newBlock(isBreak ? "after-break" : "after-continue"));
     return true;
 }
 

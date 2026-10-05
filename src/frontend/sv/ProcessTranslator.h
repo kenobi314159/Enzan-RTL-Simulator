@@ -230,6 +230,14 @@ private:
     bool translateWhileLoop(const slang::ast::Statement& statement, bool testFirst);
     bool translateRepeatLoop(const slang::ast::Statement& statement);
     bool translateForeverLoop(const slang::ast::Statement& statement);
+
+    /// `foreach` over fixed dimensions: a counting loop per dimension it names, from the
+    /// dimension's left bound to its right, with the iterators in registers.
+    bool translateForeachLoop(const slang::ast::Statement& statement);
+
+    /// `break` and `continue`, which jump to the innermost loop's exit and to where its next
+    /// iteration starts.
+    bool translateLoopJump(const slang::ast::Statement& statement, bool isBreak);
     bool translateTimed(const slang::ast::Statement& statement);
     bool translateReturn(const slang::ast::Statement& statement);
     bool translateImmediateAssertion(const slang::ast::Statement& statement);
@@ -459,6 +467,14 @@ private:
     /// nonblocking `a <= #d b`, or a continuous `assign #d a = b`. Its stores are the delayed
     /// forms, and a store the delayed forms cannot express is refused rather than undelayed.
     std::optional<std::uint32_t> storeDelay;
+
+    /// Where `continue` and `break` go in each enclosing loop, innermost last.
+    struct LoopTargets {
+        std::uint32_t continueBlock = 0;
+        std::uint32_t breakBlock = 0;
+    };
+
+    std::vector<LoopTargets> loopTargets;
     eir::Process process;
     std::uint32_t current = 0;
 

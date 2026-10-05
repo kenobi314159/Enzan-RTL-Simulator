@@ -144,6 +144,11 @@ enzan_add_golden_test(type_parameters NO_DIFFERENTIAL)
 # Packages, and package variables shared by every module that uses them.
 enzan_add_golden_test(packages)
 
+# Loops: `break`, `continue` and `foreach`. A `break` in a `foreach` of two dimensions leaves the
+# whole statement, as Verilator does, where Icarus Verilog leaves only the inner dimension.
+enzan_add_golden_test(loops)
+enzan_add_golden_test(foreach_break NO_DIFFERENTIAL)
+
 # File output, and memories loaded from files the design writes first: compared file by file
 # with what Icarus Verilog does, each in an empty directory, so they need it.
 if(ENZAN_REFERENCE_SIMULATOR)

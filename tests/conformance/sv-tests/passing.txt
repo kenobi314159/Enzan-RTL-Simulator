@@ -87,6 +87,9 @@ chapter-12/12.5.4--case_set.sv
 chapter-12/12.5--case.sv
 chapter-12/12.7.1--for.sv
 chapter-12/12.7.2--repeat.sv
+chapter-12/12.7.3--foreach-synth.sv
+chapter-12/12.8--break.sv
+chapter-12/12.8--continue.sv
 chapter-12/12.8--return.sv
 chapter-12/12.8--return_val.sv
 chapter-13/13.3.1--task-automatic.sv

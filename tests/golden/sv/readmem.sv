@@ -33,7 +33,7 @@ module tb;
         $fdisplay(file, "z111");
         $fclose(file);
 
-        for (int i = 0; i < 8; i++) ranged[i] = 8'hee;
+        foreach (ranged[i]) ranged[i] = 8'hee;
 
         $readmemh("words.hex", ascending);
         $readmemh("words.hex", descending);
