@@ -607,6 +607,73 @@ TEST_F(FrontendTest, ANetDeclarationAssignmentIsAContinuousAssignment) {
               (std::vector<std::vector<WriteExtent>>{{extent(top, "w", 0, 4)}}));
 }
 
+TEST_F(FrontendTest, AnUnpackedArrayIsStoredFlatAndKeepsItsDimensions) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [7:0] memory [0:15];
+            logic [3:0] grid [2:0][0:3];
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+
+    using enzan::eir::UnpackedDimension;
+    const enzan::eir::Object& memory = found->objects[require(found->findObject("memory"))];
+    EXPECT_EQ(memory.type.bitWidth(), 128U);
+    EXPECT_EQ(memory.elementWidth, 8U);
+    EXPECT_EQ(memory.unpackedDimensions,
+              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 0, .right = 15}}));
+
+    const enzan::eir::Object& grid = found->objects[require(found->findObject("grid"))];
+    EXPECT_EQ(grid.type.bitWidth(), 48U);
+    EXPECT_EQ(grid.elementWidth, 4U);
+    EXPECT_EQ(grid.unpackedDimensions,
+              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 2, .right = 0},
+                                              UnpackedDimension{.left = 0, .right = 3}}));
+}
+
+TEST_F(FrontendTest, AnElementOrMemberWritesItsOwnBitsOfTheFlatStorage) {
+    // The left element is highest: element 0 of `[0:3]` is bits [31:24], and `[3:0]` puts
+    // element 3 there. A struct's first member is highest too.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            typedef struct { logic [3:0] a; logic [11:0] b; } record_t;
+            logic [7:0] up [0:3];
+            logic [7:0] down [3:0];
+            record_t    record;
+            logic [7:0] value;
+            assign up[0] = value;
+            assign down[0] = value;
+            assign record.a = value[3:0];
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    using Extents = std::vector<std::vector<WriteExtent>>;
+    EXPECT_EQ(extentsOf(top, "up"), (Extents{{extent(top, "up", 24, 8)}}));
+    EXPECT_EQ(extentsOf(top, "down"), (Extents{{extent(top, "down", 0, 8)}}));
+    EXPECT_EQ(extentsOf(top, "record"), (Extents{{extent(top, "record", 12, 4)}}));
+}
+
+TEST_F(FrontendTest, AnAscendingPackedRangeHasItsLeftIndexMostSignificant) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [0:7] a;
+            logic       b;
+            assign a[0] = b;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(extentsOf(*found, "a"),
+              (std::vector<std::vector<WriteExtent>>{{extent(*found, "a", 7, 1)}}));
+}
+
 TEST_F(FrontendTest, ConstantSelectsWriteExactlyTheirBitsAndTouchingOnesMerge) {
     const std::unique_ptr<Design> design = analyse(R"(
         module top;
@@ -895,21 +962,6 @@ TEST_F(FrontendTest, AToleranceRangeInAnInsideSetIsRefused) {
         endmodule
     )"),
               nullptr);
-}
-
-TEST_F(FrontendTest, ReportsAnAscendingDeclaredRange) {
-    // `logic [0:7]` puts the most significant bit at index zero, and getting that backwards
-    // silently reverses every select.
-    EXPECT_EQ(analyse(R"(
-        module m;
-            logic [0:7] a = 8'd0;
-            logic       y;
-            always_comb y = a[3];
-        endmodule
-    )"),
-              nullptr);
-    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-    EXPECT_TRUE(reported("ascending"));
 }
 
 TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {

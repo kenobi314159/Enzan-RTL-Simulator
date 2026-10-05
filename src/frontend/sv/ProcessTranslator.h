@@ -7,6 +7,8 @@
 #include "eir/Process.h"
 #include "eir/Type.h"
 
+#include "slang/numeric/ConstantValue.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -20,7 +22,9 @@ class SourceLocation;
 
 namespace slang::ast {
 class CallExpression;
+class ElementSelectExpression;
 class Expression;
+class MemberAccessExpression;
 class RangeSelectExpression;
 class Statement;
 class TimingControl;
@@ -57,6 +61,11 @@ public:
 
     /// Converts a slang type to an EIR type, or nothing if it is not supported.
     virtual std::optional<eir::Type> convertType(const slang::ast::Type& type) = 0;
+
+    /// The bits of a constant of `type`, laid out as the storage of that type lays them out,
+    /// or nothing when the constant is not one Enzan can hold.
+    virtual std::optional<eir::BitVector> constantBits(const slang::ConstantValue& value,
+                                                       const slang::ast::Type& type) = 0;
 
     /// Maps a slang source location into Enzan's source manager.
     virtual SourceLocation convertLocation(slang::SourceLocation location) = 0;
@@ -214,10 +223,9 @@ private:
     std::optional<Value> translateConditionalExpression(const slang::ast::Expression& expression);
     std::optional<Value> translateConcatenation(const slang::ast::Expression& expression);
     std::optional<Value> translateReplication(const slang::ast::Expression& expression);
-    std::optional<Value> translateElementSelect(const slang::ast::Expression& expression);
-    std::optional<Value> translateRangeSelect(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
     std::optional<Value> translateInside(const slang::ast::Expression& expression);
+    std::optional<Value> translateAssignmentPattern(const slang::ast::Expression& expression);
 
     /// `$isunknown`, `$countones`, `$onehot` and `$onehot0` (IEEE 1800 section 20.9).
     std::optional<Value> translateBitCount(std::string_view name,
@@ -259,36 +267,73 @@ private:
     /// would silently read one bit of a byte.
     static std::uint32_t elementBitsOf(const slang::ast::Type& type);
 
-    /// Scales a declared index to a bit offset, accounting for the element width.
-    std::optional<Value> scaleIndexToBitOffset(const Value& index, std::int32_t rangeLow,
-                                               std::uint32_t elementBits);
+    /// Where a value lives: a window of an object's storage, or of a register holding a value
+    /// that is not an object (see `locate`).
+    struct Location {
+        /// The object the window is in, or `NoObject` when it is in `root`.
+        std::uint32_t objectIndex = NoObject;
 
-    /// Converts a declared index into a bit offset.
-    ///
-    /// A declared range such as `[15:8]` puts its least significant bit at index 8, so a
-    /// select of index 8 addresses bit 0 of the storage. The subtraction is emitted only
-    /// when the range's low bound is not zero, which is the overwhelmingly common case.
-    Value shiftIndexToBitOffset(const Value& index, std::int32_t rangeLow);
+        /// The value the window is in, when it is not in an object.
+        Value root;
 
-    /// Computes the bit offset of the low end of a range select.
-    std::optional<Value> lowBitOfRangeSelect(const slang::ast::RangeSelectExpression& select,
-                                             std::int32_t rangeLow, eir::Type partType,
-                                             std::uint32_t elementBits);
+        /// The type of the window itself.
+        eir::Type type;
 
-    /// The bits a write through a range select drives, as a low bit and a width: exactly its
-    /// bits when its position is constant, and everything it could reach when it is not.
-    std::pair<std::int64_t, std::int64_t>
-    writtenBitsOfRangeSelect(const slang::ast::RangeSelectExpression& select, std::int32_t rangeLow,
-                             std::uint32_t elementBits, std::uint32_t width,
-                             std::uint32_t objectWidth);
+        /// The window's low bit, when every select on the way to it was constant.
+        std::optional<std::int64_t> constantLow;
 
-    /// Returns the object a select is being written through, or nothing having reported
-    /// why.
-    ///
-    /// Writing through anything but a plain signal reference — a select of a select, a
-    /// function call result — is refused rather than approximated, because a write to the
-    /// wrong bits is indistinguishable from a design bug.
-    std::optional<std::uint32_t> objectOfLValue(const slang::ast::Expression& base);
+        /// The window's low bit as a register, when some select was not constant.
+        std::optional<Value> low;
+
+        /// True when the window is the whole of the object or value.
+        bool whole = true;
+
+        /// True when a constant select fell outside its dimension: a read gives the type's
+        /// default and a write does nothing.
+        bool outOfRange = false;
+
+        /// The bits a write here could reach, for the write set when the window moves.
+        std::int64_t reachLow = 0;
+        std::int64_t reachWidth = 0;
+
+        static constexpr std::uint32_t NoObject = 0xFFFF'FFFFU;
+
+        [[nodiscard]] bool inObject() const noexcept { return objectIndex != NoObject; }
+    };
+
+    /// Places `expression` as a window, composing every select and member access on the way to
+    /// an object, or to a value that is not one. Returns nothing having reported why.
+    std::optional<Location> locate(const slang::ast::Expression& expression);
+    std::optional<Location> locateElement(const slang::ast::ElementSelectExpression& select);
+    std::optional<Location> locateRange(const slang::ast::RangeSelectExpression& select);
+    std::optional<Location> locateMember(const slang::ast::MemberAccessExpression& access);
+
+    /// `base` narrowed to a window of `type` at a further offset, constant or in a register.
+    Location narrowed(const Location& base, std::optional<std::int64_t> constantLow,
+                      std::optional<Value> low, eir::Type type);
+
+    /// Reads a window: in place for an object, by a part select for a value.
+    std::optional<Value> readLocation(const Location& location);
+
+    /// Writes `value` into a window of an object, with a store or a part store, and records
+    /// the bits it drives. `target` is where a diagnostic points.
+    bool writeLocation(const slang::ast::Expression& target, const Location& location,
+                       const Value& value, bool nonBlocking);
+
+    /// The window's low bit as a register, loading it when it is constant.
+    Value lowOf(const Location& location);
+
+    /// A 64-bit signed constant, for offset arithmetic.
+    Value offsetConstant(std::int64_t offset);
+
+    /// `left opcode right` on offsets, both extended to the wider of the two.
+    Value offsetArithmetic(eir::Opcode opcode, const Value& left, const Value& right);
+
+    /// The bit offset of element `index` of a dimension declared `range`, `stride` bits apart.
+    Value positionValue(const Value& index, slang::ConstantRange range, std::uint32_t stride);
+
+    /// `offset` where `index` lies within `range`, and X where it does not.
+    Value checkedOffset(const Value& offset, const Value& index, slang::ConstantRange range);
 
     ModuleContext* module;
 

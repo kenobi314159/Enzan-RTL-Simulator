@@ -50,6 +50,12 @@ need the assignment to run the other way.
 body would produce a design that simulates and gives the wrong answer, which section 1.2
 ranks as the worst possible outcome. Refusing to elaborate is the safe failure.
 
+**A select or member access is a window of bits.** Unpacked arrays and structs are stored
+flat (DESIGN_GUIDE.md section 4.3), so `mem[i].field[3:0]` composes into one offset into one
+object and is read with `ReadObjectPart` and written with a part store. An index that could
+land past an inner dimension is checked, and outside it the offset is X, which reads as X and
+writes nothing.
+
 **Declarations are hoisted, keeping their scope in their name.** A generate block's
 variables become module objects called `genblk1.q`, and block-local variables are created
 on demand when something references them. Creating on demand rather than requiring every
@@ -61,12 +67,12 @@ attached breaks when it is rebased.
 
 Reported as `ENZ1004` with the construct named, rather than mistranslated:
 
-- unpacked arrays, `real`, `string` and class types (packed vectors, structs, arrays and
-  enums all work, because slang makes them integral);
+- dynamic and associative arrays, queues, unpacked unions, `real`, `string` and class types
+  (packed vectors, structs and arrays, enums, and fixed-size unpacked arrays and structs all
+  work);
 - user-defined tasks and functions, and every system function but `$time`, `$isunknown`,
   `$countones`, `$onehot` and `$onehot0`;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
-- an ascending declared range such as `logic [0:7]`;
 - an event control on an expression, or an event list inside a body rather than on a block
   header;
 - a timing control on an assignment, such as `a <= #5 b`, and a delay on a continuous

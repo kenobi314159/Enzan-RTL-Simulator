@@ -4,6 +4,7 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "eir/BitOps.h"
 #include "eir/Module.h"
 #include "eir/Verifier.h"
 #include "frontend/sv/ProcessTranslator.h"
@@ -37,9 +38,11 @@
 #include "slang/util/Bag.h"
 
 #include <format>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string_view>
 #include <utility>
 
@@ -134,6 +137,9 @@ public:
     std::optional<std::uint32_t> objectFor(const ast::ValueSymbol& symbol) override;
 
     std::optional<eir::Type> convertType(const ast::Type& type) override;
+
+    std::optional<eir::BitVector> constantBits(const slang::ConstantValue& value,
+                                               const ast::Type& type) override;
 
     SourceLocation convertLocation(slang::SourceLocation location) override;
 
@@ -258,15 +264,79 @@ std::uint32_t ModuleBuilder::enumFor(const ast::Type& type) {
 
 std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
     // Packed types — vectors, packed structs, packed arrays, enums — are all integral to
-    // slang and all behave as bit vectors, so they convert for free. Unpacked aggregates,
-    // reals and strings do not, and are reported where they are used rather than here, so
-    // that the diagnostic points at the user's line.
-    if (!type.isIntegral()) return std::nullopt;
+    // slang and all behave as bit vectors, so they convert for free.
+    if (type.isIntegral()) {
+        const slang::bitwidth_t width = type.getBitWidth();
+        if (width == 0) return std::nullopt;
+        return eir::Type::bits(width, type.isSigned(), type.isFourState());
+    }
 
-    const slang::bitwidth_t width = type.getBitWidth();
-    if (width == 0) return std::nullopt;
+    // A fixed-size unpacked array and an unpacked struct are stored flat, as the vector of all
+    // their bits (DESIGN_GUIDE.md section 4.3): every operation the language allows on one as
+    // a whole — assignment, equality, a port connection — is then the same operation on bits.
+    // Reals, strings, unions, dynamic arrays and classes are none of these, and are reported
+    // where they are used, so that the diagnostic points at the user's line.
+    const ast::Type& canonical = type.getCanonicalType();
+    std::uint64_t width = 0;
+    bool fourState = false;
 
-    return eir::Type::bits(width, type.isSigned(), type.isFourState());
+    if (canonical.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+        const auto& array = canonical.as<ast::FixedSizeUnpackedArrayType>();
+        const std::optional<eir::Type> element = convertType(array.elementType);
+        if (!element.has_value()) return std::nullopt;
+        width = std::uint64_t{element->bitWidth()} * array.range.width();
+        fourState = element->isFourState();
+    } else if (canonical.kind == slang::ast::SymbolKind::UnpackedStructType) {
+        for (const ast::FieldSymbol* field : canonical.as<ast::UnpackedStructType>().fields) {
+            const std::optional<eir::Type> member = convertType(field->getType());
+            if (!member.has_value()) return std::nullopt;
+            width += member->bitWidth();
+            fourState = fourState || member->isFourState();
+        }
+    } else {
+        return std::nullopt;
+    }
+
+    if (width == 0 || width > std::numeric_limits<std::uint32_t>::max()) return std::nullopt;
+    return eir::Type::bits(static_cast<std::uint32_t>(width), false, fourState);
+}
+
+std::optional<eir::BitVector> ModuleBuilder::constantBits(const slang::ConstantValue& value,
+                                                          const ast::Type& type) {
+    const std::optional<eir::Type> converted = convertType(type);
+    if (!converted.has_value()) return std::nullopt;
+
+    if (value.isInteger()) {
+        // One shared conversion, because the X/Z encodings of slang and Enzan differ and two
+        // copies of that mapping means one of them is wrong.
+        return toBitVector(value.integer()).resized(converted->bitWidth(), type.isSigned());
+    }
+    if (!value.isUnpacked()) return std::nullopt;
+
+    // The elements in order, the first one highest, as the storage lays them out.
+    const ast::Type& canonical = type.getCanonicalType();
+    const std::span<const slang::ConstantValue> elements = value.elements();
+    eir::BitVector result = eir::BitVector::filled(converted->bitWidth(), eir::Logic::Zero);
+    std::uint32_t offset = converted->bitWidth();
+    for (std::size_t index = 0; index < elements.size(); ++index) {
+        const ast::Type* elementType = nullptr;
+        if (canonical.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+            elementType = &canonical.as<ast::FixedSizeUnpackedArrayType>().elementType;
+        } else if (canonical.kind == slang::ast::SymbolKind::UnpackedStructType) {
+            const auto fields = canonical.as<ast::UnpackedStructType>().fields;
+            if (index >= fields.size()) return std::nullopt;
+            elementType = &fields[index]->getType();
+        } else {
+            return std::nullopt;
+        }
+
+        const std::optional<eir::BitVector> element = constantBits(elements[index], *elementType);
+        if (!element.has_value() || element->width() > offset) return std::nullopt;
+        offset -= element->width();
+        eir::bitops::assignPartAt(result.mutableRef(), element->ref(), offset);
+    }
+    if (offset != 0) return std::nullopt;
+    return result;
 }
 
 SourceLocation ModuleBuilder::convertLocation(slang::SourceLocation location) {
@@ -311,6 +381,20 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     object.location = convertLocation(symbol.location);
     object.enumIndex = enumFor(symbol.getType());
 
+    // An unpacked array keeps its declared dimensions, outermost first, for what reads it as an
+    // array rather than as the bits it is stored as: VPI, and the waveform database.
+    for (const ast::Type* level = &symbol.getType().getCanonicalType();
+         level->kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType;) {
+        const auto& array = level->as<ast::FixedSizeUnpackedArrayType>();
+        object.unpackedDimensions.push_back(
+            eir::UnpackedDimension{.left = array.range.left, .right = array.range.right});
+        level = &array.elementType.getCanonicalType();
+        if (level->kind != slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+            if (const std::optional<eir::Type> element = convertType(*level))
+                object.elementWidth = element->bitWidth();
+        }
+    }
+
     if (symbol.kind == slang::ast::SymbolKind::Net) {
         const auto& net = symbol.as<ast::NetSymbol>();
         const std::optional<eir::NetKind> netKind = convertNetKind(net.netType.netKind);
@@ -341,11 +425,8 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     } else if (initializer != nullptr) {
         ast::EvalContext evalContext(symbol);
         const slang::ConstantValue value = initializer->eval(evalContext);
-        if (value.isInteger()) {
-            // One shared conversion, because the X/Z encodings of slang and Enzan differ
-            // and two copies of that mapping means one of them is wrong.
-            const eir::BitVector initial = toBitVector(value.integer());
-            object.initialValue = initial.resized(type->bitWidth(), type->isSigned());
+        if (std::optional<eir::BitVector> initial = constantBits(value, symbol.getType())) {
+            object.initialValue = std::move(*initial);
         } else {
             reportUnsupported(
                 symbol.location,

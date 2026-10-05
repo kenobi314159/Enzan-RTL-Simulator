@@ -23,10 +23,13 @@
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
+#include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/AllTypes.h"
 #include "slang/ast/types/Type.h"
 #include "slang/numeric/SVInt.h"
 
 #include <algorithm>
+#include <tuple>
 #include <utility>
 
 namespace enzan::frontend::sv {
@@ -739,8 +742,11 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         // because an object would be a per-instance slot for a value that never changes.
         if (symbol.kind == slang::ast::SymbolKind::Parameter) {
             const slang::ConstantValue& value = symbol.as<ast::ParameterSymbol>().getValue();
-            if (!value.isInteger() || !type.has_value()) break;
-            const std::uint32_t constant = addConstant(toBitVector(value.integer()));
+            if (!type.has_value()) break;
+            const std::optional<eir::BitVector> bits =
+                module->constantBits(value, *expression.type);
+            if (!bits.has_value()) break;
+            const std::uint32_t constant = addConstant(*bits);
             const std::uint32_t result = newRegister(*type);
             emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
                                         eir::Operand::constant(constant)));
@@ -778,13 +784,22 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
 
     case ast::ExpressionKind::Replication: return translateReplication(expression);
 
-    case ast::ExpressionKind::ElementSelect: return translateElementSelect(expression);
-
-    case ast::ExpressionKind::RangeSelect: return translateRangeSelect(expression);
+    case ast::ExpressionKind::ElementSelect:
+    case ast::ExpressionKind::RangeSelect:
+    case ast::ExpressionKind::MemberAccess: {
+        const std::optional<Location> location = locate(expression);
+        if (!location.has_value()) return std::nullopt;
+        return readLocation(*location);
+    }
 
     case ast::ExpressionKind::Call: return translateCall(expression);
 
     case ast::ExpressionKind::Inside: return translateInside(expression);
+
+    case ast::ExpressionKind::SimpleAssignmentPattern:
+    case ast::ExpressionKind::StructuredAssignmentPattern:
+    case ast::ExpressionKind::ReplicatedAssignmentPattern:
+        return translateAssignmentPattern(expression);
 
     case ast::ExpressionKind::Conversion: {
         // slang inserts a conversion wherever the language's width and signedness rules
@@ -1169,6 +1184,63 @@ ProcessTranslator::translateConcatenation(const ast::Expression& expression) {
 }
 
 std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression) {
+    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    if (!resultType.has_value()) {
+        module->reportUnsupported(expression.sourceRange.start(), "this assignment pattern type");
+        failed = true;
+        return std::nullopt;
+    }
+
+    // slang expands every form — positional, by member, by default, replicated — into the
+    // elements in order, each converted to the type it initialises. In order, the first one
+    // highest, is how the storage lays out an array or a struct, so the pattern is the
+    // concatenation of its elements.
+    const ast::AssignmentPatternExpressionBase* pattern = nullptr;
+    switch (expression.kind) {
+    case ast::ExpressionKind::SimpleAssignmentPattern:
+        pattern = &expression.as<ast::SimpleAssignmentPatternExpression>();
+        break;
+    case ast::ExpressionKind::StructuredAssignmentPattern:
+        pattern = &expression.as<ast::StructuredAssignmentPatternExpression>();
+        break;
+    default: pattern = &expression.as<ast::ReplicatedAssignmentPatternExpression>(); break;
+    }
+    const std::uint32_t zero =
+        addConstant(eir::BitVector::filled(resultType->bitWidth(), eir::Logic::Zero));
+    const std::uint32_t result = newRegister(*resultType);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(zero)));
+
+    std::uint32_t offset = resultType->bitWidth();
+    for (const ast::Expression* element : pattern->elements()) {
+        const std::optional<eir::Type> elementType = module->convertType(*element->type);
+        if (!elementType.has_value()) {
+            module->reportUnsupported(element->sourceRange.start(), "this element type");
+            failed = true;
+            return std::nullopt;
+        }
+        const std::optional<Value> value = translateExpression(*element);
+        if (!value.has_value()) return std::nullopt;
+        const Value stored = coerceState(coerce(*value, *elementType), *elementType);
+
+        if (elementType->bitWidth() > offset) {
+            module->reportUnsupported(expression.sourceRange.start(),
+                                      "an assignment pattern whose elements exceed its width");
+            failed = true;
+            return std::nullopt;
+        }
+        offset -= elementType->bitWidth();
+
+        const Value at = offsetConstant(offset);
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result),
+                                    eir::Operand::reg(stored.reg), eir::Operand::reg(at.reg)));
+    }
+
+    return Value{.reg = result, .type = *resultType};
+}
+
+std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateReplication(const ast::Expression& expression) {
     const auto& replication = expression.as<ast::ReplicationExpression>();
 
@@ -1223,24 +1295,6 @@ std::uint32_t ProcessTranslator::elementBitsOf(const ast::Type& type) {
     return total / elements;
 }
 
-std::optional<ProcessTranslator::Value>
-ProcessTranslator::scaleIndexToBitOffset(const Value& index, std::int32_t rangeLow,
-                                         std::uint32_t elementBits) {
-    const Value shifted = shiftIndexToBitOffset(index, rangeLow);
-    if (elementBits == 1) return shifted;
-
-    const std::uint32_t scaleConstant =
-        addConstant(eir::BitVector::fromUInt64(elementBits, shifted.type.bitWidth()));
-    const std::uint32_t scaleRegister = newRegister(shifted.type);
-    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(scaleRegister),
-                                eir::Operand::constant(scaleConstant)));
-
-    const std::uint32_t result = newRegister(shifted.type);
-    emit(eir::Instruction::make(eir::Opcode::Multiply, eir::Operand::reg(result),
-                                eir::Operand::reg(shifted.reg), eir::Operand::reg(scaleRegister)));
-    return Value{.reg = result, .type = shifted.type};
-}
-
 ProcessTranslator::Value ProcessTranslator::widenForOffsetArithmetic(const Value& index) {
     // Thirty-two bits addresses any object Enzan can hold, because a vector's width is a
     // 32-bit quantity to begin with. Signedness is preserved so that a negative index stays
@@ -1252,51 +1306,270 @@ ProcessTranslator::Value ProcessTranslator::widenForOffsetArithmetic(const Value
     return coerce(index, eir::Type::bits(width, index.type.isSigned(), true));
 }
 
-ProcessTranslator::Value ProcessTranslator::shiftIndexToBitOffset(const Value& index,
-                                                                  std::int32_t rangeLow) {
-    // Widened **before** any arithmetic, always, not only when there is a subtraction to do.
-    //
-    // A bit offset is arithmetic on a bit position, and an index is only as wide as the
-    // thing it indexes: a 2-bit pointer into a four-element packed array, multiplied by an
-    // element width of 8, wraps to zero in two bits and every element then aliases the
-    // first. That defect reads and writes the wrong storage while looking entirely
-    // plausible, and it is what the differential test against Icarus Verilog caught.
-    const Value widened = widenForOffsetArithmetic(index);
-    if (rangeLow == 0) return widened;
+// ---------------------------------------------------------------------------
+// Locations: selects and member accesses
+// ---------------------------------------------------------------------------
+//
+// Every select and member access is a window of bits: an element of an array, a field of a
+// struct, a bit or a part of a vector. An unpacked aggregate is stored flat, left element and
+// first field highest, as a packed one is (DESIGN_GUIDE.md section 4.3), so one rule places a
+// window whatever it is a window of, and a chain of them — `mem[i].field[3:0]` — composes into
+// one offset. A window in an object is read in place and written with a part store; a window
+// in a value that is not an object, a parameter for instance, is selected from a register.
 
-    const eir::Type indexType = widened.type;
+namespace {
 
-    const std::uint32_t lowConstant =
-        addConstant(eir::BitVector::fromInt64(rangeLow, indexType.bitWidth()));
-    const std::uint32_t lowRegister = newRegister(indexType);
-    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(lowRegister),
-                                eir::Operand::constant(lowConstant)));
-
-    const std::uint32_t result = newRegister(indexType);
-    emit(eir::Instruction::make(eir::Opcode::Subtract, eir::Operand::reg(result),
-                                eir::Operand::reg(widened.reg), eir::Operand::reg(lowRegister)));
-    return Value{.reg = result, .type = indexType};
+/// The position from the least significant end, in elements, of `index` in a dimension
+/// declared `range`: the right index is at position 0, whichever way the range runs.
+std::int64_t positionOf(std::int64_t index, slang::ConstantRange range) {
+    return range.left >= range.right ? index - range.right : range.right - index;
 }
 
-std::optional<ProcessTranslator::Value>
-ProcessTranslator::lowBitOfRangeSelect(const ast::RangeSelectExpression& select,
-                                       std::int32_t rangeLow, eir::Type partType,
-                                       std::uint32_t elementBits) {
-    const eir::Type offsetType = eir::Type::bits(32, false, false);
+bool inRange(std::int64_t index, slang::ConstantRange range) {
+    return index >= range.lower() && index <= range.upper();
+}
 
-    const auto constantOffset = [&](std::int64_t offset) -> std::optional<Value> {
-        if (offset < 0) {
-            module->reportUnsupported(select.sourceRange.start(),
-                                      "a part select that starts below the declared range");
+} // namespace
+
+ProcessTranslator::Value ProcessTranslator::offsetConstant(std::int64_t offset) {
+    const eir::Type type = eir::Type::bits(64, true, false);
+    const std::uint32_t constant = addConstant(eir::BitVector::fromInt64(offset, 64));
+    const std::uint32_t result = newRegister(type);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(constant)));
+    return Value{.reg = result, .type = type};
+}
+
+ProcessTranslator::Value ProcessTranslator::lowOf(const Location& location) {
+    if (location.low.has_value()) return *location.low;
+    return offsetConstant(location.constantLow.value_or(0));
+}
+
+ProcessTranslator::Value ProcessTranslator::offsetArithmetic(eir::Opcode opcode, const Value& left,
+                                                             const Value& right) {
+    const std::uint32_t width = std::max(left.type.bitWidth(), right.type.bitWidth());
+    const eir::Type type =
+        eir::Type::bits(width, left.type.isSigned() && right.type.isSigned(), true);
+    const Value a = coerce(left, type);
+    const Value b = coerce(right, type);
+    const std::uint32_t result = newRegister(type);
+    eir::Instruction instruction = eir::Instruction::make(
+        opcode, eir::Operand::reg(result), eir::Operand::reg(a.reg), eir::Operand::reg(b.reg));
+    instruction.isSigned = type.isSigned();
+    emit(instruction);
+    return Value{.reg = result, .type = type};
+}
+
+ProcessTranslator::Value ProcessTranslator::positionValue(const Value& index,
+                                                          slang::ConstantRange range,
+                                                          std::uint32_t stride) {
+    // Widened before any arithmetic: a 2-bit index into four bytes, scaled in two bits, wraps
+    // to zero and every element aliases the first, which looks entirely plausible.
+    const Value widened = widenForOffsetArithmetic(index);
+    Value position = widened;
+    if (range.left >= range.right) {
+        if (range.right != 0)
+            position =
+                offsetArithmetic(eir::Opcode::Subtract, widened, offsetConstant(range.right));
+    } else {
+        position = offsetArithmetic(eir::Opcode::Subtract, offsetConstant(range.right), widened);
+    }
+    if (stride == 1) return position;
+    return offsetArithmetic(eir::Opcode::Multiply, position, offsetConstant(stride));
+}
+
+ProcessTranslator::Value ProcessTranslator::checkedOffset(const Value& offset, const Value& index,
+                                                          slang::ConstantRange range) {
+    // `lower <= index && index <= upper`, compared as signed 64-bit numbers so that a declared
+    // range below zero compares correctly whatever the index's own signedness.
+    const Value wide =
+        coerce(widenForOffsetArithmetic(index), eir::Type::bits(64, index.type.isSigned(), true));
+    const Value signedIndex{.reg = wide.reg, .type = eir::Type::bits(64, true, true)};
+    const Value aboveLower =
+        compare(eir::Opcode::LessEqual, offsetConstant(range.lower()), signedIndex);
+    const Value belowUpper =
+        compare(eir::Opcode::LessEqual, signedIndex, offsetConstant(range.upper()));
+    const std::uint32_t inside = newRegister(eir::Type::logic());
+    emit(eir::Instruction::make(eir::Opcode::And, eir::Operand::reg(inside),
+                                eir::Operand::reg(aboveLower.reg),
+                                eir::Operand::reg(belowUpper.reg)));
+
+    // Outside the dimension, the offset becomes X, which a read turns into X and a store into
+    // nothing; without the check an index past an inner dimension would land in the next
+    // element.
+    const std::uint32_t unknown = addConstant(eir::BitVector(offset.type.bitWidth()));
+    const std::uint32_t unknownRegister = newRegister(offset.type);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(unknownRegister),
+                                eir::Operand::constant(unknown)));
+    const std::uint32_t result = newRegister(offset.type);
+    emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(result),
+                                eir::Operand::reg(inside), eir::Operand::reg(offset.reg),
+                                eir::Operand::reg(unknownRegister)));
+    return Value{.reg = result, .type = offset.type};
+}
+
+ProcessTranslator::Location ProcessTranslator::narrowed(const Location& base,
+                                                        std::optional<std::int64_t> constantLow,
+                                                        std::optional<Value> low, eir::Type type) {
+    Location result = base;
+    result.type = type;
+    result.whole = false;
+    if (base.outOfRange) return result;
+
+    if (base.constantLow.has_value() && constantLow.has_value()) {
+        result.constantLow = *base.constantLow + *constantLow;
+        result.low.reset();
+        result.reachLow = *result.constantLow;
+        result.reachWidth = type.bitWidth();
+        return result;
+    }
+
+    const Value baseLow = lowOf(base);
+    const Value localLow = low.has_value() ? *low : offsetConstant(constantLow.value_or(0));
+    result.constantLow.reset();
+    result.low = offsetArithmetic(eir::Opcode::Add, baseLow, localLow);
+    // A window that moves is still inside the window it was taken from, which is therefore
+    // everything a write through it could reach.
+    return result;
+}
+
+std::optional<ProcessTranslator::Location>
+ProcessTranslator::locate(const ast::Expression& expression) {
+    switch (expression.kind) {
+    case ast::ExpressionKind::NamedValue:
+    case ast::ExpressionKind::HierarchicalValue: {
+        const ast::ValueSymbol& symbol = expression.as<ast::ValueExpressionBase>().symbol;
+        if (symbol.kind == slang::ast::SymbolKind::Parameter) break;
+
+        const std::optional<std::uint32_t> objectIndex = module->objectFor(symbol);
+        if (!objectIndex.has_value()) {
             failed = true;
             return std::nullopt;
         }
-        const std::uint32_t constant =
-            addConstant(eir::BitVector::fromUInt64(static_cast<std::uint64_t>(offset), 32));
-        const std::uint32_t result = newRegister(offsetType);
-        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
-                                    eir::Operand::constant(constant)));
-        return Value{.reg = result, .type = offsetType};
+        const eir::Type type = module->definition().objects[*objectIndex].type;
+        return Location{.objectIndex = *objectIndex,
+                        .type = type,
+                        .constantLow = 0,
+                        .reachWidth = type.bitWidth()};
+    }
+
+    case ast::ExpressionKind::ElementSelect:
+        return locateElement(expression.as<ast::ElementSelectExpression>());
+
+    case ast::ExpressionKind::RangeSelect:
+        return locateRange(expression.as<ast::RangeSelectExpression>());
+
+    case ast::ExpressionKind::MemberAccess:
+        return locateMember(expression.as<ast::MemberAccessExpression>());
+
+    default: break;
+    }
+
+    // Any other value — a parameter, a call, a concatenation — is a window of a register.
+    const std::optional<Value> value = translateExpression(expression);
+    if (!value.has_value()) return std::nullopt;
+    return Location{.root = *value,
+                    .type = value->type,
+                    .constantLow = 0,
+                    .reachWidth = value->type.bitWidth()};
+}
+
+std::optional<ProcessTranslator::Location>
+ProcessTranslator::locateElement(const ast::ElementSelectExpression& select) {
+    const std::optional<Location> base = locate(select.value());
+    if (!base.has_value()) return std::nullopt;
+
+    const std::optional<eir::Type> elementType = module->convertType(*select.type);
+    if (!elementType.has_value()) {
+        module->reportUnsupported(select.sourceRange.start(), "this element type");
+        failed = true;
+        return std::nullopt;
+    }
+
+    const ast::Type& baseType = *select.value().type;
+    const slang::ConstantRange range = baseType.getFixedRange();
+    const std::uint32_t stride =
+        baseType.isUnpackedArray() ? elementType->bitWidth() : elementBitsOf(baseType);
+
+    if (const std::optional<std::int64_t> index = constantValueOf(select.selector())) {
+        if (!inRange(*index, range)) {
+            Location outside = *base;
+            outside.type = *elementType;
+            outside.whole = false;
+            outside.outOfRange = true;
+            return outside;
+        }
+        return narrowed(*base, positionOf(*index, range) * static_cast<std::int64_t>(stride),
+                        std::nullopt, *elementType);
+    }
+
+    const std::optional<Value> index = translateExpression(select.selector());
+    if (!index.has_value()) return std::nullopt;
+
+    // Straight into a whole object, an index past the dimension is past the object, which a
+    // read and a store already handle; inside a window it would land in a neighbour.
+    Value offset = positionValue(*index, range, stride);
+    if (!base->whole) offset = checkedOffset(offset, *index, range);
+    Location result = narrowed(*base, std::nullopt, offset, *elementType);
+
+    if (base->whole && base->inObject() && range.left >= range.right) {
+        std::tie(result.reachLow, result.reachWidth) =
+            reachOfSelect(select.selector(), range.right, stride, elementType->bitWidth(), false,
+                          base->type.bitWidth());
+    }
+    return result;
+}
+
+std::optional<ProcessTranslator::Location>
+ProcessTranslator::locateRange(const ast::RangeSelectExpression& select) {
+    const std::optional<Location> base = locate(select.value());
+    if (!base.has_value()) return std::nullopt;
+
+    const std::optional<eir::Type> partType = module->convertType(*select.type);
+    if (!partType.has_value()) {
+        module->reportUnsupported(select.sourceRange.start(), "this part select type");
+        failed = true;
+        return std::nullopt;
+    }
+
+    const ast::Type& baseType = *select.value().type;
+    const slang::ConstantRange range = baseType.getFixedRange();
+    std::uint32_t stride = elementBitsOf(baseType);
+    if (baseType.isUnpackedArray()) {
+        const std::optional<eir::Type> element =
+            module->convertType(*baseType.getArrayElementType());
+        if (!element.has_value()) {
+            module->reportUnsupported(select.sourceRange.start(), "this element type");
+            failed = true;
+            return std::nullopt;
+        }
+        stride = element->bitWidth();
+    }
+    const auto count = static_cast<std::int64_t>(partType->bitWidth() / std::max(stride, 1U));
+    const bool descending = range.left >= range.right;
+
+    // The window's low bit is the position of whichever selected index sits lowest, which
+    // depends on which way the dimension runs.
+    const auto fromConstant = [&](std::int64_t lowIndex,
+                                  std::int64_t highIndex) -> std::optional<Location> {
+        const bool lowInside = inRange(lowIndex, range);
+        const bool highInside = inRange(highIndex, range);
+        if (!lowInside && !highInside) {
+            Location outside = *base;
+            outside.type = *partType;
+            outside.whole = false;
+            outside.outOfRange = true;
+            return outside;
+        }
+        const std::int64_t bottom = descending ? lowIndex : highIndex;
+        const std::int64_t position = positionOf(bottom, range) * static_cast<std::int64_t>(stride);
+        if ((!lowInside || !highInside) && (!base->whole || position < 0)) {
+            module->reportUnsupported(select.sourceRange.start(),
+                                      "a part select that runs past its declared range here");
+            failed = true;
+            return std::nullopt;
+        }
+        return narrowed(*base, position, std::nullopt, *partType);
     };
 
     switch (select.getSelectionKind()) {
@@ -1311,39 +1584,37 @@ ProcessTranslator::lowBitOfRangeSelect(const ast::RangeSelectExpression& select,
             failed = true;
             return std::nullopt;
         }
-        // The bounds are element indices, so the offset is scaled as a variable one is: on a
-        // packed array of bytes, [2:1] starts at bit 8, not at bit 1.
-        return constantOffset((std::min(*left, *right) - rangeLow)
-                              * static_cast<std::int64_t>(elementBits));
+        return fromConstant(std::min(*left, *right), std::max(*left, *right));
     }
 
-    case ast::RangeSelectionKind::IndexedUp: {
-        // `a[base +: width]` selects upwards from `base`, so `base` is the low bit.
-        const std::optional<Value> base = translateExpression(select.left());
-        if (!base.has_value()) return std::nullopt;
-        return scaleIndexToBitOffset(*base, rangeLow, elementBits);
-    }
-
+    case ast::RangeSelectionKind::IndexedUp:
     case ast::RangeSelectionKind::IndexedDown: {
-        // `a[base -: width]` selects downwards, so the low bit is `base - width + 1`.
-        const std::optional<Value> base = translateExpression(select.left());
-        if (!base.has_value()) return std::nullopt;
+        const bool up = select.getSelectionKind() == ast::RangeSelectionKind::IndexedUp;
+        if (const std::optional<std::int64_t> start = constantValueOf(select.left())) {
+            const std::int64_t other = up ? *start + count - 1 : *start - count + 1;
+            return fromConstant(std::min(*start, other), std::max(*start, other));
+        }
 
-        const std::optional<Value> scaled = scaleIndexToBitOffset(*base, rangeLow, elementBits);
-        if (!scaled.has_value()) return std::nullopt;
-        const Value shifted = *scaled;
-        const std::uint32_t adjustment = addConstant(eir::BitVector::fromInt64(
-            static_cast<std::int64_t>(partType.bitWidth()) - 1, shifted.type.bitWidth()));
-        const std::uint32_t adjustmentRegister = newRegister(shifted.type);
-        emit(eir::Instruction::make(eir::Opcode::LoadConstant,
-                                    eir::Operand::reg(adjustmentRegister),
-                                    eir::Operand::constant(adjustment)));
+        const std::optional<Value> start = translateExpression(select.left());
+        if (!start.has_value()) return std::nullopt;
 
-        const std::uint32_t result = newRegister(shifted.type);
-        emit(eir::Instruction::make(eir::Opcode::Subtract, eir::Operand::reg(result),
-                                    eir::Operand::reg(shifted.reg),
-                                    eir::Operand::reg(adjustmentRegister)));
-        return Value{.reg = result, .type = shifted.type};
+        // `[b +: n]` holds b to b+n-1 and `[b -: n]` holds b-n+1 to b; the one of those
+        // sitting lowest in storage gives the offset.
+        Value bottom = widenForOffsetArithmetic(*start);
+        if (up != descending) {
+            bottom = offsetArithmetic(up ? eir::Opcode::Add : eir::Opcode::Subtract, bottom,
+                                      offsetConstant(count - 1));
+        }
+        Value offset = positionValue(bottom, range, stride);
+        if (!base->whole) offset = checkedOffset(offset, bottom, range);
+        Location result = narrowed(*base, std::nullopt, offset, *partType);
+
+        if (base->whole && base->inObject() && descending) {
+            std::tie(result.reachLow, result.reachWidth) =
+                reachOfSelect(select.left(), range.right, stride, partType->bitWidth(), !up,
+                              base->type.bitWidth());
+        }
+        return result;
     }
     }
 
@@ -1352,122 +1623,118 @@ ProcessTranslator::lowBitOfRangeSelect(const ast::RangeSelectExpression& select,
     return std::nullopt;
 }
 
-std::pair<std::int64_t, std::int64_t>
-ProcessTranslator::writtenBitsOfRangeSelect(const ast::RangeSelectExpression& select,
-                                            std::int32_t rangeLow, std::uint32_t elementBits,
-                                            std::uint32_t width, std::uint32_t objectWidth) {
-    const auto scaled = [&](std::int64_t position) {
-        return (position - rangeLow) * static_cast<std::int64_t>(elementBits);
-    };
-    const auto partWidth = static_cast<std::int64_t>(width);
+std::optional<ProcessTranslator::Location>
+ProcessTranslator::locateMember(const ast::MemberAccessExpression& access) {
+    if (access.member.kind != slang::ast::SymbolKind::Field) {
+        module->reportUnsupported(access.sourceRange.start(), "this kind of member access");
+        failed = true;
+        return std::nullopt;
+    }
+    const auto& field = access.member.as<ast::FieldSymbol>();
 
-    switch (select.getSelectionKind()) {
-    case ast::RangeSelectionKind::Simple: {
-        const std::optional<std::int64_t> left = constantValueOf(select.left());
-        const std::optional<std::int64_t> right = constantValueOf(select.right());
-        if (left.has_value() && right.has_value())
-            return {scaled(std::min(*left, *right)), partWidth};
-        break;
+    const std::optional<eir::Type> fieldType = module->convertType(*access.type);
+    if (!fieldType.has_value()) {
+        module->reportUnsupported(access.sourceRange.start(), "the type of this member");
+        failed = true;
+        return std::nullopt;
     }
 
-    case ast::RangeSelectionKind::IndexedUp:
-        if (const std::optional<std::int64_t> base = constantValueOf(select.left()))
-            return {scaled(*base), partWidth};
-        return reachOfSelect(select.left(), rangeLow, elementBits, width, false, objectWidth);
+    const std::optional<Location> base = locate(access.value());
+    if (!base.has_value()) return std::nullopt;
 
-    case ast::RangeSelectionKind::IndexedDown:
-        if (const std::optional<std::int64_t> base = constantValueOf(select.left()))
-            return {scaled(*base) - partWidth + 1, partWidth};
-        return reachOfSelect(select.left(), rangeLow, elementBits, width, true, objectWidth);
+    // A packed struct's fields carry their offsets. An unpacked one is laid out as a packed one
+    // would be, first field highest, so a field sits above every field declared after it.
+    auto offset = static_cast<std::int64_t>(field.bitOffset);
+    const ast::Type& structType = access.value().type->getCanonicalType();
+    if (structType.isUnpackedStruct()) {
+        offset = 0;
+        for (const ast::FieldSymbol* other : structType.as<ast::UnpackedStructType>().fields) {
+            if (other->fieldIndex <= field.fieldIndex) continue;
+            const std::optional<eir::Type> otherType = module->convertType(other->getType());
+            if (!otherType.has_value()) {
+                module->reportUnsupported(access.sourceRange.start(), "the type of this member");
+                failed = true;
+                return std::nullopt;
+            }
+            offset += otherType->bitWidth();
+        }
     }
-
-    return {0, objectWidth};
+    return narrowed(*base, offset, std::nullopt, *fieldType);
 }
 
-std::optional<std::uint32_t> ProcessTranslator::objectOfLValue(const ast::Expression& base) {
-    if (base.kind != ast::ExpressionKind::NamedValue
-        && base.kind != ast::ExpressionKind::HierarchicalValue) {
-        module->reportUnsupported(base.sourceRange.start(),
+std::optional<ProcessTranslator::Value> ProcessTranslator::readLocation(const Location& location) {
+    const eir::Type type = location.type;
+
+    if (location.outOfRange) {
+        // An out-of-range read is the type's default: X when four-state, zero when two-state.
+        const std::uint32_t constant = addConstant(eir::BitVector::filled(
+            type.bitWidth(), type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero));
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                    eir::Operand::constant(constant)));
+        return Value{.reg = result, .type = type};
+    }
+
+    if (location.whole) {
+        if (!location.inObject()) return location.root;
+        noteRead(location.objectIndex);
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(result),
+                                    eir::Operand::object(location.objectIndex)));
+        return Value{.reg = result, .type = type};
+    }
+
+    const Value low = lowOf(location);
+    const std::uint32_t result = newRegister(type);
+    if (location.inObject()) {
+        noteRead(location.objectIndex);
+        emit(eir::Instruction::make(eir::Opcode::ReadObjectPart, eir::Operand::reg(result),
+                                    eir::Operand::object(location.objectIndex),
+                                    eir::Operand::reg(low.reg)));
+    } else {
+        emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(result),
+                                    eir::Operand::reg(location.root.reg),
+                                    eir::Operand::reg(low.reg)));
+    }
+    return Value{.reg = result, .type = type};
+}
+
+bool ProcessTranslator::writeLocation(const ast::Expression& target, const Location& location,
+                                      const Value& value, bool nonBlocking) {
+    if (!location.inObject()) {
+        module->reportUnsupported(target.sourceRange.start(),
                                   "writing through anything but a plain signal reference");
         failed = true;
-        return std::nullopt;
+        return false;
     }
 
-    const std::optional<std::uint32_t> objectIndex =
-        module->objectFor(base.as<ast::ValueExpressionBase>().symbol);
-    if (!objectIndex.has_value()) failed = true;
-    return objectIndex;
-}
+    // The language discards a write outside its dimension, so it drives nothing.
+    if (location.outOfRange) return true;
 
-std::optional<ProcessTranslator::Value>
-ProcessTranslator::translateElementSelect(const ast::Expression& expression) {
-    const auto& select = expression.as<ast::ElementSelectExpression>();
+    const Value stored = coerceState(coerce(value, location.type), location.type);
 
-    const std::optional<Value> base = translateExpression(select.value());
-    if (!base.has_value()) return std::nullopt;
-
-    const slang::ConstantRange range = select.value().type->getFixedRange();
-    if (range.left < range.right) {
-        module->reportUnsupported(expression.sourceRange.start(),
-                                  "an ascending declared range such as `[0:N]`");
-        failed = true;
-        return std::nullopt;
+    if (location.whole) {
+        noteWholeWrite(location.objectIndex);
+        emit(eir::Instruction::make(
+            nonBlocking ? eir::Opcode::StoreNonBlocking : eir::Opcode::Store, {},
+            eir::Operand::object(location.objectIndex), eir::Operand::reg(stored.reg)));
+        return true;
     }
 
-    const std::optional<Value> index = translateExpression(select.selector());
-    if (!index.has_value()) return std::nullopt;
+    // The bits written, for the driver this process is (section 3.7): exactly the window when
+    // it is constant, and everything it could reach when it moves.
+    const bool written =
+        location.constantLow.has_value()
+            ? noteWrite(location.objectIndex, *location.constantLow, location.type.bitWidth())
+            : noteWrite(location.objectIndex, location.reachLow, location.reachWidth);
+    if (!written) return true;
 
-    const std::optional<eir::Type> elementType = module->convertType(*expression.type);
-    if (!elementType.has_value()) {
-        module->reportUnsupported(expression.sourceRange.start(), "this element type");
-        failed = true;
-        return std::nullopt;
-    }
-
-    const std::optional<Value> offset =
-        scaleIndexToBitOffset(*index, range.right, elementBitsOf(*select.value().type));
-    if (!offset.has_value()) return std::nullopt;
-
-    // One bit is a bit select; anything wider is a window, which is what an element of a
-    // packed array such as `logic [3:0][7:0] mem` is. Treating every element select as a bit
-    // select would silently read one bit of a byte.
-    const std::uint32_t result = newRegister(*elementType);
-    emit(eir::Instruction::make(
-        elementType->bitWidth() == 1 ? eir::Opcode::BitSelect : eir::Opcode::PartSelect,
-        eir::Operand::reg(result), eir::Operand::reg(base->reg), eir::Operand::reg(offset->reg)));
-    return Value{.reg = result, .type = *elementType};
-}
-
-std::optional<ProcessTranslator::Value>
-ProcessTranslator::translateRangeSelect(const ast::Expression& expression) {
-    const auto& select = expression.as<ast::RangeSelectExpression>();
-
-    const std::optional<Value> base = translateExpression(select.value());
-    if (!base.has_value()) return std::nullopt;
-
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
-    if (!resultType.has_value()) {
-        module->reportUnsupported(expression.sourceRange.start(), "this part select type");
-        failed = true;
-        return std::nullopt;
-    }
-
-    const slang::ConstantRange range = select.value().type->getFixedRange();
-    if (range.left < range.right) {
-        module->reportUnsupported(expression.sourceRange.start(),
-                                  "an ascending declared range such as `[0:N]`");
-        failed = true;
-        return std::nullopt;
-    }
-
-    const std::optional<Value> low =
-        lowBitOfRangeSelect(select, range.right, *resultType, elementBitsOf(*select.value().type));
-    if (!low.has_value()) return std::nullopt;
-
-    const std::uint32_t result = newRegister(*resultType);
-    emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(result),
-                                eir::Operand::reg(base->reg), eir::Operand::reg(low->reg)));
-    return Value{.reg = result, .type = *resultType};
+    const Value low = lowOf(location);
+    emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlocking
+                                            : eir::Opcode::StorePart,
+                                {}, eir::Operand::object(location.objectIndex),
+                                eir::Operand::reg(stored.reg), eir::Operand::reg(low.reg)));
+    return true;
 }
 
 std::optional<ProcessTranslator::Value>
@@ -1628,93 +1895,12 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
         return true;
     }
 
-    case ast::ExpressionKind::ElementSelect: {
-        const auto& select = target.as<ast::ElementSelectExpression>();
-        const std::optional<std::uint32_t> objectIndex = objectOfLValue(select.value());
-        if (!objectIndex.has_value()) return false;
-
-        const slang::ConstantRange range = select.value().type->getFixedRange();
-        if (range.left < range.right) {
-            module->reportUnsupported(target.sourceRange.start(),
-                                      "an ascending declared range such as `[0:N]`");
-            failed = true;
-            return false;
-        }
-
-        const std::optional<Value> index = translateExpression(select.selector());
-        if (!index.has_value()) return false;
-
-        const std::optional<eir::Type> elementType = module->convertType(*target.type);
-        if (!elementType.has_value()) {
-            module->reportUnsupported(target.sourceRange.start(), "this element type");
-            failed = true;
-            return false;
-        }
-
-        const std::optional<Value> offset =
-            scaleIndexToBitOffset(*index, range.right, elementBitsOf(*select.value().type));
-        if (!offset.has_value()) return false;
-
-        // The bits written, for the driver this process is (section 3.7). A constant index
-        // outside the declared range writes nothing, so nothing is emitted for it.
-        const std::uint32_t elementBits = elementBitsOf(*select.value().type);
-        const std::uint32_t objectWidth =
-            module->definition().objects[*objectIndex].type.bitWidth();
-        const std::optional<std::int64_t> constantIndex = constantValueOf(select.selector());
-        const auto [lowBit, width] =
-            constantIndex.has_value()
-                ? std::pair<std::int64_t, std::int64_t>{(*constantIndex - range.right)
-                                                            * std::int64_t{elementBits},
-                                                        elementType->bitWidth()}
-                : reachOfSelect(select.selector(), range.right, elementBits,
-                                elementType->bitWidth(), false, objectWidth);
-        if (!noteWrite(*objectIndex, lowBit, width)) return true;
-
-        const Value element = coerce(value, *elementType);
-        emit(eir::Instruction::make(
-            nonBlocking ? eir::Opcode::StorePartNonBlocking : eir::Opcode::StorePart, {},
-            eir::Operand::object(*objectIndex), eir::Operand::reg(element.reg),
-            eir::Operand::reg(offset->reg)));
-        return true;
-    }
-
-    case ast::ExpressionKind::RangeSelect: {
-        const auto& select = target.as<ast::RangeSelectExpression>();
-        const std::optional<std::uint32_t> objectIndex = objectOfLValue(select.value());
-        if (!objectIndex.has_value()) return false;
-
-        const slang::ConstantRange range = select.value().type->getFixedRange();
-        if (range.left < range.right) {
-            module->reportUnsupported(target.sourceRange.start(),
-                                      "an ascending declared range such as `[0:N]`");
-            failed = true;
-            return false;
-        }
-
-        const std::optional<eir::Type> partType = module->convertType(*target.type);
-        if (!partType.has_value()) {
-            module->reportUnsupported(target.sourceRange.start(), "this part select type");
-            failed = true;
-            return false;
-        }
-
-        const std::optional<Value> low = lowBitOfRangeSelect(select, range.right, *partType,
-                                                             elementBitsOf(*select.value().type));
-        if (!low.has_value()) return false;
-
-        const std::uint32_t elementBits = elementBitsOf(*select.value().type);
-        const std::uint32_t objectWidth =
-            module->definition().objects[*objectIndex].type.bitWidth();
-        const auto [lowBit, width] = writtenBitsOfRangeSelect(select, range.right, elementBits,
-                                                              partType->bitWidth(), objectWidth);
-        if (!noteWrite(*objectIndex, lowBit, width)) return true;
-
-        const Value part = coerce(value, *partType);
-        emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlocking
-                                                : eir::Opcode::StorePart,
-                                    {}, eir::Operand::object(*objectIndex),
-                                    eir::Operand::reg(part.reg), eir::Operand::reg(low->reg)));
-        return true;
+    case ast::ExpressionKind::ElementSelect:
+    case ast::ExpressionKind::RangeSelect:
+    case ast::ExpressionKind::MemberAccess: {
+        const std::optional<Location> location = locate(target);
+        if (!location.has_value()) return false;
+        return writeLocation(target, *location, value, nonBlocking);
     }
 
     case ast::ExpressionKind::Concatenation: {

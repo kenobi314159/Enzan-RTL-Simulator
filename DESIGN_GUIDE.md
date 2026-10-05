@@ -492,6 +492,15 @@ the arena; the waveform database reads values directly out of it without
 indirection; a JIT can burn offsets into generated code as constants; and cache
 locality becomes something that can be optimised by reordering the layout.
 
+**A fixed-size unpacked array or an unpacked struct is stored flat**, as the vector of all
+its bits, the left element and the first field highest, exactly as the packed equivalent
+would be. An element, a field or a select of one is a window of those bits at an offset, so
+every rule about bits — drivers per bit range (3.7), part stores, change detection — applies
+to it unchanged, and an element is read in place rather than by copying the array. What the
+flat vector loses, the declared dimensions, is kept beside it for VPI and the waveform
+database, which present an array as an array. A memory is not recorded in a waveform, as a VCD
+leaves memories out.
+
 A driver occupies the arena only where 3.7 gives it a value of its own: on a signal
 with a bit driven more than once, each of its drivers holds both planes over its
 range, laid out at elaboration beside the signal. A signal with at most one driver per

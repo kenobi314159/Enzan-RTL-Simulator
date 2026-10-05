@@ -83,6 +83,12 @@ void WaveformWriter::selectSignals() {
          ++signalIndex) {
         if (!isRecorded(designImage->signals()[signalIndex].path)) continue;
 
+        // A memory is not recorded, as IEEE 1364 section 18 leaves memories out of a VCD: one
+        // of any size would dominate the file and the database with a value nobody reads as a
+        // waveform.
+        if (!designImage->elaboratedDesign().slots()[signalIndex].unpackedDimensions.empty())
+            continue;
+
         recordIndex[signalIndex] = static_cast<std::uint32_t>(recorded.size());
         recorded.push_back(signalIndex);
     }

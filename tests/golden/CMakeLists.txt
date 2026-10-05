@@ -99,6 +99,14 @@ enzan_add_golden_test(wildcards)
 # itself against the values IEEE 1800 sections 11.4.13 and 12.5.4 give.
 enzan_add_golden_test(inside NO_DIFFERENTIAL)
 
+# Unpacked arrays, stored flat.
+enzan_add_golden_test(arrays)
+
+# Arrays and structs where Icarus Verilog cannot be the reference: whole-array copy and equality,
+# which it does not implement, and an index past an inner dimension, which it lets land in the
+# next row where IEEE 1800 section 7.4.6 makes it out of range.
+enzan_add_golden_test(aggregates NO_DIFFERENTIAL)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------
