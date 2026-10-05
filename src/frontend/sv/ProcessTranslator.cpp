@@ -6,6 +6,7 @@
 #include "eir/Instruction.h"
 #include "frontend/sv/SvIntConversion.h"
 
+#include "slang/ast/ASTVisitor.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/Expression.h"
 #include "slang/ast/SemanticFacts.h"
@@ -52,6 +53,42 @@ std::optional<eir::EdgeKind> toEdgeKind(ast::EdgeKind edge) {
     case ast::EdgeKind::BothEdges: return eir::EdgeKind::AnyChange;
     }
     return std::nullopt;
+}
+
+/// True when evaluating `expression` can change something: an assignment, an increment or a
+/// decrement, or a call, other than to a system function that only computes. An operand the
+/// language may leave unevaluated must not be evaluated when this holds, since its effect
+/// would show; one for which it does not can be, and is cheaper to.
+bool hasSideEffects(const ast::Expression& expression) {
+    bool found = false;
+    expression.visit(
+        ast::makeVisitor([&found](auto&, const ast::AssignmentExpression&) { found = true; },
+                         [&found](auto& visitor, const ast::UnaryExpression& unary) {
+                             switch (unary.op) {
+                             case ast::UnaryOperator::Preincrement:
+                             case ast::UnaryOperator::Predecrement:
+                             case ast::UnaryOperator::Postincrement:
+                             case ast::UnaryOperator::Postdecrement: found = true; break;
+                             default: visitor.visitDefault(unary); break;
+                             }
+                         },
+                         [&found](auto& visitor, const ast::CallExpression& call) {
+                             static constexpr std::array PureFunctions{
+                                 std::string_view("$bits"),      std::string_view("$clog2"),
+                                 std::string_view("$signed"),    std::string_view("$unsigned"),
+                                 std::string_view("$countones"), std::string_view("$onehot"),
+                                 std::string_view("$onehot0"),   std::string_view("$isunknown"),
+                                 std::string_view("$time"),      std::string_view("$stime"),
+                                 std::string_view("$realtime")};
+                             if (!call.isSystemCall()
+                                 || std::ranges::find(PureFunctions, call.getSubroutineName())
+                                        == PureFunctions.end()) {
+                                 found = true;
+                                 return;
+                             }
+                             visitor.visitDefault(call);
+                         }));
+    return found;
 }
 
 } // namespace
@@ -1195,6 +1232,10 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
 
     const std::optional<Value> left = translateExpression(binary.left());
     if (!left.has_value()) return std::nullopt;
+    if ((binary.op == ast::BinaryOperator::LogicalAnd
+         || binary.op == ast::BinaryOperator::LogicalOr)
+        && hasSideEffects(binary.right()))
+        return translateShortCircuit(expression, *left);
     const std::optional<Value> right = translateExpression(binary.right());
     if (!right.has_value()) return std::nullopt;
 
@@ -1410,28 +1451,124 @@ ProcessTranslator::translateConditionalExpression(const ast::Expression& express
     const std::optional<Value> condition = translateExpression(*conditional.conditions[0].expr);
     if (!condition.has_value()) return std::nullopt;
 
-    // Both arms are evaluated, because the result merges them per bit when the condition is
-    // unknown (see BitOps::conditional). Short-circuiting would make `x ? a : b` unable to
-    // produce the merge the standard requires.
-    const std::optional<Value> whenTrue = translateExpression(conditional.left());
-    if (!whenTrue.has_value()) return std::nullopt;
-    const std::optional<Value> whenFalse = translateExpression(conditional.right());
-    if (!whenFalse.has_value()) return std::nullopt;
-
     const std::optional<eir::Type> resultType = module->convertType(*expression.type);
     if (!resultType.has_value()) {
         module->reportUnsupported(expression.sourceRange.start(), "this conditional result type");
         failed = true;
         return std::nullopt;
     }
-
-    const Value a = coerce(*whenTrue, *resultType);
-    const Value b = coerce(*whenFalse, *resultType);
     const std::uint32_t result = newRegister(*resultType);
-    emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(result),
-                                eir::Operand::reg(condition->reg), eir::Operand::reg(a.reg),
-                                eir::Operand::reg(b.reg)));
+
+    // Both arms, merged per bit as BitOps::conditional does: what an unknown condition gives.
+    const auto merged = [&]() -> bool {
+        const std::optional<Value> whenTrue = translateExpression(conditional.left());
+        if (!whenTrue.has_value()) return false;
+        const std::optional<Value> whenFalse = translateExpression(conditional.right());
+        if (!whenFalse.has_value()) return false;
+        const Value a = coerce(*whenTrue, *resultType);
+        const Value b = coerce(*whenFalse, *resultType);
+        emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(result),
+                                    eir::Operand::reg(condition->reg), eir::Operand::reg(a.reg),
+                                    eir::Operand::reg(b.reg)));
+        return true;
+    };
+
+    // Evaluating both arms and selecting is the same as evaluating the one selected, and
+    // cheaper than branching, unless an arm has an effect: then a known condition evaluates
+    // only its own arm (IEEE 1800 section 11.4.11).
+    if (!hasSideEffects(conditional.left()) && !hasSideEffects(conditional.right())) {
+        if (!merged()) return std::nullopt;
+        return Value{.reg = result, .type = *resultType};
+    }
+
+    const auto [whenTrue, whenFalse, unknown, join] = branchOnTruth(*condition);
+    const auto arm = [&](std::uint32_t block, const ast::Expression& operand) {
+        selectBlock(block);
+        const std::optional<Value> value = translateExpression(operand);
+        if (!value.has_value()) return false;
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(result),
+                                    eir::Operand::reg(coerce(*value, *resultType).reg)));
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(join)));
+        return true;
+    };
+    if (!arm(whenTrue, conditional.left()) || !arm(whenFalse, conditional.right()))
+        return std::nullopt;
+    selectBlock(unknown);
+    if (!merged()) return std::nullopt;
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(join)));
+    selectBlock(join);
     return Value{.reg = result, .type = *resultType};
+}
+
+std::array<std::uint32_t, 4> ProcessTranslator::branchOnTruth(const Value& condition) {
+    const std::uint32_t whenTrue = newBlock("truth-true");
+    const std::uint32_t whenNotTrue = newBlock("truth-not-true");
+    const std::uint32_t whenFalse = newBlock("truth-false");
+    const std::uint32_t unknown = newBlock("truth-unknown");
+    const std::uint32_t join = newBlock("truth-join");
+
+    // Known true is some bit 1; known false is every bit 0; anything else is unknown. A
+    // branch takes an unknown condition as false, so each test is made two-state first.
+    const eir::Type bit = eir::Type::logic();
+    const auto known = [&](eir::Opcode reduce, eir::Logic value) {
+        const std::uint32_t reduced = newRegister(bit);
+        emit(eir::Instruction::make(reduce, eir::Operand::reg(reduced),
+                                    eir::Operand::reg(condition.reg)));
+        eir::BitVector expected(1);
+        expected.mutableRef().set(0, value);
+        const std::uint32_t constant = newRegister(bit);
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(constant),
+                                    eir::Operand::constant(addConstant(expected))));
+        const std::uint32_t test = newRegister(bit);
+        emit(eir::Instruction::make(eir::Opcode::CaseEqual, eir::Operand::reg(test),
+                                    eir::Operand::reg(reduced), eir::Operand::reg(constant)));
+        return test;
+    };
+
+    const std::uint32_t isTrue = known(eir::Opcode::ReduceOr, eir::Logic::One);
+    emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(isTrue),
+                                eir::Operand::block(whenTrue), eir::Operand::block(whenNotTrue)));
+    selectBlock(whenNotTrue);
+    const std::uint32_t isFalse = known(eir::Opcode::ReduceOr, eir::Logic::Zero);
+    emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(isFalse),
+                                eir::Operand::block(whenFalse), eir::Operand::block(unknown)));
+    return {whenTrue, whenFalse, unknown, join};
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateShortCircuit(const ast::Expression& expression, const Value& left) {
+    const auto& binary = expression.as<ast::BinaryExpression>();
+    const bool isAnd = binary.op == ast::BinaryOperator::LogicalAnd;
+    const eir::Type bit = eir::Type::logic();
+    const std::uint32_t result = newRegister(bit);
+
+    const auto [whenTrue, whenFalse, unknown, join] = branchOnTruth(left);
+
+    // The left operand decides: false for `&&`, true for `||`.
+    selectBlock(isAnd ? whenFalse : whenTrue);
+    eir::BitVector decided(1);
+    decided.mutableRef().set(0, isAnd ? eir::Logic::Zero : eir::Logic::One);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(addConstant(decided))));
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(join)));
+
+    // Otherwise the right operand is evaluated, once, wherever the other two paths meet.
+    const std::uint32_t evaluate = newBlock("short-circuit-right");
+    selectBlock(isAnd ? whenTrue : whenFalse);
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(evaluate)));
+    selectBlock(unknown);
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(evaluate)));
+
+    selectBlock(evaluate);
+    const std::optional<Value> right = translateExpression(binary.right());
+    if (!right.has_value()) return std::nullopt;
+    emit(eir::Instruction::make(isAnd ? eir::Opcode::LogicalAnd : eir::Opcode::LogicalOr,
+                                eir::Operand::reg(result), eir::Operand::reg(left.reg),
+                                eir::Operand::reg(right->reg)));
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(join)));
+
+    selectBlock(join);
+    return Value{.reg = result, .type = bit};
 }
 
 std::optional<ProcessTranslator::Value>

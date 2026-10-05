@@ -14,6 +14,7 @@ chapter-11/11.10.3--empty_string.sv
 chapter-11/11.10--string_bit_array-sim.sv
 chapter-11/11.10--string_bit_array.sv
 chapter-11/11.12--let_construct.sv
+chapter-11/11.3.5--expr_short_circuit.sv
 chapter-11/11.3.6--assign_in_expression-sim.sv
 chapter-11/11.3.6--assign_in_expression.sv
 chapter-11/11.3.6--assign_in_expr_inv.sv

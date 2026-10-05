@@ -9,6 +9,7 @@
 
 #include "slang/numeric/ConstantValue.h"
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -249,6 +250,18 @@ private:
     std::optional<Value> translateConcatenation(const slang::ast::Expression& expression);
     std::optional<Value> translateReplication(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
+
+    /// `&&` or `||` whose right operand has side effects, which it evaluates only when the
+    /// left one does not decide the result (IEEE 1800 section 11.4.7): not when the left is
+    /// known 0 for `&&` or known 1 for `||`. An unknown left decides nothing.
+    std::optional<Value> translateShortCircuit(const slang::ast::Expression& expression,
+                                               const Value& left);
+
+    /// One block for each of the condition known true, known false, and unknown, for the
+    /// operators that evaluate their operands only as far as the condition requires. Ends in the
+    /// current block, which the caller fills; returns the true, false and unknown blocks and
+    /// the join, in that order.
+    std::array<std::uint32_t, 4> branchOnTruth(const Value& condition);
 
     /// Emits a store of `reg` to the whole of `objectIndex`, in the form `nonBlocking` and
     /// `storeDelay` call for.
