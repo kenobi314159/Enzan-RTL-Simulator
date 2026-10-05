@@ -11,6 +11,7 @@ test_gpi_extra_bad_lib
 test_gpi_users_bad_lib
 test_gpi_users_notset
 test_iteration_mixedlang
+test_iteration_verilog
 test_iteration_vhdl
 test_kill_sim
 test_logic_array_indexing
@@ -20,6 +21,7 @@ test_module_var_messy
 test_module_without_tests
 test_null_ranges
 test_packed_union
+test_similar_scope_name
 test_sv_interface
 test_toplevel_architecture_same_as_entity
 test_toplevel_library
