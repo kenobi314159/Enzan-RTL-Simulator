@@ -380,13 +380,35 @@ Further requirements:
   processes through variable selects is multiply driven for every bit either could
   reach.
 
-**How drivers are represented is an open decision** *(open)*. A driver carrying an
-offset and width, a per-bit table of owning drivers, and a hybrid that stores a
-range for the common whole-signal case all satisfy this section, and they differ in
-what 4.3's arena has to hold and in what the write path costs. The choice belongs to
-M5 and MUST be made before its driver work begins rather than during it: it decides
-the shape of the arena, and 4.3 fixes offsets at elaboration for everything stored
-there.
+**A driver is a range and nothing more until two of them overlap.** It is the signal,
+the lowest bit it drives and its width. A process's write set records the same thing
+— each entry is an object and the bits written, by the rule above for a variable
+select — so the drivers of a signal are known before anything runs, and elaboration
+finds where they overlap. The runtime keeps no record of which driver owns which bit, because nothing
+about ownership changes once elaboration is done.
+
+- **A signal none of whose bits has two drivers carries no driver state at all.**
+  Every legal variable is one, and so is most of every net. A write goes straight
+  into the signal, which is how such a signal bypasses resolution as a whole.
+- **A signal with a bit driven more than once is split into segments**: maximal runs
+  of bits driven by the same set of drivers. Each driver of such a signal has its own
+  value in the arena, in both planes, over its range; each segment lists its drivers
+  and the resolution it applies — the built-in table for the net's kind, or a call to
+  a compiled VHDL resolution function. A write through one of these drivers updates
+  the driver's value, resolves the segments that driver covers and no others, and
+  writes the result into the signal through the ordinary change-detected path (6.2),
+  so a contended bit wakes nothing unless its resolved value moves.
+- **Whether a store goes through a driver depends on the instance, not the body.** A
+  compiled body is shared by every instance of its module, and one instance's output
+  may land on a resolved net where another's does not. A store therefore names its
+  target by its position in the process's write set, and each bound process carries a
+  table from that position to the signal itself or to a driver. A JIT, which
+  specialises a process per instance, burns the answer in as a constant.
+
+A per-bit table of owning drivers was rejected because it holds at run time a fact
+that is fixed at elaboration, and pays a lookup on every write, single-driver ones
+included. Routing every write through a driver whether or not anything overlaps it
+puts a step on the path this section requires to be bypassed.
 
 ### 3.8 Determinism
 
@@ -468,11 +490,13 @@ the arena; the waveform database reads values directly out of it without
 indirection; a JIT can burn offsets into generated code as constants; and cache
 locality becomes something that can be optimised by reordering the layout.
 
-What a driver occupies here is not settled, because a driver covers a bit range
-rather than a whole signal (3.7) and the representation of that range is an open
-decision M5 makes. Whatever it is has to be laid out at elaboration like everything
-else: a per-bit structure sized at run time would be allocation on the write path,
-which 13.4 forbids.
+A driver occupies the arena only where 3.7 gives it a value of its own: on a signal
+with a bit driven more than once, each of its drivers holds both planes over its
+range, laid out at elaboration beside the signal. A signal with at most one driver per
+bit has nothing here but itself. The segment tables and the store routing of 3.7 are
+fixed at elaboration and only read during a run, so they belong to the image rather
+than to the arena, and a checkpoint has nothing of theirs to save. Nothing about
+drivers is sized at run time, which on the write path 13.4 forbids.
 
 ### 4.4 Libraries
 
@@ -2509,12 +2533,6 @@ regions; loading PLI shared objects.
 Full four-state throughout; X-propagation; nets, drivers and resolution per 3.7;
 tasks, functions, packages, interfaces, generate, structs, enums, arrays;
 `sv-tests` pass rate tracked.
-
-**The driver representation of 3.7 is decided first.** A driver covers a bit range,
-so how that range is stored — on the driver, as a per-bit table of owners, or a
-hybrid — decides the shape of 4.3's arena and the cost of the signal write path.
-4.3 fixes offsets at elaboration, and 13.4 forbids allocating on the write path, so
-this is not a choice that can be deferred until the code is written against it.
 
 **Driving disjoint parts of one signal is the case to get right**, not an edge. A
 parameterised number of instances with ports connected to an array is ordinary RTL,
