@@ -2557,11 +2557,9 @@ the language M5 adds without either:
   ones kept beside its fetch script for further modules.
 
 **Driving disjoint parts of one signal is the case to get right**, not an edge. A
-parameterised number of instances with ports connected to an array is ordinary RTL,
-and today it is refused: `ENZ3006` reports the signal as multiply driven because
-drivers are tracked per signal rather than per bit. Overlap, not sharing a signal,
-is what multiple driving means, and a variable driven in disjoint parts is legal
-where an overlapping one is an error.
+parameterised number of instances with ports connected to an array is ordinary RTL.
+Overlap, not sharing a signal, is what multiple driving means, and a variable driven
+in disjoint parts is legal where an overlapping one is an error.
 
 **Exit:** `aes` matches iverilog; the `taxi` AXI-stream tests and the `common_cells`
 testbenches above pass under Enzan; a design whose instance count is a

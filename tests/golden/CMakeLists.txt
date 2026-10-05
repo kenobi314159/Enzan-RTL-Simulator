@@ -82,6 +82,10 @@ enzan_add_golden_test(scheduling NO_DIFFERENTIAL)
 # single-instance case cannot tell a parameter that is honoured from one that is ignored.
 enzan_add_golden_test(router)
 
+# Drivers of disjoint bits of one signal, the case section 3.7 is written around: a
+# parameterised number of instances whose outputs are bits and slices of one array.
+enzan_add_golden_test(drivers)
+
 # ---------------------------------------------------------------------------
 # Waveform output
 # ---------------------------------------------------------------------------

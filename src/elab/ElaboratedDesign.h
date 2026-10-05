@@ -4,6 +4,7 @@
 
 #include "eir/BitVector.h"
 #include "eir/Design.h"
+#include "eir/Module.h"
 #include "eir/Type.h"
 
 #include <cstdint>
@@ -32,6 +33,10 @@ struct Slot {
     std::uint32_t wordOffset = 0;
 
     eir::Type type;
+
+    /// Whether the object that declared this slot is a net or a variable, which decides
+    /// whether two drivers of one bit are resolved or refused (DESIGN_GUIDE.md section 3.7).
+    eir::ObjectKind kind = eir::ObjectKind::Variable;
 
     /// The hierarchical path of the object that declared this slot, for diagnostics
     /// and for the waveform database's default name.

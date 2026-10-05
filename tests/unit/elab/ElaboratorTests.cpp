@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,7 @@ using enzan::eir::Design;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
+using enzan::eir::ObjectKind;
 using enzan::eir::Opcode;
 using enzan::eir::Operand;
 using enzan::eir::Port;
@@ -70,6 +72,32 @@ Process makeCopyProcess(ProcessKind kind, std::uint32_t from, std::uint32_t to, 
         Instruction::make(Opcode::ReadObject, Operand::reg(0), Operand::object(from)));
     entry.instructions.push_back(
         Instruction::make(Opcode::Store, {}, Operand::object(to), Operand::reg(0)));
+    entry.instructions.push_back(Instruction::make(Opcode::Return));
+    process.blocks.push_back(std::move(entry));
+    return process;
+}
+
+/// Builds a process that copies `from`, which is `width` bits, into bits `lowBit` upwards of
+/// `to`, declaring exactly those bits as written.
+Process makePartDriver(ProcessKind kind, std::uint32_t from, std::uint32_t to, std::uint32_t lowBit,
+                       std::uint32_t width) {
+    Process process;
+    process.kind = kind;
+    process.name = std::format("part{}", lowBit);
+    process.registerTypes.push_back(Type::bits(width, false, true));
+    process.registerTypes.push_back(Type::bits(32, false, false));
+    process.constants.push_back(enzan::eir::BitVector::fromUInt64(lowBit, 32));
+    process.readSet = {from};
+    process.writeSet = {WriteExtent{.objectIndex = to, .lowBit = lowBit, .width = width}};
+
+    BasicBlock entry;
+    entry.label = "entry";
+    entry.instructions.push_back(
+        Instruction::make(Opcode::ReadObject, Operand::reg(0), Operand::object(from)));
+    entry.instructions.push_back(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(1), Operand::constant(0)));
+    entry.instructions.push_back(Instruction::make(Opcode::StorePart, {}, Operand::object(to),
+                                                   Operand::reg(0), Operand::reg(1)));
     entry.instructions.push_back(Instruction::make(Opcode::Return));
     process.blocks.push_back(std::move(entry));
     return process;
@@ -508,7 +536,7 @@ TEST_F(ElaboratorTest, RejectsAContinuousAndAProceduralDriverOnOneObject) {
     design.addModule(std::move(top));
 
     EXPECT_EQ(elaborate("tb"), nullptr);
-    EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MixedDriverKinds));
 }
 
 TEST_F(ElaboratorTest, ACollapsedPortDrivenFromBothSidesIsDetected) {
@@ -536,6 +564,125 @@ TEST_F(ElaboratorTest, ACollapsedPortDrivenFromBothSidesIsDetected) {
 
     EXPECT_EQ(elaborate("parent"), nullptr);
     EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+}
+
+// ---------------------------------------------------------------------------
+// Drivers per bit (DESIGN_GUIDE.md section 3.7)
+// ---------------------------------------------------------------------------
+
+/// A module `tb` with a one-bit source and an eight-bit target of the given kind.
+ModuleDefinition partTarget(ObjectKind kind) {
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::logic()});
+    top.addObject(Object{.name = "x", .type = Type::bits(8, false, true), .kind = kind});
+    return top;
+}
+
+TEST_F(ElaboratorTest, ContinuousDriversOfDisjointBitsOfOneVariableAreAllowed) {
+    // Overlap, not sharing a signal, is what multiple driving means.
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    for (std::uint32_t bit = 0; bit < 8; ++bit)
+        top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, bit, 1));
+    design.addModule(std::move(top));
+
+    EXPECT_NE(elaborate("tb"), nullptr) << consumer.messages.front();
+    EXPECT_TRUE(consumer.codes.empty());
+}
+
+TEST_F(ElaboratorTest, ContinuousDriversOverlappingOnOneBitOfAVariableAreRefused) {
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    top.addObject(Object{.name = "pair", .type = Type::bits(2, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 0, 2));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 1, 2));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+    // The overlap, not the whole of either driver, and both drivers by name and instance.
+    EXPECT_TRUE(reported("'/tb/x' has bit 1 driven by both part0 in /tb and part1 in /tb"))
+        << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, AWideOverlapIsReportedAsARangeOnce) {
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    top.addObject(Object{.name = "nibble", .type = Type::bits(4, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 0, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 2, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 3, 4));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reported("bits [3:2]")) << consumer.messages.front();
+    EXPECT_EQ(consumer.codes.size(), 1U) << "one diagnostic per signal, for its lowest overlap";
+}
+
+TEST_F(ElaboratorTest, AProceduralWriterOfBitsNoContinuousDriverOwnsIsAllowed) {
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    top.addObject(Object{.name = "nibble", .type = Type::bits(4, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 4, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::AlwaysComb, 2, 1, 0, 4));
+    design.addModule(std::move(top));
+
+    EXPECT_NE(elaborate("tb"), nullptr) << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, AProceduralWriterOfAContinuouslyDrivenBitIsRefused) {
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    top.addObject(Object{.name = "nibble", .type = Type::bits(4, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::AlwaysComb, 2, 1, 0, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 3, 4));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MixedDriverKinds));
+    EXPECT_TRUE(reported("'/tb/x' has bit 3 driven by the continuous assignment part3 in /tb and "
+                         "also written by part0 in /tb"))
+        << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, OverlappingDriversOfANetAreRefusedUntilResolutionExists) {
+    // A net resolves them, which the runtime does not do yet; letting the last write win would
+    // be a plausible wrong answer.
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 5, 1));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 5, 1));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::NotYetImplemented));
+    EXPECT_TRUE(reported("resolving net '/tb/x', whose bit 5 is driven by both"))
+        << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, PortsOfManyInstancesDrivingBitsOfOneArrayAreAllowed) {
+    // The pattern section 3.7 is written around, after collapsing: each instance's output is
+    // its own slot, copied into one bit of the parent's array by its own connection.
+    ModuleDefinition child;
+    child.name = "channel";
+    child.addObject(Object{.name = "ready", .type = Type::logic()});
+    child.addObject(Object{.name = "src", .type = Type::logic()});
+    child.ports.push_back(
+        Port{.name = "ready", .direction = PortDirection::Output, .objectIndex = 0});
+    child.processes.push_back(makeCopyProcess(ProcessKind::ContinuousAssign, 1, 0, Type::logic()));
+    design.addModule(std::move(child));
+
+    ModuleDefinition parent = partTarget(ObjectKind::Variable);
+    parent.name = "tb";
+    for (std::uint32_t bit = 0; bit < 8; ++bit) {
+        const std::uint32_t port =
+            parent.addObject(Object{.name = std::format("u{}$ready", bit), .type = Type::logic()});
+        parent.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, port, 1, bit, 1));
+
+        enzan::eir::Instance instance;
+        instance.name = std::format("u{}", bit);
+        instance.definitionName = "channel";
+        instance.connections.push_back(PortConnection{.portIndex = 0, .objectIndex = port});
+        parent.instances.push_back(std::move(instance));
+    }
+    design.addModule(std::move(parent));
+
+    EXPECT_NE(elaborate("tb"), nullptr) << consumer.messages.front();
 }
 
 } // namespace

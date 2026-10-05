@@ -17,12 +17,10 @@ namespace enzan::eir {
 
 /// Whether an object is a net or a variable.
 ///
-/// The distinction is not cosmetic. A net may have several drivers and resolves
-/// them; a variable holds the last value written to it and having two processes
-/// write one variable is an error rather than a resolution (DESIGN_GUIDE.md section
-/// 3.7). The M1 subset supports one driver per object either way, and the
-/// distinction is recorded so that M5 can add resolution without revisiting every
-/// declaration.
+/// The distinction is not cosmetic. A bit of a net may have several drivers and
+/// resolves them; a bit of a variable may have one continuous driver, and a second is
+/// an error rather than a resolution (DESIGN_GUIDE.md section 3.7). Elaboration
+/// decides which applies from this.
 enum class ObjectKind : std::uint8_t { Net, Variable };
 
 std::string_view toString(ObjectKind kind) noexcept;

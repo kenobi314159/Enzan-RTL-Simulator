@@ -33,20 +33,30 @@ std::string joinNames(const Range& names) {
     return result;
 }
 
-/// How a slot is written, so that conflicting drivers can be detected before they
-/// produce silently wrong values.
-enum class DriverKind : std::uint8_t {
-    /// Nothing writes it.
-    None,
-    /// One or more procedural blocks write it. Several are legal and normal: a
-    /// testbench that has `initial clk = 0;` alongside `always #5 clk = ~clk;` has two
-    /// procedural writers of one variable, and the last write wins.
-    Procedural,
-    /// A continuous assignment drives it.
-    Continuous,
-    /// More than one continuous assignment, or a mixture of kinds. Reported.
-    Conflicting,
+/// One process's write of a range of one slot, for finding where drivers overlap.
+struct DriverRange {
+    std::uint32_t lowBit = 0;
+    std::uint32_t width = 0;
+
+    /// Index into the elaborated design's process list.
+    std::uint32_t process = 0;
+
+    /// True for a continuous assignment, which drives its bits; false for a procedural
+    /// block, which only writes them.
+    bool continuous = false;
+
+    [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + width; }
 };
+
+/// Names the overlapping bits of a slot for a diagnostic.
+///
+/// Counted from bit 0 at the least significant end, which is how every other part of Enzan
+/// numbers a signal's bits: the declared range is not kept past the frontend.
+std::string describeBits(std::uint32_t lowBit, std::uint32_t endBit, std::uint32_t slotWidth) {
+    if (slotWidth == 1) return "its only bit";
+    if (endBit - lowBit == 1) return std::format("bit {}", lowBit);
+    return std::format("bits [{}:{}]", endBit - 1, lowBit);
+}
 
 } // namespace
 
@@ -159,6 +169,7 @@ private:
 
         Slot slot;
         slot.type = object.type;
+        slot.kind = object.kind;
         slot.wordOffset = result->arenaSize;
         slot.path = instance.path + '/' + object.name;
         slot.enumIndex = internEnum(definition, object.enumIndex);
@@ -326,49 +337,102 @@ private:
         }
     }
 
-    /// Reports slots that would need driver resolution, which is an M5 feature.
+    /// Finds bits with more than one driver and reports those the language does not allow
+    /// (DESIGN_GUIDE.md section 3.7).
     ///
-    /// Catching this here rather than letting the runtime take the last write is the
-    /// difference between a clear error and a design that simulates to a plausible
-    /// wrong answer — the failure mode section 1.2 weighs most heavily.
+    /// Overlap is what counts, not sharing a signal: `N` instances each driving one bit of an
+    /// array are `N` drivers of disjoint ranges and no conflict at all. Several procedural
+    /// writers of one bit are legal too — `initial clk = 0;` beside `always #5 clk = ~clk;`
+    /// is in almost every testbench — and the last write wins. What is refused is a bit of a
+    /// variable with two continuous drivers, or with a continuous driver and a procedural
+    /// writer. Overlapping drivers of a net are legal and resolved, which the runtime does
+    /// not do yet, so they are refused as unimplemented rather than left to the last write.
+    ///
+    /// One diagnostic per slot, for the overlap at its lowest bit: the first conflict names
+    /// the signal and both drivers, and a list of every pair on a wide bus would bury it.
     bool checkDrivers() {
-        std::vector<DriverKind> drivers(result->slotList.size(), DriverKind::None);
+        std::vector<std::vector<DriverRange>> rangesBySlot(result->slotList.size());
 
-        for (const ProcessInstance& processInstance : result->processList) {
+        for (std::uint32_t processIndex = 0; processIndex < result->processList.size();
+             ++processIndex) {
+            const ProcessInstance& processInstance = result->processList[processIndex];
             const Instance& instance = result->instanceList[processInstance.instanceIndex];
-            const eir::ModuleDefinition& definition = design.module(instance.definitionIndex);
-            const eir::Process& process = definition.processes[processInstance.processIndex];
+            const eir::Process& process = processOf(processInstance);
             const bool continuous = process.kind == eir::ProcessKind::ContinuousAssign;
 
-            std::uint32_t previousObject = NoSlot;
             for (const eir::WriteExtent& extent : process.writeSet) {
-                // Extents are ordered by object, and two extents of one object are still one
-                // process writing it.
-                if (extent.objectIndex == previousObject) continue;
-                previousObject = extent.objectIndex;
-
-                const std::uint32_t slotIndex = instance.objectSlots[extent.objectIndex];
-                DriverKind& kind = drivers[slotIndex];
-
-                if (kind == DriverKind::None) {
-                    kind = continuous ? DriverKind::Continuous : DriverKind::Procedural;
-                } else if (continuous || kind == DriverKind::Continuous) {
-                    // Two continuous drivers need resolution; a continuous driver
-                    // fighting a procedural one is a design error in any case.
-                    kind = DriverKind::Conflicting;
-                }
+                rangesBySlot[instance.objectSlots[extent.objectIndex]].push_back(
+                    DriverRange{.lowBit = extent.lowBit,
+                                .width = extent.width,
+                                .process = processIndex,
+                                .continuous = continuous});
             }
         }
 
         bool ok = true;
-        for (std::uint32_t slotIndex = 0; slotIndex < drivers.size(); ++slotIndex) {
-            if (drivers[slotIndex] != DriverKind::Conflicting) continue;
+        for (std::uint32_t slotIndex = 0; slotIndex < rangesBySlot.size(); ++slotIndex) {
+            std::vector<DriverRange>& ranges = rangesBySlot[slotIndex];
+            if (ranges.size() < 2) continue;
 
-            diagnostics.report(DiagCode::MultipleContinuousDrivers, SourceLocation(),
-                               result->slotList[slotIndex].path);
-            ok = false;
+            // Stable, so that ranges starting at one bit keep process order and the pair a
+            // diagnostic names is the same on every run (section 3.8).
+            std::ranges::stable_sort(ranges, {}, &DriverRange::lowBit);
+            if (!checkSlotDrivers(slotIndex, ranges)) ok = false;
         }
         return ok;
+    }
+
+    /// Reports the first conflicting overlap among `ranges`, which are ordered by low bit,
+    /// and returns false if there was one.
+    bool checkSlotDrivers(std::uint32_t slotIndex, const std::vector<DriverRange>& ranges) {
+        const Slot& slot = result->slotList[slotIndex];
+
+        for (std::size_t later = 1; later < ranges.size(); ++later) {
+            for (std::size_t earlier = 0; earlier < later; ++earlier) {
+                const DriverRange& first = ranges[earlier];
+                const DriverRange& second = ranges[later];
+                if (first.endBit() <= second.lowBit) continue;
+                if (!first.continuous && !second.continuous) continue;
+
+                const std::string bits = describeBits(
+                    second.lowBit, std::min(first.endBit(), second.endBit()), slot.type.bitWidth());
+                const eir::Process& secondProcess = processOf(result->processList[second.process]);
+
+                if (first.continuous != second.continuous) {
+                    const DriverRange& driver = first.continuous ? first : second;
+                    const DriverRange& writer = first.continuous ? second : first;
+                    diagnostics.report(DiagCode::MixedDriverKinds, secondProcess.location,
+                                       slot.path, bits, describeProcess(driver.process),
+                                       describeProcess(writer.process));
+                } else if (slot.kind == eir::ObjectKind::Variable) {
+                    diagnostics.report(DiagCode::MultipleContinuousDrivers, secondProcess.location,
+                                       slot.path, bits, describeProcess(first.process),
+                                       describeProcess(second.process));
+                } else {
+                    diagnostics.report(
+                        DiagCode::NotYetImplemented, secondProcess.location,
+                        std::format("resolving net '{}', whose {} {} driven by both {} and {},",
+                                    slot.path, bits, bits.starts_with("bits") ? "are" : "is",
+                                    describeProcess(first.process),
+                                    describeProcess(second.process)));
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] const eir::Process& processOf(const ProcessInstance& processInstance) const {
+        const Instance& instance = result->instanceList[processInstance.instanceIndex];
+        return design.module(instance.definitionIndex).processes[processInstance.processIndex];
+    }
+
+    /// A process as a diagnostic names it: what it is and where, and the instance it runs in,
+    /// since every instance of a module shares the one written in its source.
+    [[nodiscard]] std::string describeProcess(std::uint32_t processIndex) const {
+        const ProcessInstance& processInstance = result->processList[processIndex];
+        return std::format("{} in {}", processOf(processInstance).name,
+                           result->instanceList[processInstance.instanceIndex].path);
     }
 
     static constexpr std::uint32_t NoSlot = 0xFFFF'FFFFU;

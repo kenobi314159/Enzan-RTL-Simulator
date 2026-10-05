@@ -71,12 +71,12 @@ ENZAN_DIAG(PortWidthMismatch, 3005, Error,
            "port '{}' of '{}' is {} bits but is connected to a {}-bit object; width conversion "
            "on port connections is not yet implemented")
 ENZAN_DIAG(MultipleContinuousDrivers, 3006, Error,
-           "'{}' is driven by more than one continuous assignment; drivers are tracked per "
-           "signal rather than per bit, so driving disjoint parts of one signal is refused here "
-           "as well. Per-bit drivers and resolution arrive at M5 (DESIGN_GUIDE.md section 3.7)")
+           "variable '{}' has {} driven by both {} and {}; a variable may have one continuous "
+           "driver for each bit, so overlapping drivers are an error rather than something to "
+           "resolve")
 ENZAN_DIAG(MixedDriverKinds, 3007, Error,
-           "'{}' is driven both by a continuous assignment and by a procedural block, which "
-           "requires driver resolution")
+           "'{}' has {} driven by the continuous assignment {} and also written by {}; a bit "
+           "that is driven continuously may not be written procedurally")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 
