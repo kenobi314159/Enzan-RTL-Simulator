@@ -135,6 +135,10 @@ void divide(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned);
 /// `dst = a % b`, with the sign of `a` when signed. A zero divisor yields all X.
 void modulo(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned);
 
+/// `dst` receives how many bits of `a` are exactly 1, as a two-state number: what
+/// `$countones` returns (IEEE 1800 section 20.9), with X and Z bits counted as not 1.
+void countOnes(BitRef dst, ConstBitRef a);
+
 /// `dst = base ** exponent`, which IEEE 1800 section 11.4.3 defines in full: X when either
 /// operand has an unknown bit; for a negative exponent, which only a signed one can be, X for
 /// a zero base, 1 for a base of 1, alternately -1 and 1 for a signed base of -1, and 0 for any

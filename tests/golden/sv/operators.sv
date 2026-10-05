@@ -189,6 +189,15 @@ module tb;
             failures = failures + 1;
         end
 
+        // The bit-counting functions count bits that are exactly 1, and see X and Z for what
+        // they are.
+        a = 8'b1010_0x1z;
+        if ($isunknown(a) !== 1'b1 || $countones(a) != 3 || $onehot(a) !== 1'b0
+            || $onehot0(8'b0) !== 1'b1 || $onehot(8'b0001_0000) !== 1'b1) begin
+            $display("FAIL: $isunknown, $countones or $onehot of %b", a);
+            failures = failures + 1;
+        end
+
         // `**` wraps at the width, and an unknown operand makes it x.
         a = 8'd3;
         narrow = 4'd4;

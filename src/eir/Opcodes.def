@@ -95,6 +95,9 @@ ENZAN_OPCODE(ReduceOr, "ror", true, 1, "as ReduceAnd against zero")
 ENZAN_OPCODE(ReduceXor, "rxor", true, 1,
              "llvm.ctpop on the aval plane and 1, guarded by an unknown-present "
              "test that forces X")
+ENZAN_OPCODE(CountOnes, "cntones", true, 1,
+             "llvm.ctpop of `aval & ~bval` per limb, summed, which counts the bits that are "
+             "exactly 1 and so leaves X and Z out, as `$countones` does")
 ENZAN_OPCODE(LogicalAnd, "land", true, 2,
              "the truth values of both operands combined by the three-valued AND "
              "table; the compiler emits branches for short-circuit evaluation and "

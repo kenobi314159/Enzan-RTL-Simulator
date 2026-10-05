@@ -1475,6 +1475,11 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
             return Value{.reg = result, .type = resultType};
         }
 
+        if (name == "$isunknown" || name == "$countones" || name == "$onehot"
+            || name == "$onehot0") {
+            return translateBitCount(name, call, expression);
+        }
+
         module->reportUnsupported(expression.sourceRange.start(),
                                   std::string("the system function ") + std::string(name));
         failed = true;
@@ -1484,6 +1489,61 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
     module->reportUnsupported(expression.sourceRange.start(), "user-defined tasks and functions");
     failed = true;
     return std::nullopt;
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateBitCount(std::string_view name, const ast::CallExpression& call,
+                                     const ast::Expression& expression) {
+    if (call.arguments().size() != 1) {
+        module->reportUnsupported(expression.sourceRange.start(),
+                                  std::string(name) + " with other than one argument");
+        failed = true;
+        return std::nullopt;
+    }
+    const std::optional<Value> operand = translateExpression(*call.arguments()[0]);
+    if (!operand.has_value()) return std::nullopt;
+
+    const std::optional<eir::Type> declared = module->convertType(*expression.type);
+    const eir::Type resultType = declared.value_or(eir::Type::bit());
+
+    const auto loadConstant = [&](std::uint64_t value, eir::Type type) {
+        const std::uint32_t index = addConstant(eir::BitVector::fromUInt64(value, type.bitWidth()));
+        const std::uint32_t reg = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(reg),
+                                    eir::Operand::constant(index)));
+        return Value{.reg = reg, .type = type};
+    };
+
+    if (name == "$isunknown") {
+        // A reduction XOR is X exactly when some bit is X or Z, and `===` asks which.
+        const std::uint32_t reduced = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::ReduceXor, eir::Operand::reg(reduced),
+                                    eir::Operand::reg(operand->reg)));
+        const eir::BitVector unknown(1);
+        const std::uint32_t index = addConstant(unknown);
+        const std::uint32_t unknownReg = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(unknownReg),
+                                    eir::Operand::constant(index)));
+        const std::uint32_t result = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::CaseEqual, eir::Operand::reg(result),
+                                    eir::Operand::reg(reduced), eir::Operand::reg(unknownReg)));
+        return coerce(Value{.reg = result, .type = eir::Type::logic()}, resultType);
+    }
+
+    const eir::Type countType = eir::Type::intType();
+    const std::uint32_t count = newRegister(countType);
+    emit(eir::Instruction::make(eir::Opcode::CountOnes, eir::Operand::reg(count),
+                                eir::Operand::reg(operand->reg)));
+    const Value counted{.reg = count, .type = countType};
+
+    if (name == "$countones") return coerce(counted, resultType);
+
+    // `$onehot` is exactly one bit set and `$onehot0` at most one; the count is two-state, so
+    // the comparison never yields X.
+    const Value one = loadConstant(1, countType);
+    const Value matched =
+        compare(name == "$onehot" ? eir::Opcode::Equal : eir::Opcode::LessEqual, counted, one);
+    return coerce(matched, resultType);
 }
 
 std::optional<ProcessTranslator::Value>

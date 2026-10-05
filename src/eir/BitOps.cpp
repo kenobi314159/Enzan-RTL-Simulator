@@ -5,6 +5,7 @@
 #include "common/Assert.h"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <span>
 #include <vector>
@@ -560,6 +561,17 @@ void modulo(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned) {
         remainder.mutableRef().canonicalize();
     }
     copy(dst, remainder.ref());
+}
+
+void countOnes(BitRef dst, ConstBitRef a) {
+    std::uint64_t count = 0;
+    for (std::uint32_t index = 0; index < a.words(); ++index)
+        count += static_cast<std::uint64_t>(std::popcount(a.aval()[index] & ~a.bval()[index]));
+
+    std::ranges::fill(dst.avalWords(), 0);
+    std::ranges::fill(dst.bvalWords(), 0);
+    dst.aval()[0] = count;
+    dst.canonicalize();
 }
 
 void power(BitRef dst, ConstBitRef base, ConstBitRef exponent, bool baseSigned,

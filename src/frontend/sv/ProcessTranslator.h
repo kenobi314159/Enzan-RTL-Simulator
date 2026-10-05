@@ -19,6 +19,7 @@ class SourceLocation;
 }
 
 namespace slang::ast {
+class CallExpression;
 class Expression;
 class RangeSelectExpression;
 class Statement;
@@ -217,6 +218,11 @@ private:
     std::optional<Value> translateRangeSelect(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
     std::optional<Value> translateInside(const slang::ast::Expression& expression);
+
+    /// `$isunknown`, `$countones`, `$onehot` and `$onehot0` (IEEE 1800 section 20.9).
+    std::optional<Value> translateBitCount(std::string_view name,
+                                           const slang::ast::CallExpression& call,
+                                           const slang::ast::Expression& expression);
 
     /// Emits a comparison of two values, each extended to the wider of the two and compared
     /// as signed only when both are, and returns its one-bit result.

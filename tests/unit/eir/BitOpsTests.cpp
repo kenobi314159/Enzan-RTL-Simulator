@@ -775,6 +775,17 @@ TEST(BitOpsConditional, MergeAcrossLimbs) {
     EXPECT_EQ(result.get(129), Logic::Unknown) << "the differing bit becomes x";
 }
 
+TEST(BitOpsCount, CountOnesCountsOnlyBitsThatAreExactlyOne) {
+    EXPECT_EQ(applyUnary(bitops::countOnes, "8'b1010_0x1z"), "00000011");
+    EXPECT_EQ(applyUnary(bitops::countOnes, "8'b0000_0000"), "00000000");
+
+    // Across limbs, and into a result narrower than the operand.
+    const BitVector wide = BitVector::filled(130, Logic::One);
+    BitVector result(32);
+    bitops::countOnes(result.mutableRef(), wide.ref());
+    EXPECT_EQ(result.ref().toUInt64(), 130U);
+}
+
 // ---------------------------------------------------------------------------
 // Power (IEEE 1800 section 11.4.3, table 11-4)
 // ---------------------------------------------------------------------------
