@@ -29,6 +29,19 @@ std::size_t paddedWidth(std::uint32_t bitWidth, eir::Radix radix, bool isSigned)
     return (isSigned ? 1 : 0) + (digits == 0 ? 1 : digits);
 }
 
+/// Widens `text` to a field width: on the right when left-justified, otherwise on the left, with
+/// zeros after any sign when `zeroPad` and with spaces when not. Text already at least as wide
+/// is left alone, as a field width never truncates.
+std::string widened(std::string text, std::optional<std::size_t> width, bool leftJustify,
+                    bool zeroPad) {
+    if (!width.has_value() || text.size() >= *width) return text;
+    const std::size_t padding = *width - text.size();
+    if (leftJustify) return text + std::string(padding, ' ');
+    if (!zeroPad) return std::string(padding, ' ') + text;
+    const std::size_t sign = !text.empty() && text.front() == '-' ? 1 : 0;
+    return text.substr(0, sign) + std::string(padding, '0') + text.substr(sign);
+}
+
 /// Pads `text` on the left with spaces to `width`.
 std::string padLeft(std::string text, std::size_t width) {
     if (text.size() >= width) return text;
@@ -88,15 +101,31 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
             break;
         }
 
-        bool minimal = false;
-        if (format[index] == '0') {
-            minimal = true;
+        // An optional `-` to left-justify, then an optional field width (IEEE 1800 section
+        // 21.2.1.3). A width of 0 asks for the minimal rendering; a width beginning with 0,
+        // such as `%016x`, pads with zeros rather than spaces.
+        bool leftJustify = false;
+        if (format[index] == '-') {
+            leftJustify = true;
             ++index;
-            if (index >= format.size()) {
-                result.append(format.substr(start));
-                break;
-            }
         }
+        std::optional<std::size_t> fieldWidth;
+        bool zeroPad = false;
+        if (index < format.size() && std::isdigit(static_cast<unsigned char>(format[index])) != 0) {
+            zeroPad = format[index] == '0';
+            std::size_t width = 0;
+            while (index < format.size()
+                   && std::isdigit(static_cast<unsigned char>(format[index])) != 0) {
+                width = (width * 10) + static_cast<std::size_t>(format[index] - '0');
+                ++index;
+            }
+            fieldWidth = width;
+        }
+        if (index >= format.size()) {
+            result.append(format.substr(start));
+            break;
+        }
+        const bool minimal = fieldWidth.has_value() && *fieldWidth == 0;
 
         const char conversion = format[index];
 
@@ -157,7 +186,7 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
         const FormatArgument& argument = arguments[nextArgument++];
 
         if (isString) {
-            result += toAsciiString(argument.value);
+            result += widened(toAsciiString(argument.value), fieldWidth, leftJustify, false);
             continue;
         }
 
@@ -169,8 +198,12 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
                 character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
         }
 
+        // A decimal is rendered minimal and then widened; a radix whose digits each cover fixed
+        // bits always shows them all, and a field width only ever adds to that.
         if (minimal) {
             result += rendered;
+        } else if (fieldWidth.has_value()) {
+            result += widened(std::move(rendered), fieldWidth, leftJustify, zeroPad);
         } else {
             result += padLeft(std::move(rendered),
                               paddedWidth(argument.value.width(), radix, argument.isSigned));

@@ -173,4 +173,24 @@ TEST(Format, PaddingWidthsMatchTheTypesRange) {
     EXPECT_EQ(render("%o", {{literal("9'd3").ref(), false}}), "003");
 }
 
+TEST(Format, AFieldWidthWidensButNeverTruncates) {
+    // Checked against Icarus Verilog. A radix whose digits cover fixed bits shows them all and
+    // a width only adds to that; a decimal is minimal and then widened.
+    const BitVector word = BitVector::fromUInt64(0x1a, 32);
+    const BitVector five = BitVector::fromInt64(5, 32);
+    const BitVector minusFive = BitVector::fromInt64(-5, 32);
+    const auto one = [](const BitVector& value, bool isSigned) {
+        return std::vector<FormatArgument>{{.value = value.ref(), .isSigned = isSigned}};
+    };
+
+    EXPECT_EQ(render("[%12h]", one(word, false)), "[    0000001a]");
+    EXPECT_EQ(render("[%3h]", one(word, false)), "[0000001a]");
+    EXPECT_EQ(render("[%016x]", one(word, false)), "[000000000000001a]");
+    EXPECT_EQ(render("[%5d]", one(five, true)), "[    5]");
+    EXPECT_EQ(render("[%05d]", one(five, true)), "[00005]");
+    EXPECT_EQ(render("[%05d]", one(minusFive, true)), "[-0005]");
+    EXPECT_EQ(render("[%-4d]", one(five, true)), "[5   ]");
+    EXPECT_EQ(render("[%02d]", one(five, true)), "[05]");
+}
+
 } // namespace
