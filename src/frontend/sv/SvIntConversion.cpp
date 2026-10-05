@@ -31,8 +31,8 @@ eir::BitVector toBitVector(const slang::SVInt& value) {
 
         // Compared by encoding, not with `==`: slang's `==` on two logic values is four-state
         // and yields X for any unknown operand, which would make every Z an X.
-        result.set(index, bit.value == slang::logic_t::Z_VALUE ? eir::Logic::HighZ
-                                                               : eir::Logic::Unknown);
+        result.set(index,
+                   bit.value == slang::logic_t::Z_VALUE ? eir::Logic::HighZ : eir::Logic::Unknown);
     }
 
     return result;
