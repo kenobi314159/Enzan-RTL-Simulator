@@ -281,6 +281,11 @@ struct ModuleDefinition {
     /// failure mode section 1.2 ranks worst. Section 8.2 has the resolution rules.
     std::string library;
 
+    /// True for a package's variables rather than a module (IEEE 1800 section 26): one
+    /// instance of it exists, at the root as `/<package>`, when some module refers to one of
+    /// them, and it is never a top level. Named `<package>::`, which no module can be.
+    bool isPackage = false;
+
     SourceLocation location;
 
     std::vector<Object> objects;

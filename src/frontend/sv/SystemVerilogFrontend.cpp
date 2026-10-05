@@ -215,6 +215,11 @@ public:
         /// which is what a build system passes. The identifier is what the two managers
         /// actually agree about.
         const std::map<slang::BufferID, BufferId>& buffers;
+
+        /// Every package variable a module refers to, in the order they were first met, for
+        /// the package definitions that hold them. Only those: a package may declare variables
+        /// of types Enzan does not have, and one nothing uses should not stop a design.
+        std::vector<const ast::ValueSymbol*>* packageVariables = nullptr;
     };
 
     ModuleBuilder(Shared& sharedState, std::string name, const ast::InstanceBodySymbol& bodySymbol)
@@ -223,6 +228,18 @@ public:
         definitionValue.sourceName = std::string(bodySymbol.getDefinition().name);
         definitionValue.location = convertLocation(bodySymbol.getDefinition().location);
     }
+
+    /// A builder for the definition that holds a package's variables, which has no body.
+    ModuleBuilder(Shared& sharedState, const ast::PackageSymbol& packageSymbol)
+        : shared(&sharedState), body(nullptr), package(&packageSymbol) {
+        definitionValue.name = std::format("{}::", packageSymbol.name);
+        definitionValue.sourceName = std::string(packageSymbol.name);
+        definitionValue.location = convertLocation(packageSymbol.location);
+        definitionValue.isPackage = true;
+    }
+
+    /// The package that declares `symbol` directly, if one does.
+    static const ast::PackageSymbol* packageOf(const ast::ValueSymbol& symbol);
 
     /// Collects declarations and ports. Instances and processes come after, because an
     /// instance's connections resolve against this module's objects.
@@ -342,6 +359,8 @@ private:
 
     Shared* shared;
     const ast::InstanceBodySymbol* body;
+    /// The package whose variables this builder declares, for a package's builder.
+    const ast::PackageSymbol* package = nullptr;
     eir::ModuleDefinition definitionValue;
 
     std::map<const ast::ValueSymbol*, std::uint32_t> objectBySymbol;
@@ -568,6 +587,13 @@ void ModuleBuilder::reportUnsupported(slang::SourceLocation location, std::strin
     shared->diagnostics.report(DiagCode::UnsupportedConstruct, convertLocation(location), what);
 }
 
+const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {
+    const ast::Scope* scope = symbol.getParentScope();
+    if (scope == nullptr || scope->asSymbol().kind != slang::ast::SymbolKind::Package)
+        return nullptr;
+    return &scope->asSymbol().as<ast::PackageSymbol>();
+}
+
 std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& symbol) {
     // A member reached through a modport is the modport's stand-in for the interface's own
     // variable or net, which is what has storage.
@@ -593,26 +619,40 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
         return std::nullopt;
     }
 
+    // A package variable is one variable however many modules use it, so a module refers to the
+    // package's own, at the root, as it would to another instance's (IEEE 1800 section 26.2).
+    const ast::PackageSymbol* const declaringPackage = packageOf(symbol);
+    if (declaringPackage != nullptr && declaringPackage != package) {
+        std::vector<const ast::ValueSymbol*>& used = *shared->packageVariables;
+        if (std::ranges::find(used, &symbol) == used.end()) used.push_back(&symbol);
+        return referenceThrough(symbol, std::format("/{}/{}", declaringPackage->name, symbol.name),
+                                *type);
+    }
+
     // A symbol another instance declares is a hierarchical reference, a name here for that
     // instance's object, and gets no storage of its own: elaboration binds it. Giving it storage
-    // would make a testbench reading `dut.state` read a copy nothing ever writes.
-    const ast::InstanceBodySymbol* owner = nullptr;
-    const std::optional<std::string> nameThere = nameWithinBody(symbol, owner);
-    if (!nameThere.has_value() || owner == nullptr) {
-        reportUnsupported(
-            symbol.location,
-            std::format("a reference to '{}', which is not declared in a module", symbol.name));
-        return std::nullopt;
-    }
-    if (owner != body) {
-        // Reached through an interface port, the reference names the port rather than the
-        // interface it happens to be connected to here: one definition serves every instance,
-        // and each may be connected to a different one.
-        if (owner->parentInstance != nullptr) {
-            if (const std::string port = portReaching(*owner->parentInstance); !port.empty())
-                return referenceThrough(symbol, std::format("{}/{}", port, *nameThere), *type);
+    // would make a testbench reading `dut.state` read a copy nothing ever writes. A package's
+    // builder declares the package's own variables, and has no body to compare against.
+    if (declaringPackage == nullptr) {
+        const ast::InstanceBodySymbol* owner = nullptr;
+        const std::optional<std::string> nameThere = nameWithinBody(symbol, owner);
+        if (!nameThere.has_value() || owner == nullptr) {
+            reportUnsupported(symbol.location,
+                              std::format("a reference to '{}', which is not declared in a module "
+                                          "or a package",
+                                          symbol.name));
+            return std::nullopt;
         }
-        return referenceTo(symbol, *owner, *nameThere, *type);
+        if (owner != body) {
+            // Reached through an interface port, the reference names the port rather than the
+            // interface it happens to be connected to here: one definition serves every
+            // instance, and each may be connected to a different one.
+            if (owner->parentInstance != nullptr) {
+                if (const std::string port = portReaching(*owner->parentInstance); !port.empty())
+                    return referenceThrough(symbol, std::format("{}/{}", port, *nameThere), *type);
+            }
+            return referenceTo(symbol, *owner, *nameThere, *type);
+        }
     }
 
     eir::Object object;
@@ -1199,10 +1239,15 @@ bool ModuleBuilder::addInstance(
 class Walker {
 public:
     Walker(eir::Design& target, ModuleBuilder::Shared sharedState)
-        : design(&target), shared(sharedState) {}
+        : design(&target), shared(sharedState) {
+        shared.packageVariables = &packageVariables;
+    }
 
     /// Translates `instance`'s body if it has not been seen, and returns its EIR name.
     std::optional<std::string> translate(const ast::InstanceSymbol& instance);
+
+    /// Adds a definition for each package whose variables the translated modules refer to.
+    bool translatePackages();
 
     [[nodiscard]] bool ok() const noexcept { return succeeded; }
 
@@ -1244,8 +1289,29 @@ private:
     /// binds no connections at all — quietly, with the design still elaborating and simulating
     /// to the wrong answer.
     std::map<std::string, BodyInfo, std::less<>> bodies;
+    std::vector<const ast::ValueSymbol*> packageVariables;
     bool succeeded = true;
 };
+
+bool Walker::translatePackages() {
+    // Packages in the order a module first used one of their variables, which is the order the
+    // modules were walked in, so the definitions come out the same on every run.
+    std::vector<const ast::PackageSymbol*> packages;
+    for (const ast::ValueSymbol* variable : packageVariables) {
+        const ast::PackageSymbol* package = ModuleBuilder::packageOf(*variable);
+        if (std::ranges::find(packages, package) == packages.end()) packages.push_back(package);
+    }
+
+    for (const ast::PackageSymbol* package : packages) {
+        ModuleBuilder builder(shared, *package);
+        for (const ast::ValueSymbol* variable : packageVariables) {
+            if (ModuleBuilder::packageOf(*variable) != package) continue;
+            if (!builder.objectFor(*variable).has_value()) return false;
+        }
+        design->addModule(builder.take());
+    }
+    return true;
+}
 
 std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
     std::string base(body.getDefinition().name);
@@ -1503,7 +1569,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         if (!walker.translate(*instance).has_value()) return nullptr;
     }
 
-    if (!walker.ok()) return nullptr;
+    if (!walker.ok() || !walker.translatePackages()) return nullptr;
 
     // A frontend's output is verified before it is accepted. Section 4.2's core invariant —
     // a process is a pure function over a declared slice of the arena — is exactly the kind

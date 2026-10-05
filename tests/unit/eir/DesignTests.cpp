@@ -95,6 +95,20 @@ TEST(Design, CandidateTopModulesIsOrderedByName) {
     EXPECT_EQ(design.candidateTopModules(), std::vector<std::string>({"alpha", "mike", "zulu"}));
 }
 
+TEST(Design, APackageIsNeverATopLevel) {
+    // Nothing instantiates a package, which would otherwise make it a candidate, and a top level
+    // named like it means the module.
+    Design design;
+    design.addModule(makeModule("testbench"));
+    ModuleDefinition package = makeModule("config::");
+    package.sourceName = "config";
+    package.isPackage = true;
+    design.addModule(std::move(package));
+
+    EXPECT_EQ(design.candidateTopModules(), std::vector<std::string>{"testbench"});
+    EXPECT_TRUE(design.findSpecialisations("config").empty());
+}
+
 TEST(Design, EveryModuleIsACandidateWhenNothingIsInstantiated) {
     Design design;
     design.addModule(makeModule("one"));

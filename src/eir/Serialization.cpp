@@ -306,6 +306,7 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
 void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definition) {
     out.text(definition.name);
     out.text(definition.sourceName);
+    out.boolean(definition.isPackage);
     writeLocation(out, names, definition.location);
 
     out.u32(static_cast<std::uint32_t>(definition.objects.size()));
@@ -559,6 +560,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     ModuleDefinition definition;
     definition.name = in.text();
     definition.sourceName = in.text();
+    definition.isPackage = in.boolean();
     definition.location = readLocation(in, buffers);
 
     definition.objects.resize(in.count());

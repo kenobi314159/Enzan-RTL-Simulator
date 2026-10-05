@@ -54,6 +54,10 @@ ranks as the worst possible outcome. Refusing to elaborate is the safe failure.
 path and no storage, which elaboration binds. Creating storage for it instead would make
 `dut.state` a copy nothing ever writes.
 
+**A package variable is a reference too**, with the absolute path `/<package>/<variable>`. The
+variables modules refer to make up a definition of the package's own, `<package>::`, built
+once every module has been translated (DESIGN_GUIDE.md section 5.1).
+
 **An interface is an instance, and a member through an interface port is a reference through
 the port** (`@in/data`); each instance records what its interface ports are connected to.
 

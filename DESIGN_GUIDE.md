@@ -603,6 +603,16 @@ relative — down as `core/state`, up and across as `../u_peer/ready` — becaus
 definition serves every instance of a parameterisation (M3.1), and a path from the root
 would be right for only one of them. A path that names nothing is an elaboration error.
 
+**A package variable is one variable however many modules use it** (IEEE 1800 section 26).
+Its package's variables are a definition of their own, named `<package>::` so that no
+module can share the name, and with one instance at the root beside the top level,
+`/<package>`, created only when something refers to one. A module's reference to one is a
+reference with the only absolute path there is, `/<package>/<variable>`, since a package has
+no position in the hierarchy for a relative path to start from. Only the variables a module
+refers to are in the definition. A package's constants, types, functions and tasks need no
+instance: slang resolves the first two, and a call is inlined like any other. A package is
+never a top level, and VPI's root does not list it as a module.
+
 **An interface instance is an instance**, its body a definition like a module's and its signals
 stored under its own path, `/tb/bus/data`. A member a module reaches through an interface port
 is a reference through that port, `@in/data`, and each instance records what its interface

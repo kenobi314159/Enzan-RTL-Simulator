@@ -85,6 +85,7 @@ public:
         const std::uint32_t topInstance =
             createInstance("/" + topName, topName, *topIndex, Instance::NoParent);
         if (!expand(topInstance)) return nullptr;
+        if (!instantiatePackages()) return nullptr;
         if (!bindHierarchicalReferences()) return nullptr;
 
         collectProcesses();
@@ -361,6 +362,33 @@ private:
     }
 
     /// Binds every hierarchical reference to the slot of the object it names.
+    /// Gives each package whose variables something refers to its one instance, at the root
+    /// beside the top level, as `/<package>` (eir::ModuleDefinition::isPackage). A reference to
+    /// a package variable is the absolute path `/<package>/<variable>`.
+    bool instantiatePackages() {
+        std::vector<std::string> packages;
+        for (const Instance& instance : result->instanceList) {
+            for (const eir::Object& object : design.module(instance.definitionIndex).objects) {
+                const std::string_view reference = object.hierarchicalPath;
+                if (!reference.starts_with('/')) continue;
+                const std::string name(reference.substr(1, reference.find('/', 1) - 1));
+                if (std::ranges::find(packages, name) == packages.end()) packages.push_back(name);
+            }
+        }
+
+        return std::ranges::all_of(packages, [this](const std::string& name) {
+            // A package that is missing leaves its references unresolved, which says so.
+            const std::optional<std::uint32_t> definition = design.findModuleIndex(name + "::");
+            if (!definition.has_value()) return true;
+            if (name == result->topName) {
+                diagnostics.report(DiagCode::PackageNamedAsTop, design.module(*definition).location,
+                                   name, name);
+                return false;
+            }
+            return expand(createInstance("/" + name, name, *definition, Instance::NoParent));
+        });
+    }
+
     bool bindHierarchicalReferences() {
         bool ok = true;
         for (Instance& instance : result->instanceList) {
@@ -374,7 +402,13 @@ private:
                 // climbs one instance from the one holding the reference.
                 std::string base = instance.path;
                 std::string_view rest = reference;
-                if (rest.starts_with('@')) {
+                if (rest.starts_with('/')) {
+                    // An absolute path, to a package's variable: from the root.
+                    const std::size_t slash = rest.find('/', 1);
+                    base = std::string(rest.substr(0, slash));
+                    rest = slash == std::string_view::npos ? std::string_view()
+                                                           : rest.substr(slash + 1);
+                } else if (rest.starts_with('@')) {
                     // The port's name runs to an index, `@in[2]/data`, or to the member.
                     const std::size_t slash = rest.find('/');
                     const std::string_view through = rest.substr(1, slash - 1);

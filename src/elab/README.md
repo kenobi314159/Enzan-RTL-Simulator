@@ -15,8 +15,11 @@ ports and computes the flat state layout (DESIGN_GUIDE.md section 2.1).
 - Find bits with more than one driver, per bit rather than per signal (DESIGN_GUIDE.md
   section 3.7), and refuse those the language does not allow: a bit of a variable or a
   `uwire` with two continuous drivers, or with a continuous driver and a procedural writer.
-- Bind each hierarchical reference — an object with a path rather than storage — to the slot
-  of the object it names, once the whole tree is expanded (DESIGN_GUIDE.md section 5.1).
+- Give each package whose variables something refers to an instance at the root, `/<package>`,
+  and bind each hierarchical reference — an object with a path rather than storage — to the
+  slot of the object it names, once the whole tree is expanded (DESIGN_GUIDE.md section 5.1).
+  A package with the top level's name is refused (ENZ3012): its variables would sit at the top
+  level's path.
 - Give each continuous write of a net that resolves — one with a bit driven twice, or a
   pulled or supply net with any driver — a **driver** with its own value in the arena, and
   split the net into **segments** with one set of drivers each. Every other signal has no

@@ -141,6 +141,9 @@ enzan_add_golden_test(short_circuit)
 # A type parameter handed down a second level. Icarus Verilog does not parse type parameters.
 enzan_add_golden_test(type_parameters NO_DIFFERENTIAL)
 
+# Packages, and package variables shared by every module that uses them.
+enzan_add_golden_test(packages)
+
 # An error reported while the design runs is the design failing in simulation: status 3.
 add_test(NAME golden.runtime_error_status
          COMMAND sh -c "\"$1\" --top tb \"$2\" >/dev/null 2>&1; test $? -eq 3" sh

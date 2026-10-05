@@ -833,4 +833,77 @@ TEST_F(ElaboratorTest, AHierarchicalReferenceToNothingIsReported) {
     EXPECT_TRUE(reported("'../middle/value' in '/tb/right'")) << consumer.messages.front();
 }
 
+// ---------------------------------------------------------------------------
+// Packages
+// ---------------------------------------------------------------------------
+
+/// A package `counters` with one variable, and a top level named `topName` whose instance of
+/// `user` and itself both refer to it.
+void addPackageDesign(Design& design, std::string_view topName) {
+    ModuleDefinition package;
+    package.name = "counters::";
+    package.sourceName = "counters";
+    package.isPackage = true;
+    package.addObject(Object{.name = "events", .type = Type::bits(32, true, false)});
+    design.addModule(std::move(package));
+
+    const auto reference = [] {
+        return Object{.name = "ref$/counters/events",
+                      .type = Type::bits(32, true, false),
+                      .hierarchicalPath = "/counters/events"};
+    };
+
+    ModuleDefinition user;
+    user.name = "user";
+    user.addObject(reference());
+    design.addModule(std::move(user));
+
+    ModuleDefinition top;
+    top.name = std::string(topName);
+    top.addObject(reference());
+    top.instances.push_back(enzan::eir::Instance{.name = "u_user", .definitionName = "user"});
+    design.addModule(std::move(top));
+}
+
+TEST_F(ElaboratorTest, APackageVariableIsOneVariableForEveryModule) {
+    addPackageDesign(design, "tb");
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+
+    // The package is an instance of its own at the root, beside the top level, not under it.
+    const Instance& package =
+        elaborated->instances()[require(elaborated->findInstance("/counters"))];
+    EXPECT_EQ(package.parent, Instance::NoParent);
+    const std::uint32_t events = require(elaborated->findSlot("/counters/events"));
+    const Instance& top = elaborated->instances()[require(elaborated->findInstance("/tb"))];
+    const Instance& user = elaborated->instances()[require(elaborated->findInstance("/tb/u_user"))];
+    EXPECT_EQ(top.objectSlots[0], events);
+    EXPECT_EQ(user.objectSlots[0], events);
+}
+
+TEST_F(ElaboratorTest, AnUnusedPackageHasNoInstance) {
+    ModuleDefinition package;
+    package.name = "counters::";
+    package.isPackage = true;
+    package.addObject(Object{.name = "events", .type = Type::bits(32, true, false)});
+    design.addModule(std::move(package));
+    ModuleDefinition top;
+    top.name = "tb";
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(elaborated->findInstance("/counters").has_value());
+}
+
+TEST_F(ElaboratorTest, APackageNamedAsTheTopLevelIsReported) {
+    // Its variables would be at the top level's path, where a reference could find the top
+    // level's own object of the same name instead.
+    addPackageDesign(design, "counters");
+
+    EXPECT_EQ(elaborate("counters"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::PackageNamedAsTop));
+}
+
 } // namespace

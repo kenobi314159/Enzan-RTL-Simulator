@@ -81,6 +81,10 @@ Design makeDesign() {
     top.addObject(Object{.name = "gen[0].q", .type = Type::logic()});
     top.addObject(Object{.name = "gen[0].inner.r", .type = Type::bits(4, true, true)});
     top.addObject(Object{.name = "u_child$in", .type = Type::bits(8, false, true)});
+    // A package's variable, so that the package has an instance at the root beside `tb`.
+    top.addObject(Object{.name = "ref$/config/mode",
+                         .type = Type::bits(2, false, true),
+                         .hierarchicalPath = "/config/mode"});
     top.parameters.push_back(
         enzan::eir::Parameter{.name = "WIDTH", .value = literal("32'd8"), .isLocal = false});
     top.parameters.push_back(
@@ -101,9 +105,16 @@ Design makeDesign() {
     generated.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 1});
     top.instances.push_back(std::move(generated));
 
+    ModuleDefinition package;
+    package.name = "config::";
+    package.sourceName = "config";
+    package.isPackage = true;
+    package.addObject(Object{.name = "mode", .type = Type::bits(2, false, true)});
+
     Design design;
     design.addModule(std::move(child));
     design.addModule(std::move(top));
+    design.addModule(std::move(package));
     return design;
 }
 
@@ -175,6 +186,7 @@ TEST_F(Vpi, TheTopLevelIsFoundFromTheRoot) {
     EXPECT_EQ(vpi_get(vpiTopModule, top), 1);
     EXPECT_EQ(nameOf(top, vpiDefName), "tb");
 
+    // The package `config` is at the root too, but it is no top-level module.
     EXPECT_EQ(vpi_scan(iterator), nullptr);
     EXPECT_EQ(vpi_free_object(iterator), 0) << "the scan that exhausted it freed it";
     EXPECT_EQ(lastErrorLevel(), vpiError);

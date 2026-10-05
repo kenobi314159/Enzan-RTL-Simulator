@@ -194,6 +194,11 @@ struct VpiContext::Callback final : Object {
 /// A module instance or a generate block.
 struct VpiContext::Scope {
     bool isModule = true;
+
+    /// The instance holding a package's variables, which is at the root but is no top-level
+    /// module: iterating the root's modules skips it, so a tool looking for the design's top
+    /// does not find a package instead.
+    bool isPackage = false;
     std::uint32_t instance = 0;
     std::uint32_t parent = NoScope;
 
@@ -380,6 +385,7 @@ void VpiContext::buildScopes() {
         const auto scopeIndex = static_cast<std::uint32_t>(scopes.size());
         Scope scope;
         scope.isModule = true;
+        scope.isPackage = definition.isPackage;
         scope.instance = instanceIndex;
         scope.name = enclosing != NoScope ? instance.name.substr(scopes[enclosing].prefix.size())
                                           : instance.name;
@@ -732,7 +738,8 @@ vpiHandle VpiContext::iterate(PLI_INT32 type, vpiHandle reference) {
         // so asking for instances in general gets the same answer.
         if ((type == vpiModule || type == vpiInstance) && image != nullptr) {
             for (std::uint32_t scope = 0; scope < scopes.size(); ++scope) {
-                if (scopes[scope].isModule && scopes[scope].parent == NoScope)
+                if (scopes[scope].isModule && !scopes[scope].isPackage
+                    && scopes[scope].parent == NoScope)
                     items.push_back(intern({.kind = TargetKind::Scope, .first = scope}));
             }
         }
@@ -882,7 +889,10 @@ PLI_INT32 VpiContext::get(PLI_INT32 property, vpiHandle object) {
 
     case vpiTopModule:
         if (found->kind == Object::Kind::Scope)
-            return scopes[found->scope].isModule && scopes[found->scope].parent == NoScope ? 1 : 0;
+            return scopes[found->scope].isModule && !scopes[found->scope].isPackage
+                           && scopes[found->scope].parent == NoScope
+                       ? 1
+                       : 0;
         break;
 
     case vpiTimeUnit:

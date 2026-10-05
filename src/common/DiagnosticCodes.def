@@ -80,6 +80,9 @@ ENZAN_DIAG(MixedDriverKinds, 3007, Error,
            "that is driven continuously may not be written procedurally")
 ENZAN_DIAG(UnresolvedHierarchicalReference, 3011, Error,
            "the hierarchical reference '{}' in '{}' names nothing in the elaborated design")
+ENZAN_DIAG(PackageNamedAsTop, 3012, Error,
+           "package '{}' has the name of the top-level module; its variables live at '/{}', "
+           "which is the top level's path")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 
