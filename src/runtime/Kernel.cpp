@@ -100,6 +100,8 @@ void Kernel::initialize() {
     // edge nothing is waiting for any more. Each of those produces a design that runs and
     // gives a different answer, which section 1.2 ranks as the worst possible outcome.
     scheduler.clear();
+    delayedWrites.clear();
+    pendingInertial.clear();
     processes.assign(designImage->processes().begin(), designImage->processes().end());
     for (std::vector<EdgeWaiter>& waiters : edgeWaiters) waiters.clear();
     std::ranges::fill(frameStorage, eir::Word{});
@@ -311,8 +313,9 @@ void Kernel::applyNonBlockingUpdates() {
 }
 
 bool Kernel::advanceTime(SimTime until) {
-    const SimTime next = std::min(scheduler.nextEventTime(),
-                                  pliHooks != nullptr ? pliHooks->nextTimedEvent() : NoTime);
+    const SimTime next = std::min({scheduler.nextEventTime(),
+                                   pliHooks != nullptr ? pliHooks->nextTimedEvent() : NoTime,
+                                   delayedWrites.empty() ? NoTime : delayedWrites.begin()->first});
 
     // Something the application scheduled with no delay after the slot had settled — from a
     // read-only callback — is due now. It runs in a further slot at this time, and time has
@@ -344,6 +347,7 @@ bool Kernel::advanceTime(SimTime until) {
     if (pliHooks != nullptr) pliHooks->timeAdvanced(currentTime);
 
     scheduler.releaseTime(next);
+    applyDelayedWrites();
     return true;
 }
 
@@ -660,6 +664,77 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
 
     state.queued = true;
     scheduler.scheduleAt(currentTime + delay, processIndex);
+}
+
+void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
+                                  std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
+                                  bool nonBlocking) {
+    if (delay > NoTime - currentTime) {
+        diagnostics.report(DiagCode::TimeOverflow, SourceLocation(), currentTime,
+                           options.timeScale.unitName());
+        errorRequested = true;
+        return;
+    }
+
+    if (nonBlocking && delay == 0) {
+        scheduler.appendNonBlocking(signalIndex, value, 0, false);
+        return;
+    }
+
+    DelayedWrite write{.processIndex = processIndex,
+                       .position = position,
+                       .signalIndex = signalIndex,
+                       .nonBlocking = nonBlocking,
+                       .serial = ++nextWriteSerial,
+                       .value = eir::BitVector::from(value)};
+
+    if (!nonBlocking) {
+        // The write this one replaces is taken out rather than skipped when it comes due, so
+        // that it leaves no time step behind in which nothing happens.
+        const auto key = std::pair{processIndex, position};
+        if (const auto pending = pendingInertial.find(key); pending != pendingInertial.end()) {
+            const auto slot = delayedWrites.find(pending->second.time);
+            std::erase_if(slot->second, [&pending](const DelayedWrite& queued) {
+                return queued.serial == pending->second.serial;
+            });
+            if (slot->second.empty()) delayedWrites.erase(slot);
+            pendingInertial.erase(pending);
+        }
+        if (delay == 0) {
+            writeRouted(processIndex, position, signalIndex, value);
+            return;
+        }
+        pendingInertial.emplace(
+            key, PendingInertial{.serial = write.serial, .time = currentTime + delay});
+    }
+
+    delayedWrites[currentTime + delay].push_back(std::move(write));
+}
+
+void Kernel::applyDelayedWrites() {
+    const auto due = delayedWrites.find(currentTime);
+    if (due == delayedWrites.end()) return;
+    const std::vector<DelayedWrite> writes = std::move(due->second);
+    delayedWrites.erase(due);
+
+    for (const DelayedWrite& write : writes) {
+        if (write.nonBlocking) {
+            scheduler.appendNonBlocking(write.signalIndex, write.value.ref(), 0, false);
+            continue;
+        }
+        pendingInertial.erase(std::pair{write.processIndex, write.position});
+        writeRouted(write.processIndex, write.position, write.signalIndex, write.value.ref());
+    }
+}
+
+void Kernel::writeRouted(std::uint32_t processIndex, std::uint32_t position,
+                         std::uint32_t signalIndex, eir::ConstBitRef value) {
+    const WriteRoute& route = processes[processIndex].writeRoutes[position];
+    if (route.direct()) {
+        writeSignal(signalIndex, value);
+    } else {
+        writeThroughDrivers(route, value, 0);
+    }
 }
 
 void Kernel::suspendForEdge(std::uint32_t processIndex, std::uint32_t signalIndex,

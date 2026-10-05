@@ -93,8 +93,10 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
 - an event control on an expression other than a signal or a constant select of one, such
   as `@(a & b)` or `@(posedge clk[i])` with `i` a variable;
-- a timing control on an assignment, such as `a <= #5 b`, and a delay on a continuous
-  assignment or a net, such as `assign #5 a = b` or `wire #5 w`;
+- an event control on a nonblocking assignment, such as `a <= @(posedge clk) b`, a delayed
+  write to part of a signal, such as `a[3:0] <= #5 b`, separate rise, fall and turn-off
+  delays, and a delay on a net, such as `wire #5 w`. Intra-assignment delays on whole
+  signals and single delays on continuous assignments work, the latter inertially;
 - `trireg`, `interconnect` and user-defined nettypes, which have no resolution table;
 - a drive strength other than strong, such as `assign (weak0, weak1) w = a`, because
   resolution has no strength model;

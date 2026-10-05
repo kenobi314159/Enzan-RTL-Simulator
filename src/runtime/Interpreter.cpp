@@ -131,6 +131,18 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             break;
         }
 
+        case eir::Opcode::StoreDelayed:
+        case eir::Opcode::StoreNonBlockingDelayed: {
+            // An unknown delay is zero, as for `#` (see WaitTime).
+            const eir::ConstBitRef delay = reg(instruction.c, instruction.cWidth);
+            kernel.scheduleDelayedWrite(
+                processIndex, instruction.dst, state.objectSignals[instruction.a],
+                reg(instruction.b, instruction.bWidth), delay.hasUnknown() ? 0 : delay.toUInt64(),
+                instruction.opcode == eir::Opcode::StoreNonBlockingDelayed);
+            if (kernel.errorRequested) return ExecutionResult::Stopped;
+            break;
+        }
+
         case eir::Opcode::StoreNonBlocking:
             kernel.scheduleNonBlocking(state.objectSignals[instruction.a],
                                        reg(instruction.b, instruction.bWidth));

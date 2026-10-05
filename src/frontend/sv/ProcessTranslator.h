@@ -105,7 +105,10 @@ public:
     bool translateBody(const slang::ast::Statement& body);
 
     /// Translates a continuous assignment's expression.
-    bool translateContinuousAssignment(const slang::ast::Expression& assignment);
+    /// `delay`, when there is one, is the assignment's delay: inertial, so that a change
+    /// arriving before an earlier one has taken effect replaces it (IEEE 1800 section 10.3.3).
+    bool translateContinuousAssignment(const slang::ast::Expression& assignment,
+                                       const slang::ast::TimingControl* delay = nullptr);
 
     /// Translates `expression` and stores its value into `objectIndex`.
     ///
@@ -242,6 +245,14 @@ private:
     std::optional<Value> translateConcatenation(const slang::ast::Expression& expression);
     std::optional<Value> translateReplication(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
+
+    /// Emits a store of `reg` to the whole of `objectIndex`, in the form `nonBlocking` and
+    /// `storeDelay` call for.
+    void emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg, bool nonBlocking);
+
+    /// Reports a delayed write to something a delayed store cannot address, and returns true,
+    /// when an assignment delay is in effect; returns false otherwise.
+    bool refuseDelayedWrite(const slang::ast::Expression& target);
 
     /// The value of an integral `expression` that computes with reals, which have no runtime
     /// representation yet, when every operand is a constant: `ClkPeriod >= 2ps` with
@@ -414,6 +425,11 @@ private:
     /// Saved and restored around the translation, so that nested compound assignments do not
     /// see each other's target.
     std::optional<Value> lvalueReference;
+
+    /// The register holding the delay of the assignment being translated, while one is: a
+    /// nonblocking `a <= #d b`, or a continuous `assign #d a = b`. Its stores are the delayed
+    /// forms, and a store the delayed forms cannot express is refused rather than undelayed.
+    std::optional<std::uint32_t> storeDelay;
     eir::Process process;
     std::uint32_t current = 0;
 

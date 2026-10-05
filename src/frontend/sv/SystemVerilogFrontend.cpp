@@ -895,12 +895,6 @@ bool ModuleBuilder::translateProcesses() {
     }
 
     for (const ast::ContinuousAssignSymbol* assignment : continuousAssignments) {
-        // An assignment delay is inertial and postpones every change; dropping it would let
-        // the target change early, which simulates to a plausible wrong answer.
-        if (assignment->getDelay() != nullptr) {
-            reportUnsupported(assignment->location, "a delay on a continuous assignment");
-            continue;
-        }
         if (!checkDriveStrength(assignment->getDriveStrength(), assignment->location)) continue;
 
         const SourceLocation location = convertLocation(assignment->location);
@@ -910,7 +904,8 @@ bool ModuleBuilder::translateProcesses() {
                         shared->slangSources.getLineNumber(assignment->location)),
             location);
 
-        if (!translator.translateContinuousAssignment(assignment->getAssignment())) {
+        if (!translator.translateContinuousAssignment(assignment->getAssignment(),
+                                                      assignment->getDelay())) {
             failed = true;
             continue;
         }

@@ -860,18 +860,6 @@ TEST_F(FrontendTest, ReportsAnUnsupportedConstructRatherThanMistranslatingIt) {
     EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
 }
 
-TEST_F(FrontendTest, ReportsADelayOnAContinuousAssignment) {
-    // Dropping it would let the target change early: a plausible wrong answer.
-    EXPECT_EQ(analyse(R"(
-        module m;
-            logic a, b;
-            assign #5 b = a;
-        endmodule
-    )"),
-              nullptr);
-    EXPECT_TRUE(reported("a delay on a continuous assignment"));
-}
-
 TEST_F(FrontendTest, ReportsADelayOnANet) {
     EXPECT_EQ(analyse(R"(
         module m;
@@ -1071,6 +1059,31 @@ TEST_F(FrontendTest, ReportsARealComputationOnAVariable) {
         endmodule
     )"),
               nullptr);
+}
+
+TEST_F(FrontendTest, ReportsADelayedWriteToPartOfASignal) {
+    // A delayed store writes a whole object; splitting the update would let the rest of the
+    // signal be overwritten with the value it had when the statement ran.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] x;
+            initial x[3:0] <= #2 4'd5;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a delayed write to part of a signal"));
+}
+
+TEST_F(FrontendTest, ReportsSeparateRiseAndFallDelays) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            wire  y;
+            assign #(1, 2) y = a;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("separate rise, fall and turn-off delays"));
 }
 
 TEST_F(FrontendTest, ReportsADeferredAssertion) {

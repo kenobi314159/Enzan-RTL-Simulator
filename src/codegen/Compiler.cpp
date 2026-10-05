@@ -23,11 +23,11 @@ std::uint32_t CompiledDesign::bodyIndex(std::uint32_t definitionIndex,
 
 namespace {
 
-/// True for the four opcodes that write an object, which are the ones the runtime routes.
+/// True for the opcodes that write an object, which are the ones the runtime routes.
 bool isStore(eir::Opcode opcode) noexcept {
     return opcode == eir::Opcode::Store || opcode == eir::Opcode::StorePart
-           || opcode == eir::Opcode::StoreNonBlocking
-           || opcode == eir::Opcode::StorePartNonBlocking;
+           || opcode == eir::Opcode::StoreNonBlocking || opcode == eir::Opcode::StorePartNonBlocking
+           || opcode == eir::Opcode::StoreDelayed || opcode == eir::Opcode::StoreNonBlockingDelayed;
 }
 
 /// Assigns each virtual register a Word offset in the frame and records its width.

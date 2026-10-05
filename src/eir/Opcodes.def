@@ -80,6 +80,14 @@ ENZAN_OPCODE(StorePartNonBlocking, "nbstorepart", false, 3,
              "update record so that two partial updates in one time slot do not "
              "overwrite each other")
 
+ENZAN_OPCODE(StoreDelayed, "dstore", false, 3,
+             "a call to the runtime helper that schedules the write of a continuous "
+             "assignment with a delay, the third operand, replacing the one it scheduled "
+             "before if that has not happened yet; when it happens it is a Store")
+ENZAN_OPCODE(StoreNonBlockingDelayed, "nbdstore", false, 3,
+             "a call to the runtime helper that schedules a non-blocking update the "
+             "third operand later, where it joins that time step's NBA region")
+
 // --- Bitwise, element by element -------------------------------------------
 
 ENZAN_OPCODE(And, "and", true, 2,

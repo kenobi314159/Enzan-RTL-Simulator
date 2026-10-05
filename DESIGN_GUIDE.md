@@ -257,6 +257,12 @@ MAY be represented as callback hook points rather than as fully separate queues,
 provided the callbacks fire at the correct point in the ordering. Section 9.3 says where each
 VPI callback fires.
 
+A delayed write is scheduled for its time, not for a process. A nonblocking `a <= #d b`
+joins the NBA region of the time step `d` later. A continuous assignment with a delay
+writes at the start of that step's Active region. Its delay is inertial: a newer write
+from the same assignment replaces one still pending, which is taken out of the schedule,
+so a pulse shorter than the delay leaves no time step behind (IEEE 1800 section 10.3.3).
+
 ### 3.4 VHDL simulation cycle
 
 Per IEEE 1076, a VHDL simulation cycle is:

@@ -3,6 +3,7 @@
 chapter-10/10.3.1--net-decl-assignment.sv
 chapter-10/10.3.1--one-net.sv
 chapter-10/10.3.2--cont-assignment.sv
+chapter-10/10.3.3--cont-assignment-delay.sv
 chapter-10/10.3--proc-assignment--bad.sv
 chapter-10/10.4.1--blocking-assignment.sv
 chapter-10/10.4.2--non-blocking-assignment.sv
@@ -329,6 +330,9 @@ chapter-9/9.4.2.2--event_implicit.sv
 chapter-9/9.4.2--event_control_edge.sv
 chapter-9/9.4.2--event_control_negedge.sv
 chapter-9/9.4.2--event_control_posedge.sv
+chapter-9/9.4.5--event_blocking_assignment_delay.sv
+chapter-9/9.4.5--event_nonblocking_assignment_delay.sv
+chapter-9/9.4.5--event_nonblocking_assignment_event.sv
 generic/class/class_test_0.sv
 generic/class/class_test_11.sv
 generic/class/class_test_12.sv

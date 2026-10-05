@@ -404,6 +404,13 @@ private:
             checkObjectWidth(definition, process, instruction.a, instruction.b, where);
             break;
 
+        case Opcode::StoreDelayed:
+        case Opcode::StoreNonBlockingDelayed:
+            checkObjectAccess(definition, process, instruction.a, true, where);
+            checkObjectWidth(definition, process, instruction.a, instruction.b, where);
+            registerWidth(definition, process, instruction.c, where);
+            break;
+
         // A part store deliberately moves a narrower value than the object holds,
         // so only the object itself is checked.
         case Opcode::StorePart:

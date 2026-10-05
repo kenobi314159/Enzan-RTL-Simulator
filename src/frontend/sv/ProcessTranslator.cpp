@@ -314,7 +314,28 @@ void ProcessTranslator::inferSensitivityFromReads() {
     }
 }
 
-bool ProcessTranslator::translateContinuousAssignment(const ast::Expression& assignment) {
+bool ProcessTranslator::translateContinuousAssignment(const ast::Expression& assignment,
+                                                      const ast::TimingControl* delay) {
+    if (delay != nullptr) {
+        // A single delay; a rise, fall and turn-off triple delays each transition by its own
+        // amount, which a store with one delay cannot do.
+        const ast::Expression* amount = nullptr;
+        if (delay->kind == ast::TimingControlKind::Delay) {
+            amount = &delay->as<ast::DelayControl>().expr;
+        } else if (delay->kind == ast::TimingControlKind::Delay3
+                   && delay->as<ast::Delay3Control>().expr2 == nullptr) {
+            amount = &delay->as<ast::Delay3Control>().expr1;
+        }
+        if (amount == nullptr) {
+            module->reportUnsupported(delay->sourceRange.start(),
+                                      "separate rise, fall and turn-off delays");
+            return false;
+        }
+        const std::optional<Value> ticks = translateExpression(*amount);
+        if (!ticks.has_value()) return false;
+        storeDelay = ticks->reg;
+    }
+
     if (!translateExpression(assignment).has_value() && failed) return false;
 
     if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
@@ -1947,6 +1968,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::readLocation(const Lo
 bool ProcessTranslator::writeLocation(const ast::Expression& target, const Location& location,
                                       const Value& value, bool nonBlocking) {
     if (!location.inObject() && location.rootIsLocal) {
+        if (refuseDelayedWrite(target)) return false;
         // A window of a local is spliced into its register, which is all a local is.
         if (location.outOfRange) return true;
         const Value stored = coerceState(coerce(value, location.type), location.type);
@@ -1975,11 +1997,11 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
 
     if (location.whole) {
         noteWholeWrite(location.objectIndex);
-        emit(eir::Instruction::make(
-            nonBlocking ? eir::Opcode::StoreNonBlocking : eir::Opcode::Store, {},
-            eir::Operand::object(location.objectIndex), eir::Operand::reg(stored.reg)));
+        emitWholeStore(location.objectIndex, stored.reg, nonBlocking);
         return true;
     }
+
+    if (refuseDelayedWrite(target)) return false;
 
     // The bits written, for the driver this process is (section 3.7): exactly the window when
     // it is constant, and everything it could reach when it moves.
@@ -1994,6 +2016,27 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
                                             : eir::Opcode::StorePart,
                                 {}, eir::Operand::object(location.objectIndex),
                                 eir::Operand::reg(stored.reg), eir::Operand::reg(low.reg)));
+    return true;
+}
+
+void ProcessTranslator::emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg,
+                                       bool nonBlocking) {
+    if (storeDelay.has_value()) {
+        emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StoreNonBlockingDelayed
+                                                : eir::Opcode::StoreDelayed,
+                                    {}, eir::Operand::object(objectIndex), eir::Operand::reg(reg),
+                                    eir::Operand::reg(*storeDelay)));
+        return;
+    }
+    emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StoreNonBlocking : eir::Opcode::Store,
+                                {}, eir::Operand::object(objectIndex), eir::Operand::reg(reg)));
+}
+
+bool ProcessTranslator::refuseDelayedWrite(const ast::Expression& target) {
+    if (!storeDelay.has_value()) return false;
+    module->reportUnsupported(target.sourceRange.start(),
+                              "a delayed write to part of a signal, or to a local variable");
+    failed = true;
     return true;
 }
 
@@ -2274,11 +2317,40 @@ std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateAssignment(const ast::Expression& expression) {
     const auto& assignment = expression.as<ast::AssignmentExpression>();
 
-    if (assignment.timingControl != nullptr) {
-        module->reportUnsupported(expression.sourceRange.start(),
-                                  "a timing control on an assignment, such as `a <= #5 b`");
-        failed = true;
-        return std::nullopt;
+    // An intra-assignment timing control evaluates the right-hand side now and assigns it
+    // later (IEEE 1800 section 9.4.5). A blocking one is a wait between the two, with the
+    // target evaluated after it. A nonblocking one with a delay schedules the update that much
+    // later and carries on, with the target evaluated now.
+    const ast::TimingControl* timing = assignment.timingControl;
+    if (timing != nullptr) {
+        const bool delayed = timing->kind == ast::TimingControlKind::Delay;
+        if (assignment.isCompound() || (assignment.isNonBlocking() && !delayed)) {
+            module->reportUnsupported(expression.sourceRange.start(),
+                                      assignment.isCompound()
+                                          ? "a timing control on a compound assignment"
+                                          : "an event control on a nonblocking assignment, "
+                                            "such as `a <= @(posedge clk) b`");
+            failed = true;
+            return std::nullopt;
+        }
+
+        const std::optional<Value> value = translateExpression(assignment.right());
+        if (!value.has_value()) return std::nullopt;
+
+        if (!assignment.isNonBlocking()) {
+            if (!translateTimingControl(*timing)) return std::nullopt;
+            if (!assignTo(assignment.left(), *value, false)) return std::nullopt;
+            return value;
+        }
+
+        const std::optional<Value> ticks =
+            translateExpression(timing->as<ast::DelayControl>().expr);
+        if (!ticks.has_value()) return std::nullopt;
+        storeDelay = ticks->reg;
+        const bool assigned = assignTo(assignment.left(), *value, true);
+        storeDelay.reset();
+        if (!assigned) return std::nullopt;
+        return value;
     }
 
     // A compound assignment is already rewritten by slang: `a += b` becomes
@@ -2312,6 +2384,7 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
     case ast::ExpressionKind::NamedValue:
     case ast::ExpressionKind::HierarchicalValue: {
         if (const Value* local = localFor(target.as<ast::ValueExpressionBase>().symbol)) {
+            if (refuseDelayedWrite(target)) return false;
             const Value stored = coerceState(coerce(value, local->type), local->type);
             emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(local->reg),
                                         eir::Operand::reg(stored.reg)));
@@ -2330,9 +2403,7 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
         const Value stored = coerceState(widened, objectType);
 
         noteWholeWrite(*objectIndex);
-        emit(eir::Instruction::make(
-            nonBlocking ? eir::Opcode::StoreNonBlocking : eir::Opcode::Store, {},
-            eir::Operand::object(*objectIndex), eir::Operand::reg(stored.reg)));
+        emitWholeStore(*objectIndex, stored.reg, nonBlocking);
         return true;
     }
 

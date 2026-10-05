@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <iosfwd>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -343,6 +344,18 @@ public:
     /// resumes in this timestamp but after everything currently Active (section 3.3).
     void suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint32_t resumePc);
 
+    /// Schedules a write of `value` to `signalIndex` `delay` time units from now: the write
+    /// of a continuous assignment with a delay, or a nonblocking `a <= #d b`.
+    ///
+    /// The first is inertial (IEEE 1800 section 10.3.3): it replaces the write the same store
+    /// of the same process scheduled before, if that has not happened yet, so a pulse
+    /// shorter than the delay never reaches the target. When it happens it is a write through
+    /// the process's route at `position`, as a Store. The second is transport: each update
+    /// happens, joining the NBA region of its time step.
+    void scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
+                              std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
+                              bool nonBlocking);
+
     /// Suspends a process until `edge` occurs on `signalIndex`.
     void suspendForEdge(std::uint32_t processIndex, std::uint32_t signalIndex, eir::EdgeKind edge,
                         std::uint32_t resumePc);
@@ -443,6 +456,39 @@ private:
     /// A windowed signal's old value, kept across its write for the comparison, sized once
     /// for the widest windowed signal.
     std::vector<eir::Word> windowScratch;
+
+    /// A write scheduled by `scheduleDelayedWrite`, waiting for its time.
+    ///
+    /// Each holds its own copy of the value. The time wheel allocates per entry as it is, so
+    /// a pool would save nothing until both move to the calendar queue section 6.2 calls for.
+    struct DelayedWrite {
+        std::uint32_t processIndex = 0;
+        std::uint32_t position = 0;
+        std::uint32_t signalIndex = 0;
+        bool nonBlocking = false;
+        std::uint64_t serial = 0;
+        eir::BitVector value;
+    };
+
+    /// Pending delayed writes by time, in the order they were scheduled within one.
+    std::map<SimTime, std::vector<DelayedWrite>> delayedWrites;
+
+    /// The pending inertial write of each (process, write position), by serial and time, so
+    /// that the next one can take it out of `delayedWrites`.
+    struct PendingInertial {
+        std::uint64_t serial = 0;
+        SimTime time = 0;
+    };
+
+    std::map<std::pair<std::uint32_t, std::uint32_t>, PendingInertial> pendingInertial;
+    std::uint64_t nextWriteSerial = 0;
+
+    /// Performs every delayed write due at the current time.
+    void applyDelayedWrites();
+
+    /// A write as a Store makes it: through the process's drivers when its route has any.
+    void writeRouted(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,
+                     eir::ConstBitRef value);
 
     /// Dynamic edge subscriptions created by `WaitEdge`, indexed by signal.
     ///
