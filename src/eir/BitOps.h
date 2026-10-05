@@ -160,8 +160,9 @@ void shiftRightArithmetic(BitRef dst, ConstBitRef a, ConstBitRef amount);
 // Comparison
 // ---------------------------------------------------------------------------
 
-/// `dst`, one bit wide, receives `a == b`: Unknown when either operand has an
-/// unknown bit, since an unknown bit could make the comparison go either way.
+/// `dst`, one bit wide, receives `a == b`: 0 when a bit known on both sides differs,
+/// and otherwise Unknown when either operand has an unknown bit, since that bit could
+/// make the comparison go either way (IEEE 1800 section 11.4.5).
 void equal(BitRef dst, ConstBitRef a, ConstBitRef b);
 
 /// `dst`, one bit wide, receives `a != b`.

@@ -138,15 +138,17 @@ ENZAN_OPCODE(ShiftRightArithmetic, "sar", true, 2,
 // --- Comparison ------------------------------------------------------------
 
 ENZAN_OPCODE(Equal, "eq", true, 2,
-             "a branch on the combined bval planes to the X result, then icmp eq on "
-             "the aval planes")
+             "icmp eq of the aval planes masked to the bits known on both sides; a "
+             "mismatch there is 0, otherwise a branch on the combined bval planes to "
+             "the X result, otherwise 1")
 ENZAN_OPCODE(NotEqual, "ne", true, 2, "as Equal with icmp ne")
 ENZAN_OPCODE(CaseEqual, "ceq", true, 2,
              "icmp eq on both planes with no unknown check at all; this is `===`, "
              "which never yields X")
 ENZAN_OPCODE(CaseNotEqual, "cne", true, 2, "as CaseEqual negated")
 ENZAN_OPCODE(LessThan, "lt", true, 2,
-             "as Equal with icmp ult or icmp slt according to the signed flag")
+             "a branch on the combined bval planes to the X result, then icmp ult or "
+             "icmp slt on the aval planes according to the signed flag")
 ENZAN_OPCODE(LessEqual, "le", true, 2, "as LessThan with icmp ule or icmp sle")
 
 // --- Selection and splicing ------------------------------------------------

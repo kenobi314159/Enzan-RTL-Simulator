@@ -644,11 +644,19 @@ void shiftRightArithmetic(BitRef dst, ConstBitRef a, ConstBitRef amount) {
 void equal(BitRef dst, ConstBitRef a, ConstBitRef b) {
     checkPredicate(dst, a, b);
 
-    if (a.hasUnknown() || b.hasUnknown()) {
-        setBit(dst, Logic::Unknown);
-        return;
+    // A bit known on both sides and different settles the comparison whatever the unknown
+    // bits hold, so it is 0 rather than X: IEEE 1800 section 11.4.5 makes the result X only
+    // when the unknown bits leave the relation ambiguous.
+    bool unknown = false;
+    for (std::uint32_t index = 0; index < a.words(); ++index) {
+        const Word known = ~a.bval()[index] & ~b.bval()[index];
+        if (((a.aval()[index] ^ b.aval()[index]) & known) != 0) {
+            setBit(dst, Logic::Zero);
+            return;
+        }
+        if ((a.bval()[index] | b.bval()[index]) != 0) unknown = true;
     }
-    setBit(dst, std::ranges::equal(a.avalWords(), b.avalWords()) ? Logic::One : Logic::Zero);
+    setBit(dst, unknown ? Logic::Unknown : Logic::One);
 }
 
 void notEqual(BitRef dst, ConstBitRef a, ConstBitRef b) {

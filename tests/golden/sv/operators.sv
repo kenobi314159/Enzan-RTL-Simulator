@@ -189,6 +189,16 @@ module tb;
             failures = failures + 1;
         end
 
+        // A bit known on both sides and different settles `==` whatever the unknown bits hold,
+        // where a relation they could decide is x (IEEE 1800 section 11.4.5).
+        narrow = 4'b1x00;
+        if ((narrow == 4'b0000) !== 1'b0 || (narrow != 4'b0000) !== 1'b1
+            || (narrow == 4'b1000) !== 1'bx) begin
+            $display("FAIL: == with an unknown bit, got %b %b %b", narrow == 4'b0000,
+                     narrow != 4'b0000, narrow == 4'b1000);
+            failures = failures + 1;
+        end
+
         // A literal's z is z, not x: `===` tells them apart.
         narrow = 4'bz01x;
         if (narrow === 4'bx01x || narrow !== 4'bz01x) begin

@@ -494,18 +494,37 @@ TEST(BitOpsShift, AcrossLimbBoundaries) {
 // Comparison
 // ---------------------------------------------------------------------------
 
-TEST(BitOpsCompare, EqualityIsUnknownWhenEitherOperandIs) {
+TEST(BitOpsCompare, EqualityIsUnknownOnlyWhenTheUnknownBitsCouldDecideIt) {
     EXPECT_EQ(applyPredicate(bitops::equal, "4'b1010", "4'b1010"), '1');
     EXPECT_EQ(applyPredicate(bitops::equal, "4'b1010", "4'b1011"), '0');
     EXPECT_EQ(applyPredicate(bitops::equal, "4'b101x", "4'b1010"), 'x');
+    EXPECT_EQ(applyPredicate(bitops::equal, "4'b101z", "4'b101z"), 'x');
 
-    // Even an operand that differs in a known bit gives x, because `==` is defined
-    // on the whole value rather than bit by bit.
-    EXPECT_EQ(applyPredicate(bitops::equal, "4'b001x", "4'b1010"), 'x');
+    // A bit known on both sides and different settles it, whatever the unknown bits hold
+    // (IEEE 1800 section 11.4.5).
+    EXPECT_EQ(applyPredicate(bitops::equal, "4'b001x", "4'b1010"), '0');
+    EXPECT_EQ(applyPredicate(bitops::equal, "4'bz010", "4'b0011"), '0');
 
     EXPECT_EQ(applyPredicate(bitops::notEqual, "4'b1010", "4'b1011"), '1');
     EXPECT_EQ(applyPredicate(bitops::notEqual, "4'b1010", "4'b1010"), '0');
     EXPECT_EQ(applyPredicate(bitops::notEqual, "4'b101x", "4'b1010"), 'x');
+    EXPECT_EQ(applyPredicate(bitops::notEqual, "4'b001x", "4'b1010"), '1');
+}
+
+TEST(BitOpsCompare, AKnownMismatchSettlesEqualityAcrossLimbs) {
+    // The mismatch in the top limb, the unknown in the bottom one.
+    BitVector a = BitVector::filled(130, Logic::Zero);
+    BitVector b = BitVector::filled(130, Logic::Zero);
+    a.set(0, Logic::Unknown);
+    a.set(129, Logic::One);
+
+    BitVector result(1);
+    bitops::equal(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::Zero);
+
+    a.set(129, Logic::Zero);
+    bitops::equal(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::Unknown);
 }
 
 TEST(BitOpsCompare, CaseEqualityNeverProducesUnknown) {
