@@ -2268,6 +2268,12 @@ testbench or a case that cannot pass for a reason outside Enzan — a design sla
 refuses, a testbench that assumes a two-state simulator — is named, with the reason, in the
 design's `expected.txt`; any other failure fails the run.
 
+Where a design's own testbenches leave a module out, or reach it only through constructs Enzan
+does not have yet, self-checking testbenches for it sit in the design's `tb/`. Each compares
+the module against a model of what it should do, and exits non-zero on a mismatch. A
+testbench written here can be wrong as easily as the simulator. Before it is committed it is
+run under a second simulator, and it must pass there too.
+
 ### 14.6 cocotb regression
 
 Once VPI lands (M4), cocotb's own regression suite runs in CI and its pass rate
@@ -2626,8 +2632,10 @@ the language M5 adds without either:
   and generate. Each is tested by its own cocotb testbench, which needs
   `cocotbext-axi` beside cocotb and sets the top level's parameters from its makefile.
 - **PULP `common_cells`**: packages and packed structs, which `taxi` does not use.
-  Tested by those of its own testbenches that use no classes, and by self-checking
-  ones kept beside its fetch script for further modules.
+  Tested by those of its own testbenches that use no classes, queues, `randomize` or
+  `real` variables, and by self-checking ones kept beside its fetch script for further
+  modules. Its concurrent assertions are SVA, which comes later, and are compiled out
+  with its own `ASSERTS_OFF`; its immediate ones run.
 
 **Driving disjoint parts of one signal is the case to get right**, not an edge. A
 parameterised number of instances with ports connected to an array is ordinary RTL.

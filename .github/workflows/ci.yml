@@ -330,6 +330,8 @@ jobs:
           tests/designs/aes/run.sh build/gcc-release/bin/enzan "$(command -v iverilog)" \
             build/designs/aes || status=1
           tests/designs/taxi/run.sh build/gcc-release/bin/enzan build/designs/taxi || status=1
+          tests/designs/common_cells/run.sh build/gcc-release/bin/enzan \
+            build/designs/common_cells || status=1
           exit "$status"
 
       - name: Keep the design regression logs
@@ -340,6 +342,7 @@ jobs:
           path: |
             build/designs/aes/*.*
             build/designs/taxi/*.log
+            build/designs/common_cells/*.*
 
       # The benchmark is a target rather than a test, because a measurement taken alongside
       # three hundred other tests compares with nothing. It runs here so that a change which
