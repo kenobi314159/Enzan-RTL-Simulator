@@ -1627,7 +1627,7 @@ Simulation twoDrivers(std::string_view a, std::string_view b) {
 TEST(Kernel, ADrivenNetIsXUntilItsDriverRunsAndAnUndrivenOneIsItsDefault) {
     // Before anything runs: a driven bit holds no value the design gave it, so X, as a variable
     // would; `z` would claim nothing drives it (DESIGN_GUIDE.md section 3.7).
-    Simulation driven = twoDrivers("1'b1", "1'bz");
+    const Simulation driven = twoDrivers("1'b1", "1'bz");
     ASSERT_TRUE(driven.ready()) << driven.messages().front();
     EXPECT_EQ(driven.value("/tb/n"), "x");
 

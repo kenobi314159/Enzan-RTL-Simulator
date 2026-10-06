@@ -514,7 +514,7 @@ TEST(BitOpsCompare, EqualityIsUnknownOnlyWhenTheUnknownBitsCouldDecideIt) {
 TEST(BitOpsCompare, AKnownMismatchSettlesEqualityAcrossLimbs) {
     // The mismatch in the top limb, the unknown in the bottom one.
     BitVector a = BitVector::filled(130, Logic::Zero);
-    BitVector b = BitVector::filled(130, Logic::Zero);
+    const BitVector b = BitVector::filled(130, Logic::Zero);
     a.set(0, Logic::Unknown);
     a.set(129, Logic::One);
 
