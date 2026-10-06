@@ -419,7 +419,7 @@ bool WaveformModel::readPending(QDataStream& stream, PendingRow& pending) {
     }
     pending.row.signalIndex = signalIndex;
     pending.row.signalWidth = signalWidth;
-    pending.row.radix = radix <= static_cast<quint8>(eir::Radix::Hexadecimal)
+    pending.row.radix = radix <= static_cast<quint8>(eir::Radix::Ascii)
                             ? static_cast<eir::Radix>(radix)
                             : eir::Radix::Hexadecimal;
     pending.row.highBit = highBit;

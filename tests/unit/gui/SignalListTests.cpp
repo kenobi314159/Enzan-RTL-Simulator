@@ -223,7 +223,8 @@ TEST(SignalList, EveryWordReadsBackAsItWasWritten) {
 }
 
 TEST(SignalList, RadixWordsRoundTrip) {
-    for (const Radix radix : {Radix::Binary, Radix::Octal, Radix::Decimal, Radix::Hexadecimal}) {
+    for (const Radix radix :
+         {Radix::Binary, Radix::Octal, Radix::Decimal, Radix::Hexadecimal, Radix::Ascii}) {
         EXPECT_EQ(radixFromWord(radixWord(radix)), radix);
     }
     EXPECT_FALSE(radixFromWord(QStringLiteral("Hexadecimal")).has_value());

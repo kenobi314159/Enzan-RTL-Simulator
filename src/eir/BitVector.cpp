@@ -9,6 +9,7 @@
 #include <cctype>
 #include <charconv>
 #include <cstring>
+#include <format>
 #include <utility>
 
 namespace enzan::eir {
@@ -68,8 +69,47 @@ constexpr std::uint32_t bitsPerDigit(Radix radix) noexcept {
     case Radix::Octal: return 3;
     case Radix::Hexadecimal: return 4;
     case Radix::Decimal: return 0;
+    case Radix::Ascii: return 8;
     }
     return 0;
+}
+
+/// The bytes of `value` as characters; see toString.
+std::string asciiString(ConstBitRef value) {
+    std::string result;
+    const std::uint32_t bytes = (value.width() + 7) / 8;
+    for (std::uint32_t index = bytes; index-- > 0;) {
+        unsigned character = 0;
+        bool unknown = false;
+        for (std::uint32_t bit = 0; bit < 8; ++bit) {
+            const std::uint32_t position = (index * 8) + bit;
+            if (position >= value.width()) break;
+            const Logic logic = value.get(position);
+            if (logic == Logic::One) character |= 1U << bit;
+            if (logic == Logic::Unknown || logic == Logic::HighZ) unknown = true;
+        }
+
+        if (unknown) {
+            result += "\xEF\xBF\xBD";
+            continue;
+        }
+        if (character == 0 && result.empty()) continue;
+
+        switch (character) {
+        case '\n': result += "\\n"; break;
+        case '\t': result += "\\t"; break;
+        case '\\': result += "\\\\"; break;
+        case 0: result += "\\0"; break;
+        default:
+            if (character >= 0x20 && character < 0x7F) {
+                result.push_back(static_cast<char>(character));
+            } else {
+                result += std::format("\\x{:02x}", character);
+            }
+            break;
+        }
+    }
+    return result;
 }
 
 /// Maps a digit character to its value in `base`, or 255 when it is not a digit
@@ -391,6 +431,8 @@ std::optional<BitVector> BitVector::parse(std::string_view text) {
 // ---------------------------------------------------------------------------
 
 std::string toString(ConstBitRef value, Radix radix, bool isSigned) {
+    if (radix == Radix::Ascii) return asciiString(value);
+
     if (radix != Radix::Decimal) {
         const std::uint32_t perDigit = bitsPerDigit(radix);
         const std::uint32_t digitCount = (value.width() + perDigit - 1) / perDigit;

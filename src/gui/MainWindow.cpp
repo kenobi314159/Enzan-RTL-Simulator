@@ -54,6 +54,7 @@ constexpr RadixChoice RadixChoices[] = {
     {.name = "Decimal", .radix = eir::Radix::Decimal},
     {.name = "Octal", .radix = eir::Radix::Octal},
     {.name = "Binary", .radix = eir::Radix::Binary},
+    {.name = "ASCII", .radix = eir::Radix::Ascii},
 };
 
 } // namespace

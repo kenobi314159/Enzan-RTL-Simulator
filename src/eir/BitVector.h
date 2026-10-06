@@ -265,8 +265,8 @@ private:
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// Number base used when rendering a vector.
-enum class Radix : std::uint8_t { Binary, Octal, Decimal, Hexadecimal };
+/// Number base used when rendering a vector, or `Ascii` for its bytes as characters.
+enum class Radix : std::uint8_t { Binary, Octal, Decimal, Hexadecimal, Ascii };
 
 /// Renders `value` in `radix`, following IEEE 1800's rules for unknown bits.
 ///
@@ -281,6 +281,13 @@ enum class Radix : std::uint8_t { Binary, Octal, Decimal, Hexadecimal };
 /// renders the minimal number of digits, with a leading `-` when `isSigned` and
 /// the value is negative. No width prefix is produced; the caller adds one where
 /// it wants `8'h`.
+///
+/// `Ascii` renders a byte at a time, the most significant first, which is how a string
+/// literal is packed into a vector. Leading NUL bytes are dropped, as `%s` drops them, since
+/// they are what zero-extending a string into a wider vector adds. A printable character is
+/// itself, and any other byte an escape: `\n`, `\t`, `\0`, `\\` or `\xNN`. Unlike `%s`, an
+/// unknown byte is not read as zero: a byte with an X or Z bit is U+FFFD, the replacement
+/// character, which no byte of a string can be mistaken for. The result is UTF-8.
 std::string toString(ConstBitRef value, Radix radix, bool isSigned = false);
 
 } // namespace enzan::eir

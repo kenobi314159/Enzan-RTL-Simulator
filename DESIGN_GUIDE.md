@@ -1586,6 +1586,12 @@ Required features: multiple named cursors, cursor locking, zoom and pan, signal
 grouping, extracting a bit range of a signal into a separate displayed signal,
 and per-signal value radix selection.
 
+**A radix may be ASCII**, for a vector holding a string. It shows the bytes as
+characters, the most significant first, and drops leading NUL bytes as `%s` does.
+A byte that is no printable character is an escape, `\n` or `\x07`. A byte with an
+X or Z bit is U+FFFD rather than the character `%s` would make of it by reading the
+unknown bits as 0, since a waveform must not show an unknown value as a known one.
+
 A bit range is *extracted* rather than dialled in. The window reaches one by
 unpacking the signal, removing the bits that are not wanted and, when the range
 should read as one value, grouping what is left — each step being a thing the
@@ -1977,7 +1983,7 @@ why a group is a block rather than an option on each of the lines inside it.
 
 | Option | Meaning |
 |---|---|
-| `-radix bin\|oct\|dec\|hex` | the radix, and the number rather than an enumeration's name, as choosing a radix from the menu does |
+| `-radix bin\|oct\|dec\|hex\|ascii` | the radix, and the number rather than an enumeration's name, as choosing a radix from the menu does; `ascii` shows the bytes as characters |
 | `-symbolic` | an enumeration's names after all; applied after `-radix` wherever it is written |
 | `-label <text>` | the row's name, for a single signal or a non-recursive scope |
 | `-highlight <1–5>` | the row's background (10.7) |

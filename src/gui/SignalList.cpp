@@ -665,13 +665,14 @@ QString radixWord(eir::Radix radix) {
     case eir::Radix::Octal: return QStringLiteral("oct");
     case eir::Radix::Decimal: return QStringLiteral("dec");
     case eir::Radix::Hexadecimal: return QStringLiteral("hex");
+    case eir::Radix::Ascii: return QStringLiteral("ascii");
     }
     return QStringLiteral("hex");
 }
 
 std::optional<eir::Radix> radixFromWord(const QString& word) {
-    for (const eir::Radix radix :
-         {eir::Radix::Binary, eir::Radix::Octal, eir::Radix::Decimal, eir::Radix::Hexadecimal}) {
+    for (const eir::Radix radix : {eir::Radix::Binary, eir::Radix::Octal, eir::Radix::Decimal,
+                                   eir::Radix::Hexadecimal, eir::Radix::Ascii}) {
         if (word == radixWord(radix)) return radix;
     }
     return std::nullopt;

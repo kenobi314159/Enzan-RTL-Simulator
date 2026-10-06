@@ -35,6 +35,7 @@
 
 namespace {
 
+using enzan::eir::Radix;
 using enzan::gui::HighlightSlots;
 using enzan::gui::SignalInfo;
 using enzan::gui::Theme;
@@ -632,6 +633,15 @@ TEST_F(InteractionTest, MovingTheCursorRefreshesRowsInsideGroupsAndUnpackedSigna
     };
     EXPECT_TRUE(covered(bit)) << "a bit of an unpacked signal was not refreshed";
     EXPECT_TRUE(covered(member)) << "a signal inside a group was not refreshed";
+}
+
+TEST_F(InteractionTest, AnAsciiRowShowsItsBytesAsCharacters) {
+    populate(400);
+
+    // Forty rising edges have passed, so the counter holds 40, the code of '('.
+    const int count = rowOf.value(QStringLiteral("count"));
+    model->setRadix(count, Radix::Ascii);
+    EXPECT_EQ(model->renderValue(count, 400), QStringLiteral("("));
 }
 
 TEST_F(InteractionTest, AnUnpackedBitShowsThatBitsValue) {

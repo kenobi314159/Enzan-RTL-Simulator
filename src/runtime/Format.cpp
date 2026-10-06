@@ -19,6 +19,7 @@ std::size_t paddedWidth(std::uint32_t bitWidth, eir::Radix radix, bool isSigned)
     case eir::Radix::Binary: return bitWidth;
     case eir::Radix::Octal: return (bitWidth + 2) / 3;
     case eir::Radix::Hexadecimal: return (bitWidth + 3) / 4;
+    case eir::Radix::Ascii: return (bitWidth + 7) / 8;
     case eir::Radix::Decimal: break;
     }
 

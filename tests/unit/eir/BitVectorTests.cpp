@@ -337,6 +337,32 @@ TEST(BitVectorToString, BinaryRendersEveryBit) {
     EXPECT_EQ(enzan::eir::toString(literal("3'b10x").ref(), Radix::Binary), "10x");
 }
 
+TEST(BitVectorToString, AsciiRendersBytesAsCharactersMostSignificantFirst) {
+    EXPECT_EQ(enzan::eir::toString(literal("40'h48454c4c4f").ref(), Radix::Ascii), "HELLO");
+}
+
+TEST(BitVectorToString, AsciiDropsLeadingNulsAsAStringPaddedIntoAWiderVectorHasThem) {
+    EXPECT_EQ(enzan::eir::toString(literal("48'h0000_0000_4849").ref(), Radix::Ascii), "HI");
+    EXPECT_EQ(enzan::eir::toString(literal("16'h0000").ref(), Radix::Ascii), "");
+    // A width that is not whole bytes has a short top byte, which is still a leading byte.
+    EXPECT_EQ(enzan::eir::toString(literal("12'h041").ref(), Radix::Ascii), "A");
+}
+
+TEST(BitVectorToString, AsciiEscapesWhatIsNotPrintable) {
+    EXPECT_EQ(enzan::eir::toString(literal("32'h410a_0907").ref(), Radix::Ascii), "A\\n\\t\\x07");
+    EXPECT_EQ(enzan::eir::toString(literal("24'h41_00_42").ref(), Radix::Ascii), "A\\0B")
+        << "a NUL inside the string is not a leading one";
+    EXPECT_EQ(enzan::eir::toString(literal("8'h5c").ref(), Radix::Ascii), "\\\\");
+    EXPECT_EQ(enzan::eir::toString(literal("8'hff").ref(), Radix::Ascii), "\\xff");
+}
+
+TEST(BitVectorToString, AsciiShowsAByteWithAnUnknownBitAsTheReplacementCharacter) {
+    // Not read as zero, as `%s` reads it: an unknown character is not a known one.
+    const std::string replacement = "\xEF\xBF\xBD"; // U+FFFD in UTF-8
+    EXPECT_EQ(enzan::eir::toString(literal("16'h41_xx").ref(), Radix::Ascii), "A" + replacement);
+    EXPECT_EQ(enzan::eir::toString(literal("16'h4z_42").ref(), Radix::Ascii), replacement + "B");
+}
+
 TEST(BitVectorToString, HexadecimalRendersEveryDigit) {
     EXPECT_EQ(enzan::eir::toString(literal("8'h0F").ref(), Radix::Hexadecimal), "0f");
     EXPECT_EQ(enzan::eir::toString(literal("16'hDEAD").ref(), Radix::Hexadecimal), "dead");
