@@ -946,11 +946,22 @@ void WaveformModel::setCursorTime(runtime::SimTime time) {
 
 void WaveformModel::refreshValues() {
     if (rows.isEmpty()) return;
+    refreshValuesUnder(QModelIndex());
+}
+
+void WaveformModel::refreshValuesUnder(const QModelIndex& parent) {
+    const int count = rowCount(parent);
+    if (count == 0) return;
 
     // The whole column at once. Working out which rows actually changed would mean reading
-    // every value to find out, which is the work the refresh is trying to avoid.
-    Q_EMIT dataChanged(index(0, ValueColumn), index(rowCount() - 1, ValueColumn),
+    // every value to find out, which is the work the refresh is trying to avoid. One range per
+    // parent, because a range names rows under one parent only: the rows inside a group or an
+    // unpacked signal would otherwise keep the value they showed until something else redrew
+    // them.
+    Q_EMIT dataChanged(index(0, ValueColumn, parent), index(count - 1, ValueColumn, parent),
                        {Qt::DisplayRole});
+    for (int position = 0; position < count; ++position)
+        refreshValuesUnder(index(position, 0, parent));
 }
 
 QVector<std::uint32_t> WaveformModel::displayedSignals() const {

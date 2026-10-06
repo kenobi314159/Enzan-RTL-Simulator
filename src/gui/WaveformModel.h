@@ -304,6 +304,10 @@ public:
 
     void refreshValues();
 
+    /// Tells the views the value column of every row under `parent` may have changed, and so on
+    /// down through the rows inside them.
+    void refreshValuesUnder(const QModelIndex& parent);
+
     [[nodiscard]] QModelIndex index(int row, int column,
                                     const QModelIndex& parent = {}) const override;
     [[nodiscard]] QModelIndex parent(const QModelIndex& child) const override;
