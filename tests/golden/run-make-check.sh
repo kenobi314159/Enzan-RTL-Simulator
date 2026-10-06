@@ -59,12 +59,12 @@ libs/%/.created:
 	@touch $@
 
 libs/counter/.stamp: rtl/counter.f | libs/counter/.created
-	$(ENZAN) analyse --out-lib libs/counter -f rtl/counter.f \
+	$(ENZAN) analyse --timescale ns --out-lib libs/counter -f rtl/counter.f \
 	         --depfile libs/counter/deps.d --depfile-target $@
 	@touch $@
 
 libs/tb/.stamp: rtl/tb.f | libs/tb/.created
-	$(ENZAN) analyse --in-lib libs/counter --out-lib libs/tb -f rtl/tb.f \
+	$(ENZAN) analyse --timescale ns --in-lib libs/counter --out-lib libs/tb -f rtl/tb.f \
 	         --depfile libs/tb/deps.d --depfile-target $@
 	@touch $@
 

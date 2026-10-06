@@ -133,7 +133,8 @@ Simulation:
                           real design, and seekable. Both may be given at once.
       --wave-scope <path> Record only this subtree, for example /tb/u_dut.
       --timescale <unit>  Time unit for delays and reported times: s, ms, us, ns,
-                          ps or fs. The default is ps.
+                          ps or fs. The default is the unit the libraries were
+                          analysed in, and ps without any.
       --delta-limit <n>   Delta cycles allowed at one timestamp. Default 10000.
       --seed <n>          The seed random numbers are drawn from. Default 0.
       --dump-stats        Print instruction and delta counts when the run ends.
@@ -202,7 +203,8 @@ struct Invocation {
     std::filesystem::path fstPath;
     std::string waveformScope;
     std::filesystem::path listenPath;
-    std::int8_t timeExponent = -12;
+    /// Given with `--timescale`; otherwise the libraries' unit, or the session's default.
+    std::optional<std::int8_t> timeExponent;
     std::uint32_t deltaLimit = 10'000;
     std::uint32_t seed = 0;
     bool dumpStatistics = false;
@@ -361,7 +363,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
                           << "' is not a time unit; expected s, ms, us, ns, ps or fs\n";
                 return ParseOutcome::BadUsage;
             }
-            invocation.timeExponent = *exponent;
+            invocation.timeExponent = exponent;
             continue;
         }
 
@@ -745,7 +747,8 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
 /// One pipeline for the batch run, the served kernel and the script. Three copies of it was
 /// where the differences between them started: a `--listen` that resolved a file differently
 /// differently from another, or a batch run that put the waveform somewhere a served one did not.
-/// Opens the libraries this invocation writes into and reads from.
+/// Opens the libraries this invocation writes into and reads from, and settles the time unit,
+/// which the libraries fix when they hold units (8.2).
 bool openLibraries(const Invocation& invocation, enzan::session::Session& session) {
     if (!invocation.outputLibrary.empty() && !session.openOutputLibrary(invocation.outputLibrary))
         return false;
@@ -753,14 +756,16 @@ bool openLibraries(const Invocation& invocation, enzan::session::Session& sessio
     for (const NamedLibrary& input : invocation.inputLibraries) {
         if (!session.addInputLibrary(input.path, input.name)) return false;
     }
-    return true;
+
+    std::optional<enzan::runtime::TimeScale> requested;
+    if (invocation.timeExponent.has_value())
+        requested = enzan::runtime::TimeScale(*invocation.timeExponent);
+    return session.chooseTimeScale(requested);
 }
 
 /// Analyses, without elaborating. Returns false having reported.
 bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
                  enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
-    session.setTimeScale(enzan::runtime::TimeScale(invocation.timeExponent));
-
     if (!openLibraries(invocation, session)) return false;
 
     enzan::session::Session::AnalysisRequest request;

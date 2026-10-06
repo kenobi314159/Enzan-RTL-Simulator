@@ -98,6 +98,16 @@ public:
     /// Sets the time unit delays are counted in. Takes effect at the next elaboration.
     void setTimeScale(runtime::TimeScale unit) noexcept { scale = unit; }
 
+    /// Sets the time unit from the open libraries, or from `requested`, `--timescale`, when they
+    /// hold no units; with neither, it is picoseconds.
+    ///
+    /// A library's delays are counts of the unit it was analysed in, so a design run from it,
+    /// or analysed against it or into it, is in that unit and no other (DESIGN_GUIDE.md section
+    /// 8.2). Returns false having reported when two libraries disagree, or `requested` names
+    /// another unit: taking either would label every time in the run wrongly. Called once the
+    /// libraries are open and before anything is analysed.
+    [[nodiscard]] bool chooseTimeScale(std::optional<runtime::TimeScale> requested);
+
     [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
 
     /// Sets the delta cycles allowed at one timestamp. Takes effect at the next elaboration.

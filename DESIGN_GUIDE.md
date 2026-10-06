@@ -537,8 +537,8 @@ current one. So the name is what `make` depends on and the key is what Enzan
 checks.
 
 **Everything that changes what analysis produces belongs in the key**, not only
-the source text: the macro definitions, the include path, the serialised format
-version and Enzan's own version. A define that is outside the key is a define
+the source text: the macro definitions, the include path, the time unit, the
+serialised format version and Enzan's own version. A define that is outside the key is a define
 whose change the library cannot see, and the result is a simulation that runs
 and is wrong.
 
@@ -937,6 +937,15 @@ an entry to discover it. **A directory with no index is not a library**: librari
 are opt-in, so a directory that was never created is a mistake to report rather than
 a library to invent.
 
+**A library carries the time unit it was analysed in**, in its index beside its name. A
+delay is stored as a count of the unit, so `#5` analysed in nanoseconds is five
+nanoseconds and nothing else. A run, or an analysis against or into a library, therefore
+takes its unit from the libraries that hold units, and `--timescale` may be left out. Given
+anyway, it must agree: a run that relabelled the library's counts in another unit would
+report every time wrongly, so a conflict is an error (ENZ6028), and so are two libraries in
+different units (ENZ6027). A library emptied by `lib clean` holds no units, and can be
+filled in another unit.
+
 **Libraries are named because a design refers to them by name.** VHDL requires it —
 `library ieee;` resolves against a name rather than a path — so the map exists from
 the start rather than being retrofitted at M6. For SystemVerilog the same map gives
@@ -1078,6 +1087,9 @@ prerequisite written by hand, and the two `run` forms differ by nothing but a fl
 ENZAN ?= enzan
 PKG   := rtl/pkg/types_pkg.sv
 
+# The time unit is fixed when a library is analysed, and a run takes it from there (8.2).
+UNIT  := --timescale ns
+
 # Libraries are opt-in (8.2), so creating one is a step of its own rather than
 # something that happens because analysis ran.
 libs/%/.created:
@@ -1087,19 +1099,19 @@ libs/%/.created:
 # One stamp per library rather than one target per unit: within a library a hit is
 # all or nothing (4.4), so the library is the smallest thing make can rebuild.
 libs/pkg/.stamp: rtl/pkg.f | libs/pkg/.created
-	$(ENZAN) analyse --out-lib libs/pkg -f rtl/pkg.f \
+	$(ENZAN) analyse $(UNIT) --out-lib libs/pkg -f rtl/pkg.f \
 	         --depfile libs/pkg/deps.d --depfile-target $@
 	@touch $@
 
 # The package is read for resolution and stored only in libs/pkg, so there is
 # exactly one of it to resolve against at elaboration (8.2).
 libs/uart/.stamp: rtl/uart.f | libs/uart/.created
-	$(ENZAN) analyse --out-lib libs/uart -f rtl/uart.f --context $(PKG) \
+	$(ENZAN) analyse $(UNIT) --out-lib libs/uart -f rtl/uart.f --context $(PKG) \
 	         --depfile libs/uart/deps.d --depfile-target $@
 	@touch $@
 
 libs/tb/.stamp: rtl/tb.f | libs/tb/.created
-	$(ENZAN) analyse --out-lib libs/tb -f rtl/tb.f --context $(PKG) \
+	$(ENZAN) analyse $(UNIT) --out-lib libs/tb -f rtl/tb.f --context $(PKG) \
 	         --depfile libs/tb/deps.d --depfile-target $@
 	@touch $@
 
@@ -1111,10 +1123,10 @@ IN     := --in-lib libs/pkg --in-lib libs/uart --in-lib libs/tb
 STAMPS := libs/pkg/.stamp libs/uart/.stamp libs/tb/.stamp
 
 sim: $(STAMPS)
-	$(ENZAN) run $(IN) --timescale ns --fst wave.fst tb
+	$(ENZAN) run $(IN) --fst wave.fst tb
 
 gui: $(STAMPS)
-	$(ENZAN) run --gui $(IN) --timescale ns tb
+	$(ENZAN) run --gui $(IN) tb
 
 check: $(STAMPS)
 	$(ENZAN) elaborate $(IN) tb

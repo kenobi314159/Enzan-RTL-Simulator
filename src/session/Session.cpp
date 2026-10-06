@@ -153,7 +153,7 @@ bool Session::analyse(const AnalysisRequest& request) {
 
     loadedFromLibrary = false;
     if (library.isOpen()) {
-        library.setOptions(defines, includeDirectories, parameters);
+        library.setOptions(defines, includeDirectories, parameters, scale.precisionExponent());
 
         auto reused = std::make_unique<eir::Design>();
         if (library.load(stored, sources, *reused)) {
@@ -207,6 +207,43 @@ bool Session::analyse(const AnalysisRequest& request) {
                        "analysis in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF");
     return false;
 #endif
+}
+
+bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
+    // Every open library that holds units, with its unit: the output library as well as the
+    // inputs, since analysing into a library adds to what it holds.
+    std::vector<std::pair<const eir::Library*, runtime::TimeScale>> holding;
+    const auto consider = [&holding](const eir::Library& candidate) {
+        if (!candidate.isOpen()) return;
+        if (const std::optional<std::int8_t> unit = candidate.timeUnit())
+            holding.emplace_back(&candidate, runtime::TimeScale(*unit));
+    };
+    consider(library);
+    for (const eir::Library& input : inputLibraries) consider(input);
+
+    for (const auto& [other, unit] : holding) {
+        const auto& [first, firstUnit] = holding.front();
+        if (unit.precisionExponent() != firstUnit.precisionExponent()) {
+            diagnostics.report(DiagCode::LibraryTimeUnitsDiffer, SourceLocation(), first->name(),
+                               firstUnit.unitName(), other->name(), unit.unitName());
+            return false;
+        }
+    }
+
+    if (holding.empty()) {
+        scale = requested.value_or(runtime::TimeScale());
+        return true;
+    }
+
+    const auto& [first, unit] = holding.front();
+    if (requested.has_value() && requested->precisionExponent() != unit.precisionExponent()) {
+        diagnostics.report(DiagCode::TimeScaleConflictsWithLibrary, SourceLocation(),
+                           requested->unitName(), first->name(), unit.unitName(),
+                           requested->unitName());
+        return false;
+    }
+    scale = unit;
+    return true;
 }
 
 bool Session::openOutputLibrary(const std::filesystem::path& path) {

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -98,10 +99,12 @@ public:
     /// key is a define whose change is invisible to the cache, which is a wrong simulation
     /// rather than a slow one.
     /// Top-level parameter overrides are among them: slang applies them while analysing, so a
-    /// unit analysed with one is not the unit analysed without it.
+    /// unit analysed with one is not the unit analysed without it. So is the time unit, as the
+    /// power of ten of a second it is: a delay is stored as a count of it, so `#5` analysed in
+    /// nanoseconds is not `#5` analysed in picoseconds.
     void setOptions(std::span<const std::string> defines,
                     std::span<const std::filesystem::path> includeDirectories,
-                    std::span<const std::string> parameters = {});
+                    std::span<const std::string> parameters, std::int8_t timeUnitExponent);
 
     /// Loads every source's units into `design`, or reports why it could not.
     ///
@@ -178,6 +181,13 @@ public:
     /// something else, which is worse than failing to parse.
     [[nodiscard]] std::span<const std::string> defines() const noexcept { return recordedDefines; }
 
+    /// The time unit this library's units were analysed in, as a power of ten of a second, or
+    /// nothing when it holds no units, or was written before libraries recorded one.
+    ///
+    /// Their delays are counts of it, so they are simulated in it and in nothing else: a design
+    /// run from this library takes its unit from here (DESIGN_GUIDE.md section 8.2).
+    [[nodiscard]] std::optional<std::int8_t> timeUnit() const;
+
     /// The units this library holds, by the source each came from, for `lib list`.
     ///
     /// Reads every entry, which is what makes it a reporting call rather than one anything
@@ -209,6 +219,10 @@ private:
     std::vector<std::filesystem::path> recordedSources;
     std::vector<std::filesystem::path> recordedIncludeDirectories;
     std::vector<std::string> recordedDefines;
+
+    /// The unit the entries were stored in, and the one the options say the next store is in.
+    std::optional<std::int8_t> recordedTimeUnit;
+    std::int8_t pendingTimeUnit = 0;
 
     /// The part of every key that does not depend on the file: the options, the format
     /// version and Enzan's version. Computed once when the options are set.

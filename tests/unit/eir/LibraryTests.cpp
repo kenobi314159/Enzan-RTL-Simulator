@@ -172,6 +172,9 @@ TEST_F(LibraryTest, AClosedLibraryNeitherLoadsNorStores) {
 // Storing and reusing
 // ---------------------------------------------------------------------------
 
+/// The time unit the tests analyse in, as a power of ten of a second.
+constexpr std::int8_t Picoseconds = -12;
+
 class StoredLibraryTest : public LibraryTest {
 protected:
     StoredLibraryTest() { EXPECT_TRUE(library.create(workspace / "work", {}, engine)); }
@@ -181,7 +184,7 @@ protected:
 
 TEST_F(StoredLibraryTest, WhatWasStoredComesBack) {
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
     Design loaded;
@@ -194,7 +197,7 @@ TEST_F(StoredLibraryTest, WhatWasStoredComesBack) {
 
 TEST_F(StoredLibraryTest, ALocationPointsBackIntoTheCallersBuffer) {
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
     Design loaded;
@@ -204,7 +207,7 @@ TEST_F(StoredLibraryTest, ALocationPointsBackIntoTheCallersBuffer) {
 
 TEST_F(StoredLibraryTest, NothingStoredIsAMiss) {
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
 
     Design loaded;
     EXPECT_FALSE(library.load({&file, 1}, sources, loaded));
@@ -212,7 +215,7 @@ TEST_F(StoredLibraryTest, NothingStoredIsAMiss) {
 }
 
 TEST_F(StoredLibraryTest, LoadingNothingIsAMissRatherThanAnEmptyHit) {
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
 
     Design loaded;
     EXPECT_FALSE(library.load({}, sources, loaded));
@@ -220,7 +223,7 @@ TEST_F(StoredLibraryTest, LoadingNothingIsAMissRatherThanAnEmptyHit) {
 
 TEST_F(StoredLibraryTest, ChangedTextIsAMiss) {
     const LibrarySource before = source("a.sv", "module a; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&before, 1}, sources, designWith("a", before.buffer), engine));
 
     const LibrarySource after = source("a.sv", "module a; wire w; endmodule\n");
@@ -232,7 +235,7 @@ TEST_F(StoredLibraryTest, TheSameTextUnderAnotherNameIsAMiss) {
     // Two files with identical contents are still two units, and a diagnostic about one must
     // name the right file.
     const LibrarySource first = source("a.sv", "module a; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&first, 1}, sources, designWith("a", first.buffer), engine));
 
     const LibrarySource second = source("b.sv", "module a; endmodule\n");
@@ -243,11 +246,11 @@ TEST_F(StoredLibraryTest, TheSameTextUnderAnotherNameIsAMiss) {
 TEST_F(StoredLibraryTest, AChangedDefineIsAMiss) {
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
     const std::vector<std::string> before{"WIDTH=8"};
-    library.setOptions(before, {});
+    library.setOptions(before, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
     const std::vector<std::string> after{"WIDTH=16"};
-    library.setOptions(after, {});
+    library.setOptions(after, {}, {}, Picoseconds);
 
     Design loaded;
     EXPECT_FALSE(library.load({&file, 1}, sources, loaded));
@@ -256,14 +259,51 @@ TEST_F(StoredLibraryTest, AChangedDefineIsAMiss) {
 TEST_F(StoredLibraryTest, AChangedIncludePathIsAMiss) {
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
     const std::vector<std::filesystem::path> before{"include"};
-    library.setOptions({}, before);
+    library.setOptions({}, before, {}, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
     const std::vector<std::filesystem::path> after{"include", "vendor"};
-    library.setOptions({}, after);
+    library.setOptions({}, after, {}, Picoseconds);
 
     Design loaded;
     EXPECT_FALSE(library.load({&file, 1}, sources, loaded));
+}
+
+TEST_F(StoredLibraryTest, AChangedTimeUnitIsAMiss) {
+    // A delay is stored as a count of the unit, so `#5` in picoseconds is not `#5` in
+    // nanoseconds.
+    const LibrarySource file = source("a.sv", "module a; endmodule\n");
+    library.setOptions({}, {}, {}, Picoseconds);
+    ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
+
+    library.setOptions({}, {}, {}, -9);
+    Design loaded;
+    EXPECT_FALSE(library.load({&file, 1}, sources, loaded));
+}
+
+TEST_F(StoredLibraryTest, TheTimeUnitIsRecordedForWhoeverReadsTheLibrary) {
+    EXPECT_FALSE(library.timeUnit().has_value()) << "a new library holds no units, so no unit";
+
+    const LibrarySource file = source("a.sv", "module a; endmodule\n");
+    library.setOptions({}, {}, {}, -9);
+    ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
+    EXPECT_EQ(library.timeUnit(), std::optional<std::int8_t>(-9));
+
+    Library reader;
+    ASSERT_TRUE(reader.open(workspace / "work", engine));
+    EXPECT_EQ(reader.timeUnit(), std::optional<std::int8_t>(-9));
+}
+
+TEST_F(StoredLibraryTest, ALibraryEmptiedOfItsEntriesHoldsNoTimeUnit) {
+    // What `lib clean` leaves can be filled in another unit.
+    const LibrarySource file = source("a.sv", "module a; endmodule\n");
+    library.setOptions({}, {}, {}, -9);
+    ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
+
+    for (const auto& entry : std::filesystem::directory_iterator(workspace / "work")) {
+        if (entry.path().extension() == ".eirlib") std::filesystem::remove(entry.path());
+    }
+    EXPECT_FALSE(library.timeUnit().has_value());
 }
 
 TEST_F(StoredLibraryTest, TwoOptionsThatConcatenateAlikeAreDistinguished) {
@@ -271,11 +311,11 @@ TEST_F(StoredLibraryTest, TwoOptionsThatConcatenateAlikeAreDistinguished) {
     // digest with no separator between fields would do.
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
     const std::vector<std::string> joined{"AB"};
-    library.setOptions(joined, {});
+    library.setOptions(joined, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
     const std::vector<std::string> split{"A", "B"};
-    library.setOptions(split, {});
+    library.setOptions(split, {}, {}, Picoseconds);
 
     Design loaded;
     EXPECT_FALSE(library.load({&file, 1}, sources, loaded));
@@ -286,18 +326,18 @@ TEST_F(StoredLibraryTest, AParameterOverrideIsPartOfTheKey) {
     // analysed without, and an override must not hash as the define spelt like it.
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
     const std::vector<std::string> width{"WIDTH=8"};
-    library.setOptions({}, {}, width);
+    library.setOptions({}, {}, width, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     Design without;
     EXPECT_FALSE(library.load({&file, 1}, sources, without));
 
-    library.setOptions(width, {});
+    library.setOptions(width, {}, {}, Picoseconds);
     Design asDefine;
     EXPECT_FALSE(library.load({&file, 1}, sources, asDefine));
 
-    library.setOptions({}, {}, width);
+    library.setOptions({}, {}, width, Picoseconds);
     Design same;
     EXPECT_TRUE(library.load({&file, 1}, sources, same));
 }
@@ -305,7 +345,7 @@ TEST_F(StoredLibraryTest, AParameterOverrideIsPartOfTheKey) {
 TEST_F(StoredLibraryTest, OneMissingFileMakesTheWholeLoadAMiss) {
     const LibrarySource first = source("a.sv", "module a; endmodule\n");
     const LibrarySource second = source("b.sv", "module b; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&first, 1}, sources, designWith("a", first.buffer), engine));
 
     const std::vector<LibrarySource> both{first, second};
@@ -325,7 +365,7 @@ TEST_F(StoredLibraryTest, SeveralFilesStoreAndLoadTogether) {
     other.location = SourceLocation(second.buffer, 0);
     design.addModule(std::move(other));
 
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store(both, sources, design, engine));
 
     Design loaded;
@@ -340,7 +380,7 @@ TEST_F(StoredLibraryTest, AFileThatDefinesNothingStillGetsAnEntry) {
     // A header of macros defines no unit. Without an entry it would look like a miss for ever,
     // and a design that includes one would never reuse anything.
     const LibrarySource header = source("defs.svh", "`define WIDTH 8\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&header, 1}, sources, Design(), engine));
 
     Design loaded;
@@ -350,7 +390,7 @@ TEST_F(StoredLibraryTest, AFileThatDefinesNothingStillGetsAnEntry) {
 
 TEST_F(StoredLibraryTest, StoringAgainReplacesTheEntry) {
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("renamed", file.buffer), engine));
 
@@ -366,7 +406,7 @@ TEST_F(StoredLibraryTest, StoringAgainReplacesTheEntry) {
 
 TEST_F(StoredLibraryTest, ACorruptEntryIsAMissRatherThanACrash) {
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
     // Section 4.4 requires a mismatch to cause clean re-analysis rather than a crash or,
@@ -384,7 +424,7 @@ TEST_F(StoredLibraryTest, ACorruptEntryIsAMissRatherThanACrash) {
 
 TEST_F(StoredLibraryTest, AnEmptyEntryIsAMiss) {
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
     for (const std::filesystem::directory_entry& entry :
@@ -402,7 +442,7 @@ TEST_F(StoredLibraryTest, AFailedWriteIsReportedAndDoesNotFailTheRun) {
     if (::geteuid() == 0) GTEST_SKIP() << "directory permissions do not restrict root";
 
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
-    library.setOptions({}, {});
+    library.setOptions({}, {}, {}, Picoseconds);
 
     // A directory where the entry wants to be: the write fails, and the caller still has the
     // design it analysed.

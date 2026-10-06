@@ -155,6 +155,13 @@ ENZAN_DIAG(RestartWithVpiApplication, 6026, Error,
 
 // --- 8000-8999: VPI, VHPI and plugin loading --------------------------------
 
+ENZAN_DIAG(LibraryTimeUnitsDiffer, 6027, Error,
+           "library '{}' was analysed in units of {} and library '{}' in units of {}; a design "
+           "is simulated in one time unit, so its libraries have to be analysed in the same one")
+ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
+           "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
+           "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "
+           "library again in {} (after `enzan lib clean` for a library being written to)")
 ENZAN_DIAG(VpiLibraryUnloadable, 8001, Error, "the VPI library '{}' could not be loaded: {}")
 ENZAN_DIAG(VpiEntryNotFound, 8002, Error,
            "the VPI library '{}' has no function called '{}' to start it with")

@@ -10,6 +10,7 @@
 #include "eir/Serialization.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -224,6 +225,11 @@ bool Library::writeIndex(DiagnosticEngine& diagnostics) const {
         index += define;
         index += '\n';
     }
+    if (recordedTimeUnit.has_value()) {
+        index += "timeunit ";
+        index += std::to_string(*recordedTimeUnit);
+        index += '\n';
+    }
 
     const std::filesystem::path indexPath = directory / IndexFileName;
     if (writeWholeFile(indexPath, index)) return true;
@@ -271,14 +277,27 @@ bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& 
     recordedSources.clear();
     recordedIncludeDirectories.clear();
     recordedDefines.clear();
+    recordedTimeUnit.reset();
     for (std::size_t line = 3; line < lines.size(); ++line) {
         const std::string_view text = lines[line];
-        if (text.starts_with("source "))
+        if (text.starts_with("source ")) {
             recordedSources.emplace_back(text.substr(7));
-        else if (text.starts_with("incdir "))
+        } else if (text.starts_with("incdir ")) {
             recordedIncludeDirectories.emplace_back(text.substr(7));
-        else if (text.starts_with("define "))
+        } else if (text.starts_with("define ")) {
             recordedDefines.emplace_back(text.substr(7));
+        } else if (text.starts_with("timeunit ")) {
+            int exponent = 0;
+            const std::string_view value = text.substr(9);
+            const auto [end, error] =
+                std::from_chars(value.data(), value.data() + value.size(), exponent);
+            if (error != std::errc() || end != value.data() + value.size() || exponent < -128
+                || exponent > 127) {
+                diagnostics.report(DiagCode::NotALibrary, SourceLocation(), newDirectory.string());
+                return false;
+            }
+            recordedTimeUnit = static_cast<std::int8_t>(exponent);
+        }
     }
 
     opened = true;
@@ -287,7 +306,7 @@ bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& 
 
 void Library::setOptions(std::span<const std::string> defines,
                          std::span<const std::filesystem::path> includeDirectories,
-                         std::span<const std::string> parameters) {
+                         std::span<const std::string> parameters, std::int8_t timeUnitExponent) {
     // Kept as well as hashed: the hash says whether an entry is current, and these say how to
     // read the sources again from somewhere else.
     recordedDefines.assign(defines.begin(), defines.end());
@@ -305,6 +324,8 @@ void Library::setOptions(std::span<const std::string> defines,
     for (const std::filesystem::path& include : includeDirectories) digest.add(include.string());
     // Marked, so that an override cannot hash the same as a define spelt like it.
     for (const std::string& parameter : parameters) digest.add("-G" + parameter);
+    digest.add("timeunit " + std::to_string(timeUnitExponent));
+    pendingTimeUnit = timeUnitExponent;
 
     optionsDigest = digest.hex();
 }
@@ -448,13 +469,25 @@ bool Library::store(std::span<const LibrarySource> sources, const SourceManager&
         allWritten = false;
     }
 
-    // Recorded so that a design analysed against this library can read these declarations.
-    // Replaced rather than merged: the sources named now are what the library holds now.
+    // Recorded so that a design analysed against this library can read these declarations, and
+    // run in the unit they were analysed in. Replaced rather than merged: the sources named now
+    // are what the library holds now.
+    recordedTimeUnit = pendingTimeUnit;
     recordedSources.clear();
     for (const LibrarySource& source : sources) recordedSources.push_back(source.path);
     if (!writeIndex(diagnostics)) allWritten = false;
 
     return allWritten;
+}
+
+std::optional<std::int8_t> Library::timeUnit() const {
+    // A library emptied by `lib clean` keeps its index, and so the unit it last held; it holds
+    // no units in it any more, so it can be filled in another.
+    std::error_code failure;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
+        if (entry.path().extension() == ".eirlib") return recordedTimeUnit;
+    }
+    return std::nullopt;
 }
 
 bool Library::overrideName(std::string_view replacement) {
