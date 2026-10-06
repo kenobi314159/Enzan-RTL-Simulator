@@ -49,6 +49,9 @@ ENZAN_DIAG(UnsupportedConstruct, 1004, Error,
 ENZAN_DIAG(NoInputFiles, 1005, Error, "no source files were given")
 ENZAN_DIAG(NoTopLevelFound, 1006, Error,
            "the sources contain no module that could serve as a top level")
+ENZAN_DIAG(ErrorInDeadCode, 1008, Warning,
+           "{}; it is in code a constant condition rules out, so it is never elaborated into "
+           "the simulation.")
 ENZAN_DIAG(UnusedParameterOverride, 1007, Warning,
            "-G {} names no parameter of a top level, and changes nothing")
 

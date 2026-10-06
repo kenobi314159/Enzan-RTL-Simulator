@@ -1658,6 +1658,18 @@ referenced in documentation and suppressed selectively. Frontend diagnostics
 from slang and NVC are translated into this engine so that output is uniform
 regardless of source language.
 
+**One family of slang's errors is a warning in code a constant condition rules out.**
+A parameter can make a construct degenerate: a part-select of width 0, a replication
+count below 0, or zero outside a concatenation, a zero-width cast, a zero replication
+in an assignment pattern. IEEE 1800 makes each an error even in a branch that can never
+run, and slang and Verilator report it; but parameterised RTL often guards one with an
+`if` or a `?:` on a parameter, and Icarus Verilog accepts it there. Enzan accepts it as
+ENZ1008 when it lies in the branch of a procedural `if` that a constant condition does
+not take, or the arm of a `?:` that a known condition does not select, in every
+instance that elaborated it. The same construct live in any instance stays an error,
+and a `case` item passed over by a constant selector is not dead. Such code is never
+translated, so nothing of it reaches the simulation.
+
 **Error codes are permanent.** A code appears in user documentation, in
 suppression lists in users' scripts, and in bug reports, so reusing a number for
 a different meaning silently changes what a user's suppression suppresses. A code

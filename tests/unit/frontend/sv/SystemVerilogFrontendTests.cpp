@@ -1099,6 +1099,74 @@ TEST_F(FrontendTest, ReportsReadingAMemoryOfTwoDimensions) {
     EXPECT_TRUE(reported("a memory of other than one unpacked dimension"));
 }
 
+// ---------------------------------------------------------------------------
+// Errors excused in code a constant condition rules out
+// ---------------------------------------------------------------------------
+
+TEST_F(FrontendTest, ADegenerateSelectInADeadBranchIsAWarning) {
+    // With W = 0 the select is of width 0, an error IEEE 1800 section 11.5.1 makes no exception
+    // for, but the branch can never run.
+    EXPECT_NE(analyse(R"(
+        module m #(parameter int W = 0) (input logic [7:0] x, output logic [7:0] y);
+            always_comb if (W > 0) y = x[7 -: W]; else y = x;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::ErrorInDeadCode));
+    EXPECT_FALSE(reportedCode(DiagCode::SystemVerilogError));
+}
+
+TEST_F(FrontendTest, ADegenerateConstructInADeadArmIsAWarning) {
+    EXPECT_NE(analyse(R"(
+        module m #(parameter int W = 2, parameter int N = 4)
+                  (input logic [7:0] x, output logic [7:0] y);
+            assign y = W > N ? {{(W - N){1'b0}}, x} : x;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::ErrorInDeadCode));
+}
+
+TEST_F(FrontendTest, TheSameSelectLiveInAnotherInstanceIsStillAnError) {
+    // One location, dead in u_dead and live in u_live with the same width: slang reports it
+    // once, and the instance in which it can run keeps it an error.
+    EXPECT_EQ(analyse(R"(
+        module sub #(parameter int W = 0, parameter bit Guard = 1)
+                    (input logic [7:0] x, output logic [7:0] y);
+            always_comb if (!Guard || W > 0) y = x[7 -: W]; else y = x;
+        endmodule
+        module top;
+            logic [7:0] x, a, b;
+            sub #(.W(0), .Guard(1)) u_dead (.x, .y(a));
+            sub #(.W(0), .Guard(0)) u_live (.x, .y(b));
+        endmodule
+    )",
+                      "top"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::SystemVerilogError));
+}
+
+TEST_F(FrontendTest, ADegenerateSelectInLiveCodeIsStillAnError) {
+    EXPECT_EQ(analyse(R"(
+        module m #(parameter int W = 0) (input logic [7:0] x, output logic [7:0] y);
+            always_comb y = x[7 -: W];
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_FALSE(reportedCode(DiagCode::ErrorInDeadCode));
+}
+
+TEST_F(FrontendTest, ACaseItemAConstantSelectorPassesOverIsNotDead) {
+    // slang does not treat the other items of a constant `case` as dead, and neither does Enzan.
+    EXPECT_EQ(analyse(R"(
+        module m #(parameter int W = 0) (input logic [7:0] x, output logic [7:0] y);
+            always_comb case (W) 0: y = x; default: y = x[7 -: W]; endcase
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_FALSE(reportedCode(DiagCode::ErrorInDeadCode));
+}
+
 TEST_F(FrontendTest, ReportsADeferredAssertion) {
     // Evaluated on the spot it would report the glitches it exists to filter out.
     EXPECT_EQ(analyse(R"(

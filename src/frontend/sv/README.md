@@ -81,6 +81,15 @@ variable to be found first matters for upgrades: block-local and loop variables 
 scopes slang has moved between releases, and a frontend that depends on where they are
 attached breaks when it is rebased.
 
+**Code a constant condition rules out is not translated.** The branch of a procedural `if`
+whose condition the parameters fix, and the arm of a `?:` whose condition is known, can never
+run, so only the live one is translated. That is also what lets a construct the parameters make
+degenerate there be excused: `DeadCode` walks every instance, records the dead branches and
+arms, and slang's errors of that family that lie in one in every instance become ENZ1008
+warnings (DESIGN_GUIDE.md section 10.6). slang wraps a statement or expression around a bad
+one in an invalid node, so the translator unwraps those and reaches the live branch through
+them.
+
 ## Not yet supported
 
 Reported as `ENZ1004` with the construct named, rather than mistranslated:

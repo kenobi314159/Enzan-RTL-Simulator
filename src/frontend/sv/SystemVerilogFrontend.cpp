@@ -7,6 +7,7 @@
 #include "eir/BitOps.h"
 #include "eir/Module.h"
 #include "eir/Verifier.h"
+#include "frontend/sv/DeadCode.h"
 #include "frontend/sv/ProcessTranslator.h"
 #include "frontend/sv/SvIntConversion.h"
 
@@ -1488,7 +1489,11 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     const slang::DiagnosticEngine slangEngine(slangSources);
     bool hasError = false;
 
-    for (const slang::Diagnostic& diagnostic : compilation.getAllDiagnostics()) {
+    // Elaborated before anything is asked of the design, so that the dead code is known.
+    const slang::Diagnostics& slangDiagnostics = compilation.getAllDiagnostics();
+    const DeadCode deadCode(compilation.getRoot());
+
+    for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
         const slang::DiagnosticSeverity severity = slang::getDefaultSeverity(diagnostic.code);
         if (severity == slang::DiagnosticSeverity::Ignored) continue;
 
@@ -1504,6 +1509,13 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             const std::size_t column = slangSources.getColumnNumber(diagnostic.location);
             return start.advanced(static_cast<std::uint32_t>(column > 0 ? column - 1 : 0));
         }();
+
+        // A degenerate construct a constant condition rules out is never translated, so it is
+        // reported and accepted rather than refused (see DeadCode).
+        if (severity == slang::DiagnosticSeverity::Error && deadCode.excuses(diagnostic)) {
+            diagnostics.report(DiagCode::ErrorInDeadCode, location, message);
+            continue;
+        }
 
         switch (severity) {
         case slang::DiagnosticSeverity::Note:

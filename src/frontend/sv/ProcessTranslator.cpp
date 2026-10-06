@@ -4,6 +4,7 @@
 
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
+#include "frontend/sv/DeadCode.h"
 #include "frontend/sv/SvIntConversion.h"
 
 #include "slang/ast/ASTVisitor.h"
@@ -478,6 +479,13 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
     case ast::StatementKind::Break: return translateLoopJump(statement, true);
     case ast::StatementKind::Continue: return translateLoopJump(statement, false);
 
+    // slang marks a statement invalid when anything in it is, a dead branch included. One in
+    // a design that reached translation holds only errors dead code excused, so what it wraps
+    // is translated, and the dead branch is skipped there.
+    case ast::StatementKind::Invalid:
+        if (const ast::Statement* child = statement.as<ast::InvalidStatement>().child)
+            return translateStatement(*child);
+        [[fallthrough]];
     default:
         module->reportUnsupported(statement.sourceRange.start(),
                                   std::string(toString(statement.kind)) + " statements");
@@ -580,6 +588,16 @@ bool ProcessTranslator::translateConditional(const ast::Statement& statement) {
                                   "pattern matching and multi-condition `if`");
         failed = true;
         return false;
+    }
+
+    // A condition fixed by the parameters takes one branch for ever, and only that one is
+    // translated: the other may hold a construct the parameters make degenerate, which is
+    // excused there and has nothing to translate it into (see DeadCode).
+    if (const std::optional<ConstantTruth> truth =
+            constantTruth(*conditional.conditions[0].expr, module->evaluationScope())) {
+        const ast::Statement* const live =
+            *truth == ConstantTruth::True ? &conditional.ifTrue : conditional.ifFalse;
+        return live == nullptr || translateStatement(*live);
     }
 
     const std::optional<Value> condition = translateExpression(*conditional.conditions[0].expr);
@@ -1156,6 +1174,12 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         if (std::optional<Value> folded = foldThroughReals(expression, *type)) return folded;
     }
 
+    // As for a statement: an invalid expression that wraps one holds a dead arm.
+    if (expression.kind == ast::ExpressionKind::Invalid) {
+        if (const ast::Expression* child = expression.as<ast::InvalidExpression>().child)
+            return translateExpression(*child);
+    }
+
     switch (expression.kind) {
     case ast::ExpressionKind::IntegerLiteral: {
         if (!type.has_value()) break;
@@ -1579,10 +1603,24 @@ ProcessTranslator::translateConditionalExpression(const ast::Expression& express
         return std::nullopt;
     }
 
+    const std::optional<eir::Type> knownType = module->convertType(*expression.type);
+
+    // A condition fixed by the parameters selects one arm for ever, as for `if`. An unknown one
+    // merges both, so it is evaluated as any other condition would be. A dead arm slang could
+    // not bind leaves the whole `?:` without a type, and then the selected arm's is its own.
+    if (const std::optional<ConstantTruth> truth =
+            constantTruth(*conditional.conditions[0].expr, module->evaluationScope());
+        truth.has_value() && *truth != ConstantTruth::Unknown) {
+        const std::optional<Value> selected = translateExpression(
+            *truth == ConstantTruth::True ? conditional.left() : conditional.right());
+        if (!selected.has_value()) return std::nullopt;
+        return coerce(*selected, knownType.value_or(selected->type));
+    }
+
     const std::optional<Value> condition = translateExpression(*conditional.conditions[0].expr);
     if (!condition.has_value()) return std::nullopt;
 
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    const std::optional<eir::Type> resultType = knownType;
     if (!resultType.has_value()) {
         module->reportUnsupported(expression.sourceRange.start(), "this conditional result type");
         failed = true;
