@@ -61,6 +61,37 @@ run_output=$("$enzan" run --in-lib libs/work --timescale ns tb) \
     || fail "a design analysed by one process did not run in another"
 grep -q 'PASS counter' <<<"$run_output" || fail "the run did not reach the design's own check"
 
+# --- what only the kernel reads applies to a run from a library ----------------------------------
+
+# A run from libraries alone analyses nothing, and the seed and the delta limit are the run's,
+# not the analysis's: given to `run`, they must take effect there.
+cat >random.sv <<'EOF'
+module random_tb;
+    initial $display("drew %0d", $random);
+endmodule
+EOF
+cat >looping.sv <<'EOF'
+module looping_tb;
+    logic toggle = 1'b0;
+    always @(toggle) toggle <= ~toggle;
+    initial #1 toggle = 1'b1;
+endmodule
+EOF
+"$enzan" lib create libs/kernel >/dev/null || fail "libs/kernel could not be created"
+"$enzan" analyse --out-lib libs/kernel random.sv looping.sv || fail "libs/kernel could not be analysed"
+
+seed0=$("$enzan" run --in-lib libs/kernel --timescale ns random_tb 2>&1) \
+    || fail "the random design did not run from its library"
+seed7=$("$enzan" run --in-lib libs/kernel --timescale ns --seed 7 random_tb 2>&1) \
+    || fail "the random design did not run from its library with a seed"
+grep -q 'seed 7' <<<"$seed7" || fail "a run from a library did not use its --seed: $seed7"
+[[ $(grep drew <<<"$seed0") != $(grep drew <<<"$seed7") ]] \
+    || fail "--seed given to a run from a library changed nothing"
+
+looped=$("$enzan" run --in-lib libs/kernel --timescale ns --delta-limit 5 looping_tb 2>&1 || true)
+grep -q 'limit of 5' <<<"$looped" \
+    || fail "a run from a library did not use its --delta-limit: $looped"
+
 # --- the file list is expanded, and can be shown without building --------------------------------
 
 expanded=$("$enzan" analyse --dry-run -f rtl.f) || fail "--dry-run failed"

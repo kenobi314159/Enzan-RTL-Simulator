@@ -760,8 +760,6 @@ bool openLibraries(const Invocation& invocation, enzan::session::Session& sessio
 bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
                  enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
     session.setTimeScale(enzan::runtime::TimeScale(invocation.timeExponent));
-    session.setDeltaLimit(invocation.deltaLimit);
-    session.setSeed(invocation.seed);
 
     if (!openLibraries(invocation, session)) return false;
 
@@ -789,6 +787,12 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
 
 bool prepare(const Invocation& invocation, enzan::session::Session& session,
              enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
+    // What only the kernel reads, set whether or not this run analyses anything: a run from
+    // libraries alone skips analysis, and a seed or a delta limit given to it would otherwise be
+    // dropped without a word.
+    session.setDeltaLimit(invocation.deltaLimit);
+    session.setSeed(invocation.seed);
+
     // A run given nothing but libraries has no sources of its own to analyse, and elaboration
     // then works from what the libraries hold.
     const bool hasSources = !invocation.files.empty() || !invocation.fileLists.empty();
