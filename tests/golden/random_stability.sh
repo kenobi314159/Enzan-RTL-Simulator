@@ -35,9 +35,5 @@ if ! cmp -s "$work/seed7.txt" "$work/seed7-extra.txt"; then
     echo "FAIL: another process drawing changed what this one drew"
     status=1
 fi
-if ! "$enzan" --top tb --seed 7 "$source" 2>&1 >/dev/null | grep -q 'seed 7'; then
-    echo "FAIL: the seed was not reported"
-    status=1
-fi
 [ "$status" -eq 0 ] && echo "PASS random_stability"
 exit "$status"

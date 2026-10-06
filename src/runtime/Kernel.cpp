@@ -154,7 +154,6 @@ void Kernel::initialize() {
     for (ProcessState& state : processes)
         state.randomState = processRandomState(options.seed, state.name);
     randomSeed = static_cast<std::int32_t>(options.seed);
-    seedReported = false;
     // Files a previous run opened are closed, which flushes what it wrote, and are opened
     // again, from the start, by the run that follows.
     openFiles.clear();
@@ -966,11 +965,6 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCall
         result.aval()[0] = opened;
         result.canonicalize();
         return;
-    }
-
-    if (!seedReported) {
-        diagnostics.report(DiagCode::RandomSeed, descriptor.location, options.seed);
-        seedReported = true;
     }
 
     std::uint64_t value = 0;
