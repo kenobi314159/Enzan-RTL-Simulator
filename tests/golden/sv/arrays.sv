@@ -2,26 +2,16 @@
 //
 // Unpacked arrays, which Enzan stores flat with the left element highest (DESIGN_GUIDE.md
 // section 4.3): memories read and written at a variable index, both directions of declared
-// range, two dimensions, assignment patterns, a wire array
-// driven element by element as a lookup table often is, and an array connected through a port.
-// Whole-array copy and equality, which Icarus Verilog does not implement, and an index past an
-// inner dimension, which it lets land in the next row, are in aggregates.sv.
-
-module reverse (
-    input  logic [7:0] in  [0:3],
-    output logic [7:0] out [0:3]
-);
-    assign out = '{in[3], in[2], in[1], in[0]};
-endmodule
+// range, two dimensions, and a wire array driven element by element as a lookup table often is.
+// Assignment patterns, whole-array copy and equality, and an array through a port, which Icarus
+// Verilog 12 does not implement or leaves X, and an index past an inner dimension, which it lets
+// land in the next row, are in aggregates.sv.
 
 module tb;
     logic [7:0] memory [0:15];
     logic [3:0] down [3:0];
     logic [7:0] grid [0:2][0:3];
-    logic [7:0] preset [0:3] = '{8'h11, 8'h22, 8'h33, 8'h44};
-    logic [7:0] filled [0:3];
     wire  [7:0] table_ [0:3];
-    logic [7:0] reversed [0:3];
     logic [3:0] address;
     logic [7:0] word;
     int failures = 0;
@@ -31,7 +21,6 @@ module tb;
     assign table_[2] = 8'h77;
     assign table_[3] = 8'h7b;
 
-    reverse u_reverse (.in(preset), .out(reversed));
 
     initial begin
         for (int i = 0; i < 16; i++) memory[i] = 8'(i * 3);
@@ -78,23 +67,11 @@ module tb;
             failures = failures + 1;
         end
 
-        // Assignment patterns and initialisers are in order, left element first.
-        if (preset[0] !== 8'h11 || preset[3] !== 8'h44) begin
-            $display("FAIL: initialiser gave %h and %h", preset[0], preset[3]);
-            failures = failures + 1;
-        end
-        filled = '{8'h5a, 8'h5a, 8'h5a, 8'h5a};
-        filled[2] = 8'h01;
-        if (filled[0] !== 8'h5a || filled[2] !== 8'h01 || filled[3] !== 8'h5a) begin
-            $display("FAIL: default pattern");
-            failures = failures + 1;
-        end
-
-        // A wire array driven element by element, and an array through a port.
+        // A wire array driven element by element.
         #1;
-        $display("table=%h %h reversed=%h %h", table_[0], table_[3], reversed[0], reversed[3]);
-        if (table_[1] !== 8'h7c || reversed[0] !== 8'h44 || reversed[3] !== 8'h11) begin
-            $display("FAIL: wire array or array port");
+        $display("table=%h %h", table_[0], table_[3]);
+        if (table_[1] !== 8'h7c) begin
+            $display("FAIL: wire array");
             failures = failures + 1;
         end
 

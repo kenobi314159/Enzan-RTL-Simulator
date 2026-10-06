@@ -103,8 +103,9 @@ enzan_add_golden_test(inside NO_DIFFERENTIAL)
 enzan_add_golden_test(arrays)
 
 # Arrays and structs where Icarus Verilog cannot be the reference: whole-array copy and equality,
-# which it does not implement, and an index past an inner dimension, which it lets land in the
-# next row where IEEE 1800 section 7.4.6 makes it out of range.
+# and assignment patterns, which version 12 does not implement; an array through a port, which
+# it leaves X; and an index past an inner dimension, which it lets land in the next row where
+# IEEE 1800 section 7.4.6 makes it out of range.
 enzan_add_golden_test(aggregates NO_DIFFERENTIAL)
 
 # Functions and tasks, inlined into the processes that call them.
@@ -144,9 +145,11 @@ enzan_add_golden_test(type_parameters NO_DIFFERENTIAL)
 # Packages, and package variables shared by every module that uses them.
 enzan_add_golden_test(packages)
 
-# Loops: `break`, `continue` and `foreach`. A `break` in a `foreach` of two dimensions leaves the
-# whole statement, as Verilator does, where Icarus Verilog leaves only the inner dimension.
-enzan_add_golden_test(loops)
+# Loops: `break`, `continue` and `foreach`. Icarus Verilog 12, the version CI installs, has no
+# `break` or `continue`; version 13 has both and agrees. A `break` in a `foreach` of two
+# dimensions leaves the whole statement, as Verilator does, where Icarus Verilog 13 leaves only
+# the inner dimension.
+enzan_add_golden_test(loops NO_DIFFERENTIAL)
 enzan_add_golden_test(foreach_break NO_DIFFERENTIAL)
 
 # File output, and memories loaded from files the design writes first: compared file by file

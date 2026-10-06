@@ -1,10 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Unpacked arrays and structs where Icarus Verilog cannot be the reference: whole-array copy and
-// equality, which it does not implement; an index past an inner dimension, which it lets land in
-// the next row where IEEE 1800 section 7.4.6 makes the read the type's default and the write
-// nothing; `'{default: ...}`; and structs, packed and unpacked, alone and in an array. The case
-// checks itself against what the standard gives.
+// equality, and assignment patterns, positional or `'{default: ...}`, as an initialiser, a
+// statement and a continuous assignment, none of which Icarus Verilog 12 implements; an array
+// through a port, which it leaves X; an index
+// past an inner dimension, which it lets land in the next row where IEEE 1800 section 7.4.6
+// makes the read the type's default and the write nothing; and structs, packed and unpacked,
+// alone and in an array. The case checks itself against what the standard gives.
+
+module reverse (
+    input  logic [7:0] in  [0:3],
+    output logic [7:0] out [0:3]
+);
+    assign out[0] = in[3];
+    assign out[1] = in[2];
+    assign out[2] = in[1];
+    assign out[3] = in[0];
+endmodule
 
 module tb;
     typedef struct packed {
@@ -22,12 +34,18 @@ module tb;
     logic [7:0] copy [0:15];
     logic [7:0] grid [0:2][0:3];
     logic [7:0] filled [0:3];
+    logic [7:0] preset [0:3] = '{8'h11, 8'h22, 8'h33, 8'h44};
+    wire  [7:0] swapped [0:1];
+    logic [7:0] reversed [0:3];
     logic [0:7] ascending;
     pair_t      pair;
     record_t    record;
     record_t    records [0:3];
     logic [3:0] address;
     int failures = 0;
+
+    assign swapped = '{preset[1], preset[0]};
+    reverse u_reverse (.in(preset), .out(reversed));
 
     initial begin
         for (int i = 0; i < 16; i++) memory[i] = 8'(i * 3);
@@ -59,6 +77,19 @@ module tb;
         filled[2] = 8'h01;
         if (filled[0] !== 8'h5a || filled[2] !== 8'h01 || filled[3] !== 8'h5a) begin
             $display("FAIL: default pattern");
+            failures = failures + 1;
+        end
+
+        // Positional patterns are in order, left element first.
+        if (preset[0] !== 8'h11 || preset[3] !== 8'h44) begin
+            $display("FAIL: initialiser gave %h and %h", preset[0], preset[3]);
+            failures = failures + 1;
+        end
+        filled = '{8'h01, 8'h02, 8'h03, 8'h04};
+        #1;
+        if (filled[0] !== 8'h01 || filled[3] !== 8'h04 || swapped[0] !== 8'h22
+            || swapped[1] !== 8'h11 || reversed[0] !== 8'h44 || reversed[3] !== 8'h11) begin
+            $display("FAIL: positional pattern, one continuously assigned, or an array port");
             failures = failures + 1;
         end
 
