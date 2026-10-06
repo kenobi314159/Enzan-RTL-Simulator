@@ -2363,8 +2363,8 @@ design, and discovering the constraint later means a rewrite.
 ### 15.3 Benchmarks
 
 `bench/` holds a fixed set of pinned designs with fixed stimulus. CI records
-cycles/sec per commit. A regression beyond an agreed threshold fails the
-nightly job.
+cycles/sec per commit. Once a threshold is agreed, a regression beyond it should fail CI,
+in a nightly job if one is added (16).
 
 ---
 
@@ -2372,20 +2372,32 @@ nightly job.
 
 **GitHub Actions.**
 
-Per-commit jobs:
+**What runs on a development branch or a pull request must be fast.** GitHub gives the
+project a monthly allowance of CI time, and every push to every branch spends it. A job or
+step that takes long runs on `main` only, with `if: github.ref == 'refs/heads/main'`.
+
+**Everything still runs before a pull request is merged, locally.** A main-only check that
+fails after the merge leaves `main` red. So whoever merges runs the main-only jobs on their
+own machine first, with the same commands the workflow uses.
+
+Jobs on every branch and pull request:
 
 - Build matrix: {GCC, Clang} × {Debug, Release}.
 - Unit and golden test suites.
 - Sanitiser build (ASan+UBSan) over unit and golden suites.
-- `clang-format` and `clang-tidy` checks.
+- `clang-format` check.
 - cocotb's regression suite (14.6) and sv-tests (14.4), in the job that already builds the
   SystemVerilog frontend, since a second job would build slang a second time to run them.
+- The design regression of 14.5 for the designs that run quickly: `aes` and `common_cells`.
 
-Nightly jobs:
+Jobs on `main` only:
 
-- Conformance suites, publishing pass rates.
-- Design regression suite.
-- Benchmark run, publishing cycles/sec.
+- `clang-tidy`, which analyses every source file.
+- The design regression for `taxi`, whose cocotb testbenches take minutes.
+
+There is no scheduled job. A nightly run would be a useful addition once there is somewhere to
+publish its results: conformance pass rates over time, the benchmark series of 15.3, and the
+design regressions too long for every commit.
 
 Dependency builds and `ccache` are cached. The default branch MUST stay green;
 a red default branch is fixed or reverted before other work continues.

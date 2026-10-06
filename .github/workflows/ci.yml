@@ -1,14 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Per-commit continuous integration (DESIGN_GUIDE.md section 16).
+# Continuous integration (DESIGN_GUIDE.md section 16), run on every push and pull request.
 #
-# The default branch must stay green; a red default branch is fixed or reverted
-# before other work continues.
+# GitHub allows a fixed amount of CI time a month, and every push to every branch spends it,
+# so what runs on a development branch or a pull request must be fast. A job or step that takes
+# long runs on main only, with `if: github.ref == 'refs/heads/main'`: clang-tidy, and the taxi
+# design regression. Whoever merges a pull request runs those locally first, because one that
+# fails after the merge leaves main red.
 #
-# The nightly jobs section 16 also describes — conformance suites, the design
-# regression suite and the benchmark run — is deliberately absent until M1,
-# because at M0 there is no simulator to run against a design and a scheduled job
-# that measures nothing is worse than none: it trains people to ignore it.
+# The default branch must stay green; a red default branch is fixed or reverted before other
+# work continues.
+#
+# There is no scheduled job. A nightly run that publishes conformance pass rates and the
+# benchmark series would be a useful addition, once there is somewhere to publish them.
 
 name: CI
 
@@ -301,7 +305,7 @@ jobs:
           path: build/cocotb-suite/*.log
 
       # The sv-tests conformance suite (section 14.4), held to its pass list as cocotb's is. It
-      # runs here rather than nightly because it takes well under a minute against this build.
+      # runs on every branch because it takes well under a minute against this build.
       - name: sv-tests conformance suite
         env:
           SVTESTS_PYTHON: ${{ github.workspace }}/.venv/bin/python
@@ -355,8 +359,8 @@ jobs:
       # The benchmark is a target rather than a test, because a measurement taken alongside
       # three hundred other tests compares with nothing. It runs here so that a change which
       # breaks the harness is caught, and so that a number is recorded per commit as section
-      # 15.1 requires; section 16 moves the published series to a nightly job once there is
-      # somewhere to publish it.
+      # 15.1 requires. Publishing the series, from a nightly job say, waits until there is
+      # somewhere to publish it (section 16).
       - name: Benchmark
         run: cmake --build --preset gcc-release --target enzan-bench
 
