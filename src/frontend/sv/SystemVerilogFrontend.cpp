@@ -337,6 +337,10 @@ private:
     /// when the type is not an enumeration.
     std::uint32_t enumFor(const ast::Type& type);
 
+    /// True when `type` is as wide as `port`, so that elaboration can collapse the port onto a
+    /// signal of it. A port whose type does not convert is left to the connection to report.
+    bool hasPortWidth(const ast::PortSymbol& port, const eir::Type& type);
+
     /// Creates an intermediate object plus a continuous assignment for a port connection
     /// that is an expression rather than a plain signal.
     std::optional<std::uint32_t> materialiseConnection(const ast::InstanceSymbol& instance,
@@ -1125,6 +1129,14 @@ ModuleBuilder::extractSensitivity(ProcessTranslator& translator, const ast::Timi
     }
 }
 
+bool ModuleBuilder::hasPortWidth(const ast::PortSymbol& port, const eir::Type& type) {
+    if (port.internalSymbol == nullptr || !ast::ValueSymbol::isKind(port.internalSymbol->kind))
+        return true;
+    const std::optional<eir::Type> portType =
+        convertType(port.internalSymbol->as<ast::ValueSymbol>().getType());
+    return !portType.has_value() || portType->bitWidth() == type.bitWidth();
+}
+
 std::optional<std::uint32_t>
 ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
                                      const ast::PortSymbol& port,
@@ -1215,9 +1227,13 @@ bool ModuleBuilder::addInstance(
             || reference.kind == ast::ExpressionKind::HierarchicalValue) {
             objectIndex = objectFor(reference.as<ast::ValueExpressionBase>().symbol);
             // A hierarchical reference has no storage until elaboration binds it, so a port
-            // cannot be collapsed onto it; it is connected through an assignment instead.
+            // cannot be collapsed onto it; it is connected through an assignment instead. So is
+            // a signal of another width than the port, which elaboration can only collapse onto
+            // a port as wide as it: the assignment extends or truncates as one written out would
+            // (IEEE 1800 section 23.3.3.7).
             if (objectIndex.has_value()
-                && !definitionValue.objects[*objectIndex].hierarchicalPath.empty())
+                && (!definitionValue.objects[*objectIndex].hierarchicalPath.empty()
+                    || !hasPortWidth(port, definitionValue.objects[*objectIndex].type)))
                 objectIndex = materialiseConnection(instance, port, reference);
         } else {
             objectIndex = materialiseConnection(instance, port, reference);

@@ -73,8 +73,9 @@ ENZAN_DIAG(RecursiveInstantiation, 3004, Error,
            "module '{}' instantiates itself, through {}; an unbounded hierarchy cannot be "
            "elaborated")
 ENZAN_DIAG(PortWidthMismatch, 3005, Error,
-           "port '{}' of '{}' is {} bits but is connected to a {}-bit object; width conversion "
-           "on port connections is not yet implemented")
+           "port '{}' of '{}' is {} bits but is connected to a {}-bit object; a port is joined "
+           "only to a signal as wide as it, and a frontend converts any other width with an "
+           "assignment")
 ENZAN_DIAG(MultipleContinuousDrivers, 3006, Error,
            "{} '{}' has {} driven by both {} and {}; a {} may have one continuous driver for "
            "each bit, so overlapping drivers are an error rather than something to resolve")

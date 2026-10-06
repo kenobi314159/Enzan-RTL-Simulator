@@ -43,8 +43,10 @@ body has been walked.
 **A port connection that is an expression gets an intermediate object and a continuous
 assignment.** The EIR contract says a connection names an object (see `eir/Module.h`), so
 `.d({a, b})` becomes a real assignment in the EIR rather than something the elaborator has
-to understand. Only inputs are handled this way: driving an expression from an output would
-need the assignment to run the other way.
+to understand: into the port's object for an input, out of it for an output. A signal of
+another width than its port is connected the same way, since elaboration joins a port only to
+a signal as wide as it; the assignment extends or truncates as one written out would (IEEE
+1800 section 23.3.3.7). An `inout` cannot be, since its assignment would run both ways.
 
 **A construct that is not supported abandons the whole process.** A partially translated
 body would produce a design that simulates and gives the wrong answer, which section 1.2

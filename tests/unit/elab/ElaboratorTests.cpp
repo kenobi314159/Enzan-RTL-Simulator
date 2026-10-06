@@ -430,13 +430,14 @@ TEST_F(ElaboratorTest, TheChildsObjectSlotPointsAtTheParentsStorage) {
 }
 
 TEST_F(ElaboratorTest, RejectsAPortWidthMismatch) {
-    // Width conversion on a port connection is not implemented, and collapsing a
-    // mismatched pair onto one slot would silently read or write the wrong bits.
+    // A port is collapsed onto the signal it is connected to, and collapsing a mismatched
+    // pair onto one slot would silently read or write the wrong bits. A frontend converts the
+    // width with an assignment instead, so EIR that asks for it is refused.
     buildPortedPair(design, 8, 4);
 
     EXPECT_EQ(elaborate("parent"), nullptr);
     EXPECT_TRUE(reportedCode(enzan::DiagCode::PortWidthMismatch));
-    EXPECT_TRUE(reported("not yet implemented"));
+    EXPECT_TRUE(reported("joined only to a signal as wide as it"));
 }
 
 TEST_F(ElaboratorTest, WarnsAboutAnUnconnectedPortButContinues) {

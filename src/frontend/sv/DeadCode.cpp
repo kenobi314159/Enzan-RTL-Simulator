@@ -76,9 +76,22 @@ slang::SourceRange deadPart(slang::SourceRange whole, slang::SourceRange ruledOu
 ///
 /// Every instance's own body, not one per definition: whether a branch is dead depends on the
 /// parameters, which differ between instances.
-class Walker : public ast::ASTVisitor<Walker, ast::VisitFlags::AllGood | ast::VisitFlags::Bad> {
+///
+/// Every node, the bad ones included: an invalid node, and an expression of the error type,
+/// such as a `?:` whose dead arm slang could not bind. slang's visitor visits those only with
+/// its `Bad` flag, and `AllGood | Bad` is no value of its flags' enumeration, which clang-tidy
+/// rightly reports; so `visit` is this class's own, the base's without the check for bad nodes.
+class Walker : public ast::ASTVisitor<Walker, ast::VisitFlags::AllGood> {
 public:
     explicit Walker(DeadCode& into) : found(&into) {}
+
+    template<typename T>
+    void visit(const T& node) {
+        if constexpr (requires { handle(node); })
+            handle(node);
+        else
+            visitDefault(node);
+    }
 
     void handle(const ast::InstanceBodySymbol& body) {
         const ast::Symbol* const outer = scope;

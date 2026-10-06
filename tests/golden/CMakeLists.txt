@@ -156,6 +156,9 @@ enzan_add_golden_test(foreach_break NO_DIFFERENTIAL)
 # a warning. Icarus Verilog accepts most of them but not those in a `?:` arm or a pattern.
 enzan_add_golden_test(dead_code NO_DIFFERENTIAL)
 
+# Ports connected to signals wider or narrower than themselves.
+enzan_add_golden_test(port_widths)
+
 # File output, and memories loaded from files the design writes first: compared file by file
 # with what Icarus Verilog does, each in an empty directory, so they need it.
 if(ENZAN_REFERENCE_SIMULATOR)
