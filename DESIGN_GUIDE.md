@@ -1010,6 +1010,12 @@ body with nothing on screen to say so. Naming it for the values gives a
 specialisation one identity wherever it is produced, which is the whole of what makes
 libraries composable.
 
+**The interfaces a body is given are among those values.** A module reads an interface's
+parameters through its port — `localparam W = bus.W` — so two instances setting none of
+their own can differ in every width that depends on the bus. Where an interface port is
+connected to a parameterised interface, to an array of them, or is generic, the name
+carries what it is connected to, as it carries a parameter.
+
 **A parameterised top is named for its values too**, so the name a user writes is the
 one the *source* gave it. A top is therefore resolved by source name when no unit has
 that exact name, and more than one parameterisation of it is reported rather than
