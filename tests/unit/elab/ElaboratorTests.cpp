@@ -527,6 +527,22 @@ TEST_F(ElaboratorTest, RejectsTwoContinuousAssignmentsDrivingOneObject) {
     EXPECT_TRUE(reported("/tb/net")) << "the report must name the object";
 }
 
+TEST_F(ElaboratorTest, ASubroutinesStaticVariableIsNoContinuousDriversTarget) {
+    // Every call of a static function writes its variables, and a call inlined into a
+    // continuous assignment is no more their driver than one in an `always`: two assignments
+    // and an always_comb calling one function are all legal.
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::logic()});
+    top.addObject(Object{.name = "f.scratch", .type = Type::logic(), .subroutineStatic = true});
+    top.processes.push_back(makeCopyProcess(ProcessKind::ContinuousAssign, 0, 1, Type::logic()));
+    top.processes.push_back(makeCopyProcess(ProcessKind::ContinuousAssign, 0, 1, Type::logic()));
+    top.processes.push_back(makeCopyProcess(ProcessKind::AlwaysComb, 0, 1, Type::logic()));
+    design.addModule(std::move(top));
+
+    EXPECT_NE(elaborate("tb"), nullptr) << consumer.messages.front();
+}
+
 TEST_F(ElaboratorTest, RejectsAContinuousAndAProceduralDriverOnOneObject) {
     ModuleDefinition top;
     top.name = "tb";

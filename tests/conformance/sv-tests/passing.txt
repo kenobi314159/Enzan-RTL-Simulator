@@ -93,6 +93,7 @@ chapter-12/12.8--continue.sv
 chapter-12/12.8--return.sv
 chapter-12/12.8--return_val.sv
 chapter-13/13.3.1--task-automatic.sv
+chapter-13/13.3.1--task-static.sv
 chapter-13/13.3--task-label.sv
 chapter-13/13.3--task.sv
 chapter-13/13.4.1--function-return-assignment.sv

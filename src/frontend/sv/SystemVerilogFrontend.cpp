@@ -26,6 +26,7 @@
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/PortSymbols.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/AllTypes.h"
@@ -118,7 +119,8 @@ std::string instanceName(const ast::InstanceSymbol& instance) {
 /// The name `symbol` has in the module that declares it, its generate blocks joined to it with
 /// dots as `collectScope` names a hoisted object or an instance (DESIGN_GUIDE.md section 5.1),
 /// and the body that module's instance has; null for the top level's instance, which no body
-/// holds. Nothing when the symbol is somewhere a name cannot reach, a subroutine or a package.
+/// holds. Nothing when the symbol is somewhere a name cannot reach, a package, or a subroutine
+/// for anything but its static variables.
 std::optional<std::string> nameWithinBody(const ast::Symbol& symbol,
                                           const ast::InstanceBodySymbol*& owner) {
     std::string prefix;
@@ -161,6 +163,17 @@ std::optional<std::string> nameWithinBody(const ast::Symbol& symbol,
             }
             break;
         }
+
+        // A static variable of a subroutine is named behind it, `f.count`, as IEEE 1800 section
+        // 23.6 names it, so that two subroutines' `count` are two variables.
+        case slang::ast::SymbolKind::Subroutine:
+            if (!ast::ValueSymbol::isKind(symbol.kind)
+                || staticSubroutineOf(symbol.as<ast::ValueSymbol>()) == nullptr)
+                return std::nullopt;
+            prefix.insert(0, ".");
+            prefix.insert(0, parent.name);
+            scope = parent.getParentScope();
+            break;
 
         // A procedural block's locals are named without it, as collectScope names them, and an
         // element of an instance array carries its index in its own name already.
@@ -239,7 +252,8 @@ public:
         definitionValue.isPackage = true;
     }
 
-    /// The package that declares `symbol` directly, if one does.
+    /// The package that declares `symbol` directly, or declares the subroutine it is a static
+    /// variable of, if one does.
     static const ast::PackageSymbol* packageOf(const ast::ValueSymbol& symbol);
 
     /// Collects declarations and ports. Instances and processes come after, because an
@@ -594,6 +608,12 @@ void ModuleBuilder::reportUnsupported(slang::SourceLocation location, std::strin
 
 const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {
     const ast::Scope* scope = symbol.getParentScope();
+    if (staticSubroutineOf(symbol) != nullptr) {
+        while (scope != nullptr
+               && (scope->asSymbol().kind == slang::ast::SymbolKind::Subroutine
+                   || scope->asSymbol().kind == slang::ast::SymbolKind::StatementBlock))
+            scope = scope->asSymbol().getParentScope();
+    }
     if (scope == nullptr || scope->asSymbol().kind != slang::ast::SymbolKind::Package)
         return nullptr;
     return &scope->asSymbol().as<ast::PackageSymbol>();
@@ -626,12 +646,16 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
 
     // A package variable is one variable however many modules use it, so a module refers to the
     // package's own, at the root, as it would to another instance's (IEEE 1800 section 26.2).
+    // A static variable of a subroutine is named behind it, as nameWithinBody names it.
+    const ast::SubroutineSymbol* const subroutine = staticSubroutineOf(symbol);
+    std::string name(symbol.name);
+    if (subroutine != nullptr) name = std::format("{}.{}", subroutine->name, symbol.name);
+
     const ast::PackageSymbol* const declaringPackage = packageOf(symbol);
     if (declaringPackage != nullptr && declaringPackage != package) {
         std::vector<const ast::ValueSymbol*>& used = *shared->packageVariables;
         if (std::ranges::find(used, &symbol) == used.end()) used.push_back(&symbol);
-        return referenceThrough(symbol, std::format("/{}/{}", declaringPackage->name, symbol.name),
-                                *type);
+        return referenceThrough(symbol, std::format("/{}/{}", declaringPackage->name, name), *type);
     }
 
     // A symbol another instance declares is a hierarchical reference, a name here for that
@@ -648,6 +672,9 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
                                           symbol.name));
             return std::nullopt;
         }
+        // Within the module, a subroutine's static variable takes the generate blocks its
+        // subroutine is in as well.
+        if (subroutine != nullptr) name = *nameThere;
         if (owner != body) {
             // Reached through an interface port, the reference names the port rather than the
             // interface it happens to be connected to here: one definition serves every
@@ -661,12 +688,13 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     }
 
     eir::Object object;
-    object.name = uniqueObjectName(symbol.name);
+    object.name = uniqueObjectName(name);
     object.type = *type;
     object.kind = symbol.kind == slang::ast::SymbolKind::Net ? eir::ObjectKind::Net
                                                              : eir::ObjectKind::Variable;
     object.location = convertLocation(symbol.location);
     object.enumIndex = enumFor(symbol.getType());
+    object.subroutineStatic = subroutine != nullptr;
 
     // An unpacked array keeps its declared dimensions, outermost first, for what reads it as an
     // array rather than as the bits it is stored as: VPI, and the waveform database.
@@ -1058,6 +1086,7 @@ std::optional<std::uint32_t> ModuleBuilder::referenceThrough(const ast::ValueSym
                                                              : eir::ObjectKind::Variable;
     object.location = convertLocation(symbol.location);
     object.hierarchicalPath = std::move(path);
+    object.subroutineStatic = staticSubroutineOf(symbol) != nullptr;
 
     const std::uint32_t index = definitionValue.addObject(std::move(object));
     objectBySymbol.emplace(&symbol, index);

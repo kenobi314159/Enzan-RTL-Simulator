@@ -106,6 +106,24 @@ bool hasSideEffects(const ast::Expression& expression) {
 
 } // namespace
 
+const ast::SubroutineSymbol* staticSubroutineOf(const ast::ValueSymbol& symbol) {
+    if (symbol.kind != slang::ast::SymbolKind::Variable) return nullptr;
+    const auto& variable = symbol.as<ast::VariableSymbol>();
+    if (variable.lifetime != ast::VariableLifetime::Static) return nullptr;
+
+    for (const ast::Scope* scope = variable.getParentScope(); scope != nullptr;) {
+        const ast::Symbol& parent = scope->asSymbol();
+        if (parent.kind == slang::ast::SymbolKind::StatementBlock) {
+            scope = parent.getParentScope();
+            continue;
+        }
+        if (parent.kind != slang::ast::SymbolKind::Subroutine) return nullptr;
+        const auto& subroutine = parent.as<ast::SubroutineSymbol>();
+        return subroutine.returnValVar == &variable ? nullptr : &subroutine;
+    }
+    return nullptr;
+}
+
 ProcessTranslator::ProcessTranslator(ModuleContext& owner, eir::ProcessKind kind, std::string name,
                                      SourceLocation location)
     : module(&owner) {
@@ -359,6 +377,7 @@ void ProcessTranslator::inferSensitivityFromReads() {
     process.sensitivity.clear();
     process.sensitivity.reserve(reads.size());
     for (const std::uint32_t objectIndex : reads) {
+        if (module->definition().objects[objectIndex].subroutineStatic) continue;
         process.sensitivity.push_back(
             eir::SensitivityEntry{.objectIndex = objectIndex, .edge = eir::EdgeKind::AnyChange});
     }
@@ -2584,6 +2603,10 @@ void ProcessTranslator::bindLocals(const ast::Scope& scope) {
             continue;
 
         const auto& variable = member.as<ast::VariableSymbol>();
+        // A static variable is the module's storage, shared by every call, and is reached
+        // through its object as any other is.
+        if (staticSubroutineOf(variable) != nullptr) continue;
+
         const std::optional<eir::Type> type = module->convertType(variable.getType());
         if (!type.has_value()) {
             module->reportUnsupported(variable.location,
@@ -2591,8 +2614,8 @@ void ProcessTranslator::bindLocals(const ast::Scope& scope) {
             failed = true;
             return;
         }
-        // Every call starts its locals afresh, at their type's default; a declaration with an
-        // initialiser sets it where the declaration is (see translateStatement).
+        // Every call starts its automatic locals afresh, at their type's default; a declaration
+        // with an initialiser sets it where the declaration is (see translateStatement).
         locals.insert_or_assign(&variable, defaultValue(*type));
     }
 }

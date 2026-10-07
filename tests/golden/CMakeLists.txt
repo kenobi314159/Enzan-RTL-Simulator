@@ -111,6 +111,13 @@ enzan_add_golden_test(aggregates NO_DIFFERENTIAL)
 # Functions and tasks, inlined into the processes that call them.
 enzan_add_golden_test(subroutines)
 
+# The static variables of functions and tasks, which every call shares.
+enzan_add_golden_test(static_locals)
+
+# Callers sharing a static function's scratch variable. Icarus Verilog makes the always_comb
+# callers wait on it, and they wake one another without end.
+enzan_add_golden_test(static_function_callers NO_DIFFERENTIAL)
+
 # Hierarchical references, down, up and across, from a definition two instances share.
 enzan_add_golden_test(hierarchical)
 

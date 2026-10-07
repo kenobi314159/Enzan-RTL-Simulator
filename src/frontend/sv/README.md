@@ -63,12 +63,15 @@ once every module has been translated (DESIGN_GUIDE.md section 5.1).
 **An interface is an instance, and a member through an interface port is a reference through
 the port** (`@in/data`); each instance records what its interface ports are connected to.
 
-**A function or task call is inlined.** The body is translated into the process that calls
-it, with its arguments, return variable and locals bound to registers, so a task's delays
-suspend the caller as its own statements would and the caller's read and write sets are
-exactly what the call touches. A static subroutine's variables are treated as automatic,
-which differs only for a design that reads a local before writing it and relies on the value
-a previous call left there.
+**A function or task call is inlined.** The body is translated into the process that calls it,
+with its arguments, return variable and automatic locals bound to registers, so a task's delays
+suspend the caller as its own statements would and the caller's read and write sets are exactly
+what the call touches. A static variable of a subroutine, as each of one declared
+without `automatic`, is one variable every call shares: storage of the module, or of the
+package, that declares the subroutine, named behind it as `f.count`, and initialised once at
+time zero. It is marked `subroutineStatic` in the EIR, so that a call inlined into a continuous
+assignment is not its continuous driver and no inferred sensitivity list watches it; callers
+watching what one another write there would wake each other for ever.
 
 **A select or member access is a window of bits.** Unpacked arrays and structs are stored
 flat (DESIGN_GUIDE.md section 4.3), so `mem[i].field[3:0]` composes into one offset into one

@@ -609,6 +609,63 @@ TEST_F(FrontendTest, ANetDeclarationAssignmentIsAContinuousAssignment) {
               (std::vector<std::vector<WriteExtent>>{{extent(top, "w", 0, 4)}}));
 }
 
+TEST_F(FrontendTest, ASubroutinesStaticVariableIsStorageEveryCallShares) {
+    // One variable for every call, named behind its subroutine, starting from its initialiser
+    // once; an automatic one stays each call's own. A package's subroutine keeps its static
+    // variables in the package, which a module reaches by path.
+    const std::unique_ptr<Design> design = analyse(R"(
+        package p;
+            function integer serial();
+                static integer last = 7;
+                last = last + 1;
+                return last;
+            endfunction
+        endpackage
+        module top;
+            function integer next_id();
+                static integer count = 5;
+                count = count + 1;
+                return count;
+            endfunction
+            function automatic integer fresh();
+                integer n = 0;
+                n = n + 1;
+                return n;
+            endfunction
+            integer x, y, z;
+            initial begin
+                x = next_id();
+                y = fresh();
+                z = p::serial();
+            end
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+
+    const enzan::eir::Object& count = top->objects[require(top->findObject("next_id.count"))];
+    EXPECT_TRUE(count.subroutineStatic);
+    ASSERT_TRUE(count.initialValue.has_value());
+    EXPECT_EQ(count.initialValue->ref().toUInt64(), 5U);
+    EXPECT_FALSE(top->findObject("n").has_value());
+    EXPECT_FALSE(top->findObject("fresh.n").has_value());
+    EXPECT_FALSE(top->objects[require(top->findObject("x"))].subroutineStatic);
+
+    const auto reference = std::ranges::find(top->objects, std::string("/p/serial.last"),
+                                             &enzan::eir::Object::hierarchicalPath);
+    ASSERT_NE(reference, top->objects.end());
+    EXPECT_TRUE(reference->subroutineStatic);
+
+    const ModuleDefinition* package = design->findModule("p::");
+    ASSERT_NE(package, nullptr);
+    const enzan::eir::Object& last = package->objects[require(package->findObject("serial.last"))];
+    EXPECT_TRUE(last.subroutineStatic);
+    ASSERT_TRUE(last.initialValue.has_value());
+    EXPECT_EQ(last.initialValue->ref().toUInt64(), 7U);
+}
+
 TEST_F(FrontendTest, AnUnpackedArrayIsStoredFlatAndKeepsItsDimensions) {
     const std::unique_ptr<Design> design = analyse(R"(
         module top;

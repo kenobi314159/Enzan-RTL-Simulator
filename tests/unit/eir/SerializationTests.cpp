@@ -101,7 +101,8 @@ ModuleDefinition richModule(BufferId buffer) {
                                 .unpackedDimensions = {UnpackedDimension{.left = 0, .right = 3},
                                                        UnpackedDimension{.left = 7, .right = -1}},
                                 .elementWidth = 1,
-                                .elementSigned = true});
+                                .elementSigned = true,
+                                .subroutineStatic = true});
     definition.addObject(Object{.name = "count",
                                 .type = Type::bits(8, true, true),
                                 .kind = ObjectKind::Variable,
@@ -218,6 +219,7 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
                                               UnpackedDimension{.left = 7, .right = -1}}));
     EXPECT_EQ(definition.objects[0].elementWidth, 1U);
     EXPECT_TRUE(definition.objects[0].elementSigned);
+    EXPECT_TRUE(definition.objects[0].subroutineStatic);
     EXPECT_FALSE(definition.objects[0].initialValue.has_value());
     EXPECT_EQ(definition.objects[0].enumIndex, Object::NoEnum);
 

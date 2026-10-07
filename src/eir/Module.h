@@ -151,6 +151,13 @@ struct Object {
     /// is unsigned whatever its elements are, so this is the only record of it.
     bool elementSigned = false;
 
+    /// A static variable of a function or task: one variable that every call of it shares, so
+    /// that what one call leaves there the next reads (IEEE 1800 section 13.3.1), written by
+    /// whichever process makes the call. A call inlined into a continuous assignment is no
+    /// continuous driver of it, and an inferred sensitivity list does not watch it: what a
+    /// call writes there is the call's own business, not a change the caller depends on.
+    bool subroutineStatic = false;
+
     /// When not empty, the object is a hierarchical reference: a name here for an object of
     /// another instance, which elaboration binds to that object's storage.
     ///

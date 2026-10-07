@@ -476,14 +476,18 @@ private:
             const ProcessInstance& processInstance = result->processList[processIndex];
             const Instance& instance = result->instanceList[processInstance.instanceIndex];
             const eir::Process& process = processOf(processInstance);
+            const std::vector<eir::Object>& objects =
+                design.module(instance.definitionIndex).objects;
             const bool continuous = process.kind == eir::ProcessKind::ContinuousAssign;
 
+            // A subroutine's static variable is written by every call of it, and a call inlined
+            // into a continuous assignment no more drives it than one in an `always` does.
             for (const eir::WriteExtent& extent : process.writeSet) {
-                rangesBySlot[instance.objectSlots[extent.objectIndex]].push_back(
-                    DriverRange{.lowBit = extent.lowBit,
-                                .width = extent.width,
-                                .process = processIndex,
-                                .continuous = continuous});
+                rangesBySlot[instance.objectSlots[extent.objectIndex]].push_back(DriverRange{
+                    .lowBit = extent.lowBit,
+                    .width = extent.width,
+                    .process = processIndex,
+                    .continuous = continuous && !objects[extent.objectIndex].subroutineStatic});
             }
         }
 

@@ -97,14 +97,18 @@ void Image::buildProcesses() {
         // Static sensitivity. An explicit list is used as written; a process whose
         // triggering is implicit — `always_comb`, `always_latch`, a continuous
         // assignment — is subscribed to everything it reads, which is what the language
-        // means by an inferred sensitivity list.
+        // means by an inferred sensitivity list. Not to a subroutine's static variable, which
+        // every caller writes: callers watching it would wake one another for ever.
         const bool inferred = body.sensitivity.empty()
                               && (body.kind == eir::ProcessKind::AlwaysComb
                                   || body.kind == eir::ProcessKind::AlwaysLatch
                                   || body.kind == eir::ProcessKind::ContinuousAssign);
 
         if (inferred) {
+            const std::vector<eir::Object>& objects =
+                design->module(instance.definitionIndex).objects;
             for (const std::uint32_t objectIndex : body.readSet) {
+                if (objects[objectIndex].subroutineStatic) continue;
                 signalList[state.objectSignals[objectIndex]].subscribers.push_back(
                     Signal::Subscriber{.processIndex = processIndex,
                                        .edge = eir::EdgeKind::AnyChange});

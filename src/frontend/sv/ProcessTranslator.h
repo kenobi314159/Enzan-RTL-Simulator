@@ -41,6 +41,15 @@ class ValueSymbol;
 
 namespace enzan::frontend::sv {
 
+/// The subroutine `symbol` is a static variable of, declared in its body or in a block of it;
+/// null for anything else, an argument, the return value and an automatic variable among them.
+///
+/// Such a variable is one variable however many calls there are, and keeps its value from one
+/// call to the next, so it is storage of the module or package declaring the subroutine
+/// rather than a register of each call.
+[[nodiscard]] const slang::ast::SubroutineSymbol*
+staticSubroutineOf(const slang::ast::ValueSymbol& symbol);
+
 /// What a process translator needs from the module it belongs to.
 ///
 /// An interface rather than a direct dependency so that statement and expression
