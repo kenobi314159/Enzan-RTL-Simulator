@@ -5,6 +5,7 @@ cmake-build-*/
 
 # Compiler and tooling caches.
 .cache/
+__pycache__/
 compile_commands.json
 *.gcda
 *.gcno
