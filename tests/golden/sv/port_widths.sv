@@ -18,6 +18,14 @@ module pass_signed #(parameter int W = 8) (
     assign o = i;
 endmodule
 
+// An output the child writes procedurally: a variable, so X rather than `z` until written.
+module hold (
+    input  logic       clk,
+    output logic [1:0] q
+);
+    always_ff @(posedge clk) q <= 2'b01;
+endmodule
+
 module tb;
     logic [5:0] wide_in = 6'b10_1101;
     logic [1:0] narrow_in = 2'b11;
@@ -28,6 +36,8 @@ module tb;
     logic signed [3:0] negative = -4'sd3;
     logic signed [7:0] extended;
     logic [7:0] sign_kept;
+    logic clk = 0;
+    logic [2:0] held;
     int failures = 0;
 
     // Wider and narrower signals on a 4-bit input, and on a 4-bit output.
@@ -40,6 +50,9 @@ module tb;
     pass_signed #(.W(8)) u_signed (.i(negative), .o(extended));
     pass_signed #(.W(8)) u_signed_to_unsigned (.i(negative), .o(sign_kept));
 
+    // A 2-bit output on a 3-bit signal, before and after the child first writes it.
+    hold u_held (.clk(clk), .q(held));
+
     initial begin
         #1;
         $display("%b %b %b %b %b %b", narrow_out, wide_out, from_wide, from_narrow, extended,
@@ -51,6 +64,19 @@ module tb;
         end
         if (extended !== -8'sd3 || sign_kept !== 8'hfd) begin
             $display("FAIL: a signed connection lost its sign");
+            failures = failures + 1;
+        end
+
+        $display("%b", held);
+        if (held !== 3'b0xx) begin
+            $display("FAIL: an output not yet written read other than X");
+            failures = failures + 1;
+        end
+        clk = 1;
+        #1;
+        $display("%b", held);
+        if (held !== 3'b001) begin
+            $display("FAIL: an output written by its child was converted wrongly");
             failures = failures + 1;
         end
 

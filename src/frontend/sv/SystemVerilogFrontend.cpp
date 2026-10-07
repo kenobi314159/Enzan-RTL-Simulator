@@ -1158,10 +1158,23 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
         return std::nullopt;
     }
 
+    // The object is what the port declares, since the port collapses onto it: an output the
+    // child writes procedurally is a variable, X until its first write, where a net would be
+    // `z`.
     eir::Object object;
     object.name = uniqueObjectName(std::format("{}${}", instance.name, port.name));
     object.type = *type;
-    object.kind = eir::ObjectKind::Net;
+    object.kind = eir::ObjectKind::Variable;
+    if (port.internalSymbol->kind == slang::ast::SymbolKind::Net) {
+        const std::optional<eir::NetKind> netKind =
+            convertNetKind(port.internalSymbol->as<ast::NetSymbol>().netType.netKind);
+        if (!netKind.has_value()) {
+            reportUnsupported(port.location, "the net type of this port");
+            return std::nullopt;
+        }
+        object.kind = eir::ObjectKind::Net;
+        object.netKind = *netKind;
+    }
     object.location = convertLocation(expression.sourceRange.start());
     const std::uint32_t objectIndex = definitionValue.addObject(std::move(object));
 
