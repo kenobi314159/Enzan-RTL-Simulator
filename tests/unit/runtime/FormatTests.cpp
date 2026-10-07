@@ -193,4 +193,14 @@ TEST(Format, AFieldWidthWidensButNeverTruncates) {
     EXPECT_EQ(render("[%02d]", one(five, true)), "[05]");
 }
 
+TEST(Format, LeftJustifyingWithoutAFieldWidthUsesTheValuesOwn) {
+    // Checked against Icarus Verilog: `%-d` is as wide as `%d`, with the padding on the right.
+    const BitVector ten = BitVector::fromUInt64(10, 32);
+    const BitVector minusThree = BitVector::fromInt64(-3, 8);
+
+    EXPECT_EQ(render("[%-d]", {{.value = ten.ref(), .isSigned = false}}), "[10        ]");
+    EXPECT_EQ(render("[%-d]", {{.value = minusThree.ref(), .isSigned = true}}), "[-3  ]");
+    EXPECT_EQ(render("[%-h]", {{.value = ten.ref(), .isSigned = false}}), "[0000000a]");
+}
+
 } // namespace

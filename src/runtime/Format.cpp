@@ -43,12 +43,6 @@ std::string widened(std::string text, std::optional<std::size_t> width, bool lef
     return text.substr(0, sign) + std::string(padding, '0') + text.substr(sign);
 }
 
-/// Pads `text` on the left with spaces to `width`.
-std::string padLeft(std::string text, std::size_t width) {
-    if (text.size() >= width) return text;
-    return std::string(width - text.size(), ' ') + text;
-}
-
 } // namespace
 
 std::string toAsciiString(eir::ConstBitRef value) {
@@ -200,14 +194,16 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
         }
 
         // A decimal is rendered minimal and then widened; a radix whose digits each cover fixed
-        // bits always shows them all, and a field width only ever adds to that.
+        // bits always shows them all, and a field width only ever adds to that. Without a field
+        // width, the value's own is the width, and `-` still justifies it to the left.
         if (minimal) {
             result += rendered;
         } else if (fieldWidth.has_value()) {
             result += widened(std::move(rendered), fieldWidth, leftJustify, zeroPad);
         } else {
-            result += padLeft(std::move(rendered),
-                              paddedWidth(argument.value.width(), radix, argument.isSigned));
+            result += widened(std::move(rendered),
+                              paddedWidth(argument.value.width(), radix, argument.isSigned),
+                              leftJustify, false);
         }
     }
 
