@@ -2733,12 +2733,52 @@ leave the gap open:
   translations of it.
 
 **The change.** EIR-S holds one unit per source module, carrying its formal
-parameters. An object's type carries its width as an expression over those
-parameters rather than as a number, and an instance carries the values it sets.
-Elaboration evaluates those expressions and materialises the concrete types, which
-is where 2.1 already says parameter resolution belongs. Everything downstream of
-elaboration — codegen, the runtime, the waveform database — sees what it sees today,
-because it only ever sees elaborated output.
+parameters, and an instance carries the values it sets. Wherever the unit's content
+depends on a parameter, EIR holds an expression over the formals rather than the number
+one parameterisation gave it. Elaboration evaluates those expressions per instance and
+*specialises* the unit into the concrete EIR the rest of Enzan consumes today, once per
+distinct set of values, which is where 2.1 already says parameter resolution belongs.
+Everything downstream of elaboration — codegen, the runtime, the waveform database, the
+PLI — sees what it sees today, because it only ever sees specialised output, and codegen
+therefore runs after elaboration rather than beside it.
+
+**A parameter reaches much further than an object's type**, and the change is sized by
+all of it rather than by the declarations:
+
+- In EIR-S, an object's width and unpacked dimensions, a port's width, an enumeration's
+  width and a struct's layout.
+- In EIR-B, the type of every register, the width of every constant, which extensions
+  and truncations a context-determined expression needs and whether it needs one at all,
+  the offset of every constant select, and the bit windows of the sensitivity list and
+  the write set (3.7), which are what drivers are found from.
+- Code a parameter rules out. A body is translated for every value it may be
+  instantiated with, so a branch one parameterisation never takes is kept, and is
+  removed when the unit is specialised rather than when it is translated.
+- Generate constructs. A conditional or looped generate block adds, repeats or drops
+  objects, processes and instances, so EIR-S holds the construct and specialisation
+  expands it, naming its blocks as 5.1 says.
+- The checks slang makes per instance. An out-of-range constant select, a width that
+  comes out zero or negative, or an elaboration-time `$error` in a generate block is
+  found by slang only for the parameterisations it saw. One a library is later
+  instantiated with is checked by specialisation instead.
+
+**A constant function is run by Enzan's own interpreter.** A parameter defined by a
+call — `localparam W = width_for(DEPTH)` — is evaluated at elaboration, when slang is
+no longer there to fold it. An expression over parameters is evaluated with the
+operations of `eir`, which elaboration already depends on; a function body, which can
+loop, is compiled and run by the bytecode VM, so there is one implementation of each
+operation rather than a second evaluator to keep in step with it. Elaboration MUST NOT
+depend on `codegen` or `runtime` (its own README), so it asks for the result through an
+interface the session implements with them.
+
+**Not every unit is generic, and that is accepted rather than a defect.** A unit whose
+parameters reach something the generic form does not cover — a type parameter, first
+of all — is still translated once per parameterisation, exactly as before this
+milestone, and named for its values (8.2). The two kinds of unit coexist in one
+library and one design. What is tracked is the share of the design regression's module
+definitions (14.5) that come out generic, and it is held by the ratchet of 14.4 as a
+pass rate is: a change that turns a generic unit back into specialised ones is a
+regression.
 
 **Before M6, and that is the point of placing it here.** VHDL generics are this
 problem in another language, so an NVC adapter written against parameter-resolved
@@ -2751,17 +2791,19 @@ what the alternative is if not — is the first question this milestone answers,
 it is answered before the EIR change is committed to rather than discovered
 half way through it.
 
-**What this removes.** The specialisation naming of 8.2 exists only because
-specialisations are units; with generic units there is nothing to name. `--in-lib`
-on `analyse` stops needing to read the other library's sources, so the boundary rule
-of 8.2 loses its exception and `--context` narrows again. Those sections are rewritten
-by this milestone rather than extended.
+**What this removes.** For a generic unit, the specialisation naming of 8.2 moves
+from analysis to elaboration, where the specialisations are made, and stays in
+analysis only for the units that remain specialised. `--in-lib` on `analyse` stops
+needing to read the other library's sources for generic units, so the boundary rule
+of 8.2 keeps its exception only for specialised ones and `--context` narrows again.
+Those sections are rewritten by this milestone rather than extended.
 
 **Exit:** a library analysed once is instantiated at a width it has never seen
 without re-reading its sources; analysing a design with a hundred distinct
 parameterisations of one module costs what one of them costs; the `.f`-and-library
 Makefile of 8.3 still builds, and the conformance and design regression pass rates
-of 14.4 and 14.5 do not move.
+of 14.4 and 14.5 do not move; the share of generic units in the design regression is
+recorded and ratcheted.
 
 ### M6 — VHDL via NVC
 
@@ -2800,7 +2842,7 @@ constraint solver); save and restore; multiple clock domain tooling; UVM.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| slang cannot yield a parameter-generic typed body | High — blocks M5.1, and a library stays a file list | Spike before committing to the EIR change (M5.1); the fallback is to keep specialisation in analysis and accept that libraries do not save work across a boundary |
+| slang cannot yield a parameter-generic typed body | High — blocks M5.1, and a library stays a file list | Spike before committing to the EIR change (M5.1); a unit that cannot be made generic keeps specialisation in analysis, and the share that can is ratcheted, so the fallback is per unit rather than for the whole milestone |
 | NVC internal APIs drift or prove unusable as a frontend | High — blocks VHDL | Spike first in M6; pin the revision; thin adapter in one directory; documented co-simulation fallback (5.2) |
 | The predefined and foreign subprograms NVC's runtime resolved are a larger body of work than estimated | High — inflates M6 | Enumerate the set during the M6 spike by walking the analysed tree, before the milestone is planned (5.2) |
 | VHDL generic and subtype elaboration must be reimplemented rather than reused from NVC | Medium — inflates M6 | Sized by the M6 spike; the tree boundary is reconsidered if it proves worse than the alternative (5.2) |
