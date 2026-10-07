@@ -2790,12 +2790,38 @@ regression.
 problem in another language, so an NVC adapter written against parameter-resolved
 EIR would be written twice.
 
-**Spike first, as M6 does.** slang is an elaborating front end: it type-checks a
-body in the context of an instance, because a type can depend on a parameter, and it
-does not offer a parameter-generic typed body. Whether one can be obtained — and
-what the alternative is if not — is the first question this milestone answers, and
-it is answered before the EIR change is committed to rather than discovered
-half way through it.
+**The spike found that slang gives enough to build one, and how.** slang is an
+elaborating front end and offers no parameter-generic typed body, but it type-checks one
+body per parameterisation, and the generic unit is derived from one of them:
+
+- **Every branch has a body.** A conditional generate branch not taken is still created,
+  uninstantiated, with its contents typed; a loop generate with no iterations gets one such
+  block. So the template holds every branch, typed once.
+- **The widths are expressions slang has already bound.** A declaration's dimensions, a
+  select's bounds and a generate's condition are bound expressions over parameter symbols;
+  in common_cells and taxi, every dimension is arithmetic over parameters, literals and
+  `$clog2`, bar two testbench ones calling a function. The width of an *operator*'s result
+  is not kept as an expression, so the frontend derives it by the sizing rules of IEEE 1800
+  section 11.6 over those leaves.
+- **What a parameter is includes its type and its interfaces.** An untyped parameter,
+  which is 33 of taxi's 35 parameterised modules, takes the type of whatever value it is
+  given, so an instance's value carries its width and sign. A module reading
+  `localparam W = bus.W` depends on its interface's parameters as on its own.
+- **slang checks the result.** Each derived width, evaluated at a parameterisation the
+  compilation elaborated, must equal slang's own; the frontend checks every one it has, and
+  a unit that disagrees anywhere stays specialised. A gap in the sizing rules therefore costs
+  coverage, not correctness, for every parameterisation the analysis saw.
+- **Across a library boundary**, slang told to accept unknown modules gives an instantiation
+  as its parameter expressions and its port connections by name, each sized on its own.
+  Elaboration binds them to the library's unit. A connection whose width depends on the
+  port's, an operator expression rather than a name or a select, cannot be sized correctly
+  that way and is reported; and an interface or package the design uses is still read from
+  source, since slang has to type-check against it.
+
+What it measured, on a module of thirty FIFOs instantiated at a hundred widths: slang's
+elaboration is 137 ms, and Enzan's translation of the hundred specialisations another
+200 ms, two each. The second is what this milestone removes; the first is slang
+type-checking each body, which no change to Enzan can avoid while slang elaborates.
 
 **What this removes.** For a generic unit, the specialisation naming of 8.2 moves
 from analysis to elaboration, where the specialisations are made, and stays in
@@ -2805,8 +2831,9 @@ of 8.2 keeps its exception only for specialised ones and `--context` narrows aga
 Those sections are rewritten by this milestone rather than extended.
 
 **Exit:** a library analysed once is instantiated at a width it has never seen
-without re-reading its sources; analysing a design with a hundred distinct
-parameterisations of one module costs what one of them costs; the `.f`-and-library
+without re-reading its sources; Enzan's translation of a design with a hundred distinct
+parameterisations of one module costs what one of them costs, slang's elaboration of
+them apart; the `.f`-and-library
 Makefile of 8.3 still builds, and the conformance and design regression pass rates
 of 14.4 and 14.5 do not move; the share of generic units in the design regression is
 recorded and ratcheted.
