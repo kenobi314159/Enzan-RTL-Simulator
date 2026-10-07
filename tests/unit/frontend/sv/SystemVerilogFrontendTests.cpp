@@ -1279,6 +1279,25 @@ TEST_F(FrontendTest, TheSameSelectLiveInAnotherInstanceIsStillAnError) {
     EXPECT_TRUE(reportedCode(DiagCode::SystemVerilogError));
 }
 
+TEST_F(FrontendTest, ADeadBranchInTwoCopiesOfOneParameterisationIsAWarning) {
+    // slang elaborates the second copy's body as a duplicate of the first, and the dead code is
+    // found in the first alone; the second must not count as an instance in which it can run.
+    EXPECT_NE(analyse(R"(
+        module sub #(parameter int W = 0) (input logic [7:0] x, output logic [7:0] y);
+            always_comb if (W > 0) y = x[7 -: W]; else y = x;
+        endmodule
+        module top;
+            logic [7:0] x, a, b;
+            sub #(.W(0)) u_a (.x, .y(a));
+            sub #(.W(0)) u_b (.x, .y(b));
+        endmodule
+    )",
+                      "top"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::ErrorInDeadCode));
+    EXPECT_FALSE(reportedCode(DiagCode::SystemVerilogError));
+}
+
 TEST_F(FrontendTest, ADegenerateSelectInLiveCodeIsStillAnError) {
     EXPECT_EQ(analyse(R"(
         module m #(parameter int W = 0) (input logic [7:0] x, output logic [7:0] y);
