@@ -514,6 +514,100 @@ TEST(Kernel, WaitEdgeSuspendsUntilTheEdgeArrives) {
     EXPECT_EQ(simulation.time(), 10U);
 }
 
+/// A process that waits on `@(posedge clk or posedge rst)` and counts each time it resumes,
+/// once when `forever` is false and in a loop when it is true.
+Process makeEventListCounter(bool forever) {
+    ProcessBuilder counter(ProcessKind::Initial, "counter");
+    const std::uint32_t countValue = counter.reg(Type::bits(16, false, true));
+    const std::uint32_t oneRegister = counter.reg(Type::bits(16, false, true));
+    const std::uint32_t sum = counter.reg(Type::bits(16, false, true));
+    const std::uint32_t one = counter.constant("16'd1");
+
+    counter.block("entry");
+    counter.waitEvents({SensitivityEntry{.objectIndex = 0, .edge = EdgeKind::Posedge},
+                        SensitivityEntry{.objectIndex = 1, .edge = EdgeKind::Posedge}},
+                       1);
+    counter.block("resumed");
+    counter.readObject(countValue, 2);
+    counter.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(oneRegister), Operand::constant(one)));
+    counter.emit(Instruction::make(Opcode::Add, Operand::reg(sum), Operand::reg(countValue),
+                                   Operand::reg(oneRegister)));
+    counter.store(2, sum);
+    counter.emit(forever ? Instruction::make(Opcode::Jump, {}, Operand::block(0))
+                         : Instruction::make(Opcode::Return));
+    return counter.finish();
+}
+
+std::vector<Object> eventListObjects() {
+    return {Object{.name = "clk", .type = Type::logic(), .initialValue = BitVector::parse("1'b0")},
+            Object{.name = "rst", .type = Type::logic(), .initialValue = BitVector::parse("1'b0")},
+            Object{.name = "count",
+                   .type = Type::bits(16, false, true),
+                   .initialValue = BitVector::parse("16'd0")}};
+}
+
+TEST(Kernel, AnEventListResumesOnceWhicheverOfItsEntriesHappen) {
+    // `clk` rises first and resumes the process, which then ends. The subscription on `rst` is
+    // stale from then on, and when `rst` rises later it must not resume the process again.
+    ProcessBuilder driver(ProcessKind::Initial, "driver");
+    const std::uint32_t delay = driver.reg(Type::bits(32, false, false));
+    const std::uint32_t bit = driver.reg(Type::logic());
+    const std::uint32_t ten = driver.constant("32'd10");
+    const std::uint32_t oneBit = driver.constant("1'b1");
+
+    driver.block("entry");
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(ten)));
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(bit), Operand::constant(oneBit)));
+    driver.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    driver.block("clock");
+    driver.store(0, bit);
+    driver.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(2)));
+    driver.block("reset");
+    driver.store(1, bit);
+    driver.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(
+        designOf(makeTop({driver.finish(), makeEventListCounter(false)}, eventListObjects())),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.time(), 20U);
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "1");
+}
+
+TEST(Kernel, AnEventListEntryWhoseSignalNeverChangesDoesNotPileUp) {
+    // `forever @(posedge clk or posedge rst)` with a reset that never rises: every wait leaves
+    // a stale subscription on `rst`, which nothing else ever removes.
+    ProcessBuilder clock(ProcessKind::Always, "clockgen");
+    const std::uint32_t delay = clock.reg(Type::bits(32, false, false));
+    const std::uint32_t value = clock.reg(Type::logic());
+    const std::uint32_t inverted = clock.reg(Type::logic());
+    const std::uint32_t five = clock.constant("32'd5");
+
+    clock.block("entry");
+    clock.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(five)));
+    clock.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    clock.block("toggle");
+    clock.readObject(value, 0);
+    clock.emit(Instruction::make(Opcode::Not, Operand::reg(inverted), Operand::reg(value)));
+    clock.store(0, inverted);
+    clock.emit(Instruction::make(Opcode::Jump, {}, Operand::block(0)));
+
+    Simulation simulation(
+        designOf(makeTop({clock.finish(), makeEventListCounter(true)}, eventListObjects())), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(10'000), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "1000");
+    EXPECT_LE(simulation.simulationKernel().armedWaits(simulation.signal("/tb/rst")), 16U)
+        << "a stale subscription on a signal that never changes stayed for the rest of the run";
+}
+
 // ---------------------------------------------------------------------------
 // System tasks
 // ---------------------------------------------------------------------------

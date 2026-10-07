@@ -307,6 +307,11 @@ public:
     /// diagnosing a design that almost fails to settle.
     [[nodiscard]] std::uint64_t totalDeltaCycles() const noexcept { return deltaTotal; }
 
+    /// The waits armed on `signalIndex` by `@` and `wait`, stale ones not yet swept included.
+    [[nodiscard]] std::size_t armedWaits(std::uint32_t signalIndex) const noexcept {
+        return edgeWaiters[signalIndex].waiters.size();
+    }
+
     // -----------------------------------------------------------------------
     // Operations the interpreter performs through the kernel
     // -----------------------------------------------------------------------
@@ -554,7 +559,25 @@ private:
         std::uint32_t width = 0;
     };
 
-    std::vector<std::vector<EdgeWaiter>> edgeWaiters;
+    /// One signal's dynamic subscriptions, and the length at which arming another first sweeps
+    /// out the stale ones.
+    struct EdgeWaiterList {
+        std::vector<EdgeWaiter> waiters;
+        std::size_t sweepAt = MinimumWaiterSweep;
+    };
+
+    static constexpr std::size_t MinimumWaiterSweep = 16;
+
+    std::vector<EdgeWaiterList> edgeWaiters;
+
+    /// Arms `waiter` on `signalIndex`.
+    ///
+    /// A stale subscription goes when its own signal next changes, and one whose signal never
+    /// does would stay for the rest of the run: `forever @(posedge clk or posedge rst)` leaves
+    /// one on `rst` for every clock. So a list that has doubled since it was last swept is
+    /// swept before it grows, which bounds it by twice what is live, at a constant cost per
+    /// wait.
+    void armWaiter(std::uint32_t signalIndex, const EdgeWaiter& waiter);
 
     /// Non-owning, in registration order. Ordered rather than hash-based because what a listener
     /// records is observable and section 3.8 makes observable ordering reproducible.

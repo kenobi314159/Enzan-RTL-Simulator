@@ -130,6 +130,15 @@ public:
                                     eir::Operand::block(resumeBlock)));
     }
 
+    /// Waits for whichever of `entries` happens first, as `@(a or posedge b)` does.
+    void waitEvents(std::vector<eir::SensitivityEntry> entries, std::uint32_t resumeBlock) {
+        for (const eir::SensitivityEntry& entry : entries) reads.push_back(entry.objectIndex);
+        const auto list = static_cast<std::uint32_t>(process.eventLists.size());
+        process.eventLists.push_back(std::move(entries));
+        emit(eir::Instruction::make(eir::Opcode::WaitEvents, {}, eir::Operand::immediate(list),
+                                    eir::Operand::block(resumeBlock)));
+    }
+
     eir::Process finish() {
         std::ranges::sort(reads);
         reads.erase(std::ranges::unique(reads).begin(), reads.end());

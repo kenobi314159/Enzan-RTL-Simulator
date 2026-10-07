@@ -159,7 +159,10 @@ void Kernel::initialize() {
     openFiles.clear();
     nextFileNumber = 3;
     nextChannel = 1;
-    for (std::vector<EdgeWaiter>& waiters : edgeWaiters) waiters.clear();
+    for (EdgeWaiterList& list : edgeWaiters) {
+        list.waiters.clear();
+        list.sweepAt = MinimumWaiterSweep;
+    }
     std::ranges::fill(frameStorage, eir::Word{});
 
     // A force does not survive a restart either: a signal still pinned from the last run would
@@ -683,7 +686,7 @@ void Kernel::notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Log
     // edge is not waiting for the next until it asks again. Rewritten in place rather
     // than erased one by one, so that the common case of nothing matching costs one pass. One
     // armed by a wait another entry of which has already fired is stale, and goes.
-    std::vector<EdgeWaiter>& waiters = edgeWaiters[signalIndex];
+    std::vector<EdgeWaiter>& waiters = edgeWaiters[signalIndex].waiters;
     std::size_t kept = 0;
     for (std::size_t index = 0; index < waiters.size(); ++index) {
         const EdgeWaiter waiter = waiters[index];
@@ -797,10 +800,10 @@ void Kernel::suspendForEdge(std::uint32_t processIndex, std::uint32_t signalInde
                             eir::EdgeKind edge, std::uint32_t resumePc) {
     ProcessState& state = processes[processIndex];
     state.resumePc = resumePc;
-    edgeWaiters[signalIndex].push_back(EdgeWaiter{.processIndex = processIndex,
-                                                  .edge = edge,
-                                                  .resumePc = resumePc,
-                                                  .generation = state.waitGeneration});
+    armWaiter(signalIndex, EdgeWaiter{.processIndex = processIndex,
+                                      .edge = edge,
+                                      .resumePc = resumePc,
+                                      .generation = state.waitGeneration});
 }
 
 void Kernel::suspendForEvents(std::uint32_t processIndex, std::uint32_t listIndex,
@@ -809,14 +812,25 @@ void Kernel::suspendForEvents(std::uint32_t processIndex, std::uint32_t listInde
     state.resumePc = resumePc;
     const codegen::CompiledProcess& body = designImage->compiledDesign().body(state.bodyIndex);
     for (const eir::SensitivityEntry& entry : body.eventLists[listIndex]) {
-        edgeWaiters[state.objectSignals[entry.objectIndex]].push_back(
-            EdgeWaiter{.processIndex = processIndex,
-                       .edge = entry.edge,
-                       .resumePc = resumePc,
-                       .generation = state.waitGeneration,
-                       .lowBit = entry.lowBit,
-                       .width = entry.width});
+        armWaiter(state.objectSignals[entry.objectIndex],
+                  EdgeWaiter{.processIndex = processIndex,
+                             .edge = entry.edge,
+                             .resumePc = resumePc,
+                             .generation = state.waitGeneration,
+                             .lowBit = entry.lowBit,
+                             .width = entry.width});
     }
+}
+
+void Kernel::armWaiter(std::uint32_t signalIndex, const EdgeWaiter& waiter) {
+    EdgeWaiterList& list = edgeWaiters[signalIndex];
+    if (list.waiters.size() >= list.sweepAt) {
+        std::erase_if(list.waiters, [this](const EdgeWaiter& armed) {
+            return armed.generation != processes[armed.processIndex].waitGeneration;
+        });
+        list.sweepAt = std::max(MinimumWaiterSweep, 2 * list.waiters.size());
+    }
+    list.waiters.push_back(waiter);
 }
 
 void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallIndex) {
