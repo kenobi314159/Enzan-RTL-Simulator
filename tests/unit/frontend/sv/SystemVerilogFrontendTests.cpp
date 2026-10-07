@@ -666,6 +666,26 @@ TEST_F(FrontendTest, ASubroutinesStaticVariableIsStorageEveryCallShares) {
     EXPECT_EQ(last.initialValue->ref().toUInt64(), 7U);
 }
 
+TEST_F(FrontendTest, AVariableWithoutStorageIsReportedOnceWhereItIsRead) {
+    // What makes the storage impossible is reported where the storage is asked for; the read
+    // asking for it has nothing to add.
+    EXPECT_EQ(analyse(R"(
+        module top;
+            function integer next(input integer a);
+                static integer t = a + 1;
+                return t;
+            endfunction
+            integer r;
+            initial r = next(4);
+        endmodule
+    )",
+                      "top"),
+              nullptr);
+    EXPECT_TRUE(reported("the initialiser of 't'"));
+    EXPECT_EQ(std::ranges::count(consumer.codes, enzan::DiagCode::UnsupportedConstruct), 1)
+        << consumer.messages.back();
+}
+
 TEST_F(FrontendTest, AnUnpackedArrayIsStoredFlatAndKeepsItsDimensions) {
     const std::unique_ptr<Design> design = analyse(R"(
         module top;

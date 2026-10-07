@@ -1258,8 +1258,13 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
             return Value{.reg = result, .type = *type};
         }
 
+        // objectFor has said why there is no object, and saying the read is unsupported too
+        // would only bury that.
         const std::optional<std::uint32_t> objectIndex = module->objectFor(symbol);
-        if (!objectIndex.has_value()) break;
+        if (!objectIndex.has_value()) {
+            failed = true;
+            return std::nullopt;
+        }
 
         const eir::Type objectType = module->definition().objects[*objectIndex].type;
         noteRead(*objectIndex);
