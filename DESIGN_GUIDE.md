@@ -478,6 +478,15 @@ cover arithmetic, logical and bitwise ops, part- and bit-selects, concatenation,
 comparison, branching, calls, signal reads, blocking and non-blocking drives,
 and the suspension primitives (`wait` on event, on time, on condition).
 
+**A generic unit is one parameterisation with every number a parameter decides
+annotated** by the expression over the unit's formal parameters that it is the value of
+(M5.1): an object's width, a register's, a constant, a select's position, an extent of
+the write set. Ignoring the annotations, it is a valid unit for the parameterisation it
+was translated from, so nothing that does not specialise has to know what a generic unit
+is. Elaboration specialises it by replacing each annotated number with its expression's
+value. The expressions apply the operations of EIR-B and nothing else, evaluated by
+BitOps, so a constant means what the same operation means when a process runs it.
+
 ### 4.2 The core invariant
 
 **Every EIR process MUST be expressible as a pure function over an explicit

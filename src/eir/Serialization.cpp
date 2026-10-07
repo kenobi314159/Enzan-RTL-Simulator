@@ -238,6 +238,11 @@ void writeInstruction(Writer& out, NameTable& names, const Instruction& instruct
     previous = instruction.location;
 }
 
+void writeIndices(Writer& out, const std::vector<std::uint32_t>& indices) {
+    out.u32(static_cast<std::uint32_t>(indices.size()));
+    for (const std::uint32_t index : indices) out.u32(index);
+}
+
 void writeProcess(Writer& out, NameTable& names, const Process& process) {
     out.u8(static_cast<std::uint8_t>(process.kind));
     out.text(process.name);
@@ -248,6 +253,9 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
 
     out.u32(static_cast<std::uint32_t>(process.constants.size()));
     for (const BitVector& value : process.constants) writeVector(out, value);
+
+    writeIndices(out, process.registerWidthExpressions);
+    writeIndices(out, process.constantExpressions);
 
     out.u32(static_cast<std::uint32_t>(process.strings.size()));
     for (const std::string& value : process.strings) out.text(value);
@@ -285,6 +293,8 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
         out.u8(static_cast<std::uint8_t>(entry.edge));
         out.u32(entry.lowBit);
         out.u32(entry.width);
+        out.u32(entry.lowBitExpression);
+        out.u32(entry.widthExpression);
     };
     for (const SensitivityEntry& entry : process.sensitivity) writeEntry(entry);
     out.u32(static_cast<std::uint32_t>(process.eventLists.size()));
@@ -301,6 +311,8 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
         out.u32(extent.objectIndex);
         out.u32(extent.lowBit);
         out.u32(extent.width);
+        out.u32(extent.lowBitExpression);
+        out.u32(extent.widthExpression);
     }
 }
 
@@ -325,11 +337,16 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         for (const UnpackedDimension& dimension : object.unpackedDimensions) {
             out.u32(static_cast<std::uint32_t>(dimension.left));
             out.u32(static_cast<std::uint32_t>(dimension.right));
+            out.u32(dimension.leftExpression);
+            out.u32(dimension.rightExpression);
         }
         out.u32(object.elementWidth);
         out.boolean(object.elementSigned);
         out.boolean(object.subroutineStatic);
         out.text(object.hierarchicalPath);
+        out.u32(object.widthExpression);
+        out.u32(object.elementWidthExpression);
+        out.u32(object.initialValueExpression);
     }
 
     out.u32(static_cast<std::uint32_t>(definition.ports.size()));
@@ -355,6 +372,11 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
             out.text(binding.port);
             out.text(binding.target);
         }
+        out.u32(static_cast<std::uint32_t>(instance.parameterActuals.size()));
+        for (const ParameterActual& actual : instance.parameterActuals) {
+            out.text(actual.formal);
+            out.u32(actual.value);
+        }
     }
 
     out.u32(static_cast<std::uint32_t>(definition.processes.size()));
@@ -376,6 +398,35 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         writeVector(out, parameter.value);
         out.boolean(parameter.isLocal);
         writeLocation(out, names, parameter.location);
+    }
+
+    out.u32(static_cast<std::uint32_t>(definition.formals.size()));
+    for (const ParameterFormal& formal : definition.formals) {
+        out.text(formal.name);
+        out.u8(static_cast<std::uint8_t>(formal.kind));
+        out.text(formal.port);
+        out.u32(formal.width);
+        out.u32(formal.widthExpression);
+        out.boolean(formal.isSigned);
+        out.boolean(formal.isTyped);
+        out.u32(formal.value);
+        writeLocation(out, names, formal.location);
+    }
+
+    const ParameterExpressions& expressions = definition.expressions;
+    out.u32(static_cast<std::uint32_t>(expressions.allConstants().size()));
+    for (const BitVector& value : expressions.allConstants()) writeVector(out, value);
+    out.u32(static_cast<std::uint32_t>(expressions.size()));
+    for (const ParameterNode& node : expressions.allNodes()) {
+        out.u8(static_cast<std::uint8_t>(node.kind));
+        out.u8(static_cast<std::uint8_t>(node.opcode));
+        out.boolean(node.isSigned);
+        out.boolean(node.operationSigned);
+        out.u32(node.width);
+        out.u32(node.widthNode);
+        out.u32(node.a);
+        out.u32(node.b);
+        out.u32(node.c);
     }
 }
 
@@ -506,6 +557,11 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     for (std::uint32_t index = 0; index < constantCount && in.ok(); ++index)
         process.constants.push_back(readVector(in));
 
+    process.registerWidthExpressions.resize(in.count());
+    for (std::uint32_t& index : process.registerWidthExpressions) index = in.u32();
+    process.constantExpressions.resize(in.count());
+    for (std::uint32_t& index : process.constantExpressions) index = in.u32();
+
     process.strings.resize(in.count());
     for (std::string& value : process.strings) value = in.text();
 
@@ -538,6 +594,8 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
         entry.edge = static_cast<EdgeKind>(in.u8());
         entry.lowBit = in.u32();
         entry.width = in.u32();
+        entry.lowBitExpression = in.u32();
+        entry.widthExpression = in.u32();
     };
     process.sensitivity.resize(in.count());
     for (SensitivityEntry& entry : process.sensitivity) readEntry(entry);
@@ -555,6 +613,8 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
         extent.objectIndex = in.u32();
         extent.lowBit = in.u32();
         extent.width = in.u32();
+        extent.lowBitExpression = in.u32();
+        extent.widthExpression = in.u32();
     }
 
     return process;
@@ -581,11 +641,16 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         for (UnpackedDimension& dimension : object.unpackedDimensions) {
             dimension.left = static_cast<std::int32_t>(in.u32());
             dimension.right = static_cast<std::int32_t>(in.u32());
+            dimension.leftExpression = in.u32();
+            dimension.rightExpression = in.u32();
         }
         object.elementWidth = in.u32();
         object.elementSigned = in.boolean();
         object.subroutineStatic = in.boolean();
         object.hierarchicalPath = in.text();
+        object.widthExpression = in.u32();
+        object.elementWidthExpression = in.u32();
+        object.initialValueExpression = in.u32();
     }
 
     definition.ports.resize(in.count());
@@ -610,6 +675,11 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         for (InterfaceBinding& binding : instance.interfaceBindings) {
             binding.port = in.text();
             binding.target = in.text();
+        }
+        instance.parameterActuals.resize(in.count());
+        for (ParameterActual& actual : instance.parameterActuals) {
+            actual.formal = in.text();
+            actual.value = in.u32();
         }
     }
 
@@ -647,6 +717,47 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
                                                   .isLocal = isLocal,
                                                   .location = location});
     }
+
+    definition.formals.resize(in.count());
+    for (ParameterFormal& formal : definition.formals) {
+        formal.name = in.text();
+        formal.kind = static_cast<FormalKind>(in.u8());
+        formal.port = in.text();
+        formal.width = in.u32();
+        formal.widthExpression = in.u32();
+        formal.isSigned = in.boolean();
+        formal.isTyped = in.boolean();
+        formal.value = in.u32();
+        formal.location = readLocation(in, buffers);
+    }
+
+    const std::uint32_t expressionConstantCount = in.count();
+    std::vector<BitVector> expressionConstants;
+    expressionConstants.reserve(expressionConstantCount);
+    for (std::uint32_t index = 0; index < expressionConstantCount && in.ok(); ++index)
+        expressionConstants.push_back(readVector(in));
+    std::vector<ParameterNode> nodes(in.count());
+    for (ParameterNode& node : nodes) {
+        node.kind = static_cast<ParameterNodeKind>(in.u8());
+        node.opcode = static_cast<Opcode>(in.u8());
+        node.isSigned = in.boolean();
+        node.operationSigned = in.boolean();
+        node.width = in.u32();
+        node.widthNode = in.u32();
+        node.a = in.u32();
+        node.b = in.u32();
+        node.c = in.u32();
+    }
+    // A table no `add` could have built — a node using one after it, a constant that does not
+    // exist — would make evaluation read past the table or loop, so it fails the decode as a
+    // truncated entry does.
+    std::optional<ParameterExpressions> expressions =
+        ParameterExpressions::fromParts(std::move(nodes), std::move(expressionConstants));
+    if (!expressions.has_value()) {
+        in.fail();
+        return definition;
+    }
+    definition.expressions = std::move(*expressions);
 
     return definition;
 }

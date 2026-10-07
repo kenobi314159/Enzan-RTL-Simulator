@@ -16,6 +16,9 @@ waveform database and the PLI all consume it.
   X-propagation. This is the highest-risk code in the project.
 - The type system, the structural layer (EIR-S) and the behavioural layer (EIR-B)
   follow in this component as milestone M1 progresses.
+- **Parameter expressions** (`ParameterExpression.h`) — what a number of a generic unit
+  depends on its formal parameters by, and their evaluation with BitOps (section 4.1,
+  milestone M5.1).
 
 ## Allowed dependencies
 

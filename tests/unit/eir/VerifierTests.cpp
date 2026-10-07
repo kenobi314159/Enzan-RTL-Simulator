@@ -77,6 +77,21 @@ protected:
         return definition;
     }
 
+    /// `makeValidModule` made generic over one formal, `W`, which both objects' widths are.
+    static ModuleDefinition makeGenericModule() {
+        ModuleDefinition definition = makeValidModule();
+        const std::uint32_t width = definition.expressions.formal(0, 32, true);
+        definition.formals.push_back(enzan::eir::ParameterFormal{
+            .name = "W",
+            .value =
+                definition.expressions.constant(enzan::eir::BitVector::fromInt64(8, 32), true)});
+        definition.objects[0].widthExpression = width;
+        definition.objects[1].widthExpression = width;
+        definition.processes[0].registerWidthExpressions = {width};
+        definition.processes[0].writeSet[0].widthExpression = width;
+        return definition;
+    }
+
     /// Verifies `definition` in isolation and returns whether it passed.
     bool check(const ModuleDefinition& definition) {
         return enzan::eir::verify(definition, nullptr, engine);
@@ -458,6 +473,48 @@ TEST_F(VerifierTest, ReportsNameTheModuleAndTheProcess) {
     EXPECT_FALSE(check(definition));
     EXPECT_TRUE(reported("module 'copier'"));
     EXPECT_TRUE(reported("process 'always_comb@copier'"));
+}
+
+// ---------------------------------------------------------------------------
+// Generic units (DESIGN_GUIDE.md section 18, M5.1)
+// ---------------------------------------------------------------------------
+
+TEST_F(VerifierTest, AcceptsAGenericUnit) {
+    EXPECT_TRUE(check(makeGenericModule()));
+    EXPECT_TRUE(consumer.messages.empty()) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, RejectsAnAnnotationNamingNoExpression) {
+    ModuleDefinition definition = makeGenericModule();
+    definition.objects[1].widthExpression = 42;
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("object 'sink' names expression 42")) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, RejectsAnnotationsOfSomeOfAProcesssRegisters) {
+    // The annotations are by register number, so a shorter list would leave the specialiser
+    // reading another register's.
+    ModuleDefinition definition = makeGenericModule();
+    definition.processes[0].registerTypes.push_back(Type::logic());
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("annotates 1 of its 2 registers")) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, RejectsAFormalDefinedByItself) {
+    // Elaboration evaluates formals in order, so a default naming its own formal, or a later
+    // one, would read a value that does not exist yet.
+    ModuleDefinition definition = makeGenericModule();
+    definition.formals[0].value = definition.expressions.formal(0, 32, true);
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("formal 'W' is defined by a formal at or after itself"))
+        << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, RejectsAnExpressionUsingAFormalTheUnitLacks) {
+    ModuleDefinition definition = makeGenericModule();
+    definition.objects[0].widthExpression = definition.expressions.formal(3, 32, true);
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("uses formal 3, but the unit has 1 formals")) << consumer.messages.front();
 }
 
 } // namespace

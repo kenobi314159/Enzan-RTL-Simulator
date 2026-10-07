@@ -4,6 +4,7 @@
 
 #include "common/SourceLocation.h"
 #include "eir/BitVector.h"
+#include "eir/ParameterExpression.h"
 #include "eir/Process.h"
 #include "eir/Type.h"
 
@@ -104,6 +105,11 @@ struct UnpackedDimension {
     std::int32_t left = 0;
     std::int32_t right = 0;
 
+    /// In a generic unit, the expressions `left` and `right` are the values of, or
+    /// `NoExpression` where the number stands for itself.
+    std::uint32_t leftExpression = NoExpression;
+    std::uint32_t rightExpression = NoExpression;
+
     [[nodiscard]] std::uint32_t size() const noexcept {
         return static_cast<std::uint32_t>(left > right ? left - right : right - left) + 1U;
     }
@@ -168,7 +174,69 @@ struct Object {
     /// the instance holding it, to whichever interface that instance's parent connected.
     std::string hierarchicalPath;
 
+    /// In a generic unit, the expressions this object's numbers are the values of, or
+    /// `NoExpression` for a number the same in every parameterisation (DESIGN_GUIDE.md section
+    /// 18, M5.1): the width of `type`, the width of an element, and the initial value.
+    std::uint32_t widthExpression = NoExpression;
+    std::uint32_t elementWidthExpression = NoExpression;
+    std::uint32_t initialValueExpression = NoExpression;
+
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
+};
+
+/// What a formal parameter of a generic unit is set by.
+enum class FormalKind : std::uint8_t {
+    /// A `parameter`: an instance may set it, and its default applies where none does.
+    Parameter,
+    /// A `localparam`: always its own expression over the formals before it.
+    LocalParameter,
+    /// A parameter of the interface an interface port is connected to, read as `bus.W`. No
+    /// instance sets it; elaboration takes it from the interface instance the port reaches.
+    InterfaceParameter,
+};
+
+/// One formal parameter of a generic unit (DESIGN_GUIDE.md section 18, M5.1).
+///
+/// A formal has a type an actual is converted to, so that every expression using it sees the
+/// width it was translated with. An untyped parameter takes whatever type its value has, which
+/// would change the width of every expression it appears in; its type is therefore the
+/// representative parameterisation's, and a value of another type is refused rather than
+/// converted.
+struct ParameterFormal {
+    /// The parameter's name; for an interface parameter, the name the interface gives it.
+    std::string name;
+
+    FormalKind kind = FormalKind::Parameter;
+
+    /// For an interface parameter, the interface port it is read through.
+    std::string port;
+
+    /// The width and signedness of the formal's type. The width may depend on an earlier
+    /// formal, as `parameter [W-1:0] INIT` does, in which case `widthExpression` gives it.
+    std::uint32_t width = 32;
+    std::uint32_t widthExpression = NoExpression;
+    bool isSigned = true;
+
+    /// False for an untyped parameter, whose actual must already have the formal's type.
+    bool isTyped = true;
+
+    /// For a parameter, the expression of its default, or `NoExpression` when it has none; for
+    /// a local parameter, its definition. An expression refers only to formals before this one.
+    std::uint32_t value = NoExpression;
+
+    SourceLocation location;
+};
+
+/// A value an instance sets one formal of a generic unit to.
+struct ParameterActual {
+    /// The formal's name.
+    std::string formal;
+
+    /// The value, as an expression in the *instantiating* unit's table: an instance inside a
+    /// generic unit sets its child's width from its own.
+    std::uint32_t value = NoExpression;
+
+    friend bool operator==(const ParameterActual&, const ParameterActual&) = default;
 };
 
 /// A parameter or localparam of a module definition, kept for display.
@@ -259,6 +327,10 @@ struct Instance {
     /// The instance's interface ports, by name, and what each is connected to.
     std::vector<InterfaceBinding> interfaceBindings;
 
+    /// The formals of a generic definition this instance sets, in the order the source sets
+    /// them. Empty for an instance of a specialised definition, whose name says its values.
+    std::vector<ParameterActual> parameterActuals;
+
     SourceLocation location;
 };
 
@@ -309,6 +381,22 @@ struct ModuleDefinition {
 
     /// What this parameterisation's parameters were resolved to, in declaration order.
     std::vector<Parameter> parameters;
+
+    /// The formals of a generic unit, in the order they are evaluated: interface parameters
+    /// first, then the declared parameters and local parameters as the source declares them.
+    /// Empty for a unit that is not generic (DESIGN_GUIDE.md section 18, M5.1).
+    ///
+    /// A generic unit is the parameterisation it was translated from — its representative —
+    /// with every number that depends on a parameter annotated by the expression it is the value
+    /// of. Ignoring the annotations, it is a valid unit for the representative's values, which
+    /// `parameters` records; specialising it at other values replaces each annotated number
+    /// with its expression's value.
+    std::vector<ParameterFormal> formals;
+
+    /// The expressions the annotations of a generic unit, and its instances' actuals, refer to.
+    ParameterExpressions expressions;
+
+    [[nodiscard]] bool isGeneric() const noexcept { return !formals.empty(); }
 
     /// Returns the index of the object called `name`, or nothing.
     ///

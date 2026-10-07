@@ -357,6 +357,93 @@ TEST_F(SerializationTest, EnumerationsAndParametersRoundTrip) {
     EXPECT_TRUE(definition.parameters[1].isLocal);
 }
 
+TEST_F(SerializationTest, AGenericUnitRoundTripsWithItsAnnotations) {
+    // Every number a parameter decides is annotated with its expression; one dropped or read
+    // into the wrong field would specialise a library unit to the wrong width, and the unit
+    // would still elaborate and run.
+    using enzan::eir::FormalKind;
+    using enzan::eir::ParameterActual;
+    using enzan::eir::ParameterFormal;
+    using enzan::eir::ParameterNode;
+    using enzan::eir::ParameterNodeKind;
+
+    ModuleDefinition definition = richModule(buffer);
+    definition.name = "counter";
+    enzan::eir::ParameterExpressions& table = definition.expressions;
+    const std::uint32_t width = table.formal(1, 32, true);
+    const std::uint32_t one = table.constant(literal("32'sd1"), true);
+    const std::uint32_t msb = table.add(ParameterNode{.kind = ParameterNodeKind::Operation,
+                                                      .opcode = Opcode::Subtract,
+                                                      .isSigned = true,
+                                                      .operationSigned = true,
+                                                      .width = 32,
+                                                      .a = width,
+                                                      .b = one});
+    definition.formals = {ParameterFormal{.name = "BUS_W",
+                                          .kind = FormalKind::InterfaceParameter,
+                                          .port = "bus",
+                                          .location = SourceLocation(buffer, 4)},
+                          ParameterFormal{.name = "WIDTH",
+                                          .kind = FormalKind::Parameter,
+                                          .width = 16,
+                                          .isSigned = false,
+                                          .isTyped = false,
+                                          .value = one},
+                          ParameterFormal{.name = "MSB",
+                                          .kind = FormalKind::LocalParameter,
+                                          .widthExpression = width,
+                                          .value = msb}};
+
+    definition.objects[1].widthExpression = width;
+    definition.objects[1].initialValueExpression = msb;
+    definition.objects[0].elementWidthExpression = one;
+    definition.objects[0].unpackedDimensions[1].leftExpression = msb;
+    definition.objects[0].unpackedDimensions[1].rightExpression = one;
+    definition.instances[0].parameterActuals = {ParameterActual{.formal = "N", .value = msb}};
+
+    Process& process = definition.processes[0];
+    process.registerWidthExpressions = {enzan::eir::NoExpression, width, enzan::eir::NoExpression,
+                                        enzan::eir::NoExpression, enzan::eir::NoExpression};
+    process.constantExpressions = {msb, enzan::eir::NoExpression};
+    process.sensitivity[0].lowBitExpression = one;
+    process.sensitivity[0].widthExpression = width;
+    process.writeSet[1].lowBitExpression = msb;
+    process.writeSet[1].widthExpression = one;
+
+    const std::vector<ModuleDefinition> decoded = roundTrip({definition});
+    ASSERT_EQ(decoded.size(), 1U);
+    const ModuleDefinition& result = decoded.front();
+
+    EXPECT_TRUE(result.isGeneric());
+    EXPECT_EQ(result.expressions, definition.expressions);
+    ASSERT_EQ(result.formals.size(), 3U);
+    for (std::size_t index = 0; index < 3; ++index) {
+        const ParameterFormal& got = result.formals[index];
+        const ParameterFormal& want = definition.formals[index];
+        EXPECT_EQ(got.name, want.name);
+        EXPECT_EQ(got.kind, want.kind);
+        EXPECT_EQ(got.port, want.port);
+        EXPECT_EQ(got.width, want.width);
+        EXPECT_EQ(got.widthExpression, want.widthExpression);
+        EXPECT_EQ(got.isSigned, want.isSigned);
+        EXPECT_EQ(got.isTyped, want.isTyped);
+        EXPECT_EQ(got.value, want.value);
+        EXPECT_EQ(got.location, want.location);
+    }
+
+    EXPECT_EQ(result.objects[1].widthExpression, width);
+    EXPECT_EQ(result.objects[1].initialValueExpression, msb);
+    EXPECT_EQ(result.objects[0].elementWidthExpression, one);
+    EXPECT_EQ(result.objects[0].unpackedDimensions[1].leftExpression, msb);
+    EXPECT_EQ(result.objects[0].unpackedDimensions[1].rightExpression, one);
+    EXPECT_EQ(result.objects[0].unpackedDimensions[0].leftExpression, enzan::eir::NoExpression);
+    EXPECT_EQ(result.instances[0].parameterActuals, definition.instances[0].parameterActuals);
+    EXPECT_EQ(result.processes[0].registerWidthExpressions, process.registerWidthExpressions);
+    EXPECT_EQ(result.processes[0].constantExpressions, process.constantExpressions);
+    EXPECT_EQ(result.processes[0].sensitivity, process.sensitivity);
+    EXPECT_EQ(result.processes[0].writeSet, process.writeSet);
+}
+
 TEST_F(SerializationTest, SeveralModulesRoundTripInOrder) {
     ModuleDefinition first;
     first.name = "first";

@@ -41,6 +41,8 @@ public:
         for (const Instance& instance : definition.instances) checkInstance(definition, instance);
 
         for (const Process& process : definition.processes) checkProcess(definition, process);
+
+        checkAnnotations(definition);
     }
 
 private:
@@ -56,6 +58,99 @@ private:
         diagnostics.report(
             DiagCode::InvalidEir, process.location,
             std::format("module '{}', process '{}': {}", definition.name, process.name, message));
+    }
+
+    /// Checks what makes a unit generic (DESIGN_GUIDE.md section 18, M5.1): that every
+    /// annotation names an expression of the unit's table, that a register or a constant is
+    /// annotated by a list as long as the one it annotates, and that a formal is defined only in
+    /// terms of the formals before it, which is the order elaboration evaluates them in.
+    void checkAnnotations(const ModuleDefinition& definition) {
+        const std::size_t expressionCount = definition.expressions.size();
+        const auto check = [&](std::uint32_t index, std::string_view what) {
+            if (index != NoExpression && index >= expressionCount) {
+                report(definition, std::format("{} names expression {}, but the unit has {}", what,
+                                               index, expressionCount));
+            }
+        };
+
+        // The highest formal each node reaches, or -1 for none. Operands come before the nodes
+        // using them, so one pass in order sees every operand's answer first.
+        std::vector<std::int64_t> highestFormal(expressionCount, -1);
+        for (std::size_t index = 0; index < expressionCount; ++index) {
+            const ParameterNode& node =
+                definition.expressions.node(static_cast<std::uint32_t>(index));
+            std::int64_t highest = -1;
+            if (node.kind == ParameterNodeKind::Formal) {
+                highest = node.a;
+                if (node.a >= definition.formals.size()) {
+                    report(definition, std::format("expression {} uses formal {}, but the unit has "
+                                                   "{} formals",
+                                                   index, node.a, definition.formals.size()));
+                }
+            } else if (node.kind != ParameterNodeKind::Constant) {
+                for (const std::uint32_t operand : {node.a, node.b, node.c})
+                    if (operand != ParameterNode::NoNode)
+                        highest = std::max(highest, highestFormal[operand]);
+            }
+            if (node.widthNode != ParameterNode::NoNode)
+                highest = std::max(highest, highestFormal[node.widthNode]);
+            highestFormal[index] = highest;
+        }
+
+        for (std::size_t index = 0; index < definition.formals.size(); ++index) {
+            const ParameterFormal& formal = definition.formals[index];
+            for (const std::uint32_t expression : {formal.value, formal.widthExpression}) {
+                check(expression, std::format("formal '{}'", formal.name));
+                if (expression != NoExpression && expression < expressionCount
+                    && highestFormal[expression] >= static_cast<std::int64_t>(index)) {
+                    report(definition, std::format("formal '{}' is defined by a formal at or after "
+                                                   "itself",
+                                                   formal.name));
+                }
+            }
+        }
+
+        for (const Object& object : definition.objects) {
+            const std::string what = std::format("object '{}'", object.name);
+            check(object.widthExpression, what);
+            check(object.elementWidthExpression, what);
+            check(object.initialValueExpression, what);
+            for (const UnpackedDimension& dimension : object.unpackedDimensions) {
+                check(dimension.leftExpression, what);
+                check(dimension.rightExpression, what);
+            }
+        }
+
+        for (const Instance& instance : definition.instances) {
+            for (const ParameterActual& actual : instance.parameterActuals)
+                check(actual.value, std::format("instance '{}'", instance.name));
+        }
+
+        for (const Process& process : definition.processes) {
+            const std::string what = std::format("process '{}'", process.name);
+            const auto checkList = [&](const std::vector<std::uint32_t>& list, std::size_t size,
+                                       std::string_view of) {
+                if (!list.empty() && list.size() != size) {
+                    report(definition, std::format("{} annotates {} of its {} {}", what,
+                                                   list.size(), size, of));
+                }
+                for (const std::uint32_t expression : list) check(expression, what);
+            };
+            checkList(process.registerWidthExpressions, process.registerTypes.size(), "registers");
+            checkList(process.constantExpressions, process.constants.size(), "constants");
+
+            const auto checkEntry = [&](const SensitivityEntry& entry) {
+                check(entry.lowBitExpression, what);
+                check(entry.widthExpression, what);
+            };
+            for (const SensitivityEntry& entry : process.sensitivity) checkEntry(entry);
+            for (const std::vector<SensitivityEntry>& list : process.eventLists)
+                for (const SensitivityEntry& entry : list) checkEntry(entry);
+            for (const WriteExtent& extent : process.writeSet) {
+                check(extent.lowBitExpression, what);
+                check(extent.widthExpression, what);
+            }
+        }
     }
 
     void checkInstance(const ModuleDefinition& definition, const Instance& instance) {

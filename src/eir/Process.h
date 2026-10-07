@@ -5,6 +5,7 @@
 #include "common/SourceLocation.h"
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
+#include "eir/ParameterExpression.h"
 #include "eir/Type.h"
 
 #include <cstdint>
@@ -167,6 +168,11 @@ struct SensitivityEntry {
     std::uint32_t lowBit = 0;
     std::uint32_t width = 0;
 
+    /// In a generic unit, the expressions `lowBit` and `width` are the values of, or
+    /// `NoExpression` where the number stands for itself (DESIGN_GUIDE.md section 18, M5.1).
+    std::uint32_t lowBitExpression = NoExpression;
+    std::uint32_t widthExpression = NoExpression;
+
     friend bool operator==(SensitivityEntry, SensitivityEntry) noexcept = default;
 };
 
@@ -185,6 +191,11 @@ struct WriteExtent {
 
     /// How many bits, from `lowBit` upwards. Never zero.
     std::uint32_t width = 0;
+
+    /// In a generic unit, the expressions `lowBit` and `width` are the values of, or
+    /// `NoExpression` where the number stands for itself.
+    std::uint32_t lowBitExpression = NoExpression;
+    std::uint32_t widthExpression = NoExpression;
 
     [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + width; }
 
@@ -243,6 +254,18 @@ struct Process {
 
     /// Constant values referred to by LoadConstant and by system task arguments.
     std::vector<BitVector> constants;
+
+    /// In a generic unit, the expression giving each register's width, by register number, or
+    /// `NoExpression` for a width that is the same in every parameterisation. Empty when no
+    /// register's width depends on a parameter.
+    ///
+    /// The width in `registerTypes` is the representative parameterisation's, which is what
+    /// keeps a generic unit a valid unit for everything that ignores these (section 18, M5.1).
+    std::vector<std::uint32_t> registerWidthExpressions;
+
+    /// In a generic unit, the expression giving each constant, by index, or `NoExpression` for
+    /// a constant that is the same in every parameterisation. Empty when none depends on one.
+    std::vector<std::uint32_t> constantExpressions;
 
     /// String literals, referred to by system task descriptors.
     std::vector<std::string> strings;
