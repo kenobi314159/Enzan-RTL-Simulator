@@ -2834,10 +2834,14 @@ body per parameterisation, and the generic unit is derived from one of them:
   which is 33 of taxi's 35 parameterised modules, takes the type of whatever value it is
   given, so an instance's value carries its width and sign. A module reading
   `localparam W = bus.W` depends on its interface's parameters as on its own.
-- **slang checks the result.** Each derived width, evaluated at a parameterisation the
-  compilation elaborated, must equal slang's own; the frontend checks every one it has, and
-  a unit that disagrees anywhere stays specialised. A gap in the sizing rules therefore costs
-  coverage, not correctness, for every parameterisation the analysis saw.
+- **slang checks the result, but cannot prove it.** A derived width evaluated at the
+  representative must equal slang's own number there, and where the design has a second
+  parameterisation the unit specialised at its values must encode as that parameterisation
+  translated on its own; a unit that disagrees stays specialised. Checking every
+  parameterisation would cost what translating them costs, which is what this milestone
+  removes, so one is checked. Neither check covers values no parameterisation used, so what
+  makes a generic unit right for those is the frontend's rule for which numbers depend on a
+  formal (5.1), and a number it cannot say keeps the unit specialised.
 - **Across a library boundary**, slang told to accept unknown modules gives an instantiation
   as its parameter expressions and its port connections by name, each sized on its own.
   Elaboration binds them to the library's unit. A connection whose width depends on the
