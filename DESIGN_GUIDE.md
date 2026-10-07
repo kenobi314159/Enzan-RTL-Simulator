@@ -632,6 +632,24 @@ instance named with its index, `u[2]`, and a port that takes an array reaches it
 one definition on two interfaces each reach their own. A modport restricts what a module may
 touch, which slang checks, and changes nothing about where a signal is.
 
+**A module whose parameters decide only values is one generic unit** (4.1, M5.1): one
+translation, named as the source names it, specialised at elaboration for each set of values
+its instances give it. Its formals are its parameters and local parameters, each default
+bound from the declaration — not from the parameter, whose initialiser is whatever the
+translated instance overrode it with. Every value of a process that names a formal is
+annotated with its expression, an instance of a generic child records the values it sets as
+expressions over its parent's formals, and a condition naming a formal is computed rather than
+taken as the dead-code rule of this section would take it.
+
+Which modules qualify is decided from the source, not from the parameterisations a design
+happens to have. A unit stays specialised when anything that decides a width or the generate
+structure — a dimension, a replication count, a size cast, a range select's bounds, a generate
+condition or loop — names a formal or a parameter or type declared from one; when a value
+naming a formal is used as a number the translation does not annotate, such as a select's
+position; when a parameter is a type, or not integral; and when the module has an interface
+port. Where the design has a second parameterisation of the module, the unit specialised at its
+values must also encode, byte for byte, as that parameterisation translated on its own.
+
 **A function or task is inlined into the process that calls it.** The body is translated in
 place, its variables bound to registers, so a task's delays suspend the caller as its own
 statements would, the caller's read and write sets are exactly what the call touches (4.2),

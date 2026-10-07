@@ -6,8 +6,11 @@
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Module.h"
+#include "eir/Serialization.h"
+#include "eir/Specialise.h"
 #include "eir/Verifier.h"
 #include "frontend/sv/DeadCode.h"
+#include "frontend/sv/ParameterLowering.h"
 #include "frontend/sv/ProcessTranslator.h"
 #include "frontend/sv/SvIntConversion.h"
 
@@ -36,12 +39,14 @@
 #include "slang/diagnostics/Diagnostics.h"
 #include "slang/numeric/Time.h"
 #include "slang/parsing/Preprocessor.h"
+#include "slang/syntax/AllSyntax.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/SourceManager.h"
 #include "slang/util/Bag.h"
 
 #include <algorithm>
 #include <format>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -299,10 +304,23 @@ public:
     /// Translates the procedural blocks and continuous assignments.
     bool translateProcesses();
 
+    /// Makes the unit generic over the body's parameters (DESIGN_GUIDE.md section 18, M5.1),
+    /// before anything is collected. Returns false, and the unit is to be translated per
+    /// parameterisation instead, when a parameter cannot be a formal or the source makes a
+    /// width or the generate structure depend on one.
+    bool makeGeneric();
+
+    /// True when the unit was made generic and nothing translated since needed what generic
+    /// units cannot say.
+    [[nodiscard]] bool isGeneric() const noexcept { return generic && !genericLost; }
+
     /// Adds an instance of an already-translated module, named `prefix` and its own name.
+    /// `genericChild` is that module's unit when it is generic, whose formals the instance's
+    /// parameter values are given for.
     bool addInstance(const ast::InstanceSymbol& instance, const std::string& prefix,
                      const std::string& targetName,
-                     const std::map<std::string, std::uint32_t, std::less<>>& targetPorts);
+                     const std::map<std::string, std::uint32_t, std::less<>>& targetPorts,
+                     const eir::ModuleDefinition* genericChild);
 
     eir::ModuleDefinition take() { return std::move(definitionValue); }
 
@@ -324,6 +342,12 @@ public:
     }
 
     [[nodiscard]] const ast::Symbol& evaluationScope() const override { return *body; }
+
+    std::optional<std::uint32_t> parameterExpression(const ast::Expression& expression) override;
+
+    [[nodiscard]] bool namesFormal(const ast::Expression& expression) override;
+
+    void usedAsNumber(const ast::Expression& expression) override;
 
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
@@ -465,6 +489,22 @@ private:
     std::vector<const ast::NetSymbol*> netAssignments;
 
     bool failed = false;
+
+    /// The parameter values an instance of the generic unit `child` sets, as expressions of this
+    /// unit, onto `result`. False when one cannot be said.
+    bool actualsOf(const ast::InstanceSymbol& instance, const eir::ModuleDefinition& child,
+                   eir::Instance& result);
+
+    /// A lowering of this unit's constant expressions, folding what names no formal.
+    ParameterLowering lowering(const ast::Symbol& scope) {
+        return ParameterLowering(definitionValue.expressions, formalBySymbol, scope);
+    }
+
+    /// For a generic unit, each parameter symbol of the body and its formal's index.
+    std::map<const ast::Symbol*, std::uint32_t> formalBySymbol;
+    bool generic = false;
+    /// Set when something translated needs what a generic unit cannot say.
+    bool genericLost = false;
 
 public:
     /// An instance found while collecting, with the generate blocks it is inside.
@@ -762,6 +802,14 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
         const slang::ConstantValue value = initializer->eval(evalContext);
         if (std::optional<eir::BitVector> initial = constantBits(value, symbol.getType())) {
             object.initialValue = std::move(*initial);
+            if (namesFormal(*initializer)) {
+                const std::optional<std::uint32_t> node =
+                    lowering(*body).lowerAs(*initializer, symbol.getType());
+                if (node.has_value())
+                    object.initialValueExpression = *node;
+                else
+                    genericLost = true;
+            }
         } else {
             reportUnsupported(
                 symbol.location,
@@ -1024,6 +1072,270 @@ bool ModuleBuilder::translateProcesses() {
     return !failed;
 }
 
+namespace {
+
+namespace syntax = slang::syntax;
+using Names = std::set<std::string, std::less<>>;
+
+/// True when `node` names anything in `names`, anywhere inside it.
+bool mentions(const syntax::SyntaxNode* node, const Names& names) {
+    if (node == nullptr) return false;
+    if (node->kind == syntax::SyntaxKind::IdentifierName)
+        return names.contains(node->as<syntax::IdentifierNameSyntax>().identifier.valueText());
+    for (std::size_t index = 0; index < node->getChildCount(); ++index) {
+        if (mentions(node->childNode(index), names)) return true;
+    }
+    return false;
+}
+
+/// Adds to `names` every parameter and type declared in `node` from one already in it, until
+/// nothing more is added: `localparam AW = W` and `typedef logic [W-1:0] word_t` make `AW` and
+/// `word_t` depend on `W` as much as `W` itself does.
+void addDependents(const syntax::SyntaxNode& node, Names& names) {
+    bool grew = true;
+    const std::function<void(const syntax::SyntaxNode&)> visit = [&](const syntax::SyntaxNode& at) {
+        if (at.kind == syntax::SyntaxKind::ParameterDeclaration) {
+            const auto& declaration = at.as<syntax::ParameterDeclarationSyntax>();
+            for (const syntax::DeclaratorSyntax* declarator : declaration.declarators) {
+                const std::string_view name = declarator->name.valueText();
+                if (!names.contains(name)
+                    && (mentions(declarator->initializer, names)
+                        || mentions(declaration.type, names))) {
+                    names.emplace(name);
+                    grew = true;
+                }
+            }
+        } else if (at.kind == syntax::SyntaxKind::TypedefDeclaration) {
+            const auto& typedefSyntax = at.as<syntax::TypedefDeclarationSyntax>();
+            const std::string_view name = typedefSyntax.name.valueText();
+            if (!names.contains(name) && mentions(&at, names)) {
+                names.emplace(name);
+                grew = true;
+            }
+        }
+        for (std::size_t index = 0; index < at.getChildCount(); ++index) {
+            if (const syntax::SyntaxNode* child = at.childNode(index)) visit(*child);
+        }
+    };
+    while (grew) {
+        grew = false;
+        visit(node);
+    }
+}
+
+/// True when something in `node` that decides a width or the generate structure names one of
+/// `names`: a dimension, a replication count, a size cast, the bounds of a range select, a
+/// generate construct's condition or bounds. Values a formal decides are what a generic unit
+/// annotates; these are what it cannot yet.
+bool widthOrStructureMentions(const syntax::SyntaxNode& node, const Names& names) {
+    switch (node.kind) {
+    case syntax::SyntaxKind::VariableDimension:
+    case syntax::SyntaxKind::SimpleRangeSelect:
+    case syntax::SyntaxKind::TypeReference:
+    case syntax::SyntaxKind::StreamingConcatenationExpression:
+    case syntax::SyntaxKind::CaseGenerate:
+        if (mentions(&node, names)) return true;
+        break;
+    case syntax::SyntaxKind::AscendingRangeSelect:
+    case syntax::SyntaxKind::DescendingRangeSelect:
+        if (mentions(node.as<syntax::RangeSelectSyntax>().right, names)) return true;
+        break;
+    case syntax::SyntaxKind::MultipleConcatenationExpression:
+        if (mentions(node.as<syntax::MultipleConcatenationExpressionSyntax>().expression, names))
+            return true;
+        break;
+    case syntax::SyntaxKind::CastExpression:
+        if (mentions(node.as<syntax::CastExpressionSyntax>().left, names)) return true;
+        break;
+    case syntax::SyntaxKind::IfGenerate:
+        if (mentions(node.as<syntax::IfGenerateSyntax>().condition, names)) return true;
+        break;
+    case syntax::SyntaxKind::LoopGenerate: {
+        const auto& loop = node.as<syntax::LoopGenerateSyntax>();
+        if (mentions(loop.initialExpr, names) || mentions(loop.stopExpr, names)
+            || mentions(loop.iterationExpr, names))
+            return true;
+        break;
+    }
+    default: break;
+    }
+    for (std::size_t index = 0; index < node.getChildCount(); ++index) {
+        const syntax::SyntaxNode* child = node.childNode(index);
+        if (child != nullptr && widthOrStructureMentions(*child, names)) return true;
+    }
+    return false;
+}
+
+/// True when `syntax` declares its type, so that a value given to the parameter is converted
+/// to it, rather than leaving the parameter to take its value's type.
+bool declaresType(const syntax::DataTypeSyntax* syntax) {
+    if (syntax == nullptr) return false;
+    if (syntax->kind != syntax::SyntaxKind::ImplicitType) return true;
+    return !syntax->as<syntax::ImplicitTypeSyntax>().dimensions.empty();
+}
+
+} // namespace
+
+bool ModuleBuilder::makeGeneric() {
+    // An interface port reads parameters of whatever interface it is given, which generic
+    // units do not yet take as formals.
+    for (const ast::Symbol* port : body->getPortList()) {
+        if (port->kind == slang::ast::SymbolKind::InterfacePort) return false;
+    }
+
+    Names names;
+    std::vector<eir::ParameterFormal> formals;
+    for (const ast::ParameterSymbolBase* base : body->getParameters()) {
+        if (base->symbol.kind != slang::ast::SymbolKind::Parameter) return false;
+        const auto& parameter = base->symbol.as<ast::ParameterSymbol>();
+        const ast::Type& type = parameter.getType();
+        if (!type.isIntegral() || !parameter.getValue().isInteger()) return false;
+
+        eir::ParameterFormal formal{
+            .name = std::string(parameter.name),
+            .kind = parameter.isLocalParam() ? eir::FormalKind::LocalParameter
+                                             : eir::FormalKind::Parameter,
+            .width = type.getBitWidth(),
+            .isSigned = type.isSigned(),
+            .isTyped = declaresType(parameter.getDeclaredType()->getTypeSyntax()),
+            .location = convertLocation(parameter.location)};
+
+        // A default, or a local parameter's definition, over the formals before it. Bound from
+        // the declaration rather than taken from the parameter, whose initialiser is whatever
+        // the representative's instance overrode it with. An untyped parameter's default is kept
+        // in its own type, which is the one it takes when used.
+        const auto declared =
+            std::ranges::find_if(body->getDefinition().parameters, [&](const auto& candidate) {
+                return !candidate.isTypeParam && candidate.hasSyntax
+                       && candidate.name == parameter.name;
+            });
+        const syntax::EqualsValueClauseSyntax* initializer =
+            declared != body->getDefinition().parameters.end() && declared->valueDecl != nullptr
+                ? declared->valueDecl->initializer
+                : nullptr;
+        if (initializer != nullptr) {
+            const ast::ASTContext context(*body, ast::LookupLocation::before(parameter));
+            const ast::Expression& bound =
+                formal.isTyped ? ast::Expression::bindRValue(type, *initializer->expr, {}, context)
+                               : ast::Expression::bind(*initializer->expr, context);
+            if (bound.bad()) return false;
+            const std::optional<std::uint32_t> node = lowering(*body).lower(bound);
+            if (!node.has_value()) return false;
+            formal.value = *node;
+        } else if (parameter.isLocalParam()) {
+            return false;
+        }
+
+        formalBySymbol.emplace(&parameter, static_cast<std::uint32_t>(formals.size()));
+        names.emplace(parameter.name);
+        formals.push_back(std::move(formal));
+    }
+    if (formals.empty()) return false;
+
+    const syntax::SyntaxNode* declaration = body->getDefinition().getSyntax();
+    if (declaration == nullptr) return false;
+    addDependents(*declaration, names);
+    if (widthOrStructureMentions(*declaration, names)) return false;
+
+    definitionValue.formals = std::move(formals);
+    generic = true;
+    return true;
+}
+
+std::optional<std::uint32_t> ModuleBuilder::parameterExpression(const ast::Expression& expression) {
+    if (!namesFormal(expression)) return std::nullopt;
+    const std::optional<std::uint32_t> node = lowering(*body).lower(expression);
+    if (!node.has_value()) genericLost = true;
+    return node;
+}
+
+bool ModuleBuilder::namesFormal(const ast::Expression& expression) {
+    return generic && lowering(*body).namesFormal(expression);
+}
+
+void ModuleBuilder::usedAsNumber(const ast::Expression& expression) {
+    if (namesFormal(expression)) genericLost = true;
+}
+
+bool ModuleBuilder::actualsOf(const ast::InstanceSymbol& instance,
+                              const eir::ModuleDefinition& child, eir::Instance& result) {
+    const syntax::SyntaxNode* syntax = instance.getSyntax();
+    if (syntax == nullptr || syntax->parent == nullptr
+        || syntax->parent->kind != syntax::SyntaxKind::HierarchyInstantiation)
+        return true;
+    const auto& instantiation = syntax->parent->as<syntax::HierarchyInstantiationSyntax>();
+    if (instantiation.parameters == nullptr) return true;
+
+    // An ordered assignment sets the parameters of the parameter port list in order, or the
+    // body's when there is no such list (IEEE 1800 section 23.10.2.1).
+    const ast::DefinitionSymbol& definition = instance.getDefinition();
+    const bool hasPortList = std::ranges::any_of(
+        definition.parameters, [](const auto& declaration) { return declaration.isPortParam; });
+    std::vector<std::string_view> ordered;
+    for (const auto& declaration : definition.parameters) {
+        if (declaration.isPortParam == hasPortList && !declaration.isLocalParam)
+            ordered.push_back(declaration.name);
+    }
+
+    const ast::Scope* scope = instance.getParentScope();
+    if (scope == nullptr) return false;
+    std::size_t position = 0;
+    for (const syntax::ParamAssignmentSyntax* assignment : instantiation.parameters->parameters) {
+        std::string_view name;
+        const syntax::ExpressionSyntax* expression = nullptr;
+        if (assignment->kind == syntax::SyntaxKind::OrderedParamAssignment) {
+            if (position >= ordered.size()) return false;
+            name = ordered[position++];
+            expression = assignment->as<syntax::OrderedParamAssignmentSyntax>().expr;
+        } else if (assignment->kind == syntax::SyntaxKind::NamedParamAssignment) {
+            const auto& named = assignment->as<syntax::NamedParamAssignmentSyntax>();
+            name = named.name.valueText();
+            expression = named.expr;
+        } else {
+            return false;
+        }
+        if (expression == nullptr) continue;
+
+        const auto formal = std::ranges::find_if(child.formals, [&](const auto& candidate) {
+            return candidate.kind == eir::FormalKind::Parameter && candidate.name == name;
+        });
+        if (formal == child.formals.end()) return false;
+
+        ast::ASTContext context(*scope, ast::LookupLocation::max);
+        const ast::Expression& bound = ast::Expression::bind(*expression, context);
+        if (bound.bad() || bound.type == nullptr || !bound.type->isIntegral()) return false;
+
+        // A value is given in the child's type when it declares one, as slang converts it. In a
+        // unit that is not generic it is a constant, folded in that type, so that the unit holds
+        // nothing but constants, as a specialised one does.
+        const std::uint32_t width = formal->isTyped ? formal->width : bound.type->getBitWidth();
+        const bool isSigned = formal->isTyped ? formal->isSigned : bound.type->isSigned();
+        std::optional<std::uint32_t> node;
+        if (namesFormal(bound)) {
+            node = lowering(scope->asSymbol()).lower(bound);
+            if (node.has_value()
+                && (width != bound.type->getBitWidth() || isSigned != bound.type->isSigned())) {
+                node = definitionValue.expressions.add(eir::ParameterNode{
+                    .kind = width >= bound.type->getBitWidth() ? eir::ParameterNodeKind::Extend
+                                                               : eir::ParameterNodeKind::Truncate,
+                    .isSigned = isSigned,
+                    .width = width,
+                    .a = *node});
+            }
+        } else {
+            ast::EvalContext evaluation(scope->asSymbol());
+            const slang::ConstantValue value = bound.eval(evaluation);
+            if (!value.isInteger()) return false;
+            node = definitionValue.expressions.constant(
+                toBitVector(value.integer()).resized(width, bound.type->isSigned()), isSigned);
+        }
+        if (!node.has_value()) return false;
+        result.parameterActuals.push_back(
+            eir::ParameterActual{.formal = std::string(name), .value = *node});
+    }
+    return true;
+}
+
 bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
                                   const ast::PortConnection& connection, eir::Instance& result) {
     const ast::Symbol* connected = connection.getIfaceConn().first;
@@ -1245,13 +1557,25 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
 
 bool ModuleBuilder::addInstance(
     const ast::InstanceSymbol& instance, const std::string& prefix, const std::string& targetName,
-    const std::map<std::string, std::uint32_t, std::less<>>& targetPorts) {
+    const std::map<std::string, std::uint32_t, std::less<>>& targetPorts,
+    const eir::ModuleDefinition* genericChild) {
     // Named with the generate blocks it is inside, as an object is: two iterations of a loop
     // each instantiating `u` are otherwise two instances with one name, and one path.
     eir::Instance result;
     result.name = prefix + instanceName(instance);
     result.definitionName = targetName;
     result.location = convertLocation(instance.location);
+
+    if (genericChild != nullptr && !actualsOf(instance, *genericChild, result)) {
+        // In a generic unit, a value that cannot be said over its formals keeps it specialised;
+        // otherwise the value is a constant, and one that does not fold is no value Enzan has.
+        if (generic) {
+            genericLost = true;
+        } else {
+            reportUnsupported(instance.location, "this instance's parameter values");
+            return false;
+        }
+    }
 
     for (const ast::PortConnection* connection : instance.getPortConnections()) {
         if (connection->port.kind == slang::ast::SymbolKind::InterfacePort) {
@@ -1318,6 +1642,10 @@ public:
         shared.packageVariables = &packageVariables;
     }
 
+    /// Records the parameterisation `instance` is, and every one under it, so that whether a
+    /// definition can be one generic unit is decided knowing all of them.
+    void discover(const ast::InstanceSymbol& instance);
+
     /// Translates `instance`'s body if it has not been seen, and returns its EIR name.
     std::optional<std::string> translate(const ast::InstanceSymbol& instance);
 
@@ -1331,6 +1659,41 @@ private:
         std::string name;
         std::map<std::string, std::uint32_t, std::less<>> portIndices;
     };
+
+    /// `discover` for the instances in `scope`.
+    void discoverIn(const ast::Scope& scope);
+
+    /// How a definition is translated: once, generic over its parameters (DESIGN_GUIDE.md
+    /// section 18, M5.1), or once per parameterisation.
+    enum class Form : std::uint8_t { Deciding, Generic, Specialised };
+
+    /// The form of `definition`, deciding it the first time it is asked.
+    Form formOf(const ast::DefinitionSymbol& definition);
+
+    /// Translates `definition` generically, and checks the unit against a second
+    /// parameterisation where the design has one. True when the unit was added.
+    bool tryGeneric(const ast::DefinitionSymbol& definition);
+
+    /// A translation of `body`, generic or for its own parameterisation, whose instances name the
+    /// units of their children (translated for good as they are met). Diagnostics about the body
+    /// itself go to `quiet`: a translation that fails here is made again, and reported, the
+    /// usual way.
+    struct Built {
+        eir::ModuleDefinition unit;
+        std::map<std::string, std::uint32_t, std::less<>> portIndices;
+    };
+
+    std::optional<Built> buildUnit(const ast::InstanceBodySymbol& body, bool generic,
+                                   DiagnosticEngine& quiet);
+
+    /// True when `generic`, specialised at `body`'s parameter values, is the unit `body`
+    /// translates to on its own: the same objects, processes, constants and instances, byte for
+    /// byte in the library's encoding.
+    bool agrees(const eir::ModuleDefinition& generic, const ast::InstanceBodySymbol& body,
+                DiagnosticEngine& quiet);
+
+    /// The unit an instance of `definition` names when it is generic, or null.
+    const eir::ModuleDefinition* genericUnit(const ast::DefinitionSymbol& definition);
 
     /// Returns the EIR name for one parameterisation of a module.
     ///
@@ -1358,7 +1721,148 @@ private:
     std::map<std::string, BodyInfo, std::less<>> bodies;
     std::vector<const ast::ValueSymbol*> packageVariables;
     bool succeeded = true;
+
+    std::map<const ast::DefinitionSymbol*, Form> forms;
+    /// Each definition's distinct parameterisations, in the order the hierarchy reaches them;
+    /// the first is the one a generic unit is translated from.
+    std::map<const ast::DefinitionSymbol*, std::vector<const ast::InstanceBodySymbol*>>
+        parameterisations;
+    std::set<std::string, std::less<>> discovered;
 };
+
+void Walker::discover(const ast::InstanceSymbol& instance) {
+    if (!discovered.insert(specialisedModuleName(instance.body)).second) return;
+    parameterisations[&instance.body.getDefinition()].push_back(&instance.body);
+    discoverIn(instance.body);
+}
+
+void Walker::discoverIn(const ast::Scope& scope) {
+    const auto record = [this](const ast::InstanceSymbol& instance) { discover(instance); };
+    const std::function<void(const ast::InstanceArraySymbol&)> array =
+        [&](const ast::InstanceArraySymbol& instances) {
+            for (const ast::Symbol* element : instances.elements) {
+                if (element->kind == slang::ast::SymbolKind::Instance)
+                    record(element->as<ast::InstanceSymbol>());
+                else if (element->kind == slang::ast::SymbolKind::InstanceArray)
+                    array(element->as<ast::InstanceArraySymbol>());
+            }
+        };
+    for (const ast::Symbol& member : scope.members()) {
+        switch (member.kind) {
+        case slang::ast::SymbolKind::Instance: record(member.as<ast::InstanceSymbol>()); break;
+        case slang::ast::SymbolKind::InstanceArray:
+            array(member.as<ast::InstanceArraySymbol>());
+            break;
+        case slang::ast::SymbolKind::GenerateBlock:
+            if (!member.as<ast::GenerateBlockSymbol>().isUninstantiated)
+                discoverIn(member.as<ast::GenerateBlockSymbol>());
+            break;
+        case slang::ast::SymbolKind::GenerateBlockArray:
+            for (const ast::GenerateBlockSymbol* entry :
+                 member.as<ast::GenerateBlockArraySymbol>().entries) {
+                if (!entry->isUninstantiated) discoverIn(*entry);
+            }
+            break;
+        default: break;
+        }
+    }
+}
+
+Walker::Form Walker::formOf(const ast::DefinitionSymbol& definition) {
+    const auto [entry, inserted] = forms.try_emplace(&definition, Form::Deciding);
+    if (!inserted) return entry->second == Form::Deciding ? Form::Specialised : entry->second;
+    const Form form = tryGeneric(definition) ? Form::Generic : Form::Specialised;
+    forms[&definition] = form;
+    return form;
+}
+
+const eir::ModuleDefinition* Walker::genericUnit(const ast::DefinitionSymbol& definition) {
+    const auto entry = forms.find(&definition);
+    if (entry == forms.end() || entry->second != Form::Generic) return nullptr;
+    return design->findModule(definition.name);
+}
+
+std::optional<Walker::Built> Walker::buildUnit(const ast::InstanceBodySymbol& body, bool generic,
+                                               DiagnosticEngine& quiet) {
+    ModuleBuilder::Shared quietShared{.design = shared.design,
+                                      .diagnostics = quiet,
+                                      .sources = shared.sources,
+                                      .slangSources = shared.slangSources,
+                                      .buffers = shared.buffers,
+                                      .packageVariables = shared.packageVariables};
+    ModuleBuilder builder(
+        quietShared, generic ? std::string(body.getDefinition().name) : specialisedModuleName(body),
+        body);
+    if (generic && !builder.makeGeneric()) return std::nullopt;
+    if (!builder.collectDeclarations()) return std::nullopt;
+
+    for (const ModuleBuilder::CollectedInstance& collected : builder.instances) {
+        const ast::InstanceSymbol* child = collected.symbol;
+        const std::optional<std::string> childName = translate(*child);
+        if (!childName.has_value()) return std::nullopt;
+        const auto childInfo = bodies.find(*childName);
+        if (childInfo == bodies.end()) return std::nullopt;
+        if (!builder.addInstance(*child, collected.prefix, *childName,
+                                 childInfo->second.portIndices,
+                                 genericUnit(child->getDefinition())))
+            return std::nullopt;
+    }
+
+    if (!builder.translateProcesses()) return std::nullopt;
+    if (generic && !builder.isGeneric()) return std::nullopt;
+    std::map<std::string, std::uint32_t, std::less<>> ports = builder.portIndices();
+    return Built{.unit = builder.take(), .portIndices = std::move(ports)};
+}
+
+bool Walker::agrees(const eir::ModuleDefinition& generic, const ast::InstanceBodySymbol& body,
+                    DiagnosticEngine& quiet) {
+    const std::optional<Built> own = buildUnit(body, false, quiet);
+    if (!own.has_value()) return false;
+
+    std::map<std::string, eir::ParameterValue, std::less<>> actuals;
+    for (const ast::ParameterSymbolBase* base : body.getParameters()) {
+        if (base->isLocalParam() || base->symbol.kind != slang::ast::SymbolKind::Parameter)
+            continue;
+        const auto& parameter = base->symbol.as<ast::ParameterSymbol>();
+        if (!parameter.getValue().isInteger()) return false;
+        actuals.insert_or_assign(
+            std::string(parameter.name),
+            eir::ParameterValue{.bits = toBitVector(parameter.getValue().integer()),
+                                .isSigned = parameter.getType().isSigned()});
+    }
+
+    auto values = eir::formalValues(generic, actuals, {});
+    if (std::holds_alternative<eir::SpecialiseFailure>(values)) return false;
+    auto specialised = eir::specialiseAt(
+        generic, std::get<std::vector<std::optional<eir::ParameterValue>>>(values));
+    if (std::holds_alternative<eir::SpecialiseFailure>(specialised)) return false;
+    eir::ModuleDefinition& unit = std::get<eir::ModuleDefinition>(specialised);
+    unit.name = own->unit.name;
+
+    const std::array<eir::ModuleDefinition, 1> mine{std::move(unit)};
+    const std::array<eir::ModuleDefinition, 1> theirs{own->unit};
+    return eir::encodeModules(mine, shared.sources) == eir::encodeModules(theirs, shared.sources);
+}
+
+bool Walker::tryGeneric(const ast::DefinitionSymbol& definition) {
+    const auto found = parameterisations.find(&definition);
+    if (found == parameterisations.end() || found->second.empty()) return false;
+    const std::vector<const ast::InstanceBodySymbol*>& candidates = found->second;
+
+    DiagnosticEngine quiet(shared.sources);
+    std::optional<Built> generic = buildUnit(*candidates.front(), true, quiet);
+    if (!generic.has_value()) return false;
+
+    // The source decides that nothing but values depends on a formal, and the translation
+    // annotates every value that does; a second parameterisation, where the design has one,
+    // checks both against what slang made of it.
+    if (candidates.size() > 1 && !agrees(generic->unit, *candidates[1], quiet)) return false;
+
+    const std::string name(definition.name);
+    bodies.emplace(name, BodyInfo{.name = name, .portIndices = std::move(generic->portIndices)});
+    design->addModule(std::move(generic->unit));
+    return true;
+}
 
 bool Walker::translatePackages() {
     // Packages in the order a module first used one of their variables, which is the order the
@@ -1446,6 +1950,9 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
         return std::nullopt;
     }
 
+    if (formOf(body.getDefinition()) == Form::Generic)
+        return std::string(body.getDefinition().name);
+
     std::string name = specialisedModuleName(body);
 
     const auto existing = bodies.find(name);
@@ -1477,7 +1984,8 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
         }
 
         if (!builder.addInstance(*child, collected.prefix, *childName,
-                                 childInfo->second.portIndices)) {
+                                 childInfo->second.portIndices,
+                                 genericUnit(child->getDefinition()))) {
             succeeded = false;
             return std::nullopt;
         }
@@ -1641,6 +2149,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
                                        .buffers = buffers};
 
     Walker walker(*design, shared);
+    for (const slang::ast::InstanceSymbol* instance : root.topInstances) walker.discover(*instance);
     for (const slang::ast::InstanceSymbol* instance : root.topInstances) {
         if (!walker.translate(*instance).has_value()) return nullptr;
     }

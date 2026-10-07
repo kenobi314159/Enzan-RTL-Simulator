@@ -149,6 +149,10 @@ enzan_add_golden_test(short_circuit)
 # A type parameter handed down a second level. Icarus Verilog does not parse type parameters.
 enzan_add_golden_test(type_parameters NO_DIFFERENTIAL)
 
+# A module whose parameters decide only values, made one generic unit and specialised for each
+# instance at elaboration: the defaults, a local parameter, and a value a generic parent passes.
+enzan_add_golden_test(generic_parameters)
+
 # Packages, and package variables shared by every module that uses them.
 enzan_add_golden_test(packages)
 

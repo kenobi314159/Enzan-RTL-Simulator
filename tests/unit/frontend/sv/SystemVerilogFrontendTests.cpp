@@ -12,6 +12,7 @@
 #include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Module.h"
+#include "eir/ParameterExpression.h"
 #include "eir/Process.h"
 #include "eir/Verifier.h"
 
@@ -21,6 +22,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <set>
@@ -421,6 +423,152 @@ TEST_F(FrontendTest, EachParameterisationBecomesItsOwnDefinition) {
     // Named by their values, so the same parameterisation is the same name wherever it is
     // produced, which is what lets a library be instantiated by whoever uses it.
     EXPECT_NE(design->findModule("leaf$WIDTH_8"), nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Generic units (DESIGN_GUIDE.md section 18, M5.1)
+// ---------------------------------------------------------------------------
+
+/// A counter whose parameters decide only values: when it wraps, and by how much it counts.
+constexpr std::string_view ValueParameterisedCounter = R"(
+    module wrap_counter #(parameter int MAX = 9, parameter int STEP = 1)
+                         (input logic clk, output logic [7:0] count);
+        localparam int LAST = MAX - STEP;
+        always_ff @(posedge clk)
+            if (count > 8'(LAST)) count <= '0;
+            else count <= count + 8'(STEP);
+    endmodule
+)";
+
+TEST_F(FrontendTest, AModuleWhoseParametersAreOnlyValuesIsOneGenericUnit) {
+    const std::unique_ptr<Design> design = analyse(std::string(ValueParameterisedCounter) + R"(
+        module top;
+            logic clk;
+            logic [7:0] a, b;
+            wrap_counter #(.MAX(5)) u_a (.clk, .count(a));
+            wrap_counter #(.MAX(20), .STEP(3)) u_b (.clk, .count(b));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    // One unit under the source's name, rather than one per parameterisation.
+    const ModuleDefinition* counter = design->findModule("wrap_counter");
+    ASSERT_NE(counter, nullptr);
+    EXPECT_TRUE(counter->isGeneric());
+    EXPECT_EQ(std::ranges::count(design->modules(), std::string_view("wrap_counter"),
+                                 &ModuleDefinition::sourceName),
+              1);
+    std::vector<std::string> formals;
+    for (const enzan::eir::ParameterFormal& formal : counter->formals)
+        formals.push_back(formal.name);
+    EXPECT_EQ(formals, (std::vector<std::string>{"MAX", "STEP", "LAST"}));
+
+    // Each instance says what it sets, and only that.
+    const ModuleDefinition* topUnit = design->findModule("top");
+    ASSERT_NE(topUnit, nullptr);
+    const ModuleDefinition& top = *topUnit;
+    ASSERT_EQ(top.instances.size(), 2U);
+    EXPECT_EQ(top.instances[0].definitionName, "wrap_counter");
+    ASSERT_EQ(top.instances[0].parameterActuals.size(), 1U);
+    EXPECT_EQ(top.instances[0].parameterActuals[0].formal, "MAX");
+    EXPECT_EQ(top.instances[1].parameterActuals.size(), 2U);
+}
+
+TEST_F(FrontendTest, AGenericUnitKeepsTheDeclaredDefaultsRatherThanAnOverride) {
+    // The unit is translated from the first parameterisation, which overrides MAX; the default
+    // it records must still be the declaration's 9, or an instance setting nothing would count
+    // to 5.
+    const std::unique_ptr<Design> design = analyse(std::string(ValueParameterisedCounter) + R"(
+        module top;
+            logic clk;
+            logic [7:0] a;
+            wrap_counter #(.MAX(5)) u_a (.clk, .count(a));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* counterUnit = design->findModule("wrap_counter");
+    ASSERT_NE(counterUnit, nullptr);
+    const ModuleDefinition& counter = *counterUnit;
+    ASSERT_TRUE(counter.isGeneric());
+
+    const std::vector<std::optional<enzan::eir::ParameterValue>> none(counter.formals.size());
+    enzan::eir::ParameterEvaluator evaluator(counter.expressions, none);
+    EXPECT_EQ(evaluator.integer(counter.formals[0].value), 9U);
+}
+
+TEST_F(FrontendTest, AWidthThatAParameterDecidesKeepsTheModuleSpecialised) {
+    // Directly, through a local parameter, and through a typedef: each makes a width depend on
+    // WIDTH, which a generic unit cannot say yet.
+    for (const std::string_view declaration :
+         {"logic [WIDTH-1:0] q;", "localparam int W = WIDTH; logic [W-1:0] q;",
+          "typedef logic [WIDTH-1:0] word_t; word_t q;"}) {
+        const std::unique_ptr<Design> design = analyse(std::format(R"(
+            module leaf #(parameter int WIDTH = 8) (output logic out);
+                {}
+                assign out = ^q;
+            endmodule
+            module top;
+                logic a, b;
+                leaf #(.WIDTH(4)) u_a (.out(a));
+                leaf #(.WIDTH(16)) u_b (.out(b));
+            endmodule
+        )",
+                                                                   declaration),
+                                                       "top");
+        ASSERT_NE(design, nullptr) << consumer.messages.front();
+        EXPECT_EQ(design->findSpecialisations("leaf").size(), 2U) << declaration;
+        EXPECT_EQ(design->findModule("leaf"), nullptr) << declaration;
+    }
+}
+
+TEST_F(FrontendTest, AGenerateConditionOnAParameterKeepsTheModuleSpecialised) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf #(parameter bit FAST = 0) (input logic d, output logic q);
+            if (FAST) begin : g_fast
+                assign q = d;
+            end else begin : g_slow
+                assign q = ~d;
+            end
+        endmodule
+        module top;
+            logic d, a, b;
+            leaf #(.FAST(0)) u_a (.d, .q(a));
+            leaf #(.FAST(1)) u_b (.d, .q(b));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_EQ(design->findSpecialisations("leaf").size(), 2U);
+}
+
+TEST_F(FrontendTest, AGenericParentPassesAnExpressionOverItsOwnFormals) {
+    const std::unique_ptr<Design> design = analyse(std::string(ValueParameterisedCounter) + R"(
+        module pair #(parameter int LIMIT = 3) (input logic clk, output logic [7:0] fast);
+            wrap_counter #(.MAX(LIMIT * 2)) u_fast (.clk, .count(fast));
+        endmodule
+        module top;
+            logic clk;
+            logic [7:0] a, b;
+            pair u_a (.clk, .fast(a));
+            pair #(.LIMIT(7)) u_b (.clk, .fast(b));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* pairUnit = design->findModule("pair");
+    ASSERT_NE(pairUnit, nullptr);
+    const ModuleDefinition& pair = *pairUnit;
+    ASSERT_TRUE(pair.isGeneric());
+    ASSERT_EQ(pair.instances.size(), 1U);
+    ASSERT_EQ(pair.instances[0].parameterActuals.size(), 1U);
+
+    // LIMIT * 2 at LIMIT = 7 is 14.
+    const std::vector<std::optional<enzan::eir::ParameterValue>> limit{enzan::eir::ParameterValue{
+        .bits = enzan::eir::BitVector::fromInt64(7, 32), .isSigned = true}};
+    enzan::eir::ParameterEvaluator evaluator(pair.expressions, limit);
+    EXPECT_EQ(evaluator.integer(pair.instances[0].parameterActuals[0].value), 14U);
 }
 
 TEST_F(FrontendTest, AConnectionThatIsAnExpressionGetsAnIntermediateAndAnAssignment) {

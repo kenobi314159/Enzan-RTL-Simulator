@@ -166,6 +166,16 @@ std::uint32_t ProcessTranslator::addConstant(const eir::BitVector& value) {
     return static_cast<std::uint32_t>(process.constants.size() - 1);
 }
 
+std::uint32_t ProcessTranslator::addConstantOf(const eir::BitVector& value,
+                                               const ast::Expression& expression) {
+    const std::uint32_t index = addConstant(value);
+    if (const std::optional<std::uint32_t> node = module->parameterExpression(expression)) {
+        process.constantExpressions.resize(process.constants.size(), eir::NoExpression);
+        process.constantExpressions[index] = *node;
+    }
+    return index;
+}
+
 std::uint32_t ProcessTranslator::addString(std::string text) {
     process.strings.push_back(std::move(text));
     return static_cast<std::uint32_t>(process.strings.size() - 1);
@@ -261,6 +271,7 @@ void ProcessTranslator::setSensitivity(std::vector<eir::SensitivityEntry> sensit
 
 std::optional<ProcessTranslator::Value>
 ProcessTranslator::foldThroughReals(const ast::Expression& expression, const eir::Type& type) {
+    module->usedAsNumber(expression);
     ast::EvalContext context(module->evaluationScope());
     const slang::ConstantValue value = expression.eval(context);
     if (!value.isInteger()) return std::nullopt;
@@ -321,6 +332,11 @@ eir::Process ProcessTranslator::take() {
 
     process.readSet = reads;
     process.writeSet = writes;
+
+    // Annotations are by index, so a list some later constant outgrew is filled out to cover
+    // every one.
+    if (!process.constantExpressions.empty())
+        process.constantExpressions.resize(process.constants.size(), eir::NoExpression);
     return std::move(process);
 }
 
@@ -612,8 +628,13 @@ bool ProcessTranslator::translateConditional(const ast::Statement& statement) {
     // A condition fixed by the parameters takes one branch for ever, and only that one is
     // translated: the other may hold a construct the parameters make degenerate, which is
     // excused there and has nothing to translate it into (see DeadCode).
+    //
+    // In a generic unit a condition naming a formal is fixed by each specialisation rather than
+    // by this one, so both branches are kept and the condition is computed.
     if (const std::optional<ConstantTruth> truth =
-            constantTruth(*conditional.conditions[0].expr, module->evaluationScope())) {
+            module->namesFormal(*conditional.conditions[0].expr)
+                ? std::nullopt
+                : constantTruth(*conditional.conditions[0].expr, module->evaluationScope())) {
         const ast::Statement* const live =
             *truth == ConstantTruth::True ? &conditional.ifTrue : conditional.ifFalse;
         return live == nullptr || translateStatement(*live);
@@ -1251,7 +1272,7 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
             const std::optional<eir::BitVector> bits =
                 module->constantBits(value, *expression.type);
             if (!bits.has_value()) break;
-            const std::uint32_t constant = addConstant(*bits);
+            const std::uint32_t constant = addConstantOf(*bits, expression);
             const std::uint32_t result = newRegister(*type);
             emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
                                         eir::Operand::constant(constant)));
@@ -1633,7 +1654,9 @@ ProcessTranslator::translateConditionalExpression(const ast::Expression& express
     // merges both, so it is evaluated as any other condition would be. A dead arm slang could
     // not bind leaves the whole `?:` without a type, and then the selected arm's is its own.
     if (const std::optional<ConstantTruth> truth =
-            constantTruth(*conditional.conditions[0].expr, module->evaluationScope());
+            module->namesFormal(*conditional.conditions[0].expr)
+                ? std::nullopt
+                : constantTruth(*conditional.conditions[0].expr, module->evaluationScope());
         truth.has_value() && *truth != ConstantTruth::Unknown) {
         const std::optional<Value> selected = translateExpression(
             *truth == ConstantTruth::True ? conditional.left() : conditional.right());
@@ -2505,7 +2528,7 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
         constant != nullptr && constant->isInteger()) {
         const std::optional<eir::Type> type = module->convertType(*expression.type);
         if (type.has_value()) {
-            const std::uint32_t index = addConstant(toBitVector(constant->integer()));
+            const std::uint32_t index = addConstantOf(toBitVector(constant->integer()), expression);
             const std::uint32_t result = newRegister(*type);
             emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
                                         eir::Operand::constant(index)));
@@ -3090,6 +3113,7 @@ bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNod
 }
 
 std::optional<std::int64_t> ProcessTranslator::constantValueOf(const ast::Expression& expression) {
+    module->usedAsNumber(expression);
     if (expression.kind == ast::ExpressionKind::Conversion)
         return constantValueOf(expression.as<ast::ConversionExpression>().operand());
 

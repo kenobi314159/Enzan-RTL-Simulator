@@ -94,6 +94,22 @@ public:
 
     /// The instance body, in whose scope an expression of constants is evaluated.
     [[nodiscard]] virtual const slang::ast::Symbol& evaluationScope() const = 0;
+
+    /// In a generic unit, the expression over its formals that `expression`'s value is, when it
+    /// names one (DESIGN_GUIDE.md section 18, M5.1); nothing when it names none, and in a unit
+    /// that is not generic. One that names a formal and cannot be said as an expression keeps
+    /// the unit from being generic.
+    virtual std::optional<std::uint32_t>
+    parameterExpression(const slang::ast::Expression& expression) = 0;
+
+    /// True in a generic unit when `expression` names one of its formals, so that its value
+    /// differs between parameterisations.
+    [[nodiscard]] virtual bool namesFormal(const slang::ast::Expression& expression) = 0;
+
+    /// Says that the translation used the value of `expression` as a number it does not annotate
+    /// — a select's position, a count — which in a generic unit keeps it from being generic
+    /// when the expression names a formal.
+    virtual void usedAsNumber(const slang::ast::Expression& expression) = 0;
 };
 
 /// Translates one procedural block or continuous assignment into an EIR process.
@@ -179,6 +195,11 @@ private:
     /// The statement being translated, stamped onto everything `emit` produces.
     SourceLocation currentStatement;
     std::uint32_t addConstant(const eir::BitVector& value);
+
+    /// Adds the value of the constant `expression`, annotated in a generic unit with the
+    /// expression over its formals that it is.
+    std::uint32_t addConstantOf(const eir::BitVector& value,
+                                const slang::ast::Expression& expression);
     std::uint32_t addString(std::string text);
 
     /// Switches emission to `block`.
