@@ -66,10 +66,17 @@ TEST(Format, HexadecimalBinaryAndOctal) {
     EXPECT_EQ(render("%o", arguments), "245");
 }
 
-TEST(Format, UppercaseConversionsUppercaseTheDigits) {
+TEST(Format, AnUppercaseConversionIsTheLowercaseOne) {
+    // Checked against Icarus Verilog. Uppercasing would also turn `x`, a digit wholly unknown,
+    // into `X`, a digit partly unknown.
     const BitVector value = literal("8'hAB");
-    EXPECT_EQ(render("%H", {{.value = value.ref(), .isSigned = false}}), "AB");
-    EXPECT_EQ(render("%X", {{.value = value.ref(), .isSigned = false}}), "AB");
+    EXPECT_EQ(render("%H", {{.value = value.ref(), .isSigned = false}}), "ab");
+    EXPECT_EQ(render("%X", {{.value = value.ref(), .isSigned = false}}), "ab");
+
+    const BitVector unknown = literal("8'hxx");
+    EXPECT_EQ(render("%X", {{.value = unknown.ref(), .isSigned = false}}), "xx");
+    EXPECT_EQ(render("%D", {{.value = unknown.ref(), .isSigned = false}}), "  x");
+    EXPECT_EQ(render("%B", {{.value = literal("4'b1x0z").ref(), .isSigned = false}}), "1x0z");
 }
 
 TEST(Format, UnknownBitsRenderAsTheValueEngineRendersThem) {

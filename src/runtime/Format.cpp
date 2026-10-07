@@ -185,13 +185,9 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
             continue;
         }
 
+        // The conversion's case changes nothing (IEEE 1800 section 21.2.1.2): `%H` is `%h`. The
+        // case of a digit is what tells `x`, every bit unknown, from `X`, some of them.
         std::string rendered = eir::toString(argument.value, radix, argument.isSigned);
-        const bool uppercase = conversion == 'H' || conversion == 'X' || conversion == 'D'
-                               || conversion == 'B' || conversion == 'O';
-        if (uppercase) {
-            for (char& character : rendered)
-                character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
-        }
 
         // A decimal is rendered minimal and then widened; a radix whose digits each cover fixed
         // bits always shows them all, and a field width only ever adds to that. Without a field
