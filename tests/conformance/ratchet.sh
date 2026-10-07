@@ -22,8 +22,9 @@ fi
 readonly list="$1"
 readonly passed="$2"
 
+# `|| [[ -n ... ]]` so that a last line with no newline after it is read too.
 status=0
-while read -r expected; do
+while read -r expected || [[ -n "$expected" ]]; do
     [[ -z "$expected" || "$expected" == \#* ]] && continue
     if ! grep -qxF -- "$expected" "$passed"; then
         printf 'REGRESSED %s, which %s lists as passing\n' "$expected" "$list"
@@ -31,7 +32,7 @@ while read -r expected; do
     fi
 done <"$list"
 
-while read -r name; do
+while read -r name || [[ -n "$name" ]]; do
     [[ -z "$name" ]] && continue
     if ! grep -qxF -- "$name" "$list"; then
         printf 'NEW %s passes; add it to %s\n' "$name" "$list"
