@@ -91,6 +91,11 @@ looped=$("$enzan" run --in-lib libs/kernel --timescale ns --delta-limit 5 loopin
 grep -q 'limit of 5' <<<"$looped" \
     || fail "a run from a library did not use its --delta-limit: $looped"
 
+# A parameter override is the analysis's, so a run that analyses nothing refuses one rather than
+# running the default it was given to change.
+[[ $(status_of "$enzan" run --in-lib libs/kernel --timescale ns -G WIDTH=8 random_tb) -eq 1 ]] \
+    || fail "-G given to a run from a library was not refused"
+
 # --- a library is simulated in the time unit it was analysed in ------------------------------------
 
 # Its delays are counts of that unit, so a run from it takes the unit from it, and a

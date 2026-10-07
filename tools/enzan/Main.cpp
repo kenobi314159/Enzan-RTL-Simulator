@@ -1124,6 +1124,15 @@ int main(int argc, char** argv) {
         return static_cast<int>(ExitStatus::Usage);
     }
 
+    // An override is applied while sources are analysed (8.2). A run from libraries alone
+    // analyses nothing, so it would run the default the override was given to change.
+    if (!invocation.parameters.empty() && invocation.files.empty()
+        && invocation.fileLists.empty()) {
+        std::cerr << "enzan: '-G' sets a parameter while sources are analysed, and this "
+                     "analyses none; give it to the analysis that stores the top level\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
     if (invocation.useGui && !invocation.listenPath.empty()) {
         std::cerr << "enzan: '--listen' cannot be combined with '--gui'; --gui starts a window "
                      "on a socket of its own, and --listen is for a kernel that outlives "
