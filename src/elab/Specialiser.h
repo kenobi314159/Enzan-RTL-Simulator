@@ -60,6 +60,15 @@ private:
             const std::map<std::string, eir::ParameterValue, std::less<>>& actuals,
             const std::map<std::string, Interface, std::less<>>& interfaces);
 
+    /// Makes every connection of instance `instanceIndex` of `unit` whose two sides differ in
+    /// width an assignment through an object of the port's width. False, having reported it,
+    /// for an `inout`, which no one-way assignment can join.
+    ///
+    /// Only for a connection a generic unit is on either side of: anywhere else a frontend saw
+    /// both widths and converted them itself, and a mismatch is its defect, which elaboration
+    /// reports rather than hides.
+    bool adaptPorts(eir::ModuleDefinition& unit, std::size_t instanceIndex);
+
     const eir::Design& analysed;
     DiagnosticEngine& diagnostics;
     std::unique_ptr<eir::Design> units;

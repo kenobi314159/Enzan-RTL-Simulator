@@ -73,6 +73,72 @@ std::optional<Specialiser::Result> Specialiser::specialise(std::uint32_t top) {
     return Result{.units = std::move(units), .top = *index};
 }
 
+bool Specialiser::adaptPorts(eir::ModuleDefinition& unit, std::size_t instanceIndex) {
+    eir::Instance& instance = unit.instances[instanceIndex];
+    const eir::ModuleDefinition* child = units->findModule(instance.definitionName);
+    if (child == nullptr) return true;
+
+    for (eir::PortConnection& connection : instance.connections) {
+        if (!connection.connected() || connection.portIndex >= child->ports.size()) continue;
+        const eir::Port& port = child->ports[connection.portIndex];
+        const eir::Object& inner = child->objects[port.objectIndex];
+        const eir::Object& outer = unit.objects[connection.objectIndex];
+        if (!inner.type.isBits() || !outer.type.isBits()
+            || inner.type.bitWidth() == outer.type.bitWidth())
+            continue;
+
+        // The widths a frontend made equal can differ once a generic unit is specialised, on
+        // either side: a connection is then an assignment, as one written out would be (IEEE
+        // 1800 section 23.3.3.7), into an object of the port's width that the port collapses
+        // onto, the frontend's own shape for such a connection.
+        if (port.direction == eir::PortDirection::InOut) {
+            diagnostics.report(DiagCode::PortWidthMismatch, port.location, port.name, child->name,
+                               inner.type.bitWidth(), outer.type.bitWidth());
+            return false;
+        }
+        const bool input = port.direction == eir::PortDirection::Input;
+
+        eir::Object adapted;
+        adapted.name = std::format("{}${}", instance.name, port.name);
+        while (unit.findObject(adapted.name).has_value()) adapted.name += '$';
+        adapted.type = inner.type;
+        adapted.kind = inner.kind;
+        adapted.netKind = inner.netKind;
+        adapted.location = instance.location;
+        const std::uint32_t adaptedIndex = unit.addObject(std::move(adapted));
+        const std::uint32_t outerIndex = connection.objectIndex;
+        connection.objectIndex = adaptedIndex;
+
+        const std::uint32_t from = input ? outerIndex : adaptedIndex;
+        const std::uint32_t to = input ? adaptedIndex : outerIndex;
+        const eir::Type fromType = unit.objects[from].type;
+        const eir::Type toType = unit.objects[to].type;
+
+        eir::Process process;
+        process.kind = eir::ProcessKind::ContinuousAssign;
+        process.name = std::format("connection@{}.{}", instance.name, port.name);
+        process.location = instance.location;
+        process.registerTypes = {fromType, toType};
+        process.readSet = {from};
+        process.writeSet = {eir::WriteExtent::whole(to, toType.bitWidth())};
+        eir::BasicBlock entry;
+        entry.label = "entry";
+        entry.instructions.push_back(eir::Instruction::make(
+            eir::Opcode::ReadObject, eir::Operand::reg(0), eir::Operand::object(from)));
+        eir::Instruction convert = eir::Instruction::make(
+            toType.bitWidth() < fromType.bitWidth() ? eir::Opcode::Truncate : eir::Opcode::Extend,
+            eir::Operand::reg(1), eir::Operand::reg(0));
+        convert.isSigned = fromType.isSigned();
+        entry.instructions.push_back(convert);
+        entry.instructions.push_back(eir::Instruction::make(
+            eir::Opcode::Store, {}, eir::Operand::object(to), eir::Operand::reg(1)));
+        entry.instructions.push_back(eir::Instruction::make(eir::Opcode::Return));
+        process.blocks.push_back(std::move(entry));
+        unit.processes.push_back(std::move(process));
+    }
+    return true;
+}
+
 std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
                                                 const std::string& instancePath,
                                                 const ValueMap& actuals,
@@ -180,6 +246,9 @@ std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
     // Each instance names the specialisation it instantiates. Interfaces first where an
     // instance is connected to one, so that its parameters are known when the instance is.
     std::vector<std::optional<std::string>> resolved(unit.instances.size());
+    // Whether each instance's definition is generic: a connection to one, or from inside one,
+    // may join two widths only specialisation decided.
+    std::vector<bool> childGeneric(unit.instances.size(), false);
     std::vector<bool> resolving(unit.instances.size(), false);
     std::function<bool(std::size_t)> resolve;
 
@@ -224,6 +293,8 @@ std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
         std::vector<std::string_view> ambiguity;
         const std::optional<std::uint32_t> childIndexInDesign =
             analysed.findModuleIndex(child.definitionName, &ambiguity);
+        if (childIndexInDesign.has_value())
+            childGeneric[childIndex] = analysed.module(*childIndexInDesign).isGeneric();
         if (!childIndexInDesign.has_value()) {
             // Left as it is, for elaboration to report as it reports any unresolved instance.
             if (!ambiguity.empty()) {
@@ -259,6 +330,8 @@ std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
     for (std::size_t child = 0; child < unit.instances.size(); ++child) {
         unit.instances[child].definitionName = *resolved[child];
         unit.instances[child].parameterActuals.clear();
+        if ((definition.isGeneric() || childGeneric[child]) && !adaptPorts(unit, child))
+            return std::nullopt;
     }
     unit.expressions = {};
 

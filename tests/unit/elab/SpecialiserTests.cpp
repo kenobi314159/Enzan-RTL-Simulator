@@ -329,6 +329,48 @@ TEST_F(SpecialiserTest, AnInterfacesParametersAreReadThroughThePort) {
     EXPECT_EQ(wide.objects[0].type.bitWidth(), 16U);
 }
 
+TEST_F(SpecialiserTest, APortSpecialisedToAnotherWidthIsConnectedThroughAnAssignment) {
+    // `q` is W bits, and the parent's `wide` 8: equal for the representative, so the frontend
+    // collapsed the port, and 4 bits apart once the instance sets W = 4. The connection becomes
+    // what a frontend makes of one between two widths: an object of the port's width, written
+    // by the child, and an assignment widening it into the parent's signal.
+    ModuleDefinition top = topOf({4});
+    top.addObject(Object{.name = "wide", .type = Type::bits(8, false, true)});
+    top.instances[0].connections.push_back(
+        enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0});
+    Design design;
+    design.addModule(genericLeaf());
+    design.addModule(std::move(top));
+
+    const std::optional<Specialiser::Result> result = specialise(design);
+    ASSERT_TRUE(result.has_value()) << consumer.messages.front();
+    const ModuleDefinition& concrete = result->units->module(result->top);
+    const std::uint32_t adapted = require(concrete.findObject("u0$q"));
+    EXPECT_EQ(concrete.objects[adapted].type.bitWidth(), 4U);
+    EXPECT_EQ(concrete.instances[0].connections[0].objectIndex, adapted);
+    ASSERT_EQ(concrete.processes.size(), 1U);
+    EXPECT_EQ(concrete.processes[0].readSet, std::vector<std::uint32_t>{adapted});
+    EXPECT_EQ(concrete.processes[0].writeSet, (std::vector<WriteExtent>{WriteExtent::whole(0, 8)}));
+
+    enzan::elab::Elaborator elaborator(design, engine);
+    EXPECT_NE(elaborator.elaborate("top"), nullptr) << consumer.messages.front();
+}
+
+TEST_F(SpecialiserTest, AnInoutSpecialisedToAnotherWidthIsRefused) {
+    ModuleDefinition leaf = genericLeaf();
+    leaf.ports[0].direction = PortDirection::InOut;
+    ModuleDefinition top = topOf({4});
+    top.addObject(Object{.name = "wide", .type = Type::bits(8, false, true)});
+    top.instances[0].connections.push_back(
+        enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0});
+    Design design;
+    design.addModule(std::move(leaf));
+    design.addModule(std::move(top));
+
+    EXPECT_FALSE(specialise(design).has_value());
+    EXPECT_TRUE(reported(DiagCode::PortWidthMismatch));
+}
+
 TEST_F(SpecialiserTest, AGenericDesignElaboratesToItsSpecialisations) {
     // Through the elaborator, which is how a design meets the specialiser: every instance is of
     // a concrete unit, and its slots are as wide as its own parameterisation says.
