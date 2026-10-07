@@ -96,10 +96,10 @@ public:
         if (elaborated == nullptr) return;
 
         codegen::Compiler compiler(engine);
-        compiled = compiler.compile(analysed);
+        compiled = compiler.compile(elaborated->units());
         if (compiled == nullptr) return;
 
-        image = std::make_unique<runtime::Image>(analysed, *elaborated, *compiled);
+        image = std::make_unique<runtime::Image>(*elaborated, *compiled);
 
         runtime::KernelOptions options;
         options.transcript = &transcriptStream;

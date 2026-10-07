@@ -87,6 +87,16 @@ ENZAN_DIAG(UnresolvedHierarchicalReference, 3011, Error,
 ENZAN_DIAG(PackageNamedAsTop, 3012, Error,
            "package '{}' has the name of the top-level module; its variables live at '/{}', "
            "which is the top level's path")
+ENZAN_DIAG(ParameterHasNoValue, 3013, Error,
+           "parameter '{}' of '{}' has no default, and instance '{}' does not set it")
+ENZAN_DIAG(UnknownParameterActual, 3014, Error,
+           "instance '{}' sets '{}', which is no parameter of '{}'")
+ENZAN_DIAG(ParameterEvaluationFailed, 3015, Error,
+           "'{}' cannot be specialised for instance '{}': {}")
+ENZAN_DIAG(UntypedParameterType, 3016, Error,
+           "parameter '{}' of '{}' takes the type of its value, and instance '{}' gives it a {} "
+           "where the unit was analysed with a {}; every width that depends on it would change, "
+           "so analyse '{}' from source for this instance")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 

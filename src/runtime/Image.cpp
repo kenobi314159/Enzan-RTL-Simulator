@@ -12,9 +12,9 @@
 
 namespace enzan::runtime {
 
-Image::Image(const eir::Design& analysedDesign, const elab::ElaboratedDesign& elaboratedDesign,
+Image::Image(const elab::ElaboratedDesign& elaboratedDesign,
              const codegen::CompiledDesign& compiledDesign)
-    : design(&analysedDesign), elaborated(&elaboratedDesign), compiled(&compiledDesign) {
+    : design(&elaboratedDesign.units()), elaborated(&elaboratedDesign), compiled(&compiledDesign) {
     arenaSize = elaboratedDesign.arenaWords();
     buildSignals();
     buildInstanceTables();

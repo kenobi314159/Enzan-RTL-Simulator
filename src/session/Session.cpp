@@ -360,12 +360,12 @@ bool Session::elaborate(std::string_view topModule) {
     if (tree == nullptr) return false;
 
     codegen::Compiler compiler(diagnostics);
-    std::unique_ptr<codegen::CompiledDesign> bodies = compiler.compile(*design);
+    std::unique_ptr<codegen::CompiledDesign> bodies = compiler.compile(tree->units());
     if (bodies == nullptr) return false;
 
     elaborated = std::move(tree);
     compiled = std::move(bodies);
-    image = std::make_unique<runtime::Image>(*design, *elaborated, *compiled);
+    image = std::make_unique<runtime::Image>(*elaborated, *compiled);
 
     runtime::KernelOptions options;
     options.timeScale = scale;

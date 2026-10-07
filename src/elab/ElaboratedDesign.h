@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -169,6 +170,11 @@ struct Segment {
 /// each run and owns nothing the analysed Design needs.
 class ElaboratedDesign {
 public:
+    /// The units this elaboration instantiates, which `Instance::definitionIndex` indexes: the
+    /// analysed design's concrete units under the top, and the specialisations made of its
+    /// generic ones (DESIGN_GUIDE.md section 18, M5.1). Nothing in it is generic.
+    [[nodiscard]] const eir::Design& units() const noexcept { return *unitDesign; }
+
     [[nodiscard]] std::span<const Instance> instances() const noexcept { return instanceList; }
 
     [[nodiscard]] std::span<const Slot> slots() const noexcept { return slotList; }
@@ -232,6 +238,8 @@ public:
 
 private:
     friend class Elaborator;
+
+    std::unique_ptr<eir::Design> unitDesign;
 
     std::vector<Instance> instanceList;
     std::vector<Slot> slotList;

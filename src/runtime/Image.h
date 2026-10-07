@@ -126,9 +126,9 @@ struct ProcessState {
 /// downstream of here needs any of the three.
 class Image {
 public:
-    /// Builds the image. `design`, `elaborated` and `compiled` must outlive it.
-    Image(const eir::Design& design, const elab::ElaboratedDesign& elaborated,
-          const codegen::CompiledDesign& compiled);
+    /// Builds the image of the units `elaborated` instantiates, whose bodies `compiled` holds.
+    /// Both must outlive it.
+    Image(const elab::ElaboratedDesign& elaborated, const codegen::CompiledDesign& compiled);
 
     [[nodiscard]] std::span<const Signal> signals() const noexcept { return signalList; }
 
@@ -144,9 +144,9 @@ public:
         return *elaborated;
     }
 
-    /// The analysed design the elaboration was built from, for the facts that live on a
-    /// definition rather than on a slot — a module's parameters, and what they resolved to.
-    [[nodiscard]] const eir::Design& analysedDesign() const noexcept { return *design; }
+    /// The units the elaboration instantiates, for the facts that live on a definition rather
+    /// than on a slot — a module's parameters, and what they resolved to.
+    [[nodiscard]] const eir::Design& units() const noexcept { return *design; }
 
     [[nodiscard]] std::uint32_t arenaWords() const noexcept { return arenaSize; }
 

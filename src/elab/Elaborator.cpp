@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "elab/Elaborator.h"
+#include "elab/JoinNames.h"
+#include "elab/Specialiser.h"
 
 #include "common/Assert.h"
 #include "common/Diagnostics.h"
@@ -17,21 +19,6 @@
 namespace enzan::elab {
 
 namespace {
-
-/// Joins a list of names for a diagnostic, in the order given.
-template<typename Range>
-std::string joinNames(const Range& names) {
-    if (names.empty()) return "(none)";
-
-    std::string result;
-    for (const std::string_view name : names) {
-        if (!result.empty()) result += ", ";
-        result += '\'';
-        result += name;
-        result += '\'';
-    }
-    return result;
-}
 
 /// One process's write of a range of one slot, for finding where drivers overlap.
 struct DriverRange {
@@ -65,11 +52,18 @@ std::string describeBits(std::uint32_t lowBit, std::uint32_t endBit, std::uint32
 class Elaborator::Builder {
 public:
     Builder(const eir::Design& analysedDesign, DiagnosticEngine& engine)
-        : design(analysedDesign), diagnostics(engine) {}
+        : analysed(analysedDesign), diagnostics(engine) {}
 
     std::unique_ptr<ElaboratedDesign> run(std::string_view topModuleName) {
-        const std::optional<std::uint32_t> topIndex = resolveTop(topModuleName);
-        if (!topIndex.has_value()) return nullptr;
+        const std::optional<std::uint32_t> analysedTop = resolveTop(topModuleName);
+        if (!analysedTop.has_value()) return nullptr;
+
+        // Every generic unit under the top becomes the specialisations its instances need, and
+        // the rest of elaboration sees only those (DESIGN_GUIDE.md section 18, M5.1).
+        Specialiser specialiser(analysed, diagnostics);
+        std::optional<Specialiser::Result> specialised = specialiser.specialise(*analysedTop);
+        if (!specialised.has_value()) return nullptr;
+        const std::uint32_t topIndex = specialised->top;
 
         // The top instance is named for the module as the source names it, so that a design
         // elaborated with `tb` as its top has `/tb/...` paths — which is what a user typing a
@@ -77,13 +71,15 @@ public:
         // definition's, because a parameterised top's definition is named for its values
         // (section 8.2), and `/counter$WIDTH_8/count` is a path nobody would write. The design
         // reports its top by the same name, since that is the name a front end shows.
-        const eir::ModuleDefinition& top = design.module(*topIndex);
+        const eir::ModuleDefinition& top = specialised->units->module(topIndex);
         const std::string& topName = top.sourceName.empty() ? top.name : top.sourceName;
 
         result = std::make_unique<ElaboratedDesign>();
+        result->unitDesign = std::move(specialised->units);
+        design = result->unitDesign.get();
         result->topName = topName;
         const std::uint32_t topInstance =
-            createInstance("/" + topName, topName, *topIndex, Instance::NoParent);
+            createInstance("/" + topName, topName, topIndex, Instance::NoParent);
         if (!expand(topInstance)) return nullptr;
         if (!instantiatePackages()) return nullptr;
         if (!bindHierarchicalReferences()) return nullptr;
@@ -99,7 +95,7 @@ private:
         if (!topModuleName.empty()) {
             std::vector<std::string_view> ambiguity;
             const std::optional<std::uint32_t> index =
-                design.findModuleIndex(topModuleName, &ambiguity);
+                analysed.findModuleIndex(topModuleName, &ambiguity);
             if (!index.has_value() && !ambiguity.empty()) {
                 diagnostics.report(DiagCode::AmbiguousModule, SourceLocation(), topModuleName,
                                    joinNames(ambiguity), topModuleName);
@@ -109,13 +105,13 @@ private:
             // wrote is its source name. Tried second, so an exact name still wins.
             if (!index.has_value()) {
                 const std::vector<std::uint32_t> specialisations =
-                    design.findSpecialisations(topModuleName);
+                    analysed.findSpecialisations(topModuleName);
                 if (specialisations.size() == 1) return specialisations.front();
                 if (specialisations.size() > 1) {
                     std::vector<std::string_view> names;
                     names.reserve(specialisations.size());
                     for (const std::uint32_t candidate : specialisations)
-                        names.push_back(design.module(candidate).name);
+                        names.push_back(analysed.module(candidate).name);
                     diagnostics.report(DiagCode::AmbiguousSpecialisation, SourceLocation(),
                                        topModuleName, joinNames(names));
                     return std::nullopt;
@@ -124,7 +120,7 @@ private:
 
             if (!index.has_value()) {
                 std::vector<std::string> names;
-                for (const eir::ModuleDefinition& definition : design.modules())
+                for (const eir::ModuleDefinition& definition : analysed.modules())
                     names.push_back(definition.name);
                 diagnostics.report(DiagCode::TopModuleNotFound, SourceLocation(), topModuleName,
                                    joinNames(names));
@@ -134,8 +130,8 @@ private:
         }
 
         // Choosing a top level is safe only when the choice is forced.
-        const std::vector<std::string> candidates = design.candidateTopModules();
-        if (candidates.size() == 1) return design.findModuleIndex(candidates.front());
+        const std::vector<std::string> candidates = analysed.candidateTopModules();
+        if (candidates.size() == 1) return analysed.findModuleIndex(candidates.front());
 
         diagnostics.report(DiagCode::NoTopModule, SourceLocation(), candidates.size(),
                            joinNames(candidates));
@@ -151,7 +147,7 @@ private:
         instance.name = std::move(name);
         instance.definitionIndex = definitionIndex;
         instance.parent = parent;
-        instance.objectSlots.assign(design.module(definitionIndex).objects.size(), NoSlot);
+        instance.objectSlots.assign(design->module(definitionIndex).objects.size(), NoSlot);
 
         result->instancesByPath.emplace(instance.path, index);
         result->instanceList.push_back(std::move(instance));
@@ -164,7 +160,7 @@ private:
     /// Allocates a slot for one object of one instance, or reuses an ancestor's.
     std::uint32_t allocateSlot(std::uint32_t instanceIndex, std::uint32_t objectIndex) {
         const Instance& instance = result->instanceList[instanceIndex];
-        const eir::ModuleDefinition& definition = design.module(instance.definitionIndex);
+        const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
         const eir::Object& object = definition.objects[objectIndex];
 
         const auto slotIndex = static_cast<std::uint32_t>(result->slotList.size());
@@ -225,7 +221,7 @@ private:
     /// Expands one instance: allocates its slots, binds its ports and recurses.
     bool expand(std::uint32_t instanceIndex) {
         const eir::ModuleDefinition& definition =
-            design.module(result->instanceList[instanceIndex].definitionIndex);
+            design->module(result->instanceList[instanceIndex].definitionIndex);
 
         // Objects first, so that a child's port can find the parent object it binds
         // to. Ports are collapsed onto the parent's slot when the instance is created
@@ -253,7 +249,7 @@ private:
     bool expandChild(std::uint32_t parentIndex, const eir::Instance& child) {
         std::vector<std::string_view> ambiguity;
         const std::optional<std::uint32_t> childDefinition =
-            design.findModuleIndex(child.definitionName, &ambiguity);
+            design->findModuleIndex(child.definitionName, &ambiguity);
         if (!childDefinition.has_value() && !ambiguity.empty()) {
             diagnostics.report(DiagCode::AmbiguousModule, child.location, child.definitionName,
                                joinNames(ambiguity), child.definitionName);
@@ -292,11 +288,11 @@ private:
     /// a connection between two objects of the same width is the same storage under
     /// two names, which is what commercial tools do and what makes a port cost
     /// nothing at run time. The alternative would add a process and a delta cycle to
-    /// every port in the design.
+    /// every port in the design->
     bool bindPorts(std::uint32_t parentIndex, std::uint32_t childIndex,
                    const eir::Instance& child) {
         const eir::ModuleDefinition& childDefinition =
-            design.module(result->instanceList[childIndex].definitionIndex);
+            design->module(result->instanceList[childIndex].definitionIndex);
         const Instance& parent = result->instanceList[parentIndex];
 
         return std::ranges::all_of(child.connections, [&](const eir::PortConnection& connection) {
@@ -368,7 +364,7 @@ private:
     bool instantiatePackages() {
         std::vector<std::string> packages;
         for (const Instance& instance : result->instanceList) {
-            for (const eir::Object& object : design.module(instance.definitionIndex).objects) {
+            for (const eir::Object& object : design->module(instance.definitionIndex).objects) {
                 const std::string_view reference = object.hierarchicalPath;
                 if (!reference.starts_with('/')) continue;
                 const std::string name(reference.substr(1, reference.find('/', 1) - 1));
@@ -378,11 +374,11 @@ private:
 
         return std::ranges::all_of(packages, [this](const std::string& name) {
             // A package that is missing leaves its references unresolved, which says so.
-            const std::optional<std::uint32_t> definition = design.findModuleIndex(name + "::");
+            const std::optional<std::uint32_t> definition = design->findModuleIndex(name + "::");
             if (!definition.has_value()) return true;
             if (name == result->topName) {
-                diagnostics.report(DiagCode::PackageNamedAsTop, design.module(*definition).location,
-                                   name, name);
+                diagnostics.report(DiagCode::PackageNamedAsTop,
+                                   design->module(*definition).location, name, name);
                 return false;
             }
             return expand(createInstance("/" + name, name, *definition, Instance::NoParent));
@@ -392,7 +388,7 @@ private:
     bool bindHierarchicalReferences() {
         bool ok = true;
         for (Instance& instance : result->instanceList) {
-            const eir::ModuleDefinition& definition = design.module(instance.definitionIndex);
+            const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
             for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
                  ++objectIndex) {
                 const std::string& reference = definition.objects[objectIndex].hierarchicalPath;
@@ -446,7 +442,7 @@ private:
         for (std::uint32_t instanceIndex = 0; instanceIndex < result->instanceList.size();
              ++instanceIndex) {
             const eir::ModuleDefinition& definition =
-                design.module(result->instanceList[instanceIndex].definitionIndex);
+                design->module(result->instanceList[instanceIndex].definitionIndex);
             for (std::uint32_t processIndex = 0; processIndex < definition.processes.size();
                  ++processIndex) {
                 result->processList.push_back(
@@ -477,7 +473,7 @@ private:
             const Instance& instance = result->instanceList[processInstance.instanceIndex];
             const eir::Process& process = processOf(processInstance);
             const std::vector<eir::Object>& objects =
-                design.module(instance.definitionIndex).objects;
+                design->module(instance.definitionIndex).objects;
             const bool continuous = process.kind == eir::ProcessKind::ContinuousAssign;
 
             // A subroutine's static variable is written by every call of it, and a call inlined
@@ -681,7 +677,7 @@ private:
 
     [[nodiscard]] const eir::Process& processOf(const ProcessInstance& processInstance) const {
         const Instance& instance = result->instanceList[processInstance.instanceIndex];
-        return design.module(instance.definitionIndex).processes[processInstance.processIndex];
+        return design->module(instance.definitionIndex).processes[processInstance.processIndex];
     }
 
     /// A process as a diagnostic names it: what it is and where, and the instance it runs in,
@@ -694,7 +690,10 @@ private:
 
     static constexpr std::uint32_t NoSlot = 0xFFFF'FFFFU;
 
-    const eir::Design& design;
+    /// What analysis produced, generic units included; only the top is resolved against it.
+    const eir::Design& analysed;
+    /// The concrete units under the top, which the result owns and everything else here reads.
+    const eir::Design* design = nullptr;
     DiagnosticEngine& diagnostics;
     std::unique_ptr<ElaboratedDesign> result;
 

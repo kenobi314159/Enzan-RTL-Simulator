@@ -6,6 +6,10 @@ ports and computes the flat state layout (DESIGN_GUIDE.md section 2.1).
 ## Responsibility
 
 - Resolve the top module, or refuse to guess when the choice is not forced.
+- **Specialise generic units** (`Specialiser`): evaluate each instance's parameters, make one
+  concrete unit per distinct set of values and name it for them (DESIGN_GUIDE.md sections
+  4.1, 8.2 and 18, M5.1). Everything after this sees concrete units only, which the
+  elaborated design owns; a unit nothing under the top instantiates is not specialised.
 - Expand the instance tree, detecting recursive instantiation.
 - Assign every object of every instance a **slot**: a piece of state with an offset
   in the single contiguous arena of section 4.3.
@@ -29,9 +33,9 @@ ports and computes the flat state layout (DESIGN_GUIDE.md section 2.1).
 
 ## What elaboration is not
 
-- **It does not evaluate parameters or expand generate constructs.** Those happen in
-  the frontend, which emits one EIR definition per distinct parameterisation. That is
-  what keeps an analysed unit reusable without re-evaluating anything (section 2.1).
+- **It does not expand generate constructs, nor type a body.** A frontend still decides
+  which constructs a unit holds; a unit that is not generic is one definition per
+  parameterisation, as the frontend emitted it, and elaboration takes it as it is.
 - **It is not cacheable.** Elaboration is per-design by nature: the same library
   elaborated against a different top level produces a different image, so nothing here
   is stored in a library.

@@ -22,10 +22,9 @@ namespace enzan::elab {
 /// or parameterisations, which is why it is a separate phase from analysis rather
 /// than something a frontend does.
 ///
-/// What this phase deliberately does **not** do: evaluate parameters or expand
-/// generate constructs. Both happen in the frontend, which emits one EIR definition
-/// per distinct parameterisation, so that an analysed unit is reusable without
-/// re-evaluating anything.
+/// Parameters are resolved here: a generic unit becomes one concrete unit per distinct set
+/// of values its instances give it (`Specialiser`), and the elaborated design owns those
+/// units. A unit that is not generic is taken as the frontend emitted it.
 class Elaborator {
 public:
     /// `design` and `diagnostics` must outlive the elaborator.

@@ -100,10 +100,10 @@ protected:
         ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
 
         Compiler compiler(engine);
-        compiled = compiler.compile(analysed);
+        compiled = compiler.compile(elaborated->units());
         ASSERT_NE(compiled, nullptr);
 
-        image = std::make_unique<Image>(analysed, *elaborated, *compiled);
+        image = std::make_unique<Image>(*elaborated, *compiled);
         arena.resize(image->arenaWords());
         image->initializeState(arena);
     }

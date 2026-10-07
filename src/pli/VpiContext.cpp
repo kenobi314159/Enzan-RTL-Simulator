@@ -380,7 +380,7 @@ void VpiContext::detach() {
 
 void VpiContext::buildScopes() {
     const elab::ElaboratedDesign& elaborated = image->elaboratedDesign();
-    const eir::Design& design = image->analysedDesign();
+    const eir::Design& design = image->units();
 
     moduleScopeOfInstance.assign(elaborated.instances().size(), NoScope);
     objectScopes.assign(elaborated.instances().size(), {});
@@ -502,7 +502,7 @@ vpiHandle VpiContext::intern(const Target& target) {
     switch (target.kind) {
     case TargetKind::Scope: {
         const Scope& scope = scopes[target.first];
-        const eir::ModuleDefinition& definition = image->analysedDesign().module(
+        const eir::ModuleDefinition& definition = image->units().module(
             image->elaboratedDesign().instances()[scope.instance].definitionIndex);
         object->kind = Object::Kind::Scope;
         object->type = scope.isModule ? vpiModule : vpiGenScope;
@@ -522,7 +522,7 @@ vpiHandle VpiContext::intern(const Target& target) {
         const auto objectIndex = static_cast<std::uint32_t>(target.second);
         const elab::Instance& instance = image->elaboratedDesign().instances()[instanceIndex];
         const eir::Object& declared =
-            image->analysedDesign().module(instance.definitionIndex).objects[objectIndex];
+            image->units().module(instance.definitionIndex).objects[objectIndex];
         const std::uint32_t owner = objectScopes[instanceIndex][objectIndex];
 
         object->kind = Object::Kind::Signal;
@@ -611,7 +611,7 @@ vpiHandle VpiContext::intern(const Target& target) {
         object->dimensions.assign(whole.dimensions.begin() + depth, whole.dimensions.end());
         if (object->dimensions.empty()) {
             const elab::Instance& instance = image->elaboratedDesign().instances()[target.first];
-            const eir::Object& declared = image->analysedDesign()
+            const eir::Object& declared = image->units()
                                               .module(instance.definitionIndex)
                                               .objects[static_cast<std::size_t>(target.second)];
             if (declared.kind == eir::ObjectKind::Net)
@@ -637,7 +637,7 @@ vpiHandle VpiContext::intern(const Target& target) {
         const auto parameterIndex = static_cast<std::uint32_t>(target.second);
         const elab::Instance& instance = image->elaboratedDesign().instances()[instanceIndex];
         const eir::Parameter& parameter =
-            image->analysedDesign().module(instance.definitionIndex).parameters[parameterIndex];
+            image->units().module(instance.definitionIndex).parameters[parameterIndex];
         const std::uint32_t owner = parameterScopes[instanceIndex][parameterIndex];
 
         object->kind = Object::Kind::Parameter;
@@ -904,7 +904,7 @@ vpiHandle VpiContext::iterate(PLI_INT32 type, vpiHandle reference) {
         const Scope& scope = scopes[object->scope];
         const auto signalType = [&](std::uint32_t objectIndex) {
             const eir::Object& declared =
-                image->analysedDesign()
+                image->units()
                     .module(image->elaboratedDesign().instances()[scope.instance].definitionIndex)
                     .objects[objectIndex];
             if (!declared.unpackedDimensions.empty())
@@ -1064,7 +1064,7 @@ PLI_INT32 VpiContext::get(PLI_INT32 property, vpiHandle object) {
         if (found->kind == Object::Kind::Parameter) {
             const elab::Instance& instance =
                 image->elaboratedDesign().instances()[found->target.first];
-            return image->analysedDesign()
+            return image->units()
                            .module(instance.definitionIndex)
                            .parameters[static_cast<std::size_t>(found->target.second)]
                            .isLocal
@@ -1170,7 +1170,7 @@ void VpiContext::getValue(vpiHandle object, s_vpi_value* value) {
     case Object::Kind::Parameter: {
         const elab::Instance& instance = image->elaboratedDesign().instances()[found->target.first];
         const eir::Parameter& parameter =
-            image->analysedDesign()
+            image->units()
                 .module(instance.definitionIndex)
                 .parameters[static_cast<std::size_t>(found->target.second)];
         ok = readValue(parameter.value.ref(), false, *value, values, error);

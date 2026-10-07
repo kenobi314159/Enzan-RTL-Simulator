@@ -477,7 +477,7 @@ void KernelServer::onQueryDesign() {
 
     for (const elab::Instance& instance : instances) {
         const eir::ModuleDefinition& definition =
-            image->analysedDesign().module(instance.definitionIndex);
+            image->units().module(instance.definitionIndex);
 
         std::string file;
         std::uint32_t line = 0;
@@ -620,7 +620,7 @@ void KernelServer::onQueryObjects(const Frame& frame) {
     const std::uint32_t instanceIndex = *elaborated.findInstance(request.instancePath);
     // NOLINTEND(bugprone-unchecked-optional-access)
     const eir::ModuleDefinition& definition =
-        image->analysedDesign().module(elaborated.instances()[instanceIndex].definitionIndex);
+        image->units().module(elaborated.instances()[instanceIndex].definitionIndex);
 
     for (const eir::Parameter& parameter : definition.parameters) {
         message.parameters.push_back(
