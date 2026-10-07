@@ -1124,13 +1124,26 @@ int main(int argc, char** argv) {
         return static_cast<int>(ExitStatus::Usage);
     }
 
-    // An override is applied while sources are analysed (8.2). A run from libraries alone
-    // analyses nothing, so it would run the default the override was given to change.
-    if (!invocation.parameters.empty() && invocation.files.empty()
-        && invocation.fileLists.empty()) {
-        std::cerr << "enzan: '-G' sets a parameter while sources are analysed, and this "
-                     "analyses none; give it to the analysis that stores the top level\n";
-        return static_cast<int>(ExitStatus::Usage);
+    // A macro, an include directory and a parameter override apply while sources are analysed
+    // (8.2). A run from libraries alone analyses nothing, so it would run what the libraries hold
+    // as if the option had been taken.
+    if (invocation.files.empty() && invocation.fileLists.empty()) {
+        std::vector<std::string_view> analysisOptions;
+        if (!invocation.defines.empty()) analysisOptions.emplace_back("'-D'");
+        if (!invocation.includeDirectories.empty()) analysisOptions.emplace_back("'-I'");
+        if (!invocation.parameters.empty()) analysisOptions.emplace_back("'-G'");
+        if (!analysisOptions.empty()) {
+            std::cerr << "enzan: ";
+            for (std::size_t index = 0; index < analysisOptions.size(); ++index) {
+                if (index != 0) std::cerr << (index + 1 == analysisOptions.size() ? " and " : ", ");
+                std::cerr << analysisOptions[index];
+            }
+            std::cerr << (analysisOptions.size() == 1 ? " applies" : " apply")
+                      << " while sources are analysed, and this analyses none; give "
+                      << (analysisOptions.size() == 1 ? "it" : "them")
+                      << " to the analysis that stores the top level\n";
+            return static_cast<int>(ExitStatus::Usage);
+        }
     }
 
     if (invocation.useGui && !invocation.listenPath.empty()) {
