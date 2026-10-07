@@ -502,9 +502,6 @@ private:
     /// `$random`'s seed when it is called without one of its own.
     std::int32_t randomSeed = 0;
 
-    /// Whether the seed has been reported, which happens once, at the first draw.
-    bool seedReported = false;
-
     /// A write scheduled by `scheduleDelayedWrite`, waiting for its time.
     ///
     /// Each holds its own copy of the value. The time wheel allocates per entry as it is, so

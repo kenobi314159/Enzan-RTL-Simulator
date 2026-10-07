@@ -876,12 +876,12 @@ cocotb's makefiles spell it. slang applies an override while analysing, so it is
 entry's key as a define is (4.4). One that names no parameter of a top level changes nothing,
 and is reported rather than ignored, since a misspelt override is otherwise invisible.
 
-**Random numbers are drawn from `--seed N`**, 0 by default, which a run reports at its first
-draw (3.8). `$random` is IEEE 1364's reference generator, bit for bit, so a seed draws in Enzan
-what it draws in other simulators that follow it: Icarus Verilog's `$random` starts from 0 as
-well. `$urandom` and `$urandom_range` draw from a generator each process has of its own,
-derived from the seed and the process's name, so what one process draws does not change when
-another starts drawing (IEEE 1800 section 18.14).
+**Random numbers are drawn from `--seed N`**, 0 by default (3.8). `$random` is IEEE 1364's
+reference generator, bit for bit, so a seed draws in Enzan what it draws in other simulators
+that follow it: Icarus Verilog's `$random` starts from 0 as well. `$urandom` and
+`$urandom_range` draw from a generator each process has of its own, derived from the seed and
+the process's name, so what one process draws does not change when another starts drawing (IEEE
+1800 section 18.14).
 
 **Exit statuses are distinct enough to branch on**, because a Makefile and a CI
 job need to tell a broken invocation from a broken design:
