@@ -3,6 +3,8 @@
 #include "eir/Module.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <format>
 #include <utility>
 
 namespace enzan::eir {
@@ -113,6 +115,42 @@ std::uint32_t ModuleDefinition::addEnum(EnumDefinition definition) {
     const auto index = static_cast<std::uint32_t>(enums.size());
     enums.push_back(std::move(definition));
     return index;
+}
+
+std::string specialisedName(std::string_view sourceName, std::span<const NamedValue> values) {
+    std::string rendered;
+    for (const NamedValue& value : values) {
+        if (!rendered.empty()) rendered += ',';
+        rendered += value.name;
+        rendered += '=';
+        rendered += value.value;
+    }
+    if (rendered.empty()) return std::string(sourceName);
+
+    std::string suffix;
+    if (rendered.size() <= 32) {
+        suffix = rendered;
+        for (char& c : suffix) {
+            const bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                              || (c >= '0' && c <= '9') || c == '_';
+            if (!keep) c = '_';
+        }
+    } else {
+        // FNV-1a over the rendered values. Stable across runs, builds and machines, which a
+        // std::hash is not required to be.
+        std::uint64_t hash = 0xcbf2'9ce4'8422'2325ULL;
+        for (const char c : rendered) {
+            hash ^= static_cast<unsigned char>(c);
+            hash *= 0x0000'0100'0000'01b3ULL;
+        }
+        suffix = std::format("{:016x}", hash);
+    }
+    return std::format("{}${}", sourceName, suffix);
+}
+
+std::string renderParameterValue(const ParameterValue& value) {
+    const ConstBitRef bits = value.bits.ref();
+    return toString(bits, bits.hasUnknown() ? Radix::Binary : Radix::Decimal, value.isSigned);
 }
 
 } // namespace enzan::eir

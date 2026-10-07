@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -413,5 +414,27 @@ struct ModuleDefinition {
     /// a copy per signal would send the same members over the wire once per object.
     std::uint32_t addEnum(EnumDefinition definition);
 };
+
+/// One value a specialisation's name records: a parameter, or what an interface port is
+/// connected to, rendered as text.
+struct NamedValue {
+    std::string name;
+    std::string value;
+};
+
+/// The name of the specialisation of `sourceName` at `values` (DESIGN_GUIDE.md section 8.2).
+///
+/// **A function of the values alone**, so that one parameterisation has one name wherever it
+/// is produced: a counter numbering parameterisations in the order one compilation met them
+/// would give `counter$1` a different meaning in every library. Readable while it is short,
+/// which is what a `lib list` and a waveform hierarchy want, and a digest of the values once
+/// it is not, so that a module with many or wide parameters does not get a name nothing can
+/// display. With no values, the name is the source's.
+[[nodiscard]] std::string specialisedName(std::string_view sourceName,
+                                          std::span<const NamedValue> values);
+
+/// `value` as a specialisation's name records it: in decimal when every bit is known, which
+/// is how a parameter is written, and in binary otherwise.
+[[nodiscard]] std::string renderParameterValue(const ParameterValue& value);
 
 } // namespace enzan::eir
