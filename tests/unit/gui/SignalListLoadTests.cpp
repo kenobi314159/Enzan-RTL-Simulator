@@ -190,6 +190,16 @@ TEST_F(SignalListLoadTest, AScopeAddsWhatTheMenuEntryAdds) {
     EXPECT_EQ(waves()->writeSignalList(), byMenu);
 }
 
+TEST_F(SignalListLoadTest, ALabelNamesTheGroupAScopeAdds) {
+    ASSERT_TRUE(load("add wave -label Top /tb\n"));
+
+    const QVector<int> rows = topRows();
+    ASSERT_EQ(rows.size(), 1) << "the scope alone, not its subtree";
+    EXPECT_EQ(rowAt(rows[0]).kind, WaveRow::Kind::Group);
+    EXPECT_EQ(rowAt(rows[0]).label, QStringLiteral("Top"));
+    EXPECT_FALSE(rowAt(rows[0]).children.isEmpty());
+}
+
 TEST_F(SignalListLoadTest, AMissingPathIsSkippedWithAWarningNamingItsLine) {
     ASSERT_TRUE(load("add wave /tb/clk\n"
                      "add wave /tb/no_such_signal\n"
