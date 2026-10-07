@@ -49,7 +49,8 @@ enum class ConstantTruth : std::uint8_t {
 /// `case` item: a constant selector does not make slang treat the other items as dead.
 class DeadCode {
 public:
-    /// Walks every instance under `root`, each in its own parameterisation.
+    /// Walks every parameterisation under `root` once, in the first instance slang elaborated
+    /// it for.
     explicit DeadCode(const slang::ast::RootSymbol& root);
 
     /// True when `diagnostic` is one of the errors a dead branch excuses, and lies in dead
