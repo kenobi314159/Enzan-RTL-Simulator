@@ -1147,7 +1147,8 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
     // resolution and therefore M5. Inputs and outputs each need it in one direction only.
     if (port.direction == slang::ast::ArgumentDirection::InOut) {
         reportUnsupported(expression.sourceRange.start(),
-                          "an inout port connected to an expression rather than a signal");
+                          "an inout port connected to an expression, a hierarchical reference "
+                          "or a signal of another width");
         return std::nullopt;
     }
 

@@ -874,6 +874,23 @@ TEST_F(FrontendTest, ReportsADelayOnANet) {
     EXPECT_TRUE(reported("a delay on a net"));
 }
 
+TEST_F(FrontendTest, ReportsAnInoutConnectedToASignalOfAnotherWidth) {
+    // Connected through an assignment, as an input or an output of another width is, which an
+    // inout cannot be; the signal is still a signal, not an expression.
+    EXPECT_EQ(analyse(R"(
+        module child(inout wire [1:0] p);
+        endmodule
+        module top;
+            wire [2:0] w;
+            child u(.p(w));
+        endmodule
+    )",
+                      "top"),
+              nullptr);
+    EXPECT_TRUE(reported("an inout port connected to an expression, a hierarchical reference or "
+                         "a signal of another width"));
+}
+
 TEST_F(FrontendTest, ReportsADriveStrengthOtherThanStrong) {
     // Resolution has no strength model, so a weak driver would lose to nothing and tie with a
     // strong one.
