@@ -11,6 +11,7 @@ enzan_add_component(
           ParameterExpression.cpp
           Process.cpp
           Serialization.cpp
+          Specialise.cpp
           Type.cpp
           Verifier.cpp
   HEADERS BitOps.h
@@ -23,6 +24,7 @@ enzan_add_component(
           ParameterExpression.h
           Process.h
           Serialization.h
+          Specialise.h
           Type.h
           Verifier.h
   DEPENDS enzan::common)

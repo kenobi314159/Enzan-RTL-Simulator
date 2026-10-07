@@ -4,6 +4,7 @@
 
 #include "common/Diagnostics.h"
 #include "eir/ParameterExpression.h"
+#include "eir/Specialise.h"
 #include "eir/Verifier.h"
 #include "elab/JoinNames.h"
 
@@ -80,86 +81,49 @@ std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
     const std::string& sourceName =
         definition.sourceName.empty() ? definition.name : definition.sourceName;
 
-    // The formals' values, in the order they are declared, each from what came before it.
-    std::vector<std::optional<eir::ParameterValue>> formals(definition.formals.size());
-    eir::ParameterEvaluator evaluator(definition.expressions, formals);
-    // Why evaluation failed when the evaluator itself did not: a width that is a fine integer
-    // and zero.
-    std::optional<eir::ParameterError> failure;
-    const auto evaluationFailed = [&]() {
-        diagnostics.report(DiagCode::ParameterEvaluationFailed, definition.location, sourceName,
-                           instancePath, describe(failure.value_or(evaluator.error())));
+    const auto report = [&](const eir::SpecialiseFailure& failure) {
+        switch (failure.kind) {
+        case eir::SpecialiseFailure::Kind::NoValue:
+            diagnostics.report(DiagCode::ParameterHasNoValue, failure.location, failure.formal,
+                               sourceName, instancePath);
+            break;
+        case eir::SpecialiseFailure::Kind::UnknownActual:
+            diagnostics.report(DiagCode::UnknownParameterActual, failure.location, instancePath,
+                               failure.formal, sourceName);
+            break;
+        case eir::SpecialiseFailure::Kind::UntypedMismatch:
+            diagnostics.report(
+                DiagCode::UntypedParameterType, failure.location, failure.formal, sourceName,
+                instancePath, describeType(failure.givenWidth, failure.givenSigned),
+                describeType(failure.expectedWidth, failure.expectedSigned), sourceName);
+            break;
+        case eir::SpecialiseFailure::Kind::Evaluation:
+            diagnostics.report(DiagCode::ParameterEvaluationFailed, failure.location, sourceName,
+                               instancePath, describe(failure.evaluation));
+            break;
+        }
         return std::nullopt;
     };
 
-    for (const auto& [name, value] : actuals) {
-        const bool known = std::ranges::any_of(definition.formals, [&](const auto& formal) {
-            return formal.kind == eir::FormalKind::Parameter && formal.name == name;
+    auto formals = eir::formalValues(
+        definition, actuals,
+        [&](std::string_view port, std::string_view name) -> std::optional<eir::ParameterValue> {
+            const auto interface = interfaces.find(port);
+            if (interface == interfaces.end()) return std::nullopt;
+            const auto found = interface->second.parameters.find(name);
+            if (found == interface->second.parameters.end()) return std::nullopt;
+            return found->second;
         });
-        if (!known) {
-            diagnostics.report(DiagCode::UnknownParameterActual, definition.location, instancePath,
-                               name, sourceName);
-            return std::nullopt;
-        }
-    }
+    if (const auto* failure = std::get_if<eir::SpecialiseFailure>(&formals))
+        return report(*failure);
+    const auto& values = std::get<std::vector<std::optional<eir::ParameterValue>>>(formals);
 
     std::vector<eir::NamedValue> nameValues;
     for (std::size_t formalIndex = 0; formalIndex < definition.formals.size(); ++formalIndex) {
         const eir::ParameterFormal& formal = definition.formals[formalIndex];
-
-        std::optional<eir::ParameterValue> given;
-        if (formal.kind == eir::FormalKind::InterfaceParameter) {
-            const auto interface = interfaces.find(formal.port);
-            if (interface != interfaces.end()) {
-                const auto found = interface->second.parameters.find(formal.name);
-                if (found != interface->second.parameters.end()) given = found->second;
-            }
-            if (!given.has_value()) {
-                diagnostics.report(DiagCode::ParameterHasNoValue, formal.location,
-                                   std::format("{}.{}", formal.port, formal.name), sourceName,
-                                   instancePath);
-                return std::nullopt;
-            }
-        } else if (const auto actual = actuals.find(formal.name);
-                   formal.kind == eir::FormalKind::Parameter && actual != actuals.end()) {
-            given = actual->second;
-        } else if (formal.value != eir::NoExpression) {
-            const eir::ParameterValue* value = evaluator.value(formal.value);
-            if (value == nullptr) return evaluationFailed();
-            given = *value;
-        } else {
-            diagnostics.report(DiagCode::ParameterHasNoValue, formal.location, formal.name,
-                               sourceName, instancePath);
-            return std::nullopt;
-        }
-
-        std::uint32_t width = formal.width;
-        if (formal.widthExpression != eir::NoExpression) {
-            const std::optional<std::uint32_t> evaluated =
-                evaluator.integer(formal.widthExpression);
-            if (evaluated == 0U) failure = eir::ParameterError::ZeroWidth;
-            if (!evaluated.has_value() || *evaluated == 0) return evaluationFailed();
-            width = *evaluated;
-        }
-
-        // A typed formal converts what it is given, as an assignment would. An untyped one is
-        // its value's type, and every width the unit was translated with assumed the
-        // representative's; another type is a different unit, which only slang can produce.
-        if (formal.isTyped) {
-            given = eir::ParameterValue{.bits = given->bits.resized(width, given->isSigned),
-                                        .isSigned = formal.isSigned};
-        } else if (given->bits.width() != width || given->isSigned != formal.isSigned) {
-            diagnostics.report(DiagCode::UntypedParameterType, formal.location, formal.name,
-                               sourceName, instancePath,
-                               describeType(given->bits.width(), given->isSigned),
-                               describeType(width, formal.isSigned), sourceName);
-            return std::nullopt;
-        }
-
-        formals[formalIndex] = std::move(given);
         if (formal.kind == eir::FormalKind::Parameter) {
             nameValues.push_back(eir::NamedValue{
-                .name = formal.name, .value = eir::renderParameterValue(*formals[formalIndex])});
+                .name = formal.name, .value = eir::renderParameterValue(*values[formalIndex])});
         }
     }
 
@@ -194,136 +158,14 @@ std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
                            instancePath);
         return std::nullopt;
     }
-    inProgress.push_back(name);
 
-    eir::ModuleDefinition unit = definition;
+    auto specialised = eir::specialiseAt(definition, values);
+    if (const auto* failure = std::get_if<eir::SpecialiseFailure>(&specialised))
+        return report(*failure);
+    eir::ModuleDefinition unit = std::move(std::get<eir::ModuleDefinition>(specialised));
     unit.name = name;
 
-    // Every annotated number becomes its expression's value.
-    const auto integer = [&](std::uint32_t expression, std::uint32_t& into) {
-        if (expression == eir::NoExpression) return true;
-        const std::optional<std::uint32_t> value = evaluator.integer(expression);
-        if (!value.has_value()) return false;
-        into = *value;
-        return true;
-    };
-    const auto width = [&](std::uint32_t expression, std::uint32_t& into) {
-        if (expression == eir::NoExpression) return true;
-        if (!integer(expression, into)) return false;
-        if (into > 0) return true;
-        failure = eir::ParameterError::ZeroWidth;
-        return false;
-    };
-    const auto bound = [&](std::uint32_t expression, std::int32_t& into) {
-        if (expression == eir::NoExpression) return true;
-        const eir::ParameterValue* value = evaluator.value(expression);
-        if (value == nullptr || value->bits.ref().hasUnknown()) return false;
-        into = static_cast<std::int32_t>(
-            value->isSigned ? value->bits.ref().toInt64()
-                            : static_cast<std::int64_t>(value->bits.ref().toUInt64()));
-        return true;
-    };
-    const auto bits = [&](std::uint32_t expression, eir::BitVector& into) {
-        if (expression == eir::NoExpression) return true;
-        const eir::ParameterValue* value = evaluator.value(expression);
-        if (value == nullptr) return false;
-        into = value->bits;
-        return true;
-    };
-    const auto resize = [](eir::Type& type, std::uint32_t newWidth) {
-        if (type.isBits()) type = eir::Type::bits(newWidth, type.isSigned(), type.isFourState());
-    };
-
-    bool evaluated = true;
-    for (eir::Object& object : unit.objects) {
-        std::uint32_t objectWidth = object.type.bitWidth();
-        evaluated = evaluated && width(object.widthExpression, objectWidth);
-        resize(object.type, objectWidth);
-        evaluated = evaluated && width(object.elementWidthExpression, object.elementWidth);
-        for (eir::UnpackedDimension& dimension : object.unpackedDimensions) {
-            evaluated = evaluated && bound(dimension.leftExpression, dimension.left)
-                        && bound(dimension.rightExpression, dimension.right);
-        }
-        if (object.initialValueExpression != eir::NoExpression) {
-            eir::BitVector value(1);
-            evaluated = evaluated && bits(object.initialValueExpression, value);
-            object.initialValue = std::move(value);
-        }
-    }
-
-    for (eir::Process& process : unit.processes) {
-        for (std::size_t reg = 0; reg < process.registerWidthExpressions.size(); ++reg) {
-            std::uint32_t registerWidth = process.registerTypes[reg].bitWidth();
-            evaluated = evaluated && width(process.registerWidthExpressions[reg], registerWidth);
-            resize(process.registerTypes[reg], registerWidth);
-        }
-        for (std::size_t constant = 0; constant < process.constantExpressions.size(); ++constant)
-            evaluated = evaluated
-                        && bits(process.constantExpressions[constant], process.constants[constant]);
-
-        // A system task's argument is as wide as the register it passes, which may be a
-        // parameter's width; its signedness is the argument's own, as the format reads it.
-        for (eir::SysTaskCall& call : process.sysCalls) {
-            for (eir::SysTaskArgument& argument : call.arguments) {
-                if (argument.value.kind() != eir::Operand::Kind::Register
-                    || argument.value.index() >= process.registerWidthExpressions.size()
-                    || process.registerWidthExpressions[argument.value.index()]
-                           == eir::NoExpression)
-                    continue;
-                resize(argument.type, process.registerTypes[argument.value.index()].bitWidth());
-            }
-        }
-
-        const auto entry = [&](eir::SensitivityEntry& sensitivity) {
-            return integer(sensitivity.lowBitExpression, sensitivity.lowBit)
-                   && width(sensitivity.widthExpression, sensitivity.width);
-        };
-        for (eir::SensitivityEntry& sensitivity : process.sensitivity)
-            evaluated = evaluated && entry(sensitivity);
-        for (std::vector<eir::SensitivityEntry>& list : process.eventLists)
-            for (eir::SensitivityEntry& sensitivity : list)
-                evaluated = evaluated && entry(sensitivity);
-        for (eir::WriteExtent& extent : process.writeSet) {
-            evaluated = evaluated && integer(extent.lowBitExpression, extent.lowBit)
-                        && width(extent.widthExpression, extent.width);
-        }
-        eir::normaliseWriteSet(process.writeSet);
-
-        // The annotations have been applied; what remains is a concrete process.
-        process.registerWidthExpressions.clear();
-        process.constantExpressions.clear();
-        for (eir::SensitivityEntry& sensitivity : process.sensitivity)
-            sensitivity.lowBitExpression = sensitivity.widthExpression = eir::NoExpression;
-        for (std::vector<eir::SensitivityEntry>& list : process.eventLists)
-            for (eir::SensitivityEntry& sensitivity : list)
-                sensitivity.lowBitExpression = sensitivity.widthExpression = eir::NoExpression;
-        for (eir::WriteExtent& extent : process.writeSet)
-            extent.lowBitExpression = extent.widthExpression = eir::NoExpression;
-    }
-    if (!evaluated) {
-        inProgress.pop_back();
-        return evaluationFailed();
-    }
-    for (eir::Object& object : unit.objects) {
-        object.widthExpression = object.elementWidthExpression = object.initialValueExpression =
-            eir::NoExpression;
-        for (eir::UnpackedDimension& dimension : object.unpackedDimensions)
-            dimension.leftExpression = dimension.rightExpression = eir::NoExpression;
-    }
-
-    // What a reader is shown for this specialisation's parameters.
-    if (definition.isGeneric()) {
-        unit.parameters.clear();
-        for (std::size_t formalIndex = 0; formalIndex < definition.formals.size(); ++formalIndex) {
-            const eir::ParameterFormal& formal = definition.formals[formalIndex];
-            if (formal.kind == eir::FormalKind::InterfaceParameter) continue;
-            unit.parameters.push_back(
-                eir::Parameter{.name = formal.name,
-                               .value = formals[formalIndex]->bits,
-                               .isLocal = formal.kind == eir::FormalKind::LocalParameter,
-                               .location = formal.location});
-        }
-    }
+    inProgress.push_back(name);
     ValueMap& ownParameters = parametersOf[name];
     for (const eir::Parameter& parameter : unit.parameters) {
         const auto formal =
@@ -393,12 +235,7 @@ std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
             return true;
         }
 
-        ValueMap childActuals;
-        for (const eir::ParameterActual& actual : child.parameterActuals) {
-            const eir::ParameterValue* value = evaluator.value(actual.value);
-            if (value == nullptr) return false;
-            childActuals.insert_or_assign(actual.formal, *value);
-        }
+        const ValueMap childActuals = eir::actualValues(unit, child);
         InterfaceMap childInterfaces;
         for (const eir::InterfaceBinding& binding : child.interfaceBindings) {
             std::optional<Interface> interface = interfaceFor(binding.target);
@@ -423,7 +260,6 @@ std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
         unit.instances[child].definitionName = *resolved[child];
         unit.instances[child].parameterActuals.clear();
     }
-    unit.formals.clear();
     unit.expressions = {};
 
     // A specialisation is checked as a frontend's unit is: an annotation the frontend got wrong
