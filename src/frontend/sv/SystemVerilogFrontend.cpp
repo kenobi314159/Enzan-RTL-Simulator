@@ -110,6 +110,29 @@ std::string arraySuffixOf(const ast::InstanceSymbol& instance) {
     return suffix;
 }
 
+/// How many instances `array` holds, counting through its dimensions.
+std::size_t countElements(const ast::InstanceArraySymbol& array) {
+    std::size_t count = 0;
+    for (const ast::Symbol* element : array.elements) {
+        count += element->kind == slang::ast::SymbolKind::InstanceArray
+                     ? countElements(element->as<ast::InstanceArraySymbol>())
+                     : 1;
+    }
+    return count;
+}
+
+/// The first instance `array` holds, or null when it holds none.
+const ast::InstanceSymbol* firstElement(const ast::InstanceArraySymbol& array) {
+    for (const ast::Symbol* element : array.elements) {
+        if (element->kind == slang::ast::SymbolKind::Instance)
+            return &element->as<ast::InstanceSymbol>();
+        if (const ast::InstanceSymbol* found =
+                firstElement(element->as<ast::InstanceArraySymbol>()))
+            return found;
+    }
+    return nullptr;
+}
+
 /// The name an instance has in the module holding it: its own, or its array's with its index.
 std::string instanceName(const ast::InstanceSymbol& instance) {
     if (instance.arrayPath.empty()) return std::string(instance.name);
@@ -426,16 +449,6 @@ private:
         }
         if (declared == nullptr || countElements(*declared) != countElements(array)) return nullptr;
         return declared;
-    }
-
-    static std::size_t countElements(const ast::InstanceArraySymbol& array) {
-        std::size_t count = 0;
-        for (const ast::Symbol* element : array.elements) {
-            count += element->kind == slang::ast::SymbolKind::InstanceArray
-                         ? countElements(element->as<ast::InstanceArraySymbol>())
-                         : 1;
-        }
-        return count;
     }
 
     static bool containsElement(const ast::InstanceArraySymbol& array,
@@ -1325,9 +1338,10 @@ private:
     /// produces several. Each becomes its own EIR definition — which is what keeps parameters
     /// out of EIR entirely (see eir/Module.h) — and a suffix distinguishes them.
     ///
-    /// **The suffix is a function of the parameter values, not a counter.** A counter numbers
-    /// the parameterisations in the order *this* compilation happened to walk them, which makes
-    /// the name meaningless outside it: `counter$1` from one analysis and `counter$1` from
+    /// **The suffix is a function of the parameter values, and of the interfaces the body's
+    /// ports are connected to, not a counter.** A counter numbers the parameterisations in the
+    /// order *this* compilation happened to walk them, which makes the name meaningless
+    /// outside it: `counter$1` from one analysis and `counter$1` from
     /// another would be different modules wearing one name, and a design assembled from two
     /// libraries (DESIGN_GUIDE.md section 8.2) would resolve an instance to the wrong body with
     /// nothing to say so. Deriving it from the values instead gives a specialisation the same
@@ -1342,9 +1356,9 @@ private:
     /// Keyed by name and not by `InstanceBodySymbol*`: slang hands out a separate body symbol
     /// per instance even when the parameterisation is identical, so a pointer never matches and
     /// every instance of a module was translated again and then discarded by the design's
-    /// replace-by-name. The name is a function of the definition and the parameters set on it
-    /// (`specialisedModuleName`), so two bodies sharing a name are the same module and one
-    /// translation serves every instance of it.
+    /// replace-by-name. The name is a function of the definition, the parameters set on it and
+    /// the interfaces it is given (`specialisedModuleName`), so two bodies sharing a name are the
+    /// same module and one translation serves every instance of it.
     ///
     /// This is only sound because `BodyInfo::portIndices` is keyed by port name. A map keyed on
     /// slang's port symbols belongs to the one body it came from, and reusing it for another
@@ -1379,7 +1393,7 @@ std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
     std::string base(body.getDefinition().name);
 
     // Only the parameters set from outside: a localparam is derived inside the module from
-    // those, so two instances agreeing on the ports agree on it, and including it would make
+    // those and from its interfaces', both of which the name covers, so including it would make
     // the name longer without making it more specific.
     std::string values;
     for (const ast::ParameterSymbolBase* parameter : body.getParameters()) {
@@ -1400,6 +1414,38 @@ std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
 
         if (!values.empty()) values += ',';
         values += symbol.name;
+        values += '=';
+        values += rendered;
+    }
+
+    // And what each interface port is connected to, where that can change the body. A body
+    // reads an interface's parameters through the port, `localparam W = bus.W`, so two
+    // instances agreeing on their own parameters can still disagree on every width that
+    // depends on the interface's; and a generic port, or one taking an array, reaches different
+    // members or a different number of elements by what it is given.
+    for (const ast::Symbol* portSymbol : body.getPortList()) {
+        if (portSymbol->kind != slang::ast::SymbolKind::InterfacePort) continue;
+        const auto& port = portSymbol->as<ast::InterfacePortSymbol>();
+        const ast::Symbol* connected = port.getConnection().first;
+        if (connected == nullptr) continue;
+
+        std::string rendered;
+        if (connected->kind == slang::ast::SymbolKind::Instance) {
+            const ast::InstanceBodySymbol& interface = connected->as<ast::InstanceSymbol>().body;
+            rendered = specialisedModuleName(interface);
+            if (!port.isGeneric && rendered == interface.getDefinition().name) continue;
+        } else if (connected->kind == slang::ast::SymbolKind::InstanceArray) {
+            const auto& array = connected->as<ast::InstanceArraySymbol>();
+            const ast::InstanceSymbol* element = firstElement(array);
+            if (element == nullptr) continue;
+            rendered =
+                std::format("{}[{}]", specialisedModuleName(element->body), countElements(array));
+        } else {
+            continue;
+        }
+
+        if (!values.empty()) values += ',';
+        values += port.name;
         values += '=';
         values += rendered;
     }

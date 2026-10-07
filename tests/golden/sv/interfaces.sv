@@ -3,7 +3,8 @@
 // Interfaces (IEEE 1800 section 25): an interface with signals and logic of its own, modules
 // reading and writing it through ports with modports, an interface passed down through a module
 // to the one that uses it, and two instances of one module on two interfaces, which share one
-// definition and must each reach their own.
+// definition and must each reach their own. Two instances of a module given interfaces of two
+// widths are two parameterisations, although they set no parameter of their own.
 
 interface stream_if (input logic clk);
     logic [7:0] data;
@@ -41,6 +42,18 @@ module counter_bank (stream_if in[2], output logic [7:0] total);
     assign total = in[0].beats + in[1].beats;
 endmodule
 
+// A bus whose width is a parameter, and a module taking its width from the bus it is given.
+interface wide_if #(parameter int W = 8);
+    logic [W-1:0] data;
+endinterface
+
+module inverter (wide_if bus, output logic [31:0] inverted);
+    localparam int W = bus.W;
+    logic [W-1:0] value;
+    assign value = ~bus.data;
+    assign inverted = 32'(value);
+endmodule
+
 // Passes its interface port straight down to the module that uses it.
 module wrapper (input logic clk, stream_if.sink in, output logic [7:0] last);
     consumer u_consumer (.clk(clk), .in(in), .last(last));
@@ -63,6 +76,13 @@ module tb;
     wrapper u_wrapper_b (.clk(clk), .in(b), .last(last_b));
     counter_bank u_bank (.in(bank), .total(bank_total));
 
+    wide_if #(.W(8))  narrow ();
+    wide_if #(.W(16)) wide ();
+    logic [31:0] narrow_inverted;
+    logic [31:0] wide_inverted;
+    inverter u_narrow (.bus(narrow), .inverted(narrow_inverted));
+    inverter u_wide (.bus(wide), .inverted(wide_inverted));
+
     always #5 clk = ~clk;
 
     initial begin
@@ -72,7 +92,14 @@ module tb;
         #1;
         bank[0].beats = 8'd3;
         bank[1].beats = 8'd4;
+        narrow.data = 8'h0f;
+        wide.data = 16'h00ff;
         #1;
+        if (narrow_inverted !== 32'h00f0 || wide_inverted !== 32'hff00) begin
+            $display("FAIL: widths taken from the interface, got %h and %h", narrow_inverted,
+                     wide_inverted);
+            failures = failures + 1;
+        end
         if (bank_total !== 8'd7) begin
             $display("FAIL: an array of interfaces through an array port, got %0d", bank_total);
             failures = failures + 1;

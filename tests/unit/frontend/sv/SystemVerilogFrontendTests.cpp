@@ -1119,6 +1119,41 @@ TEST_F(FrontendTest, AMemberReachedThroughAnInterfacePortGoesThroughThePort) {
               (std::vector<InterfaceBinding>{InterfaceBinding{.port = "in", .target = "@in"}}));
 }
 
+TEST_F(FrontendTest, AModuleGivenInterfacesOfTwoWidthsIsTwoParameterisations) {
+    // `sink` sets no parameter of its own, yet its widths come from the interface it is
+    // given. Two instances agreeing on their own parameters are therefore not one
+    // parameterisation, and sharing a translation between them gave one the other's widths.
+    const std::unique_ptr<Design> design = analyse(R"(
+        interface bus_if #(parameter int W = 8);
+            logic [W-1:0] data;
+        endinterface
+
+        module sink (bus_if b);
+            localparam int W = b.W;
+            logic [W-1:0] copy;
+            assign copy = b.data;
+        endmodule
+
+        module top;
+            bus_if #(.W(8))  narrow ();
+            bus_if #(.W(16)) wide ();
+            sink u_narrow (.b(narrow));
+            sink u_wide (.b(wide));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const std::vector<std::uint32_t> sinks = design->findSpecialisations("sink");
+    ASSERT_EQ(sinks.size(), 2U);
+    std::set<std::uint32_t> widths;
+    for (const std::uint32_t index : sinks) {
+        const ModuleDefinition& sink = design->module(index);
+        widths.insert(sink.objects[require(sink.findObject("copy"))].type.bitWidth());
+    }
+    EXPECT_EQ(widths, (std::set<std::uint32_t>{8, 16}));
+}
+
 TEST_F(FrontendTest, AParameterOverrideSetsTheTopLevelsParameter) {
     const std::unique_ptr<Design> design =
         analyse("module top #(parameter int W = 4); endmodule\n", "top", {"W=9"});
