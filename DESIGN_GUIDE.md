@@ -435,8 +435,8 @@ Concrete invariants:
 - Code MUST NOT iterate `std::unordered_map`/`std::unordered_set` in any way
   that affects simulation results, diagnostic ordering, or generated output.
   Use ordered containers or sort explicitly where order is observable.
-- All randomisation MUST draw from an explicit seeded generator. The seed MUST
-  be recorded in the transcript and MUST be settable from the command line.
+- All randomisation MUST draw from an explicit seeded generator. The seed
+  MUST be settable from the command line.
 - The kernel is single-threaded in the initial arc, which makes determinism
   achievable. Any later parallelism MUST preserve it.
 
