@@ -147,6 +147,10 @@ struct Object {
     /// The width of one element, when `unpackedDimensions` is not empty.
     std::uint32_t elementWidth = 0;
 
+    /// Whether one element is signed, when `unpackedDimensions` is not empty. The flat vector
+    /// is unsigned whatever its elements are, so this is the only record of it.
+    bool elementSigned = false;
+
     /// When not empty, the object is a hierarchical reference: a name here for an object of
     /// another instance, which elaboration binds to that object's storage.
     ///

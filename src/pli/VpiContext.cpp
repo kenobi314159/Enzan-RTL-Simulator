@@ -618,6 +618,7 @@ vpiHandle VpiContext::intern(const Target& target) {
                 object->type = vpiNet;
             else
                 object->type = declared.type.isFourState() ? vpiReg : vpiBitVar;
+            object->isSigned = declared.elementSigned;
         } else {
             object->type = whole.type;
             object->isArray = true;

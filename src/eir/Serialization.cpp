@@ -327,6 +327,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
             out.u32(static_cast<std::uint32_t>(dimension.right));
         }
         out.u32(object.elementWidth);
+        out.boolean(object.elementSigned);
         out.text(object.hierarchicalPath);
     }
 
@@ -581,6 +582,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
             dimension.right = static_cast<std::int32_t>(in.u32());
         }
         object.elementWidth = in.u32();
+        object.elementSigned = in.boolean();
         object.hierarchicalPath = in.text();
     }
 

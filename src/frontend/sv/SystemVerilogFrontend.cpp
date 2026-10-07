@@ -677,8 +677,10 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
             eir::UnpackedDimension{.left = array.range.left, .right = array.range.right});
         level = &array.elementType.getCanonicalType();
         if (level->kind != slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
-            if (const std::optional<eir::Type> element = convertType(*level))
+            if (const std::optional<eir::Type> element = convertType(*level)) {
                 object.elementWidth = element->bitWidth();
+                object.elementSigned = element->isSigned();
+            }
         }
     }
 

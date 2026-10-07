@@ -613,7 +613,7 @@ TEST_F(FrontendTest, AnUnpackedArrayIsStoredFlatAndKeepsItsDimensions) {
     const std::unique_ptr<Design> design = analyse(R"(
         module top;
             logic [7:0] memory [0:15];
-            logic [3:0] grid [2:0][0:3];
+            logic signed [3:0] grid [2:0][0:3];
         endmodule
     )");
     ASSERT_NE(design, nullptr) << consumer.messages.front();
@@ -624,12 +624,14 @@ TEST_F(FrontendTest, AnUnpackedArrayIsStoredFlatAndKeepsItsDimensions) {
     const enzan::eir::Object& memory = found->objects[require(found->findObject("memory"))];
     EXPECT_EQ(memory.type.bitWidth(), 128U);
     EXPECT_EQ(memory.elementWidth, 8U);
+    EXPECT_FALSE(memory.elementSigned);
     EXPECT_EQ(memory.unpackedDimensions,
               (std::vector<UnpackedDimension>{UnpackedDimension{.left = 0, .right = 15}}));
 
     const enzan::eir::Object& grid = found->objects[require(found->findObject("grid"))];
     EXPECT_EQ(grid.type.bitWidth(), 48U);
     EXPECT_EQ(grid.elementWidth, 4U);
+    EXPECT_TRUE(grid.elementSigned) << "the flat vector is unsigned, and the element is not";
     EXPECT_EQ(grid.unpackedDimensions,
               (std::vector<UnpackedDimension>{UnpackedDimension{.left = 2, .right = 0},
                                               UnpackedDimension{.left = 0, .right = 3}}));

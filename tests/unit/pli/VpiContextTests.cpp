@@ -81,12 +81,13 @@ Design makeDesign() {
     top.addObject(Object{.name = "gen[0].q", .type = Type::logic()});
     top.addObject(Object{.name = "gen[0].inner.r", .type = Type::bits(4, true, true)});
     top.addObject(Object{.name = "u_child$in", .type = Type::bits(8, false, true)});
-    // `logic [7:0] mem [3:0]`, stored flat with the left element, mem[3], highest.
+    // `logic signed [7:0] mem [3:0]`, stored flat with the left element, mem[3], highest.
     Object memory{.name = "mem",
                   .type = Type::bits(32, false, true),
                   .initialValue = literal("32'h33221100")};
     memory.unpackedDimensions.push_back(enzan::eir::UnpackedDimension{.left = 3, .right = 0});
     memory.elementWidth = 8;
+    memory.elementSigned = true;
     top.addObject(std::move(memory));
     // `logic [3:0] grid [0:1][2:0]`: grid[0][2] highest, then grid[0][1], ... grid[1][0].
     Object grid{
@@ -387,6 +388,19 @@ TEST_F(Vpi, AnElementOfAnArrayIsSelectedByItsDeclaredIndex) {
 
     EXPECT_EQ(vpi_handle_by_index(memory, 4), nullptr);
     EXPECT_EQ(lastErrorLevel(), vpiError);
+}
+
+TEST_F(Vpi, AnElementOfAnArrayIsAsSignedAsItsDeclaredType) {
+    // The array is stored as one unsigned vector, so its element type is what says this.
+    vpiHandle element = vpi_handle_by_index(byName("tb.mem"), 1);
+    ASSERT_NE(element, nullptr);
+    EXPECT_EQ(vpi_get(vpiSigned, element), 1);
+
+    write(element, -2, vpiNoDelay);
+    s_vpi_value value{};
+    value.format = vpiIntVal;
+    vpi_get_value(element, &value);
+    EXPECT_EQ(value.value.integer, -2);
 }
 
 TEST_F(Vpi, AnArrayOfTwoDimensionsIsAnArrayOfArrays) {
