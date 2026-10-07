@@ -8,6 +8,7 @@ enzan_add_component(
           Instruction.cpp
           Library.cpp
           Module.cpp
+          ParameterExpression.cpp
           Process.cpp
           Serialization.cpp
           Type.cpp
@@ -19,6 +20,7 @@ enzan_add_component(
           Library.h
           Module.h
           Opcodes.def
+          ParameterExpression.h
           Process.h
           Serialization.h
           Type.h
