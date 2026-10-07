@@ -79,6 +79,22 @@ TEST(Format, AnUppercaseConversionIsTheLowercaseOne) {
     EXPECT_EQ(render("%B", {{.value = literal("4'b1x0z").ref(), .isSigned = false}}), "1x0z");
 }
 
+TEST(Format, AMinimalRadixDropsItsLeadingZeroDigits) {
+    // Checked against Icarus Verilog: zeros go, one digit stays, and an unknown digit is kept.
+    const auto minimal = [](std::string_view format, std::string_view text) {
+        const BitVector value = literal(text);
+        return render(format, {{.value = value.ref(), .isSigned = false}});
+    };
+    EXPECT_EQ(minimal("%0h", "16'h00ab"), "ab");
+    EXPECT_EQ(minimal("%0h", "16'h0x3f"), "x3f");
+    EXPECT_EQ(minimal("%0h", "16'h00zz"), "zz");
+    EXPECT_EQ(minimal("%0h", "32'hxxxxxxxx"), "xxxxxxxx");
+    EXPECT_EQ(minimal("%0h", "8'h00"), "0");
+    EXPECT_EQ(minimal("%0b", "8'b00000101"), "101");
+    EXPECT_EQ(minimal("%0o", "9'o000"), "0");
+    EXPECT_EQ(minimal("%0h", "12'b0000_01x0_0000"), "X0");
+}
+
 TEST(Format, UnknownBitsRenderAsTheValueEngineRendersThem) {
     const BitVector value = literal("8'b1010_xxxx");
     EXPECT_EQ(render("%b", {{.value = value.ref(), .isSigned = false}}), "1010xxxx");

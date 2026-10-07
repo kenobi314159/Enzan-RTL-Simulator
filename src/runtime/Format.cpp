@@ -190,9 +190,12 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
         std::string rendered = eir::toString(argument.value, radix, argument.isSigned);
 
         // A decimal is rendered minimal and then widened; a radix whose digits each cover fixed
-        // bits always shows them all, and a field width only ever adds to that. Without a field
-        // width, the value's own is the width, and `-` still justifies it to the left.
+        // bits shows them all, and a field width only ever adds to that. Without a field width,
+        // the value's own is the width, and `-` still justifies it to the left. The minimal
+        // form of a radix drops its leading zero digits, keeping one; an unknown digit stays.
         if (minimal) {
+            const std::size_t significant = rendered.find_first_not_of('0');
+            rendered.erase(0, significant == std::string::npos ? rendered.size() - 1 : significant);
             result += rendered;
         } else if (fieldWidth.has_value()) {
             result += widened(std::move(rendered), fieldWidth, leftJustify, zeroPad);
