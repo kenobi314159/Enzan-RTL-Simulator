@@ -17,6 +17,10 @@ namespace enzan::gui {
 
 namespace {
 
+/// Every radix a signal list can name, in the order a message lists them.
+constexpr std::array ListedRadixes{eir::Radix::Binary, eir::Radix::Octal, eir::Radix::Decimal,
+                                   eir::Radix::Hexadecimal, eir::Radix::Ascii};
+
 /// How deeply groups may nest. Each level is a recursion here, and a file is untrusted input:
 /// without a limit, a few kilobytes of opening braces would take the window down.
 constexpr int MaximumDepth = 32;
@@ -233,8 +237,10 @@ private:
             }
             entry.radix = radixFromWord(QString::fromUtf8(words[index].text));
             if (!entry.radix.has_value()) {
-                error(line, QStringLiteral("'%1' is not a radix; it is one of bin, oct, dec, hex")
-                                .arg(QString::fromUtf8(words[index].text)));
+                QStringList known;
+                for (const eir::Radix radix : ListedRadixes) known << radixWord(radix);
+                error(line, QStringLiteral("'%1' is not a radix; it is one of %2")
+                                .arg(QString::fromUtf8(words[index].text), known.join(u", ")));
                 failed = true;
             }
             return true;
@@ -671,8 +677,7 @@ QString radixWord(eir::Radix radix) {
 }
 
 std::optional<eir::Radix> radixFromWord(const QString& word) {
-    for (const eir::Radix radix : {eir::Radix::Binary, eir::Radix::Octal, eir::Radix::Decimal,
-                                   eir::Radix::Hexadecimal, eir::Radix::Ascii}) {
+    for (const eir::Radix radix : ListedRadixes) {
         if (word == radixWord(radix)) return radix;
     }
     return std::nullopt;

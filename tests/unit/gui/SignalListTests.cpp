@@ -174,6 +174,13 @@ TEST(SignalList, ValuesAreChecked) {
     EXPECT_FALSE(parse("group G\n").errors.isEmpty());
 }
 
+TEST(SignalList, AWrongRadixIsToldEveryRadixThereIs) {
+    const auto parsed = parse("add wave -radix ternary /tb/a\n");
+    ASSERT_EQ(parsed.errors.size(), 1);
+    EXPECT_TRUE(parsed.errors.front().text.endsWith(QStringLiteral("bin, oct, dec, hex, ascii")))
+        << firstError(parsed);
+}
+
 TEST(SignalList, OptionsThatContradictTheirPathsAreRefused) {
     EXPECT_FALSE(parse("add wave -label x /tb/a /tb/b\n").errors.isEmpty());
     EXPECT_FALSE(parse("add wave -contents {} /tb/a /tb/b\n").errors.isEmpty());
