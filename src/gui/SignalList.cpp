@@ -462,12 +462,6 @@ private:
                                   .arg(path));
             return;
         }
-        if (entry.label.has_value() && entry.recursive) {
-            error(entry.line, QStringLiteral("-label cannot be applied to a scope %1"
-                                             "inserted recursively with -r")
-                                  .arg(path));
-            return;
-        }
 
         // The subtree in the Structure window's order, as *Add to wave recursive* takes it.
         const QString prefix = path + u'/';
