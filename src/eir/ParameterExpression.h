@@ -4,6 +4,7 @@
 
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
+#include "eir/Type.h"
 
 #include <compare>
 #include <cstdint>
@@ -195,6 +196,7 @@ private:
 /// The index that says a number is the number written beside it rather than the value of an
 /// expression: every number of a unit that does not depend on a parameter.
 inline constexpr std::uint32_t NoExpression = ParameterNode::NoNode;
+static_assert(NoExpression == Type::NoWidthExpression, "one sentinel for every annotation");
 
 /// The widest value a parameter expression may produce, which is the widest vector slang
 /// accepts: a width beyond it is a mistake in the design rather than something to allocate.

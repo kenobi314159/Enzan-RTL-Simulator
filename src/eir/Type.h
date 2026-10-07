@@ -77,6 +77,34 @@ public:
         return result;
     }
 
+    /// The index a type's width has when it is the number written and no expression's value.
+    static constexpr std::uint32_t NoWidthExpression = 0xFFFF'FFFFU;
+
+    /// In a generic unit, the expression of the unit's table that this type's width is the
+    /// value of (DESIGN_GUIDE.md section 18, M5.1), or `NoWidthExpression`. `bitWidth()` is then
+    /// the representative's width, which is what keeps the unit valid for everything that does
+    /// not specialise it.
+    ///
+    /// Carried on the type rather than beside it, so that whatever takes a type from an object
+    /// or a value takes its expression with it: a register's type copied from the object it
+    /// reads cannot lose the annotation by being copied.
+    [[nodiscard]] constexpr std::uint32_t widthExpression() const noexcept { return widthNode; }
+
+    /// This type with its width the value of `expression`.
+    [[nodiscard]] constexpr Type withWidthExpression(std::uint32_t expression) const noexcept {
+        Type result = *this;
+        result.widthNode = expression;
+        return result;
+    }
+
+    /// This type at a concrete width, with no expression.
+    [[nodiscard]] constexpr Type withWidth(std::uint32_t newWidth) const noexcept {
+        Type result = *this;
+        result.width = newWidth;
+        result.widthNode = NoWidthExpression;
+        return result;
+    }
+
     [[nodiscard]] constexpr Kind kind() const noexcept { return typeKind; }
 
     [[nodiscard]] constexpr bool isBits() const noexcept { return typeKind == Kind::Bits; }
@@ -127,6 +155,7 @@ private:
     std::uint32_t width = 0;
     bool signedFlag = false;
     bool fourStateFlag = false;
+    std::uint32_t widthNode = NoWidthExpression;
 };
 
 } // namespace enzan::eir

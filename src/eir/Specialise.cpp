@@ -19,7 +19,7 @@ SpecialiseFailure evaluationFailure(const ParameterEvaluator& evaluator, SourceL
 }
 
 void resize(Type& type, std::uint32_t width) {
-    if (type.isBits()) type = Type::bits(width, type.isSigned(), type.isFourState());
+    if (type.isBits()) type = type.withWidth(width);
 }
 
 } // namespace
@@ -125,6 +125,13 @@ specialiseAt(const ModuleDefinition& unit, std::span<const std::optional<Paramet
                             : static_cast<std::int64_t>(value->bits.ref().toUInt64()));
         return true;
     };
+    // A type whose width is an expression's value takes it, and is concrete from then on.
+    const auto concrete = [&](Type& type) {
+        std::uint32_t typeWidth = type.bitWidth();
+        if (!width(type.widthExpression(), typeWidth)) return false;
+        resize(type, typeWidth);
+        return true;
+    };
     const auto bits = [&](std::uint32_t expression, BitVector& into) {
         if (expression == NoExpression) return true;
         const ParameterValue* value = evaluator.value(expression);
@@ -136,9 +143,7 @@ specialiseAt(const ModuleDefinition& unit, std::span<const std::optional<Paramet
     ModuleDefinition result = unit;
     bool evaluated = true;
     for (Object& object : result.objects) {
-        std::uint32_t objectWidth = object.type.bitWidth();
-        evaluated = evaluated && width(object.widthExpression, objectWidth);
-        resize(object.type, objectWidth);
+        evaluated = evaluated && concrete(object.type);
         evaluated = evaluated && width(object.elementWidthExpression, object.elementWidth);
         for (UnpackedDimension& dimension : object.unpackedDimensions) {
             evaluated = evaluated && bound(dimension.leftExpression, dimension.left)
@@ -150,31 +155,17 @@ specialiseAt(const ModuleDefinition& unit, std::span<const std::optional<Paramet
             evaluated = evaluated && bits(object.initialValueExpression, value);
             object.initialValue = std::move(value);
         }
-        object.widthExpression = object.elementWidthExpression = object.initialValueExpression =
-            NoExpression;
+        object.elementWidthExpression = object.initialValueExpression = NoExpression;
     }
 
     for (Process& process : result.processes) {
-        for (std::size_t reg = 0; reg < process.registerWidthExpressions.size(); ++reg) {
-            std::uint32_t registerWidth = process.registerTypes[reg].bitWidth();
-            evaluated = evaluated && width(process.registerWidthExpressions[reg], registerWidth);
-            resize(process.registerTypes[reg], registerWidth);
-        }
+        for (Type& type : process.registerTypes) evaluated = evaluated && concrete(type);
         for (std::size_t constant = 0; constant < process.constantExpressions.size(); ++constant)
             evaluated = evaluated
                         && bits(process.constantExpressions[constant], process.constants[constant]);
-
-        // A system task's argument is as wide as the register it passes, which may be a
-        // parameter's width; its signedness is the argument's own, as the format reads it.
-        for (SysTaskCall& call : process.sysCalls) {
-            for (SysTaskArgument& argument : call.arguments) {
-                if (argument.value.kind() != Operand::Kind::Register
-                    || argument.value.index() >= process.registerWidthExpressions.size()
-                    || process.registerWidthExpressions[argument.value.index()] == NoExpression)
-                    continue;
-                resize(argument.type, process.registerTypes[argument.value.index()].bitWidth());
-            }
-        }
+        for (SysTaskCall& call : process.sysCalls)
+            for (SysTaskArgument& argument : call.arguments)
+                evaluated = evaluated && concrete(argument.type);
 
         const auto entry = [&](SensitivityEntry& sensitivity) {
             const bool ok = integer(sensitivity.lowBitExpression, sensitivity.lowBit)
@@ -193,7 +184,6 @@ specialiseAt(const ModuleDefinition& unit, std::span<const std::optional<Paramet
         }
         normaliseWriteSet(process.writeSet);
 
-        process.registerWidthExpressions.clear();
         process.constantExpressions.clear();
     }
 

@@ -195,6 +195,7 @@ void writeType(Writer& out, const Type& type) {
     out.u32(type.bitWidth());
     out.boolean(type.isSigned());
     out.boolean(type.isFourState());
+    out.u32(type.widthExpression());
 }
 
 void writeVector(Writer& out, const BitVector& value) {
@@ -254,7 +255,6 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     out.u32(static_cast<std::uint32_t>(process.constants.size()));
     for (const BitVector& value : process.constants) writeVector(out, value);
 
-    writeIndices(out, process.registerWidthExpressions);
     writeIndices(out, process.constantExpressions);
 
     out.u32(static_cast<std::uint32_t>(process.strings.size()));
@@ -344,7 +344,6 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.boolean(object.elementSigned);
         out.boolean(object.subroutineStatic);
         out.text(object.hierarchicalPath);
-        out.u32(object.widthExpression);
         out.u32(object.elementWidthExpression);
         out.u32(object.initialValueExpression);
     }
@@ -473,10 +472,12 @@ Type readType(Reader& in) {
     const std::uint32_t width = in.u32();
     const bool isSigned = in.boolean();
     const bool isFourState = in.boolean();
+    const std::uint32_t widthExpression = in.u32();
 
     switch (kind) {
     case Type::Kind::Void: return Type::voidType();
-    case Type::Kind::Bits: return Type::bits(width, isSigned, isFourState);
+    case Type::Kind::Bits:
+        return Type::bits(width, isSigned, isFourState).withWidthExpression(widthExpression);
     case Type::Kind::Real: return Type::real();
     case Type::Kind::String: return Type::string();
     }
@@ -557,8 +558,6 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     for (std::uint32_t index = 0; index < constantCount && in.ok(); ++index)
         process.constants.push_back(readVector(in));
 
-    process.registerWidthExpressions.resize(in.count());
-    for (std::uint32_t& index : process.registerWidthExpressions) index = in.u32();
     process.constantExpressions.resize(in.count());
     for (std::uint32_t& index : process.constantExpressions) index = in.u32();
 
@@ -648,7 +647,6 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         object.elementSigned = in.boolean();
         object.subroutineStatic = in.boolean();
         object.hierarchicalPath = in.text();
-        object.widthExpression = in.u32();
         object.elementWidthExpression = in.u32();
         object.initialValueExpression = in.u32();
     }

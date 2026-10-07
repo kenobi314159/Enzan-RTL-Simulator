@@ -177,8 +177,7 @@ struct Object {
 
     /// In a generic unit, the expressions this object's numbers are the values of, or
     /// `NoExpression` for a number the same in every parameterisation (DESIGN_GUIDE.md section
-    /// 18, M5.1): the width of `type`, the width of an element, and the initial value.
-    std::uint32_t widthExpression = NoExpression;
+    /// 18, M5.1): the width of an element, and the initial value. Its width is its type's.
     std::uint32_t elementWidthExpression = NoExpression;
     std::uint32_t initialValueExpression = NoExpression;
 

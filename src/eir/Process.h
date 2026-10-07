@@ -255,14 +255,6 @@ struct Process {
     /// Constant values referred to by LoadConstant and by system task arguments.
     std::vector<BitVector> constants;
 
-    /// In a generic unit, the expression giving each register's width, by register number, or
-    /// `NoExpression` for a width that is the same in every parameterisation. Empty when no
-    /// register's width depends on a parameter.
-    ///
-    /// The width in `registerTypes` is the representative parameterisation's, which is what
-    /// keeps a generic unit a valid unit for everything that ignores these (section 18, M5.1).
-    std::vector<std::uint32_t> registerWidthExpressions;
-
     /// In a generic unit, the expression giving each constant, by index, or `NoExpression` for
     /// a constant that is the same in every parameterisation. Empty when none depends on one.
     std::vector<std::uint32_t> constantExpressions;

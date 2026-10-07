@@ -394,7 +394,7 @@ TEST_F(SerializationTest, AGenericUnitRoundTripsWithItsAnnotations) {
                                           .widthExpression = width,
                                           .value = msb}};
 
-    definition.objects[1].widthExpression = width;
+    definition.objects[1].type = definition.objects[1].type.withWidthExpression(width);
     definition.objects[1].initialValueExpression = msb;
     definition.objects[0].elementWidthExpression = one;
     definition.objects[0].unpackedDimensions[1].leftExpression = msb;
@@ -402,8 +402,7 @@ TEST_F(SerializationTest, AGenericUnitRoundTripsWithItsAnnotations) {
     definition.instances[0].parameterActuals = {ParameterActual{.formal = "N", .value = msb}};
 
     Process& process = definition.processes[0];
-    process.registerWidthExpressions = {enzan::eir::NoExpression, width, enzan::eir::NoExpression,
-                                        enzan::eir::NoExpression, enzan::eir::NoExpression};
+    process.registerTypes[1] = process.registerTypes[1].withWidthExpression(width);
     process.constantExpressions = {msb, enzan::eir::NoExpression};
     process.sensitivity[0].lowBitExpression = one;
     process.sensitivity[0].widthExpression = width;
@@ -431,14 +430,15 @@ TEST_F(SerializationTest, AGenericUnitRoundTripsWithItsAnnotations) {
         EXPECT_EQ(got.location, want.location);
     }
 
-    EXPECT_EQ(result.objects[1].widthExpression, width);
+    EXPECT_EQ(result.objects[1].type.widthExpression(), width);
+    EXPECT_EQ(result.objects[1].type, definition.objects[1].type);
     EXPECT_EQ(result.objects[1].initialValueExpression, msb);
     EXPECT_EQ(result.objects[0].elementWidthExpression, one);
     EXPECT_EQ(result.objects[0].unpackedDimensions[1].leftExpression, msb);
     EXPECT_EQ(result.objects[0].unpackedDimensions[1].rightExpression, one);
     EXPECT_EQ(result.objects[0].unpackedDimensions[0].leftExpression, enzan::eir::NoExpression);
     EXPECT_EQ(result.instances[0].parameterActuals, definition.instances[0].parameterActuals);
-    EXPECT_EQ(result.processes[0].registerWidthExpressions, process.registerWidthExpressions);
+    EXPECT_EQ(result.processes[0].registerTypes, process.registerTypes);
     EXPECT_EQ(result.processes[0].constantExpressions, process.constantExpressions);
     EXPECT_EQ(result.processes[0].sensitivity, process.sensitivity);
     EXPECT_EQ(result.processes[0].writeSet, process.writeSet);

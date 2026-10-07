@@ -87,14 +87,13 @@ ModuleDefinition genericLeaf() {
     leaf.formals.push_back(ParameterFormal{.name = "W", .value = table.constant(intBits(8), true)});
     leaf.parameters.push_back(enzan::eir::Parameter{.name = "W", .value = intBits(8)});
 
-    leaf.addObject(Object{.name = "q", .type = Type::bits(8, false, true), .widthExpression = w});
+    leaf.addObject(Object{.name = "q", .type = Type::bits(8, false, true).withWidthExpression(w)});
     leaf.ports.push_back(Port{.name = "q", .direction = PortDirection::Output, .objectIndex = 0});
 
     Process process;
     process.kind = ProcessKind::Initial;
     process.name = "initial@leaf";
-    process.registerTypes = {Type::bits(8, false, true)};
-    process.registerWidthExpressions = {w};
+    process.registerTypes = {Type::bits(8, false, true).withWidthExpression(w)};
     process.constants = {BitVector::fromUInt64(0xff, 8)};
     process.constantExpressions = {ones};
     process.writeSet = {
@@ -187,7 +186,7 @@ TEST_F(SpecialiserTest, EachSetOfValuesIsOneConcreteUnit) {
         EXPECT_EQ(process.registerTypes[0], Type::bits(width, false, true)) << name;
         EXPECT_EQ(process.constants[0], BitVector::fromUInt64(ones, width)) << name;
         EXPECT_EQ(process.writeSet[0].width, width) << name;
-        EXPECT_TRUE(process.registerWidthExpressions.empty());
+        EXPECT_EQ(process.registerTypes[0].widthExpression(), NoExpression);
         EXPECT_TRUE(process.constantExpressions.empty());
         ASSERT_EQ(leaf.parameters.size(), 1U);
         EXPECT_EQ(leaf.parameters[0].value, intBits(width)) << "shown as what it resolved to";
@@ -290,7 +289,7 @@ TEST_F(SpecialiserTest, AnInterfacesParametersAreReadThroughThePort) {
     sink.formals.push_back(
         ParameterFormal{.name = "W", .kind = FormalKind::InterfaceParameter, .port = "b"});
     sink.addObject(
-        Object{.name = "copy", .type = Type::bits(8, false, true), .widthExpression = w});
+        Object{.name = "copy", .type = Type::bits(8, false, true).withWidthExpression(w)});
 
     ModuleDefinition top;
     top.name = "top";

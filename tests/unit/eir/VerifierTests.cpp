@@ -85,9 +85,9 @@ protected:
             .name = "W",
             .value =
                 definition.expressions.constant(enzan::eir::BitVector::fromInt64(8, 32), true)});
-        definition.objects[0].widthExpression = width;
-        definition.objects[1].widthExpression = width;
-        definition.processes[0].registerWidthExpressions = {width};
+        for (Object& object : definition.objects) object.type = object.type.withWidthExpression(width);
+        definition.processes[0].registerTypes[0] =
+            definition.processes[0].registerTypes[0].withWidthExpression(width);
         definition.processes[0].writeSet[0].widthExpression = width;
         return definition;
     }
@@ -486,18 +486,20 @@ TEST_F(VerifierTest, AcceptsAGenericUnit) {
 
 TEST_F(VerifierTest, RejectsAnAnnotationNamingNoExpression) {
     ModuleDefinition definition = makeGenericModule();
-    definition.objects[1].widthExpression = 42;
+    definition.objects[1].type = definition.objects[1].type.withWidthExpression(42);
     EXPECT_FALSE(check(definition));
     EXPECT_TRUE(reported("object 'sink' names expression 42")) << consumer.messages.front();
 }
 
-TEST_F(VerifierTest, RejectsAnnotationsOfSomeOfAProcesssRegisters) {
-    // The annotations are by register number, so a shorter list would leave the specialiser
-    // reading another register's.
+TEST_F(VerifierTest, RejectsAnnotationsOfSomeOfAProcesssConstants) {
+    // The annotations are by constant, so a shorter list would leave the specialiser reading
+    // another constant's.
     ModuleDefinition definition = makeGenericModule();
-    definition.processes[0].registerTypes.push_back(Type::logic());
+    definition.processes[0].constants = {enzan::eir::BitVector::fromUInt64(0, 8),
+                                         enzan::eir::BitVector::fromUInt64(1, 8)};
+    definition.processes[0].constantExpressions = {enzan::eir::NoExpression};
     EXPECT_FALSE(check(definition));
-    EXPECT_TRUE(reported("annotates 1 of its 2 registers")) << consumer.messages.front();
+    EXPECT_TRUE(reported("annotates 1 of its 2 constants")) << consumer.messages.front();
 }
 
 TEST_F(VerifierTest, RejectsAFormalDefinedByItself) {
@@ -512,7 +514,8 @@ TEST_F(VerifierTest, RejectsAFormalDefinedByItself) {
 
 TEST_F(VerifierTest, RejectsAnExpressionUsingAFormalTheUnitLacks) {
     ModuleDefinition definition = makeGenericModule();
-    definition.objects[0].widthExpression = definition.expressions.formal(3, 32, true);
+    definition.objects[0].type =
+        definition.objects[0].type.withWidthExpression(definition.expressions.formal(3, 32, true));
     EXPECT_FALSE(check(definition));
     EXPECT_TRUE(reported("uses formal 3, but the unit has 1 formals")) << consumer.messages.front();
 }

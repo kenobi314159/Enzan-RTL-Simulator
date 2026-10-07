@@ -112,7 +112,7 @@ private:
 
         for (const Object& object : definition.objects) {
             const std::string what = std::format("object '{}'", object.name);
-            check(object.widthExpression, what);
+            check(object.type.widthExpression(), what);
             check(object.elementWidthExpression, what);
             check(object.initialValueExpression, what);
             for (const UnpackedDimension& dimension : object.unpackedDimensions) {
@@ -136,7 +136,10 @@ private:
                 }
                 for (const std::uint32_t expression : list) check(expression, what);
             };
-            checkList(process.registerWidthExpressions, process.registerTypes.size(), "registers");
+            for (const Type& type : process.registerTypes) check(type.widthExpression(), what);
+            for (const SysTaskCall& call : process.sysCalls)
+                for (const SysTaskArgument& argument : call.arguments)
+                    check(argument.type.widthExpression(), what);
             checkList(process.constantExpressions, process.constants.size(), "constants");
 
             const auto checkEntry = [&](const SensitivityEntry& entry) {
