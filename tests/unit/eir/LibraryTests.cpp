@@ -33,11 +33,14 @@ using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
 using enzan::SourceLocation;
 using enzan::SourceManager;
+using enzan::eir::BitVector;
 using enzan::eir::Design;
 using enzan::eir::Library;
 using enzan::eir::LibrarySource;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
+using enzan::eir::Parameter;
+using enzan::eir::ParameterFormal;
 using enzan::eir::Type;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
@@ -540,6 +543,50 @@ TEST_F(LibraryTest, ListingNamesTheUnitsItHolds) {
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
     EXPECT_EQ(library.unitNames(), std::vector<std::string>{"a"});
+}
+
+TEST_F(LibraryTest, ListingSaysWhichUnitsAreGenericAndWhichSpecialised) {
+    // What a design needing other parameters can use as it is: a generic unit serves every
+    // parameterisation, a specialised one only its own (DESIGN_GUIDE.md section 8.2, M5.1).
+    const std::filesystem::path path = workspace / "work";
+    const LibrarySource file = source("a.sv", "module a; endmodule\n");
+
+    Design design;
+    ModuleDefinition generic;
+    generic.name = "g";
+    generic.sourceName = "g";
+    generic.location = SourceLocation(file.buffer, 0);
+    generic.formals.push_back(ParameterFormal{.name = "W"});
+    generic.parameters.push_back(Parameter{.name = "W", .value = BitVector(32)});
+    design.addModule(std::move(generic));
+
+    ModuleDefinition specialised;
+    specialised.name = "s$W_4";
+    specialised.sourceName = "s";
+    specialised.location = SourceLocation(file.buffer, 0);
+    specialised.parameters.push_back(Parameter{.name = "W", .value = BitVector(32)});
+    specialised.parameters.push_back(
+        Parameter{.name = "L", .value = BitVector(32), .isLocal = true});
+    design.addModule(std::move(specialised));
+
+    // A local parameter does not make a parameterisation of its own.
+    ModuleDefinition plain;
+    plain.name = "p";
+    plain.sourceName = "p";
+    plain.location = SourceLocation(file.buffer, 0);
+    plain.parameters.push_back(Parameter{.name = "L", .value = BitVector(32), .isLocal = true});
+    design.addModule(std::move(plain));
+
+    Library library;
+    ASSERT_TRUE(library.create(path, {}, engine));
+    ASSERT_TRUE(library.store({&file, 1}, sources, design, engine));
+
+    using Summary = Library::UnitSummary;
+    EXPECT_EQ(library.units(), (std::vector<Summary>{
+                                   Summary{.name = "g", .sourceName = "g", .generic = true},
+                                   Summary{.name = "p", .sourceName = "p"},
+                                   Summary{.name = "s$W_4", .sourceName = "s", .specialised = true},
+                               }));
 }
 
 TEST_F(StoredLibraryTest, AnEntryIsNamedAfterItsSourceAndStaysThereWhenItChanges) {

@@ -1011,10 +1011,17 @@ ExitStatus runLibCommand(const Invocation& invocation, enzan::DiagnosticEngine& 
     if (!library.open(path, diagnostics)) return ExitStatus::AnalysisFailed;
 
     if (invocation.command == Command::LibList) {
-        const std::vector<std::string> units = library.unitNames();
+        // A unit's form is what decides whether a design needing other parameters can use it as
+        // it is: a generic unit serves every parameterisation, a specialised one only its own.
+        const std::vector<enzan::eir::Library::UnitSummary> units = library.units();
         std::cout << "library '" << library.name() << "' in " << path.string() << ", "
                   << units.size() << (units.size() == 1 ? " unit\n" : " units\n");
-        for (const std::string& unit : units) std::cout << "  " << unit << '\n';
+        for (const enzan::eir::Library::UnitSummary& unit : units) {
+            std::cout << "  " << unit.name;
+            if (unit.generic) std::cout << " (generic)";
+            if (unit.specialised) std::cout << " (a parameterisation of " << unit.sourceName << ')';
+            std::cout << '\n';
+        }
         return ExitStatus::Success;
     }
 

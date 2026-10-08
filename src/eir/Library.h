@@ -188,11 +188,27 @@ public:
     /// run from this library takes its unit from here (DESIGN_GUIDE.md section 8.2).
     [[nodiscard]] std::optional<std::int8_t> timeUnit() const;
 
-    /// The units this library holds, by the source each came from, for `lib list`.
+    /// What `units` says of one unit.
+    struct UnitSummary {
+        std::string name;
+        /// The module the source names, which a parameterisation's name is mangled from.
+        std::string sourceName;
+        /// A generic unit, specialised at elaboration (DESIGN_GUIDE.md section 18, M5.1).
+        bool generic = false;
+        /// One parameterisation of a module whose parameters keep it specialised.
+        bool specialised = false;
+
+        bool operator==(const UnitSummary&) const = default;
+    };
+
+    /// The units this library holds, in name order, for `lib list`.
     ///
     /// Reads every entry, which is what makes it a reporting call rather than one anything
     /// hot depends on. Entries that cannot be decoded are skipped rather than failing the
     /// listing: being told what is readable is more use than being told nothing.
+    [[nodiscard]] std::vector<UnitSummary> units() const;
+
+    /// The names of `units`.
     [[nodiscard]] std::vector<std::string> unitNames() const;
 
 private:

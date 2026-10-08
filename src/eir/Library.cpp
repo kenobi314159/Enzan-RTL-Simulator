@@ -542,14 +542,14 @@ bool Library::loadAll(Design& design, DiagnosticEngine& diagnostics) const {
     return true;
 }
 
-std::vector<std::string> Library::unitNames() const {
-    std::vector<std::string> names;
-    if (!opened) return names;
+std::vector<Library::UnitSummary> Library::units() const {
+    std::vector<UnitSummary> summaries;
+    if (!opened) return summaries;
 
     // Collected into an ordered set rather than reported in directory order: a directory
     // listing is whatever the filesystem feels like, and section 3.8 puts observable ordering
     // beyond the reach of that.
-    std::set<std::string, std::less<>> sorted;
+    std::map<std::string, UnitSummary, std::less<>> sorted;
 
     std::error_code failure;
     for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
@@ -571,10 +571,26 @@ std::vector<std::string> Library::unitNames() const {
         if (!decodeModules(std::string_view(*contents).substr(offset), noBuffers, decoded))
             continue;
 
-        for (const ModuleDefinition& definition : decoded) sorted.insert(definition.name);
+        for (const ModuleDefinition& definition : decoded) {
+            // A parameterisation is named for its values (`specialisedName`), and only it is:
+            // a type parameter has no value to record, so the name is what tells.
+            const bool parameterised = definition.name != definition.sourceName;
+            sorted.insert_or_assign(
+                definition.name,
+                UnitSummary{.name = definition.name,
+                            .sourceName = definition.sourceName,
+                            .generic = definition.isGeneric(),
+                            .specialised = parameterised && !definition.isGeneric()});
+        }
     }
 
-    names.assign(sorted.begin(), sorted.end());
+    for (auto& [name, summary] : sorted) summaries.push_back(std::move(summary));
+    return summaries;
+}
+
+std::vector<std::string> Library::unitNames() const {
+    std::vector<std::string> names;
+    for (UnitSummary& summary : units()) names.push_back(std::move(summary.name));
     return names;
 }
 

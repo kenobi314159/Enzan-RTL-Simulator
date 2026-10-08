@@ -242,8 +242,8 @@ EOF
 # holds it once, named as the source names it, and the consumer stores nothing of it, since a
 # second copy would make an unqualified reference ambiguous.
 producer=$("$enzan" lib list libs/pc)
-grep -qx '  pcounter' <<<"$producer" \
-    || fail "the producer's library does not hold the counter as one unit: $producer"
+grep -qx '  pcounter (generic)' <<<"$producer" \
+    || fail "the producer's library does not hold the counter as one generic unit: $producer"
 grep -q 'pcounter\$' <<<"$producer" && fail "the producer's library holds a specialisation: $producer"
 "$enzan" lib list libs/pw | grep -q 'pcounter' \
     && fail "the consumer stored a unit its input library already held"
@@ -252,7 +252,7 @@ grep -q 'pcounter\$' <<<"$producer" && fail "the producer's library holds a spec
 # not by a counter: a counter would number them in the order one compilation walked them, and
 # the same name would mean different modules in two libraries. The consumer stores the one it
 # created, and not the one the producer already has.
-grep -q 'ptyped\$T_logic_3_0' <<<"$producer" \
+grep -q 'ptyped\$T_logic_3_0.* (a parameterisation of ptyped)$' <<<"$producer" \
     || fail "the producer's library does not name its parameterisation: $producer"
 "$enzan" lib list libs/pw | grep -q 'ptyped\$T_logic_7_0' \
     || fail "the consumer's library does not hold the parameterisation it created"
