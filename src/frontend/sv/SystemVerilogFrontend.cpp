@@ -2,6 +2,7 @@
 
 #include "frontend/sv/SystemVerilogFrontend.h"
 
+#include "common/Assert.h"
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
@@ -373,6 +374,10 @@ public:
     std::optional<std::uint32_t> filledOfWidth(eir::Logic fill, const eir::Type& type) override;
 
     void cannotBeGeneric() override { genericLost = true; }
+
+    std::optional<Dimension> dimensionOf(const ast::Expression& base) override;
+
+    Number combine(eir::Opcode opcode, const Number& left, const Number& right) override;
 
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
@@ -781,7 +786,6 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     eir::Object object;
     object.name = uniqueObjectName(name);
     object.type = *type;
-    if (generic && declaringPackage == nullptr) annotateWidths(symbol, object);
     object.kind = symbol.kind == slang::ast::SymbolKind::Net ? eir::ObjectKind::Net
                                                              : eir::ObjectKind::Variable;
     object.location = convertLocation(symbol.location);
@@ -803,6 +807,7 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
             }
         }
     }
+    if (generic && declaringPackage == nullptr) annotateWidths(symbol, object);
 
     if (symbol.kind == slang::ast::SymbolKind::Net) {
         const auto& net = symbol.as<ast::NetSymbol>();
@@ -1305,6 +1310,14 @@ bool widthsAgree(const eir::ModuleDefinition& unit) {
                                  && process.constantExpressions[instruction.a.index()]
                                         != eir::NoExpression);
                     break;
+                // A window's width is its own and its position an offset, which is annotated
+                // where it moves with a formal; nothing about either has to equal anything.
+                case eir::Opcode::ReadObjectPart:
+                case eir::Opcode::StorePart:
+                case eir::Opcode::StorePartNonBlocking:
+                case eir::Opcode::PartSelect:
+                case eir::Opcode::BitSelect:
+                case eir::Opcode::SplicePart:
                 case eir::Opcode::Extend:
                 case eir::Opcode::Truncate:
                 case eir::Opcode::ReduceAnd:
@@ -1505,6 +1518,75 @@ std::optional<std::uint32_t> ModuleBuilder::filledOfWidth(eir::Logic fill, const
         eir::ParameterNode{.kind = eir::ParameterNodeKind::Replicate,
                            .a = type.widthExpression(),
                            .b = table.constant(eir::BitVector::filled(1, fill), false)});
+}
+
+std::optional<Dimension> ModuleBuilder::dimensionOf(const ast::Expression& base) {
+    if (!generic || (base.kind != ast::ExpressionKind::NamedValue)) return std::nullopt;
+    const ast::ValueSymbol& symbol = base.as<ast::ValueExpressionBase>().symbol;
+
+    const std::optional<std::vector<Bounds>> unpacked = widths->unpacked(symbol);
+    const std::optional<Width> packed = widths->packed(symbol);
+    const std::optional<std::vector<Bounds>> packedBounds = widths->packedBounds(symbol);
+    if (!unpacked.has_value() || !packed.has_value() || !packedBounds.has_value())
+        return std::nullopt;
+
+    // The outermost dimension is the one selected, and an element is everything inside it.
+    Width stride = widths->fixed(1);
+    const Bounds* outer = nullptr;
+    if (!unpacked->empty()) {
+        outer = &unpacked->front();
+        stride = *packed;
+        for (std::size_t index = 1; index < unpacked->size(); ++index)
+            stride = widths->product(stride, widths->spanOf((*unpacked)[index]));
+    } else if (!packedBounds->empty()) {
+        outer = &packedBounds->front();
+        for (std::size_t index = 1; index < packedBounds->size(); ++index)
+            stride = widths->product(stride, widths->spanOf((*packedBounds)[index]));
+    } else {
+        return std::nullopt;
+    }
+
+    // A width is a 32-bit signed integer and an offset a 64-bit one.
+    const auto number = [&](const Width& width) {
+        const auto value = static_cast<std::int64_t>(static_cast<std::int32_t>(width.value));
+        if (width.isFixed()) return Number{.value = value};
+        return Number{.value = value,
+                      .expression = definitionValue.expressions.add(
+                          eir::ParameterNode{.kind = eir::ParameterNodeKind::Extend,
+                                             .isSigned = true,
+                                             .width = 64,
+                                             .a = width.expression})};
+    };
+    return Dimension{
+        .left = number(outer->left), .right = number(outer->right), .stride = number(stride)};
+}
+
+Number ModuleBuilder::combine(eir::Opcode opcode, const Number& left, const Number& right) {
+    const auto apply = [opcode](std::int64_t a, std::int64_t b) -> std::int64_t {
+        switch (opcode) {
+        case eir::Opcode::Add: return a + b;
+        case eir::Opcode::Subtract: return a - b;
+        case eir::Opcode::Multiply: return a * b;
+        default: ENZAN_UNREACHABLE("an offset is added, subtracted or scaled");
+        }
+    };
+    const std::int64_t value = apply(left.value, right.value);
+    if (left.isFixed() && right.isFixed()) return Number{.value = value};
+
+    eir::ParameterExpressions& table = definitionValue.expressions;
+    const auto node = [&](const Number& number) {
+        return number.isFixed() ? table.constant(eir::BitVector::fromInt64(number.value, 64), true)
+                                : number.expression;
+    };
+    return Number{.value = value,
+                  .expression =
+                      table.add(eir::ParameterNode{.kind = eir::ParameterNodeKind::Operation,
+                                                   .opcode = opcode,
+                                                   .isSigned = true,
+                                                   .operationSigned = true,
+                                                   .width = 64,
+                                                   .a = node(left),
+                                                   .b = node(right)})};
 }
 
 std::optional<std::uint32_t> ModuleBuilder::parameterExpression(const ast::Expression& expression) {

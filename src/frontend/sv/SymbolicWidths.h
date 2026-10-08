@@ -77,6 +77,10 @@ public:
     /// decides it in a way this cannot say.
     std::optional<Width> packed(const slang::ast::ValueSymbol& symbol);
 
+    /// The packed dimensions of `symbol`, outermost first, or nothing as for `packed`; empty
+    /// for a type with none of its own, such as `int`.
+    std::optional<std::vector<Bounds>> packedBounds(const slang::ast::ValueSymbol& symbol);
+
     /// The unpacked dimensions of `symbol`, outermost first, or nothing as for `packed`.
     std::optional<std::vector<Bounds>> unpacked(const slang::ast::ValueSymbol& symbol);
 

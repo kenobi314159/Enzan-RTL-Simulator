@@ -328,6 +328,37 @@ std::optional<Width> SymbolicWidths::packed(const ast::ValueSymbol& symbol) {
     return checked(width, *expected);
 }
 
+std::optional<std::vector<Bounds>> SymbolicWidths::packedBounds(const ast::ValueSymbol& symbol) {
+    const ast::Scope* scope = symbol.getParentScope();
+    const ast::DeclaredType* declared = symbol.getDeclaredType();
+    if (scope == nullptr || declared == nullptr) return std::nullopt;
+
+    std::vector<Bounds> result;
+    const syntax::SyntaxList<syntax::VariableDimensionSyntax>* dimensions =
+        packedDimensions(declared->getTypeSyntax());
+    if (dimensions == nullptr) return result;
+    for (const syntax::VariableDimensionSyntax* dimension : *dimensions) {
+        const auto [left, right] = dimensionBounds(*dimension);
+        std::optional<Bounds> bounds;
+        if (right == nullptr || !sizeOf(left, right, *scope, &bounds).has_value()
+            || !bounds.has_value())
+            return std::nullopt;
+        result.push_back(*bounds);
+    }
+    // The outermost against slang's own range, as every width is checked.
+    if (!result.empty()) {
+        const slang::ConstantRange range = packedPart(symbol.getType()).getFixedRange();
+        const auto check = [&](const Width& bound, std::int32_t expected) {
+            if (bound.isFixed() ? static_cast<std::int32_t>(bound.value) != expected
+                                : representativeValue(bound.expression) != expected)
+                failed = true;
+        };
+        check(result.front().left, range.left);
+        check(result.front().right, range.right);
+    }
+    return result;
+}
+
 std::optional<std::vector<Bounds>> SymbolicWidths::unpacked(const ast::ValueSymbol& symbol) {
     const ast::Scope* scope = symbol.getParentScope();
     const ast::DeclaredType* declared = symbol.getDeclaredType();

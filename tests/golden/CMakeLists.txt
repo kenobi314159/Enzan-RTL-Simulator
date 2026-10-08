@@ -157,6 +157,10 @@ enzan_add_golden_test(generic_parameters)
 # takes from its context moves with the parameter, wider for one instance and narrower for another.
 enzan_add_golden_test(generic_widths)
 
+# Selects in a generic unit's parameter-sized objects: a memory at a moving index, whose stride
+# is the parameter, and a bit and a part at fixed positions.
+enzan_add_golden_test(generic_selects)
+
 # Packages, and package variables shared by every module that uses them.
 enzan_add_golden_test(packages)
 

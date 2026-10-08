@@ -50,6 +50,23 @@ namespace enzan::frontend::sv {
 [[nodiscard]] const slang::ast::SubroutineSymbol*
 staticSubroutineOf(const slang::ast::ValueSymbol& symbol);
 
+/// A number the translation derives — an offset, a bound, a stride — as it is for the
+/// representative, and in a generic unit the 64-bit signed expression of the unit's table it is
+/// the value of when a formal decides it (DESIGN_GUIDE.md section 18, M5.1).
+struct Number {
+    std::int64_t value = 0;
+    std::uint32_t expression = eir::NoExpression;
+
+    [[nodiscard]] bool isFixed() const noexcept { return expression == eir::NoExpression; }
+};
+
+/// The dimension a select indexes, its bounds and the bits one of its elements takes.
+struct Dimension {
+    Number left;
+    Number right;
+    Number stride;
+};
+
 /// What a process translator needs from the module it belongs to.
 ///
 /// An interface rather than a direct dependency so that statement and expression
@@ -142,6 +159,18 @@ public:
     /// Says that the translation needed a number of a width a formal decides, which it cannot
     /// annotate; in a generic unit that keeps it from being generic.
     virtual void cannotBeGeneric() = 0;
+
+    /// In a generic unit, the dimension a select of `base` indexes, when it is an object or a
+    /// local this unit declares; nothing otherwise.
+    virtual std::optional<Dimension> dimensionOf(const slang::ast::Expression& base) = 0;
+
+    /// `left opcode right` for 64-bit signed numbers, with an expression when either has one.
+    virtual Number combine(eir::Opcode opcode, const Number& left, const Number& right) = 0;
+
+    /// `type`'s width as a number.
+    [[nodiscard]] static Number widthOf(const eir::Type& type) {
+        return Number{.value = type.bitWidth(), .expression = type.widthExpression()};
+    }
 };
 
 /// True when `left` and `right` are as wide as each other in every parameterisation: the same
@@ -264,8 +293,9 @@ private:
     ///
     /// Signed and 64 bits wide so that a select below or beyond the declared range arrives
     /// as written: such a write is discarded by the language, so only the bits inside the
-    /// object are recorded, and a write with none inside should not be emitted at all.
-    bool noteWrite(std::uint32_t objectIndex, std::int64_t lowBit, std::int64_t width);
+    /// object are recorded, and a write with none inside should not be emitted at all. In a
+    /// generic unit the window may be expressions, and must then lie inside the object.
+    bool noteWrite(std::uint32_t objectIndex, const Number& lowBit, const Number& width);
 
     /// Records that the process writes every bit of an object.
     void noteWholeWrite(std::uint32_t objectIndex);
@@ -453,8 +483,10 @@ private:
         /// The type of the window itself.
         eir::Type type;
 
-        /// The window's low bit, when every select on the way to it was constant.
+        /// The window's low bit, when every select on the way to it was constant, and in a
+        /// generic unit the expression it is when a formal decides it.
         std::optional<std::int64_t> constantLow;
+        std::uint32_t constantLowExpression = eir::NoExpression;
 
         /// The window's low bit as a register, when some select was not constant.
         std::optional<Value> low;
@@ -466,9 +498,12 @@ private:
         /// default and a write does nothing.
         bool outOfRange = false;
 
-        /// The bits a write here could reach, for the write set when the window moves.
+        /// The bits a write here could reach, for the write set when the window moves, with
+        /// the expressions they are in a generic unit.
         std::int64_t reachLow = 0;
         std::int64_t reachWidth = 0;
+        std::uint32_t reachLowExpression = eir::NoExpression;
+        std::uint32_t reachWidthExpression = eir::NoExpression;
 
         /// True when `root` is the register of an inlined subroutine's local, which a write
         /// may change in place.
@@ -487,7 +522,7 @@ private:
     std::optional<Location> locateMember(const slang::ast::MemberAccessExpression& access);
 
     /// `base` narrowed to a window of `type` at a further offset, constant or in a register.
-    Location narrowed(const Location& base, std::optional<std::int64_t> constantLow,
+    Location narrowed(const Location& base, std::optional<Number> constantLow,
                       std::optional<Value> low, eir::Type type);
 
     /// Reads a window: in place for an object, by a part select for a value.
@@ -501,17 +536,25 @@ private:
     /// The window's low bit as a register, loading it when it is constant.
     Value lowOf(const Location& location);
 
-    /// A 64-bit signed constant, for offset arithmetic.
+    /// A 64-bit signed constant, for offset arithmetic, annotated with its expression in a
+    /// generic unit.
     Value offsetConstant(std::int64_t offset);
+    Value offsetConstant(const Number& offset);
 
     /// `left opcode right` on offsets, both extended to the wider of the two.
     Value offsetArithmetic(eir::Opcode opcode, const Value& left, const Value& right);
 
-    /// The bit offset of element `index` of a dimension declared `range`, `stride` bits apart.
-    Value positionValue(const Value& index, slang::ConstantRange range, std::uint32_t stride);
+    /// The bit offset of element `index` of `dimension`.
+    Value positionValue(const Value& index, const Dimension& dimension);
 
-    /// `offset` where `index` lies within `range`, and X where it does not.
-    Value checkedOffset(const Value& offset, const Value& index, slang::ConstantRange range);
+    /// `offset` where `index` lies within `dimension`, and X where it does not.
+    Value checkedOffset(const Value& offset, const Value& index, const Dimension& dimension);
+
+    /// The dimension a select of `base` indexes, `range` and `stride` as slang gives them,
+    /// and as expressions where a formal decides them in a generic unit. Nothing, having said
+    /// the unit cannot be generic, when a formal decides them in a way not yet said.
+    Dimension dimensionFor(const slang::ast::Expression& base, slang::ConstantRange range,
+                           std::uint32_t stride, bool symbolic);
 
     /// A subroutine being inlined: where a `return` in its body goes.
     struct InlineFrame {

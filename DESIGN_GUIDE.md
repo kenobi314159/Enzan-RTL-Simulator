@@ -647,15 +647,18 @@ dimensions. An expression's width is derived from its operands' by the sizing ru
 against slang's number for the representative. Two widths are taken to be equal only when
 they are the same expression, so a conversion is kept wherever they are not; specialisation
 removes one whose two sides came out equal, which is what a frontend translating that
-parameterisation directly would not have emitted.
+parameterisation directly would not have emitted. A select's position, stride and bounds are
+expressions too, from the declaration of the object it selects from, and a write's extent
+through a select that moves is the whole object.
 
 Which modules qualify is decided from the source, not from the parameterisations a design
 happens to have. A unit stays specialised when anything that decides a width or the generate
 structure names a formal, or a parameter or type declared from one, other than a declared
 object's dimensions — a type's dimensions, a replication count, a size cast, a range select's
 bounds, a generate condition or loop; when the translation needs a number a formal decides
-that it does not yet derive — a select's position or a concatenation's offsets in an object a
-formal sizes, a value used as a count; when a parameter is a type, or not integral; when the
+that it does not yet derive — a concatenation's offsets in an object a formal sizes, a part
+select whose width one decides, a select whose bounds one decides when the representative's
+dimension has one element and so says nothing of which way it runs, a value used as a count; when a parameter is a type, or not integral; when the
 module has an interface port or a hierarchical reference; and when, after translating, an
 instruction joins two widths that are equal for the representative but not as expressions,
 the trace a lost expression leaves. Where the design has a second parameterisation of the

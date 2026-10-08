@@ -204,13 +204,29 @@ void ProcessTranslator::noteRead(std::uint32_t objectIndex) {
     reads.push_back(objectIndex);
 }
 
-bool ProcessTranslator::noteWrite(std::uint32_t objectIndex, std::int64_t lowBit,
-                                  std::int64_t width) {
-    // A window of an object a formal sizes would have to move and clip with it.
-    if (isSymbolic(module->definition().objects[objectIndex].type)) module->cannotBeGeneric();
-    const std::int64_t objectWidth = module->definition().objects[objectIndex].type.bitWidth();
-    const std::int64_t low = std::max<std::int64_t>(lowBit, 0);
-    const std::int64_t end = std::min(lowBit + width, objectWidth);
+bool ProcessTranslator::noteWrite(std::uint32_t objectIndex, const Number& lowBit,
+                                  const Number& width) {
+    const eir::Type& objectType = module->definition().objects[objectIndex].type;
+    const std::int64_t objectWidth = objectType.bitWidth();
+
+    // A window a formal moves or sizes, or one in an object a formal sizes, is recorded as its
+    // expressions, which only mean the bits they name if they never clip: it must lie inside
+    // the object for the representative, and the specialisation is checked for the rest.
+    if (!lowBit.isFixed() || !width.isFixed() || isSymbolic(objectType)) {
+        if (lowBit.value < 0 || lowBit.value + width.value > objectWidth || width.value <= 0) {
+            module->cannotBeGeneric();
+        } else {
+            writes.push_back(eir::WriteExtent{.objectIndex = objectIndex,
+                                              .lowBit = static_cast<std::uint32_t>(lowBit.value),
+                                              .width = static_cast<std::uint32_t>(width.value),
+                                              .lowBitExpression = lowBit.expression,
+                                              .widthExpression = width.expression});
+            return true;
+        }
+    }
+
+    const std::int64_t low = std::max<std::int64_t>(lowBit.value, 0);
+    const std::int64_t end = std::min(lowBit.value + width.value, objectWidth);
     if (end <= low) return false;
 
     writes.push_back(eir::WriteExtent{.objectIndex = objectIndex,
@@ -335,7 +351,9 @@ ProcessTranslator::eventEntry(const ast::Expression& expression, ast::EdgeKind e
         return eir::SensitivityEntry{.objectIndex = location->objectIndex,
                                      .edge = *kind,
                                      .lowBit = static_cast<std::uint32_t>(*location->constantLow),
-                                     .width = location->type.bitWidth()};
+                                     .width = location->type.bitWidth(),
+                                     .lowBitExpression = location->constantLowExpression,
+                                     .widthExpression = location->type.widthExpression()};
     }
 
     default: return std::nullopt;
@@ -1988,7 +2006,13 @@ ProcessTranslator::Value ProcessTranslator::widenForOffsetArithmetic(const Value
     // 32-bit quantity to begin with. Signedness is preserved so that a negative index stays
     // negative: it then becomes a very large unsigned offset, the select reads out of range,
     // and the result is X — which is what IEEE 1800 requires for an out-of-range select.
-    if (isSymbolic(index.type)) module->cannotBeGeneric();
+    if (isSymbolic(index.type)) {
+        // At least 32 bits, as an expression where a formal decides the index's width; one that
+        // comes out 32 or wider is a copy specialisation removes.
+        const eir::Type wider = module->widerOf(index.type, eir::Type::bits(32, false, true));
+        return coerce(index, eir::Type::bits(wider.bitWidth(), index.type.isSigned(), true)
+                                 .withWidthExpression(wider.widthExpression()));
+    }
     const std::uint32_t width = std::max(index.type.bitWidth(), 32U);
     if (index.type.bitWidth() == width) return index;
 
@@ -2029,16 +2053,26 @@ ProcessTranslator::Value ProcessTranslator::offsetConstant(std::int64_t offset) 
     return Value{.reg = result, .type = type};
 }
 
+ProcessTranslator::Value ProcessTranslator::offsetConstant(const Number& offset) {
+    if (offset.isFixed()) return offsetConstant(offset.value);
+    const eir::Type type = eir::Type::bits(64, true, false);
+    const std::uint32_t constant =
+        addConstantAs(eir::BitVector::fromInt64(offset.value, 64), offset.expression);
+    const std::uint32_t result = newRegister(type);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(constant)));
+    return Value{.reg = result, .type = type};
+}
+
 ProcessTranslator::Value ProcessTranslator::lowOf(const Location& location) {
     if (location.low.has_value()) return *location.low;
-    return offsetConstant(location.constantLow.value_or(0));
+    return offsetConstant(Number{.value = location.constantLow.value_or(0),
+                                 .expression = location.constantLowExpression});
 }
 
 ProcessTranslator::Value ProcessTranslator::offsetArithmetic(eir::Opcode opcode, const Value& left,
                                                              const Value& right) {
-    const std::uint32_t width = std::max(left.type.bitWidth(), right.type.bitWidth());
-    const eir::Type type =
-        eir::Type::bits(width, left.type.isSigned() && right.type.isSigned(), true);
+    const eir::Type type = module->widerOf(left.type, right.type);
     const Value a = coerce(left, type);
     const Value b = coerce(right, type);
     const std::uint32_t result = newRegister(type);
@@ -2050,34 +2084,35 @@ ProcessTranslator::Value ProcessTranslator::offsetArithmetic(eir::Opcode opcode,
 }
 
 ProcessTranslator::Value ProcessTranslator::positionValue(const Value& index,
-                                                          slang::ConstantRange range,
-                                                          std::uint32_t stride) {
+                                                          const Dimension& dimension) {
     // Widened before any arithmetic: a 2-bit index into four bytes, scaled in two bits, wraps
     // to zero and every element aliases the first, which looks entirely plausible.
     const Value widened = widenForOffsetArithmetic(index);
     Value position = widened;
-    if (range.left >= range.right) {
-        if (range.right != 0)
+    if (dimension.left.value >= dimension.right.value) {
+        if (dimension.right.value != 0 || !dimension.right.isFixed())
             position =
-                offsetArithmetic(eir::Opcode::Subtract, widened, offsetConstant(range.right));
+                offsetArithmetic(eir::Opcode::Subtract, widened, offsetConstant(dimension.right));
     } else {
-        position = offsetArithmetic(eir::Opcode::Subtract, offsetConstant(range.right), widened);
+        position =
+            offsetArithmetic(eir::Opcode::Subtract, offsetConstant(dimension.right), widened);
     }
-    if (stride == 1) return position;
-    return offsetArithmetic(eir::Opcode::Multiply, position, offsetConstant(stride));
+    if (dimension.stride.isFixed() && dimension.stride.value == 1) return position;
+    return offsetArithmetic(eir::Opcode::Multiply, position, offsetConstant(dimension.stride));
 }
 
 ProcessTranslator::Value ProcessTranslator::checkedOffset(const Value& offset, const Value& index,
-                                                          slang::ConstantRange range) {
+                                                          const Dimension& dimension) {
     // `lower <= index && index <= upper`, compared as signed 64-bit numbers so that a declared
     // range below zero compares correctly whatever the index's own signedness.
+    const bool descending = dimension.left.value >= dimension.right.value;
+    const Number& lower = descending ? dimension.right : dimension.left;
+    const Number& upper = descending ? dimension.left : dimension.right;
     const Value wide =
         coerce(widenForOffsetArithmetic(index), eir::Type::bits(64, index.type.isSigned(), true));
     const Value signedIndex{.reg = wide.reg, .type = eir::Type::bits(64, true, true)};
-    const Value aboveLower =
-        compare(eir::Opcode::LessEqual, offsetConstant(range.lower()), signedIndex);
-    const Value belowUpper =
-        compare(eir::Opcode::LessEqual, signedIndex, offsetConstant(range.upper()));
+    const Value aboveLower = compare(eir::Opcode::LessEqual, offsetConstant(lower), signedIndex);
+    const Value belowUpper = compare(eir::Opcode::LessEqual, signedIndex, offsetConstant(upper));
     const std::uint32_t inside = newRegister(eir::Type::logic());
     emit(eir::Instruction::make(eir::Opcode::And, eir::Operand::reg(inside),
                                 eir::Operand::reg(aboveLower.reg),
@@ -2097,26 +2132,53 @@ ProcessTranslator::Value ProcessTranslator::checkedOffset(const Value& offset, c
     return Value{.reg = result, .type = offset.type};
 }
 
+Dimension ProcessTranslator::dimensionFor(const ast::Expression& base, slang::ConstantRange range,
+                                          std::uint32_t stride, bool symbolic) {
+    const Dimension fixed{.left = Number{.value = range.left},
+                          .right = Number{.value = range.right},
+                          .stride = Number{.value = stride}};
+    if (!symbolic) return fixed;
+    const std::optional<Dimension> dimension = module->dimensionOf(base);
+    // Which way the dimension runs is taken from the representative's bounds; with one element
+    // it does not say, and another parameterisation could run the other way.
+    if (!dimension.has_value() || dimension->left.value != range.left
+        || dimension->right.value != range.right || dimension->stride.value != stride
+        || (range.left == range.right
+            && (!dimension->left.isFixed() || !dimension->right.isFixed()))) {
+        module->cannotBeGeneric();
+        return fixed;
+    }
+    return *dimension;
+}
+
 ProcessTranslator::Location ProcessTranslator::narrowed(const Location& base,
-                                                        std::optional<std::int64_t> constantLow,
+                                                        std::optional<Number> constantLow,
                                                         std::optional<Value> low, eir::Type type) {
-    if (isSymbolic(base.type) || isSymbolic(type)) module->cannotBeGeneric();
     Location result = base;
     result.type = type;
     result.whole = false;
     if (base.outOfRange) return result;
 
     if (base.constantLow.has_value() && constantLow.has_value()) {
-        result.constantLow = *base.constantLow + *constantLow;
+        const Number at = module->combine(
+            eir::Opcode::Add,
+            Number{.value = *base.constantLow, .expression = base.constantLowExpression},
+            *constantLow);
+        result.constantLow = at.value;
+        result.constantLowExpression = at.expression;
         result.low.reset();
-        result.reachLow = *result.constantLow;
+        result.reachLow = at.value;
+        result.reachLowExpression = at.expression;
         result.reachWidth = type.bitWidth();
+        result.reachWidthExpression = type.widthExpression();
         return result;
     }
 
     const Value baseLow = lowOf(base);
-    const Value localLow = low.has_value() ? *low : offsetConstant(constantLow.value_or(0));
+    const Value localLow =
+        low.has_value() ? *low : offsetConstant(constantLow.value_or(Number{.value = 0}));
     result.constantLow.reset();
+    result.constantLowExpression = eir::NoExpression;
     result.low = offsetArithmetic(eir::Opcode::Add, baseLow, localLow);
     // A window that moves is still inside the window it was taken from, which is therefore
     // everything a write through it could reach.
@@ -2134,6 +2196,7 @@ ProcessTranslator::locate(const ast::Expression& expression) {
                             .type = local->type,
                             .constantLow = 0,
                             .reachWidth = local->type.bitWidth(),
+                            .reachWidthExpression = local->type.widthExpression(),
                             .rootIsLocal = true};
         }
         if (symbol.kind == slang::ast::SymbolKind::Parameter
@@ -2149,7 +2212,8 @@ ProcessTranslator::locate(const ast::Expression& expression) {
         return Location{.objectIndex = *objectIndex,
                         .type = type,
                         .constantLow = 0,
-                        .reachWidth = type.bitWidth()};
+                        .reachWidth = type.bitWidth(),
+                        .reachWidthExpression = type.widthExpression()};
     }
 
     case ast::ExpressionKind::ElementSelect:
@@ -2184,25 +2248,34 @@ ProcessTranslator::locateElement(const ast::ElementSelectExpression& select) {
         failed = true;
         return std::nullopt;
     }
-    // Positions, strides and the bounds an index is checked against are numbers here; where a
-    // formal decides the select's base or its element, they would have to move with it.
-    if (isSymbolic(base->type) || isSymbolic(*elementType)) module->cannotBeGeneric();
-
     const ast::Type& baseType = *select.value().type;
     const slang::ConstantRange range = baseType.getFixedRange();
     const std::uint32_t stride =
         baseType.isUnpackedArray() ? elementType->bitWidth() : elementBitsOf(baseType);
+    // Positions, strides and the bounds an index is checked against are expressions where a
+    // formal decides the select's base or its element.
+    const bool symbolic = isSymbolic(base->type) || isSymbolic(*elementType);
+    const Dimension dimension = dimensionFor(select.value(), range, stride, symbolic);
+    const bool symbolicBounds = !dimension.left.isFixed() || !dimension.right.isFixed();
 
     if (const std::optional<std::int64_t> index = constantValueOf(select.selector())) {
         if (!inRange(*index, range)) {
+            // Whether it falls outside would depend on a formal.
+            if (symbolicBounds) module->cannotBeGeneric();
             Location outside = *base;
             outside.type = *elementType;
             outside.whole = false;
             outside.outOfRange = true;
             return outside;
         }
-        return narrowed(*base, positionOf(*index, range) * static_cast<std::int64_t>(stride),
-                        std::nullopt, *elementType);
+        const bool descending = range.left >= range.right;
+        const Number at{.value = *index};
+        const Number position = module->combine(
+            eir::Opcode::Multiply,
+            descending ? module->combine(eir::Opcode::Subtract, at, dimension.right)
+                       : module->combine(eir::Opcode::Subtract, dimension.right, at),
+            dimension.stride);
+        return narrowed(*base, position, std::nullopt, *elementType);
     }
 
     const std::optional<Value> index = translateExpression(select.selector());
@@ -2210,14 +2283,22 @@ ProcessTranslator::locateElement(const ast::ElementSelectExpression& select) {
 
     // Straight into a whole object, an index past the dimension is past the object, which a
     // read and a store already handle; inside a window it would land in a neighbour.
-    Value offset = positionValue(*index, range, stride);
-    if (!base->whole) offset = checkedOffset(offset, *index, range);
+    Value offset = positionValue(*index, dimension);
+    if (!base->whole) offset = checkedOffset(offset, *index, dimension);
     Location result = narrowed(*base, std::nullopt, offset, *elementType);
 
     if (base->whole && base->inObject() && range.left >= range.right) {
-        std::tie(result.reachLow, result.reachWidth) =
-            reachOfSelect(select.selector(), range.right, stride, elementType->bitWidth(), false,
-                          base->type.bitWidth());
+        if (symbolic) {
+            // What a moving index can reach, bounded by its type, is a number; in an object a
+            // formal sizes, everything is taken as reachable instead.
+            result.reachLow = 0;
+            result.reachWidth = base->type.bitWidth();
+            result.reachWidthExpression = base->type.widthExpression();
+        } else {
+            std::tie(result.reachLow, result.reachWidth) =
+                reachOfSelect(select.selector(), range.right, stride, elementType->bitWidth(),
+                              false, base->type.bitWidth());
+        }
     }
     return result;
 }
@@ -2233,7 +2314,8 @@ ProcessTranslator::locateRange(const ast::RangeSelectExpression& select) {
         failed = true;
         return std::nullopt;
     }
-    if (isSymbolic(base->type) || isSymbolic(*partType)) module->cannotBeGeneric();
+    // A part whose width a formal decides would need its count of elements as an expression.
+    if (isSymbolic(*partType)) module->cannotBeGeneric();
 
     const ast::Type& baseType = *select.value().type;
     const slang::ConstantRange range = baseType.getFixedRange();
@@ -2250,6 +2332,11 @@ ProcessTranslator::locateRange(const ast::RangeSelectExpression& select) {
     }
     const auto count = static_cast<std::int64_t>(partType->bitWidth() / std::max(stride, 1U));
     const bool descending = range.left >= range.right;
+    const Dimension dimension = dimensionFor(select.value(), range, stride, isSymbolic(base->type));
+    // A part's element count is fixed here, so only its position can move with a formal; that
+    // takes the stride as fixed too.
+    if (!dimension.stride.isFixed()) module->cannotBeGeneric();
+    const bool symbolicBounds = !dimension.left.isFixed() || !dimension.right.isFixed();
 
     // The window's low bit is the position of whichever selected index sits lowest, which
     // depends on which way the dimension runs.
@@ -2257,6 +2344,7 @@ ProcessTranslator::locateRange(const ast::RangeSelectExpression& select) {
                                   std::int64_t highIndex) -> std::optional<Location> {
         const bool lowInside = inRange(lowIndex, range);
         const bool highInside = inRange(highIndex, range);
+        if (symbolicBounds && (!lowInside || !highInside)) module->cannotBeGeneric();
         if (!lowInside && !highInside) {
             Location outside = *base;
             outside.type = *partType;
@@ -2266,13 +2354,19 @@ ProcessTranslator::locateRange(const ast::RangeSelectExpression& select) {
         }
         const std::int64_t bottom = descending ? lowIndex : highIndex;
         const std::int64_t position = positionOf(bottom, range) * static_cast<std::int64_t>(stride);
+        const Number at = module->combine(
+            eir::Opcode::Multiply,
+            descending
+                ? module->combine(eir::Opcode::Subtract, Number{.value = bottom}, dimension.right)
+                : module->combine(eir::Opcode::Subtract, dimension.right, Number{.value = bottom}),
+            dimension.stride);
         if ((!lowInside || !highInside) && (!base->whole || position < 0)) {
             module->reportUnsupported(select.sourceRange.start(),
                                       "a part select that runs past its declared range here");
             failed = true;
             return std::nullopt;
         }
-        return narrowed(*base, position, std::nullopt, *partType);
+        return narrowed(*base, at, std::nullopt, *partType);
     };
 
     switch (select.getSelectionKind()) {
@@ -2308,14 +2402,20 @@ ProcessTranslator::locateRange(const ast::RangeSelectExpression& select) {
             bottom = offsetArithmetic(up ? eir::Opcode::Add : eir::Opcode::Subtract, bottom,
                                       offsetConstant(count - 1));
         }
-        Value offset = positionValue(bottom, range, stride);
-        if (!base->whole) offset = checkedOffset(offset, bottom, range);
+        Value offset = positionValue(bottom, dimension);
+        if (!base->whole) offset = checkedOffset(offset, bottom, dimension);
         Location result = narrowed(*base, std::nullopt, offset, *partType);
 
         if (base->whole && base->inObject() && descending) {
-            std::tie(result.reachLow, result.reachWidth) =
-                reachOfSelect(select.left(), range.right, stride, partType->bitWidth(), !up,
-                              base->type.bitWidth());
+            if (isSymbolic(base->type)) {
+                result.reachLow = 0;
+                result.reachWidth = base->type.bitWidth();
+                result.reachWidthExpression = base->type.widthExpression();
+            } else {
+                std::tie(result.reachLow, result.reachWidth) =
+                    reachOfSelect(select.left(), range.right, stride, partType->bitWidth(), !up,
+                                  base->type.bitWidth());
+            }
         }
         return result;
     }
@@ -2362,7 +2462,7 @@ ProcessTranslator::locateMember(const ast::MemberAccessExpression& access) {
             offset += otherType->bitWidth();
         }
     }
-    return narrowed(*base, offset, std::nullopt, *fieldType);
+    return narrowed(*base, Number{.value = offset}, std::nullopt, *fieldType);
 }
 
 std::optional<ProcessTranslator::Value> ProcessTranslator::readLocation(const Location& location) {
@@ -2444,10 +2544,16 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
 
     // The bits written, for the driver this process is (section 3.7): exactly the window when
     // it is constant, and everything it could reach when it moves.
-    const bool written =
-        location.constantLow.has_value()
-            ? noteWrite(location.objectIndex, *location.constantLow, location.type.bitWidth())
-            : noteWrite(location.objectIndex, location.reachLow, location.reachWidth);
+    const bool written = location.constantLow.has_value()
+                             ? noteWrite(location.objectIndex,
+                                         Number{.value = *location.constantLow,
+                                                .expression = location.constantLowExpression},
+                                         ModuleContext::widthOf(location.type))
+                             : noteWrite(location.objectIndex,
+                                         Number{.value = location.reachLow,
+                                                .expression = location.reachLowExpression},
+                                         Number{.value = location.reachWidth,
+                                                .expression = location.reachWidthExpression});
     if (!written) return true;
 
     const Value low = lowOf(location);
