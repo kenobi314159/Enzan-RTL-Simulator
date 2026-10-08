@@ -101,6 +101,17 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "ENZAN_SANITIZERS": "address;undefined"
       }
+    },
+    {
+      "name": "gcc-profile",
+      "displayName": "GCC profiling",
+      "description": "RelWithDebInfo with frame pointers kept, for perf --call-graph fp and samply. Set as CMAKE_C_FLAGS and CMAKE_CXX_FLAGS rather than on Enzan's own targets, so that slang and the vendored FST writer keep them too and a stack can be walked through them; Arch's system libraries are built with frame pointers already. Leaf functions keep theirs as well, because the interpreter's hottest code is small functions that call nothing.",
+      "inherits": "gcc",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_FLAGS": "-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer"
+      }
     }
   ],
   "buildPresets": [
@@ -131,6 +142,10 @@
     {
       "name": "clang-sanitize",
       "configurePreset": "clang-sanitize"
+    },
+    {
+      "name": "gcc-profile",
+      "configurePreset": "gcc-profile"
     }
   ],
   "testPresets": [
@@ -203,6 +218,17 @@
     {
       "name": "clang-sanitize",
       "configurePreset": "clang-sanitize",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "gcc-profile",
+      "configurePreset": "gcc-profile",
       "output": {
         "outputOnFailure": true
       },

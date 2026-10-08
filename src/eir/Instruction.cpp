@@ -46,7 +46,7 @@ std::string_view llvmLowering(Opcode opcode) noexcept {
 }
 
 bool suspends(Opcode opcode) noexcept {
-    return opcode == Opcode::WaitTime || opcode == Opcode::WaitEdge;
+    return opcode == Opcode::WaitTime || opcode == Opcode::WaitEdge || opcode == Opcode::WaitEvents;
 }
 
 bool isTerminator(Opcode opcode) noexcept {

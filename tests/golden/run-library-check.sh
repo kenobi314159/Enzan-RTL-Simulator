@@ -48,7 +48,7 @@ cd "$work"
 # --- analysis and simulation are separate processes ----------------------------------------------
 
 printf 'counter.sv\n' >rtl.f
-"$enzan" analyse --out-lib libs/work -f rtl.f || fail "analysis into a library failed"
+"$enzan" analyse --timescale ns --out-lib libs/work -f rtl.f || fail "analysis into a library failed"
 
 listing=$("$enzan" lib list libs/work)
 grep -q "library 'work'" <<<"$listing" || fail "the library does not report its own name"
@@ -60,6 +60,80 @@ ls libs/work | grep -q 'counter.sv' || fail "an entry is not named after the sou
 run_output=$("$enzan" run --in-lib libs/work --timescale ns tb) \
     || fail "a design analysed by one process did not run in another"
 grep -q 'PASS counter' <<<"$run_output" || fail "the run did not reach the design's own check"
+
+# --- what only the kernel reads applies to a run from a library ----------------------------------
+
+# A run from libraries alone analyses nothing, and the seed and the delta limit are the run's,
+# not the analysis's: given to `run`, they must take effect there.
+cat >random.sv <<'EOF'
+module random_tb;
+    initial $display("drew %0d", $random);
+endmodule
+EOF
+cat >looping.sv <<'EOF'
+module looping_tb;
+    logic toggle = 1'b0;
+    always @(toggle) toggle <= ~toggle;
+    initial #1 toggle = 1'b1;
+endmodule
+EOF
+"$enzan" lib create libs/kernel >/dev/null || fail "libs/kernel could not be created"
+"$enzan" analyse --timescale ns --out-lib libs/kernel random.sv looping.sv || fail "libs/kernel could not be analysed"
+
+seed0=$("$enzan" run --in-lib libs/kernel --timescale ns random_tb 2>&1) \
+    || fail "the random design did not run from its library"
+seed7=$("$enzan" run --in-lib libs/kernel --timescale ns --seed 7 random_tb 2>&1) \
+    || fail "the random design did not run from its library with a seed"
+[[ $(grep drew <<<"$seed0") != $(grep drew <<<"$seed7") ]] \
+    || fail "--seed given to a run from a library changed nothing"
+
+looped=$("$enzan" run --in-lib libs/kernel --timescale ns --delta-limit 5 looping_tb 2>&1 || true)
+grep -q 'limit of 5' <<<"$looped" \
+    || fail "a run from a library did not use its --delta-limit: $looped"
+
+# A macro, an include directory and a parameter override are the analysis's, so a run that
+# analyses nothing refuses them rather than running what the library holds as if taken.
+[[ $(status_of "$enzan" run --in-lib libs/kernel --timescale ns -G WIDTH=8 random_tb) -eq 1 ]] \
+    || fail "-G given to a run from a library was not refused"
+[[ $(status_of "$enzan" run --in-lib libs/kernel --timescale ns -D FAST random_tb) -eq 1 ]] \
+    || fail "-D given to a run from a library was not refused"
+[[ $(status_of "$enzan" elaborate --in-lib libs/kernel --timescale ns +incdir+inc random_tb) -eq 1 ]] \
+    || fail "+incdir+ given to an elaboration from a library was not refused"
+
+# --- a library is simulated in the time unit it was analysed in ------------------------------------
+
+# Its delays are counts of that unit, so a run from it takes the unit from it, and a
+# `--timescale` naming another would label every time wrongly. It is refused.
+cat >timed.sv <<'EOF'
+module timed_tb;
+    initial #5 $display("at %0t", $time);
+endmodule
+EOF
+"$enzan" lib create libs/timed_ns >/dev/null || fail "libs/timed_ns could not be created"
+"$enzan" lib create libs/timed_us >/dev/null || fail "libs/timed_us could not be created"
+"$enzan" analyse --timescale ns --out-lib libs/timed_ns timed.sv || fail "libs/timed_ns analysis"
+"$enzan" analyse --timescale us --out-lib libs/timed_us timed.sv || fail "libs/timed_us analysis"
+
+timed=$("$enzan" run --in-lib libs/timed_ns timed_tb) \
+    || fail "a run from a library without --timescale did not run"
+grep -q 'at 5ns' <<<"$timed" || fail "a run did not take its library's unit: $timed"
+
+conflict=$("$enzan" run --in-lib libs/timed_ns --timescale ps timed_tb 2>&1 || true)
+[[ $(status_of "$enzan" run --in-lib libs/timed_ns --timescale ps timed_tb) -eq 2 ]] \
+    || fail "a --timescale other than the library's was not refused"
+grep -q 'ENZ6028' <<<"$conflict" || fail "the conflicting unit was not reported: $conflict"
+
+mixed=$("$enzan" run --in-lib libs/timed_ns --in-lib libs/timed_us timed_ns.timed_tb 2>&1 || true)
+grep -q 'ENZ6027' <<<"$mixed" || fail "libraries in two units were combined: $mixed"
+
+# Analysing into a library takes its unit too, and another one is refused until it is cleaned.
+[[ $(status_of "$enzan" analyse --timescale ps --out-lib libs/timed_ns timed.sv) -ne 0 ]] \
+    || fail "analysing into a library in another unit was allowed"
+"$enzan" lib clean libs/timed_ns >/dev/null || fail "libs/timed_ns could not be cleaned"
+"$enzan" analyse --timescale ps --out-lib libs/timed_ns timed.sv \
+    || fail "a cleaned library could not be filled in another unit"
+grep -q 'at 5ps' <<<"$("$enzan" run --in-lib libs/timed_ns timed_tb)" \
+    || fail "the cleaned library did not take its new unit"
 
 # --- the file list is expanded, and can be shown without building --------------------------------
 
@@ -98,8 +172,8 @@ EOF
 
 "$enzan" lib create libs/one >/dev/null || fail "libs/one could not be created"
 "$enzan" lib create libs/two >/dev/null || fail "libs/two could not be created"
-"$enzan" analyse --out-lib libs/one split/one.sv || fail "libs/one could not be analysed"
-"$enzan" analyse --out-lib libs/two split/two.sv || fail "libs/two could not be analysed"
+"$enzan" analyse --timescale ns --out-lib libs/one split/one.sv || fail "libs/one could not be analysed"
+"$enzan" analyse --timescale ns --out-lib libs/two split/two.sv || fail "libs/two could not be analysed"
 
 both=$("$enzan" run --in-lib libs/one --in-lib libs/two --timescale ns two_tb) \
     || fail "two libraries could not be combined"
@@ -107,7 +181,7 @@ grep -q 'PASS split' <<<"$both" || fail "the combined run did not reach the desi
 
 # One name in two libraries is reported rather than silently resolved (8.2).
 "$enzan" lib create libs/clash >/dev/null
-"$enzan" analyse --out-lib libs/clash split/two.sv || fail "libs/clash could not be analysed"
+"$enzan" analyse --timescale ns --out-lib libs/clash split/two.sv || fail "libs/clash could not be analysed"
 
 clash=$("$enzan" run --in-lib libs/two --in-lib libs/clash --timescale ns two_tb 2>&1 || true)
 [[ $(status_of "$enzan" run --in-lib libs/two --in-lib libs/clash --timescale ns two_tb) -ne 0 ]] \
@@ -150,7 +224,7 @@ EOF
 
 "$enzan" lib create libs/pc >/dev/null || fail "libs/pc could not be created"
 "$enzan" lib create libs/pw >/dev/null || fail "libs/pw could not be created"
-"$enzan" analyse --out-lib libs/pc par/counter.sv || fail "the counter library could not be analysed"
+"$enzan" analyse --timescale ns --out-lib libs/pc par/counter.sv || fail "the counter library could not be analysed"
 "$enzan" analyse --in-lib libs/pc --out-lib libs/pw par/wrap.sv \
     || fail "a design could not be analysed against a library"
 

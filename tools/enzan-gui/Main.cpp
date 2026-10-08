@@ -60,6 +60,7 @@ Options:
                           $XDG_CONFIG_HOME/enzan-gui/theme.tcl when it exists.
       --write-theme <file>
                           Write the built-in theme to this file and exit.
+      --wave-list <file>  Open the wave window with this signal list in it.
 
 The normative specification is DESIGN_GUIDE.md in the source tree.
 )";
@@ -114,9 +115,14 @@ int main(int argc, char** argv) {
         QStringLiteral("Write the built-in theme to this file and exit, as a starting point "
                        "for one of your own."),
         QStringLiteral("file"));
+    const QCommandLineOption waveListOption(
+        QStringLiteral("wave-list"),
+        QStringLiteral("Open the wave window with this signal list in it."),
+        QStringLiteral("file"));
     parser.addOption(attachOption);
     parser.addOption(themeOption);
     parser.addOption(writeThemeOption);
+    parser.addOption(waveListOption);
     // `enzan run --gui ...` forwards its command word, which this process has no use for: it
     // starts a kernel, and the kernel is the thing that runs. Dropped rather than refused, so
     // that both spellings of the same request work (DESIGN_GUIDE.md section 8.4).
@@ -182,7 +188,18 @@ int main(int argc, char** argv) {
             window.note(QStringLiteral("Could not attach to %1: %2")
                             .arg(parser.value(attachOption), error));
         }
-    } else {
+    }
+
+    // After attaching, though the rows wait for the design to arrive: the file is read and
+    // checked now, so that a mistake in it is reported as the window opens. One that cannot be
+    // loaded leaves the window empty, as a theme that cannot be read leaves the built-in
+    // colours (DESIGN_GUIDE.md section 10.8).
+    if (parser.isSet(waveListOption) && !window.loadSignalList(parser.value(waveListOption))) {
+        QTextStream(stderr) << "enzan-gui: " << parser.value(waveListOption)
+                            << ": not loaded; the window's transcript says why\n";
+    }
+
+    if (!parser.isSet(attachOption)) {
         // No socket. The window comes up and explains itself rather than exiting with a usage
         // message at someone who reached this binary without meaning to.
         window.note(QStringLiteral(

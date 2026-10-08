@@ -10,10 +10,14 @@
 #include "eir/Process.h"
 #include "runtime/Format.h"
 #include "runtime/Interpreter.h"
+#include "runtime/ReadMem.h"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -49,6 +53,58 @@ bool isNegedge(eir::Logic before, eir::Logic after) noexcept {
     return before == eir::Logic::One || after == eir::Logic::Zero;
 }
 
+/// The words a windowed signal's old value needs, for the widest such signal.
+std::size_t windowScratchWords(const Image& image) {
+    std::uint32_t widest = 0;
+    for (const Signal& signal : image.signals())
+        if (signal.windowed) widest = std::max(widest, signal.bitWidth);
+    return eir::storageWordsFor(widest);
+}
+
+/// IEEE 1364's `$random`: the reference C code the standard gives for its distribution
+/// functions, `rtl_dist_uniform`, over the whole 32-bit range. The seed advances as a linear
+/// congruential generator and the draw is computed from it in floating point. Kept bit for bit,
+/// because every simulator that follows it, Icarus Verilog among them, draws the same sequence
+/// from the same seed.
+std::int32_t ieeeRandom(std::int32_t& seed) {
+    if (seed == 0) seed = 259'341'593;
+    seed = static_cast<std::int32_t>((69069U * static_cast<std::uint32_t>(seed)) + 1U);
+
+    const std::uint32_t bits = (static_cast<std::uint32_t>(seed) >> 9U) | 0x3f80'0000U;
+    float single = 0;
+    std::memcpy(&single, &bits, sizeof single);
+    auto fraction = static_cast<double>(single);
+    fraction += fraction * 0.00000011920928955078125;
+
+    const double low = -2147483648.0;
+    const double high = 2147483647.0;
+    double draw = ((high - low) * (fraction - 1.0)) + low;
+    draw = (draw + 2147483648.0) / 4294967295.0;
+    draw = (draw * 4294967296.0) - 2147483648.0;
+    return static_cast<std::int32_t>(draw >= 0 ? draw : draw - 1);
+}
+
+/// SplitMix64, for `$urandom`: small, fast and well distributed, which is all a process's
+/// stimulus needs.
+std::uint64_t splitMix(std::uint64_t& state) {
+    state += 0x9e37'79b9'7f4a'7c15ULL;
+    std::uint64_t mixed = state;
+    mixed = (mixed ^ (mixed >> 30U)) * 0xbf58'476d'1ce4'e5b9ULL;
+    mixed = (mixed ^ (mixed >> 27U)) * 0x94d0'49bb'1331'11ebULL;
+    return mixed ^ (mixed >> 31U);
+}
+
+/// A process's generator state from the seed and its name, which stay the same from run to
+/// run whatever else the design does.
+std::uint64_t processRandomState(std::uint32_t seed, std::string_view name) {
+    std::uint64_t hash = 0xcbf2'9ce4'8422'2325ULL;
+    for (const char c : name) {
+        hash ^= static_cast<unsigned char>(c);
+        hash *= 0x0000'0100'0000'01b3ULL;
+    }
+    return hash ^ (std::uint64_t{seed} * 0x9e37'79b9'7f4a'7c15ULL);
+}
+
 bool edgeMatches(eir::EdgeKind edge, eir::Logic before, eir::Logic after) noexcept {
     switch (edge) {
     case eir::EdgeKind::AnyChange:
@@ -69,6 +125,10 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
       stateArena(designImageToRun.arenaWords()),
       frameStorage(designImageToRun.frameWords(), 0),
       processes(designImageToRun.processes().begin(), designImageToRun.processes().end()),
+      resolvedScratch(eir::storageWordsFor(designImageToRun.elaboratedDesign().widestDriver()), 0),
+      segmentScratch(resolvedScratch.size(), 0),
+      driverScratch(resolvedScratch.size(), 0),
+      windowScratch(windowScratchWords(designImageToRun), 0),
       edgeWaiters(designImageToRun.signals().size()) {}
 
 Kernel::~Kernel() = default;
@@ -88,8 +148,21 @@ void Kernel::initialize() {
     // edge nothing is waiting for any more. Each of those produces a design that runs and
     // gives a different answer, which section 1.2 ranks as the worst possible outcome.
     scheduler.clear();
+    delayedWrites.clear();
+    pendingInertial.clear();
     processes.assign(designImage->processes().begin(), designImage->processes().end());
-    for (std::vector<EdgeWaiter>& waiters : edgeWaiters) waiters.clear();
+    for (ProcessState& state : processes)
+        state.randomState = processRandomState(options.seed, state.name);
+    randomSeed = static_cast<std::int32_t>(options.seed);
+    // Files a previous run opened are closed, which flushes what it wrote, and are opened
+    // again, from the start, by the run that follows.
+    openFiles.clear();
+    nextFileNumber = 3;
+    nextChannel = 1;
+    for (EdgeWaiterList& list : edgeWaiters) {
+        list.waiters.clear();
+        list.sweepAt = MinimumWaiterSweep;
+    }
     std::ranges::fill(frameStorage, eir::Word{});
 
     // A force does not survive a restart either: a signal still pinned from the last run would
@@ -98,6 +171,7 @@ void Kernel::initialize() {
 
     finishRequested = false;
     errorRequested = false;
+    stopRequested = false;
     finishStatus = 0;
     finalProcessesRun = false;
     lastStatus = RunStatus::Quiescent;
@@ -117,12 +191,22 @@ RunStatus Kernel::run(SimTime until) {
         // the run's state is in the scheduler and the arena and nothing is half-done. Stopping
         // anywhere else would make resuming produce a different answer from running straight
         // through, which section 3.8 forbids.
-        if (interrupt != nullptr && interrupt->shouldInterrupt()) {
+        if (stopRequested || (interrupt != nullptr && interrupt->shouldInterrupt())) {
+            stopRequested = false;
             lastStatus = RunStatus::Interrupted;
             return lastStatus;
         }
 
-        if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates()) {
+        // A finish asked for outside a time slot — by an application, from a callback that ran
+        // before the run began — ends the run before anything else executes, exactly as one
+        // asked for inside a slot ends it before the next.
+        if (stopping()) {
+            lastStatus = errorRequested ? RunStatus::Error : RunStatus::Finished;
+            runFinalProcesses();
+            return lastStatus;
+        }
+
+        if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates() || pliWorkDue()) {
             if (!runTimeSlot()) {
                 lastStatus = errorRequested ? RunStatus::Error : RunStatus::Finished;
                 runFinalProcesses();
@@ -130,7 +214,12 @@ RunStatus Kernel::run(SimTime until) {
             }
         }
 
-        if (!advanceTime(until)) return lastStatus;
+        // A stop asked for in the last slot is a stop of this run, which has ended anyway. Kept,
+        // it would end the next run before that run had done anything.
+        if (!advanceTime(until)) {
+            stopRequested = false;
+            return lastStatus;
+        }
     }
 }
 
@@ -139,7 +228,21 @@ bool Kernel::runTimeSlot() {
     // fully; only when Active, Inactive and NBA are all empty does the slot move on to
     // Observed, and the Reactive family iterates by the same rule. Anything that
     // schedules Active work sends control back to the top.
+    //
+    // An application's timed events run first, before the Active region is drained, and its
+    // read-write callbacks once everything else has settled (section 9.3).
+    bool firstPass = true;
     while (true) {
+        if (pliHooks != nullptr && pliHooks->nextTimedEvent() <= currentTime) {
+            // On any pass but the first, what is due was scheduled during this slot with no
+            // delay, and running it is a further iteration of the slot. Counting it keeps an
+            // application that does that forever inside the delta limit of section 3.2.
+            if (!firstPass && !countDelta()) return false;
+            pliHooks->runTimedEvents(currentTime);
+            if (halted()) return false;
+        }
+        firstPass = false;
+
         drain(Region::Active);
         if (halted()) return false;
 
@@ -180,13 +283,38 @@ bool Kernel::runTimeSlot() {
             continue;
         }
 
+        // Read-write synchronisation is the application's chance to write once the design has
+        // settled, and whatever it writes has to settle in turn, so it sends control back to
+        // the top like any other region that schedules work. It counts as a delta for the
+        // same reason a `#0` does: an application that asks for read-write from read-write
+        // forever is a delta loop, and the limit is what finds one.
+        if (pliHooks != nullptr && pliHooks->hasReadWrite()) {
+            pliHooks->runReadWrite();
+            if (halted()) return false;
+            if (!countDelta()) return false;
+            continue;
+        }
+
         break;
     }
 
-    // Postponed is last and, in the M1 subset, cannot schedule anything: `$monitor` and
-    // `cbReadOnlySynch` are read-only by definition.
+    // Read-only synchronisation sees the slot's final values, before Postponed. Writes are
+    // refused while it runs (section 9.4), so it cannot send control back.
+    if (pliHooks != nullptr && pliHooks->hasReadOnly()) {
+        pliHooks->runReadOnly();
+        if (halted()) return false;
+    }
+
+    // Postponed is last and, in the M1 subset, cannot schedule anything: `$monitor` is
+    // read-only by definition.
     drain(Region::Postponed);
     return !halted();
+}
+
+bool Kernel::pliWorkDue() const {
+    if (pliHooks == nullptr) return false;
+    return pliHooks->nextTimedEvent() <= currentTime || pliHooks->hasReadWrite()
+           || pliHooks->hasReadOnly();
 }
 
 bool Kernel::countDelta() {
@@ -207,7 +335,9 @@ void Kernel::drain(Region region) {
         const std::uint32_t processIndex = scheduler.take(region);
         processes[processIndex].queued = false;
 
+        runningProcess = processIndex;
         const ExecutionResult result = interpreter.run(processIndex);
+        runningProcess = NoProcess;
 
         if (result == ExecutionResult::Stopped || stopping()) return;
 
@@ -228,21 +358,35 @@ void Kernel::drain(Region region) {
 }
 
 void Kernel::applyNonBlockingUpdates() {
-    // Applying an update can wake a process, but waking schedules into Active and never
-    // appends to this list, so iterating it while applying is safe.
-    for (const NonBlockingUpdate& update : scheduler.nonBlockingUpdates()) {
+    // Taken as a batch, because applying an update can append another: a write runs the
+    // application's value-change callbacks, and one of those may write with an inertial delay.
+    // That update belongs to the next NBA pass, not to this one.
+    for (const NonBlockingUpdate& update : scheduler.takeNonBlockingUpdates()) {
         if (update.partial) {
-            writeSignalPart(update.signalIndex, scheduler.updateValue(update), update.lowBit);
+            writeSignalPart(update.signalIndex, scheduler.takenValue(update), update.lowBit);
         } else {
-            writeSignal(update.signalIndex, scheduler.updateValue(update));
+            writeSignal(update.signalIndex, scheduler.takenValue(update));
         }
         if (stopping()) break;
     }
-    scheduler.clearNonBlocking();
 }
 
 bool Kernel::advanceTime(SimTime until) {
-    const SimTime next = scheduler.nextEventTime();
+    const SimTime next = std::min({scheduler.nextEventTime(),
+                                   pliHooks != nullptr ? pliHooks->nextTimedEvent() : NoTime,
+                                   delayedWrites.empty() ? NoTime : delayedWrites.begin()->first});
+
+    // Something the application scheduled with no delay after the slot had settled — from a
+    // read-only callback — is due now. It runs in a further slot at this time, and time has
+    // not advanced, so nothing that reports an advance is told about one. That further slot
+    // is a delta like any other, or an application doing it forever would never be stopped.
+    if (next <= currentTime) {
+        if (countDelta()) return true;
+        lastStatus = RunStatus::Error;
+        runFinalProcesses();
+        return false;
+    }
+
     if (next == NoTime) {
         lastStatus = RunStatus::Quiescent;
         runFinalProcesses();
@@ -259,7 +403,10 @@ bool Kernel::advanceTime(SimTime until) {
 
     for (ValueChangeListener* listener : listeners) listener->onTimeAdvance(currentTime);
 
+    if (pliHooks != nullptr) pliHooks->timeAdvanced(currentTime);
+
     scheduler.releaseTime(next);
+    applyDelayedWrites();
     return true;
 }
 
@@ -297,6 +444,12 @@ void Kernel::wake(std::uint32_t processIndex) {
     ProcessState& state = processes[processIndex];
     if (state.queued) return;
 
+    // A process is not waiting on its event control while it runs, so what it writes then
+    // cannot wake it. Without this an `always @*` that sets a temporary and reads it back —
+    // `k = 0; ... k = a ^ b; y = k;`, which is ordinary Verilog — is sensitive to its own
+    // writes, wakes itself on every run, and never lets the time slot end.
+    if (processIndex == runningProcess) return;
+
     state.resumePc = 0;
     state.queued = true;
     scheduler.schedule(Region::Active, processIndex);
@@ -324,13 +477,20 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     // assigned.
     if (value.width() == target.width() && eir::ConstBitRef(target).identicalTo(value)) return;
 
+    const eir::ConstBitRef previous = keepPrevious(signal, target);
     const eir::Logic before = target.get(0);
     bitops::extend(target, value, false);
     const eir::Logic after = target.get(0);
 
     for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
-    notifyChange(signalIndex, before, after);
+    notifyChange(signalIndex, before, after, previous, target);
+
+    // Last, because an application's callback may write this signal again. Everything about
+    // this change — the edge it was, who it woke, what the listeners recorded — is settled
+    // before that can happen, so a second write is a second change rather than one that
+    // rewrites the first behind its back.
+    if (pliHooks != nullptr) pliHooks->valueChanged(signalIndex);
 }
 
 void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
@@ -354,13 +514,104 @@ void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
     }
     if (!changed) return;
 
+    const eir::ConstBitRef previous = keepPrevious(signal, target);
     const eir::Logic before = target.get(0);
     bitops::assignPartAt(target, value, lowBit);
     const eir::Logic after = target.get(0);
 
     for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
-    notifyChange(signalIndex, before, after);
+    notifyChange(signalIndex, before, after, previous, target);
+
+    if (pliHooks != nullptr) pliHooks->valueChanged(signalIndex);
+}
+
+void Kernel::writeThroughDrivers(const WriteRoute& route, eir::ConstBitRef value,
+                                 std::uint64_t lowBit) {
+    const std::span<const elab::Driver> drivers = designImage->elaboratedDesign().drivers();
+
+    for (std::uint32_t index = route.firstDriver; index < route.firstDriver + route.driverCount;
+         ++index) {
+        const elab::Driver& driver = drivers[index];
+        if (lowBit < driver.lowBit || lowBit >= driver.endBit()) continue;
+
+        const eir::BitRef storage = stateArena.at(driver.wordOffset, driver.width);
+        const std::uint64_t offset = lowBit - driver.lowBit;
+
+        // A driver that did not change changes nothing it resolves into, so the common case
+        // of a continuous assignment re-evaluating to the value it already drives stops here.
+        bool changed = false;
+        for (std::uint32_t bit = 0; bit < value.width() && offset + bit < driver.width; ++bit) {
+            if (storage.get(static_cast<std::uint32_t>(offset + bit)) != value.get(bit)) {
+                changed = true;
+                break;
+            }
+        }
+        if (!changed) return;
+
+        bitops::assignPartAt(storage, value, offset);
+        resolveDriver(index);
+        return;
+    }
+}
+
+void Kernel::resolveDriver(std::uint32_t driverIndex) {
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    const elab::Driver& written = elaborated.drivers()[driverIndex];
+    const eir::BitRef resolved(resolvedScratch.data(), written.width);
+
+    for (std::uint32_t segmentIndex = written.firstSegment;
+         segmentIndex < written.firstSegment + written.segmentCount; ++segmentIndex) {
+        const elab::Segment& segment = elaborated.segments()[segmentIndex];
+        const eir::BitRef acc(segmentScratch.data(), segment.width);
+        const eir::BitRef next(driverScratch.data(), segment.width);
+
+        const auto sliceOf = [&](std::uint32_t segmentDriver, eir::BitRef into) {
+            const elab::Driver& driver =
+                elaborated.drivers()[elaborated.segmentDrivers()[segmentDriver]];
+            bitops::partSelectAt(into, stateArena.at(driver.wordOffset, driver.width),
+                                 segment.lowBit - driver.lowBit);
+        };
+
+        sliceOf(segment.firstDriver, acc);
+        for (std::uint32_t other = segment.firstDriver + 1;
+             other < segment.firstDriver + segment.driverCount; ++other) {
+            sliceOf(other, next);
+            switch (segment.netKind) {
+            case eir::NetKind::WiredAnd:
+            case eir::NetKind::TriAnd: bitops::resolveWiredAnd(acc, next); break;
+            case eir::NetKind::WiredOr:
+            case eir::NetKind::TriOr: bitops::resolveWiredOr(acc, next); break;
+            case eir::NetKind::Wire:
+            case eir::NetKind::Tri:
+            case eir::NetKind::Tri0:
+            case eir::NetKind::Tri1:
+            case eir::NetKind::Supply0:
+            case eir::NetKind::Supply1:
+            case eir::NetKind::UWire: bitops::resolveWire(acc, next); break;
+            }
+        }
+
+        // What the net itself contributes: a pull where every driver is `z`, or a supply that
+        // no strong driver can move.
+        switch (segment.netKind) {
+        case eir::NetKind::Tri0: bitops::pullHighImpedance(acc, eir::Logic::Zero); break;
+        case eir::NetKind::Tri1: bitops::pullHighImpedance(acc, eir::Logic::One); break;
+        case eir::NetKind::Supply0: acc.fill(eir::Logic::Zero); break;
+        case eir::NetKind::Supply1: acc.fill(eir::Logic::One); break;
+        case eir::NetKind::Wire:
+        case eir::NetKind::Tri:
+        case eir::NetKind::WiredAnd:
+        case eir::NetKind::WiredOr:
+        case eir::NetKind::TriAnd:
+        case eir::NetKind::TriOr:
+        case eir::NetKind::UWire: break;
+        }
+
+        bitops::assignPartAt(resolved, acc, segment.lowBit - written.lowBit);
+    }
+
+    writeSignalPart(written.slot, resolved, written.lowBit);
 }
 
 void Kernel::scheduleNonBlocking(std::uint32_t signalIndex, eir::ConstBitRef value) {
@@ -406,19 +657,43 @@ void Kernel::removeListener(ValueChangeListener& listener) {
     if (position != listeners.end()) listeners.erase(position);
 }
 
-void Kernel::notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after) {
+eir::ConstBitRef Kernel::keepPrevious(const Signal& signal, eir::ConstBitRef target) {
+    if (!signal.windowed) return {};
+    const eir::BitRef kept(windowScratch.data(), signal.bitWidth);
+    bitops::copy(kept, target);
+    return kept;
+}
+
+void Kernel::notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after,
+                          eir::ConstBitRef previous, eir::ConstBitRef current) {
+    // A whole-signal entry looks at the lowest bit for an edge and needs nothing for a change;
+    // a window looks at its own lowest bit, or compares its bits, against the kept old value.
+    const auto matches = [&](eir::EdgeKind edge, std::uint32_t lowBit, std::uint32_t width) {
+        if (width == 0) return edgeMatches(edge, before, after);
+        if (edge != eir::EdgeKind::AnyChange)
+            return edgeMatches(edge, previous.get(lowBit), current.get(lowBit));
+        for (std::uint32_t bit = lowBit; bit < lowBit + width; ++bit)
+            if (previous.get(bit) != current.get(bit)) return true;
+        return false;
+    };
+
     for (const Signal::Subscriber& subscriber : designImage->signals()[signalIndex].subscribers) {
-        if (edgeMatches(subscriber.edge, before, after)) wake(subscriber.processIndex);
+        if (matches(subscriber.edge, subscriber.lowBit, subscriber.width))
+            wake(subscriber.processIndex);
     }
 
     // Dynamic subscriptions are consumed when they fire: a process that waited for one
     // edge is not waiting for the next until it asks again. Rewritten in place rather
-    // than erased one by one, so that the common case of nothing matching costs one pass.
-    std::vector<EdgeWaiter>& waiters = edgeWaiters[signalIndex];
+    // than erased one by one, so that the common case of nothing matching costs one pass. One
+    // armed by a wait another entry of which has already fired is stale, and goes.
+    std::vector<EdgeWaiter>& waiters = edgeWaiters[signalIndex].waiters;
     std::size_t kept = 0;
     for (std::size_t index = 0; index < waiters.size(); ++index) {
         const EdgeWaiter waiter = waiters[index];
-        if (edgeMatches(waiter.edge, before, after)) {
+        ProcessState& state = processes[waiter.processIndex];
+        if (waiter.generation != state.waitGeneration) continue;
+        if (matches(waiter.edge, waiter.lowBit, waiter.width)) {
+            ++state.waitGeneration;
             resume(waiter.processIndex, waiter.resumePc);
         } else {
             waiters[kept++] = waiter;
@@ -450,11 +725,112 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
     scheduler.scheduleAt(currentTime + delay, processIndex);
 }
 
+void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
+                                  std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
+                                  bool nonBlocking) {
+    if (delay > NoTime - currentTime) {
+        diagnostics.report(DiagCode::TimeOverflow, SourceLocation(), currentTime,
+                           options.timeScale.unitName());
+        errorRequested = true;
+        return;
+    }
+
+    if (nonBlocking && delay == 0) {
+        scheduler.appendNonBlocking(signalIndex, value, 0, false);
+        return;
+    }
+
+    DelayedWrite write{.processIndex = processIndex,
+                       .position = position,
+                       .signalIndex = signalIndex,
+                       .nonBlocking = nonBlocking,
+                       .serial = ++nextWriteSerial,
+                       .value = eir::BitVector::from(value)};
+
+    if (!nonBlocking) {
+        // The write this one replaces is taken out rather than skipped when it comes due, so
+        // that it leaves no time step behind in which nothing happens.
+        const auto key = std::pair{processIndex, position};
+        if (const auto pending = pendingInertial.find(key); pending != pendingInertial.end()) {
+            const auto slot = delayedWrites.find(pending->second.time);
+            std::erase_if(slot->second, [&pending](const DelayedWrite& queued) {
+                return queued.serial == pending->second.serial;
+            });
+            if (slot->second.empty()) delayedWrites.erase(slot);
+            pendingInertial.erase(pending);
+        }
+        if (delay == 0) {
+            writeRouted(processIndex, position, signalIndex, value);
+            return;
+        }
+        pendingInertial.emplace(
+            key, PendingInertial{.serial = write.serial, .time = currentTime + delay});
+    }
+
+    delayedWrites[currentTime + delay].push_back(std::move(write));
+}
+
+void Kernel::applyDelayedWrites() {
+    const auto due = delayedWrites.find(currentTime);
+    if (due == delayedWrites.end()) return;
+    const std::vector<DelayedWrite> writes = std::move(due->second);
+    delayedWrites.erase(due);
+
+    for (const DelayedWrite& write : writes) {
+        if (write.nonBlocking) {
+            scheduler.appendNonBlocking(write.signalIndex, write.value.ref(), 0, false);
+            continue;
+        }
+        pendingInertial.erase(std::pair{write.processIndex, write.position});
+        writeRouted(write.processIndex, write.position, write.signalIndex, write.value.ref());
+    }
+}
+
+void Kernel::writeRouted(std::uint32_t processIndex, std::uint32_t position,
+                         std::uint32_t signalIndex, eir::ConstBitRef value) {
+    const WriteRoute& route = processes[processIndex].writeRoutes[position];
+    if (route.direct()) {
+        writeSignal(signalIndex, value);
+    } else {
+        writeThroughDrivers(route, value, 0);
+    }
+}
+
 void Kernel::suspendForEdge(std::uint32_t processIndex, std::uint32_t signalIndex,
                             eir::EdgeKind edge, std::uint32_t resumePc) {
-    processes[processIndex].resumePc = resumePc;
-    edgeWaiters[signalIndex].push_back(
-        EdgeWaiter{.processIndex = processIndex, .edge = edge, .resumePc = resumePc});
+    ProcessState& state = processes[processIndex];
+    state.resumePc = resumePc;
+    armWaiter(signalIndex, EdgeWaiter{.processIndex = processIndex,
+                                      .edge = edge,
+                                      .resumePc = resumePc,
+                                      .generation = state.waitGeneration});
+}
+
+void Kernel::suspendForEvents(std::uint32_t processIndex, std::uint32_t listIndex,
+                              std::uint32_t resumePc) {
+    ProcessState& state = processes[processIndex];
+    state.resumePc = resumePc;
+    const codegen::CompiledProcess& body = designImage->compiledDesign().body(state.bodyIndex);
+    for (const eir::SensitivityEntry& entry : body.eventLists[listIndex]) {
+        armWaiter(state.objectSignals[entry.objectIndex],
+                  EdgeWaiter{.processIndex = processIndex,
+                             .edge = entry.edge,
+                             .resumePc = resumePc,
+                             .generation = state.waitGeneration,
+                             .lowBit = entry.lowBit,
+                             .width = entry.width});
+    }
+}
+
+void Kernel::armWaiter(std::uint32_t signalIndex, const EdgeWaiter& waiter) {
+    EdgeWaiterList& list = edgeWaiters[signalIndex];
+    if (list.waiters.size() >= list.sweepAt) {
+        std::erase_if(list.waiters, [this](const EdgeWaiter& armed) {
+            return armed.generation != processes[armed.processIndex].waitGeneration;
+        });
+        list.sweepAt = std::max(MinimumWaiterSweep, 2 * list.waiters.size());
+    }
+    list.waiters.push_back(waiter);
 }
 
 void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallIndex) {
@@ -469,6 +845,19 @@ void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallInde
             argument.isConstant ? body.constant(argument.location)
                                 : frameAt(state.frameOffset + argument.location, argument.bitWidth);
         arguments.push_back(FormatArgument{.value = value, .isSigned = argument.isSigned});
+    }
+
+    // The file tasks take a descriptor first, which is not part of what they print. An
+    // unknown bit in it names no file.
+    const bool toFile = descriptor.kind == eir::SysTaskKind::FileDisplay
+                        || descriptor.kind == eir::SysTaskKind::FileWrite
+                        || descriptor.kind == eir::SysTaskKind::FileClose
+                        || descriptor.kind == eir::SysTaskKind::FileFlush;
+    std::uint32_t fileDescriptor = 0;
+    if (toFile && !arguments.empty()) {
+        const eir::ConstBitRef value = arguments.front().value;
+        fileDescriptor = static_cast<std::uint32_t>(value.aval()[0] & ~value.bval()[0]);
+        arguments.erase(arguments.begin());
     }
 
     const elab::Instance& instance =
@@ -514,6 +903,213 @@ void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallInde
     case eir::SysTaskKind::DumpVars:
         for (ValueChangeListener* listener : listeners) listener->onDumpVars();
         return;
+
+    case eir::SysTaskKind::FileDisplay:
+        writeToDescriptor(fileDescriptor, text + '\n', "$fdisplay", descriptor.location);
+        return;
+
+    case eir::SysTaskKind::FileWrite:
+        writeToDescriptor(fileDescriptor, text, "$fwrite", descriptor.location);
+        return;
+
+    case eir::SysTaskKind::FileClose:
+        if (fileFor(fileDescriptor) != nullptr) {
+            std::erase_if(openFiles, [fileDescriptor](const OpenFile& file) {
+                return file.descriptor == fileDescriptor;
+            });
+        } else {
+            diagnostics.report(DiagCode::FileNotOpen, descriptor.location, "$fclose",
+                               fileDescriptor);
+        }
+        return;
+
+    case eir::SysTaskKind::FileFlush:
+        if (descriptor.arguments.empty()) {
+            transcriptStream().flush();
+            for (OpenFile& file : openFiles) file.stream->flush();
+        } else if (OpenFile* file = fileFor(fileDescriptor)) {
+            file->stream->flush();
+        } else {
+            transcriptStream().flush();
+        }
+        return;
+
+    case eir::SysTaskKind::ReadMemHex:
+    case eir::SysTaskKind::ReadMemBinary: readMemory(processIndex, descriptor, arguments); return;
+
+    case eir::SysTaskKind::Random:
+    case eir::SysTaskKind::URandom:
+    case eir::SysTaskKind::URandomRange:
+    case eir::SysTaskKind::FileOpen:
+        ENZAN_ASSERT(false, "a system function run as a system task; run the EIR verifier");
+        return;
+    }
+}
+
+void Kernel::runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCallIndex,
+                               eir::BitRef result) {
+    ProcessState& state = processes[processIndex];
+    const codegen::CompiledProcess& body = designImage->compiledDesign().body(state.bodyIndex);
+    const codegen::SysTaskDescriptor& descriptor = body.sysCalls[sysCallIndex];
+
+    // An argument as a number; an unknown bit reads as 0, as other simulators read it.
+    const auto argument = [&](std::size_t index) -> std::uint64_t {
+        const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[index];
+        const eir::ConstBitRef value =
+            compiled.isConstant ? body.constant(compiled.location)
+                                : frameAt(state.frameOffset + compiled.location, compiled.bitWidth);
+        std::uint64_t number = value.aval()[0] & ~value.bval()[0];
+        if (value.width() < 64) number &= (std::uint64_t{1} << value.width()) - 1;
+        return number;
+    };
+
+    if (descriptor.kind == eir::SysTaskKind::FileOpen) {
+        const auto text = [&](std::size_t index) {
+            const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[index];
+            return toAsciiString(
+                compiled.isConstant
+                    ? body.constant(compiled.location)
+                    : frameAt(state.frameOffset + compiled.location, compiled.bitWidth));
+        };
+        const std::uint32_t opened =
+            openFile(text(0), descriptor.arguments.size() > 1 ? text(1) : std::string(),
+                     descriptor.location);
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        result.aval()[0] = opened;
+        result.canonicalize();
+        return;
+    }
+
+    std::uint64_t value = 0;
+    switch (descriptor.kind) {
+    case eir::SysTaskKind::Random:
+        if (descriptor.arguments.empty()) {
+            value = static_cast<std::uint32_t>(ieeeRandom(randomSeed));
+        } else {
+            auto seed = static_cast<std::int32_t>(static_cast<std::uint32_t>(argument(0)));
+            const std::int32_t draw = ieeeRandom(seed);
+            value = (std::uint64_t{static_cast<std::uint32_t>(seed)} << 32U)
+                    | static_cast<std::uint32_t>(draw);
+        }
+        break;
+
+    case eir::SysTaskKind::URandom:
+        if (!descriptor.arguments.empty())
+            state.randomState = processRandomState(static_cast<std::uint32_t>(argument(0)), {});
+        value = splitMix(state.randomState) & 0xFFFF'FFFFU;
+        break;
+
+    case eir::SysTaskKind::URandomRange: {
+        std::uint64_t high = argument(0) & 0xFFFF'FFFFU;
+        std::uint64_t low = descriptor.arguments.size() > 1 ? argument(1) & 0xFFFF'FFFFU : 0;
+        if (low > high) std::swap(low, high);
+        value = low + (splitMix(state.randomState) % (high - low + 1));
+        break;
+    }
+
+    default: ENZAN_ASSERT(false, "a system task run as a system function"); break;
+    }
+
+    std::ranges::fill(result.avalWords(), 0);
+    std::ranges::fill(result.bvalWords(), 0);
+    result.aval()[0] = value;
+    result.canonicalize();
+}
+
+void Kernel::readMemory(std::uint32_t processIndex, const codegen::SysTaskDescriptor& descriptor,
+                        std::span<const FormatArgument> arguments) {
+    const std::string task(eir::toString(descriptor.kind));
+    const std::string name = toAsciiString(arguments[0].value);
+    const auto address = [&](std::size_t index) -> std::optional<std::int64_t> {
+        if (arguments.size() <= index || arguments[index].value.hasUnknown()) return std::nullopt;
+        return arguments[index].isSigned
+                   ? arguments[index].value.toInt64()
+                   : static_cast<std::int64_t>(arguments[index].value.toUInt64());
+    };
+
+    const std::ifstream file(name);
+    if (!file) {
+        diagnostics.report(DiagCode::ReadMemProblem, descriptor.location, task, name,
+                           "the file could not be opened");
+        return;
+    }
+    std::ostringstream contents;
+    contents << file.rdbuf();
+
+    // The memory as it is, so that what the file does not reach keeps its value, written back
+    // whole: one change, which wakes what reads the memory once.
+    const std::uint32_t signalIndex = processes[processIndex].objectSignals[descriptor.objectIndex];
+    const elab::Slot& slot = designImage->elaboratedDesign().slots()[signalIndex];
+    const Signal& signal = designImage->signals()[signalIndex];
+    eir::BitVector memory = eir::BitVector::from(stateArena.at(signal.wordOffset, signal.bitWidth));
+    const MemoryShape shape{.left = slot.unpackedDimensions.front().left,
+                            .right = slot.unpackedDimensions.front().right,
+                            .elementWidth = slot.elementWidth};
+
+    for (const std::string& problem :
+         loadMemoryImage(contents.str(), descriptor.kind == eir::SysTaskKind::ReadMemHex, shape,
+                         address(1), address(2), memory.mutableRef()))
+        diagnostics.report(DiagCode::ReadMemProblem, descriptor.location, task, name, problem);
+    writeSignal(signalIndex, memory.ref());
+}
+
+std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,
+                               SourceLocation location) {
+    // Writing only: a file opened for reading has nothing that reads it yet, and opening one
+    // anyway would let a testbench read as if it had read nothing.
+    const bool channel = mode.empty();
+    if (!channel && !mode.starts_with('w') && !mode.starts_with('a')) {
+        diagnostics.report(DiagCode::FileNotOpened, location, name, mode,
+                           "Enzan opens files for writing only");
+        return 0;
+    }
+    if (channel && nextChannel > 30) {
+        diagnostics.report(DiagCode::FileNotOpened, location, name, mode,
+                           "all 30 channels of a multichannel descriptor are in use");
+        return 0;
+    }
+
+    auto stream = std::make_unique<std::ofstream>(
+        name, mode.starts_with('a') ? std::ios::out | std::ios::app : std::ios::out);
+    if (!stream->is_open()) {
+        diagnostics.report(DiagCode::FileNotOpened, location, name, mode,
+                           "the file could not be created");
+        return 0;
+    }
+
+    const std::uint32_t descriptor =
+        channel ? std::uint32_t{1} << nextChannel++ : 0x8000'0000U | nextFileNumber++;
+    openFiles.push_back(OpenFile{.descriptor = descriptor, .stream = std::move(stream)});
+    return descriptor;
+}
+
+Kernel::OpenFile* Kernel::fileFor(std::uint32_t descriptor) {
+    const auto found = std::ranges::find(openFiles, descriptor, &OpenFile::descriptor);
+    return found != openFiles.end() ? &*found : nullptr;
+}
+
+void Kernel::writeToDescriptor(std::uint32_t descriptor, std::string_view text,
+                               std::string_view task, SourceLocation location) {
+    if ((descriptor & 0x8000'0000U) != 0) {
+        // A file descriptor: the standard streams, or one file.
+        if (descriptor == 0x8000'0001U) {
+            transcriptStream() << text;
+        } else if (descriptor == 0x8000'0002U) {
+            std::cerr << text;
+        } else if (OpenFile* file = fileFor(descriptor)) {
+            *file->stream << text;
+        } else {
+            diagnostics.report(DiagCode::FileNotOpen, location, task, descriptor);
+        }
+        return;
+    }
+
+    // A multichannel descriptor: bit 0 is the standard output, each other bit one file.
+    if ((descriptor & 1U) != 0) transcriptStream() << text;
+    for (OpenFile& file : openFiles) {
+        if ((file.descriptor & 0x8000'0000U) == 0 && (descriptor & file.descriptor) != 0)
+            *file.stream << text;
     }
 }
 

@@ -52,6 +52,11 @@ void Image::buildInstanceTables() {
 
 void Image::buildProcesses() {
     processList.reserve(elaborated->processes().size());
+    processWriteRoutes.resize(elaborated->processes().size());
+
+    // Drivers are ordered by process, then object, so one pass hands each process its runs.
+    const std::span<const elab::Driver> drivers = elaborated->drivers();
+    std::size_t nextDriver = 0;
 
     for (const elab::ProcessInstance& processInstance : elaborated->processes()) {
         const elab::Instance& instance = elaborated->instances()[processInstance.instanceIndex];
@@ -73,26 +78,55 @@ void Image::buildProcesses() {
 
         const auto processIndex = static_cast<std::uint32_t>(processList.size());
 
+        std::vector<WriteRoute>& routes = processWriteRoutes[processIndex];
+        for (const std::uint32_t objectIndex : eir::writtenObjects(body.writeSet)) {
+            WriteRoute route{.firstDriver = static_cast<std::uint32_t>(nextDriver),
+                             .driverCount = 0};
+            while (nextDriver < drivers.size() && drivers[nextDriver].process == processIndex
+                   && drivers[nextDriver].objectIndex == objectIndex) {
+                ++route.driverCount;
+                ++nextDriver;
+            }
+            routes.push_back(route);
+        }
+        ENZAN_ALWAYS_ASSERT(nextDriver == drivers.size()
+                                || drivers[nextDriver].process != processIndex,
+                            "every driver of a process is reached through one of its routes");
+        state.writeRoutes = routes;
+
         // Static sensitivity. An explicit list is used as written; a process whose
         // triggering is implicit — `always_comb`, `always_latch`, a continuous
         // assignment — is subscribed to everything it reads, which is what the language
-        // means by an inferred sensitivity list.
+        // means by an inferred sensitivity list. Not to a subroutine's static variable, which
+        // every caller writes: callers watching it would wake one another for ever.
         const bool inferred = body.sensitivity.empty()
                               && (body.kind == eir::ProcessKind::AlwaysComb
                                   || body.kind == eir::ProcessKind::AlwaysLatch
                                   || body.kind == eir::ProcessKind::ContinuousAssign);
 
         if (inferred) {
+            const std::vector<eir::Object>& objects =
+                design->module(instance.definitionIndex).objects;
             for (const std::uint32_t objectIndex : body.readSet) {
+                if (objects[objectIndex].subroutineStatic) continue;
                 signalList[state.objectSignals[objectIndex]].subscribers.push_back(
                     Signal::Subscriber{.processIndex = processIndex,
                                        .edge = eir::EdgeKind::AnyChange});
             }
         } else {
             for (const eir::SensitivityEntry& entry : body.sensitivity) {
-                signalList[state.objectSignals[entry.objectIndex]].subscribers.push_back(
-                    Signal::Subscriber{.processIndex = processIndex, .edge = entry.edge});
+                Signal& signal = signalList[state.objectSignals[entry.objectIndex]];
+                signal.subscribers.push_back(Signal::Subscriber{.processIndex = processIndex,
+                                                                .edge = entry.edge,
+                                                                .lowBit = entry.lowBit,
+                                                                .width = entry.width});
+                if (entry.width != 0) signal.windowed = true;
             }
+        }
+        for (const std::vector<eir::SensitivityEntry>& list : body.eventLists) {
+            for (const eir::SensitivityEntry& entry : list)
+                if (entry.width != 0)
+                    signalList[state.objectSignals[entry.objectIndex]].windowed = true;
         }
 
         processList.push_back(std::move(state));
@@ -135,10 +169,22 @@ void Image::initializeState(Arena& arena) const {
                     continue;
                 }
 
-                // No declared initialiser: X for a four-state object, zero for a two-state
-                // one (section 3.9). A four-state object that defaulted to zero would hide
-                // exactly the bugs X exists to reveal.
-                target.fill(object.type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero);
+                // No declared initialiser: a net's bits hold what an undriven bit of its kind
+                // holds, `z` or its pull, until a driver says otherwise (section 3.7). A
+                // variable is X when four-state and zero when two-state (section 3.9); one
+                // that defaulted to zero would hide exactly the bugs X exists to reveal. The
+                // slot's kind decides, not the object's, since a collapsed port's object is
+                // only another name for its parent's declaration.
+                const elab::Slot& slot = elaborated->slots()[slotIndex];
+                if (slot.kind == eir::ObjectKind::Net) {
+                    target.fill(eir::undrivenValue(slot.netKind));
+                    for (const eir::WriteExtent& driven : slot.drivenBits) {
+                        eir::bitops::assignPartAt(target, eir::BitVector(driven.width).ref(),
+                                                  driven.lowBit);
+                    }
+                } else {
+                    target.fill(object.type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero);
+                }
             }
         }
     };
@@ -147,6 +193,11 @@ void Image::initializeState(Arena& arena) const {
     // whichever side of the port connection declared it.
     visit(true);
     visit(false);
+
+    // A driver that has not run yet has no value the design gave it, so it starts at X, as the
+    // net's driven bits do.
+    for (const elab::Driver& driver : elaborated->drivers())
+        arena.at(driver.wordOffset, driver.width).fill(eir::Logic::Unknown);
 }
 
 std::uint32_t Image::findSignal(std::string_view path) const {

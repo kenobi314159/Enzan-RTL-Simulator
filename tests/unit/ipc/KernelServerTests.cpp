@@ -42,7 +42,10 @@
 #include <utility>
 #include <vector>
 
+#include <fcntl.h>
+#include <pty.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 namespace {
 
@@ -236,12 +239,19 @@ protected:
     /// command typed at a front end and a request from one act on the same simulation, so a
     /// test that served an image of its own would be testing an arrangement that does not
     /// exist.
-    void rebuild(Design design) {
+    ///
+    /// `withVpiApplication` loads the test plugin first, as `--vpi` would.
+    void rebuild(Design design, bool withVpiApplication = false) {
         // The old server before the old session: the server borrows the session's kernel, and
         // replacing the session first would leave it pointing at one that has gone.
         server.reset();
+        session.reset();
         session = std::make_unique<Session>(sources, engine);
         session->setTimeScale(TimeScale(-9));
+        if (withVpiApplication) {
+            const std::vector<std::string> commandLine = {"enzan"};
+            ASSERT_TRUE(session->loadVpiApplication(ENZAN_TEST_STARTUP_PLUGIN, commandLine));
+        }
         session->setDesign(std::make_unique<Design>(std::move(design)));
         ASSERT_TRUE(session->elaborate("tb"))
             << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.front());
@@ -751,6 +761,25 @@ TEST_F(ServerFixture, RestartReturnsToTimeZeroAndKeepsTheSubscriptions) {
     EXPECT_EQ(server->kernel().time(), 40U);
 }
 
+TEST_F(ServerFixture, RestartIsRefusedWhileAVpiApplicationIsLoaded) {
+    // The client's restart reaches the kernel without going through the session, so the server
+    // has to make the session's refusal itself (DESIGN_GUIDE.md section 9.5).
+    rebuild(tickingDesign(), true);
+    connectClient();
+
+    RunMessage run;
+    run.duration = 100;
+    request(MessageType::Run, run);
+    ASSERT_EQ(server->kernel().time(), 100U);
+
+    enzan::ipc::RestartMessage restart;
+    request(MessageType::Restart, restart);
+
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
+    EXPECT_NE(failure.reason.find("VPI"), std::string::npos) << failure.reason;
+    EXPECT_EQ(server->kernel().time(), 100U) << "nothing was put back";
+}
+
 // ---------------------------------------------------------------------------
 // Transcript
 // ---------------------------------------------------------------------------
@@ -763,6 +792,221 @@ TEST_F(ServerFixture, TheTranscriptGoesToTheClientAndToTheTerminal) {
     const auto transcript = expect<TranscriptMessage>(MessageType::Transcript);
     EXPECT_NE(transcript.text.find("attached"), std::string::npos) << transcript.text;
     EXPECT_NE(localTranscript.str().find("attached"), std::string::npos) << localTranscript.str();
+}
+
+// ---------------------------------------------------------------------------
+// Captured output (section 10.2)
+// ---------------------------------------------------------------------------
+
+/// Points this process's standard output and standard error somewhere else for one test, and
+/// puts them back, so that what a test captures is what it wrote and the terminal is left as it
+/// was found.
+class StandardStreams {
+public:
+    StandardStreams(int output, int error)
+        : savedOutput(::dup(STDOUT_FILENO)), savedError(::dup(STDERR_FILENO)) {
+        std::fflush(nullptr);
+        ::dup2(output, STDOUT_FILENO);
+        ::dup2(error, STDERR_FILENO);
+    }
+
+    StandardStreams(const StandardStreams&) = delete;
+    StandardStreams& operator=(const StandardStreams&) = delete;
+    StandardStreams(StandardStreams&&) = delete;
+    StandardStreams& operator=(StandardStreams&&) = delete;
+
+    ~StandardStreams() {
+        std::fflush(nullptr);
+        ::dup2(savedOutput, STDOUT_FILENO);
+        ::dup2(savedError, STDERR_FILENO);
+        ::close(savedOutput);
+        ::close(savedError);
+    }
+
+private:
+    int savedOutput;
+    int savedError;
+};
+
+/// A file standing in for a terminal or a log, read back once the test is done with it.
+class Scratch {
+public:
+    Scratch() {
+        std::array<char, 32> name{};
+        std::snprintf(name.data(), name.size(), "/tmp/enzan-capture-XXXXXX");
+        descriptor = ::mkstemp(name.data());
+        path = name.data();
+    }
+
+    Scratch(const Scratch&) = delete;
+    Scratch& operator=(const Scratch&) = delete;
+    Scratch(Scratch&&) = delete;
+    Scratch& operator=(Scratch&&) = delete;
+
+    ~Scratch() {
+        ::close(descriptor);
+        ::unlink(path.c_str());
+    }
+
+    [[nodiscard]] std::string contents() const {
+        std::string text;
+        std::array<char, 4096> buffer{};
+        for (::ssize_t offset = 0;;) {
+            const ::ssize_t count = ::pread(descriptor, buffer.data(), buffer.size(), offset);
+            if (count <= 0) break;
+            text.append(buffer.data(), static_cast<std::size_t>(count));
+            offset += count;
+        }
+        return text;
+    }
+
+    int descriptor = -1;
+    std::string path;
+};
+
+void writeTo(int descriptor, std::string_view text) {
+    ASSERT_EQ(::write(descriptor, text.data(), text.size()), static_cast<::ssize_t>(text.size()));
+}
+
+class CaptureFixture : public ServerFixture {
+protected:
+    /// The capture is stopped before the streams are put back. Stopping restores the
+    /// descriptors the capture found, so the other order would leave this test binary writing
+    /// into a scratch file that no longer exists.
+    void TearDown() override {
+        server.reset();
+        streams.reset();
+        if (controller >= 0) ::close(controller);
+        if (terminal >= 0) ::close(terminal);
+        ServerFixture::TearDown();
+    }
+
+    /// Points standard output and standard error at `output` and `error`, connects a client
+    /// and starts capturing.
+    void capture(int output, int error) {
+        streams.emplace(output, error);
+        connectClient();
+        std::string failure;
+        ASSERT_TRUE(server->captureOutput(failure)) << failure;
+    }
+
+    /// Everything the client has been sent as transcript, waiting up to two seconds for
+    /// `wanted` to be part of it: the capture is drained on a thread of its own, so what was
+    /// written arrives a moment later rather than within the step that follows.
+    std::string transcriptContaining(std::string_view wanted) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (true) {
+            pumpServer();
+            for (const TranscriptMessage& message :
+                 expectAll<TranscriptMessage>(MessageType::Transcript)) {
+                collected += message.text;
+            }
+            if (collected.find(wanted) != std::string::npos) return collected;
+            if (std::chrono::steady_clock::now() > deadline) return collected;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+
+    Scratch log;
+    Scratch errors;
+    std::optional<StandardStreams> streams;
+    int controller = -1;
+    int terminal = -1;
+    std::string collected;
+};
+
+TEST_F(CaptureFixture, WhatTheProcessWritesReachesTheTranscriptAndTheTerminal) {
+    // The point of capturing: a VPI application writes to the process's standard output, not
+    // through Enzan, and cocotb's whole log is written that way.
+    capture(log.descriptor, log.descriptor);
+    writeTo(STDOUT_FILENO, "from an application\n");
+    EXPECT_NE(transcriptContaining("from an application").find("from an application\n"),
+              std::string::npos);
+
+    server.reset();
+    EXPECT_NE(log.contents().find("from an application\n"), std::string::npos)
+        << "the terminal still gets what it always got";
+}
+
+TEST_F(CaptureFixture, StandardErrorIsCapturedWhenItIsTheSameFileAsStandardOutput) {
+    capture(log.descriptor, log.descriptor);
+    writeTo(STDERR_FILENO, "a traceback\n");
+    EXPECT_NE(transcriptContaining("a traceback").find("a traceback"), std::string::npos);
+}
+
+TEST_F(CaptureFixture, StandardErrorKeptApartFromStandardOutputIsLeftAlone) {
+    // Merging two destinations the user kept apart would put errors in a log meant for output.
+    capture(log.descriptor, errors.descriptor);
+    writeTo(STDERR_FILENO, "kept apart\n");
+    writeTo(STDOUT_FILENO, "marker\n");
+    EXPECT_EQ(transcriptContaining("marker").find("kept apart"), std::string::npos);
+
+    server.reset();
+    EXPECT_NE(errors.contents().find("kept apart"), std::string::npos);
+    EXPECT_EQ(log.contents().find("kept apart"), std::string::npos);
+}
+
+TEST_F(CaptureFixture, TheKernelsOwnLinesAreNotSentTwice) {
+    // With the echo going to standard output, the capture is what carries the kernel's own
+    // transcript, and the relay must stop keeping a copy of it.
+    ServerOptions options;
+    options.kernelVersion = "enzan test";
+    options.timeScale = TimeScale(-9);
+    server.reset();
+    server = std::make_unique<KernelServer>(*session, engine, options);
+    server->start();
+
+    capture(log.descriptor, log.descriptor);
+    server->transcript() << "once only\n";
+    writeTo(STDOUT_FILENO, "and then\n");
+
+    const std::string transcript = transcriptContaining("and then");
+    const std::size_t first = transcript.find("once only");
+    ASSERT_NE(first, std::string::npos) << transcript;
+    EXPECT_EQ(transcript.find("once only", first + 1), std::string::npos) << transcript;
+    EXPECT_LT(first, transcript.find("and then")) << "in the order it was written";
+}
+
+TEST_F(CaptureFixture, ATerminalIsCapturedAsATerminalAndColourStaysOnIt) {
+    // A program writing to a pipe buffers in blocks, and its lines would reach the window long
+    // after the events they describe; a terminal is captured with a terminal for that reason.
+    ASSERT_EQ(::openpty(&controller, &terminal, nullptr, nullptr, nullptr), 0);
+    capture(terminal, terminal);
+    EXPECT_EQ(::isatty(STDOUT_FILENO), 1) << "what an application sees is still a terminal";
+
+    writeTo(STDOUT_FILENO, "\x1b[32mpassed\x1b[0m\n");
+    const std::string transcript = transcriptContaining("passed");
+    EXPECT_NE(transcript.find("passed\n"), std::string::npos) << transcript;
+    EXPECT_EQ(transcript.find('\x1b'), std::string::npos) << "colour codes are stripped";
+
+    server.reset();
+
+    // The real terminal got the bytes as written, colour included.
+    ::fcntl(controller, F_SETFL, ::fcntl(controller, F_GETFL) | O_NONBLOCK);
+    std::string echoed;
+    std::array<char, 4096> buffer{};
+    for (::ssize_t count = 0; (count = ::read(controller, buffer.data(), buffer.size())) > 0;)
+        echoed.append(buffer.data(), static_cast<std::size_t>(count));
+    EXPECT_NE(echoed.find("\x1b[32mpassed\x1b[0m"), std::string::npos) << echoed;
+}
+
+TEST_F(CaptureFixture, MoreThanTheCaptureHoldsDoesNotStallTheWriter) {
+    // One callback can write more than a pipe holds. The capture is drained on a thread of its
+    // own because a writer that had to wait for its own thread to drain would wait for ever.
+    capture(log.descriptor, log.descriptor);
+    const std::string line(1023, 'x');
+    for (int index = 0; index < 512; ++index) writeTo(STDOUT_FILENO, line + '\n');
+    writeTo(STDOUT_FILENO, "the end\n");
+
+    EXPECT_NE(transcriptContaining("the end").find("the end"), std::string::npos);
+}
+
+TEST_F(CaptureFixture, StoppingPutsTheDescriptorsBack) {
+    capture(log.descriptor, log.descriptor);
+    server.reset();
+
+    writeTo(STDOUT_FILENO, "after the server\n");
+    EXPECT_NE(log.contents().find("after the server\n"), std::string::npos);
 }
 
 // ---------------------------------------------------------------------------

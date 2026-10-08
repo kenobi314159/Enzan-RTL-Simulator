@@ -5,12 +5,16 @@
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
 #include "runtime/Arena.h"
+#include "runtime/Format.h"
 #include "runtime/Image.h"
 #include "runtime/Scheduler.h"
 #include "runtime/Time.h"
 
 #include <cstdint>
 #include <iosfwd>
+#include <map>
+#include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -95,6 +99,54 @@ public:
     virtual void onDumpVars() {}
 };
 
+/// The points in the region ordering at which a PLI application runs.
+///
+/// Section 3.3 lets the PLI regions be hook points rather than queues, and section 9.3 says
+/// where each callback fires; this is the kernel's half of that table. An interface rather
+/// than a dependency for the reason `ValueChangeListener` is one: `runtime` must not depend on
+/// `pli`, and a kernel with no application loaded pays one null test per hook and nothing else.
+///
+/// Every hook may re-enter the kernel — write a signal, schedule a non-blocking update, ask
+/// for the run to finish — because that is what an application's callbacks do.
+class PliHooks {
+public:
+    PliHooks() = default;
+    PliHooks(const PliHooks&) = delete;
+    PliHooks& operator=(const PliHooks&) = delete;
+    PliHooks(PliHooks&&) = delete;
+    PliHooks& operator=(PliHooks&&) = delete;
+    virtual ~PliHooks() = default;
+
+    /// Called once a signal has changed: the new value is in the arena, the processes it
+    /// wakes are scheduled and every listener has recorded it. `cbValueChange`.
+    virtual void valueChanged(std::uint32_t signalIndex) = 0;
+
+    /// The earliest time anything the application scheduled is due, or `NoTime`.
+    ///
+    /// Taken into account when the kernel decides whether there is anything left to do,
+    /// because a pending timed callback keeps a simulation running: a testbench written in
+    /// Python is a design that schedules nothing of its own.
+    [[nodiscard]] virtual SimTime nextTimedEvent() const = 0;
+
+    /// Called when time has advanced to `time`, before anything at that time runs.
+    /// `cbNextSimTime`.
+    virtual void timeAdvanced(SimTime time) = 0;
+
+    /// Runs everything due at or before `time`: delayed writes, then `cbAfterDelay` and
+    /// `cbAtStartOfSimTime`.
+    virtual void runTimedEvents(SimTime time) = 0;
+
+    [[nodiscard]] virtual bool hasReadWrite() const = 0;
+
+    /// Runs the pending `cbReadWriteSynch` callbacks, once the slot has settled.
+    virtual void runReadWrite() = 0;
+
+    [[nodiscard]] virtual bool hasReadOnly() const = 0;
+
+    /// Runs the pending `cbReadOnlySynch` callbacks, before the Postponed region.
+    virtual void runReadOnly() = 0;
+};
+
 /// Tunable kernel behaviour.
 struct KernelOptions {
     /// Delta cycles allowed at one timestamp before the run is abandoned.
@@ -107,6 +159,11 @@ struct KernelOptions {
 
     /// Where `$display` and the severity tasks write. Null means the standard output.
     std::ostream* transcript = nullptr;
+
+    /// What every random draw starts from (section 3.8): `$random`'s own seed, and what each
+    /// process's `$urandom` generator is derived from. Zero by default, which is where other
+    /// simulators start `$random` too.
+    std::uint32_t seed = 0;
 };
 
 /// The simulation kernel: one time wheel, one event queue, one arena.
@@ -222,12 +279,38 @@ public:
     /// kernel — entitled to give it.
     void setInterrupt(RunInterrupt* source) noexcept { interrupt = source; }
 
+    /// Registers the PLI application's hooks, or clears them with a null pointer.
+    ///
+    /// `hooks` must outlive the kernel or be cleared first. One rather than a list, because
+    /// one VPI implementation serves every application a process loads (section 9).
+    void setPliHooks(PliHooks* hooks) noexcept { pliHooks = hooks; }
+
+    /// Ends the simulation as `$finish` does, once whatever is running returns.
+    ///
+    /// `vpi_control(vpiFinish)` (section 9.5). The exit status is untouched, so a run an
+    /// application finishes ends successfully unless something else failed.
+    void requestFinish() noexcept { finishRequested = true; }
+
+    /// Stops the run at the next time-slot boundary, as a `RunInterrupt` would.
+    ///
+    /// `vpi_control(vpiStop)` (section 9.5). The boundary is the one a run can be resumed
+    /// from with the same result, which is the whole reason `RunInterrupt` polls there.
+    void requestStop() noexcept { stopRequested = true; }
+
+    /// The unit every time the kernel reports is counted in.
+    [[nodiscard]] TimeScale timeScale() const noexcept { return options.timeScale; }
+
     /// Total instructions executed, for the benchmark harness.
     [[nodiscard]] std::uint64_t executedInstructions() const noexcept { return instructionCount; }
 
     /// Total delta cycles across the whole run, for the benchmark harness and for
     /// diagnosing a design that almost fails to settle.
     [[nodiscard]] std::uint64_t totalDeltaCycles() const noexcept { return deltaTotal; }
+
+    /// The waits armed on `signalIndex` by `@` and `wait`, stale ones not yet swept included.
+    [[nodiscard]] std::size_t armedWaits(std::uint32_t signalIndex) const noexcept {
+        return edgeWaiters[signalIndex].waiters.size();
+    }
 
     // -----------------------------------------------------------------------
     // Operations the interpreter performs through the kernel
@@ -250,6 +333,15 @@ public:
     /// Writes a whole signal, detecting change and waking its subscribers.
     void writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value);
 
+    /// Writes `value` through the driver of `route` whose range holds bit `lowBit` of the
+    /// signal, and resolves what that changes (DESIGN_GUIDE.md section 3.7).
+    ///
+    /// Only the segments that driver covers are resolved, and the result reaches the signal
+    /// through `writeSignalPart`, so a contended bit wakes nothing unless its resolved value
+    /// moves. A write that lands in no driver's range is outside the signal and is dropped,
+    /// as a write through an out-of-range select is.
+    void writeThroughDrivers(const WriteRoute& route, eir::ConstBitRef value, std::uint64_t lowBit);
+
     /// Writes `value` into a signal starting at bit `lowBit`, leaving the rest alone.
     void writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value, std::uint64_t lowBit);
 
@@ -265,12 +357,32 @@ public:
     /// resumes in this timestamp but after everything currently Active (section 3.3).
     void suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint32_t resumePc);
 
+    /// Schedules a write of `value` to `signalIndex` `delay` time units from now: the write
+    /// of a continuous assignment with a delay, or a nonblocking `a <= #d b`.
+    ///
+    /// The first is inertial (IEEE 1800 section 10.3.3): it replaces the write the same store
+    /// of the same process scheduled before, if that has not happened yet, so a pulse
+    /// shorter than the delay never reaches the target. When it happens it is a write through
+    /// the process's route at `position`, as a Store. The second is transport: each update
+    /// happens, joining the NBA region of its time step.
+    void scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
+                              std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
+                              bool nonBlocking);
+
     /// Suspends a process until `edge` occurs on `signalIndex`.
     void suspendForEdge(std::uint32_t processIndex, std::uint32_t signalIndex, eir::EdgeKind edge,
                         std::uint32_t resumePc);
 
+    /// Suspends `processIndex` until any entry of its event list `listIndex` happens.
+    void suspendForEvents(std::uint32_t processIndex, std::uint32_t listIndex,
+                          std::uint32_t resumePc);
+
     /// Performs a system task call.
     void runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallIndex);
+
+    /// Performs a system function call, writing its result to `result`.
+    void runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCallIndex,
+                           eir::BitRef result);
 
 private:
     /// Runs one timestamp to completion, iterating the regions per section 3.3.
@@ -301,12 +413,26 @@ private:
     /// Runs the design's `final` blocks, once.
     void runFinalProcesses();
 
+    /// True when the PLI application has something to run at the current time.
+    [[nodiscard]] bool pliWorkDue() const;
+
     [[nodiscard]] bool stopping() const noexcept { return finishRequested || errorRequested; }
 
     [[nodiscard]] bool halted() const noexcept { return stopping(); }
 
     /// Wakes whatever is waiting on a transition of `signalIndex`.
-    void notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after);
+    /// Wakes and resumes what the change of `signalIndex` concerns. `before` and `after` are its
+    /// lowest bit either side of the write; `previous` is its whole old value when the signal is
+    /// windowed and empty otherwise, and `current` its new one.
+    void notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after,
+                      eir::ConstBitRef previous, eir::ConstBitRef current);
+
+    /// Copies a windowed signal's value before a write changes it, and returns the copy; returns
+    /// an empty view for a signal nothing watches by window.
+    eir::ConstBitRef keepPrevious(const Signal& signal, eir::ConstBitRef target);
+
+    /// Resolves every segment `driverIndex` covers and writes the result into its signal.
+    void resolveDriver(std::uint32_t driverIndex);
 
     /// Reports the delta limit being exceeded, naming what is still active.
     void reportDeltaLimit();
@@ -331,6 +457,89 @@ private:
     /// a test of one size against zero for the whole of an ordinary run.
     std::vector<bool> forcedSignals;
 
+    /// The process the interpreter is running, which its own writes do not wake, or
+    /// `NoProcess` between processes.
+    std::uint32_t runningProcess = NoProcess;
+    static constexpr std::uint32_t NoProcess = 0xFFFF'FFFFU;
+
+    /// Scratch for resolution, sized once for the widest driver: the resolved range, the
+    /// segment being folded, and the driver being folded into it. Resolution runs on the
+    /// write path, which section 13.4 forbids allocating on.
+    std::vector<eir::Word> resolvedScratch;
+
+    std::vector<eir::Word> segmentScratch;
+    std::vector<eir::Word> driverScratch;
+
+    /// A windowed signal's old value, kept across its write for the comparison, sized once
+    /// for the widest windowed signal.
+    std::vector<eir::Word> windowScratch;
+
+    /// A file the design opened with `$fopen`: by descriptor, `0x8000'0000` with a number
+    /// above the standard streams' 0 to 2, or by one channel bit of a multichannel descriptor
+    /// when it was opened with no mode (IEEE 1800 section 21.3.1).
+    struct OpenFile {
+        std::uint32_t descriptor = 0;
+        std::unique_ptr<std::ostream> stream;
+    };
+
+    std::vector<OpenFile> openFiles;
+    std::uint32_t nextFileNumber = 3;
+    std::uint32_t nextChannel = 1;
+
+    /// Runs `$readmemh` or `$readmemb`, whose arguments are the file name and the optional
+    /// start and end addresses.
+    void readMemory(std::uint32_t processIndex, const codegen::SysTaskDescriptor& descriptor,
+                    std::span<const FormatArgument> arguments);
+
+    /// Opens `name` for `$fopen`, and returns its descriptor or 0.
+    std::uint32_t openFile(const std::string& name, const std::string& mode,
+                           SourceLocation location);
+
+    /// Writes `text` to every file and standard stream `descriptor` names. `task` and
+    /// `location` are for the warning a descriptor that is not open gets.
+    void writeToDescriptor(std::uint32_t descriptor, std::string_view text, std::string_view task,
+                           SourceLocation location);
+
+    /// The open file `descriptor` names on its own, or nothing: a standard stream, a
+    /// multichannel descriptor and one not open are not.
+    OpenFile* fileFor(std::uint32_t descriptor);
+
+    /// `$random`'s seed when it is called without one of its own.
+    std::int32_t randomSeed = 0;
+
+    /// A write scheduled by `scheduleDelayedWrite`, waiting for its time.
+    ///
+    /// Each holds its own copy of the value. The time wheel allocates per entry as it is, so
+    /// a pool would save nothing until both move to the calendar queue section 6.2 calls for.
+    struct DelayedWrite {
+        std::uint32_t processIndex = 0;
+        std::uint32_t position = 0;
+        std::uint32_t signalIndex = 0;
+        bool nonBlocking = false;
+        std::uint64_t serial = 0;
+        eir::BitVector value;
+    };
+
+    /// Pending delayed writes by time, in the order they were scheduled within one.
+    std::map<SimTime, std::vector<DelayedWrite>> delayedWrites;
+
+    /// The pending inertial write of each (process, write position), by serial and time, so
+    /// that the next one can take it out of `delayedWrites`.
+    struct PendingInertial {
+        std::uint64_t serial = 0;
+        SimTime time = 0;
+    };
+
+    std::map<std::pair<std::uint32_t, std::uint32_t>, PendingInertial> pendingInertial;
+    std::uint64_t nextWriteSerial = 0;
+
+    /// Performs every delayed write due at the current time.
+    void applyDelayedWrites();
+
+    /// A write as a Store makes it: through the process's drivers when its route has any.
+    void writeRouted(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,
+                     eir::ConstBitRef value);
+
     /// Dynamic edge subscriptions created by `WaitEdge`, indexed by signal.
     ///
     /// Separate from the static subscriber list because these are consumed when they
@@ -340,9 +549,35 @@ private:
         std::uint32_t processIndex = 0;
         eir::EdgeKind edge = eir::EdgeKind::AnyChange;
         std::uint32_t resumePc = 0;
+
+        /// The process's wait generation when it armed this, which no longer matches once
+        /// another entry of the same wait has fired.
+        std::uint32_t generation = 0;
+
+        /// The window watched; a width of 0 is the whole signal.
+        std::uint32_t lowBit = 0;
+        std::uint32_t width = 0;
     };
 
-    std::vector<std::vector<EdgeWaiter>> edgeWaiters;
+    /// One signal's dynamic subscriptions, and the length at which arming another first sweeps
+    /// out the stale ones.
+    struct EdgeWaiterList {
+        std::vector<EdgeWaiter> waiters;
+        std::size_t sweepAt = MinimumWaiterSweep;
+    };
+
+    static constexpr std::size_t MinimumWaiterSweep = 16;
+
+    std::vector<EdgeWaiterList> edgeWaiters;
+
+    /// Arms `waiter` on `signalIndex`.
+    ///
+    /// A stale subscription goes when its own signal next changes, and one whose signal never
+    /// does would stay for the rest of the run: `forever @(posedge clk or posedge rst)` leaves
+    /// one on `rst` for every clock. So a list that has doubled since it was last swept is
+    /// swept before it grows, which bounds it by twice what is live, at a constant cost per
+    /// wait.
+    void armWaiter(std::uint32_t signalIndex, const EdgeWaiter& waiter);
 
     /// Non-owning, in registration order. Ordered rather than hash-based because what a listener
     /// records is observable and section 3.8 makes observable ordering reproducible.
@@ -351,11 +586,17 @@ private:
     /// Polled between time slots, or null. Non-owning.
     RunInterrupt* interrupt = nullptr;
 
+    /// The loaded PLI application's hooks, or null. Non-owning.
+    PliHooks* pliHooks = nullptr;
+
     SimTime currentTime = 0;
     RunStatus lastStatus = RunStatus::Quiescent;
     int finishStatus = 0;
     bool finishRequested = false;
     bool errorRequested = false;
+
+    /// Set by `requestStop`, and cleared when the run it stops returns.
+    bool stopRequested = false;
 
     bool finalProcessesRun = false;
 

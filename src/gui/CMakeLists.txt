@@ -15,6 +15,8 @@ enzan_add_component(
           KernelSession.cpp
           MainWindow.cpp
           ObjectsModel.cpp
+          SignalList.cpp
+          TclLibrary.cpp
           Theme.cpp
           TimeAxis.cpp
           TranscriptView.cpp
@@ -24,6 +26,8 @@ enzan_add_component(
           KernelSession.h
           MainWindow.h
           ObjectsModel.h
+          SignalList.h
+          TclLibrary.h
           Theme.h
           ThemeColors.def
           TimeAxis.h

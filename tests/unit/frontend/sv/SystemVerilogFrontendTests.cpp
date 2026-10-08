@@ -39,7 +39,30 @@ using enzan::SourceManager;
 using enzan::eir::Design;
 using enzan::eir::Instance;
 using enzan::eir::ModuleDefinition;
+using enzan::eir::WriteExtent;
 using enzan::test::require;
+
+/// Every process's extents of the object called `name`, one list per process that writes it,
+/// in process order.
+std::vector<std::vector<WriteExtent>> extentsOf(const ModuleDefinition& definition,
+                                                std::string_view name) {
+    const std::uint32_t objectIndex = require(definition.findObject(name));
+    std::vector<std::vector<WriteExtent>> result;
+    for (const enzan::eir::Process& process : definition.processes) {
+        std::vector<WriteExtent> extents;
+        std::ranges::copy_if(
+            process.writeSet, std::back_inserter(extents),
+            [objectIndex](const WriteExtent& extent) { return extent.objectIndex == objectIndex; });
+        if (!extents.empty()) result.push_back(std::move(extents));
+    }
+    return result;
+}
+
+/// An extent of the object called `name` in `definition`.
+WriteExtent extent(const ModuleDefinition& definition, std::string_view name, std::uint32_t lowBit,
+                   std::uint32_t width) {
+    return {.objectIndex = require(definition.findObject(name)), .lowBit = lowBit, .width = width};
+}
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -74,7 +97,8 @@ protected:
     }
 
     /// Analyses `text` as a single file. Returns nullptr when analysis failed.
-    std::unique_ptr<Design> analyse(std::string_view text, std::string_view top = "") {
+    std::unique_ptr<Design> analyse(std::string_view text, std::string_view top = "",
+                                    std::vector<std::string> parameters = {}) {
         const std::filesystem::path path = directory / "design.sv";
         std::ofstream file(path);
         file << text;
@@ -83,6 +107,7 @@ protected:
         enzan::frontend::sv::Options options;
         options.files.push_back(path);
         if (!top.empty()) options.topModules.emplace_back(top);
+        options.parameterOverrides = std::move(parameters);
 
         return enzan::frontend::sv::analyse(options, sources, engine);
     }
@@ -445,12 +470,417 @@ TEST_F(FrontendTest, GenerateBlocksAreHoistedWithTheirScopeInTheName) {
     const ModuleDefinition* module = design->findModule("m");
     ASSERT_NE(module, nullptr);
 
-    // Two blocks declaring `value` must not collide, and the name must still be recognisable.
-    std::size_t hoisted = 0;
-    for (const enzan::eir::Object& object : module->objects) {
-        if (object.name.find("value") != std::string::npos) ++hoisted;
-    }
-    EXPECT_EQ(hoisted, 2U) << "both generate iterations should declare their own object";
+    // Two blocks declaring `value` must not collide, and each is named for its iteration as the
+    // standard names it, so that a reader can tell which is which.
+    EXPECT_TRUE(module->findObject("g_loop[0].value").has_value());
+    EXPECT_TRUE(module->findObject("g_loop[1].value").has_value());
+}
+
+TEST_F(FrontendTest, AnUnnamedGenerateBlockIsNamedAsTheStandardNamesIt) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            localparam int P = 1;
+            if (P == 1) begin
+                logic x;
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+    EXPECT_TRUE(module->findObject("genblk1.x").has_value()) << "IEEE 1800 section 27.6";
+}
+
+TEST_F(FrontendTest, AnInstanceInAGenerateBlockHasTheBlockInItsName) {
+    // Without the block in it, every iteration's instance has the same name and so the same
+    // path, and nothing can tell them apart.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf (input logic a);
+        endmodule
+        module m;
+            logic a;
+            for (genvar i = 0; i < 2; i++) begin : g_loop
+                leaf u_leaf (.a(a));
+            end
+            if (1) begin : g_if
+                leaf u_leaf (.a(a));
+            end
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+    std::vector<std::string> names;
+    names.reserve(module->instances.size());
+    for (const enzan::eir::Instance& instance : module->instances) names.push_back(instance.name);
+    EXPECT_EQ(names,
+              (std::vector<std::string>{"g_loop[0].u_leaf", "g_loop[1].u_leaf", "g_if.u_leaf"}));
+}
+
+// ---------------------------------------------------------------------------
+// Write sets
+// ---------------------------------------------------------------------------
+//
+// A write set records the bits a process writes, because a driver owns bits rather than a
+// signal (DESIGN_GUIDE.md section 3.7). What these pin is which bits: elaboration decides
+// whether two processes are in conflict by comparing them.
+
+TEST_F(FrontendTest, AWholeAssignmentWritesEveryBit) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [7:0] a;
+            logic [7:0] x;
+            assign x = a;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    EXPECT_EQ(extentsOf(top, "x"),
+              (std::vector<std::vector<WriteExtent>>{{extent(top, "x", 0, 8)}}));
+}
+
+TEST_F(FrontendTest, ANetRecordsTheKindItWasDeclaredAs) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            wire    a;
+            wand    b;
+            trior   c;
+            tri1    d;
+            supply0 e;
+            uwire   f;
+            logic   g;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+
+    using enzan::eir::NetKind;
+    const auto kindOf = [found](std::string_view name) {
+        return found->objects[require(found->findObject(name))].netKind;
+    };
+    EXPECT_EQ(kindOf("a"), NetKind::Wire);
+    EXPECT_EQ(kindOf("b"), NetKind::WiredAnd);
+    EXPECT_EQ(kindOf("c"), NetKind::TriOr);
+    EXPECT_EQ(kindOf("d"), NetKind::Tri1);
+    EXPECT_EQ(kindOf("e"), NetKind::Supply0);
+    EXPECT_EQ(kindOf("f"), NetKind::UWire);
+    EXPECT_EQ(found->objects[require(found->findObject("g"))].kind,
+              enzan::eir::ObjectKind::Variable);
+}
+
+TEST_F(FrontendTest, ANetWithNoResolutionTableIsReported) {
+    // A trireg stores charge, which Enzan has no model of; treating it as a wire would lose
+    // the stored value the moment its drivers let go.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            trireg t;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a 'trireg' net"));
+}
+
+TEST_F(FrontendTest, ANetDeclarationAssignmentIsAContinuousAssignment) {
+    // `wire w = a & b;` drives the net for the whole run, not only at time zero.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [3:0] a;
+            logic [3:0] b;
+            wire  [3:0] w = a & b;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    const std::uint32_t w = require(top.findObject("w"));
+    EXPECT_FALSE(top.objects[w].initialValue.has_value());
+    ASSERT_EQ(top.processes.size(), 1U);
+    EXPECT_EQ(top.processes[0].kind, enzan::eir::ProcessKind::ContinuousAssign);
+    EXPECT_EQ(extentsOf(top, "w"),
+              (std::vector<std::vector<WriteExtent>>{{extent(top, "w", 0, 4)}}));
+}
+
+TEST_F(FrontendTest, ASubroutinesStaticVariableIsStorageEveryCallShares) {
+    // One variable for every call, named behind its subroutine, starting from its initialiser
+    // once; an automatic one stays each call's own. A package's subroutine keeps its static
+    // variables in the package, which a module reaches by path.
+    const std::unique_ptr<Design> design = analyse(R"(
+        package p;
+            function integer serial();
+                static integer last = 7;
+                last = last + 1;
+                return last;
+            endfunction
+        endpackage
+        module top;
+            function integer next_id();
+                static integer count = 5;
+                count = count + 1;
+                return count;
+            endfunction
+            function automatic integer fresh();
+                integer n = 0;
+                n = n + 1;
+                return n;
+            endfunction
+            integer x, y, z;
+            initial begin
+                x = next_id();
+                y = fresh();
+                z = p::serial();
+            end
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+
+    const enzan::eir::Object& count = top->objects[require(top->findObject("next_id.count"))];
+    EXPECT_TRUE(count.subroutineStatic);
+    ASSERT_TRUE(count.initialValue.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    EXPECT_EQ(count.initialValue->ref().toUInt64(), 5U);
+    EXPECT_FALSE(top->findObject("n").has_value());
+    EXPECT_FALSE(top->findObject("fresh.n").has_value());
+    EXPECT_FALSE(top->objects[require(top->findObject("x"))].subroutineStatic);
+
+    const auto reference = std::ranges::find(top->objects, std::string("/p/serial.last"),
+                                             &enzan::eir::Object::hierarchicalPath);
+    ASSERT_NE(reference, top->objects.end());
+    EXPECT_TRUE(reference->subroutineStatic);
+
+    const ModuleDefinition* package = design->findModule("p::");
+    ASSERT_NE(package, nullptr);
+    const enzan::eir::Object& last = package->objects[require(package->findObject("serial.last"))];
+    EXPECT_TRUE(last.subroutineStatic);
+    ASSERT_TRUE(last.initialValue.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    EXPECT_EQ(last.initialValue->ref().toUInt64(), 7U);
+}
+
+TEST_F(FrontendTest, AVariableWithoutStorageIsReportedOnceWhereItIsRead) {
+    // What makes the storage impossible is reported where the storage is asked for; the read
+    // asking for it has nothing to add.
+    EXPECT_EQ(analyse(R"(
+        module top;
+            function integer next(input integer a);
+                static integer t = a + 1;
+                return t;
+            endfunction
+            integer r;
+            initial r = next(4);
+        endmodule
+    )",
+                      "top"),
+              nullptr);
+    EXPECT_TRUE(reported("the initialiser of 't'"));
+    EXPECT_EQ(std::ranges::count(consumer.codes, enzan::DiagCode::UnsupportedConstruct), 1)
+        << consumer.messages.back();
+}
+
+TEST_F(FrontendTest, AnUnpackedArrayIsStoredFlatAndKeepsItsDimensions) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [7:0] memory [0:15];
+            logic signed [3:0] grid [2:0][0:3];
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+
+    using enzan::eir::UnpackedDimension;
+    const enzan::eir::Object& memory = found->objects[require(found->findObject("memory"))];
+    EXPECT_EQ(memory.type.bitWidth(), 128U);
+    EXPECT_EQ(memory.elementWidth, 8U);
+    EXPECT_FALSE(memory.elementSigned);
+    EXPECT_EQ(memory.unpackedDimensions,
+              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 0, .right = 15}}));
+
+    const enzan::eir::Object& grid = found->objects[require(found->findObject("grid"))];
+    EXPECT_EQ(grid.type.bitWidth(), 48U);
+    EXPECT_EQ(grid.elementWidth, 4U);
+    EXPECT_TRUE(grid.elementSigned) << "the flat vector is unsigned, and the element is not";
+    EXPECT_EQ(grid.unpackedDimensions,
+              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 2, .right = 0},
+                                              UnpackedDimension{.left = 0, .right = 3}}));
+}
+
+TEST_F(FrontendTest, AnElementOrMemberWritesItsOwnBitsOfTheFlatStorage) {
+    // The left element is highest: element 0 of `[0:3]` is bits [31:24], and `[3:0]` puts
+    // element 3 there. A struct's first member is highest too.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            typedef struct { logic [3:0] a; logic [11:0] b; } record_t;
+            logic [7:0] up [0:3];
+            logic [7:0] down [3:0];
+            record_t    record;
+            logic [7:0] value;
+            assign up[0] = value;
+            assign down[0] = value;
+            assign record.a = value[3:0];
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    using Extents = std::vector<std::vector<WriteExtent>>;
+    EXPECT_EQ(extentsOf(top, "up"), (Extents{{extent(top, "up", 24, 8)}}));
+    EXPECT_EQ(extentsOf(top, "down"), (Extents{{extent(top, "down", 0, 8)}}));
+    EXPECT_EQ(extentsOf(top, "record"), (Extents{{extent(top, "record", 12, 4)}}));
+}
+
+TEST_F(FrontendTest, AnAscendingPackedRangeHasItsLeftIndexMostSignificant) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [0:7] a;
+            logic       b;
+            assign a[0] = b;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(extentsOf(*found, "a"),
+              (std::vector<std::vector<WriteExtent>>{{extent(*found, "a", 7, 1)}}));
+}
+
+TEST_F(FrontendTest, ConstantSelectsWriteExactlyTheirBitsAndTouchingOnesMerge) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic       a;
+            logic [7:0] x;
+            always_comb begin
+                x[0] = a;
+                x[1] = a;
+                x[5:4] = {a, a};
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    EXPECT_EQ(extentsOf(top, "x"), (std::vector<std::vector<WriteExtent>>{
+                                       {extent(top, "x", 0, 2), extent(top, "x", 4, 2)}}));
+}
+
+TEST_F(FrontendTest, ASelectOfAPackedArrayOrAnOffsetRangeWritesTheBitsItNames) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [7:0]      a;
+            logic [3:0][7:0] bytes;
+            logic [15:8]     high;
+            logic [7:0]      up;
+            logic [7:0]      down;
+            assign bytes[2] = a;
+            assign high[13:10] = a[3:0];
+            assign up[1 +: 2] = a[1:0];
+            assign down[6 -: 3] = a[2:0];
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    using Extents = std::vector<std::vector<WriteExtent>>;
+    EXPECT_EQ(extentsOf(top, "bytes"), (Extents{{extent(top, "bytes", 16, 8)}}));
+    EXPECT_EQ(extentsOf(top, "high"), (Extents{{extent(top, "high", 2, 4)}}));
+    EXPECT_EQ(extentsOf(top, "up"), (Extents{{extent(top, "up", 1, 2)}}));
+    EXPECT_EQ(extentsOf(top, "down"), (Extents{{extent(top, "down", 4, 3)}}));
+}
+
+TEST_F(FrontendTest, AVariableSelectWritesEveryBitItsIndexCanReach) {
+    // A two-bit index reaches four positions of a sixteen-bit vector, and nothing past them;
+    // an `int` index reaches anything.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [1:0]  i;
+            int          j;
+            logic        a;
+            logic [15:0] narrow;
+            logic [15:0] wide;
+            logic [3:0][7:0] bytes;
+            always_comb narrow[i] = a;
+            always_comb wide[j] = a;
+            always_comb bytes[i + 2'd0] = {8{a}};
+            always_comb narrow[i + 4'd8 +: 2] = {a, a};
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    using Extents = std::vector<std::vector<WriteExtent>>;
+    EXPECT_EQ(extentsOf(top, "narrow"),
+              (Extents{{extent(top, "narrow", 0, 4)}, {extent(top, "narrow", 0, 16)}}));
+    EXPECT_EQ(extentsOf(top, "wide"), (Extents{{extent(top, "wide", 0, 16)}}));
+    EXPECT_EQ(extentsOf(top, "bytes"), (Extents{{extent(top, "bytes", 0, 32)}}));
+}
+
+TEST_F(FrontendTest, AConstantSelectOutsideTheObjectWritesNothing) {
+    // The language discards such a write, so it drives no bit and is not emitted at all.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [3:0] n;
+            logic       a;
+            always_comb begin
+                n[1] = a;
+                n[7] = a;
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    EXPECT_EQ(extentsOf(top, "n"),
+              (std::vector<std::vector<WriteExtent>>{{extent(top, "n", 1, 1)}}));
+}
+
+TEST_F(FrontendTest, EachInstanceOfAGeneratedArrayDrivesItsOwnBit) {
+    // The case section 3.7 is written around: a parameterised number of instances whose
+    // outputs are bits of one array. Each connection drives one bit and no other.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module channel (output logic ready);
+            assign ready = 1'b1;
+        endmodule
+
+        module top;
+            logic [3:0] ready;
+            for (genvar i = 0; i < 4; i++) begin : gen
+                channel u (.ready(ready[i]));
+            end
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    const ModuleDefinition& top = *found;
+
+    EXPECT_EQ(extentsOf(top, "ready"), (std::vector<std::vector<WriteExtent>>{
+                                           {extent(top, "ready", 0, 1)},
+                                           {extent(top, "ready", 1, 1)},
+                                           {extent(top, "ready", 2, 1)},
+                                           {extent(top, "ready", 3, 1)},
+                                       }));
 }
 
 // ---------------------------------------------------------------------------
@@ -511,49 +941,427 @@ TEST_F(FrontendTest, ReportsAnUnsupportedConstructRatherThanMistranslatingIt) {
     EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
 }
 
+TEST_F(FrontendTest, ReportsADelayOnANet) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            wire #5 w;
+            assign w = a;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a delay on a net"));
+}
+
+TEST_F(FrontendTest, ReportsAnInoutConnectedToASignalOfAnotherWidth) {
+    // Connected through an assignment, as an input or an output of another width is, which an
+    // inout cannot be; the signal is still a signal, not an expression.
+    EXPECT_EQ(analyse(R"(
+        module child(inout wire [1:0] p);
+        endmodule
+        module top;
+            wire [2:0] w;
+            child u(.p(w));
+        endmodule
+    )",
+                      "top"),
+              nullptr);
+    EXPECT_TRUE(reported("an inout port connected to an expression, a hierarchical reference or "
+                         "a signal of another width"));
+}
+
+TEST_F(FrontendTest, ReportsADriveStrengthOtherThanStrong) {
+    // Resolution has no strength model, so a weak driver would lose to nothing and tie with a
+    // strong one.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            wire w;
+            assign (weak0, weak1) w = a;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a drive strength other than strong"));
+}
+
+TEST_F(FrontendTest, AnExplicitStrongDriveIsTheDefaultAndAccepted) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic a;
+            wire w;
+            assign (strong0, strong1) w = a;
+        endmodule
+    )");
+    EXPECT_NE(design, nullptr) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, ACalledFunctionIsInlinedAndItsReadsAreTheCallers) {
+    // The body becomes part of the process that calls it, so what it reads is in that process's
+    // read set, and an always_comb calling it is sensitive to it (DESIGN_GUIDE.md section 4.2).
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic [7:0] scale;
+            logic [7:0] b;
+            logic [7:0] y;
+            function automatic logic [7:0] times_scale(input logic [7:0] value);
+                return value * scale;
+            endfunction
+            always_comb y = times_scale(b);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 1U);
+
+    const std::vector<std::uint32_t>& reads = found->processes[0].readSet;
+    EXPECT_TRUE(std::ranges::binary_search(reads, require(found->findObject("scale"))));
+    EXPECT_TRUE(std::ranges::binary_search(reads, require(found->findObject("b"))));
+    // The function's own variables are registers, not state.
+    EXPECT_FALSE(found->findObject("value").has_value());
+}
+
+TEST_F(FrontendTest, AHierarchicalReferenceIsAPathFromTheInstanceHoldingIt) {
+    // Down from the testbench, and up and across from one leaf to another. One definition
+    // serves both leaves, so the path is relative rather than from the root.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf;
+            logic [3:0] value;
+            logic [3:0] seen;
+            assign seen = tb.u_other.value;
+        endmodule
+
+        module tb;
+            leaf u_one ();
+            leaf u_other ();
+            logic [3:0] copy;
+            assign copy = u_one.value;
+        endmodule
+    )",
+                                                   "tb");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const auto referencesOf = [](const ModuleDefinition& definition) {
+        std::vector<std::string> paths;
+        for (const enzan::eir::Object& object : definition.objects)
+            if (!object.hierarchicalPath.empty()) paths.push_back(object.hierarchicalPath);
+        return paths;
+    };
+    const ModuleDefinition* tb = design->findModule("tb");
+    const ModuleDefinition* leaf = design->findModule("leaf");
+    ASSERT_NE(tb, nullptr);
+    ASSERT_NE(leaf, nullptr);
+    EXPECT_EQ(referencesOf(*tb), (std::vector<std::string>{"u_one/value"}));
+    EXPECT_EQ(referencesOf(*leaf), (std::vector<std::string>{"../u_other/value"}));
+}
+
+TEST_F(FrontendTest, AModuleWithoutATimescaleBesideOneWithIsAccepted) {
+    // IEEE 1800 makes the mixture an error and slang enforces it, but simulators warn and real
+    // designs rely on that; Enzan counts delays in its own unit, which is the default given.
+    const std::unique_ptr<Design> design = analyse(R"(
+        `timescale 1ns / 1ps
+        module top;
+            leaf u ();
+        endmodule
+        `resetall
+        module leaf;
+        endmodule
+    )",
+                                                   "top");
+    EXPECT_NE(design, nullptr) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, AMemberReachedThroughAnInterfacePortGoesThroughThePort) {
+    // The reference names the port, not the interface it is connected to in one instance, and
+    // the instance records what each of its interface ports is connected to.
+    const std::unique_ptr<Design> design = analyse(R"(
+        interface bus_if;
+            logic [3:0] data;
+            modport sink (input data);
+        endinterface
+
+        module leaf (bus_if.sink in, output logic [3:0] copy);
+            assign copy = in.data;
+        endmodule
+
+        module middle (bus_if.sink in, output logic [3:0] copy);
+            leaf u_leaf (.in(in), .copy(copy));
+        endmodule
+
+        module top;
+            bus_if bus ();
+            logic [3:0] copy;
+            middle u_middle (.in(bus), .copy(copy));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* leaf = design->findModule("leaf");
+    ASSERT_NE(leaf, nullptr);
+    EXPECT_TRUE(std::ranges::any_of(leaf->objects, [](const enzan::eir::Object& object) {
+        return object.hierarchicalPath == "@in/data";
+    }));
+
+    using enzan::eir::InterfaceBinding;
+    const ModuleDefinition* top = design->findModule("top");
+    const ModuleDefinition* middle = design->findModule("middle");
+    ASSERT_NE(top, nullptr);
+    ASSERT_NE(middle, nullptr);
+    const auto bindingsOf = [](const ModuleDefinition& definition, std::string_view instance) {
+        for (const enzan::eir::Instance& child : definition.instances)
+            if (child.name == instance) return child.interfaceBindings;
+        return std::vector<InterfaceBinding>{};
+    };
+    EXPECT_EQ(bindingsOf(*top, "u_middle"),
+              (std::vector<InterfaceBinding>{InterfaceBinding{.port = "in", .target = "bus"}}));
+    EXPECT_EQ(bindingsOf(*middle, "u_leaf"),
+              (std::vector<InterfaceBinding>{InterfaceBinding{.port = "in", .target = "@in"}}));
+}
+
+TEST_F(FrontendTest, AParameterOverrideSetsTheTopLevelsParameter) {
+    const std::unique_ptr<Design> design =
+        analyse("module top #(parameter int W = 4); endmodule\n", "top", {"W=9"});
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    ASSERT_EQ(design->modules().size(), 1U);
+    const ModuleDefinition& top = design->modules().front();
+    ASSERT_EQ(top.parameters.size(), 1U);
+    EXPECT_EQ(top.parameters[0].value.ref().toUInt64(), 9U);
+}
+
+TEST_F(FrontendTest, AnOverrideNamingNoParameterIsReported) {
+    // slang ignores it, which would let a misspelt `-G` change nothing without a word.
+    const std::unique_ptr<Design> design =
+        analyse("module top #(parameter int W = 4); endmodule\n", "top", {"WIDTH=9"});
+    EXPECT_NE(design, nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::UnusedParameterOverride));
+}
+
+TEST_F(FrontendTest, FoldsAComparisonOfConstantTimes) {
+    // `2ps` is a real; with a parameter on the other side the comparison is a constant.
+    const auto design = analyse(R"(
+        module m #(parameter time Period = 10ns);
+            logic ok;
+            initial ok = Period >= 2ps && Period * 1.5 > 14;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, ReportsARealComputationOnAVariable) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] x;
+            logic ok;
+            initial ok = x * 1.5 > 2;
+        endmodule
+    )"),
+              nullptr);
+}
+
+TEST_F(FrontendTest, ReportsADelayedWriteToPartOfASignal) {
+    // A delayed store writes a whole object; splitting the update would let the rest of the
+    // signal be overwritten with the value it had when the statement ran.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] x;
+            initial x[3:0] <= #2 4'd5;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a delayed write to part of a signal"));
+}
+
+TEST_F(FrontendTest, ReportsSeparateRiseAndFallDelays) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            wire  y;
+            assign #(1, 2) y = a;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("separate rise, fall and turn-off delays"));
+}
+
+TEST_F(FrontendTest, ReportsReadingAMemoryOfTwoDimensions) {
+    // The file's words follow one address; which of two dimensions they would run along is
+    // not something to guess.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] grid [0:3][0:3];
+            initial $readmemh("grid.hex", grid);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a memory of other than one unpacked dimension"));
+}
+
+// ---------------------------------------------------------------------------
+// Errors excused in code a constant condition rules out
+// ---------------------------------------------------------------------------
+
+TEST_F(FrontendTest, ADegenerateSelectInADeadBranchIsAWarning) {
+    // With W = 0 the select is of width 0, an error IEEE 1800 section 11.5.1 makes no exception
+    // for, but the branch can never run.
+    EXPECT_NE(analyse(R"(
+        module m #(parameter int W = 0) (input logic [7:0] x, output logic [7:0] y);
+            always_comb if (W > 0) y = x[7 -: W]; else y = x;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::ErrorInDeadCode));
+    EXPECT_FALSE(reportedCode(DiagCode::SystemVerilogError));
+}
+
+TEST_F(FrontendTest, ADegenerateConstructInADeadArmIsAWarning) {
+    EXPECT_NE(analyse(R"(
+        module m #(parameter int W = 2, parameter int N = 4)
+                  (input logic [7:0] x, output logic [7:0] y);
+            assign y = W > N ? {{(W - N){1'b0}}, x} : x;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::ErrorInDeadCode));
+}
+
+TEST_F(FrontendTest, TheSameSelectLiveInAnotherInstanceIsStillAnError) {
+    // One location, dead in u_dead and live in u_live with the same width: slang reports it
+    // once, and the instance in which it can run keeps it an error.
+    EXPECT_EQ(analyse(R"(
+        module sub #(parameter int W = 0, parameter bit Guard = 1)
+                    (input logic [7:0] x, output logic [7:0] y);
+            always_comb if (!Guard || W > 0) y = x[7 -: W]; else y = x;
+        endmodule
+        module top;
+            logic [7:0] x, a, b;
+            sub #(.W(0), .Guard(1)) u_dead (.x, .y(a));
+            sub #(.W(0), .Guard(0)) u_live (.x, .y(b));
+        endmodule
+    )",
+                      "top"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::SystemVerilogError));
+}
+
+TEST_F(FrontendTest, ADegenerateSelectInLiveCodeIsStillAnError) {
+    EXPECT_EQ(analyse(R"(
+        module m #(parameter int W = 0) (input logic [7:0] x, output logic [7:0] y);
+            always_comb y = x[7 -: W];
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_FALSE(reportedCode(DiagCode::ErrorInDeadCode));
+}
+
+TEST_F(FrontendTest, ACaseItemAConstantSelectorPassesOverIsNotDead) {
+    // slang does not treat the other items of a constant `case` as dead, and neither does Enzan.
+    EXPECT_EQ(analyse(R"(
+        module m #(parameter int W = 0) (input logic [7:0] x, output logic [7:0] y);
+            always_comb case (W) 0: y = x; default: y = x[7 -: W]; endcase
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_FALSE(reportedCode(DiagCode::ErrorInDeadCode));
+}
+
+TEST_F(FrontendTest, ReportsADeferredAssertion) {
+    // Evaluated on the spot it would report the glitches it exists to filter out.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            always_comb assert #0 (a);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a deferred assertion"));
+}
+
+TEST_F(FrontendTest, ReportsARecursiveCall) {
+    // An inlined body cannot contain itself.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] n;
+            logic [7:0] y;
+            function automatic logic [7:0] factorial(input logic [7:0] k);
+                return k <= 1 ? 8'd1 : k * factorial(k - 1);
+            endfunction
+            always_comb y = factorial(n);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a recursive call of 'factorial'"));
+}
+
+TEST_F(FrontendTest, ReportsARefArgument) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] v;
+            task automatic bump(ref logic [7:0] target);
+                target = target + 1;
+            endtask
+            initial bump(v);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a `ref` argument"));
+}
+
 TEST_F(FrontendTest, ReportsAnUnsupportedSystemTaskByName) {
     EXPECT_EQ(analyse(R"(
         module m;
-            initial $random();
+            initial $sdf_annotate("timing.sdf");
         endmodule
     )"),
               nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-    EXPECT_TRUE(reported("$random")) << "the diagnostic must name the task";
+    EXPECT_TRUE(reported("$sdf_annotate")) << "the diagnostic must name the task";
 }
 
-TEST_F(FrontendTest, ReportsCasezBecauseWildcardComparisonIsNotImplemented) {
-    // Approximating a wildcard compare with `==` would silently take the wrong branch.
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, EachCaseFormComparesItsItemsWithItsOwnOpcode) {
+    // A wildcard compare approximated with `==` would silently take the wrong branch, so each
+    // form is pinned to the comparison IEEE 1800 section 12.5 gives it.
+    const std::unique_ptr<Design> design = analyse(R"(
         module m;
-            logic [3:0] s = 4'b0000;
+            logic [3:0] s;
             logic       y;
-            always_comb begin
-                casez (s)
-                    4'b1???: y = 1'b1;
-                    default: y = 1'b0;
-                endcase
-            end
+            always_comb case (s)   4'b1x0z: y = 1'b1; default: y = 1'b0; endcase
+            always_comb casez (s)  4'b1???: y = 1'b1; default: y = 1'b0; endcase
+            always_comb casex (s)  4'b1xxx: y = 1'b1; default: y = 1'b0; endcase
+            always_comb case (s) inside 4'b1???: y = 1'b1; default: y = 1'b0; endcase
         endmodule
-    )"),
-              nullptr);
-    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-    EXPECT_TRUE(reported("casez"));
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 4U);
+
+    const auto uses = [](const enzan::eir::Process& process, enzan::eir::Opcode opcode) {
+        return std::ranges::any_of(process.blocks, [opcode](const enzan::eir::BasicBlock& block) {
+            return std::ranges::any_of(block.instructions,
+                                       [opcode](const enzan::eir::Instruction& instruction) {
+                                           return instruction.opcode == opcode;
+                                       });
+        });
+    };
+    EXPECT_TRUE(uses(found->processes[0], enzan::eir::Opcode::CaseEqual));
+    EXPECT_TRUE(uses(found->processes[1], enzan::eir::Opcode::CaseZMatch));
+    EXPECT_TRUE(uses(found->processes[2], enzan::eir::Opcode::CaseXMatch));
+    EXPECT_TRUE(uses(found->processes[3], enzan::eir::Opcode::WildcardEqual));
 }
 
-TEST_F(FrontendTest, ReportsAnAscendingDeclaredRange) {
-    // `logic [0:7]` puts the most significant bit at index zero, and getting that backwards
-    // silently reverses every select.
+TEST_F(FrontendTest, AToleranceRangeInAnInsideSetIsRefused) {
+    // A tolerance range is IEEE 1800-2023 syntax, which slang refuses in the 2017 mode Enzan
+    // runs it in. The frontend refuses it as well, so that selecting a later standard reports
+    // it rather than comparing against the bounds as though they were a plain range.
     EXPECT_EQ(analyse(R"(
         module m;
-            logic [0:7] a = 8'd0;
+            logic [7:0] v;
             logic       y;
-            always_comb y = a[3];
+            always_comb y = v inside {[8'd10 +/- 8'd2]};
         endmodule
     )"),
               nullptr);
-    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-    EXPECT_TRUE(reported("ascending"));
 }
 
 TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {
@@ -564,7 +1372,7 @@ TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {
     // file list expands to. slang shortens such a path when it renders a file *name*, so a
     // conversion that matched names rather than buffers resolved nothing at all here — every
     // diagnostic in the design lost its file, its line and its caret.
-    EXPECT_EQ(analyse("module m;\n  initial $random();\nendmodule\n"), nullptr);
+    EXPECT_EQ(analyse("module m;\n  initial $sdf_annotate(\"timing.sdf\");\nendmodule\n"), nullptr);
 
     ASSERT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
     EXPECT_GE(sources.bufferCount(), 1U);

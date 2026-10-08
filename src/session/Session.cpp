@@ -9,6 +9,7 @@
 #include "eir/Design.h"
 #include "elab/ElaboratedDesign.h"
 #include "elab/Elaborator.h"
+#include "pli/VpiContext.h"
 #include "runtime/Image.h"
 #include "wavedb/FstWriter.h"
 #include "wavedb/VcdWriter.h"
@@ -68,6 +69,12 @@ Session::Session(SourceManager& sourceManager, DiagnosticEngine& engine)
     : sources(sourceManager), diagnostics(engine) {}
 
 Session::~Session() {
+    // The application first, while the design it is told about still exists: an application
+    // that writes its results when the simulation ends — cocotb does — reads the design as it
+    // does so, and a batch run that stopped at its time limit ends here (section 9.5).
+    endVpiSimulation();
+    if (vpi != nullptr) vpi->detach();
+
     // Before the kernel goes, because a writer is registered as one of its listeners and
     // finishes its file from here.
     closeWaveforms();
@@ -76,6 +83,7 @@ Session::~Session() {
 void Session::setTranscript(std::ostream* stream) noexcept {
     transcript = stream;
     if (kernel != nullptr) kernel->setTranscript(stream);
+    if (vpi != nullptr) vpi->setTranscript(stream);
 }
 
 std::ostream& Session::transcriptStream() const {
@@ -93,6 +101,7 @@ bool Session::analyse(const AnalysisRequest& request) {
     for (const std::string& define : request.defines) defines.push_back(define);
     for (const std::filesystem::path& directory : request.includeDirectories)
         includeDirectories.push_back(directory);
+    for (const std::string& parameter : request.parameters) parameters.push_back(parameter);
 
     if (files.empty()) {
         diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
@@ -144,7 +153,7 @@ bool Session::analyse(const AnalysisRequest& request) {
 
     loadedFromLibrary = false;
     if (library.isOpen()) {
-        library.setOptions(defines, includeDirectories);
+        library.setOptions(defines, includeDirectories, parameters, scale.precisionExponent());
 
         auto reused = std::make_unique<eir::Design>();
         if (library.load(stored, sources, *reused)) {
@@ -168,6 +177,8 @@ bool Session::analyse(const AnalysisRequest& request) {
     options.buffers = buffers;
     options.defines = defines;
     options.includeDirectories = includeDirectories;
+    options.timeUnitExponent = scale.precisionExponent();
+    options.parameterOverrides = parameters;
 
     std::unique_ptr<eir::Design> analysed = frontend::sv::analyse(options, sources, diagnostics);
     if (analysed == nullptr) return false;
@@ -196,6 +207,43 @@ bool Session::analyse(const AnalysisRequest& request) {
                        "analysis in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF");
     return false;
 #endif
+}
+
+bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
+    // Every open library that holds units, with its unit: the output library as well as the
+    // inputs, since analysing into a library adds to what it holds.
+    std::vector<std::pair<const eir::Library*, runtime::TimeScale>> holding;
+    const auto consider = [&holding](const eir::Library& candidate) {
+        if (!candidate.isOpen()) return;
+        if (const std::optional<std::int8_t> unit = candidate.timeUnit())
+            holding.emplace_back(&candidate, runtime::TimeScale(*unit));
+    };
+    consider(library);
+    for (const eir::Library& input : inputLibraries) consider(input);
+
+    for (const auto& [other, unit] : holding) {
+        const auto& [first, firstUnit] = holding.front();
+        if (unit.precisionExponent() != firstUnit.precisionExponent()) {
+            diagnostics.report(DiagCode::LibraryTimeUnitsDiffer, SourceLocation(), first->name(),
+                               firstUnit.unitName(), other->name(), unit.unitName());
+            return false;
+        }
+    }
+
+    if (holding.empty()) {
+        scale = requested.value_or(runtime::TimeScale());
+        return true;
+    }
+
+    const auto& [first, unit] = holding.front();
+    if (requested.has_value() && requested->precisionExponent() != unit.precisionExponent()) {
+        diagnostics.report(DiagCode::TimeScaleConflictsWithLibrary, SourceLocation(),
+                           requested->unitName(), first->name(), unit.unitName(),
+                           requested->unitName());
+        return false;
+    }
+    scale = unit;
+    return true;
 }
 
 bool Session::openOutputLibrary(const std::filesystem::path& path) {
@@ -232,6 +280,13 @@ void Session::discardElaboration() {
     // over-cautious renewal costs a round trip where a missed one costs a pointer into a
     // simulation that no longer exists.
     ++generation;
+
+    // An application holds handles into the design and the kernel's hooks; it lets go of both
+    // before either is freed, having first been told the simulation it watched has ended.
+    if (vpi != nullptr && kernel != nullptr) {
+        endVpiSimulation();
+        vpi->detach();
+    }
 
     // Torn down in dependency order, so that nothing is left holding a reference to something
     // already gone: the writers listen to the kernel, the kernel reads the image, and the
@@ -316,11 +371,36 @@ bool Session::elaborate(std::string_view topModule) {
     options.timeScale = scale;
     options.deltaLimit = deltaLimit;
     options.transcript = transcript;
+    options.seed = seed;
 
     kernel = std::make_unique<runtime::Kernel>(*image, diagnostics, options);
     kernel->initialize();
     status = runtime::RunStatus::TimeLimitReached;
+
+    // Everything an application does to the design starts here (section 9.1).
+    if (vpi != nullptr) {
+        vpi->attach(*image, *kernel, &sources);
+        vpi->startOfSimulation();
+    }
     return true;
+}
+
+bool Session::loadVpiApplication(std::string_view specification,
+                                 std::span<const std::string> commandLine) {
+    if (vpi == nullptr) {
+        vpi = std::make_unique<pli::VpiContext>(
+            diagnostics, std::vector<std::string>(commandLine.begin(), commandLine.end()));
+        vpi->setTranscript(transcript);
+    }
+    return vpi->load(specification);
+}
+
+bool Session::hasVpiApplication() const noexcept {
+    return vpi != nullptr && vpi->hasApplications();
+}
+
+void Session::endVpiSimulation() {
+    if (vpi != nullptr) vpi->endOfSimulation();
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +415,14 @@ runtime::RunStatus Session::run(std::optional<runtime::SimTime> until) {
 
     status = kernel->run(until.value_or(runtime::NoTime));
 
+    // A run that stopped at a time limit or was interrupted can continue; one that finished,
+    // ran out of events or failed cannot, and an application is told so now rather than when
+    // the process happens to exit.
+    if (status == runtime::RunStatus::Finished || status == runtime::RunStatus::Quiescent
+        || status == runtime::RunStatus::Error) {
+        endVpiSimulation();
+    }
+
     // The files are brought up to date every time the run stops, because a user who paused to
     // look at a waveform expects the file to contain what has happened rather than everything
     // up to the last time advance.
@@ -346,6 +434,11 @@ runtime::RunStatus Session::run(std::optional<runtime::SimTime> until) {
 bool Session::restart() {
     if (kernel == nullptr) {
         diagnostics.report(DiagCode::NoSimulation, SourceLocation(), "restart");
+        return false;
+    }
+
+    if (hasVpiApplication()) {
+        diagnostics.report(DiagCode::RestartWithVpiApplication, SourceLocation());
         return false;
     }
 

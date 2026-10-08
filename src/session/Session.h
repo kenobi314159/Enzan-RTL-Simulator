@@ -34,6 +34,10 @@ namespace enzan::elab {
 class ElaboratedDesign;
 }
 
+namespace enzan::pli {
+class VpiContext;
+}
+
 namespace enzan::runtime {
 class Image;
 }
@@ -94,10 +98,23 @@ public:
     /// Sets the time unit delays are counted in. Takes effect at the next elaboration.
     void setTimeScale(runtime::TimeScale unit) noexcept { scale = unit; }
 
+    /// Sets the time unit from the open libraries, or from `requested`, `--timescale`, when they
+    /// hold no units; with neither, it is picoseconds.
+    ///
+    /// A library's delays are counts of the unit it was analysed in, so a design run from it,
+    /// or analysed against it or into it, is in that unit and no other (DESIGN_GUIDE.md section
+    /// 8.2). Returns false having reported when two libraries disagree, or `requested` names
+    /// another unit: taking either would label every time in the run wrongly. Called once the
+    /// libraries are open and before anything is analysed.
+    [[nodiscard]] bool chooseTimeScale(std::optional<runtime::TimeScale> requested);
+
     [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
 
     /// Sets the delta cycles allowed at one timestamp. Takes effect at the next elaboration.
     void setDeltaLimit(std::uint32_t limit) noexcept { deltaLimit = limit; }
+
+    /// The seed random draws start from (DESIGN_GUIDE.md section 3.8).
+    void setSeed(std::uint32_t value) noexcept { seed = value; }
 
     // -----------------------------------------------------------------------
     // Analysis
@@ -124,6 +141,9 @@ public:
         std::vector<std::filesystem::path> libraryFiles;
         std::vector<std::string> defines;
         std::vector<std::filesystem::path> includeDirectories;
+
+        /// Top-level parameter overrides, each `NAME=VALUE`.
+        std::vector<std::string> parameters;
     };
 
     /// Analyses `request` together with everything analysed before it.
@@ -201,6 +221,23 @@ public:
 
     [[nodiscard]] bool hasLibrary() const noexcept { return library.isOpen(); }
 
+    // -----------------------------------------------------------------------
+    // VPI applications
+    // -----------------------------------------------------------------------
+
+    /// Loads a VPI application and runs its startup routines (DESIGN_GUIDE.md section 9.1).
+    ///
+    /// Called before analysis, so that a library that cannot be loaded is reported before a
+    /// long analysis rather than after it, and so that its startup routines run before the
+    /// design exists, as the standard orders it. Every elaboration from then on is shown to it.
+    ///
+    /// `commandLine` is what `vpi_get_vlog_info` reports, and is taken from the first call:
+    /// one process has one command line however many applications it loads.
+    bool loadVpiApplication(std::string_view specification,
+                            std::span<const std::string> commandLine);
+
+    [[nodiscard]] bool hasVpiApplication() const noexcept;
+
     /// True when the last `analyse` came out of the library rather than the frontend.
     [[nodiscard]] bool reusedLibrary() const noexcept { return loadedFromLibrary; }
 
@@ -242,6 +279,9 @@ public:
     runtime::RunStatus run(std::optional<runtime::SimTime> until);
 
     /// Puts the design back to time zero, keeping the elaboration and the waveform files.
+    ///
+    /// Refused while a VPI application is loaded (section 9.5): it would still hold the state
+    /// of the simulation being discarded.
     bool restart();
 
     [[nodiscard]] runtime::SimTime time() const noexcept;
@@ -336,6 +376,9 @@ private:
     /// Drops the kernel, the image and everything they were built from.
     void discardElaboration();
 
+    /// Tells a loaded application the simulation is over, once (section 9.5).
+    void endVpiSimulation();
+
     /// Parses `literal` to the width of `signalIndex`, reporting through `error`.
     [[nodiscard]] std::optional<eir::BitVector>
     parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;
@@ -365,6 +408,7 @@ private:
     /// Every file the last analysis read, for `--depfile`.
     std::vector<std::filesystem::path> lastFilesRead;
     std::vector<std::string> defines;
+    std::vector<std::string> parameters;
     std::vector<std::filesystem::path> includeDirectories;
 
     eir::Library library;
@@ -379,6 +423,12 @@ private:
     std::unique_ptr<runtime::Image> image;
     std::unique_ptr<runtime::Kernel> kernel;
 
+    /// The loaded VPI applications' view of the simulation, or null when none is loaded.
+    ///
+    /// Declared after the kernel so that it is destroyed first: it holds the kernel's hooks
+    /// and must let go of them before the kernel goes.
+    std::unique_ptr<pli::VpiContext> vpi;
+
     /// Open waveform files. Owned here so that `quit` and the destructor both finish them.
     std::vector<std::unique_ptr<wavedb::WaveformWriter>> writers;
 
@@ -388,6 +438,7 @@ private:
     runtime::TimeScale scale;
     runtime::RunStatus status = runtime::RunStatus::Quiescent;
     std::uint32_t deltaLimit = 10'000;
+    std::uint32_t seed = 0;
 
     /// Bumped by `discardElaboration`, which every path that replaces the simulation goes
     /// through. See `elaborationGeneration`.

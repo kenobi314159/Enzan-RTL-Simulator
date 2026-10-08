@@ -367,9 +367,9 @@ TEST_F(ParameterRowTest, NeverHasAnEdgeToStepTo) {
 
 TEST_F(ParameterRowTest, SurvivesTheClipboardWithItsValue) {
     const int rowId = model->addSignal(width());
-    model->copyRows({rowId});
+    model->copySignalRows({rowId});
 
-    const QVector<int> pasted = model->pasteRows(-1, -1);
+    const QVector<int> pasted = model->pasteSignalRows(-1, -1);
     ASSERT_EQ(pasted.size(), 1);
 
     // The value travels with it: there is nowhere for the other end to look it up, since a

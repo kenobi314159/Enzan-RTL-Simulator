@@ -12,9 +12,20 @@ ports and computes the flat state layout (DESIGN_GUIDE.md section 2.1).
 - Bind ports by collapsing a connected port onto the parent object's slot, so that a
   port costs nothing at run time.
 - Produce the list of processes to schedule, as (instance, process) pairs.
-- Reject the cases that would need features later milestones bring — port width
-  conversion, driver resolution — rather than let them simulate to a plausible wrong
-  answer.
+- Find bits with more than one driver, per bit rather than per signal (DESIGN_GUIDE.md
+  section 3.7), and refuse those the language does not allow: a bit of a variable or a
+  `uwire` with two continuous drivers, or with a continuous driver and a procedural writer.
+- Give each package whose variables something refers to an instance at the root, `/<package>`,
+  and bind each hierarchical reference — an object with a path rather than storage — to the
+  slot of the object it names, once the whole tree is expanded (DESIGN_GUIDE.md section 5.1).
+  A package with the top level's name is refused (ENZ3012): its variables would sit at the top
+  level's path.
+- Give each continuous write of a net that resolves — one with a bit driven twice, or a
+  pulled or supply net with any driver — a **driver** with its own value in the arena, and
+  split the net into **segments** with one set of drivers each. Every other signal has no
+  driver state and is written straight into its slot.
+- Reject the cases that would need features later milestones bring, such as port width
+  conversion, rather than let them simulate to a plausible wrong answer.
 
 ## What elaboration is not
 
@@ -50,17 +61,6 @@ which is why an instance holds a slot index per object rather than a base offset
 a fixed displacement. The interpreter pays one extra load per state access; a JIT
 specialises a process per instance and burns the absolute offsets in as constants,
 which is what section 4.3 anticipates.
-
-## Known limitation: the driver check is per signal, not per bit range
-
-Driving disjoint parts of one vector from several continuous assignments — `assign x[7:4] =
-a; assign x[3:0] = b;` — is legal SystemVerilog and needs no resolution at all, because no bit
-has two drivers. Enzan's check counts drivers per *signal*, so it refuses that design.
-
-The check is deliberately conservative: the alternative to refusing is letting the last write
-win, which produces a plausible wrong answer rather than an error, and section 1.2 ranks that
-as the worst outcome available. Making it per bit range is real work that belongs with driver
-resolution at M5, where the same bit-level bookkeeping is needed anyway.
 
 ## Port collapsing across a language boundary
 

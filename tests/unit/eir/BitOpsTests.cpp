@@ -13,6 +13,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -115,6 +118,55 @@ TEST(BitOpsMovement, SetUnknownCoversTheWholeWidth) {
     bitops::setUnknown(value.mutableRef());
 
     EXPECT_TRUE(value.ref().isAll(Logic::Unknown));
+}
+
+TEST(BitOpsMovement, ExtendMatchesABitAtATimeAcrossWordBoundaries) {
+    // Extension works a word at a time, so what can go wrong is at the edges of words: a
+    // source or destination ending exactly on one, a step across one, a top word partly
+    // used. Every pair of these widths is checked against the definition, a bit at a time,
+    // for each value the sign bit can hold, into a destination that starts as all X so that
+    // a bit left behind shows.
+    constexpr std::array<std::uint32_t, 11> Widths = {1, 2, 7, 63, 64, 65, 100, 127, 128, 129, 200};
+    static constexpr std::array<Logic, 4> Values = {Logic::Zero, Logic::One, Logic::HighZ,
+                                                    Logic::Unknown};
+
+    std::uint64_t state = 0x9E37'79B9'7F4A'7C15U;
+    const auto next = [&state] {
+        state = (state * 6364136223846793005U) + 1442695040888963407U;
+        return Values[(state >> 33U) % 4];
+    };
+
+    for (const std::uint32_t sourceWidth : Widths) {
+        for (const Logic sign : Values) {
+            BitVector source = BitVector::filled(sourceWidth, Logic::Zero);
+            for (std::uint32_t bit = 0; bit + 1 < sourceWidth; ++bit) source.set(bit, next());
+            source.set(sourceWidth - 1, sign);
+
+            for (const std::uint32_t destinationWidth : Widths) {
+                for (const bool signExtend : {false, true}) {
+                    BitVector destination(destinationWidth);
+                    bitops::extend(destination.mutableRef(), source.ref(), signExtend);
+
+                    BitVector expected = BitVector::filled(destinationWidth, Logic::Zero);
+                    for (std::uint32_t bit = 0; bit < destinationWidth; ++bit) {
+                        if (bit < sourceWidth)
+                            expected.set(bit, source.get(bit));
+                        else if (signExtend)
+                            expected.set(bit, sign);
+                    }
+
+                    EXPECT_EQ(binary(destination.ref()), binary(expected.ref()))
+                        << sourceWidth << " bits to " << destinationWidth
+                        << (signExtend ? ", sign-extended" : ", zero-extended");
+                    EXPECT_TRUE(std::ranges::equal(destination.ref().avalWords(),
+                                                   expected.ref().avalWords())
+                                && std::ranges::equal(destination.ref().bvalWords(),
+                                                      expected.ref().bvalWords()))
+                        << "canonical form, " << sourceWidth << " bits to " << destinationWidth;
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -442,18 +494,86 @@ TEST(BitOpsShift, AcrossLimbBoundaries) {
 // Comparison
 // ---------------------------------------------------------------------------
 
-TEST(BitOpsCompare, EqualityIsUnknownWhenEitherOperandIs) {
+TEST(BitOpsCompare, EqualityIsUnknownOnlyWhenTheUnknownBitsCouldDecideIt) {
     EXPECT_EQ(applyPredicate(bitops::equal, "4'b1010", "4'b1010"), '1');
     EXPECT_EQ(applyPredicate(bitops::equal, "4'b1010", "4'b1011"), '0');
     EXPECT_EQ(applyPredicate(bitops::equal, "4'b101x", "4'b1010"), 'x');
+    EXPECT_EQ(applyPredicate(bitops::equal, "4'b101z", "4'b101z"), 'x');
 
-    // Even an operand that differs in a known bit gives x, because `==` is defined
-    // on the whole value rather than bit by bit.
-    EXPECT_EQ(applyPredicate(bitops::equal, "4'b001x", "4'b1010"), 'x');
+    // A bit known on both sides and different settles it, whatever the unknown bits hold
+    // (IEEE 1800 section 11.4.5).
+    EXPECT_EQ(applyPredicate(bitops::equal, "4'b001x", "4'b1010"), '0');
+    EXPECT_EQ(applyPredicate(bitops::equal, "4'bz010", "4'b0011"), '0');
 
     EXPECT_EQ(applyPredicate(bitops::notEqual, "4'b1010", "4'b1011"), '1');
     EXPECT_EQ(applyPredicate(bitops::notEqual, "4'b1010", "4'b1010"), '0');
     EXPECT_EQ(applyPredicate(bitops::notEqual, "4'b101x", "4'b1010"), 'x');
+    EXPECT_EQ(applyPredicate(bitops::notEqual, "4'b001x", "4'b1010"), '1');
+}
+
+TEST(BitOpsCompare, AKnownMismatchSettlesEqualityAcrossLimbs) {
+    // The mismatch in the top limb, the unknown in the bottom one.
+    BitVector a = BitVector::filled(130, Logic::Zero);
+    const BitVector b = BitVector::filled(130, Logic::Zero);
+    a.set(0, Logic::Unknown);
+    a.set(129, Logic::One);
+
+    BitVector result(1);
+    bitops::equal(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::Zero);
+
+    a.set(129, Logic::Zero);
+    bitops::equal(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::Unknown);
+}
+
+TEST(BitOpsCompare, WildcardEqualityTreatsTheRightOperandsUnknownsAsAnything) {
+    // IEEE 1800 section 11.4.6.
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b1010", "4'b1x1z"), '1');
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b0010", "4'b1x1z"), '0');
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b1010", "4'b1010"), '1');
+
+    // The left operand's unknowns are not wildcards: where they meet a known bit the result
+    // is x, unless a known mismatch elsewhere settles it.
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b1x10", "4'b1010"), 'x');
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b1x10", "4'b1x10"), '1');
+    EXPECT_EQ(applyPredicate(bitops::wildcardEqual, "4'b0x10", "4'b1010"), '0');
+
+    EXPECT_EQ(applyPredicate(bitops::wildcardNotEqual, "4'b0010", "4'b1x1z"), '1');
+    EXPECT_EQ(applyPredicate(bitops::wildcardNotEqual, "4'b1010", "4'b1x1z"), '0');
+    EXPECT_EQ(applyPredicate(bitops::wildcardNotEqual, "4'b1x10", "4'b1010"), 'x');
+}
+
+TEST(BitOpsCompare, CasezIgnoresZOnEitherSideAndComparesXExactly) {
+    // IEEE 1800 section 12.5.1: z in the selector or the item is a don't-care; x is a value.
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1010", "4'b1z1z"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1z1z", "4'b1010"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1010", "4'b0z1z"), '0');
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1x10", "4'b1x10"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseZMatch, "4'b1x10", "4'b1010"), '0');
+}
+
+TEST(BitOpsCompare, CasexIgnoresXAndZOnEitherSide) {
+    EXPECT_EQ(applyPredicate(bitops::caseXMatch, "4'b1010", "4'b1x1z"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseXMatch, "4'b1x10", "4'b1010"), '1');
+    EXPECT_EQ(applyPredicate(bitops::caseXMatch, "4'b1010", "4'b0x1z"), '0');
+}
+
+TEST(BitOpsCompare, WildcardComparisonsWorkAcrossLimbs) {
+    BitVector a = BitVector::filled(130, Logic::Zero);
+    BitVector b = BitVector::filled(130, Logic::Zero);
+    a.set(129, Logic::One);
+    b.set(129, Logic::HighZ);
+
+    BitVector result(1);
+    bitops::wildcardEqual(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::One);
+    bitops::caseZMatch(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::One);
+
+    b.set(129, Logic::Zero);
+    bitops::caseXMatch(result.mutableRef(), a.ref(), b.ref());
+    EXPECT_EQ(result.get(0), Logic::Zero);
 }
 
 TEST(BitOpsCompare, CaseEqualityNeverProducesUnknown) {
@@ -653,6 +773,173 @@ TEST(BitOpsConditional, MergeAcrossLimbs) {
 
     EXPECT_EQ(result.get(0), Logic::One) << "agreeing bits stay known";
     EXPECT_EQ(result.get(129), Logic::Unknown) << "the differing bit becomes x";
+}
+
+TEST(BitOpsCount, CeilLog2RoundsUpAndIsZeroForZeroAndOne) {
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd0"), "00000000");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd1"), "00000000");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd2"), "00000001");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd5"), "00000011");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd128"), "00000111");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'd129"), "00001000");
+    EXPECT_EQ(applyUnary(bitops::ceilLog2, "8'b0000_01x1"), "xxxxxxxx");
+}
+
+TEST(BitOpsCount, CeilLog2LooksAcrossWords) {
+    // 2**64 is a power of two in the second word; one more bit in the first rounds it up.
+    BitVector value = BitVector::filled(100, Logic::Zero);
+    value.mutableRef().set(64, Logic::One);
+    BitVector result(32);
+    bitops::ceilLog2(result.mutableRef(), value.ref());
+    EXPECT_EQ(result.ref().toUInt64(), 64U);
+    value.mutableRef().set(3, Logic::One);
+    bitops::ceilLog2(result.mutableRef(), value.ref());
+    EXPECT_EQ(result.ref().toUInt64(), 65U);
+}
+
+TEST(BitOpsCount, CountOnesCountsOnlyBitsThatAreExactlyOne) {
+    EXPECT_EQ(applyUnary(bitops::countOnes, "8'b1010_0x1z"), "00000011");
+    EXPECT_EQ(applyUnary(bitops::countOnes, "8'b0000_0000"), "00000000");
+
+    // Across limbs, and into a result narrower than the operand.
+    const BitVector wide = BitVector::filled(130, Logic::One);
+    BitVector result(32);
+    bitops::countOnes(result.mutableRef(), wide.ref());
+    EXPECT_EQ(result.ref().toUInt64(), 130U);
+}
+
+// ---------------------------------------------------------------------------
+// Power (IEEE 1800 section 11.4.3, table 11-4)
+// ---------------------------------------------------------------------------
+
+std::string applyPower(std::string_view base, std::string_view exponent, bool baseSigned,
+                       bool exponentSigned) {
+    const BitVector a = literal(base);
+    const BitVector b = literal(exponent);
+    BitVector result(a.width());
+    bitops::power(result.mutableRef(), a.ref(), b.ref(), baseSigned, exponentSigned);
+    return binary(result.ref());
+}
+
+TEST(BitOpsPower, RaisesModuloTheWidth) {
+    EXPECT_EQ(applyPower("8'd3", "4'd4", false, false), "01010001"); // 81
+    EXPECT_EQ(applyPower("8'd2", "4'd9", false, false), "00000000"); // 512 wraps to 0
+    EXPECT_EQ(applyPower("8'd7", "4'd0", false, false), "00000001");
+    EXPECT_EQ(applyPower("8'd0", "4'd0", false, false), "00000001");
+    EXPECT_EQ(applyPower("8'd0", "4'd3", false, false), "00000000");
+}
+
+TEST(BitOpsPower, AnUnknownOperandMakesTheWholeResultX) {
+    EXPECT_EQ(applyPower("8'd3", "4'b0x01", false, false), "xxxxxxxx");
+    EXPECT_EQ(applyPower("8'b0000001z", "4'd2", false, false), "xxxxxxxx");
+}
+
+TEST(BitOpsPower, ANegativeExponentFollowsTheStandardsTable) {
+    // Only a signed exponent can be negative; 4'b1101 is -3 signed and 13 unsigned.
+    EXPECT_EQ(applyPower("8'd0", "4'b1101", true, true), "xxxxxxxx");
+    EXPECT_EQ(applyPower("8'd1", "4'b1101", true, true), "00000001");
+    EXPECT_EQ(applyPower("8'hff", "4'b1101", true, true), "11111111"); // -1 ** odd
+    EXPECT_EQ(applyPower("8'hff", "4'b1110", true, true), "00000001"); // -1 ** even
+    EXPECT_EQ(applyPower("8'd5", "4'b1101", true, true), "00000000");
+    // An unsigned base of all ones is 255, not -1.
+    EXPECT_EQ(applyPower("8'hff", "4'b1101", false, true), "00000000");
+    // The same bits as an unsigned exponent are 13.
+    EXPECT_EQ(applyPower("8'd1", "4'b1101", false, false), "00000001");
+}
+
+TEST(BitOpsPower, WideValuesGiveTheSameAnswerAsNarrowOnes) {
+    // 3 ** 50 modulo 2 ** 96, checked against Icarus Verilog.
+    const BitVector base = literal("96'd3");
+    const BitVector exponent = literal("7'd50");
+    BitVector result(96);
+    bitops::power(result.mutableRef(), base.ref(), exponent.ref(), false, false);
+    EXPECT_EQ(enzan::eir::toString(result.ref(), Radix::Hexadecimal), "0000980553f0db2fd09de3c9");
+}
+
+// ---------------------------------------------------------------------------
+// Resolution (DESIGN_GUIDE.md section 3.7; IEEE 1800 tables 6-2 to 6-4)
+// ---------------------------------------------------------------------------
+
+/// A resolution table as the standard prints it: the row is the first driver and the column
+/// the second, both in the order 0, 1, x, z.
+using ResolutionTable = std::array<std::string_view, 4>;
+
+constexpr std::array<Logic, 4> TableOrder = {Logic::Zero, Logic::One, Logic::Unknown, Logic::HighZ};
+
+Logic fromTableChar(char value) {
+    switch (value) {
+    case '0': return Logic::Zero;
+    case '1': return Logic::One;
+    case 'z': return Logic::HighZ;
+    default: return Logic::Unknown;
+    }
+}
+
+template<typename Resolve>
+void expectTable(Resolve resolveFunction, const ResolutionTable& table) {
+    for (std::size_t row = 0; row < 4; ++row) {
+        for (std::size_t column = 0; column < 4; ++column) {
+            BitVector acc(1);
+            acc.set(0, TableOrder[row]);
+            BitVector driver(1);
+            driver.set(0, TableOrder[column]);
+            resolveFunction(acc.mutableRef(), driver.ref());
+
+            EXPECT_EQ(acc.get(0), fromTableChar(table[row][column]))
+                << "row " << enzan::eir::toChar(TableOrder[row]) << ", column "
+                << enzan::eir::toChar(TableOrder[column]);
+        }
+    }
+}
+
+TEST(BitOpsResolution, WireMatchesTheStandardsTable) {
+    //                    0      1      x      z
+    expectTable(bitops::resolveWire, {"0xx0", "x1x1", "xxxx", "01xz"});
+}
+
+TEST(BitOpsResolution, WiredAndMatchesTheStandardsTable) {
+    expectTable(bitops::resolveWiredAnd, {"0000", "01x1", "0xxx", "01xz"});
+}
+
+TEST(BitOpsResolution, WiredOrMatchesTheStandardsTable) {
+    expectTable(bitops::resolveWiredOr, {"01x0", "1111", "x1xx", "01xz"});
+}
+
+TEST(BitOpsResolution, PullReplacesOnlyHighImpedance) {
+    BitVector value = literal("4'bz01x");
+    bitops::pullHighImpedance(value.mutableRef(), Logic::Zero);
+    EXPECT_EQ(binary(value.ref()), "001x");
+
+    value = literal("4'bz01x");
+    bitops::pullHighImpedance(value.mutableRef(), Logic::One);
+    EXPECT_EQ(binary(value.ref()), "101x");
+}
+
+TEST(BitOpsResolution, WideVectorsResolveBitByBitAcrossLimbs) {
+    // Every pairing of the four values at every position, over three limbs, compared with the
+    // single-bit result of the same table.
+    constexpr std::uint32_t Width = 150;
+    BitVector left(Width);
+    BitVector right(Width);
+    for (std::uint32_t bit = 0; bit < Width; ++bit) {
+        left.set(bit, TableOrder[bit % 4]);
+        right.set(bit, TableOrder[(bit / 4) % 4]);
+    }
+
+    for (const auto resolveFunction :
+         {bitops::resolveWire, bitops::resolveWiredAnd, bitops::resolveWiredOr}) {
+        BitVector acc = left;
+        resolveFunction(acc.mutableRef(), right.ref());
+
+        for (std::uint32_t bit = 0; bit < Width; ++bit) {
+            BitVector oneLeft(1);
+            oneLeft.set(0, left.get(bit));
+            BitVector oneRight(1);
+            oneRight.set(0, right.get(bit));
+            resolveFunction(oneLeft.mutableRef(), oneRight.ref());
+            ASSERT_EQ(acc.get(bit), oneLeft.get(0)) << "bit " << bit;
+        }
+    }
 }
 
 } // namespace

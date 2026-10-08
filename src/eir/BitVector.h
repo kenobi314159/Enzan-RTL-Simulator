@@ -265,22 +265,29 @@ private:
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// Number base used when rendering a vector.
-enum class Radix : std::uint8_t { Binary, Octal, Decimal, Hexadecimal };
+/// Number base used when rendering a vector, or `Ascii` for its bytes as characters.
+enum class Radix : std::uint8_t { Binary, Octal, Decimal, Hexadecimal, Ascii };
 
 /// Renders `value` in `radix`, following IEEE 1800's rules for unknown bits.
 ///
 /// In binary, octal and hexadecimal each digit covers a fixed number of bits and
 /// is rendered `x` or `z` when *all* of those bits are X or Z, and `X` or `Z` when
 /// only some of them are. In decimal the whole value is `x` when every bit is X,
-/// `z` when every bit is Z, and `X` when some bits are unknown, because a decimal
-/// rendering cannot localise the unknown to a digit.
+/// `z` when every bit is Z, `X` when some bits are X, and `Z` when some are Z and
+/// none X, because a decimal rendering cannot localise the unknown to a digit.
 ///
 /// Binary, octal and hexadecimal render every digit of the vector's width, which
 /// is what a sized value displays as and what the waveform view needs. Decimal
 /// renders the minimal number of digits, with a leading `-` when `isSigned` and
 /// the value is negative. No width prefix is produced; the caller adds one where
 /// it wants `8'h`.
+///
+/// `Ascii` renders a byte at a time, the most significant first, which is how a string
+/// literal is packed into a vector. Leading NUL bytes are dropped, as `%s` drops them, since
+/// they are what zero-extending a string into a wider vector adds. A printable character is
+/// itself, and any other byte an escape: `\n`, `\t`, `\0`, `\\` or `\xNN`. Unlike `%s`, an
+/// unknown byte is not read as zero: a byte with an X or Z bit is U+FFFD, the replacement
+/// character, which no byte of a string can be mistaken for. The result is UTF-8.
 std::string toString(ConstBitRef value, Radix radix, bool isSigned = false);
 
 } // namespace enzan::eir

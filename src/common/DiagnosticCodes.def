@@ -49,6 +49,11 @@ ENZAN_DIAG(UnsupportedConstruct, 1004, Error,
 ENZAN_DIAG(NoInputFiles, 1005, Error, "no source files were given")
 ENZAN_DIAG(NoTopLevelFound, 1006, Error,
            "the sources contain no module that could serve as a top level")
+ENZAN_DIAG(ErrorInDeadCode, 1008, Warning,
+           "{}; it is in code a constant condition rules out, so it is never elaborated into "
+           "the simulation.")
+ENZAN_DIAG(UnusedParameterOverride, 1007, Warning,
+           "-G {} names no parameter of a top level, and changes nothing")
 
 // --- 3000-3999: elaboration -------------------------------------------------
 
@@ -68,14 +73,20 @@ ENZAN_DIAG(RecursiveInstantiation, 3004, Error,
            "module '{}' instantiates itself, through {}; an unbounded hierarchy cannot be "
            "elaborated")
 ENZAN_DIAG(PortWidthMismatch, 3005, Error,
-           "port '{}' of '{}' is {} bits but is connected to a {}-bit object; width conversion "
-           "on port connections is not yet implemented")
+           "port '{}' of '{}' is {} bits but is connected to a {}-bit object; a port is joined "
+           "only to a signal as wide as it, and a frontend converts any other width with an "
+           "assignment")
 ENZAN_DIAG(MultipleContinuousDrivers, 3006, Error,
-           "'{}' is driven by more than one continuous assignment; driver resolution is not yet "
-           "implemented")
+           "{} '{}' has {} driven by both {} and {}; a {} may have one continuous driver for "
+           "each bit, so overlapping drivers are an error rather than something to resolve")
 ENZAN_DIAG(MixedDriverKinds, 3007, Error,
-           "'{}' is driven both by a continuous assignment and by a procedural block, which "
-           "requires driver resolution")
+           "'{}' has {} driven by the continuous assignment {} and also written by {}; a bit "
+           "that is driven continuously may not be written procedurally")
+ENZAN_DIAG(UnresolvedHierarchicalReference, 3011, Error,
+           "the hierarchical reference '{}' in '{}' names nothing in the elaborated design")
+ENZAN_DIAG(PackageNamedAsTop, 3012, Error,
+           "package '{}' has the name of the top-level module; its variables live at '/{}', "
+           "which is the top level's path")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 
@@ -91,6 +102,9 @@ ENZAN_DIAG(UserFatal, 5003, Error, "$fatal: {}")
 ENZAN_DIAG(UserError, 5004, Error, "{}")
 ENZAN_DIAG(UserWarning, 5005, Warning, "{}")
 ENZAN_DIAG(UserInfo, 5006, Note, "{}")
+ENZAN_DIAG(FileNotOpened, 5008, Warning, "$fopen could not open '{}' with mode '{}': {}")
+ENZAN_DIAG(FileNotOpen, 5009, Warning, "{} names file descriptor {:#x}, which is not open")
+ENZAN_DIAG(ReadMemProblem, 5010, Warning, "{} of '{}': {}")
 
 // --- 6000-6999: the session and its command line -----------------------------
 
@@ -136,6 +150,26 @@ ENZAN_DIAG(FileListLibrarySearchIgnored, 6021, Warning,
            "'{}' is understood but not acted on yet: Enzan analyses every file it is given and "
            "does not go looking for a module nothing defines, so a module reachable only this "
            "way will be reported as undefined. Naming the file in the list analyses it")
+ENZAN_DIAG(RestartWithVpiApplication, 6026, Error,
+           "a design cannot be restarted while a VPI application is loaded: the application "
+           "would still hold the state of the simulation being discarded, and nothing in the "
+           "standard tells it so")
+
+// --- 8000-8999: VPI, VHPI and plugin loading --------------------------------
+
+ENZAN_DIAG(LibraryTimeUnitsDiffer, 6027, Error,
+           "library '{}' was analysed in units of {} and library '{}' in units of {}; a design "
+           "is simulated in one time unit, so its libraries have to be analysed in the same one")
+ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
+           "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
+           "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "
+           "library again in {} (after `enzan lib clean` for a library being written to)")
+ENZAN_DIAG(VpiLibraryUnloadable, 8001, Error, "the VPI library '{}' could not be loaded: {}")
+ENZAN_DIAG(VpiEntryNotFound, 8002, Error,
+           "the VPI library '{}' has no function called '{}' to start it with")
+ENZAN_DIAG(VpiNoStartupRoutines, 8003, Error,
+           "the VPI library '{}' defines no vlog_startup_routines; if it is started some other "
+           "way, name the function as --vpi <library>:<function>")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 

@@ -36,6 +36,7 @@ using enzan::eir::Operand;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
+using enzan::eir::WriteExtent;
 using enzan::test::literal;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
@@ -83,7 +84,7 @@ Process makeCopyProcess() {
     process.name = "copy";
     process.registerTypes.push_back(Type::bits(8, false, true));
     process.readSet = {0};
-    process.writeSet = {1};
+    process.writeSet = {WriteExtent::whole(1, 8)};
 
     BasicBlock entry;
     entry.label = "entry";
@@ -138,6 +139,31 @@ TEST_F(CompilerTest, RegistersBecomeFrameOffsetsAndCarryTheirWidths) {
     EXPECT_EQ(body.frameWords, 2U + 2U + 4U);
     EXPECT_EQ(body.code[0].dst, 0U) << "register 0 sits at the start of the frame";
     EXPECT_EQ(body.code[0].dstWidth, 1U);
+}
+
+TEST_F(CompilerTest, AStoreCarriesItsObjectsPositionAmongTheObjectsWritten) {
+    // The runtime routes a store by this position (DESIGN_GUIDE.md section 3.7), so it counts
+    // objects, not extents: object 1 is written in two ranges and is still position 0.
+    Process process = makeCopyProcess();
+    process.writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
+                        WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 4},
+                        WriteExtent::whole(2, 8)};
+    process.blocks[0].instructions.insert(
+        process.blocks[0].instructions.begin() + 2,
+        Instruction::make(Opcode::Store, {}, Operand::object(2), Operand::reg(0)));
+
+    ModuleDefinition definition = makeModule(std::move(process));
+    definition.addObject(Object{.name = "c", .type = Type::bits(8, false, true)});
+    design.addModule(std::move(definition));
+
+    const std::unique_ptr<CompiledDesign> compiled = compile();
+    ASSERT_NE(compiled, nullptr) << consumer.messages.front();
+
+    const auto& body = compiled->body(0);
+    ASSERT_EQ(body.code[1].opcode, Opcode::Store);
+    EXPECT_EQ(body.code[1].dst, 0U);
+    ASSERT_EQ(body.code[2].opcode, Opcode::Store);
+    EXPECT_EQ(body.code[2].dst, 1U);
 }
 
 TEST_F(CompilerTest, NonRegisterOperandsKeepTheirIndexAndHaveNoWidth) {

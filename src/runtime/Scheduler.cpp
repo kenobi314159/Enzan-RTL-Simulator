@@ -90,12 +90,21 @@ void Scheduler::clear() noexcept {
     for (Queue& queue : queues) queue.clear();
     timeWheel.clear();
     clearNonBlocking();
+    takenUpdates.clear();
+    takenPool.clear();
     deltas = 0;
 }
 
 void Scheduler::clearNonBlocking() {
     pendingUpdates.clear();
     updatePool.clear();
+}
+
+std::span<const NonBlockingUpdate> Scheduler::takeNonBlockingUpdates() {
+    std::swap(takenUpdates, pendingUpdates);
+    std::swap(takenPool, updatePool);
+    clearNonBlocking();
+    return takenUpdates;
 }
 
 } // namespace enzan::runtime

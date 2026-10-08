@@ -23,6 +23,13 @@ std::uint32_t CompiledDesign::bodyIndex(std::uint32_t definitionIndex,
 
 namespace {
 
+/// True for the opcodes that write an object, which are the ones the runtime routes.
+bool isStore(eir::Opcode opcode) noexcept {
+    return opcode == eir::Opcode::Store || opcode == eir::Opcode::StorePart
+           || opcode == eir::Opcode::StoreNonBlocking || opcode == eir::Opcode::StorePartNonBlocking
+           || opcode == eir::Opcode::StoreDelayed || opcode == eir::Opcode::StoreNonBlockingDelayed;
+}
+
 /// Assigns each virtual register a Word offset in the frame and records its width.
 ///
 /// Every register lives in the frame, wide ones included. That is what section 6.1
@@ -97,6 +104,7 @@ bool Compiler::compileProcess(const eir::ModuleDefinition& definition, const eir
     out.name = process.name;
     out.location = process.location;
     out.sensitivity = process.sensitivity;
+    out.eventLists = process.eventLists;
     out.readSet = process.readSet;
     out.writeSet = process.writeSet;
     out.startsAtTimeZero = eir::startsAtTimeZero(process);
@@ -124,6 +132,8 @@ bool Compiler::compileProcess(const eir::ModuleDefinition& definition, const eir
 
     std::vector<Fixup> fixups;
     out.blockStarts.reserve(process.blocks.size());
+
+    const std::vector<std::uint32_t> written = eir::writtenObjects(process.writeSet);
 
     for (const eir::BasicBlock& block : process.blocks) {
         out.blockStarts.push_back(static_cast<std::uint32_t>(out.code.size()));
@@ -163,6 +173,21 @@ bool Compiler::compileProcess(const eir::ModuleDefinition& definition, const eir
             if (!resolve(source.dst, emitted.dst, emitted.dstWidth)) return false;
             for (std::size_t index = 0; index < sources.size(); ++index) {
                 if (!resolve(sources[index], *targets[index], *widths[index])) return false;
+            }
+
+            // A store has no destination register, so `dst` carries its object's position
+            // among the objects the process writes, which is what the runtime routes it by:
+            // straight into the signal, or through the process's drivers of it (section 3.7).
+            if (isStore(source.opcode)) {
+                const auto position = std::ranges::lower_bound(written, source.a.index());
+                if (position == written.end() || *position != source.a.index()) {
+                    reportInvalid(definition, process,
+                                  std::format("a store to object {} is not in the write set; run "
+                                              "the EIR verifier before compiling",
+                                              source.a.index()));
+                    return false;
+                }
+                emitted.dst = static_cast<std::uint32_t>(position - written.begin());
             }
 
             const auto instructionIndex = static_cast<std::uint32_t>(out.code.size());
@@ -205,6 +230,7 @@ bool Compiler::compileSysTaskCalls(const eir::ModuleDefinition& definition,
         SysTaskDescriptor descriptor;
         descriptor.kind = call.kind;
         descriptor.formatIndex = call.formatIndex;
+        descriptor.objectIndex = call.objectIndex;
         descriptor.location = call.location;
 
         if (call.hasFormat() && call.formatIndex >= process.strings.size()) {

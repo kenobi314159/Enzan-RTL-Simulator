@@ -9,8 +9,9 @@ The name is Japanese and carries two readings: *distant peaks* (遠山), for the
 mountain-like horizon of a screen full of waveforms, and *calculation* (演算),
 for the computational work the simulator performs.
 
-**Status: milestone M2.1 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and
-FST waveforms, and comes with an interactive graphical debugging environment. A parameterised
+**Status: milestone M4 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and
+FST waveforms, comes with an interactive graphical debugging environment, and runs cocotb
+testbenches through VPI. A parameterised
 counter, a synchronous FIFO, and a packet router
 three levels deep that pushes four hundred and eighty transfers through three channel instances
 all run, self-check, and agree with Icarus Verilog. See [what works
@@ -31,7 +32,7 @@ Enzan targets **Linux only**; Windows and macOS support are explicit non-goals.
 | Python 3 | 3.8 | optional; only for the waveform structure checks in the test suite |
 | GoogleTest | 1.12 | built from source automatically if absent |
 | Qt 6 | 6.4 | only for the GUI, which is off by default |
-| Tcl | 8.6 | the GUI theme; needed only with `-DENZAN_BUILD_GUI=ON` |
+| Tcl | 8.6 | the GUI theme and signal lists; needed only with `-DENZAN_BUILD_GUI=ON` |
 | ccache | any | optional; used automatically when present |
 
 On Arch and derivatives:
@@ -61,7 +62,8 @@ sudo dnf install qt6-qtbase-devel
 If a dependency is missing, CMake stops with a message naming the package to
 install for your distribution rather than with a link error.
 
-Tcl is needed only for the GUI, whose theme is a Tcl script.
+Tcl is needed only for the GUI, whose theme is a Tcl script and whose signal lists are read
+with Tcl's parser.
 
 ### Running a simulation
 
@@ -136,6 +138,42 @@ the built-in dark theme out as a starting point, and `enzan --gui --theme mine.t
 `~/.config/enzan-gui/theme.tcl` — loads yours over it, so a file that sets three colours changes
 three colours.
 
+What the wave window shows can be kept. *Wave → Save Signal List…* writes it to a file, and
+*Load Signal List…* or `enzan run --gui --wave-list signals.tcl` puts it back. The file is a short
+list of `add wave` and `group` commands, written in Tcl's syntax but never run as Tcl, and easy
+to write by hand:
+
+```tcl
+add wave /tb/clk /tb/rst_n
+add wave -radix dec -label count /tb/u_dut/count
+group "The FIFO" {
+    add wave -r /tb/u_fifo
+}
+```
+
+Adding signals in the window writes the matching command into the transcript, ready to copy.
+DESIGN_GUIDE.md section 10.8 has the whole format.
+
+### Running a cocotb testbench
+
+VPI applications load with `--vpi <library>[:<entry>]`, and cocotb is the one this exists for. cocotb
+picks a simulator by the makefiles in its own directory, so Enzan's is added to a copy of them:
+
+```sh
+pip install cocotb
+tools/cocotb/makefiles.sh build/cocotb-makefiles
+make SIM=enzan COCOTB_MAKEFILES_DIR=$PWD/build/cocotb-makefiles
+```
+
+run in the directory of an ordinary cocotb testbench. `ENZAN_BIN_DIR` names the directory holding
+`enzan` when it is not on your `PATH`. Delays inside the design are counted in the unit
+`COCOTB_HDL_TIMEPRECISION` names, because Enzan does not read `` `timescale `` yet; a testbench
+that drives every event from Python, as most do, does not notice.
+
+cocotb's own regression suite runs in CI, and `tests/conformance/cocotb/run-suite.sh` runs it
+locally. Its pass rate is low until M5: most of its cases share one design that uses unpacked
+arrays, `real`, `string` and structs, which Enzan does not analyse yet.
+
 ## What works today
 
 | | |
@@ -158,7 +196,9 @@ three colours.
 | `force`, `deposit` and `release` from the Objects window | yes |
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
-| The Processes and Source windows, VHDL, VPI | not yet — M6, M4 |
+| VPI, and cocotb testbenches through it | yes — modules, generate blocks, nets, variables, bits, parameters; every callback cocotb uses |
+| `` `timescale `` and `timeunit` | not yet — every delay is counted in the `--timescale` unit |
+| The Processes and Source windows, VHDL | not yet — M6 |
 
 Anything unsupported is reported with a source location and the construct named, never
 mistranslated: a partially translated design would simulate and give the wrong answer, which is
@@ -185,8 +225,12 @@ The binary lands at `build/gcc-debug/bin/enzan`:
 
 `cmake --list-presets` shows them all. There are `gcc-` and `clang-` variants of
 `debug`, `release` and `relwithdebinfo`, plus `clang-sanitize` for the
-AddressSanitizer and UndefinedBehaviorSanitizer configuration that CI runs.
+AddressSanitizer and UndefinedBehaviorSanitizer configuration that CI runs, and
+`gcc-profile` for profiling: `relwithdebinfo` with frame pointers kept everywhere, so
+that `perf record --call-graph fp` and `samply` get whole stacks cheaply.
 Each preset builds into its own directory under `build/`, so several can coexist.
+Time a simulation in an optimised build only; a debug build is an order of magnitude
+slower, and what dominates its profile is mostly what the optimiser would remove.
 
 ### First build takes a while
 
@@ -268,10 +312,11 @@ M1 — a SystemVerilog subset simulating to a VCD or FST waveform, with a counte
 self-check and agree with a reference simulator, and cycles/sec recorded per commit — and so is
 M2, the interactive GUI. Broader language coverage is M5's job rather than a gap in any of them.
 
-M2.1, the wave window's mouse and keyboard model, followed.
+M2.1, the wave window's mouse and keyboard model, followed, then M3, the command line, file lists
+and analysis libraries, and M4, VPI and cocotb.
 
-Next is M4, VPI and cocotb, then M5 four-state completion and language breadth, M6 VHDL via NVC,
-and M7 mixed-language simulation. See [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the
+Next is M5 four-state completion and language breadth, M6 VHDL via NVC, and M7 mixed-language
+simulation. See [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the
 full roadmap and the exit criteria of each milestone.
 
 ## License

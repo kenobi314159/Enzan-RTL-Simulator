@@ -270,6 +270,7 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     for (const SysTaskCall& call : process.sysCalls) {
         out.u8(static_cast<std::uint8_t>(call.kind));
         out.u32(call.formatIndex);
+        out.u32(call.objectIndex);
         writeLocation(out, names, call.location);
         out.u32(static_cast<std::uint32_t>(call.arguments.size()));
         for (const SysTaskArgument& argument : call.arguments) {
@@ -279,21 +280,34 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     }
 
     out.u32(static_cast<std::uint32_t>(process.sensitivity.size()));
-    for (const SensitivityEntry& entry : process.sensitivity) {
+    const auto writeEntry = [&out](const SensitivityEntry& entry) {
         out.u32(entry.objectIndex);
         out.u8(static_cast<std::uint8_t>(entry.edge));
+        out.u32(entry.lowBit);
+        out.u32(entry.width);
+    };
+    for (const SensitivityEntry& entry : process.sensitivity) writeEntry(entry);
+    out.u32(static_cast<std::uint32_t>(process.eventLists.size()));
+    for (const std::vector<SensitivityEntry>& list : process.eventLists) {
+        out.u32(static_cast<std::uint32_t>(list.size()));
+        for (const SensitivityEntry& entry : list) writeEntry(entry);
     }
 
     out.u32(static_cast<std::uint32_t>(process.readSet.size()));
     for (const std::uint32_t index : process.readSet) out.u32(index);
 
     out.u32(static_cast<std::uint32_t>(process.writeSet.size()));
-    for (const std::uint32_t index : process.writeSet) out.u32(index);
+    for (const WriteExtent& extent : process.writeSet) {
+        out.u32(extent.objectIndex);
+        out.u32(extent.lowBit);
+        out.u32(extent.width);
+    }
 }
 
 void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definition) {
     out.text(definition.name);
     out.text(definition.sourceName);
+    out.boolean(definition.isPackage);
     writeLocation(out, names, definition.location);
 
     out.u32(static_cast<std::uint32_t>(definition.objects.size()));
@@ -301,11 +315,21 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.text(object.name);
         writeType(out, object.type);
         out.u8(static_cast<std::uint8_t>(object.kind));
+        out.u8(static_cast<std::uint8_t>(object.netKind));
         writeLocation(out, names, object.location);
         out.boolean(object.initialValue.has_value());
         if (object.initialValue.has_value()) writeVector(out, *object.initialValue);
         out.boolean(object.isAlias);
         out.u32(object.enumIndex);
+        out.u32(static_cast<std::uint32_t>(object.unpackedDimensions.size()));
+        for (const UnpackedDimension& dimension : object.unpackedDimensions) {
+            out.u32(static_cast<std::uint32_t>(dimension.left));
+            out.u32(static_cast<std::uint32_t>(dimension.right));
+        }
+        out.u32(object.elementWidth);
+        out.boolean(object.elementSigned);
+        out.boolean(object.subroutineStatic);
+        out.text(object.hierarchicalPath);
     }
 
     out.u32(static_cast<std::uint32_t>(definition.ports.size()));
@@ -325,6 +349,11 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         for (const PortConnection& connection : instance.connections) {
             out.u32(connection.portIndex);
             out.u32(connection.objectIndex);
+        }
+        out.u32(static_cast<std::uint32_t>(instance.interfaceBindings.size()));
+        for (const InterfaceBinding& binding : instance.interfaceBindings) {
+            out.text(binding.port);
+            out.text(binding.target);
         }
     }
 
@@ -495,6 +524,7 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     for (SysTaskCall& call : process.sysCalls) {
         call.kind = static_cast<SysTaskKind>(in.u8());
         call.formatIndex = in.u32();
+        call.objectIndex = in.u32();
         call.location = readLocation(in, buffers);
         call.arguments.resize(in.count());
         for (SysTaskArgument& argument : call.arguments) {
@@ -503,17 +533,29 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
         }
     }
 
-    process.sensitivity.resize(in.count());
-    for (SensitivityEntry& entry : process.sensitivity) {
+    const auto readEntry = [&in](SensitivityEntry& entry) {
         entry.objectIndex = in.u32();
         entry.edge = static_cast<EdgeKind>(in.u8());
+        entry.lowBit = in.u32();
+        entry.width = in.u32();
+    };
+    process.sensitivity.resize(in.count());
+    for (SensitivityEntry& entry : process.sensitivity) readEntry(entry);
+    process.eventLists.resize(in.count());
+    for (std::vector<SensitivityEntry>& list : process.eventLists) {
+        list.resize(in.count());
+        for (SensitivityEntry& entry : list) readEntry(entry);
     }
 
     process.readSet.resize(in.count());
     for (std::uint32_t& index : process.readSet) index = in.u32();
 
     process.writeSet.resize(in.count());
-    for (std::uint32_t& index : process.writeSet) index = in.u32();
+    for (WriteExtent& extent : process.writeSet) {
+        extent.objectIndex = in.u32();
+        extent.lowBit = in.u32();
+        extent.width = in.u32();
+    }
 
     return process;
 }
@@ -522,6 +564,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     ModuleDefinition definition;
     definition.name = in.text();
     definition.sourceName = in.text();
+    definition.isPackage = in.boolean();
     definition.location = readLocation(in, buffers);
 
     definition.objects.resize(in.count());
@@ -529,10 +572,20 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         object.name = in.text();
         object.type = readType(in);
         object.kind = static_cast<ObjectKind>(in.u8());
+        object.netKind = static_cast<NetKind>(in.u8());
         object.location = readLocation(in, buffers);
         if (in.boolean()) object.initialValue = readVector(in);
         object.isAlias = in.boolean();
         object.enumIndex = in.u32();
+        object.unpackedDimensions.resize(in.count());
+        for (UnpackedDimension& dimension : object.unpackedDimensions) {
+            dimension.left = static_cast<std::int32_t>(in.u32());
+            dimension.right = static_cast<std::int32_t>(in.u32());
+        }
+        object.elementWidth = in.u32();
+        object.elementSigned = in.boolean();
+        object.subroutineStatic = in.boolean();
+        object.hierarchicalPath = in.text();
     }
 
     definition.ports.resize(in.count());
@@ -552,6 +605,11 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         for (PortConnection& connection : instance.connections) {
             connection.portIndex = in.u32();
             connection.objectIndex = in.u32();
+        }
+        instance.interfaceBindings.resize(in.count());
+        for (InterfaceBinding& binding : instance.interfaceBindings) {
+            binding.port = in.text();
+            binding.target = in.text();
         }
     }
 

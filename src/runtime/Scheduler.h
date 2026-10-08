@@ -121,11 +121,28 @@ public:
 
     [[nodiscard]] bool hasNonBlockingUpdates() const noexcept { return !pendingUpdates.empty(); }
 
-    /// Discards every pending update. Called once they have been applied.
+    /// Discards every pending update.
     ///
     /// The pool's capacity is kept, so a steady-state simulation stops allocating for
     /// non-blocking assignments after the first few time slots.
     void clearNonBlocking();
+
+    /// Hands every pending update over to be applied, and leaves the pending list empty.
+    ///
+    /// Two lists rather than one because applying an update can append another. A write
+    /// wakes no process directly, but it does run a VPI value-change callback, and a callback
+    /// that writes with an inertial delay schedules a non-blocking update (DESIGN_GUIDE.md
+    /// section 9.4). Appending to the list being applied would invalidate it; appending to
+    /// the pending one makes that update part of the next NBA pass, which is where it belongs.
+    ///
+    /// The returned updates and their values stay valid until the next call. Both lists keep
+    /// their capacity, so swapping them allocates nothing once each has grown.
+    std::span<const NonBlockingUpdate> takeNonBlockingUpdates();
+
+    /// Returns a view of the value of an update returned by `takeNonBlockingUpdates`.
+    [[nodiscard]] eir::ConstBitRef takenValue(const NonBlockingUpdate& update) const noexcept {
+        return {takenPool.data() + update.valueOffset, update.bitWidth};
+    }
 
     /// Number of delta cycles taken at the current timestamp.
     [[nodiscard]] std::uint32_t deltaCount() const noexcept { return deltas; }
@@ -191,6 +208,10 @@ private:
 
     std::vector<NonBlockingUpdate> pendingUpdates;
     std::vector<eir::Word> updatePool;
+
+    /// The batch `takeNonBlockingUpdates` last handed out, and the values it refers to.
+    std::vector<NonBlockingUpdate> takenUpdates;
+    std::vector<eir::Word> takenPool;
 
     std::uint32_t deltas = 0;
 };

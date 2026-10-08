@@ -5,6 +5,7 @@ cmake-build-*/
 
 # Compiler and tooling caches.
 .cache/
+__pycache__/
 compile_commands.json
 *.gcda
 *.gcno
@@ -37,3 +38,6 @@ compile_commands.json
 .idea/
 .vscode/
 .DS_Store
+
+# The Python environment CI and contributors install cocotb into (tests/conformance/cocotb).
+/.venv/

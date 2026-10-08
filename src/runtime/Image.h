@@ -33,9 +33,36 @@ struct Signal {
     struct Subscriber {
         std::uint32_t processIndex = 0;
         eir::EdgeKind edge = eir::EdgeKind::AnyChange;
+
+        /// The window watched; a width of 0 is the whole signal (see eir::SensitivityEntry).
+        std::uint32_t lowBit = 0;
+        std::uint32_t width = 0;
     };
 
     std::vector<Subscriber> subscribers;
+
+    /// True when something watches a window of this signal other than its lowest bit, which
+    /// means a write has to keep the old value to compare the window against.
+    ///
+    /// Known when the image is built, from every process's sensitivity and event lists, so a
+    /// signal nobody watches by window pays nothing on its write path.
+    bool windowed = false;
+};
+
+/// Where a process's stores to one object go (DESIGN_GUIDE.md section 3.7).
+///
+/// Straight into the signal, for the overwhelmingly common object with one driver per bit;
+/// or through this process's drivers of it, when what it writes is resolved with other
+/// drivers. A process can write two separate ranges of one object, which are two drivers, so
+/// a route is a run of them and a part store goes through the one holding its bits.
+struct WriteRoute {
+    /// Index of the first driver in the elaborated design's list.
+    std::uint32_t firstDriver = 0;
+
+    /// Zero for a store that goes straight into the signal.
+    std::uint32_t driverCount = 0;
+
+    [[nodiscard]] bool direct() const noexcept { return driverCount == 0; }
 };
 
 /// One schedulable process: a compiled body bound to an elaborated instance.
@@ -63,8 +90,25 @@ struct ProcessState {
     /// Object index to signal index, for the same instance.
     std::span<const std::uint32_t> objectSignals;
 
+    /// One route per object the process writes, indexed by a store's `dst`.
+    ///
+    /// Per process rather than per instance, because drivers belong to processes: one
+    /// instance's process may drive a resolved net that another process of the same instance
+    /// does not touch.
+    std::span<const WriteRoute> writeRoutes;
+
     /// Instruction index to resume at. Zero means "start from the beginning".
     std::uint32_t resumePc = 0;
+
+    /// Counts the process's waits on edges. A wait on an event list arms one subscription per
+    /// entry under the current count, and the first to fire advances it, which is what makes
+    /// the others stale rather than able to resume the process a second time.
+    std::uint32_t waitGeneration = 0;
+
+    /// The state of this process's `$urandom` generator, derived from the seed and the
+    /// process's name so that what one process draws does not depend on what any other does
+    /// (IEEE 1800 section 18.14). Set when the kernel starts.
+    std::uint64_t randomState = 0;
 
     /// True while the process sits in one of the scheduler's queues, so that a signal
     /// changing twice in one region does not enqueue it twice.
@@ -140,6 +184,9 @@ private:
     /// that the spans in ProcessState stay valid for the image's lifetime.
     std::vector<std::vector<std::uint32_t>> instanceObjectOffsets;
     std::vector<std::vector<std::uint32_t>> instanceObjectSignals;
+
+    /// Per-process routes, indexed by process. Owned here for the same reason.
+    std::vector<std::vector<WriteRoute>> processWriteRoutes;
 
     std::uint32_t arenaSize = 0;
     std::uint32_t frameSize = 0;

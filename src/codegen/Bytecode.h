@@ -44,6 +44,11 @@ struct Instruction {
     /// - a constant operand indexes the compiled constant pool;
     /// - a system task operand indexes the descriptor list;
     /// - an immediate operand is the value itself.
+    ///
+    /// A store has no destination register, and its `dst` is instead the position of its
+    /// object among the objects the process writes (`eir::writtenObjects`): the index into
+    /// the bound process's routes, which say whether the store goes straight into the
+    /// signal or through drivers to be resolved (DESIGN_GUIDE.md section 3.7).
     std::uint32_t dst = 0;
     std::uint32_t a = 0;
     std::uint32_t b = 0;
@@ -91,6 +96,9 @@ struct SysTaskDescriptor {
 
     std::vector<Argument> arguments;
 
+    /// The object the call writes, or `eir::SysTaskCall::NoObject`.
+    std::uint32_t objectIndex = eir::SysTaskCall::NoObject;
+
     SourceLocation location;
 
     [[nodiscard]] bool hasFormat() const noexcept {
@@ -133,8 +141,9 @@ struct CompiledProcess {
     std::string name;
     SourceLocation location;
     std::vector<eir::SensitivityEntry> sensitivity;
+    std::vector<std::vector<eir::SensitivityEntry>> eventLists;
     std::vector<std::uint32_t> readSet;
-    std::vector<std::uint32_t> writeSet;
+    std::vector<eir::WriteExtent> writeSet;
 
     /// True when the process must be scheduled once at time zero.
     bool startsAtTimeZero = false;

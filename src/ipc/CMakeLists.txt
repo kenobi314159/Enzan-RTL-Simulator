@@ -20,9 +20,12 @@ enzan_add_component(
 # served kernel, a `-do` script and a batch run are one pipeline, and a server that built a
 # kernel of its own would mean a command typed at a front end acted on a different simulation
 # from the one on screen.
+# A thread drains captured output; see OutputCapture.h for why it cannot be the kernel's own.
+find_package(Threads REQUIRED)
+
 enzan_add_component(
   ipc_server
-  SOURCES ChangePublisher.cpp KernelServer.cpp
-  HEADERS ChangePublisher.h KernelServer.h
+  SOURCES ChangePublisher.cpp KernelServer.cpp OutputCapture.cpp
+  HEADERS ChangePublisher.h KernelServer.h OutputCapture.h
   DEPENDS enzan::session enzan::ipc enzan::runtime enzan::wavedb
-  PRIVATE_DEPENDS enzan::elab)
+  PRIVATE_DEPENDS enzan::elab Threads::Threads)

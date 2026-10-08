@@ -56,13 +56,22 @@ ENZAN_OPCODE(CoerceTwoState, "twostate", true, 1,
 ENZAN_OPCODE(ReadObject, "read", true, 1,
              "getelementptr on the arena base with a constant offset, then a load "
              "of each plane")
+ENZAN_OPCODE(ReadObjectPart, "readpart", true, 2,
+             "getelementptr on the arena base to the object, then a load of the words "
+             "holding the window at the offset operand and a funnel shift of each plane; "
+             "an offset with an unknown bit, or a window past the object, fills X. This "
+             "is how an element of an array is read without copying the array")
 ENZAN_OPCODE(Store, "store", false, 2,
              "a call to the runtime update helper, which compares the new value "
              "against the old and schedules the processes sensitive to it; the "
-             "comparison inlines to an icmp pair for widths up to 64")
+             "comparison inlines to an icmp pair for widths up to 64. Where the bound "
+             "process's route for the object names drivers, a call to the driver "
+             "helper instead, which resolves; a JIT specialises per instance and so "
+             "emits only the call that applies")
 ENZAN_OPCODE(StorePart, "storepart", false, 3,
              "as Store, with a mask and shift computed from the offset operand so "
-             "that only the selected bits change")
+             "that only the selected bits change; through drivers, the offset also "
+             "chooses the driver whose range holds it")
 ENZAN_OPCODE(StoreNonBlocking, "nbstore", false, 2,
              "a call to the runtime helper that appends a non-blocking update "
              "record to the NBA region's queue")
@@ -70,6 +79,14 @@ ENZAN_OPCODE(StorePartNonBlocking, "nbstorepart", false, 3,
              "as StoreNonBlocking, with the bit offset and width carried in the "
              "update record so that two partial updates in one time slot do not "
              "overwrite each other")
+
+ENZAN_OPCODE(StoreDelayed, "dstore", false, 3,
+             "a call to the runtime helper that schedules the write of a continuous "
+             "assignment with a delay, the third operand, replacing the one it scheduled "
+             "before if that has not happened yet; when it happens it is a Store")
+ENZAN_OPCODE(StoreNonBlockingDelayed, "nbdstore", false, 3,
+             "a call to the runtime helper that schedules a non-blocking update the "
+             "third operand later, where it joins that time step's NBA region")
 
 // --- Bitwise, element by element -------------------------------------------
 
@@ -91,6 +108,13 @@ ENZAN_OPCODE(ReduceOr, "ror", true, 1, "as ReduceAnd against zero")
 ENZAN_OPCODE(ReduceXor, "rxor", true, 1,
              "llvm.ctpop on the aval plane and 1, guarded by an unknown-present "
              "test that forces X")
+ENZAN_OPCODE(CountOnes, "cntones", true, 1,
+             "llvm.ctpop of `aval & ~bval` per limb, summed, which counts the bits that are "
+             "exactly 1 and so leaves X and Z out, as `$countones` does")
+ENZAN_OPCODE(CeilLog2, "clog2", true, 1,
+             "the position of the highest set bit, found by llvm.ctlz per limb, plus one "
+             "unless the operand is a power of two; 0 for 0 and 1, and X for an operand "
+             "with an X or Z bit, as `$clog2` does")
 ENZAN_OPCODE(LogicalAnd, "land", true, 2,
              "the truth values of both operands combined by the three-valued AND "
              "table; the compiler emits branches for short-circuit evaluation and "
@@ -120,6 +144,12 @@ ENZAN_OPCODE(Divide, "div", true, 2,
              "rather than as undefined behaviour")
 ENZAN_OPCODE(Modulo, "mod", true, 2, "as Divide with `urem` or `srem`")
 ENZAN_OPCODE(Negate, "neg", true, 1, "as Add with `sub` from zero")
+ENZAN_OPCODE(Power, "pow", true, 3,
+             "a branch on either operand's bval plane to the all-X path, a branch on the "
+             "exponent's sign when the immediate third operand says it is signed to the "
+             "table of IEEE 1800 section 11.4.3 for a negative exponent, then square and "
+             "multiply over the exponent's bits with `mul`; wide values call the runtime "
+             "helper, as Multiply does")
 
 // --- Shifts ----------------------------------------------------------------
 
@@ -134,15 +164,27 @@ ENZAN_OPCODE(ShiftRightArithmetic, "sar", true, 2,
 // --- Comparison ------------------------------------------------------------
 
 ENZAN_OPCODE(Equal, "eq", true, 2,
-             "a branch on the combined bval planes to the X result, then icmp eq on "
-             "the aval planes")
+             "icmp eq of the aval planes masked to the bits known on both sides; a "
+             "mismatch there is 0, otherwise a branch on the combined bval planes to "
+             "the X result, otherwise 1")
 ENZAN_OPCODE(NotEqual, "ne", true, 2, "as Equal with icmp ne")
 ENZAN_OPCODE(CaseEqual, "ceq", true, 2,
              "icmp eq on both planes with no unknown check at all; this is `===`, "
              "which never yields X")
 ENZAN_OPCODE(CaseNotEqual, "cne", true, 2, "as CaseEqual negated")
+ENZAN_OPCODE(WildcardEqual, "weq", true, 2,
+             "as Equal with both planes masked to the bits where the right operand's "
+             "bval is clear, so that its X and Z bits compare as anything; `==?`")
+ENZAN_OPCODE(WildcardNotEqual, "wne", true, 2, "as WildcardEqual negated; `!=?`")
+ENZAN_OPCODE(CaseZMatch, "czmatch", true, 2,
+             "icmp eq of both planes masked to the bits that are Z in neither operand, "
+             "which is how `casez` compares an item with its selector")
+ENZAN_OPCODE(CaseXMatch, "cxmatch", true, 2,
+             "icmp eq of the aval planes masked to the bits where neither operand's bval "
+             "is set, which is how `casex` compares an item with its selector")
 ENZAN_OPCODE(LessThan, "lt", true, 2,
-             "as Equal with icmp ult or icmp slt according to the signed flag")
+             "a branch on the combined bval planes to the X result, then icmp ult or "
+             "icmp slt on the aval planes according to the signed flag")
 ENZAN_OPCODE(LessEqual, "le", true, 2, "as LessThan with icmp ule or icmp sle")
 
 // --- Selection and splicing ------------------------------------------------
@@ -171,6 +213,10 @@ ENZAN_OPCODE(SysTask, "systask", false, 1,
              "a call to the runtime with the call descriptor's index; system tasks "
              "are never inlined, because their cost is dominated by formatting and "
              "I/O rather than by the call")
+ENZAN_OPCODE(SysFunction, "sysfunc", true, 1,
+             "as SysTask, with a pointer to the result register as a second argument; "
+             "a system function's result depends on state the runtime keeps, such as "
+             "a random generator")
 
 // --- Suspension ------------------------------------------------------------
 //
@@ -183,6 +229,10 @@ ENZAN_OPCODE(SysTask, "systask", false, 1,
 ENZAN_OPCODE(WaitTime, "waittime", false, 2,
              "a call to the scheduler to re-arm this process after the given delay, "
              "a store of the resume index, then ret void")
+ENZAN_OPCODE(WaitEvents, "waitevents", false, 2,
+             "a call to the scheduler to subscribe to every entry of the event list the "
+             "immediate first operand names, under one wait generation so that the first "
+             "to fire discards the rest, a store of the resume index, then ret void")
 ENZAN_OPCODE(WaitEdge, "waitedge", false, 3,
              "a call to the scheduler to subscribe to the given edge on the given "
              "object, a store of the resume index, then ret void")

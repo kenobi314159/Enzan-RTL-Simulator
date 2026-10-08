@@ -1,14 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Per-commit continuous integration (DESIGN_GUIDE.md section 16).
+# Continuous integration (DESIGN_GUIDE.md section 16), run on every push and pull request.
 #
-# The default branch must stay green; a red default branch is fixed or reverted
-# before other work continues.
+# GitHub allows a fixed amount of CI time a month, and every push to every branch spends it,
+# so what runs on a development branch or a pull request must be fast. A job or step that takes
+# long runs on main only, with `if: github.ref == 'refs/heads/main'`: clang-tidy, and the taxi
+# design regression. Whoever merges a pull request runs those locally first, because one that
+# fails after the merge leaves main red.
 #
-# The nightly jobs section 16 also describes — conformance suites, the design
-# regression suite and the benchmark run — is deliberately absent until M1,
-# because at M0 there is no simulator to run against a design and a scheduled job
-# that measures nothing is worse than none: it trains people to ignore it.
+# The default branch must stay green; a red default branch is fixed or reverted before other
+# work continues.
+#
+# There is no scheduled job. A nightly run that publishes conformance pass rates and the
+# benchmark series would be a useful addition, once there is somewhere to publish them.
 
 name: CI
 
@@ -237,11 +241,23 @@ jobs:
       # gtkwave is installed for one program: fst2vcd, which is how the suite checks that a
       # reader other than ours can get the design back out of an FST. Without it the FST cases
       # skip, and a writer that produced an unreadable file would go unnoticed here.
+      #
+      # libpython3-dev because cocotb embeds Python into the simulator it is loaded into, and
+      # needs the shared library to do it.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 iverilog gtkwave
+            cmake ninja-build ccache libgtest-dev zlib1g-dev python3 python3-venv \
+            libpython3-dev iverilog gtkwave
+
+      # The cocotb version is named once, in requirements.txt (DESIGN_GUIDE.md section 14.6), and
+      # so is what sv-tests' driver needs (section 14.4).
+      - name: Install cocotb and sv-tests' driver requirements
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -r tests/conformance/cocotb/requirements.txt \
+            -r tests/conformance/sv-tests/requirements.txt
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -260,17 +276,91 @@ jobs:
       # commit would spend most of the CI budget on one dependency.
       - name: Configure and build with the SystemVerilog frontend enabled
         run: |
-          cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_WERROR=ON
+          cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_WERROR=ON \
+            -DENZAN_COCOTB_PYTHON="$PWD/.venv/bin/python"
           cmake --build --preset gcc-release
 
       - name: Test
         run: ctest --preset gcc-release
 
+      # cocotb's own regression suite (section 14.6). It fails the job when a case passing.txt
+      # lists stops passing, and the pass rate goes into the job summary so that it is tracked
+      # where the run is.
+      - name: cocotb regression suite
+        env:
+          COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          status=0
+          tests/conformance/cocotb/run-suite.sh build/gcc-release/bin/enzan build/cocotb-suite \
+            > build/cocotb-suite.txt 2>&1 || status=$?
+          cat build/cocotb-suite.txt
+          { echo '```'; cat build/cocotb-suite.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Keep the cocotb logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cocotb-suite-logs
+          path: build/cocotb-suite/*.log
+
+      # The sv-tests conformance suite (section 14.4), held to its pass list as cocotb's is. It
+      # runs on every branch because it takes well under a minute against this build.
+      - name: sv-tests conformance suite
+        env:
+          SVTESTS_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          status=0
+          tests/conformance/sv-tests/run-suite.sh build/gcc-release/bin/enzan build/sv-tests \
+            > build/sv-tests.txt 2>&1 || status=$?
+          grep -v '^FAIL ' build/sv-tests.txt
+          { echo '```'; grep -v '^FAIL ' build/sv-tests.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Keep the sv-tests logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sv-tests-logs
+          path: build/sv-tests/out/logs
+
+      # The design regression (section 14.5): each design's own testbenches, held to their own
+      # verdicts and, where Icarus Verilog can run them, to its transcript. Under a second here.
+      - name: Design regression
+        run: |
+          status=0
+          tests/designs/aes/run.sh build/gcc-release/bin/enzan "$(command -v iverilog)" \
+            build/designs/aes || status=1
+          tests/designs/common_cells/run.sh build/gcc-release/bin/enzan \
+            build/designs/common_cells || status=1
+          exit "$status"
+
+      # The long running tests only execute on the main branch.
+      - name: Design regression - long run
+        if: github.ref == 'refs/heads/main'
+        env:
+          COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          .venv/bin/pip install --quiet -r tests/designs/taxi/requirements.txt
+          status=0
+          tests/designs/taxi/run.sh build/gcc-release/bin/enzan build/designs/taxi || status=1
+          exit "$status"
+
+      - name: Keep the design regression logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: design-regression-logs
+          path: |
+            build/designs/aes/*.*
+            build/designs/taxi/*.log
+            build/designs/common_cells/*.*
+
       # The benchmark is a target rather than a test, because a measurement taken alongside
       # three hundred other tests compares with nothing. It runs here so that a change which
       # breaks the harness is caught, and so that a number is recorded per commit as section
-      # 15.1 requires; section 16 moves the published series to a nightly job once there is
-      # somewhere to publish it.
+      # 15.1 requires. Publishing the series, from a nightly job say, waits until there is
+      # somewhere to publish it (section 16).
       - name: Benchmark
         run: cmake --build --preset gcc-release --target enzan-bench
 

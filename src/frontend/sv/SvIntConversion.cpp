@@ -29,9 +29,10 @@ eir::BitVector toBitVector(const slang::SVInt& value) {
             continue;
         }
 
-        // slang distinguishes X from Z the same way Enzan does, but encodes the pair
-        // differently in its value plane; asking it which one this is avoids having to know.
-        result.set(index, bit == slang::logic_t::z ? eir::Logic::HighZ : eir::Logic::Unknown);
+        // Compared by encoding, not with `==`: slang's `==` on two logic values is four-state
+        // and yields X for any unknown operand, which would make every Z an X.
+        result.set(index,
+                   bit.value == slang::logic_t::Z_VALUE ? eir::Logic::HighZ : eir::Logic::Unknown);
     }
 
     return result;

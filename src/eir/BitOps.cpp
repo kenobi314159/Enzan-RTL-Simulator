@@ -5,6 +5,7 @@
 #include "common/Assert.h"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <span>
 #include <vector>
@@ -192,19 +193,36 @@ void extend(BitRef dst, ConstBitRef source, bool signExtend) {
         return;
     }
 
+    // A word at a time rather than a bit at a time. This runs for every assignment whose two
+    // sides differ in width, which in RTL is most of them (`count <= count + 1'b1` widens the
+    // `1'b1`), and a bit at a time cost two calls per bit.
+    const std::uint32_t sourceWords = source.words();
+    const std::uint32_t dstWords = dst.words();
+    const std::uint32_t shared = std::min(sourceWords, dstWords);
+    std::copy_n(source.aval(), shared, dst.aval());
+    std::copy_n(source.bval(), shared, dst.bval());
+
     if (dst.width() < source.width()) {
-        // Truncation: take the low bits and drop the rest.
-        for (std::uint32_t index = 0; index < dst.width(); ++index)
-            dst.set(index, source.get(index));
+        // Truncation: the low words, less whatever of the last one lies above the width.
+        dst.canonicalize();
         return;
     }
 
     // An unknown sign bit makes every extended bit unknown, which is the
     // pessimistic answer the standard requires.
-    const Logic fill = signExtend ? source.get(source.width() - 1) : Logic::Zero;
-    for (std::uint32_t index = 0; index < source.width(); ++index)
-        dst.set(index, source.get(index));
-    for (std::uint32_t index = source.width(); index < dst.width(); ++index) dst.set(index, fill);
+    const auto fill =
+        static_cast<std::uint8_t>(signExtend ? source.get(source.width() - 1) : Logic::Zero);
+    const Word fillA = (fill & 1U) != 0 ? ~Word{0} : Word{0};
+    const Word fillB = (fill & 2U) != 0 ? ~Word{0} : Word{0};
+
+    // The source's last word is canonical, zero above its width, so the fill is ORed into it.
+    // The mask is empty when the source ends exactly on a word.
+    const Word above = ~topWordMask(source.width());
+    dst.aval()[sourceWords - 1] |= fillA & above;
+    dst.bval()[sourceWords - 1] |= fillB & above;
+    std::fill(dst.aval() + sourceWords, dst.aval() + dstWords, fillA);
+    std::fill(dst.bval() + sourceWords, dst.bval() + dstWords, fillB);
+    dst.canonicalize();
 }
 
 void setUnknown(BitRef dst) {
@@ -545,6 +563,108 @@ void modulo(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned) {
     copy(dst, remainder.ref());
 }
 
+void countOnes(BitRef dst, ConstBitRef a) {
+    std::uint64_t count = 0;
+    for (std::uint32_t index = 0; index < a.words(); ++index)
+        count += static_cast<std::uint64_t>(std::popcount(a.aval()[index] & ~a.bval()[index]));
+
+    std::ranges::fill(dst.avalWords(), 0);
+    std::ranges::fill(dst.bvalWords(), 0);
+    dst.aval()[0] = count;
+    dst.canonicalize();
+}
+
+void ceilLog2(BitRef dst, ConstBitRef a) {
+    if (a.hasUnknown()) {
+        setUnknown(dst);
+        return;
+    }
+
+    // The highest set bit gives the floor; one more unless no other bit is set.
+    std::uint64_t result = 0;
+    bool otherBits = false;
+    for (std::uint32_t index = a.words(); index-- > 0;) {
+        const Word word = a.aval()[index];
+        if (word == 0) continue;
+        const auto top = static_cast<std::uint32_t>(std::bit_width(word) - 1);
+        result = (std::uint64_t{index} * 64) + top;
+        otherBits = (word & ~(Word{1} << top)) != 0;
+        for (std::uint32_t lower = 0; lower < index && !otherBits; ++lower)
+            otherBits = a.aval()[lower] != 0;
+        if (otherBits) ++result;
+        break;
+    }
+
+    std::ranges::fill(dst.avalWords(), 0);
+    std::ranges::fill(dst.bvalWords(), 0);
+    dst.aval()[0] = result;
+    dst.canonicalize();
+}
+
+void power(BitRef dst, ConstBitRef base, ConstBitRef exponent, bool baseSigned,
+           bool exponentSigned) {
+    ENZAN_ASSERT(dst.width() == base.width(), "power requires the base and result to be equal");
+
+    if (base.hasUnknown() || exponent.hasUnknown()) {
+        setUnknown(dst);
+        return;
+    }
+
+    const auto setInteger = [&dst](std::int64_t value) {
+        std::ranges::fill(dst.bvalWords(), 0);
+        std::ranges::fill(dst.avalWords(), value < 0 ? ~Word{0} : 0);
+        dst.aval()[0] = static_cast<Word>(value);
+        dst.canonicalize();
+    };
+
+    // A negative exponent, which only a signed one can be: IEEE 1800 table 11-4.
+    if (exponentSigned && exponent.get(exponent.width() - 1) == Logic::One) {
+        const bool isOne = base.aval()[0] == 1
+                           && std::all_of(base.avalWords().begin() + 1, base.avalWords().end(),
+                                          [](Word word) { return word == 0; });
+        if (base.isZero()) {
+            setUnknown(dst);
+        } else if (isOne) {
+            setInteger(1);
+        } else if (baseSigned && base.isAll(Logic::One)) {
+            setInteger((exponent.aval()[0] & 1U) != 0 ? -1 : 1);
+        } else {
+            setInteger(0);
+        }
+        return;
+    }
+
+    // Square and multiply from the exponent's top set bit down, modulo 2 to the width.
+    std::uint32_t top = exponent.width();
+    while (top > 0 && exponent.get(top - 1) == Logic::Zero) --top;
+
+    if (dst.width() <= BitsPerWord) {
+        const Word factor = base.aval()[0];
+        Word result = 1;
+        for (std::uint32_t bit = top; bit > 0; --bit) {
+            result *= result;
+            if (exponent.get(bit - 1) == Logic::One) result *= factor;
+        }
+        dst.aval()[0] = result;
+        dst.bval()[0] = 0;
+        dst.canonicalize();
+        return;
+    }
+
+    // Wide values go through `multiply`, which allocates, as it does for every wide product.
+    BitVector result = BitVector::fromUInt64(1, dst.width());
+    BitVector product(dst.width());
+    for (std::uint32_t bit = top; bit > 0; --bit) {
+        multiply(product.mutableRef(), result.ref(), result.ref());
+        copy(result.mutableRef(), product.ref());
+        if (exponent.get(bit - 1) == Logic::One) {
+            multiply(product.mutableRef(), result.ref(), base);
+            copy(result.mutableRef(), product.ref());
+        }
+    }
+    copy(dst, result.ref());
+}
+
 void negate(BitRef dst, ConstBitRef a) {
     ENZAN_ASSERT(dst.width() == a.width(), "negate requires equal widths");
 
@@ -627,11 +747,19 @@ void shiftRightArithmetic(BitRef dst, ConstBitRef a, ConstBitRef amount) {
 void equal(BitRef dst, ConstBitRef a, ConstBitRef b) {
     checkPredicate(dst, a, b);
 
-    if (a.hasUnknown() || b.hasUnknown()) {
-        setBit(dst, Logic::Unknown);
-        return;
+    // A bit known on both sides and different settles the comparison whatever the unknown
+    // bits hold, so it is 0 rather than X: IEEE 1800 section 11.4.5 makes the result X only
+    // when the unknown bits leave the relation ambiguous.
+    bool unknown = false;
+    for (std::uint32_t index = 0; index < a.words(); ++index) {
+        const Word known = ~a.bval()[index] & ~b.bval()[index];
+        if (((a.aval()[index] ^ b.aval()[index]) & known) != 0) {
+            setBit(dst, Logic::Zero);
+            return;
+        }
+        if ((a.bval()[index] | b.bval()[index]) != 0) unknown = true;
     }
-    setBit(dst, std::ranges::equal(a.avalWords(), b.avalWords()) ? Logic::One : Logic::Zero);
+    setBit(dst, unknown ? Logic::Unknown : Logic::One);
 }
 
 void notEqual(BitRef dst, ConstBitRef a, ConstBitRef b) {
@@ -648,6 +776,59 @@ void caseEqual(BitRef dst, ConstBitRef a, ConstBitRef b) {
 void caseNotEqual(BitRef dst, ConstBitRef a, ConstBitRef b) {
     checkPredicate(dst, a, b);
     setBit(dst, a.identicalTo(b) ? Logic::Zero : Logic::One);
+}
+
+void wildcardEqual(BitRef dst, ConstBitRef a, ConstBitRef b) {
+    checkPredicate(dst, a, b);
+
+    // As `equal`, over only the bits where `b` is known.
+    bool unknown = false;
+    for (std::uint32_t index = 0; index < a.words(); ++index) {
+        const Word compared = ~b.bval()[index];
+        const Word known = compared & ~a.bval()[index];
+        if (((a.aval()[index] ^ b.aval()[index]) & known) != 0) {
+            setBit(dst, Logic::Zero);
+            return;
+        }
+        if ((a.bval()[index] & compared) != 0) unknown = true;
+    }
+    setBit(dst, unknown ? Logic::Unknown : Logic::One);
+}
+
+void wildcardNotEqual(BitRef dst, ConstBitRef a, ConstBitRef b) {
+    wildcardEqual(dst, a, b);
+    if (dst.get(0) != Logic::Unknown)
+        dst.set(0, dst.get(0) == Logic::One ? Logic::Zero : Logic::One);
+}
+
+void caseZMatch(BitRef dst, ConstBitRef a, ConstBitRef b) {
+    checkPredicate(dst, a, b);
+
+    for (std::uint32_t index = 0; index < a.words(); ++index) {
+        // Z is (aval 0, bval 1).
+        const Word highZ =
+            (~a.aval()[index] & a.bval()[index]) | (~b.aval()[index] & b.bval()[index]);
+        const Word differs =
+            (a.aval()[index] ^ b.aval()[index]) | (a.bval()[index] ^ b.bval()[index]);
+        if ((differs & ~highZ) != 0) {
+            setBit(dst, Logic::Zero);
+            return;
+        }
+    }
+    setBit(dst, Logic::One);
+}
+
+void caseXMatch(BitRef dst, ConstBitRef a, ConstBitRef b) {
+    checkPredicate(dst, a, b);
+
+    for (std::uint32_t index = 0; index < a.words(); ++index) {
+        const Word unknown = a.bval()[index] | b.bval()[index];
+        if (((a.aval()[index] ^ b.aval()[index]) & ~unknown) != 0) {
+            setBit(dst, Logic::Zero);
+            return;
+        }
+    }
+    setBit(dst, Logic::One);
 }
 
 void lessThan(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned) {
@@ -750,6 +931,89 @@ void conditional(BitRef dst, ConstBitRef condition, ConstBitRef whenTrue, ConstB
         dst.bval()[index] = (whenTrue.bval()[index] & agree) | ~agree;
     }
     dst.canonicalize();
+}
+
+// ---------------------------------------------------------------------------
+// Resolution
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A limb decomposed into the four values, which resolution needs apart because `z` and X,
+/// one "unknown" to every other operation, behave differently here.
+struct ResolutionMasks {
+    Word isZero;
+    Word isOne;
+    Word isHighZ;
+};
+
+ResolutionMasks decomposeForResolution(Word aval, Word bval) noexcept {
+    return {.isZero = ~aval & ~bval, .isOne = aval & ~bval, .isHighZ = ~aval & bval};
+}
+
+/// Writes a resolved limb from the bits that are 0, 1 and `z`; every other bit is X.
+void composeResolved(Word& aval, Word& bval, Word isZero, Word isOne, Word isHighZ) noexcept {
+    const Word isUnknown = ~(isZero | isOne | isHighZ);
+    aval = isOne | isUnknown;
+    bval = isHighZ | isUnknown;
+}
+
+enum class Dominant : std::uint8_t { None, Zero, One };
+
+/// The three tables differ only in which value, if any, wins over a conflict.
+void resolve(BitRef acc, ConstBitRef driver, Dominant dominant) {
+    ENZAN_ASSERT(acc.width() == driver.width(), "resolution needs equal widths");
+
+    const std::uint32_t count = acc.words();
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const ResolutionMasks left = decomposeForResolution(acc.aval()[index], acc.bval()[index]);
+        const ResolutionMasks right =
+            decomposeForResolution(driver.aval()[index], driver.bval()[index]);
+
+        // A value survives where the other side agrees with it or is z.
+        Word isZero =
+            (left.isZero & (right.isZero | right.isHighZ)) | (left.isHighZ & right.isZero);
+        Word isOne = (left.isOne & (right.isOne | right.isHighZ)) | (left.isHighZ & right.isOne);
+        const Word isHighZ = left.isHighZ & right.isHighZ;
+
+        // A dominant value wins wherever either side holds it, X and its opposite included.
+        if (dominant == Dominant::Zero) {
+            isZero = left.isZero | right.isZero;
+            isOne &= ~isZero;
+        } else if (dominant == Dominant::One) {
+            isOne = left.isOne | right.isOne;
+            isZero &= ~isOne;
+        }
+
+        composeResolved(acc.aval()[index], acc.bval()[index], isZero, isOne, isHighZ);
+    }
+    acc.canonicalize();
+}
+
+} // namespace
+
+void resolveWire(BitRef acc, ConstBitRef driver) {
+    resolve(acc, driver, Dominant::None);
+}
+
+void resolveWiredAnd(BitRef acc, ConstBitRef driver) {
+    resolve(acc, driver, Dominant::Zero);
+}
+
+void resolveWiredOr(BitRef acc, ConstBitRef driver) {
+    resolve(acc, driver, Dominant::One);
+}
+
+void pullHighImpedance(BitRef value, Logic pull) {
+    ENZAN_ASSERT(pull == Logic::Zero || pull == Logic::One, "a pull is 0 or 1");
+
+    const std::uint32_t count = value.words();
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const Word isHighZ = ~value.aval()[index] & value.bval()[index];
+        value.bval()[index] &= ~isHighZ;
+        if (pull == Logic::One) value.aval()[index] |= isHighZ;
+    }
+    value.canonicalize();
 }
 
 } // namespace enzan::eir::bitops

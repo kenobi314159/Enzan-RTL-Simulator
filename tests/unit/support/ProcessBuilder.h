@@ -85,21 +85,33 @@ public:
                                     eir::Operand::object(objectIndex)));
     }
 
+    /// Reads the window of `objectIndex` as wide as `destination`, at the offset in
+    /// `offsetRegister`.
+    void readObjectPart(std::uint32_t destination, std::uint32_t objectIndex,
+                        std::uint32_t offsetRegister) {
+        reads.push_back(objectIndex);
+        emit(eir::Instruction::make(eir::Opcode::ReadObjectPart, eir::Operand::reg(destination),
+                                    eir::Operand::object(objectIndex),
+                                    eir::Operand::reg(offsetRegister)));
+    }
+
     void store(std::uint32_t objectIndex, std::uint32_t source) {
-        writes.push_back(objectIndex);
+        writes.push_back(eir::WriteExtent::whole(objectIndex, widthOf(source)));
         emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(objectIndex),
                                     eir::Operand::reg(source)));
     }
 
     void storeNonBlocking(std::uint32_t objectIndex, std::uint32_t source) {
-        writes.push_back(objectIndex);
+        writes.push_back(eir::WriteExtent::whole(objectIndex, widthOf(source)));
         emit(eir::Instruction::make(eir::Opcode::StoreNonBlocking, {},
                                     eir::Operand::object(objectIndex), eir::Operand::reg(source)));
     }
 
+    /// A part store whose index is a register, which drives every bit of the object because
+    /// nothing says which it will reach (DESIGN_GUIDE.md section 3.7).
     void storePartNonBlocking(std::uint32_t objectIndex, std::uint32_t source,
-                              std::uint32_t indexRegister) {
-        writes.push_back(objectIndex);
+                              std::uint32_t indexRegister, std::uint32_t objectWidth) {
+        writes.push_back(eir::WriteExtent::whole(objectIndex, objectWidth));
         emit(eir::Instruction::make(eir::Opcode::StorePartNonBlocking, {},
                                     eir::Operand::object(objectIndex), eir::Operand::reg(source),
                                     eir::Operand::reg(indexRegister)));
@@ -118,21 +130,34 @@ public:
                                     eir::Operand::block(resumeBlock)));
     }
 
+    /// Waits for whichever of `entries` happens first, as `@(a or posedge b)` does.
+    void waitEvents(std::vector<eir::SensitivityEntry> entries, std::uint32_t resumeBlock) {
+        for (const eir::SensitivityEntry& entry : entries) reads.push_back(entry.objectIndex);
+        const auto list = static_cast<std::uint32_t>(process.eventLists.size());
+        process.eventLists.push_back(std::move(entries));
+        emit(eir::Instruction::make(eir::Opcode::WaitEvents, {}, eir::Operand::immediate(list),
+                                    eir::Operand::block(resumeBlock)));
+    }
+
     eir::Process finish() {
         std::ranges::sort(reads);
         reads.erase(std::ranges::unique(reads).begin(), reads.end());
-        std::ranges::sort(writes);
-        writes.erase(std::ranges::unique(writes).begin(), writes.end());
+        eir::normaliseWriteSet(writes);
         process.readSet = reads;
         process.writeSet = writes;
         return std::move(process);
     }
 
 private:
+    /// A whole store moves a register as wide as its object, which the verifier checks.
+    [[nodiscard]] std::uint32_t widthOf(std::uint32_t source) const {
+        return process.registerTypes[source].bitWidth();
+    }
+
     eir::Process process;
     SourceLocation current;
     std::vector<std::uint32_t> reads;
-    std::vector<std::uint32_t> writes;
+    std::vector<eir::WriteExtent> writes;
 };
 
 } // namespace enzan::test

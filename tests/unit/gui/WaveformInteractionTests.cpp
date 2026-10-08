@@ -26,13 +26,16 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QScrollBar>
+#include <QSignalSpy>
 #include <QTreeView>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <memory>
 
 namespace {
 
+using enzan::eir::Radix;
 using enzan::gui::HighlightSlots;
 using enzan::gui::SignalInfo;
 using enzan::gui::Theme;
@@ -501,8 +504,8 @@ TEST_F(InteractionTest, PastingRedrawsTheCanvasAndKeepsWhatWasOpen) {
     PaintCounter counter;
     view->installEventFilter(&counter);
 
-    model->copyRows({rowOf.value(QStringLiteral("clk"))});
-    const QVector<int> pasted = model->pasteRows(-1, -1);
+    model->copySignalRows({rowOf.value(QStringLiteral("clk"))});
+    const QVector<int> pasted = model->pasteSignalRows(-1, -1);
     QCoreApplication::processEvents();
 
     ASSERT_EQ(pasted.size(), 1);
@@ -597,6 +600,48 @@ TEST_F(InteractionTest, AMultiBitSignalUnpacksIntoItsBits) {
     const int signalsBefore = static_cast<int>(model->displayedSignals().size());
     EXPECT_EQ(signalsBefore, static_cast<int>(objectsOf(QStringLiteral("/tb")).size()))
         << "unpacking must not subscribe to anything new";
+}
+
+TEST_F(InteractionTest, MovingTheCursorRefreshesRowsInsideGroupsAndUnpackedSignals) {
+    // A range of changed rows names rows under one parent. One range over the top-level rows
+    // left a bit of an unpacked signal, and a signal in a group, showing the value at the old
+    // cursor until something else made the list redraw them.
+    populate();
+
+    const int count = rowOf.value(QStringLiteral("count"));
+    model->unpack(count);
+    const int group = model->addGroup(QStringLiteral("clocks"));
+    ASSERT_TRUE(model->moveRowsTo({rowOf.value(QStringLiteral("clk"))}, group, 0));
+
+    const QModelIndex bit = model->index(0, WaveformModel::ValueColumn, model->indexOfRow(count));
+    const QModelIndex member =
+        model->index(0, WaveformModel::ValueColumn, model->indexOfRow(group));
+    ASSERT_TRUE(bit.isValid());
+    ASSERT_TRUE(member.isValid());
+
+    QSignalSpy changes(model.get(), &QAbstractItemModel::dataChanged);
+    model->setCursorTime(123);
+
+    const auto covered = [&changes](const QModelIndex& wanted) {
+        return std::ranges::any_of(changes, [&wanted](const QList<QVariant>& change) {
+            const auto first = change.at(0).value<QModelIndex>();
+            const auto last = change.at(1).value<QModelIndex>();
+            return first.parent() == wanted.parent() && first.row() <= wanted.row()
+                   && wanted.row() <= last.row() && first.column() <= wanted.column()
+                   && wanted.column() <= last.column();
+        });
+    };
+    EXPECT_TRUE(covered(bit)) << "a bit of an unpacked signal was not refreshed";
+    EXPECT_TRUE(covered(member)) << "a signal inside a group was not refreshed";
+}
+
+TEST_F(InteractionTest, AnAsciiRowShowsItsBytesAsCharacters) {
+    populate(400);
+
+    // Forty rising edges have passed, so the counter holds 40, the code of '('.
+    const int count = rowOf.value(QStringLiteral("count"));
+    model->setRadix(count, Radix::Ascii);
+    EXPECT_EQ(model->renderValue(count, 400), QStringLiteral("("));
 }
 
 TEST_F(InteractionTest, AnUnpackedBitShowsThatBitsValue) {

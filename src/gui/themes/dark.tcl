@@ -7,8 +7,8 @@
 # widget code, so there is no fallback in C++ to fall back to: if a key below is missing, the
 # widget asking for it gets nothing.
 #
-# Section 8.1 makes Tcl the configuration language for the whole tool, with no second format, so
-# this is a Tcl script rather than an ini file. It gets one command:
+# Section 10.5 makes Tcl the theme language, so this is a Tcl script rather than an ini file. It
+# gets one command:
 #
 #     theme <key> <colour>
 #
@@ -101,8 +101,8 @@ theme wave.zoom.band               #40ffd866
 # for the reader's own benefit and must not out-shout the trace drawn on top of it, which is the
 # thing they are actually looking at. They differ in hue rather than in brightness so that five
 # highlighted rows are told apart at a glance without any of them dominating.
-theme wave.highlight.1             #17222e
-theme wave.highlight.2             #1c2418
-theme wave.highlight.3             #2a2118
-theme wave.highlight.4             #261a24
-theme wave.highlight.5             #16252a
+theme wave.highlight.1             #444444
+theme wave.highlight.2             #2c5428
+theme wave.highlight.3             #5a4b28
+theme wave.highlight.4             #512a48
+theme wave.highlight.5             #26455a

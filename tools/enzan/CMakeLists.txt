@@ -14,6 +14,9 @@ endif()
 
 target_link_libraries(enzan PRIVATE enzan::session)
 
+# VPI applications loaded with `--vpi` resolve the routines against this executable.
+enzan_export_vpi(enzan)
+
 if(ENZAN_BUILD_TESTS)
   # End-to-end checks on the executable itself. The unit tests cover the version
   # strings; these cover the thing a user actually invokes, including the error
@@ -55,6 +58,16 @@ if(ENZAN_BUILD_TESTS)
                                                           --run 10 design.sv)
   set_tests_properties(cli.enzan.listen_with_run_message
                        PROPERTIES PASS_REGULAR_EXPRESSION "cannot be combined")
+
+  # A signal list fills a wave window, and a headless run has none (DESIGN_GUIDE.md section 10.8).
+  add_test(NAME cli.enzan.wave_list_without_gui_status COMMAND enzan run --wave-list signals.tcl
+                                                               --top tb design.sv)
+  set_tests_properties(cli.enzan.wave_list_without_gui_status PROPERTIES WILL_FAIL TRUE)
+
+  add_test(NAME cli.enzan.wave_list_without_gui_message COMMAND enzan run --wave-list signals.tcl
+                                                                --top tb design.sv)
+  set_tests_properties(cli.enzan.wave_list_without_gui_message
+                       PROPERTIES PASS_REGULAR_EXPRESSION "'--wave-list' needs '--gui'")
 
   add_test(NAME cli.enzan.listen_with_vcd_status COMMAND enzan --listen /tmp/enzan-test.sock
                                                          --vcd out.vcd design.sv)

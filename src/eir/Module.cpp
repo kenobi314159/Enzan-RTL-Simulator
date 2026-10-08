@@ -15,6 +15,57 @@ std::string_view toString(ObjectKind kind) noexcept {
     return "var";
 }
 
+std::string_view toString(NetKind kind) noexcept {
+    switch (kind) {
+    case NetKind::Wire: return "wire";
+    case NetKind::Tri: return "tri";
+    case NetKind::WiredAnd: return "wand";
+    case NetKind::WiredOr: return "wor";
+    case NetKind::TriAnd: return "triand";
+    case NetKind::TriOr: return "trior";
+    case NetKind::Tri0: return "tri0";
+    case NetKind::Tri1: return "tri1";
+    case NetKind::Supply0: return "supply0";
+    case NetKind::Supply1: return "supply1";
+    case NetKind::UWire: return "uwire";
+    }
+    return "wire";
+}
+
+Logic undrivenValue(NetKind kind) noexcept {
+    switch (kind) {
+    case NetKind::Tri0:
+    case NetKind::Supply0: return Logic::Zero;
+    case NetKind::Tri1:
+    case NetKind::Supply1: return Logic::One;
+    case NetKind::Wire:
+    case NetKind::Tri:
+    case NetKind::WiredAnd:
+    case NetKind::WiredOr:
+    case NetKind::TriAnd:
+    case NetKind::TriOr:
+    case NetKind::UWire: return Logic::HighZ;
+    }
+    return Logic::HighZ;
+}
+
+bool resolvesSingleDrivers(NetKind kind) noexcept {
+    switch (kind) {
+    case NetKind::Tri0:
+    case NetKind::Tri1:
+    case NetKind::Supply0:
+    case NetKind::Supply1: return true;
+    case NetKind::Wire:
+    case NetKind::Tri:
+    case NetKind::WiredAnd:
+    case NetKind::WiredOr:
+    case NetKind::TriAnd:
+    case NetKind::TriOr:
+    case NetKind::UWire: return false;
+    }
+    return false;
+}
+
 std::string_view toString(PortDirection direction) noexcept {
     switch (direction) {
     case PortDirection::Input: return "input";

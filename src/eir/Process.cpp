@@ -2,7 +2,49 @@
 
 #include "eir/Process.h"
 
+#include <algorithm>
+
 namespace enzan::eir {
+
+void normaliseWriteSet(std::vector<WriteExtent>& extents) {
+    std::ranges::sort(extents, [](const WriteExtent& left, const WriteExtent& right) {
+        if (left.objectIndex != right.objectIndex) return left.objectIndex < right.objectIndex;
+        return left.lowBit < right.lowBit;
+    });
+
+    std::vector<WriteExtent> merged;
+    merged.reserve(extents.size());
+    for (const WriteExtent& extent : extents) {
+        if (!merged.empty() && merged.back().objectIndex == extent.objectIndex
+            && extent.lowBit <= merged.back().endBit()) {
+            WriteExtent& last = merged.back();
+            last.width = std::max(last.endBit(), extent.endBit()) - last.lowBit;
+            continue;
+        }
+        merged.push_back(extent);
+    }
+    extents = std::move(merged);
+}
+
+bool writesObject(const std::vector<WriteExtent>& writeSet, std::uint32_t objectIndex) noexcept {
+    const auto found =
+        std::ranges::lower_bound(writeSet, objectIndex, {}, &WriteExtent::objectIndex);
+    return found != writeSet.end() && found->objectIndex == objectIndex;
+}
+
+std::vector<std::uint32_t> writtenObjects(const std::vector<WriteExtent>& writeSet) {
+    std::vector<std::uint32_t> objects;
+    for (const WriteExtent& extent : writeSet) {
+        if (objects.empty() || objects.back() != extent.objectIndex)
+            objects.push_back(extent.objectIndex);
+    }
+    return objects;
+}
+
+bool isSystemFunction(SysTaskKind kind) noexcept {
+    return kind == SysTaskKind::Random || kind == SysTaskKind::URandom
+           || kind == SysTaskKind::URandomRange || kind == SysTaskKind::FileOpen;
+}
 
 std::string_view toString(SysTaskKind kind) noexcept {
     switch (kind) {
@@ -15,6 +57,16 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::Info: return "$info";
     case SysTaskKind::DumpFile: return "$dumpfile";
     case SysTaskKind::DumpVars: return "$dumpvars";
+    case SysTaskKind::Random: return "$random";
+    case SysTaskKind::URandom: return "$urandom";
+    case SysTaskKind::URandomRange: return "$urandom_range";
+    case SysTaskKind::FileDisplay: return "$fdisplay";
+    case SysTaskKind::FileWrite: return "$fwrite";
+    case SysTaskKind::FileClose: return "$fclose";
+    case SysTaskKind::FileFlush: return "$fflush";
+    case SysTaskKind::ReadMemHex: return "$readmemh";
+    case SysTaskKind::ReadMemBinary: return "$readmemb";
+    case SysTaskKind::FileOpen: return "$fopen";
     }
     return "$unknown";
 }

@@ -64,14 +64,21 @@ std::streambuf::int_type KernelServer::TranscriptRelay::overflow(int_type charac
     }
 
     const char text = traits_type::to_char_type(character);
-    pending.push_back(text);
+    if (collecting) pending.push_back(text);
     echoTo->put(text);
+    if (!collecting) echoTo->flush();
     return character;
 }
 
 std::streamsize KernelServer::TranscriptRelay::xsputn(const char* text, std::streamsize count) {
-    pending.append(text, static_cast<std::size_t>(count));
+    if (collecting) pending.append(text, static_cast<std::size_t>(count));
     echoTo->write(text, count);
+
+    // Not collecting means the echo is the captured standard output and is the transcript's
+    // only route. It is flushed as it is written, because what an application writes goes to
+    // the same descriptor unbuffered by this stream, and a line held back here would arrive
+    // after lines written later.
+    if (!collecting) echoTo->flush();
     return count;
 }
 
@@ -116,6 +123,7 @@ KernelServer::KernelServer(session::Session& sessionToServe, DiagnosticEngine& d
 }
 
 KernelServer::~KernelServer() {
+    capture.stop();
     diagnostics->removeConsumer(diagnosticRelay);
     detachFromKernel();
 
@@ -237,6 +245,16 @@ bool KernelServer::listen(const std::filesystem::path& socketPath, std::string& 
     return listener.listen(socketPath, error);
 }
 
+bool KernelServer::captureOutput(std::string& error) {
+    if (!capture.start(error)) return false;
+
+    // When the relay echoes to the standard output, that is captured from now on, and the
+    // capture carries the kernel's transcript to the client in the order everything reached the
+    // terminal. An echo going anywhere else is not captured, and the relay keeps its own copy.
+    if (options.localTranscript == nullptr) transcriptRelay.stopCollecting();
+    return true;
+}
+
 void KernelServer::attach(Connection client) {
     connection = std::move(client);
     greeted = false;
@@ -248,6 +266,7 @@ void KernelServer::attach(Connection client) {
         static_cast<void>(publisher->takeBatches());
     }
     static_cast<void>(transcriptRelay.take());
+    static_cast<void>(capture.take());
     static_cast<void>(diagnosticRelay.take());
 }
 
@@ -284,7 +303,7 @@ bool KernelServer::step(int timeoutMilliseconds) {
     // Waiting is skipped when there is already work queued, so that a run asked for in the
     // same round starts immediately rather than after the timeout.
     if (!runRequested) {
-        std::array<pollfd, 2> waiting{};
+        std::array<pollfd, 3> waiting{};
         nfds_t count = 0;
 
         if (listener.isListening()) {
@@ -295,6 +314,13 @@ bool KernelServer::step(int timeoutMilliseconds) {
             if (connection.hasPendingOutput()) events |= POLLOUT;
             waiting[count++] =
                 pollfd{.fd = connection.descriptor(), .events = events, .revents = 0};
+        }
+        // Captured output that arrives while nothing else is happening — the last lines of a
+        // run, still on their way through the capture when the run returned — is forwarded
+        // when it arrives rather than when something else next wakes the server.
+        if (capture.active()) {
+            waiting[count++] =
+                pollfd{.fd = capture.wakeDescriptor(), .events = POLLIN, .revents = 0};
         }
         if (count > 0) static_cast<void>(::poll(waiting.data(), count, timeoutMilliseconds));
     }
@@ -679,6 +705,13 @@ void KernelServer::onRestart() {
         return;
     }
 
+    // The same refusal as `Session::restart`, made here because a restart from the client puts
+    // the kernel back to time zero itself rather than through the session (section 9.5).
+    if (session->hasVpiApplication()) {
+        sendFailure("a design with a VPI application loaded cannot be restarted");
+        return;
+    }
+
     start();
 
     // The client learns from the time going backwards that everything it holds is stale, so
@@ -763,7 +796,10 @@ bool KernelServer::shouldInterrupt() {
 // ---------------------------------------------------------------------------
 
 void KernelServer::pump() {
+    // The relay first: taking from it flushes the standard output, which is what puts the
+    // kernel's own lines into the capture.
     std::string transcript = transcriptRelay.take();
+    if (capture.active()) transcript += capture.take();
     std::vector<DiagnosticMessage> reported = diagnosticRelay.take();
     std::vector<ValueChangesMessage> batches;
     if (publisher != nullptr) batches = publisher->takeBatches();

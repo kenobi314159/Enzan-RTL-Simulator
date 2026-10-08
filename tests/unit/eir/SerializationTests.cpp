@@ -35,6 +35,7 @@ using enzan::eir::EnumMember;
 using enzan::eir::Instance;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
+using enzan::eir::NetKind;
 using enzan::eir::Object;
 using enzan::eir::ObjectKind;
 using enzan::eir::Opcode;
@@ -50,6 +51,8 @@ using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
 using enzan::eir::Type;
+using enzan::eir::UnpackedDimension;
+using enzan::eir::WriteExtent;
 using enzan::test::literal;
 
 class SerializationTest : public ::testing::Test {
@@ -93,7 +96,13 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.addObject(Object{.name = "clk",
                                 .type = Type::logic(),
                                 .kind = ObjectKind::Net,
-                                .location = SourceLocation(buffer, 11)});
+                                .netKind = NetKind::Tri1,
+                                .location = SourceLocation(buffer, 11),
+                                .unpackedDimensions = {UnpackedDimension{.left = 0, .right = 3},
+                                                       UnpackedDimension{.left = 7, .right = -1}},
+                                .elementWidth = 1,
+                                .elementSigned = true,
+                                .subroutineStatic = true});
     definition.addObject(Object{.name = "count",
                                 .type = Type::bits(8, true, true),
                                 .kind = ObjectKind::Variable,
@@ -165,7 +174,10 @@ ModuleDefinition richModule(BufferId buffer) {
 
     process.sensitivity.push_back(SensitivityEntry{.objectIndex = 0, .edge = EdgeKind::Posedge});
     process.readSet = {0, 1};
-    process.writeSet = {1};
+    // Two extents of one object, with every field different, so that a field written in the
+    // wrong order or an extent dropped shows up.
+    process.writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
+                        WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}};
     definition.processes.push_back(std::move(process));
 
     definition.parameters.push_back(Parameter{.name = "WIDTH",
@@ -201,6 +213,13 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     ASSERT_EQ(definition.objects.size(), 2U);
     EXPECT_EQ(definition.objects[0].name, "clk");
     EXPECT_EQ(definition.objects[0].kind, ObjectKind::Net);
+    EXPECT_EQ(definition.objects[0].netKind, NetKind::Tri1);
+    EXPECT_EQ(definition.objects[0].unpackedDimensions,
+              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 0, .right = 3},
+                                              UnpackedDimension{.left = 7, .right = -1}}));
+    EXPECT_EQ(definition.objects[0].elementWidth, 1U);
+    EXPECT_TRUE(definition.objects[0].elementSigned);
+    EXPECT_TRUE(definition.objects[0].subroutineStatic);
     EXPECT_FALSE(definition.objects[0].initialValue.has_value());
     EXPECT_EQ(definition.objects[0].enumIndex, Object::NoEnum);
 
@@ -272,7 +291,9 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     ASSERT_EQ(process.sensitivity.size(), 1U);
     EXPECT_EQ(process.sensitivity[0].edge, EdgeKind::Posedge);
     EXPECT_EQ(process.readSet, (std::vector<std::uint32_t>{0, 1}));
-    EXPECT_EQ(process.writeSet, (std::vector<std::uint32_t>{1}));
+    EXPECT_EQ(process.writeSet,
+              (std::vector<WriteExtent>{WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
+                                        WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}}));
 }
 
 TEST_F(SerializationTest, InstructionLocationsRoundTrip) {

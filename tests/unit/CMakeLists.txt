@@ -12,6 +12,7 @@ add_subdirectory(elab)
 add_subdirectory(frontend)
 add_subdirectory(runtime)
 add_subdirectory(wavedb)
+add_subdirectory(pli)
 add_subdirectory(ipc)
 
 add_subdirectory(session)

@@ -135,6 +135,23 @@ void divide(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned);
 /// `dst = a % b`, with the sign of `a` when signed. A zero divisor yields all X.
 void modulo(BitRef dst, ConstBitRef a, ConstBitRef b, bool isSigned);
 
+/// `dst` receives how many bits of `a` are exactly 1, as a two-state number: what
+/// `$countones` returns (IEEE 1800 section 20.9), with X and Z bits counted as not 1.
+void countOnes(BitRef dst, ConstBitRef a);
+
+/// `dst` receives the ceiling of the base-2 logarithm of `a`, read as unsigned, as a two-state
+/// number: what `$clog2` returns (IEEE 1800 section 20.8.1), with 0 for an `a` of 0. An `a`
+/// with an X or Z bit has no logarithm, and yields all X.
+void ceilLog2(BitRef dst, ConstBitRef a);
+
+/// `dst = base ** exponent`, which IEEE 1800 section 11.4.3 defines in full: X when either
+/// operand has an unknown bit; for a negative exponent, which only a signed one can be, X for
+/// a zero base, 1 for a base of 1, alternately -1 and 1 for a signed base of -1, and 0 for any
+/// other; otherwise the power modulo 2 to the width. `dst` and `base` have one width, and the
+/// exponent is self-determined.
+void power(BitRef dst, ConstBitRef base, ConstBitRef exponent, bool baseSigned,
+           bool exponentSigned);
+
 /// `dst = -a`, two's complement, wrapping at the width.
 void negate(BitRef dst, ConstBitRef a);
 
@@ -160,8 +177,9 @@ void shiftRightArithmetic(BitRef dst, ConstBitRef a, ConstBitRef amount);
 // Comparison
 // ---------------------------------------------------------------------------
 
-/// `dst`, one bit wide, receives `a == b`: Unknown when either operand has an
-/// unknown bit, since an unknown bit could make the comparison go either way.
+/// `dst`, one bit wide, receives `a == b`: 0 when a bit known on both sides differs,
+/// and otherwise Unknown when either operand has an unknown bit, since that bit could
+/// make the comparison go either way (IEEE 1800 section 11.4.5).
 void equal(BitRef dst, ConstBitRef a, ConstBitRef b);
 
 /// `dst`, one bit wide, receives `a != b`.
@@ -173,6 +191,23 @@ void caseEqual(BitRef dst, ConstBitRef a, ConstBitRef b);
 
 /// `dst`, one bit wide, receives `a !== b`.
 void caseNotEqual(BitRef dst, ConstBitRef a, ConstBitRef b);
+
+/// `dst`, one bit wide, receives `a ==? b`: as `==`, except that an X or Z bit of `b` matches
+/// anything (IEEE 1800 section 11.4.6). One of `a` is not a wildcard, and makes the result
+/// Unknown where it is compared with a known bit of `b` that no known mismatch has settled.
+void wildcardEqual(BitRef dst, ConstBitRef a, ConstBitRef b);
+
+/// `dst`, one bit wide, receives `a !=? b`.
+void wildcardNotEqual(BitRef dst, ConstBitRef a, ConstBitRef b);
+
+/// `dst`, one bit wide, receives whether a `casez` item matches its selector: every bit that is
+/// Z in neither is identical in both, X included (IEEE 1800 section 12.5.1). Never Unknown,
+/// and symmetric, as the standard makes a Z in either side a don't-care.
+void caseZMatch(BitRef dst, ConstBitRef a, ConstBitRef b);
+
+/// `dst`, one bit wide, receives whether a `casex` item matches its selector: every bit that is
+/// X or Z in neither is equal in both. Never Unknown.
+void caseXMatch(BitRef dst, ConstBitRef a, ConstBitRef b);
 
 /// `dst`, one bit wide, receives `a < b`. Unknown when either operand has an
 /// unknown bit.
@@ -227,5 +262,32 @@ void assignPart(BitRef dst, ConstBitRef source, ConstBitRef lowIndex);
 /// what stops an unknown reset from turning an entire datapath X when both arms
 /// would have driven the same value.
 void conditional(BitRef dst, ConstBitRef condition, ConstBitRef whenTrue, ConstBitRef whenFalse);
+
+// ---------------------------------------------------------------------------
+// Resolution
+// ---------------------------------------------------------------------------
+//
+// How a bit of a net with several drivers takes its value (DESIGN_GUIDE.md section 3.7). Each
+// function folds one more driver into an accumulator that holds what the drivers so far
+// resolved to, so a bit with `n` drivers costs `n - 1` calls. `acc` and `driver` must have the
+// same width and must not overlap. Strength is not modelled: every driver is strong, which the
+// frontend guarantees by refusing any other.
+//
+// `z` is the identity of all three, so an accumulator starts as the first driver's value.
+
+/// `wire`, `tri` and `uwire`: a bit two drivers agree on keeps its value, `z` yields to the
+/// other driver, and any other disagreement is X.
+void resolveWire(BitRef acc, ConstBitRef driver);
+
+/// `wand` and `triand`: 0 wins over everything but `z`, two 1s give 1, and X with anything
+/// but 0 or `z` is X.
+void resolveWiredAnd(BitRef acc, ConstBitRef driver);
+
+/// `wor` and `trior`: the dual of `resolveWiredAnd`, with 1 winning.
+void resolveWiredOr(BitRef acc, ConstBitRef driver);
+
+/// Replaces each `z` bit of `value` with `pull`, which must be 0 or 1: what a `tri0` or `tri1`
+/// does to a bit every driver leaves undriven.
+void pullHighImpedance(BitRef value, Logic pull);
 
 } // namespace enzan::eir::bitops

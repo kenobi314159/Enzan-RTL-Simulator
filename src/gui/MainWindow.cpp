@@ -2,11 +2,14 @@
 
 #include "gui/MainWindow.h"
 
+#include "common/Diagnostics.h"
 #include "eir/BitOps.h"
 
 #include <QAction>
 #include <QCloseEvent>
 #include <QDockWidget>
+#include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QIcon>
@@ -16,6 +19,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPixmap>
+#include <QSaveFile>
 #include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
@@ -28,6 +32,7 @@
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <utility>
 
 namespace enzan::gui {
 
@@ -49,6 +54,7 @@ constexpr RadixChoice RadixChoices[] = {
     {.name = "Decimal", .radix = eir::Radix::Decimal},
     {.name = "Octal", .radix = eir::Radix::Octal},
     {.name = "Binary", .radix = eir::Radix::Binary},
+    {.name = "ASCII", .radix = eir::Radix::Ascii},
 };
 
 } // namespace
@@ -116,22 +122,21 @@ void MainWindow::buildDocks() {
     // window: the reader has just found the module in the hierarchy, and making them click it,
     // move to another pane, select everything and add it is four steps to say one thing.
     //
-    // Four entries rather than two with modifiers, because each is a different question — this
-    // module or its subtree, kept together or not — and a menu that hides half of its answers
-    // behind a held key is a menu that only its author knows the whole of.
+    // Two entries rather than one with a modifier, because each is a different question — this
+    // module or its subtree — and a menu that hides half of its answers behind a held key is a
+    // menu that only its author knows the whole of.
     struct ScopeInsert {
         const char* label;
         bool recursive;
-        bool grouped;
     };
 
-    for (const ScopeInsert& entry : {ScopeInsert{"Add to wave", false, true},
-                                     ScopeInsert{"Add to wave recursive", true, true}}) {
+    for (const ScopeInsert& entry :
+         {ScopeInsert{.label = "Add to wave", .recursive = false},
+          ScopeInsert{.label = "Add to wave recursive", .recursive = true}}) {
         auto* action = new QAction(tr(entry.label), structureView);
         const bool recursive = entry.recursive;
-        const bool grouped = entry.grouped;
         connect(action, &QAction::triggered, this,
-                [this, recursive, grouped] { insertScopeSignals(recursive, grouped); });
+                [this, recursive] { insertScopeSignals(recursive); });
         structureView->addAction(action);
     }
 
@@ -378,6 +383,9 @@ void MainWindow::buildMenus() {
                     [this] { waveView->removeCursor(waveView->activeCursor()); });
     wave->addSeparator();
     wave->addAction(tr("Clear Wave Window"), this, [this] { waveModel->clear(); });
+    wave->addSeparator();
+    wave->addAction(tr("Load Signal List…"), this, &MainWindow::chooseSignalListToLoad);
+    wave->addAction(tr("Save Signal List…"), this, &MainWindow::chooseSignalListToSave);
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     for (const QDockWidget* dock : findChildren<QDockWidget*>()) {
@@ -396,10 +404,23 @@ void MainWindow::onWelcomed() {
 }
 
 void MainWindow::onDesignChanged() {
-    // A new design's scopes are not the old one's, so an insert still waiting on a reply is
-    // waiting for a scope that may no longer exist, and its group belongs to a window that is
-    // about to be rebuilt.
-    pendingInserts.clear();
+    // A new design's scopes are not the old one's, so a load still waiting on a reply is
+    // waiting for a scope that may no longer exist. A file is said so, so that the reader knows
+    // to load it again; a menu entry was about the old design and has nothing to redo.
+    //
+    // Only when the hierarchy really is different. The same tree arrives again whenever anything
+    // asks for it, and dropping every load in flight each time would lose them for nothing.
+    QStringList scopes;
+    for (const ipc::InstanceEntry& instance : session->instances())
+        scopes << QString::fromStdString(instance.path);
+    if (scopes != knownScopes) {
+        for (const PendingLoad& load : pendingLoads) {
+            if (!load.file.isEmpty())
+                note(tr("The design changed while %1 was loading; load it again").arg(load.file));
+        }
+        pendingLoads.clear();
+        knownScopes = scopes;
+    }
     objectsScope.clear();
 
     designModel->setInstances(session->instances());
@@ -415,6 +436,13 @@ void MainWindow::onDesignChanged() {
             onScopeSelected(index);
         }
     }
+
+    // A list named before there was a design to find its paths in — on the command line, which
+    // is read before the kernel has said anything.
+    if (!deferredSignalList.isEmpty()) {
+        const QString path = std::exchange(deferredSignalList, QString());
+        static_cast<void>(loadSignalList(path));
+    }
 }
 
 void MainWindow::onScopeSelected(const QModelIndex& index) {
@@ -429,18 +457,15 @@ void MainWindow::onScopeSelected(const QModelIndex& index) {
 
 void MainWindow::onObjectsReceived(const QString& instancePath,
                                    const QVector<SignalInfo>& objects) {
-    // Anything waiting on this scope is served first. More than one insert may be — a reader
-    // can ask for a subtree twice — so every match is taken rather than the first.
-    for (int index = 0; index < pendingInserts.size();) {
-        if (pendingInserts[index].scope != instancePath) {
-            ++index;
-            continue;
-        }
-
-        const int group = pendingInserts[index].group;
-        pendingInserts.removeAt(index);
-        insertObjectsIntoWave(objects, group);
+    // Every load waiting on this scope is served first. More than one may be — a reader can
+    // ask for a subtree twice — so each is given the answer rather than only the first.
+    bool served = false;
+    for (PendingLoad& load : pendingLoads) {
+        if (load.waiting.removeAll(instancePath) == 0) continue;
+        load.objects.insert(instancePath, objects);
+        served = true;
     }
+    if (served) applyFinishedLoads();
 
     // And the Objects window, but only when this is the scope it is showing. A recursive insert
     // asks about every scope in a subtree, and without this test the pane would end up showing
@@ -520,10 +545,14 @@ void MainWindow::addSelectedObjectsToWave() {
     const QModelIndexList selected = objectsView->selectionModel()->selectedRows();
     if (selected.isEmpty()) return;
 
+    QStringList paths;
     for (const QModelIndex& index : selected) {
         const SignalInfo* info = objectsModel->objectAt(index.row());
-        if (info != nullptr) waveModel->addSignal(*info);
+        if (info == nullptr) continue;
+        waveModel->addSignal(*info);
+        paths << quoteSignalListWord(info->path);
     }
+    if (!paths.isEmpty()) echo(QStringLiteral("add wave ") + paths.join(u' '));
 
     // Deliberately nothing else. Expanding everything here — which is what this used to do —
     // unpacked every bus in the window each time a signal was added, throwing away whatever
@@ -531,48 +560,129 @@ void MainWindow::addSelectedObjectsToWave() {
     // there stays as it was.
 }
 
-void MainWindow::insertScopeSignals(bool recursive, bool grouped) {
+void MainWindow::insertScopeSignals(bool recursive) {
     const QString root = designModel->pathAt(structureView->currentIndex());
     if (root.isEmpty()) return;
 
-    // The scopes to take, in the order the kernel sent the tree — which is elaboration order,
-    // and is the order the Structure window shows them in. Taken from the tree the window
-    // already holds rather than asked for, so that the set is decided at once and the groups
-    // can be made in it before any reply arrives.
-    QStringList scopes;
-    if (!recursive) {
-        scopes << root;
-    } else {
-        const QString prefix = root + QLatin1Char('/');
-        for (const ipc::InstanceEntry& instance : session->instances()) {
-            const QString path = QString::fromStdString(instance.path);
+    SignalListEntry command;
+    command.paths << root;
+    command.recursive = recursive;
 
-            // The prefix is compared with the separator attached, so that `/tb/u_dut` does not
-            // take `/tb/u_dut2` with it.
-            if (path == root || path.startsWith(prefix)) scopes << path;
-        }
+    echo(QStringLiteral("add wave ") + (recursive ? QStringLiteral("-r ") : QString())
+         + quoteSignalListWord(root));
+
+    PendingLoad load;
+    load.entries.push_back(std::move(command));
+    startLoad(std::move(load));
+}
+
+// ---------------------------------------------------------------------------
+// Signal list files
+// ---------------------------------------------------------------------------
+
+void MainWindow::echo(const QString& command) {
+    transcriptView->appendNote(command);
+}
+
+void MainWindow::reportSignalList(const QString& file, const SignalListMessage& message,
+                                  bool isError) {
+    const DiagnosticSeverity severity =
+        isError ? DiagnosticSeverity::Error : DiagnosticSeverity::Warning;
+    transcriptView->appendDiagnostic(static_cast<int>(severity), message.text, file, message.line);
+}
+
+bool MainWindow::loadSignalList(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        note(tr("The signal list %1 could not be read: %2").arg(path, file.errorString()));
+        return false;
     }
 
-    for (const QString& scope : scopes) {
-        // The group exists before its contents do, and every group of one insert is made before
-        // any reply can arrive, which is what puts them in tree order rather than in the order
-        // the kernel happened to answer. Flat, by the argument on `insertScopeSignals`.
-        const int group = grouped ? waveModel->addGroup(scope) : -1;
-        pendingInserts.append(PendingInsert{.scope = scope, .group = group});
-        session->queryObjects(scope);
+    // Read and checked now, whether or not there is a design yet, so that a mistake in the file
+    // is reported as the window opens rather than whenever the kernel gets round to answering.
+    ParsedSignalList parsed = parseSignalList(file.readAll());
+    if (!parsed.errors.isEmpty()) {
+        for (const SignalListMessage& message : parsed.errors)
+            reportSignalList(path, message, true);
+        note(tr("Nothing was loaded from %1").arg(path));
+        return false;
+    }
+
+    if (session->instances().isEmpty()) {
+        deferredSignalList = path;
+        return true;
+    }
+
+    PendingLoad load;
+    load.file = path;
+    load.entries = std::move(parsed.entries);
+    load.replace = true;
+    startLoad(std::move(load));
+    return true;
+}
+
+bool MainWindow::saveSignalList(const QString& path) {
+    // Written aside and moved into place, so that a save that fails half-way leaves the list
+    // that was there rather than half of the new one.
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(waveModel->writeSignalList().toUtf8()) < 0
+        || !file.commit()) {
+        note(tr("The signal list could not be written to %1: %2").arg(path, file.errorString()));
+        return false;
+    }
+
+    note(tr("Saved the signal list to %1").arg(path));
+    return true;
+}
+
+void MainWindow::chooseSignalListToLoad() {
+    const QString path = QFileDialog::getOpenFileName(this, tr("Load Signal List"));
+    if (!path.isEmpty()) static_cast<void>(loadSignalList(path));
+}
+
+void MainWindow::chooseSignalListToSave() {
+    const QString path = QFileDialog::getSaveFileName(this, tr("Save Signal List"));
+    if (!path.isEmpty()) static_cast<void>(saveSignalList(path));
+}
+
+void MainWindow::startLoad(PendingLoad load) {
+    load.waiting = scopesNeededBy(load.entries, session->instances());
+    const QStringList scopes = load.waiting;
+    pendingLoads.push_back(std::move(load));
+
+    for (const QString& scope : scopes) session->queryObjects(scope);
+    applyFinishedLoads();
+}
+
+void MainWindow::applyFinishedLoads() {
+    while (!pendingLoads.isEmpty() && pendingLoads.front().waiting.isEmpty()) {
+        const PendingLoad load = pendingLoads.takeFirst();
+        finishLoad(load);
     }
 }
 
-void MainWindow::insertObjectsIntoWave(const QVector<SignalInfo>& objects, int group) {
-    for (const SignalInfo& info : objects) {
-        waveModel->addSignal(info, group);
+void MainWindow::finishLoad(const PendingLoad& load) {
+    const ResolvedSignalList resolved =
+        resolveSignalList(load.entries, session->instances(), load.objects);
+
+    for (const SignalListMessage& message : resolved.warnings)
+        reportSignalList(load.file, message, false);
+
+    if (!resolved.errors.isEmpty()) {
+        for (const SignalListMessage& message : resolved.errors)
+            reportSignalList(load.file, message, true);
+        if (!load.file.isEmpty()) note(tr("Nothing was loaded from %1").arg(load.file));
+        return;
     }
 
-    // A module that declares no signals leaves no group behind. A row named after a scope with
-    // nothing in it says only that the scope was asked about, which is not worth a line.
-    if (group < 0) return;
-    const WaveRow* groupRow = waveModel->row(group);
-    if (groupRow != nullptr && groupRow->children.isEmpty()) waveModel->removeRow(group);
+    if (load.replace) waveModel->clear();
+
+    // Inserted the way a paste inserts, so nothing already in the window collapses or expands
+    // (DESIGN_GUIDE.md section 10.7). Groups are not expanded either: a list of two hundred
+    // signals opened all at once is a wall, and the groups are there to be opened one by one.
+    static_cast<void>(waveModel->insertSignalRows(resolved.rows, -1, -1));
+
+    if (!load.file.isEmpty()) note(tr("Loaded the signal list %1").arg(load.file));
 }
 
 void MainWindow::depositOrForceSelectedObject(bool force) {
@@ -719,7 +829,7 @@ void MainWindow::copySelectedWaves() {
     const QVector<int> selected = selectedWaveRows();
     if (selected.isEmpty()) return;
 
-    waveModel->copyRows(selected);
+    waveModel->copySignalRows(selected);
     note(tr("Copied %n row(s)", nullptr, static_cast<int>(selected.size())));
 }
 
@@ -745,7 +855,7 @@ void MainWindow::pasteWaves() {
         }
     }
 
-    const QVector<int> pasted = waveModel->pasteRows(targetGroup, position);
+    const QVector<int> pasted = waveModel->pasteSignalRows(targetGroup, position);
     if (pasted.isEmpty()) return;
 
     waveRowsView->setCurrentIndex(waveModel->indexOfRow(pasted.front()));

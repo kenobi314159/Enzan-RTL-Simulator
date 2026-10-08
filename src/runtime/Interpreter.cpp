@@ -87,10 +87,32 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             bitops::copy(reg(instruction.dst, instruction.dstWidth), objectValue(instruction.a));
             break;
 
-        case eir::Opcode::Store:
-            kernel.writeSignal(state.objectSignals[instruction.a],
-                               reg(instruction.b, instruction.bWidth));
+        case eir::Opcode::ReadObjectPart: {
+            // A window of the object at a run-time offset, read straight from the arena: an
+            // element of a memory costs its own width, not the memory's.
+            const eir::BitRef destination = reg(instruction.dst, instruction.dstWidth);
+            const eir::ConstBitRef offset = reg(instruction.b, instruction.bWidth);
+            if (offset.hasUnknown()) {
+                bitops::setUnknown(destination);
+                break;
+            }
+            bitops::partSelectAt(destination, objectValue(instruction.a), offset.toUInt64());
             break;
+        }
+
+        case eir::Opcode::Store: {
+            // A store goes straight into the signal unless what it writes is resolved with
+            // other drivers, in which case it goes through this process's driver (section
+            // 3.7). One load and a compare on the common path.
+            const WriteRoute& route = state.writeRoutes[instruction.dst];
+            if (route.direct()) {
+                kernel.writeSignal(state.objectSignals[instruction.a],
+                                   reg(instruction.b, instruction.bWidth));
+            } else {
+                kernel.writeThroughDrivers(route, reg(instruction.b, instruction.bWidth), 0);
+            }
+            break;
+        }
 
         case eir::Opcode::StorePart: {
             const eir::ConstBitRef index = reg(instruction.c, instruction.cWidth);
@@ -98,8 +120,26 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
                 // The target of the write is unknown, so nothing may be written.
                 break;
             }
-            kernel.writeSignalPart(state.objectSignals[instruction.a],
-                                   reg(instruction.b, instruction.bWidth), index.toUInt64());
+            const WriteRoute& route = state.writeRoutes[instruction.dst];
+            if (route.direct()) {
+                kernel.writeSignalPart(state.objectSignals[instruction.a],
+                                       reg(instruction.b, instruction.bWidth), index.toUInt64());
+            } else {
+                kernel.writeThroughDrivers(route, reg(instruction.b, instruction.bWidth),
+                                           index.toUInt64());
+            }
+            break;
+        }
+
+        case eir::Opcode::StoreDelayed:
+        case eir::Opcode::StoreNonBlockingDelayed: {
+            // An unknown delay is zero, as for `#` (see WaitTime).
+            const eir::ConstBitRef delay = reg(instruction.c, instruction.cWidth);
+            kernel.scheduleDelayedWrite(
+                processIndex, instruction.dst, state.objectSignals[instruction.a],
+                reg(instruction.b, instruction.bWidth), delay.hasUnknown() ? 0 : delay.toUInt64(),
+                instruction.opcode == eir::Opcode::StoreNonBlockingDelayed);
+            if (kernel.errorRequested) return ExecutionResult::Stopped;
             break;
         }
 
@@ -255,6 +295,48 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
                                  reg(instruction.b, instruction.bWidth));
             break;
 
+        case eir::Opcode::WildcardEqual:
+            bitops::wildcardEqual(reg(instruction.dst, instruction.dstWidth),
+                                  reg(instruction.a, instruction.aWidth),
+                                  reg(instruction.b, instruction.bWidth));
+            break;
+
+        case eir::Opcode::WildcardNotEqual:
+            bitops::wildcardNotEqual(reg(instruction.dst, instruction.dstWidth),
+                                     reg(instruction.a, instruction.aWidth),
+                                     reg(instruction.b, instruction.bWidth));
+            break;
+
+        case eir::Opcode::CeilLog2:
+            bitops::ceilLog2(reg(instruction.dst, instruction.dstWidth),
+                             reg(instruction.a, instruction.aWidth));
+            break;
+
+        case eir::Opcode::CountOnes:
+            bitops::countOnes(reg(instruction.dst, instruction.dstWidth),
+                              reg(instruction.a, instruction.aWidth));
+            break;
+
+        case eir::Opcode::Power:
+            // The third operand is an immediate saying whether the exponent is signed, which
+            // the one signedness flag of an instruction cannot also carry.
+            bitops::power(
+                reg(instruction.dst, instruction.dstWidth), reg(instruction.a, instruction.aWidth),
+                reg(instruction.b, instruction.bWidth), instruction.isSigned, instruction.c != 0);
+            break;
+
+        case eir::Opcode::CaseZMatch:
+            bitops::caseZMatch(reg(instruction.dst, instruction.dstWidth),
+                               reg(instruction.a, instruction.aWidth),
+                               reg(instruction.b, instruction.bWidth));
+            break;
+
+        case eir::Opcode::CaseXMatch:
+            bitops::caseXMatch(reg(instruction.dst, instruction.dstWidth),
+                               reg(instruction.a, instruction.aWidth),
+                               reg(instruction.b, instruction.bWidth));
+            break;
+
         case eir::Opcode::LessThan:
             bitops::lessThan(reg(instruction.dst, instruction.dstWidth),
                              reg(instruction.a, instruction.aWidth),
@@ -301,6 +383,11 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             break;
         }
 
+        case eir::Opcode::SysFunction:
+            kernel.runSystemFunction(processIndex, instruction.a,
+                                     reg(instruction.dst, instruction.dstWidth));
+            break;
+
         case eir::Opcode::SysTask:
             kernel.runSystemTask(processIndex, instruction.a);
             if (kernel.finishRequested || kernel.errorRequested) return ExecutionResult::Stopped;
@@ -316,6 +403,10 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             kernel.suspendForTime(processIndex, amount, instruction.b);
             return kernel.errorRequested ? ExecutionResult::Stopped : ExecutionResult::Suspended;
         }
+
+        case eir::Opcode::WaitEvents:
+            kernel.suspendForEvents(processIndex, instruction.a, instruction.b);
+            return ExecutionResult::Suspended;
 
         case eir::Opcode::WaitEdge:
             kernel.suspendForEdge(processIndex, state.objectSignals[instruction.a],

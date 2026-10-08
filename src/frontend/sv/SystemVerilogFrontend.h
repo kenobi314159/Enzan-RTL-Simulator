@@ -5,6 +5,7 @@
 #include "common/SourceLocation.h"
 #include "eir/Design.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -52,6 +53,18 @@ struct Options {
     /// This is slang's notion of a top level, used to decide which instance bodies exist
     /// at all. Enzan's own choice of which one to simulate happens at elaboration.
     std::vector<std::string> topModules;
+
+    /// Overrides of the top level's parameters, each `NAME=VALUE` (`enzan -G`).
+    std::vector<std::string> parameterOverrides;
+
+    /// The time unit, as a power of ten of a second, that a design element without a
+    /// `` `timescale `` or `timeunit` of its own is taken to be in.
+    ///
+    /// IEEE 1800 makes a design where some elements have a time scale and others do not an
+    /// error, and slang enforces it; other simulators warn, and real designs — a testbench with a
+    /// `` `timescale `` and the RTL without — rely on that. Enzan counts every delay in its one
+    /// unit regardless (DESIGN_GUIDE.md section 9.6), so that unit is the honest default.
+    std::int8_t timeUnitExponent = -12;
 
     /// Receives every file the analysis read, when given.
     ///

@@ -6,13 +6,18 @@
 #include "gui/DesignTreeModel.h"
 #include "gui/KernelSession.h"
 #include "gui/ObjectsModel.h"
+#include "gui/SignalList.h"
 #include "gui/Theme.h"
 #include "gui/TranscriptView.h"
 #include "gui/WaveformModel.h"
 #include "gui/WaveformView.h"
 
+#include <QHash>
 #include <QMainWindow>
 #include <QString>
+#include <QStringList>
+
+#include <vector>
 
 class QAction;
 class QComboBox;
@@ -41,6 +46,18 @@ public:
     /// Writes a note into the transcript, for the messages the front end makes itself.
     void note(const QString& text);
 
+    /// Replaces the wave window's list with the signal list in `path` (DESIGN_GUIDE.md section
+    /// 10.8).
+    ///
+    /// The file is read and checked here; its rows arrive once the kernel has described every
+    /// scope it names, and not before the design itself has arrived, so this may be called
+    /// as soon as the window exists. Returns false, having said why in the transcript, when the
+    /// file cannot be read or has a mistake in it, and the list is then left as it was.
+    bool loadSignalList(const QString& path);
+
+    /// Writes the wave window's list to `path`. Returns false, having said why, when it cannot.
+    bool saveSignalList(const QString& path);
+
 protected:
     void closeEvent(QCloseEvent* event) override;
 
@@ -62,19 +79,23 @@ private:
 
     void addSelectedObjectsToWave();
 
-    /// Adds the signals of the scope the reader right-clicked in the Structure window.
+    /// Adds the signals of the scope the reader right-clicked in the Structure window, each
+    /// scope's in a group of its own named by the scope's path. `recursive` takes everything
+    /// below it as well.
     ///
-    /// `recursive` takes everything below it as well; `grouped` puts each scope's signals in a
-    /// group of their own, named by the scope's path.
+    /// Performed as the signal list command `add wave ?-r? <scope>`, which section 10.8 defines
+    /// as this menu entry: the command is what runs, so the two cannot come to disagree, and it
+    /// is what the transcript shows.
     ///
-    /// Grouped recursion is deliberately *flat*: one group per module, siblings of each other,
-    /// rather than groups nested the way the design is. The hierarchy is what the Structure
-    /// window is for, and a reader who asks a subtree into the wave window is asking to compare
-    /// its modules side by side — which nesting would put behind a disclosure arrow each.
-    void insertScopeSignals(bool recursive, bool grouped);
+    /// Recursion is deliberately *flat*: one group per module, siblings of each other, rather
+    /// than groups nested the way the design is. The hierarchy is what the Structure window is
+    /// for, and a reader who asks a subtree into the wave window is asking to compare its
+    /// modules side by side — which nesting would put behind a disclosure arrow each.
+    void insertScopeSignals(bool recursive);
 
-    /// Adds a scope's signals to `group`, or to the top level when it is -1.
-    void insertObjectsIntoWave(const QVector<enzan::gui::SignalInfo>& objects, int group);
+    /// Asks for a signal list file to load or a place to save one.
+    void chooseSignalListToLoad();
+    void chooseSignalListToSave();
 
     void groupSelectedWaves();
 
@@ -104,6 +125,44 @@ private:
     void runUntilFinished();
     void stopRun();
     void restartRun();
+
+    /// Writes a signal list command into the transcript, as the command that does what the reader
+    /// just did, ready to be copied into a file (section 10.8).
+    void echo(const QString& command);
+
+    /// Reports a problem in a signal list, against the file and line it is on.
+    void reportSignalList(const QString& file, const SignalListMessage& message, bool isError);
+
+    /// A signal list on its way into the wave window: read, and waiting for the kernel to
+    /// describe the scopes it names.
+    ///
+    /// Insertion cannot happen where it is asked for: the objects of a scope come from the
+    /// kernel, which may be on another machine (DESIGN_GUIDE.md section 2.2).
+    struct PendingLoad {
+        /// The file it came from, or empty for a menu entry.
+        QString file;
+
+        std::vector<SignalListEntry> entries;
+
+        /// Scopes asked about and not yet answered.
+        QStringList waiting;
+
+        QHash<QString, QVector<SignalInfo>> objects;
+
+        /// True for a file, which replaces the list; false for a menu entry, which adds to it.
+        bool replace = false;
+    };
+
+    /// Asks the kernel about every scope `load` needs and queues it.
+    void startLoad(PendingLoad load);
+
+    /// Puts every load at the front of the queue that has all its answers into the window.
+    ///
+    /// In the order they were asked for, whatever order the kernel answers in, so that two
+    /// inserts made one after the other land one after the other.
+    void applyFinishedLoads();
+
+    void finishLoad(const PendingLoad& load);
 
     /// Writes a value into the selected signal, asking for it first.
     ///
@@ -166,21 +225,15 @@ private:
     /// whichever module answered last — a module the reader never clicked.
     QString objectsScope;
 
-    /// A scope whose objects have been asked for on behalf of an insert, and the group they are
-    /// destined for.
-    ///
-    /// Insertion cannot be done where the menu is clicked: the objects of a scope come from the
-    /// kernel, which may be on another machine (DESIGN_GUIDE.md section 2.2). The *groups* are
-    /// made immediately and in tree order, though, so that they sit in the order the Structure
-    /// window shows however the replies are interleaved; only their contents wait.
-    struct PendingInsert {
-        QString scope;
+    /// Signal lists waiting for the kernel, in the order they were asked for.
+    QVector<PendingLoad> pendingLoads;
 
-        /// The group to fill, or -1 to add at the top level.
-        int group = -1;
-    };
+    /// A signal list asked for before the design arrived, loaded when it does.
+    QString deferredSignalList;
 
-    QVector<PendingInsert> pendingInserts;
+    /// The scopes of the design the window last showed, to tell a new design from the same one
+    /// sent again.
+    QStringList knownScopes;
 };
 
 } // namespace enzan::gui

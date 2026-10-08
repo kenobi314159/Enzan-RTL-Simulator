@@ -66,10 +66,33 @@ TEST(Format, HexadecimalBinaryAndOctal) {
     EXPECT_EQ(render("%o", arguments), "245");
 }
 
-TEST(Format, UppercaseConversionsUppercaseTheDigits) {
+TEST(Format, AnUppercaseConversionIsTheLowercaseOne) {
+    // Checked against Icarus Verilog. Uppercasing would also turn `x`, a digit wholly unknown,
+    // into `X`, a digit partly unknown.
     const BitVector value = literal("8'hAB");
-    EXPECT_EQ(render("%H", {{.value = value.ref(), .isSigned = false}}), "AB");
-    EXPECT_EQ(render("%X", {{.value = value.ref(), .isSigned = false}}), "AB");
+    EXPECT_EQ(render("%H", {{.value = value.ref(), .isSigned = false}}), "ab");
+    EXPECT_EQ(render("%X", {{.value = value.ref(), .isSigned = false}}), "ab");
+
+    const BitVector unknown = literal("8'hxx");
+    EXPECT_EQ(render("%X", {{.value = unknown.ref(), .isSigned = false}}), "xx");
+    EXPECT_EQ(render("%D", {{.value = unknown.ref(), .isSigned = false}}), "  x");
+    EXPECT_EQ(render("%B", {{.value = literal("4'b1x0z").ref(), .isSigned = false}}), "1x0z");
+}
+
+TEST(Format, AMinimalRadixDropsItsLeadingZeroDigits) {
+    // Checked against Icarus Verilog: zeros go, one digit stays, and an unknown digit is kept.
+    const auto minimal = [](std::string_view format, std::string_view text) {
+        const BitVector value = literal(text);
+        return render(format, {{.value = value.ref(), .isSigned = false}});
+    };
+    EXPECT_EQ(minimal("%0h", "16'h00ab"), "ab");
+    EXPECT_EQ(minimal("%0h", "16'h0x3f"), "x3f");
+    EXPECT_EQ(minimal("%0h", "16'h00zz"), "zz");
+    EXPECT_EQ(minimal("%0h", "32'hxxxxxxxx"), "xxxxxxxx");
+    EXPECT_EQ(minimal("%0h", "8'h00"), "0");
+    EXPECT_EQ(minimal("%0b", "8'b00000101"), "101");
+    EXPECT_EQ(minimal("%0o", "9'o000"), "0");
+    EXPECT_EQ(minimal("%0h", "12'b0000_01x0_0000"), "X0");
 }
 
 TEST(Format, UnknownBitsRenderAsTheValueEngineRendersThem) {
@@ -171,6 +194,36 @@ TEST(Format, PaddingWidthsMatchTheTypesRange) {
     EXPECT_EQ(render("%d", {{literal("16'd3").ref(), false}}), "    3");
     EXPECT_EQ(render("%h", {{literal("12'h3").ref(), false}}), "003");
     EXPECT_EQ(render("%o", {{literal("9'd3").ref(), false}}), "003");
+}
+
+TEST(Format, AFieldWidthWidensButNeverTruncates) {
+    // Checked against Icarus Verilog. A radix whose digits cover fixed bits shows them all and
+    // a width only adds to that; a decimal is minimal and then widened.
+    const BitVector word = BitVector::fromUInt64(0x1a, 32);
+    const BitVector five = BitVector::fromInt64(5, 32);
+    const BitVector minusFive = BitVector::fromInt64(-5, 32);
+    const auto one = [](const BitVector& value, bool isSigned) {
+        return std::vector<FormatArgument>{{.value = value.ref(), .isSigned = isSigned}};
+    };
+
+    EXPECT_EQ(render("[%12h]", one(word, false)), "[    0000001a]");
+    EXPECT_EQ(render("[%3h]", one(word, false)), "[0000001a]");
+    EXPECT_EQ(render("[%016x]", one(word, false)), "[000000000000001a]");
+    EXPECT_EQ(render("[%5d]", one(five, true)), "[    5]");
+    EXPECT_EQ(render("[%05d]", one(five, true)), "[00005]");
+    EXPECT_EQ(render("[%05d]", one(minusFive, true)), "[-0005]");
+    EXPECT_EQ(render("[%-4d]", one(five, true)), "[5   ]");
+    EXPECT_EQ(render("[%02d]", one(five, true)), "[05]");
+}
+
+TEST(Format, LeftJustifyingWithoutAFieldWidthUsesTheValuesOwn) {
+    // Checked against Icarus Verilog: `%-d` is as wide as `%d`, with the padding on the right.
+    const BitVector ten = BitVector::fromUInt64(10, 32);
+    const BitVector minusThree = BitVector::fromInt64(-3, 8);
+
+    EXPECT_EQ(render("[%-d]", {{.value = ten.ref(), .isSigned = false}}), "[10        ]");
+    EXPECT_EQ(render("[%-d]", {{.value = minusThree.ref(), .isSigned = true}}), "[-3  ]");
+    EXPECT_EQ(render("[%-h]", {{.value = ten.ref(), .isSigned = false}}), "[0000000a]");
 }
 
 } // namespace

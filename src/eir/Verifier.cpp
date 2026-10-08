@@ -92,8 +92,7 @@ private:
 
     /// Checks that an object index is in range and is declared in the given set.
     void checkObjectAccess(const ModuleDefinition& definition, const Process& process,
-                           Operand operand, const std::vector<std::uint32_t>& declared,
-                           std::string_view setName, std::string_view where) {
+                           Operand operand, bool isWrite, std::string_view where) {
         if (operand.kind() != Operand::Kind::Object) {
             reportProcess(definition, process, std::format("{} expects an object operand", where));
             return;
@@ -108,10 +107,14 @@ private:
         // The core invariant of section 4.2. A process that touches an object it did
         // not declare is not a pure function over a known slice of the arena, and
         // every optimisation that depends on read/write sets would then be unsound.
-        if (!std::ranges::binary_search(declared, operand.index())) {
+        const bool declared = isWrite
+                                  ? writesObject(process.writeSet, operand.index())
+                                  : std::ranges::binary_search(process.readSet, operand.index());
+        if (!declared) {
             reportProcess(definition, process,
                           std::format("{} touches object '{}' which is not in the declared {}",
-                                      where, definition.objects[operand.index()].name, setName));
+                                      where, definition.objects[operand.index()].name,
+                                      isWrite ? "write set" : "read set"));
         }
     }
 
@@ -134,6 +137,79 @@ private:
                                           "{} objects",
                                           name, index, definition.objects.size()));
             }
+        }
+    }
+
+    /// Checks that the write set is in the form `normaliseWriteSet` produces and that every
+    /// extent lies inside its object.
+    ///
+    /// The form is checked rather than restored, because elaboration finds overlapping drivers
+    /// by comparing extents (section 3.7): two touching extents of one process would be read as
+    /// two drivers of that process, and an extent past the end of its object would claim bits
+    /// that do not exist.
+    void checkWriteSet(const ModuleDefinition& definition, const Process& process) {
+        const WriteExtent* previous = nullptr;
+        for (const WriteExtent& extent : process.writeSet) {
+            if (extent.objectIndex >= definition.objects.size()) {
+                reportProcess(definition, process,
+                              std::format("the declared write set names object {}, but the module "
+                                          "has {} objects",
+                                          extent.objectIndex, definition.objects.size()));
+                return;
+            }
+            const Object& object = definition.objects[extent.objectIndex];
+
+            if (extent.width == 0) {
+                reportProcess(
+                    definition, process,
+                    std::format("the declared write set has an empty extent of '{}'", object.name));
+            } else if (extent.endBit() > object.type.bitWidth()) {
+                reportProcess(definition, process,
+                              std::format("the declared write set writes bits [{}:{}] of '{}', "
+                                          "which is {} bits wide",
+                                          extent.endBit() - 1, extent.lowBit, object.name,
+                                          object.type.bitWidth()));
+            }
+
+            if (previous != nullptr) {
+                const bool ordered = previous->objectIndex < extent.objectIndex
+                                     || (previous->objectIndex == extent.objectIndex
+                                         && previous->endBit() < extent.lowBit);
+                if (!ordered) {
+                    reportProcess(definition, process,
+                                  std::format("the declared write set is not normalised at '{}'; "
+                                              "extents must be ordered, and one object's must "
+                                              "neither overlap nor touch",
+                                              object.name));
+                }
+            }
+            previous = &extent;
+        }
+    }
+
+    void checkSensitivityEntry(const ModuleDefinition& definition, const Process& process,
+                               const SensitivityEntry& entry) {
+        if (entry.objectIndex >= definition.objects.size()) {
+            reportProcess(definition, process,
+                          std::format("is sensitive to object {}, but the module has {} objects",
+                                      entry.objectIndex, definition.objects.size()));
+            return;
+        }
+        // A process triggered by a signal depends on that signal's value, so the signal
+        // belongs in the read set; otherwise activity-based scheduling and partitioning would
+        // both draw the dependency graph wrongly.
+        const Object& object = definition.objects[entry.objectIndex];
+        if (!std::ranges::binary_search(process.readSet, entry.objectIndex)) {
+            reportProcess(definition, process,
+                          std::format("is sensitive to '{}' but does not declare it in its read "
+                                      "set",
+                                      object.name));
+        }
+        if (entry.width != 0 && entry.lowBit + entry.width > object.type.bitWidth()) {
+            reportProcess(definition, process,
+                          std::format("is sensitive to bits [{}:{}] of '{}', which is {} bits wide",
+                                      entry.lowBit + entry.width - 1, entry.lowBit, object.name,
+                                      object.type.bitWidth()));
         }
     }
 
@@ -183,30 +259,28 @@ private:
 
     void checkProcess(const ModuleDefinition& definition, const Process& process) {
         checkDeclaredSet(definition, process, process.readSet, "read set");
-        checkDeclaredSet(definition, process, process.writeSet, "write set");
+        checkWriteSet(definition, process);
+
+        // A call that writes an object writes it as a store does, so the object must be in the
+        // write set, or the drivers and the scheduler would not know the process writes it.
+        for (const SysTaskCall& call : process.sysCalls) {
+            if (call.objectIndex != SysTaskCall::NoObject) {
+                checkObjectAccess(definition, process, Operand::object(call.objectIndex), true,
+                                  toString(call.kind));
+            }
+        }
 
         if (process.blocks.empty()) {
             reportProcess(definition, process, "has no basic blocks");
             return;
         }
 
-        for (const SensitivityEntry& entry : process.sensitivity) {
-            if (entry.objectIndex >= definition.objects.size()) {
-                reportProcess(definition, process,
-                              std::format("is sensitive to object {}, but the module has {} "
-                                          "objects",
-                                          entry.objectIndex, definition.objects.size()));
-                continue;
-            }
-            // A process triggered by a signal depends on that signal's value, so the
-            // signal belongs in the read set; otherwise activity-based scheduling
-            // and partitioning would both draw the dependency graph wrongly.
-            if (!std::ranges::binary_search(process.readSet, entry.objectIndex)) {
-                reportProcess(definition, process,
-                              std::format("is sensitive to '{}' but does not declare it in its "
-                                          "read set",
-                                          definition.objects[entry.objectIndex].name));
-            }
+        for (const SensitivityEntry& entry : process.sensitivity)
+            checkSensitivityEntry(definition, process, entry);
+        for (const std::vector<SensitivityEntry>& list : process.eventLists) {
+            if (list.empty()) reportProcess(definition, process, "has an empty event list");
+            for (const SensitivityEntry& entry : list)
+                checkSensitivityEntry(definition, process, entry);
         }
 
         for (std::size_t blockIndex = 0; blockIndex < process.blocks.size(); ++blockIndex)
@@ -324,29 +398,60 @@ private:
                               const Instruction& instruction, const std::string& where) {
         switch (instruction.opcode) {
         case Opcode::ReadObject:
-            checkObjectAccess(definition, process, instruction.a, process.readSet, "read set",
-                              where);
+            checkObjectAccess(definition, process, instruction.a, false, where);
             checkObjectWidth(definition, process, instruction.a, instruction.dst, where);
+            break;
+
+        // A window of an object, which may be narrower than it, so only the object is checked.
+        case Opcode::ReadObjectPart:
+            checkObjectAccess(definition, process, instruction.a, false, where);
             break;
 
         case Opcode::Store:
         case Opcode::StoreNonBlocking:
-            checkObjectAccess(definition, process, instruction.a, process.writeSet, "write set",
-                              where);
+            checkObjectAccess(definition, process, instruction.a, true, where);
             checkObjectWidth(definition, process, instruction.a, instruction.b, where);
+            break;
+
+        case Opcode::StoreDelayed:
+        case Opcode::StoreNonBlockingDelayed:
+            checkObjectAccess(definition, process, instruction.a, true, where);
+            checkObjectWidth(definition, process, instruction.a, instruction.b, where);
+            registerWidth(definition, process, instruction.c, where);
             break;
 
         // A part store deliberately moves a narrower value than the object holds,
         // so only the object itself is checked.
         case Opcode::StorePart:
         case Opcode::StorePartNonBlocking:
-            checkObjectAccess(definition, process, instruction.a, process.writeSet, "write set",
-                              where);
+            checkObjectAccess(definition, process, instruction.a, true, where);
+            break;
+
+        // A system task has no result and a system function has one, so each opcode runs only
+        // its own kind of call.
+        case Opcode::SysTask:
+        case Opcode::SysFunction:
+            if (instruction.a.kind() == Operand::Kind::SysCall
+                && instruction.a.index() < process.sysCalls.size()
+                && isSystemFunction(process.sysCalls[instruction.a.index()].kind)
+                       != (instruction.opcode == Opcode::SysFunction)) {
+                reportProcess(definition, process,
+                              std::format("{} runs {} with the wrong opcode", where,
+                                          toString(process.sysCalls[instruction.a.index()].kind)));
+            }
             break;
 
         case Opcode::WaitEdge:
-            checkObjectAccess(definition, process, instruction.a, process.readSet, "read set",
-                              where);
+            checkObjectAccess(definition, process, instruction.a, false, where);
+            break;
+
+        case Opcode::WaitEvents:
+            if (instruction.a.kind() != Operand::Kind::Immediate
+                || instruction.a.index() >= process.eventLists.size()) {
+                reportProcess(
+                    definition, process,
+                    std::format("{} names an event list the process does not have", where));
+            }
             break;
 
         // Equal-width binary operations. The frontend inserts the extensions
@@ -380,6 +485,10 @@ private:
         case Opcode::NotEqual:
         case Opcode::CaseEqual:
         case Opcode::CaseNotEqual:
+        case Opcode::WildcardEqual:
+        case Opcode::WildcardNotEqual:
+        case Opcode::CaseZMatch:
+        case Opcode::CaseXMatch:
         case Opcode::LessThan:
         case Opcode::LessEqual:
         case Opcode::ReduceAnd:

@@ -3,18 +3,13 @@
 #include "gui/Theme.h"
 
 #include "common/Assert.h"
+#include "gui/TclLibrary.h"
 
 #include <QFile>
 
 #include <algorithm>
-#include <mutex>
 
 #include <tcl.h>
-
-// Section 8.1 asks for Tcl 8.6 or later. Checked here rather than in CMake because CMake's
-// FindTCL module reports no version at all, so the header is the only thing that knows.
-static_assert(TCL_MAJOR_VERSION > 8 || (TCL_MAJOR_VERSION == 8 && TCL_MINOR_VERSION >= 6),
-              "Enzan requires Tcl 8.6 or later (DESIGN_GUIDE.md section 10.5)");
 
 namespace enzan::gui {
 
@@ -66,12 +61,7 @@ int themeCommandProc(ClientData data, Tcl_Interp* interp, int objc, Tcl_Obj* con
 class Interpreter {
 public:
     Interpreter() {
-        // Tcl asks to be told about the executable once per process before anything else. It
-        // is what initialises the library's encodings, and skipping it leaves a handful of
-        // things quietly not working.
-        static std::once_flag initialised;
-        std::call_once(initialised, [] { Tcl_FindExecutable(nullptr); });
-
+        initialiseTcl();
         handle = Tcl_CreateInterp();
     }
 

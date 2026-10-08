@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,7 @@ using enzan::eir::Design;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
+using enzan::eir::ObjectKind;
 using enzan::eir::Opcode;
 using enzan::eir::Operand;
 using enzan::eir::Port;
@@ -37,6 +39,7 @@ using enzan::eir::PortDirection;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
+using enzan::eir::WriteExtent;
 using enzan::elab::ElaboratedDesign;
 using enzan::elab::Elaborator;
 using enzan::elab::Instance;
@@ -61,7 +64,7 @@ Process makeCopyProcess(ProcessKind kind, std::uint32_t from, std::uint32_t to, 
     process.name = "copy";
     process.registerTypes.push_back(type);
     process.readSet = {from};
-    process.writeSet = {to};
+    process.writeSet = {WriteExtent::whole(to, type.bitWidth())};
 
     BasicBlock entry;
     entry.label = "entry";
@@ -69,6 +72,32 @@ Process makeCopyProcess(ProcessKind kind, std::uint32_t from, std::uint32_t to, 
         Instruction::make(Opcode::ReadObject, Operand::reg(0), Operand::object(from)));
     entry.instructions.push_back(
         Instruction::make(Opcode::Store, {}, Operand::object(to), Operand::reg(0)));
+    entry.instructions.push_back(Instruction::make(Opcode::Return));
+    process.blocks.push_back(std::move(entry));
+    return process;
+}
+
+/// Builds a process that copies `from`, which is `width` bits, into bits `lowBit` upwards of
+/// `to`, declaring exactly those bits as written.
+Process makePartDriver(ProcessKind kind, std::uint32_t from, std::uint32_t to, std::uint32_t lowBit,
+                       std::uint32_t width) {
+    Process process;
+    process.kind = kind;
+    process.name = std::format("part{}", lowBit);
+    process.registerTypes.push_back(Type::bits(width, false, true));
+    process.registerTypes.push_back(Type::bits(32, false, false));
+    process.constants.push_back(enzan::eir::BitVector::fromUInt64(lowBit, 32));
+    process.readSet = {from};
+    process.writeSet = {WriteExtent{.objectIndex = to, .lowBit = lowBit, .width = width}};
+
+    BasicBlock entry;
+    entry.label = "entry";
+    entry.instructions.push_back(
+        Instruction::make(Opcode::ReadObject, Operand::reg(0), Operand::object(from)));
+    entry.instructions.push_back(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(1), Operand::constant(0)));
+    entry.instructions.push_back(Instruction::make(Opcode::StorePart, {}, Operand::object(to),
+                                                   Operand::reg(0), Operand::reg(1)));
     entry.instructions.push_back(Instruction::make(Opcode::Return));
     process.blocks.push_back(std::move(entry));
     return process;
@@ -119,6 +148,23 @@ TEST_F(ElaboratorTest, ElaboratesASingleModule) {
     EXPECT_EQ(elaborated->instances()[0].parent, Instance::NoParent);
     EXPECT_EQ(elaborated->slots().size(), 1U);
     EXPECT_EQ(elaborated->findSlot("/top/a"), 0U);
+}
+
+TEST_F(ElaboratorTest, AParameterisedTopIsNamedAsTheSourceNamesIt) {
+    // Its definition is named for its parameter values (section 8.2); its instance, and so
+    // every path under it, is named for what the user wrote.
+    ModuleDefinition top;
+    top.name = "counter$WIDTH_8";
+    top.sourceName = "counter";
+    top.addObject(Object{.name = "count", .type = Type::bits(8, false, true)});
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("counter");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_EQ(elaborated->instances()[0].path, "/counter");
+    EXPECT_EQ(elaborated->instances()[0].name, "counter");
+    EXPECT_EQ(elaborated->topModuleName(), "counter") << "the name a window title shows";
+    EXPECT_EQ(elaborated->findSlot("/counter/count"), 0U);
 }
 
 TEST_F(ElaboratorTest, ChoosesTheOnlyCandidateTopWhenNoneIsNamed) {
@@ -384,13 +430,14 @@ TEST_F(ElaboratorTest, TheChildsObjectSlotPointsAtTheParentsStorage) {
 }
 
 TEST_F(ElaboratorTest, RejectsAPortWidthMismatch) {
-    // Width conversion on a port connection is not implemented, and collapsing a
-    // mismatched pair onto one slot would silently read or write the wrong bits.
+    // A port is collapsed onto the signal it is connected to, and collapsing a mismatched
+    // pair onto one slot would silently read or write the wrong bits. A frontend converts the
+    // width with an assignment instead, so EIR that asks for it is refused.
     buildPortedPair(design, 8, 4);
 
     EXPECT_EQ(elaborate("parent"), nullptr);
     EXPECT_TRUE(reportedCode(enzan::DiagCode::PortWidthMismatch));
-    EXPECT_TRUE(reported("not yet implemented"));
+    EXPECT_TRUE(reported("joined only to a signal as wide as it"));
 }
 
 TEST_F(ElaboratorTest, WarnsAboutAnUnconnectedPortButContinues) {
@@ -480,6 +527,22 @@ TEST_F(ElaboratorTest, RejectsTwoContinuousAssignmentsDrivingOneObject) {
     EXPECT_TRUE(reported("/tb/net")) << "the report must name the object";
 }
 
+TEST_F(ElaboratorTest, ASubroutinesStaticVariableIsNoContinuousDriversTarget) {
+    // Every call of a static function writes its variables, and a call inlined into a
+    // continuous assignment is no more their driver than one in an `always`: two assignments
+    // and an always_comb calling one function are all legal.
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::logic()});
+    top.addObject(Object{.name = "f.scratch", .type = Type::logic(), .subroutineStatic = true});
+    top.processes.push_back(makeCopyProcess(ProcessKind::ContinuousAssign, 0, 1, Type::logic()));
+    top.processes.push_back(makeCopyProcess(ProcessKind::ContinuousAssign, 0, 1, Type::logic()));
+    top.processes.push_back(makeCopyProcess(ProcessKind::AlwaysComb, 0, 1, Type::logic()));
+    design.addModule(std::move(top));
+
+    EXPECT_NE(elaborate("tb"), nullptr) << consumer.messages.front();
+}
+
 TEST_F(ElaboratorTest, RejectsAContinuousAndAProceduralDriverOnOneObject) {
     ModuleDefinition top;
     top.name = "tb";
@@ -490,7 +553,7 @@ TEST_F(ElaboratorTest, RejectsAContinuousAndAProceduralDriverOnOneObject) {
     design.addModule(std::move(top));
 
     EXPECT_EQ(elaborate("tb"), nullptr);
-    EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MixedDriverKinds));
 }
 
 TEST_F(ElaboratorTest, ACollapsedPortDrivenFromBothSidesIsDetected) {
@@ -518,6 +581,346 @@ TEST_F(ElaboratorTest, ACollapsedPortDrivenFromBothSidesIsDetected) {
 
     EXPECT_EQ(elaborate("parent"), nullptr);
     EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+}
+
+// ---------------------------------------------------------------------------
+// Drivers per bit (DESIGN_GUIDE.md section 3.7)
+// ---------------------------------------------------------------------------
+
+/// A module `tb` with a one-bit source and an eight-bit target of the given kind.
+ModuleDefinition partTarget(ObjectKind kind) {
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::logic()});
+    top.addObject(Object{.name = "x", .type = Type::bits(8, false, true), .kind = kind});
+    return top;
+}
+
+TEST_F(ElaboratorTest, ContinuousDriversOfDisjointBitsOfOneVariableAreAllowed) {
+    // Overlap, not sharing a signal, is what multiple driving means.
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    for (std::uint32_t bit = 0; bit < 8; ++bit)
+        top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, bit, 1));
+    design.addModule(std::move(top));
+
+    EXPECT_NE(elaborate("tb"), nullptr) << consumer.messages.front();
+    EXPECT_TRUE(consumer.codes.empty());
+}
+
+TEST_F(ElaboratorTest, ContinuousDriversOverlappingOnOneBitOfAVariableAreRefused) {
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    top.addObject(Object{.name = "pair", .type = Type::bits(2, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 0, 2));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 1, 2));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+    // The overlap, not the whole of either driver, and both drivers by name and instance.
+    EXPECT_TRUE(reported("'/tb/x' has bit 1 driven by both part0 in /tb and part1 in /tb"))
+        << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, AWideOverlapIsReportedAsARangeOnce) {
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    top.addObject(Object{.name = "nibble", .type = Type::bits(4, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 0, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 2, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 3, 4));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reported("bits [3:2]")) << consumer.messages.front();
+    EXPECT_EQ(consumer.codes.size(), 1U) << "one diagnostic per signal, for its lowest overlap";
+}
+
+TEST_F(ElaboratorTest, AProceduralWriterOfBitsNoContinuousDriverOwnsIsAllowed) {
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    top.addObject(Object{.name = "nibble", .type = Type::bits(4, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 4, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::AlwaysComb, 2, 1, 0, 4));
+    design.addModule(std::move(top));
+
+    EXPECT_NE(elaborate("tb"), nullptr) << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, AProceduralWriterOfAContinuouslyDrivenBitIsRefused) {
+    ModuleDefinition top = partTarget(ObjectKind::Variable);
+    top.addObject(Object{.name = "nibble", .type = Type::bits(4, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::AlwaysComb, 2, 1, 0, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 3, 4));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MixedDriverKinds));
+    EXPECT_TRUE(reported("'/tb/x' has bit 3 driven by the continuous assignment part3 in /tb and "
+                         "also written by part0 in /tb"))
+        << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, OverlappingDriversOfANetAreResolvedRatherThanRefused) {
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 5, 1));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 5, 1));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+
+    // Each driver has its own value in the arena, past every slot.
+    ASSERT_EQ(elaborated->drivers().size(), 2U);
+    const std::uint32_t slot = require(elaborated->findSlot("/tb/x"));
+    for (const enzan::elab::Driver& driver : elaborated->drivers()) {
+        EXPECT_EQ(driver.slot, slot);
+        EXPECT_EQ(driver.lowBit, 5U);
+        EXPECT_EQ(driver.width, 1U);
+        EXPECT_GE(driver.wordOffset, elaborated->slots().back().wordOffset + 2);
+    }
+    EXPECT_NE(elaborated->drivers()[0].wordOffset, elaborated->drivers()[1].wordOffset);
+
+    ASSERT_EQ(elaborated->segments().size(), 1U);
+    EXPECT_EQ(elaborated->segments()[0].lowBit, 5U);
+    EXPECT_EQ(elaborated->segments()[0].driverCount, 2U);
+}
+
+TEST_F(ElaboratorTest, PartlyOverlappingDriversSplitIntoSegments) {
+    // Bits [3:0] and [5:2]: bits 1 and 0 have the first alone, 3 and 2 have both, and 5 and 4
+    // the second alone. Bits 7 and 6 have none and are in no segment.
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.addObject(Object{.name = "nibble", .type = Type::bits(4, false, true)});
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 0, 4));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 2, 1, 2, 4));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+
+    const auto segments = elaborated->segments();
+    ASSERT_EQ(segments.size(), 3U);
+    EXPECT_EQ(segments[0].lowBit, 0U);
+    EXPECT_EQ(segments[0].width, 2U);
+    EXPECT_EQ(segments[0].driverCount, 1U);
+    EXPECT_EQ(segments[1].lowBit, 2U);
+    EXPECT_EQ(segments[1].width, 2U);
+    EXPECT_EQ(segments[1].driverCount, 2U);
+    EXPECT_EQ(segments[2].lowBit, 4U);
+    EXPECT_EQ(segments[2].width, 2U);
+    EXPECT_EQ(segments[2].driverCount, 1U);
+
+    // Each driver covers exactly the segments inside its range.
+    const auto drivers = elaborated->drivers();
+    ASSERT_EQ(drivers.size(), 2U);
+    EXPECT_EQ(drivers[0].firstSegment, 0U);
+    EXPECT_EQ(drivers[0].segmentCount, 2U);
+    EXPECT_EQ(drivers[1].firstSegment, 1U);
+    EXPECT_EQ(drivers[1].segmentCount, 2U);
+    EXPECT_EQ(elaborated->widestDriver(), 4U);
+}
+
+TEST_F(ElaboratorTest, ANetWithOneDriverPerBitHasNoDrivers) {
+    // The common case bypasses resolution as a whole: its stores go straight into the slot.
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    for (std::uint32_t bit = 0; bit < 8; ++bit)
+        top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, bit, 1));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(elaborated->drivers().empty());
+    EXPECT_TRUE(elaborated->segments().empty());
+}
+
+TEST_F(ElaboratorTest, PortsOfManyInstancesDrivingBitsOfOneArrayAreAllowed) {
+    // The pattern section 3.7 is written around, after collapsing: each instance's output is
+    // its own slot, copied into one bit of the parent's array by its own connection.
+    ModuleDefinition child;
+    child.name = "channel";
+    child.addObject(Object{.name = "ready", .type = Type::logic()});
+    child.addObject(Object{.name = "src", .type = Type::logic()});
+    child.ports.push_back(
+        Port{.name = "ready", .direction = PortDirection::Output, .objectIndex = 0});
+    child.processes.push_back(makeCopyProcess(ProcessKind::ContinuousAssign, 1, 0, Type::logic()));
+    design.addModule(std::move(child));
+
+    ModuleDefinition parent = partTarget(ObjectKind::Variable);
+    parent.name = "tb";
+    for (std::uint32_t bit = 0; bit < 8; ++bit) {
+        const std::uint32_t port =
+            parent.addObject(Object{.name = std::format("u{}$ready", bit), .type = Type::logic()});
+        parent.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, port, 1, bit, 1));
+
+        enzan::eir::Instance instance;
+        instance.name = std::format("u{}", bit);
+        instance.definitionName = "channel";
+        instance.connections.push_back(PortConnection{.portIndex = 0, .objectIndex = port});
+        parent.instances.push_back(std::move(instance));
+    }
+    design.addModule(std::move(parent));
+
+    EXPECT_NE(elaborate("tb"), nullptr) << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, OverlappingDriversOfAUwireAreAnErrorAsForAVariable) {
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.objects[1].netKind = enzan::eir::NetKind::UWire;
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 2, 1));
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 2, 1));
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+    EXPECT_TRUE(reported("uwire net '/tb/x' has bit 2")) << consumer.messages.front();
+}
+
+TEST_F(ElaboratorTest, APulledNetResolvesEvenASingleDriver) {
+    // A tri0 driven to z reads 0, so its one driver is resolved like several would be.
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.objects[1].netKind = enzan::eir::NetKind::Tri0;
+    top.processes.push_back(makePartDriver(ProcessKind::ContinuousAssign, 0, 1, 0, 1));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->drivers().size(), 1U);
+    ASSERT_EQ(elaborated->segments().size(), 1U);
+    EXPECT_EQ(elaborated->segments()[0].netKind, enzan::eir::NetKind::Tri0);
+}
+
+TEST_F(ElaboratorTest, AnUndrivenPulledNetNeedsNoResolution) {
+    ModuleDefinition top = partTarget(ObjectKind::Net);
+    top.objects[1].netKind = enzan::eir::NetKind::Supply1;
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    const std::uint32_t slot = require(elaborated->findSlot("/tb/x"));
+    EXPECT_EQ(elaborated->slots()[slot].kind, ObjectKind::Net);
+    EXPECT_EQ(elaborated->slots()[slot].netKind, enzan::eir::NetKind::Supply1);
+}
+
+// ---------------------------------------------------------------------------
+// Hierarchical references
+// ---------------------------------------------------------------------------
+
+/// `tb` holding `left` and `right`, both of `leaf`, whose one object is `value`; `right` also
+/// declares a reference to `../left/value`.
+void addReferencingDesign(Design& design, std::string_view reference) {
+    ModuleDefinition leaf;
+    leaf.name = "leaf";
+    leaf.addObject(Object{.name = "value", .type = Type::bits(4, false, true)});
+    design.addModule(std::move(leaf));
+
+    ModuleDefinition peer;
+    peer.name = "peer";
+    peer.addObject(Object{.name = "value", .type = Type::bits(4, false, true)});
+    peer.addObject(Object{.name = "ref$value",
+                          .type = Type::bits(4, false, true),
+                          .hierarchicalPath = std::string(reference)});
+    design.addModule(std::move(peer));
+
+    ModuleDefinition top;
+    top.name = "tb";
+    for (const auto& [name, definition] : {std::pair{"left", "leaf"}, std::pair{"right", "peer"}}) {
+        enzan::eir::Instance instance;
+        instance.name = name;
+        instance.definitionName = definition;
+        top.instances.push_back(std::move(instance));
+    }
+    design.addModule(std::move(top));
+}
+
+TEST_F(ElaboratorTest, AHierarchicalReferenceIsTheStorageItNames) {
+    addReferencingDesign(design, "../left/value");
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+
+    const std::uint32_t target = require(elaborated->findSlot("/tb/left/value"));
+    const Instance& right = elaborated->instances()[require(elaborated->findInstance("/tb/right"))];
+    EXPECT_EQ(right.objectSlots[1], target);
+    // A reference has no storage and no name of its own.
+    EXPECT_FALSE(elaborated->findSlot("/tb/right/ref$value").has_value());
+}
+
+TEST_F(ElaboratorTest, AHierarchicalReferenceToNothingIsReported) {
+    addReferencingDesign(design, "../middle/value");
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::UnresolvedHierarchicalReference));
+    EXPECT_TRUE(reported("'../middle/value' in '/tb/right'")) << consumer.messages.front();
+}
+
+// ---------------------------------------------------------------------------
+// Packages
+// ---------------------------------------------------------------------------
+
+/// A package `counters` with one variable, and a top level named `topName` whose instance of
+/// `user` and itself both refer to it.
+void addPackageDesign(Design& design, std::string_view topName) {
+    ModuleDefinition package;
+    package.name = "counters::";
+    package.sourceName = "counters";
+    package.isPackage = true;
+    package.addObject(Object{.name = "events", .type = Type::bits(32, true, false)});
+    design.addModule(std::move(package));
+
+    const auto reference = [] {
+        return Object{.name = "ref$/counters/events",
+                      .type = Type::bits(32, true, false),
+                      .hierarchicalPath = "/counters/events"};
+    };
+
+    ModuleDefinition user;
+    user.name = "user";
+    user.addObject(reference());
+    design.addModule(std::move(user));
+
+    ModuleDefinition top;
+    top.name = std::string(topName);
+    top.addObject(reference());
+    top.instances.push_back(enzan::eir::Instance{.name = "u_user", .definitionName = "user"});
+    design.addModule(std::move(top));
+}
+
+TEST_F(ElaboratorTest, APackageVariableIsOneVariableForEveryModule) {
+    addPackageDesign(design, "tb");
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+
+    // The package is an instance of its own at the root, beside the top level, not under it.
+    const Instance& package =
+        elaborated->instances()[require(elaborated->findInstance("/counters"))];
+    EXPECT_EQ(package.parent, Instance::NoParent);
+    const std::uint32_t events = require(elaborated->findSlot("/counters/events"));
+    const Instance& top = elaborated->instances()[require(elaborated->findInstance("/tb"))];
+    const Instance& user = elaborated->instances()[require(elaborated->findInstance("/tb/u_user"))];
+    EXPECT_EQ(top.objectSlots[0], events);
+    EXPECT_EQ(user.objectSlots[0], events);
+}
+
+TEST_F(ElaboratorTest, AnUnusedPackageHasNoInstance) {
+    ModuleDefinition package;
+    package.name = "counters::";
+    package.isPackage = true;
+    package.addObject(Object{.name = "events", .type = Type::bits(32, true, false)});
+    design.addModule(std::move(package));
+    ModuleDefinition top;
+    top.name = "tb";
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(elaborated->findInstance("/counters").has_value());
+}
+
+TEST_F(ElaboratorTest, APackageNamedAsTheTopLevelIsReported) {
+    // Its variables would be at the top level's path, where a reference could find the top
+    // level's own object of the same name instead.
+    addPackageDesign(design, "counters");
+
+    EXPECT_EQ(elaborate("counters"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::PackageNamedAsTop));
 }
 
 } // namespace

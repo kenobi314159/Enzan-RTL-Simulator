@@ -15,7 +15,7 @@ elaborated, compiled design.
   wheel, and the non-blocking update queue. Holds ordering, not policy.
 - **The interpreter** (`Interpreter.h`) — executes compiled bodies.
 - **The kernel** (`Kernel.h`) — drives the regions, applies updates, detects value
-  changes, enforces the delta limit and performs system tasks.
+  changes, resolves drivers, enforces the delta limit and performs system tasks.
 - **Formatting** (`Format.h`) — the `$display` conversions.
 
 ## Invariants this component is responsible for
@@ -62,6 +62,10 @@ form section 3.8 could be violated in.
 GUI attaches and detaches its own listeners, so value changes are published through the
 `ValueChangeListener` interface and the waveform database implements it.
 
+**Not `pli`**, for the same reason. The points in the region ordering where a VPI
+application's callbacks run (DESIGN_GUIDE.md section 9.3) are the `PliHooks` interface, and
+`pli` implements it. A kernel with nothing loaded pays one null test per hook.
+
 ## Deliberate deferrals
 
 - **Dispatch is a `switch`, not computed goto.** Section 6.1 makes threaded dispatch a
@@ -72,7 +76,8 @@ GUI attaches and detaches its own listeners, so value changes are published thro
 - **The time wheel is an ordered map.** Section 6.2 calls for a hierarchical or calendar
   queue once there is a benchmark to justify one.
 - **Preponed and the PLI-specific regions are not separate queues.** Section 3.3 permits
-  representing them as callback hook points, and nothing in the M1 subset samples in
-  Preponed.
-- **One driver per signal.** Driver resolution is M5; elaboration rejects a design that
-  would need it rather than letting the last write win silently.
+  representing them as callback hook points, which is what `PliHooks` is, and nothing in the
+  subset samples in Preponed.
+- **Resolution has no strength model.** Every driver is strong, which the frontend
+  guarantees by refusing any other strength, so the tables of IEEE 1800 tables 6-2 to 6-4
+  are the whole of it.

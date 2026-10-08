@@ -17,15 +17,49 @@ namespace enzan::eir {
 
 /// Whether an object is a net or a variable.
 ///
-/// The distinction is not cosmetic. A net may have several drivers and resolves
-/// them; a variable holds the last value written to it and having two processes
-/// write one variable is an error rather than a resolution (DESIGN_GUIDE.md section
-/// 3.7). The M1 subset supports one driver per object either way, and the
-/// distinction is recorded so that M5 can add resolution without revisiting every
-/// declaration.
+/// The distinction is not cosmetic. A bit of a net may have several drivers and
+/// resolves them; a bit of a variable may have one continuous driver, and a second is
+/// an error rather than a resolution (DESIGN_GUIDE.md section 3.7). Elaboration
+/// decides which applies from this.
 enum class ObjectKind : std::uint8_t { Net, Variable };
 
 std::string_view toString(ObjectKind kind) noexcept;
+
+/// Which kind of net a net is, which decides how a bit with several drivers resolves and what
+/// a bit with none holds (DESIGN_GUIDE.md section 3.7).
+///
+/// `tri` is kept apart from `wire`, and `triand` and `trior` from `wand` and `wor`, although
+/// each pair behaves identically: a reader is shown the kind they declared.
+enum class NetKind : std::uint8_t {
+    Wire,
+    Tri,
+    WiredAnd,
+    WiredOr,
+    TriAnd,
+    TriOr,
+    /// Pulled to 0 where nothing drives it, and where every driver is `z`.
+    Tri0,
+    /// Pulled to 1 likewise.
+    Tri1,
+    /// Always 0. Its supply strength beats every driver Enzan can model, all of which are
+    /// strong.
+    Supply0,
+    /// Always 1.
+    Supply1,
+    /// A net that may have one driver per bit, as a variable may.
+    UWire,
+};
+
+/// The keyword that declares `kind`, for diagnostics and the GUI.
+std::string_view toString(NetKind kind) noexcept;
+
+/// The value of a bit of a `kind` net that nothing drives: `z`, or the value it is pulled or
+/// tied to.
+Logic undrivenValue(NetKind kind) noexcept;
+
+/// True when even one driver's value has to be resolved before it reaches the net: a pulled
+/// net turns a driven `z` into its pull, and a supply net ignores its drivers.
+bool resolvesSingleDrivers(NetKind kind) noexcept;
 
 /// One name an enumeration gives to one value.
 struct EnumMember {
@@ -60,11 +94,32 @@ struct EnumDefinition {
     [[nodiscard]] std::string_view nameOf(const BitVector& value) const;
 };
 
+/// One unpacked dimension of an array, as declared: `[0:15]` is a left of 0 and a right of 15.
+///
+/// Kept for what reads the array as an array — VPI's `vpiRegArray`, the waveform database's
+/// choice not to record memories — and not for simulating it. Storage is flat: the array's
+/// elements are one vector of its bits, left element highest, as a packed array's are
+/// (DESIGN_GUIDE.md section 4.3), so every operation on it is an operation on bits.
+struct UnpackedDimension {
+    std::int32_t left = 0;
+    std::int32_t right = 0;
+
+    [[nodiscard]] std::uint32_t size() const noexcept {
+        return static_cast<std::uint32_t>(left > right ? left - right : right - left) + 1U;
+    }
+
+    friend bool operator==(UnpackedDimension, UnpackedDimension) noexcept = default;
+};
+
 /// A declared signal or variable inside a module.
 struct Object {
     std::string name;
     Type type;
     ObjectKind kind = ObjectKind::Variable;
+
+    /// The kind of net, when `kind` is `Net`; ignored for a variable.
+    NetKind netKind = NetKind::Wire;
+
     SourceLocation location;
 
     /// The value at time zero, when the declaration supplied one.
@@ -84,6 +139,34 @@ struct Object {
     /// `NoEnum`. It changes nothing about how the object behaves; it is what lets a display
     /// name the value.
     std::uint32_t enumIndex = NoEnum;
+
+    /// The unpacked dimensions, outermost first, when the object is an unpacked array; empty
+    /// otherwise. Its type is then the flat vector of all its elements.
+    std::vector<UnpackedDimension> unpackedDimensions;
+
+    /// The width of one element, when `unpackedDimensions` is not empty.
+    std::uint32_t elementWidth = 0;
+
+    /// Whether one element is signed, when `unpackedDimensions` is not empty. The flat vector
+    /// is unsigned whatever its elements are, so this is the only record of it.
+    bool elementSigned = false;
+
+    /// A static variable of a function or task: one variable that every call of it shares, so
+    /// that what one call leaves there the next reads (IEEE 1800 section 13.3.1), written by
+    /// whichever process makes the call. A call inlined into a continuous assignment is no
+    /// continuous driver of it, and an inferred sensitivity list does not watch it: what a
+    /// call writes there is the call's own business, not a change the caller depends on.
+    bool subroutineStatic = false;
+
+    /// When not empty, the object is a hierarchical reference: a name here for an object of
+    /// another instance, which elaboration binds to that object's storage.
+    ///
+    /// The path is relative to the instance holding this object — `dut/core/state` down,
+    /// `../u_peer/ready` up and across — because one definition serves every instance of a
+    /// parameterisation (DESIGN_GUIDE.md section 18, M3.1), and a path from the root would be
+    /// right for only one of them. A path beginning `@port/` goes through an interface port of
+    /// the instance holding it, to whichever interface that instance's parent connected.
+    std::string hierarchicalPath;
 
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
 };
@@ -145,6 +228,18 @@ struct PortConnection {
     [[nodiscard]] bool connected() const noexcept { return objectIndex != Unconnected; }
 };
 
+/// What an instance's interface port is connected to (IEEE 1800 section 25).
+///
+/// The target is named from the instantiating module, as a hierarchical reference's path is: an
+/// interface instance in it, by the name it has there, or `@port` for an interface port of its
+/// own, which is how an interface is passed down through several levels.
+struct InterfaceBinding {
+    std::string port;
+    std::string target;
+
+    friend bool operator==(const InterfaceBinding&, const InterfaceBinding&) = default;
+};
+
 /// An instantiation of one module definition inside another.
 struct Instance {
     /// The instance name, as it appears in the hierarchical path.
@@ -160,6 +255,9 @@ struct Instance {
     std::string definitionName;
 
     std::vector<PortConnection> connections;
+
+    /// The instance's interface ports, by name, and what each is connected to.
+    std::vector<InterfaceBinding> interfaceBindings;
 
     SourceLocation location;
 };
@@ -193,6 +291,11 @@ struct ModuleDefinition {
     /// was loaded last — which is what a design keyed on the bare name does — is the
     /// failure mode section 1.2 ranks worst. Section 8.2 has the resolution rules.
     std::string library;
+
+    /// True for a package's variables rather than a module (IEEE 1800 section 26): one
+    /// instance of it exists, at the root as `/<package>`, when some module refers to one of
+    /// them, and it is never a top level. Named `<package>::`, which no module can be.
+    bool isPackage = false;
 
     SourceLocation location;
 

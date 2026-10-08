@@ -10,26 +10,23 @@
 
 #include "runtime/Kernel.h"
 
-#include "codegen/Compiler.h"
 #include "common/Diagnostics.h"
-#include "common/SourceManager.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
 #include "eir/Module.h"
 #include "eir/Process.h"
-#include "eir/Verifier.h"
-#include "elab/Elaborator.h"
-#include "runtime/Image.h"
 
 #include "support/Literals.h"
 #include "support/ProcessBuilder.h"
+#include "support/Simulation.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -37,11 +34,6 @@
 namespace {
 
 // NOLINTBEGIN(misc-unused-using-decls)
-using enzan::Diagnostic;
-using enzan::DiagnosticEngine;
-using enzan::SourceManager;
-using enzan::codegen::CompiledDesign;
-using enzan::codegen::Compiler;
 using enzan::eir::BasicBlock;
 using enzan::eir::BitVector;
 using enzan::eir::Design;
@@ -59,146 +51,17 @@ using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
 using enzan::eir::Type;
-using enzan::elab::ElaboratedDesign;
-using enzan::elab::Elaborator;
-using enzan::runtime::Image;
 using enzan::runtime::Kernel;
-using enzan::runtime::KernelOptions;
 using enzan::runtime::NoTime;
+using enzan::runtime::PliHooks;
 using enzan::runtime::RunInterrupt;
 using enzan::runtime::RunStatus;
 using enzan::runtime::SimTime;
 using enzan::test::literal;
 using enzan::test::ProcessBuilder;
+using enzan::test::Simulation;
 
 // NOLINTEND(misc-unused-using-decls)
-
-class CollectingConsumer final : public enzan::DiagnosticConsumer {
-public:
-    void consume(const Diagnostic& diagnostic) override {
-        messages.push_back(diagnostic.message);
-        codes.push_back(diagnostic.code);
-    }
-
-    std::vector<std::string> messages;
-    std::vector<enzan::DiagCode> codes;
-};
-
-/// Verifies, elaborates, compiles and runs a one-module design.
-class Simulation {
-public:
-    /// The buffer `Simulation` registers its stand-in source text as.
-    ///
-    /// Always the first buffer of the manager, so that a test can build EIR carrying
-    /// locations into it *before* the simulation that owns the manager exists. Identifiers
-    /// are handed out in the order buffers are added, which is what makes that sound.
-    static constexpr enzan::BufferId SourceBuffer = enzan::BufferId::fromIndex(0);
-
-    /// One line of stand-in source per line number, so that a location is easy to write.
-    static constexpr std::string_view SourceText = "one\ntwo\nthree\nfour\nfive\n";
-
-    /// The byte offset of 1-based `line` in `SourceText`.
-    static constexpr std::uint32_t lineOffset(std::uint32_t line) {
-        constexpr std::uint32_t Offsets[] = {0, 0, 4, 8, 14, 19};
-        return Offsets[line];
-    }
-
-    /// A location on `line` of the stand-in source.
-    static constexpr enzan::SourceLocation at(std::uint32_t line) {
-        return {SourceBuffer, lineOffset(line)};
-    }
-
-    /// A location `column` bytes into `line`, for a test that needs two positions on one line.
-    ///
-    /// Every line of the stand-in source is at least three bytes long, so a small column stays
-    /// on the line it was asked for.
-    static constexpr enzan::SourceLocation at(std::uint32_t line, std::uint32_t column) {
-        return {SourceBuffer, lineOffset(line) + column};
-    }
-
-    Simulation(Design design, std::string_view topName)
-        : engine(sources), analysed(std::move(design)) {
-        // Added first, so that `SourceBuffer` names it. Every simulation gets one even when
-        // the test does not care, because a fixture whose buffer numbering depends on what
-        // the test asked for is a fixture that breaks the next test to be written.
-        const enzan::BufferId registered = sources.addBuffer("design.sv", std::string(SourceText));
-        EXPECT_EQ(registered, SourceBuffer);
-
-        engine.addConsumer(consumer);
-
-        // Verifying here means every kernel test also exercises the verifier, and that a
-        // test whose hand-built EIR is malformed says so instead of misbehaving.
-        valid = enzan::eir::verify(analysed, engine);
-
-        Elaborator elaborator(analysed, engine);
-        elaborated = elaborator.elaborate(topName);
-        if (elaborated == nullptr) return;
-
-        Compiler compiler(engine);
-        compiled = compiler.compile(analysed);
-        if (compiled == nullptr) return;
-
-        image = std::make_unique<Image>(analysed, *elaborated, *compiled);
-
-        KernelOptions options;
-        options.transcript = &transcriptStream;
-        options.deltaLimit = deltaLimit;
-        kernel = std::make_unique<Kernel>(*image, engine, options);
-        kernel->initialize();
-    }
-
-    [[nodiscard]] bool ready() const noexcept { return kernel != nullptr && valid; }
-
-    RunStatus run(SimTime until = NoTime) { return kernel->run(until); }
-
-    [[nodiscard]] SimTime time() const { return kernel->time(); }
-
-    /// Renders a signal's current value, so that assertions read as the design does.
-    [[nodiscard]] std::string value(std::string_view path, Radix radix = Radix::Binary) const {
-        const std::uint32_t signalIndex = image->findSignal(path);
-        EXPECT_NE(signalIndex, Image::NoSignal) << "no signal named " << path;
-        if (signalIndex == Image::NoSignal) return "<missing>";
-
-        const auto& signal = image->signals()[signalIndex];
-        return enzan::eir::toString(kernel->arena().at(signal.wordOffset, signal.bitWidth), radix);
-    }
-
-    /// The index of a signal by path, failing the test if the design has no such signal.
-    [[nodiscard]] std::uint32_t signal(std::string_view path) const {
-        const std::uint32_t signalIndex = image->findSignal(path);
-        EXPECT_NE(signalIndex, Image::NoSignal) << "no signal named " << path;
-        return signalIndex;
-    }
-
-    [[nodiscard]] std::string transcript() const { return transcriptStream.str(); }
-
-    [[nodiscard]] bool reportedCode(enzan::DiagCode code) const {
-        return std::ranges::find(consumer.codes, code) != consumer.codes.end();
-    }
-
-    [[nodiscard]] const std::vector<std::string>& messages() const { return consumer.messages; }
-
-    Kernel& simulationKernel() { return *kernel; }
-
-    /// Delta limit applied to the kernel. Set before constructing to test the limit
-    /// without waiting for ten thousand iterations.
-    static std::uint32_t deltaLimit;
-
-private:
-    SourceManager sources;
-    DiagnosticEngine engine;
-    CollectingConsumer consumer;
-    std::ostringstream transcriptStream;
-
-    Design analysed;
-    std::unique_ptr<ElaboratedDesign> elaborated;
-    std::unique_ptr<CompiledDesign> compiled;
-    std::unique_ptr<Image> image;
-    std::unique_ptr<Kernel> kernel;
-    bool valid = false;
-};
-
-std::uint32_t Simulation::deltaLimit = 10'000;
 
 /// A module with two 8-bit objects and whatever processes the caller adds.
 ModuleDefinition makeTop(std::vector<Process> processes, std::vector<Object> objects = {}) {
@@ -359,12 +222,12 @@ TEST(Kernel, TwoPartialNonBlockingUpdatesBothTakeEffect) {
         Instruction::make(Opcode::LoadConstant, Operand::reg(nibble), Operand::constant(lowValue)));
     builder.emit(
         Instruction::make(Opcode::LoadConstant, Operand::reg(index), Operand::constant(zero)));
-    builder.storePartNonBlocking(0, nibble, index);
+    builder.storePartNonBlocking(0, nibble, index, 8);
     builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(nibble),
                                    Operand::constant(highValue)));
     builder.emit(
         Instruction::make(Opcode::LoadConstant, Operand::reg(index), Operand::constant(four)));
-    builder.storePartNonBlocking(0, nibble, index);
+    builder.storePartNonBlocking(0, nibble, index, 8);
     builder.emit(Instruction::make(Opcode::Return));
 
     ModuleDefinition definition = makeTop({builder.finish()});
@@ -649,6 +512,100 @@ TEST(Kernel, WaitEdgeSuspendsUntilTheEdgeArrives) {
     EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
     EXPECT_EQ(simulation.value("/tb/marker", Radix::Hexadecimal), "ab");
     EXPECT_EQ(simulation.time(), 10U);
+}
+
+/// A process that waits on `@(posedge clk or posedge rst)` and counts each time it resumes,
+/// once when `forever` is false and in a loop when it is true.
+Process makeEventListCounter(bool forever) {
+    ProcessBuilder counter(ProcessKind::Initial, "counter");
+    const std::uint32_t countValue = counter.reg(Type::bits(16, false, true));
+    const std::uint32_t oneRegister = counter.reg(Type::bits(16, false, true));
+    const std::uint32_t sum = counter.reg(Type::bits(16, false, true));
+    const std::uint32_t one = counter.constant("16'd1");
+
+    counter.block("entry");
+    counter.waitEvents({SensitivityEntry{.objectIndex = 0, .edge = EdgeKind::Posedge},
+                        SensitivityEntry{.objectIndex = 1, .edge = EdgeKind::Posedge}},
+                       1);
+    counter.block("resumed");
+    counter.readObject(countValue, 2);
+    counter.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(oneRegister), Operand::constant(one)));
+    counter.emit(Instruction::make(Opcode::Add, Operand::reg(sum), Operand::reg(countValue),
+                                   Operand::reg(oneRegister)));
+    counter.store(2, sum);
+    counter.emit(forever ? Instruction::make(Opcode::Jump, {}, Operand::block(0))
+                         : Instruction::make(Opcode::Return));
+    return counter.finish();
+}
+
+std::vector<Object> eventListObjects() {
+    return {Object{.name = "clk", .type = Type::logic(), .initialValue = BitVector::parse("1'b0")},
+            Object{.name = "rst", .type = Type::logic(), .initialValue = BitVector::parse("1'b0")},
+            Object{.name = "count",
+                   .type = Type::bits(16, false, true),
+                   .initialValue = BitVector::parse("16'd0")}};
+}
+
+TEST(Kernel, AnEventListResumesOnceWhicheverOfItsEntriesHappen) {
+    // `clk` rises first and resumes the process, which then ends. The subscription on `rst` is
+    // stale from then on, and when `rst` rises later it must not resume the process again.
+    ProcessBuilder driver(ProcessKind::Initial, "driver");
+    const std::uint32_t delay = driver.reg(Type::bits(32, false, false));
+    const std::uint32_t bit = driver.reg(Type::logic());
+    const std::uint32_t ten = driver.constant("32'd10");
+    const std::uint32_t oneBit = driver.constant("1'b1");
+
+    driver.block("entry");
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(ten)));
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(bit), Operand::constant(oneBit)));
+    driver.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    driver.block("clock");
+    driver.store(0, bit);
+    driver.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(2)));
+    driver.block("reset");
+    driver.store(1, bit);
+    driver.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(
+        designOf(makeTop({driver.finish(), makeEventListCounter(false)}, eventListObjects())),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.time(), 20U);
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "1");
+}
+
+TEST(Kernel, AnEventListEntryWhoseSignalNeverChangesDoesNotPileUp) {
+    // `forever @(posedge clk or posedge rst)` with a reset that never rises: every wait leaves
+    // a stale subscription on `rst`, which nothing else ever removes.
+    ProcessBuilder clock(ProcessKind::Always, "clockgen");
+    const std::uint32_t delay = clock.reg(Type::bits(32, false, false));
+    const std::uint32_t value = clock.reg(Type::logic());
+    const std::uint32_t inverted = clock.reg(Type::logic());
+    const std::uint32_t five = clock.constant("32'd5");
+
+    clock.block("entry");
+    clock.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(five)));
+    clock.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    clock.block("toggle");
+    clock.readObject(value, 0);
+    clock.emit(Instruction::make(Opcode::Not, Operand::reg(inverted), Operand::reg(value)));
+    clock.store(0, inverted);
+    clock.emit(Instruction::make(Opcode::Jump, {}, Operand::block(0)));
+
+    Simulation simulation(
+        designOf(makeTop({clock.finish(), makeEventListCounter(true)}, eventListObjects())), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(10'000), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "1000");
+    EXPECT_LE(simulation.simulationKernel().armedWaits(simulation.signal("/tb/rst")), 16U)
+        << "a stale subscription on a signal that never changes stayed for the rest of the run";
 }
 
 // ---------------------------------------------------------------------------
@@ -1402,6 +1359,411 @@ TEST(Kernel, ReinitialisingAfterASuspensionDoesNotResumeTheOldRun) {
     EXPECT_EQ(simulation.value("/tb/clk"), "0");
     ASSERT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
     EXPECT_EQ(simulation.value("/tb/clk"), "1");
+}
+
+// ---------------------------------------------------------------------------
+// PLI hooks (section 9.3)
+// ---------------------------------------------------------------------------
+
+/// A PLI application reduced to what the kernel sees of one: queues of things to run at the
+/// points section 9.3 names, plus a log of when each point was reached.
+class ScriptedHooks final : public PliHooks {
+public:
+    using Action = std::function<void()>;
+
+    void valueChanged(std::uint32_t signalIndex) override {
+        if (onValueChange) onValueChange(signalIndex);
+    }
+
+    [[nodiscard]] SimTime nextTimedEvent() const override {
+        return timed.empty() ? NoTime : timed.begin()->first;
+    }
+
+    void timeAdvanced(SimTime time) override { log.push_back("advance " + std::to_string(time)); }
+
+    void runTimedEvents(SimTime time) override {
+        // Taken out before running, so that one scheduling another for the same time is
+        // run on the kernel's next pass rather than inside this one.
+        std::vector<Action> due;
+        while (!timed.empty() && timed.begin()->first <= time) {
+            due.push_back(std::move(timed.begin()->second));
+            timed.erase(timed.begin());
+        }
+        for (const Action& action : due) action();
+    }
+
+    [[nodiscard]] bool hasReadWrite() const override { return !readWrite.empty(); }
+
+    void runReadWrite() override { runAll(readWrite); }
+
+    [[nodiscard]] bool hasReadOnly() const override { return !readOnly.empty(); }
+
+    void runReadOnly() override { runAll(readOnly); }
+
+    std::function<void(std::uint32_t)> onValueChange;
+    std::multimap<SimTime, Action> timed;
+    std::vector<Action> readWrite;
+    std::vector<Action> readOnly;
+    std::vector<std::string> log;
+
+private:
+    static void runAll(std::vector<Action>& actions) {
+        std::vector<Action> taken;
+        taken.swap(actions);
+        for (const Action& action : taken) action();
+    }
+};
+
+/// A process that copies `a` into `b` whenever `a` changes.
+Process copyAToB() {
+    ProcessBuilder builder(ProcessKind::AlwaysComb, "copy");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    builder.block("entry");
+    builder.readObject(value, 0);
+    builder.store(1, value);
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+TEST(KernelPli, APendingTimedEventKeepsAQuietDesignRunning) {
+    // A design that schedules nothing of its own is exactly what a Python testbench drives,
+    // and it must not be declared finished while the testbench still has a timer running.
+    Simulation simulation(designOf(makeTop({})), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    const std::uint32_t a = simulation.signal("/tb/a");
+    hooks.timed.emplace(40, [&] { simulation.simulationKernel().deposit(a, literal("8'h5A")); });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.time(), 40U);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Hexadecimal), "5a");
+}
+
+TEST(KernelPli, CallbacksFireWhereSection93PutsThem) {
+    // At one timestamp: time advances, the timed event runs before the process released at
+    // that time, the clock changes, and only then do read-write and read-only run.
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    const std::uint32_t clk = simulation.signal("/tb/clk");
+    hooks.onValueChange = [&](std::uint32_t signal) {
+        if (signal == clk) hooks.log.push_back("change clk=" + simulation.value("/tb/clk"));
+    };
+    hooks.timed.emplace(5, [&] {
+        hooks.log.push_back("timed clk=" + simulation.value("/tb/clk"));
+        hooks.readWrite.emplace_back(
+            [&] { hooks.log.emplace_back("read-write clk=" + simulation.value("/tb/clk")); });
+        hooks.readOnly.emplace_back([&] { hooks.log.emplace_back("read-only"); });
+    });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    ASSERT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+    const std::vector<std::string> expected = {"advance 5", "timed clk=0", "change clk=1",
+                                               "read-write clk=1", "read-only"};
+    EXPECT_EQ(hooks.log, expected);
+}
+
+TEST(KernelPli, WhatAReadWriteCallbackWritesSettlesBeforeReadOnly) {
+    Simulation simulation(designOf(makeTop({copyAToB()})), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    const std::uint32_t a = simulation.signal("/tb/a");
+    std::string seenByReadOnly;
+    hooks.readWrite.emplace_back(
+        [&] { simulation.simulationKernel().deposit(a, literal("8'h42")); });
+    hooks.readOnly.emplace_back(
+        [&] { seenByReadOnly = simulation.value("/tb/b", Radix::Hexadecimal); });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(seenByReadOnly, "42") << "the copy ran before the read-only phase";
+}
+
+TEST(KernelPli, ReadWriteAskingForReadWriteForeverIsADeltaLoop) {
+    Simulation::deltaLimit = 16;
+    Simulation simulation(designOf(makeTop({})), "tb");
+    Simulation::deltaLimit = 10'000;
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    std::function<void()> again = [&] { hooks.readWrite.push_back(again); };
+    hooks.readWrite.push_back(again);
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::DeltaLimitExceeded));
+}
+
+TEST(KernelPli, AnUpdateScheduledWhileUpdatesAreAppliedJoinsTheNextPass) {
+    // A value-change callback runs while the NBA batch is being applied, and one that writes
+    // with an inertial delay appends to the very list being applied. The second write must
+    // land, and the first batch must not be disturbed by it.
+    ProcessBuilder builder(ProcessKind::Initial, "nba");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t constant = builder.constant("8'h11");
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(constant)));
+    builder.storeNonBlocking(0, value);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    ScriptedHooks hooks;
+    const std::uint32_t a = simulation.signal("/tb/a");
+    const std::uint32_t b = simulation.signal("/tb/b");
+    const BitVector written = literal("8'h22");
+    hooks.onValueChange = [&](std::uint32_t signal) {
+        if (signal == a) simulation.simulationKernel().scheduleNonBlocking(b, written);
+    };
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Hexadecimal), "11");
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "22");
+}
+
+TEST(KernelPli, AFinishFromACallbackEndsTheRunThere) {
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    hooks.timed.emplace(12, [&] { simulation.simulationKernel().requestFinish(); });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(100), RunStatus::Finished);
+    EXPECT_EQ(simulation.time(), 12U);
+    EXPECT_EQ(simulation.simulationKernel().exitStatus(), 0);
+}
+
+TEST(KernelPli, AFinishAskedForBeforeTheRunEndsItBeforeAnythingRuns) {
+    // What an application does from `cbStartOfSimulation` when it has nothing to test.
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    simulation.simulationKernel().requestFinish();
+    EXPECT_EQ(simulation.run(100), RunStatus::Finished);
+    EXPECT_EQ(simulation.time(), 0U);
+    EXPECT_EQ(simulation.simulationKernel().executedInstructions(), 0U);
+}
+
+TEST(KernelPli, AStopFromACallbackPausesTheRunAndResumingMatchesAStraightRun) {
+    Simulation straight(freeRunningClock(), "tb");
+    ASSERT_TRUE(straight.ready());
+    ASSERT_EQ(straight.run(100), RunStatus::TimeLimitReached);
+
+    Simulation stopped(freeRunningClock(), "tb");
+    ASSERT_TRUE(stopped.ready());
+
+    ScriptedHooks hooks;
+    hooks.timed.emplace(12, [&] { stopped.simulationKernel().requestStop(); });
+    stopped.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(stopped.run(100), RunStatus::Interrupted);
+    EXPECT_LT(stopped.time(), 100U);
+    EXPECT_GE(stopped.time(), 12U);
+
+    EXPECT_EQ(stopped.run(100), RunStatus::TimeLimitReached);
+    EXPECT_EQ(stopped.value("/tb/clk"), straight.value("/tb/clk"));
+    EXPECT_EQ(stopped.simulationKernel().executedInstructions(),
+              straight.simulationKernel().executedInstructions());
+}
+
+TEST(KernelPli, AStopTheRunEndedBeforeReachingDoesNotStopTheNextRun) {
+    // Asked for at 12, with the next edge at 15 past the limit: the run ends at its limit, and
+    // the stop it never reached ends with it rather than cutting the next run short at once.
+    Simulation simulation(freeRunningClock(), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    hooks.timed.emplace(12, [&] { simulation.simulationKernel().requestStop(); });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    ASSERT_EQ(simulation.run(14), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.run(30), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.time(), 30U);
+}
+
+TEST(KernelPli, AZeroDelayEventFromReadOnlyRunsInAFurtherSlotAtTheSameTime) {
+    // Read-only is the end of a slot, so something scheduled from it with no delay cannot run
+    // in that slot. It runs in another at the same time, and time is not said to advance.
+    Simulation simulation(designOf(makeTop({})), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    ScriptedHooks hooks;
+    hooks.timed.emplace(10, [&] {
+        hooks.readOnly.emplace_back([&] {
+            hooks.log.emplace_back("read-only");
+            hooks.timed.emplace(10, [&] { hooks.log.emplace_back("after read-only"); });
+        });
+    });
+    simulation.simulationKernel().setPliHooks(&hooks);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.time(), 10U);
+    const std::vector<std::string> expected = {"advance 10", "read-only", "after read-only"};
+    EXPECT_EQ(hooks.log, expected);
+}
+
+TEST(Kernel, AProcessIsNotWokenByWhatItWritesWhileItRuns) {
+    // `always @* begin t = 0; t = x; y = t; end`: the inferred sensitivity includes the
+    // temporary, which the process changes twice on every run. A process is not waiting on its
+    // event control while it runs, so those changes must not schedule it again; if they did,
+    // the time slot would never end.
+    ProcessBuilder builder(ProcessKind::AlwaysComb, "temporaries");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t zero = builder.constant("8'd0");
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(zero)));
+    builder.store(1, value);
+    builder.readObject(value, 0);
+    builder.store(1, value);
+    builder.readObject(value, 1);
+    builder.store(2, value);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop(
+        {builder.finish()},
+        {Object{.name = "x", .type = Type::bits(8, false, true), .initialValue = literal("8'd7")},
+         Object{.name = "t", .type = Type::bits(8, false, true)},
+         Object{.name = "y", .type = Type::bits(8, false, true)}});
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/y", Radix::Decimal), "7");
+
+    // It runs once at time zero, and once more for each change of what it reads from outside.
+    const std::uint64_t once = simulation.simulationKernel().executedInstructions();
+    simulation.simulationKernel().deposit(simulation.signal("/tb/x"), literal("8'd9"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/y", Radix::Decimal), "9");
+    EXPECT_EQ(simulation.simulationKernel().executedInstructions(), 2 * once);
+}
+
+// ---------------------------------------------------------------------------
+// Reading a window of an object
+// ---------------------------------------------------------------------------
+
+/// `result = source[offset +: 8]`, read with ReadObjectPart, with `offset` as given.
+Simulation readWindowAt(std::string_view offset) {
+    ProcessBuilder builder(ProcessKind::Initial, "window");
+    const std::uint32_t window = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t at = builder.reg(Type::bits(32, false, true));
+    const std::uint32_t offsetConstant = builder.constant(offset);
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(at),
+                                   Operand::constant(offsetConstant)));
+    builder.readObjectPart(window, 0, at);
+    builder.store(1, window);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition =
+        makeTop({builder.finish()}, {Object{.name = "source",
+                                            .type = Type::bits(16, false, true),
+                                            .initialValue = literal("16'hA55A")},
+                                     Object{.name = "result", .type = Type::bits(8, false, true)}});
+    return {designOf(std::move(definition)), "tb"};
+}
+
+TEST(Kernel, AWindowOfAnObjectIsReadAtItsOffset) {
+    Simulation simulation = readWindowAt("32'd4");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/result", Radix::Hexadecimal), "55");
+}
+
+TEST(Kernel, AWindowPastTheEndOfAnObjectReadsXThere) {
+    Simulation simulation = readWindowAt("32'd12");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/result"), "xxxx1010");
+}
+
+TEST(Kernel, AWindowAtAnUnknownOffsetIsX) {
+    Simulation simulation = readWindowAt("32'bx");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/result"), "xxxxxxxx");
+}
+
+// ---------------------------------------------------------------------------
+// Resolution (DESIGN_GUIDE.md section 3.7)
+// ---------------------------------------------------------------------------
+
+/// A continuous assignment of all of one one-bit object to another.
+Process continuousCopy(std::uint32_t from, std::uint32_t to) {
+    ProcessBuilder builder(ProcessKind::ContinuousAssign, "assign");
+    const std::uint32_t value = builder.reg(Type::logic());
+    builder.block("entry");
+    builder.readObject(value, from);
+    builder.store(to, value);
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+/// `wire n; assign n = a; assign n = b;`, with `a` and `b` starting at the given values.
+Simulation twoDrivers(std::string_view a, std::string_view b) {
+    ModuleDefinition definition =
+        makeTop({continuousCopy(0, 2), continuousCopy(1, 2)},
+                {Object{.name = "a", .type = Type::logic(), .initialValue = literal(a)},
+                 Object{.name = "b", .type = Type::logic(), .initialValue = literal(b)},
+                 Object{.name = "n", .type = Type::logic(), .kind = enzan::eir::ObjectKind::Net}});
+    return {designOf(std::move(definition)), "tb"};
+}
+
+TEST(Kernel, ADrivenNetIsXUntilItsDriverRunsAndAnUndrivenOneIsItsDefault) {
+    // Before anything runs: a driven bit holds no value the design gave it, so X, as a variable
+    // would; `z` would claim nothing drives it (DESIGN_GUIDE.md section 3.7).
+    const Simulation driven = twoDrivers("1'b1", "1'bz");
+    ASSERT_TRUE(driven.ready()) << driven.messages().front();
+    EXPECT_EQ(driven.value("/tb/n"), "x");
+
+    ModuleDefinition definition = makeTop({}, {Object{.name = "n",
+                                                      .type = Type::bits(4, false, true),
+                                                      .kind = enzan::eir::ObjectKind::Net}});
+    const Simulation undriven(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(undriven.ready());
+    EXPECT_EQ(undriven.value("/tb/n"), "zzzz");
+}
+
+TEST(Kernel, TwoDriversOfANetResolveAndReResolveWhenEitherChanges) {
+    Simulation simulation = twoDrivers("1'b1", "1'bz");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "1") << "z yields to the other driver";
+
+    simulation.simulationKernel().deposit(simulation.signal("/tb/b"), literal("1'b0"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "x") << "two strong drivers disagreeing are X";
+
+    simulation.simulationKernel().deposit(simulation.signal("/tb/a"), literal("1'bz"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "0");
+}
+
+TEST(Kernel, ADepositOnAResolvedNetHoldsOnlyUntilADriverChanges) {
+    // A deposit writes the net, not a driver, so the next driver update resolves it again from
+    // what the drivers drive. That is what `vpi_put_value` without a force means, and what a
+    // cocotb test writing to a bus that the design also drives sees.
+    Simulation simulation = twoDrivers("1'b1", "1'bz");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+
+    simulation.simulationKernel().deposit(simulation.signal("/tb/n"), literal("1'b0"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "0");
+
+    simulation.simulationKernel().deposit(simulation.signal("/tb/b"), literal("1'b1"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "1");
 }
 
 } // namespace

@@ -7,6 +7,8 @@ enzan_add_unit_test(
           DesignTests.cpp
           InstructionTests.cpp
           LibraryTests.cpp
+          ModuleTests.cpp
+          ProcessTests.cpp
           SerializationTests.cpp
           TypeTests.cpp
           VerifierTests.cpp

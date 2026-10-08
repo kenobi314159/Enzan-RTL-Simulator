@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -496,6 +497,87 @@ TEST_F(SessionTest, AFileInADirectoryThatDoesNotExistIsReported) {
 
     EXPECT_FALSE(session.openVcd(workspace / "no-such-directory/out.vcd"));
     EXPECT_TRUE(reported(DiagCode::CannotOpenFile));
+}
+
+// ---------------------------------------------------------------------------
+// VPI applications (DESIGN_GUIDE.md section 9)
+// ---------------------------------------------------------------------------
+
+/// How many times `needle` appears in `text`.
+std::size_t occurrences(const std::string& text, std::string_view needle) {
+    std::size_t count = 0;
+    for (std::size_t at = text.find(needle); at != std::string::npos;
+         at = text.find(needle, at + needle.size())) {
+        ++count;
+    }
+    return count;
+}
+
+/// The command line `vpi_get_vlog_info` is handed.
+std::vector<std::string> commandLine() {
+    return {"enzan", "--vpi", "plugin.so"};
+}
+
+TEST_F(SessionTest, AnApplicationLoadsBeforeThereIsADesign) {
+    ASSERT_TRUE(session.loadVpiApplication(ENZAN_TEST_STARTUP_PLUGIN, commandLine()));
+    EXPECT_TRUE(session.hasVpiApplication());
+    EXPECT_EQ(occurrences(transcript.str(), "first startup routine ran"), 1U);
+    EXPECT_EQ(occurrences(transcript.str(), "start of simulation"), 0U);
+}
+
+TEST_F(SessionTest, ElaborationStartsTheApplicationsSimulation) {
+    ASSERT_TRUE(session.loadVpiApplication(ENZAN_TEST_STARTUP_PLUGIN, commandLine()));
+    loadCounter();
+    EXPECT_EQ(occurrences(transcript.str(), "start of simulation"), 1U);
+    EXPECT_EQ(occurrences(transcript.str(), "end of simulation"), 0U);
+}
+
+TEST_F(SessionTest, AFinishedRunEndsTheApplicationsSimulationOnce) {
+    ASSERT_TRUE(session.loadVpiApplication(ENZAN_TEST_STARTUP_PLUGIN, commandLine()));
+    loadCounter();
+    ASSERT_EQ(session.run(std::nullopt), RunStatus::Finished);
+    EXPECT_EQ(occurrences(transcript.str(), "end of simulation"), 1U);
+
+    // Running a finished design again is not a second end.
+    session.run(std::nullopt);
+    EXPECT_EQ(occurrences(transcript.str(), "end of simulation"), 1U);
+}
+
+TEST_F(SessionTest, ARunStoppedShortStillEndsTheApplicationsSimulation) {
+    // What a batch run with `--run` does: the process ends while the design could have gone
+    // on, and an application that writes its results when told the simulation is over — as
+    // cocotb does — would otherwise never write them (section 9.5).
+    {
+        Session shortRun(sources, engine);
+        shortRun.setTranscript(&transcript);
+        ASSERT_TRUE(shortRun.loadVpiApplication(ENZAN_TEST_STARTUP_PLUGIN, commandLine()));
+
+        workspace.write("counter.sv", CounterSource);
+        Session::AnalysisRequest request;
+        request.files.push_back(workspace / "counter.sv");
+        ASSERT_TRUE(shortRun.analyse(request)) << firstMessage();
+        ASSERT_TRUE(shortRun.elaborate("tb")) << firstMessage();
+
+        ASSERT_EQ(shortRun.run(50), RunStatus::TimeLimitReached);
+        EXPECT_EQ(occurrences(transcript.str(), "end of simulation"), 0U);
+    }
+    EXPECT_EQ(occurrences(transcript.str(), "end of simulation"), 1U);
+}
+
+TEST_F(SessionTest, ADesignCannotBeRestartedWhileAnApplicationIsLoaded) {
+    ASSERT_TRUE(session.loadVpiApplication(ENZAN_TEST_STARTUP_PLUGIN, commandLine()));
+    loadCounter();
+    ASSERT_EQ(session.run(50), RunStatus::TimeLimitReached);
+
+    EXPECT_FALSE(session.restart());
+    EXPECT_TRUE(reported(DiagCode::RestartWithVpiApplication));
+    EXPECT_EQ(session.time(), 50U) << "nothing was put back";
+}
+
+TEST_F(SessionTest, AnApplicationThatCannotBeLoadedIsReported) {
+    EXPECT_FALSE(session.loadVpiApplication("/nonexistent/libnothing.so", commandLine()));
+    EXPECT_TRUE(reported(DiagCode::VpiLibraryUnloadable));
+    EXPECT_FALSE(session.hasVpiApplication());
 }
 
 } // namespace

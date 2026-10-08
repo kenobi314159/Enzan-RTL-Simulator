@@ -6,6 +6,7 @@
 
 module tb;
     int failures = 0;
+    localparam int NONE = 0;
 
     task automatic expect_eq8(input logic [7:0] got, input logic [7:0] want,
                               input int line_number);
@@ -20,6 +21,7 @@ module tb;
     logic [7:0] r;
     logic [3:0] narrow;
     logic       bit_result;
+    logic [3:0][7:0] bytes;
 
     initial begin
         // --- arithmetic ---------------------------------------------------
@@ -167,6 +169,12 @@ module tb;
             $display("FAIL: concatenation, got %b", r);
             failures = failures + 1;
         end
+        // A replication counted to zero adds nothing to the concatenation around it.
+        r = {narrow, {NONE{1'b1}}, 4'b0101};
+        if (r !== 8'b1010_0101) begin
+            $display("FAIL: a zero-count replication, got %b", r);
+            failures = failures + 1;
+        end
         r = {2{4'b1100}};
         if (r !== 8'b1100_1100) begin
             $display("FAIL: replication, got %b", r);
@@ -188,7 +196,81 @@ module tb;
             failures = failures + 1;
         end
 
+        // The bit-counting functions count bits that are exactly 1, and see X and Z for what
+        // they are.
+        a = 8'b1010_0x1z;
+        if ($isunknown(a) !== 1'b1 || $countones(a) != 3 || $onehot(a) !== 1'b0
+            || $onehot0(8'b0) !== 1'b1 || $onehot(8'b0001_0000) !== 1'b1) begin
+            $display("FAIL: $isunknown, $countones or $onehot of %b", a);
+            failures = failures + 1;
+        end
+
+        // `$clog2` and `$bits` of something that is not a constant, as in a loop bound: the
+        // logarithm rounds up and is 0 for 0, and `$bits` is the width without evaluating.
+        a = 8'd5;
+        b = 8'd128;
+        if ($clog2(a) != 3 || $clog2(b) != 7 || $clog2(a - 8'd5) != 0 || $bits(a + b) != 8) begin
+            $display("FAIL: $clog2 of %0d or %0d, or $bits of a sum", a, b);
+            failures = failures + 1;
+        end
+
+        // `**` wraps at the width, and an unknown operand makes it x.
+        a = 8'd3;
+        narrow = 4'd4;
+        if ((a ** narrow) !== 8'd81 || (a ** 4'bx000) !== 8'bxxxx_xxxx) begin
+            $display("FAIL: 3 ** 4 should be 81, got %0d", a ** narrow);
+            failures = failures + 1;
+        end
+
+        // A bit known on both sides and different settles `==` whatever the unknown bits hold,
+        // where a relation they could decide is x (IEEE 1800 section 11.4.5).
+        narrow = 4'b1x00;
+        if ((narrow == 4'b0000) !== 1'b0 || (narrow != 4'b0000) !== 1'b1
+            || (narrow == 4'b1000) !== 1'bx) begin
+            $display("FAIL: == with an unknown bit, got %b %b %b", narrow == 4'b0000,
+                     narrow != 4'b0000, narrow == 4'b1000);
+            failures = failures + 1;
+        end
+
+        // A case item matches by ===, so an item with x or z matches a selector holding the same.
+        narrow = 4'b10x1;
+        bit_result = 1'b0;
+        case (narrow)
+            4'b1001: bit_result = 1'b0;
+            4'b10x1: bit_result = 1'b1;
+            default: bit_result = 1'b0;
+        endcase
+        if (bit_result !== 1'b1) begin
+            $display("FAIL: a case item with x did not match a selector holding it");
+            failures = failures + 1;
+        end
+
+        // A literal's z is z, not x: `===` tells them apart.
+        narrow = 4'bz01x;
+        if (narrow === 4'bx01x || narrow !== 4'bz01x) begin
+            $display("FAIL: a z in a literal, got %b", narrow);
+            failures = failures + 1;
+        end
+
+        // A constant part select of a packed array counts in elements, not bits: [2:1] of
+        // four bytes is the middle two bytes.
+        bytes = 32'h4433_2211;
+        if (bytes[2:1] !== 16'h3322) begin
+            $display("FAIL: packed-array part select, got %h", bytes[2:1]);
+            failures = failures + 1;
+        end
+        bytes[2:1] = 16'hbbaa;
+        if (bytes !== 32'h44bb_aa11) begin
+            $display("FAIL: packed-array part-select write, got %h", bytes);
+            failures = failures + 1;
+        end
+
         // --- signedness ---------------------------------------------------
+        if ($signed(4'b1111) >= 0 || $unsigned(-4'sd1) != 4'd15) begin
+            $display("FAIL: $signed and $unsigned");
+            failures = failures + 1;
+        end
+
         if ($signed(8'hFF) >= 0) begin
             $display("FAIL: 8'hff should be negative when signed");
             failures = failures + 1;

@@ -113,6 +113,8 @@ Sources:
   -D, --define <NAME[=V]> Define a preprocessor macro. +define+ is also accepted.
   -I, --incdir <dir>      Add a directory to the `include search path. +incdir+
                           is also accepted.
+  -G <NAME=VALUE>         Set a parameter of the top level, overriding its
+                          default. -GNAME=VALUE is also accepted.
 
 Libraries:
       --out-lib <dir>     The library analysis is written into, created when it
@@ -131,9 +133,14 @@ Simulation:
                           real design, and seekable. Both may be given at once.
       --wave-scope <path> Record only this subtree, for example /tb/u_dut.
       --timescale <unit>  Time unit for delays and reported times: s, ms, us, ns,
-                          ps or fs. The default is ps.
+                          ps or fs. The default is the unit the libraries were
+                          analysed in, and ps without any.
       --delta-limit <n>   Delta cycles allowed at one timestamp. Default 10000.
+      --seed <n>          The seed random numbers are drawn from. Default 0.
       --dump-stats        Print instruction and delta counts when the run ends.
+      --vpi <lib[:entry]> Load a VPI application, such as cocotb's; repeatable.
+                          Without an entry, its vlog_startup_routines are run.
+  +<plusarg>              Passed to the design and to VPI applications.
 
 Graphical front end:
       --gui               Hand the elaborated design to a window rather than
@@ -147,6 +154,8 @@ Graphical front end:
       --write-theme <file>
                           Write the built-in theme out as a starting point for
                           one of your own, and exit.
+      --wave-list <file>  Open the wave window with this signal list in it.
+                          The window's Wave menu saves one.
 
   -h, --help              Print this message and exit.
   -V, --version           Print version and build information and exit.
@@ -180,17 +189,31 @@ struct Invocation {
     std::string libraryName;
     std::filesystem::path themePath;
     std::filesystem::path writeThemePath;
+
+    /// A signal list the window starts with (DESIGN_GUIDE.md section 10.8).
+    std::filesystem::path waveListPath;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
+
+    /// Top-level parameter overrides, each `NAME=VALUE`.
+    std::vector<std::string> parameters;
     std::string topModule;
     std::optional<std::uint64_t> runUntil;
     std::filesystem::path vcdPath;
     std::filesystem::path fstPath;
     std::string waveformScope;
     std::filesystem::path listenPath;
-    std::int8_t timeExponent = -12;
+    /// Given with `--timescale`; otherwise the libraries' unit, or the session's default.
+    std::optional<std::int8_t> timeExponent;
     std::uint32_t deltaLimit = 10'000;
+    std::uint32_t seed = 0;
     bool dumpStatistics = false;
+
+    /// VPI applications to load, in the order given (DESIGN_GUIDE.md section 9.1).
+    std::vector<std::string> vpiApplications;
+
+    /// The command line as it was given, which is what `vpi_get_vlog_info` reports.
+    std::vector<std::string> commandLine;
 };
 
 /// Parses a time unit name into its power-of-ten exponent.
@@ -340,7 +363,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
                           << "' is not a time unit; expected s, ms, us, ns, ps or fs\n";
                 return ParseOutcome::BadUsage;
             }
-            invocation.timeExponent = *exponent;
+            invocation.timeExponent = exponent;
             continue;
         }
 
@@ -363,10 +386,35 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
+        if (argument == "--seed") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            const std::optional<std::uint64_t> parsed = parseUnsigned(value);
+            if (!parsed.has_value() || *parsed > 0xFFFF'FFFFU) {
+                std::cerr << "enzan: '" << value << "' is not a seed from 0 to 4294967295\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.seed = static_cast<std::uint32_t>(*parsed);
+            continue;
+        }
+
         if (argument == "-D" || argument == "--define") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             invocation.defines.emplace_back(value);
+            continue;
+        }
+
+        // `-G NAME=VALUE`, or `-GNAME=VALUE` as Verilator spells it and as cocotb's makefiles
+        // pass it.
+        if (argument == "-G") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.parameters.emplace_back(value);
+            continue;
+        }
+        if (argument.starts_with("-G") && argument.size() > 2) {
+            invocation.parameters.emplace_back(argument.substr(2));
             continue;
         }
 
@@ -379,6 +427,13 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 
         if (argument == "--dump-stats") {
             invocation.dumpStatistics = true;
+            continue;
+        }
+
+        if (argument == "--vpi") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.vpiApplications.emplace_back(value);
             continue;
         }
 
@@ -464,6 +519,13 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
+        if (argument == "--wave-list") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.waveListPath = value;
+            continue;
+        }
+
         if (argument == "--dry-run") {
             invocation.dryRun = true;
             continue;
@@ -489,6 +551,13 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         // `-sv` asks for the only language this build reads, so it is accepted and dropped
         // exactly as the file-list reader treats it.
         if (argument == "-sv") continue;
+
+        // Any other `+` word is a plusarg. It belongs to the design and its VPI applications,
+        // which read it from the command line `vpi_get_vlog_info` reports (section 9.1), so it
+        // is accepted here and needs nothing further. The analysis options above are the
+        // exception, and `+libext+` stays refused below because it names a file-list feature
+        // that this command line does not have.
+        if (argument.starts_with('+') && !argument.starts_with("+libext+")) continue;
 
         if (argument.starts_with('-') || argument.starts_with('+')) {
             std::cerr << "enzan: unrecognised option '" << argument << "'\n"
@@ -556,8 +625,9 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
 /// The window's own options, as the front end spells them.
 ///
 /// `--gui` is the only way in (8.4), so anything the window needs has to travel through here.
-/// Its theme is the one thing a user configures about it, and leaving that reachable only by
-/// running the front end directly would make it a second program to learn after all.
+/// Its theme and the signal list it starts with are what a user configures about it, and
+/// leaving those reachable only by running the front end directly would make it a second
+/// program to learn after all.
 std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::vector<std::string> options;
     if (!invocation.themePath.empty()) {
@@ -567,6 +637,10 @@ std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     if (!invocation.writeThemePath.empty()) {
         options.emplace_back("--write-theme");
         options.push_back(invocation.writeThemePath.string());
+    }
+    if (!invocation.waveListPath.empty()) {
+        options.emplace_back("--wave-list");
+        options.push_back(invocation.waveListPath.string());
     }
     return options;
 }
@@ -659,6 +733,8 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
     for (const std::string& define : invocation.defines) request.defines.push_back(define);
     for (const std::filesystem::path& directory : invocation.includeDirectories)
         request.includeDirectories.push_back(directory);
+    for (const std::string& parameter : invocation.parameters)
+        request.parameters.push_back(parameter);
 
     request.contextFiles = invocation.contextFiles;
     return true;
@@ -671,7 +747,8 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
 /// One pipeline for the batch run, the served kernel and the script. Three copies of it was
 /// where the differences between them started: a `--listen` that resolved a file differently
 /// differently from another, or a batch run that put the waveform somewhere a served one did not.
-/// Opens the libraries this invocation writes into and reads from.
+/// Opens the libraries this invocation writes into and reads from, and settles the time unit,
+/// which the libraries fix when they hold units (8.2).
 bool openLibraries(const Invocation& invocation, enzan::session::Session& session) {
     if (!invocation.outputLibrary.empty() && !session.openOutputLibrary(invocation.outputLibrary))
         return false;
@@ -679,15 +756,16 @@ bool openLibraries(const Invocation& invocation, enzan::session::Session& sessio
     for (const NamedLibrary& input : invocation.inputLibraries) {
         if (!session.addInputLibrary(input.path, input.name)) return false;
     }
-    return true;
+
+    std::optional<enzan::runtime::TimeScale> requested;
+    if (invocation.timeExponent.has_value())
+        requested = enzan::runtime::TimeScale(*invocation.timeExponent);
+    return session.chooseTimeScale(requested);
 }
 
 /// Analyses, without elaborating. Returns false having reported.
 bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
                  enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
-    session.setTimeScale(enzan::runtime::TimeScale(invocation.timeExponent));
-    session.setDeltaLimit(invocation.deltaLimit);
-
     if (!openLibraries(invocation, session)) return false;
 
     enzan::session::Session::AnalysisRequest request;
@@ -714,6 +792,12 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
 
 bool prepare(const Invocation& invocation, enzan::session::Session& session,
              enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
+    // What only the kernel reads, set whether or not this run analyses anything: a run from
+    // libraries alone skips analysis, and a seed or a delta limit given to it would otherwise be
+    // dropped without a word.
+    session.setDeltaLimit(invocation.deltaLimit);
+    session.setSeed(invocation.seed);
+
     // A run given nothing but libraries has no sources of its own to analyse, and elaboration
     // then works from what the libraries hold.
     const bool hasSources = !invocation.files.empty() || !invocation.fileLists.empty();
@@ -783,6 +867,15 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
                   << std::flush;
     }
 
+    // After the window has started, so that the window's own output is not captured into the
+    // transcript it shows. A capture that cannot be set up costs the transcript what the design's
+    // applications print, and nothing else: the run goes ahead.
+    if (!server.captureOutput(error)) {
+        std::cerr << "enzan: what VPI applications print will not appear in the window's "
+                     "transcript: "
+                  << error << '\n';
+    }
+
     const int status = serveUntilDone(server, window);
     if (status != 0) return ExitStatus::SimulationFailed;
     if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;
@@ -793,6 +886,14 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
 ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                     enzan::DiagnosticEngine& diagnostics) {
     enzan::session::Session session(sources, diagnostics);
+
+    // Before analysis, so that a library that cannot be loaded is reported before a long
+    // analysis rather than after it (section 9.1).
+    for (const std::string& application : invocation.vpiApplications) {
+        if (!session.loadVpiApplication(application, invocation.commandLine))
+            return ExitStatus::AnalysisFailed;
+    }
+
     if (!prepare(invocation, session, sources, diagnostics)) return ExitStatus::AnalysisFailed;
 
     // Opened before serving as well as before running: a served session records into the live
@@ -835,9 +936,11 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                   << enzan::runtime::toString(status) << ")\n";
     }
 
-    if (status == enzan::runtime::RunStatus::Error || session.exitStatus() != 0)
+    // Analysis and elaboration have succeeded by here, so an error reported since — an `$error`,
+    // a failed assertion — is the design failing in simulation, which is status 3 (8.1).
+    if (status == enzan::runtime::RunStatus::Error || session.exitStatus() != 0
+        || diagnostics.hasErrors())
         return ExitStatus::SimulationFailed;
-    if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;
     return ExitStatus::Success;
 }
 
@@ -955,6 +1058,7 @@ int main(int argc, char** argv) {
     }
 
     Invocation invocation;
+    invocation.commandLine.assign(rawArguments.begin(), rawArguments.end());
     const std::size_t consumed = readCommand(arguments, invocation);
     switch (parseCommandLine(arguments.subspan(consumed), invocation)) {
     case ParseOutcome::PrintedHelp: return static_cast<int>(ExitStatus::Success);
@@ -979,9 +1083,23 @@ int main(int argc, char** argv) {
 
     if (!invocation.writeThemePath.empty()) becomeFrontEnd(frontEndOptions(invocation));
 
+    // An application observes a simulation, and these commands run none (section 9.1).
+    if (!invocation.vpiApplications.empty() && invocation.command != Command::Run
+        && invocation.command != Command::OneShot) {
+        std::cerr << "enzan: '--vpi' needs a simulation to load into; give it to `run` or to "
+                     "the one-shot form\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
     if (!invocation.themePath.empty() && !invocation.useGui) {
         std::cerr << "enzan: '--theme' needs '--gui'; it colours a window, and a headless run "
                      "has none\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
+    if (!invocation.waveListPath.empty() && !invocation.useGui) {
+        std::cerr << "enzan: '--wave-list' needs '--gui'; it fills a wave window, and a headless "
+                     "run has none. What a batch run records is chosen with --wave-scope\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 
@@ -1004,6 +1122,28 @@ int main(int argc, char** argv) {
         std::cerr << "enzan: no source files were given\n"
                   << "Try 'enzan --help' for the available options.\n";
         return static_cast<int>(ExitStatus::Usage);
+    }
+
+    // A macro, an include directory and a parameter override apply while sources are analysed
+    // (8.2). A run from libraries alone analyses nothing, so it would run what the libraries hold
+    // as if the option had been taken.
+    if (invocation.files.empty() && invocation.fileLists.empty()) {
+        std::vector<std::string_view> analysisOptions;
+        if (!invocation.defines.empty()) analysisOptions.emplace_back("'-D'");
+        if (!invocation.includeDirectories.empty()) analysisOptions.emplace_back("'-I'");
+        if (!invocation.parameters.empty()) analysisOptions.emplace_back("'-G'");
+        if (!analysisOptions.empty()) {
+            std::cerr << "enzan: ";
+            for (std::size_t index = 0; index < analysisOptions.size(); ++index) {
+                if (index != 0) std::cerr << (index + 1 == analysisOptions.size() ? " and " : ", ");
+                std::cerr << analysisOptions[index];
+            }
+            std::cerr << (analysisOptions.size() == 1 ? " applies" : " apply")
+                      << " while sources are analysed, and this analyses none; give "
+                      << (analysisOptions.size() == 1 ? "it" : "them")
+                      << " to the analysis that stores the top level\n";
+            return static_cast<int>(ExitStatus::Usage);
+        }
     }
 
     if (invocation.useGui && !invocation.listenPath.empty()) {

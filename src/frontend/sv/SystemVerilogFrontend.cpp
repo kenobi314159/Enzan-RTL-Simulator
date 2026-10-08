@@ -4,8 +4,10 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "eir/BitOps.h"
 #include "eir/Module.h"
 #include "eir/Verifier.h"
+#include "frontend/sv/DeadCode.h"
 #include "frontend/sv/ProcessTranslator.h"
 #include "frontend/sv/SvIntConversion.h"
 
@@ -24,23 +26,30 @@
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/PortSymbols.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/AllTypes.h"
+#include "slang/ast/types/NetType.h"
 #include "slang/ast/types/Type.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/Diagnostics.h"
+#include "slang/numeric/Time.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/SourceManager.h"
 #include "slang/util/Bag.h"
 
+#include <algorithm>
 #include <format>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace enzan::frontend::sv {
 
@@ -73,6 +82,134 @@ const ast::Expression& externalSideOf(const ast::Expression& expression,
     return withoutConversions(external);
 }
 
+/// slang's unit for a power of ten of a second, when it has one.
+std::optional<slang::TimeUnit> timeUnitOf(std::int8_t exponent) {
+    switch (exponent) {
+    case 0: return slang::TimeUnit::Seconds;
+    case -3: return slang::TimeUnit::Milliseconds;
+    case -6: return slang::TimeUnit::Microseconds;
+    case -9: return slang::TimeUnit::Nanoseconds;
+    case -12: return slang::TimeUnit::Picoseconds;
+    case -15: return slang::TimeUnit::Femtoseconds;
+    default: return std::nullopt;
+    }
+}
+
+/// The index part of an instance's name when it is an element of an instance array, `[2]` or
+/// `[1][0]`, as IEEE 1800 section 23.3.3.5 names it; empty for an instance of its own.
+std::string arraySuffixOf(const ast::InstanceSymbol& instance) {
+    if (instance.arrayPath.empty()) return {};
+    slang::SmallVector<slang::ConstantRange, 4> dimensions;
+    instance.getArrayDimensions(dimensions);
+    std::string suffix;
+    for (std::size_t index = 0; index < instance.arrayPath.size() && index < dimensions.size();
+         ++index) {
+        suffix += std::format("[{}]", static_cast<std::int32_t>(instance.arrayPath[index])
+                                          + dimensions[index].lower());
+    }
+    return suffix;
+}
+
+/// The name an instance has in the module holding it: its own, or its array's with its index.
+std::string instanceName(const ast::InstanceSymbol& instance) {
+    if (instance.arrayPath.empty()) return std::string(instance.name);
+    return std::string(instance.getArrayName()) + arraySuffixOf(instance);
+}
+
+/// The name `symbol` has in the module that declares it, its generate blocks joined to it with
+/// dots as `collectScope` names a hoisted object or an instance (DESIGN_GUIDE.md section 5.1),
+/// and the body that module's instance has; null for the top level's instance, which no body
+/// holds. Nothing when the symbol is somewhere a name cannot reach, a package, or a subroutine
+/// for anything but its static variables.
+std::optional<std::string> nameWithinBody(const ast::Symbol& symbol,
+                                          const ast::InstanceBodySymbol*& owner) {
+    std::string prefix;
+    std::string ownName = symbol.kind == slang::ast::SymbolKind::Instance
+                              ? instanceName(symbol.as<ast::InstanceSymbol>())
+                              : std::string(symbol.name);
+    const ast::Scope* scope = symbol.getParentScope();
+    while (scope != nullptr) {
+        const ast::Symbol& parent = scope->asSymbol();
+        switch (parent.kind) {
+        case slang::ast::SymbolKind::InstanceBody:
+            owner = &parent.as<ast::InstanceBodySymbol>();
+            return prefix + ownName;
+
+        case slang::ast::SymbolKind::Root:
+        case slang::ast::SymbolKind::CompilationUnit:
+            if (symbol.kind != slang::ast::SymbolKind::Instance) return std::nullopt;
+            owner = nullptr;
+            return ownName;
+
+        case slang::ast::SymbolKind::GenerateBlock: {
+            const auto& block = parent.as<ast::GenerateBlockSymbol>();
+            const ast::Scope* above = block.getParentScope();
+            if (above != nullptr
+                && above->asSymbol().kind == slang::ast::SymbolKind::GenerateBlockArray) {
+                const auto& array = above->asSymbol().as<ast::GenerateBlockArraySymbol>();
+                const slang::SVInt* index = block.getArrayIndex();
+                const std::string entry =
+                    index != nullptr
+                        ? std::format("{}[{}]", array.getExternalName(),
+                                      index->toString(slang::LiteralBase::Decimal, false))
+                        : array.getExternalName();
+                prefix.insert(0, ".");
+                prefix.insert(0, entry);
+                scope = array.getParentScope();
+            } else {
+                prefix.insert(0, ".");
+                prefix.insert(0, block.getExternalName());
+                scope = above;
+            }
+            break;
+        }
+
+        // A static variable of a subroutine is named behind it, `f.count`, as IEEE 1800 section
+        // 23.6 names it, so that two subroutines' `count` are two variables.
+        case slang::ast::SymbolKind::Subroutine:
+            if (!ast::ValueSymbol::isKind(symbol.kind)
+                || staticSubroutineOf(symbol.as<ast::ValueSymbol>()) == nullptr)
+                return std::nullopt;
+            prefix.insert(0, ".");
+            prefix.insert(0, parent.name);
+            scope = parent.getParentScope();
+            break;
+
+        // A procedural block's locals are named without it, as collectScope names them, and an
+        // element of an instance array carries its index in its own name already.
+        case slang::ast::SymbolKind::StatementBlock:
+        case slang::ast::SymbolKind::InstanceArray: scope = parent.getParentScope(); break;
+
+        // A static property of a class declared in a module is that module's storage, named
+        // with its class.
+        case slang::ast::SymbolKind::ClassType:
+            prefix.insert(0, "::");
+            prefix.insert(0, parent.name);
+            scope = parent.getParentScope();
+            break;
+
+        default: return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+/// The instances from the top level down to the one whose body is `body`, by the names
+/// `nameWithinBody` gives them.
+std::optional<std::vector<std::string>> instanceChain(const ast::InstanceBodySymbol& body) {
+    std::vector<std::string> chain;
+    const ast::InstanceBodySymbol* current = &body;
+    while (current != nullptr && current->parentInstance != nullptr) {
+        const ast::InstanceBodySymbol* owner = nullptr;
+        const std::optional<std::string> name = nameWithinBody(*current->parentInstance, owner);
+        if (!name.has_value()) return std::nullopt;
+        chain.push_back(*name);
+        current = owner;
+    }
+    std::ranges::reverse(chain);
+    return chain;
+}
+
 /// Translates one analysed module body into an EIR module definition.
 class ModuleBuilder final : public ModuleContext {
 public:
@@ -92,6 +229,11 @@ public:
         /// which is what a build system passes. The identifier is what the two managers
         /// actually agree about.
         const std::map<slang::BufferID, BufferId>& buffers;
+
+        /// Every package variable a module refers to, in the order they were first met, for
+        /// the package definitions that hold them. Only those: a package may declare variables
+        /// of types Enzan does not have, and one nothing uses should not stop a design.
+        std::vector<const ast::ValueSymbol*>* packageVariables = nullptr;
     };
 
     ModuleBuilder(Shared& sharedState, std::string name, const ast::InstanceBodySymbol& bodySymbol)
@@ -100,6 +242,19 @@ public:
         definitionValue.sourceName = std::string(bodySymbol.getDefinition().name);
         definitionValue.location = convertLocation(bodySymbol.getDefinition().location);
     }
+
+    /// A builder for the definition that holds a package's variables, which has no body.
+    ModuleBuilder(Shared& sharedState, const ast::PackageSymbol& packageSymbol)
+        : shared(&sharedState), body(nullptr), package(&packageSymbol) {
+        definitionValue.name = std::format("{}::", packageSymbol.name);
+        definitionValue.sourceName = std::string(packageSymbol.name);
+        definitionValue.location = convertLocation(packageSymbol.location);
+        definitionValue.isPackage = true;
+    }
+
+    /// The package that declares `symbol` directly, or declares the subroutine it is a static
+    /// variable of, if one does.
+    static const ast::PackageSymbol* packageOf(const ast::ValueSymbol& symbol);
 
     /// Collects declarations and ports. Instances and processes come after, because an
     /// instance's connections resolve against this module's objects.
@@ -121,8 +276,9 @@ public:
     /// Translates the procedural blocks and continuous assignments.
     bool translateProcesses();
 
-    /// Adds an instance of an already-translated module.
-    bool addInstance(const ast::InstanceSymbol& instance, const std::string& targetName,
+    /// Adds an instance of an already-translated module, named `prefix` and its own name.
+    bool addInstance(const ast::InstanceSymbol& instance, const std::string& prefix,
+                     const std::string& targetName,
                      const std::map<std::string, std::uint32_t, std::less<>>& targetPorts);
 
     eir::ModuleDefinition take() { return std::move(definitionValue); }
@@ -133,6 +289,9 @@ public:
 
     std::optional<eir::Type> convertType(const ast::Type& type) override;
 
+    std::optional<eir::BitVector> constantBits(const slang::ConstantValue& value,
+                                               const ast::Type& type) override;
+
     SourceLocation convertLocation(slang::SourceLocation location) override;
 
     void reportUnsupported(slang::SourceLocation location, std::string_view what) override;
@@ -141,9 +300,49 @@ public:
         return definitionValue;
     }
 
+    [[nodiscard]] const ast::Symbol& evaluationScope() const override { return *body; }
+
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
+
+    /// The EIR kind of a slang net kind, or nothing for one Enzan cannot resolve.
+    static std::optional<eir::NetKind> convertNetKind(ast::NetType::NetKind kind);
+
+    /// Creates the object a hierarchical reference to `symbol`, declared in `owner` as `name`,
+    /// is: one with no storage and a path from this instance to that object.
+    std::optional<std::uint32_t> referenceTo(const ast::ValueSymbol& symbol,
+                                             const ast::InstanceBodySymbol& owner,
+                                             const std::string& name, eir::Type type);
+
+    /// Records what `connection`, an interface port of `instance`, is connected to here.
+    bool bindInterface(const ast::InstanceSymbol& instance, const ast::PortConnection& connection,
+                       eir::Instance& result);
+
+    /// Creates the object for a reference whose path is already known.
+    std::optional<std::uint32_t> referenceThrough(const ast::ValueSymbol& symbol, std::string path,
+                                                  eir::Type type);
+
+    /// Reports a drive strength other than the default and returns false.
+    ///
+    /// Enzan resolves drivers without a strength model (DESIGN_GUIDE.md section 3.7), which
+    /// gives the right answer only when every driver is strong: a `weak` driver contending with
+    /// a strong one would resolve to X where the strong one should win.
+    bool checkDriveStrength(
+        std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
+        slang::SourceLocation location);
+
+    /// Collects the elements of an instance array, and of the arrays nested in it.
+    void collectInstanceArray(const ast::InstanceArraySymbol& array, const std::string& prefix) {
+        for (const ast::Symbol* element : array.elements) {
+            if (element->kind == slang::ast::SymbolKind::InstanceArray) {
+                collectInstanceArray(element->as<ast::InstanceArraySymbol>(), prefix);
+            } else if (element->kind == slang::ast::SymbolKind::Instance) {
+                instances.push_back(CollectedInstance{
+                    .prefix = prefix, .symbol = &element->as<ast::InstanceSymbol>()});
+            }
+        }
+    }
 
     /// Returns a name not already used by an object in this module.
     std::string uniqueObjectName(std::string_view preferred);
@@ -151,6 +350,10 @@ private:
     /// Records `type`'s enumeration in this definition and returns its index, or `NoEnum`
     /// when the type is not an enumeration.
     std::uint32_t enumFor(const ast::Type& type);
+
+    /// True when `type` is as wide as `port`, so that elaboration can collapse the port onto a
+    /// signal of it. A port whose type does not convert is left to the connection to report.
+    bool hasPortWidth(const ast::PortSymbol& port, const eir::Type& type);
 
     /// Creates an intermediate object plus a continuous assignment for a port connection
     /// that is an expression rather than a plain signal.
@@ -169,11 +372,14 @@ private:
         Implicit,
     };
 
-    SensitivityForm extractSensitivity(const ast::TimingControl& timing,
+    SensitivityForm extractSensitivity(ProcessTranslator& translator,
+                                       const ast::TimingControl& timing,
                                        std::vector<eir::SensitivityEntry>& into);
 
     Shared* shared;
     const ast::InstanceBodySymbol* body;
+    /// The package whose variables this builder declares, for a package's builder.
+    const ast::PackageSymbol* package = nullptr;
     eir::ModuleDefinition definitionValue;
 
     std::map<const ast::ValueSymbol*, std::uint32_t> objectBySymbol;
@@ -182,11 +388,81 @@ private:
     std::vector<std::pair<std::string, const ast::ProceduralBlockSymbol*>> proceduralBlocks;
     std::vector<const ast::ContinuousAssignSymbol*> continuousAssignments;
 
+    /// The interface ports of this body, in declaration order.
+    std::vector<const ast::InterfacePortSymbol*> interfacePorts;
+
+    /// How this body reaches `instance` through one of its interface ports: `@port`, or
+    /// `@port[2]` when the port is an array and the instance one of its elements. Empty when no
+    /// interface port reaches it.
+    [[nodiscard]] std::string portReaching(const ast::InstanceSymbol& instance) const {
+        for (const ast::InterfacePortSymbol* port : interfacePorts) {
+            const ast::Symbol* connected = port->getConnection().first;
+            if (connected == &instance) return std::format("@{}", port->name);
+            if (connected != nullptr && connected->kind == slang::ast::SymbolKind::InstanceArray
+                && containsElement(connected->as<ast::InstanceArraySymbol>(), instance)) {
+                return std::format("@{}{}", port->name, arraySuffixOf(instance));
+            }
+        }
+        return {};
+    }
+
+    /// The instance array, declared in some body, holding exactly the elements of `array`, or
+    /// null: an array slice holds only some of them, and is not supported.
+    static const ast::InstanceArraySymbol* declaredArrayOf(const ast::InstanceArraySymbol& array) {
+        if (array.getParentScope() != nullptr) return &array;
+
+        const ast::Symbol* leaf = &array;
+        while (leaf->kind == slang::ast::SymbolKind::InstanceArray) {
+            const auto& elements = leaf->as<ast::InstanceArraySymbol>().elements;
+            if (elements.empty()) return nullptr;
+            leaf = elements.front();
+        }
+        const ast::Scope* scope = leaf->getParentScope();
+        const ast::InstanceArraySymbol* declared = nullptr;
+        while (scope != nullptr
+               && scope->asSymbol().kind == slang::ast::SymbolKind::InstanceArray) {
+            declared = &scope->asSymbol().as<ast::InstanceArraySymbol>();
+            scope = declared->getParentScope();
+        }
+        if (declared == nullptr || countElements(*declared) != countElements(array)) return nullptr;
+        return declared;
+    }
+
+    static std::size_t countElements(const ast::InstanceArraySymbol& array) {
+        std::size_t count = 0;
+        for (const ast::Symbol* element : array.elements) {
+            count += element->kind == slang::ast::SymbolKind::InstanceArray
+                         ? countElements(element->as<ast::InstanceArraySymbol>())
+                         : 1;
+        }
+        return count;
+    }
+
+    static bool containsElement(const ast::InstanceArraySymbol& array,
+                                const ast::InstanceSymbol& instance) {
+        return std::ranges::any_of(array.elements, [&instance](const ast::Symbol* element) {
+            if (element == &instance) return true;
+            return element->kind == slang::ast::SymbolKind::InstanceArray
+                   && containsElement(element->as<ast::InstanceArraySymbol>(), instance);
+        });
+    }
+
+    /// Nets declared with an assignment, `wire w = a & b;`, which is a continuous assignment
+    /// written in the declaration rather than a time-zero value.
+    std::vector<const ast::NetSymbol*> netAssignments;
+
     bool failed = false;
 
 public:
+    /// An instance found while collecting, with the generate blocks it is inside.
+    struct CollectedInstance {
+        /// What its name begins with, as an object's does: `gen[0].` inside a generate block.
+        std::string prefix;
+        const ast::InstanceSymbol* symbol = nullptr;
+    };
+
     /// Instances found while collecting, in declaration order.
-    std::vector<const ast::InstanceSymbol*> instances;
+    std::vector<CollectedInstance> instances;
 };
 
 std::string ModuleBuilder::uniqueObjectName(std::string_view preferred) {
@@ -233,15 +509,79 @@ std::uint32_t ModuleBuilder::enumFor(const ast::Type& type) {
 
 std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
     // Packed types — vectors, packed structs, packed arrays, enums — are all integral to
-    // slang and all behave as bit vectors, so they convert for free. Unpacked aggregates,
-    // reals and strings do not, and are reported where they are used rather than here, so
-    // that the diagnostic points at the user's line.
-    if (!type.isIntegral()) return std::nullopt;
+    // slang and all behave as bit vectors, so they convert for free.
+    if (type.isIntegral()) {
+        const slang::bitwidth_t width = type.getBitWidth();
+        if (width == 0) return std::nullopt;
+        return eir::Type::bits(width, type.isSigned(), type.isFourState());
+    }
 
-    const slang::bitwidth_t width = type.getBitWidth();
-    if (width == 0) return std::nullopt;
+    // A fixed-size unpacked array and an unpacked struct are stored flat, as the vector of all
+    // their bits (DESIGN_GUIDE.md section 4.3): every operation the language allows on one as
+    // a whole — assignment, equality, a port connection — is then the same operation on bits.
+    // Reals, strings, unions, dynamic arrays and classes are none of these, and are reported
+    // where they are used, so that the diagnostic points at the user's line.
+    const ast::Type& canonical = type.getCanonicalType();
+    std::uint64_t width = 0;
+    bool fourState = false;
 
-    return eir::Type::bits(width, type.isSigned(), type.isFourState());
+    if (canonical.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+        const auto& array = canonical.as<ast::FixedSizeUnpackedArrayType>();
+        const std::optional<eir::Type> element = convertType(array.elementType);
+        if (!element.has_value()) return std::nullopt;
+        width = std::uint64_t{element->bitWidth()} * array.range.width();
+        fourState = element->isFourState();
+    } else if (canonical.kind == slang::ast::SymbolKind::UnpackedStructType) {
+        for (const ast::FieldSymbol* field : canonical.as<ast::UnpackedStructType>().fields) {
+            const std::optional<eir::Type> member = convertType(field->getType());
+            if (!member.has_value()) return std::nullopt;
+            width += member->bitWidth();
+            fourState = fourState || member->isFourState();
+        }
+    } else {
+        return std::nullopt;
+    }
+
+    if (width == 0 || width > std::numeric_limits<std::uint32_t>::max()) return std::nullopt;
+    return eir::Type::bits(static_cast<std::uint32_t>(width), false, fourState);
+}
+
+std::optional<eir::BitVector> ModuleBuilder::constantBits(const slang::ConstantValue& value,
+                                                          const ast::Type& type) {
+    const std::optional<eir::Type> converted = convertType(type);
+    if (!converted.has_value()) return std::nullopt;
+
+    if (value.isInteger()) {
+        // One shared conversion, because the X/Z encodings of slang and Enzan differ and two
+        // copies of that mapping means one of them is wrong.
+        return toBitVector(value.integer()).resized(converted->bitWidth(), type.isSigned());
+    }
+    if (!value.isUnpacked()) return std::nullopt;
+
+    // The elements in order, the first one highest, as the storage lays them out.
+    const ast::Type& canonical = type.getCanonicalType();
+    const std::span<const slang::ConstantValue> elements = value.elements();
+    eir::BitVector result = eir::BitVector::filled(converted->bitWidth(), eir::Logic::Zero);
+    std::uint32_t offset = converted->bitWidth();
+    for (std::size_t index = 0; index < elements.size(); ++index) {
+        const ast::Type* elementType = nullptr;
+        if (canonical.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+            elementType = &canonical.as<ast::FixedSizeUnpackedArrayType>().elementType;
+        } else if (canonical.kind == slang::ast::SymbolKind::UnpackedStructType) {
+            const auto fields = canonical.as<ast::UnpackedStructType>().fields;
+            if (index >= fields.size()) return std::nullopt;
+            elementType = &fields[index]->getType();
+        } else {
+            return std::nullopt;
+        }
+
+        const std::optional<eir::BitVector> element = constantBits(elements[index], *elementType);
+        if (!element.has_value() || element->width() > offset) return std::nullopt;
+        offset -= element->width();
+        eir::bitops::assignPartAt(result.mutableRef(), element->ref(), offset);
+    }
+    if (offset != 0) return std::nullopt;
+    return result;
 }
 
 SourceLocation ModuleBuilder::convertLocation(slang::SourceLocation location) {
@@ -266,7 +606,33 @@ void ModuleBuilder::reportUnsupported(slang::SourceLocation location, std::strin
     shared->diagnostics.report(DiagCode::UnsupportedConstruct, convertLocation(location), what);
 }
 
+const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {
+    const ast::Scope* scope = symbol.getParentScope();
+    if (staticSubroutineOf(symbol) != nullptr) {
+        while (scope != nullptr
+               && (scope->asSymbol().kind == slang::ast::SymbolKind::Subroutine
+                   || scope->asSymbol().kind == slang::ast::SymbolKind::StatementBlock))
+            scope = scope->asSymbol().getParentScope();
+    }
+    if (scope == nullptr || scope->asSymbol().kind != slang::ast::SymbolKind::Package)
+        return nullptr;
+    return &scope->asSymbol().as<ast::PackageSymbol>();
+}
+
 std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& symbol) {
+    // A member reached through a modport is the modport's stand-in for the interface's own
+    // variable or net, which is what has storage.
+    if (symbol.kind == slang::ast::SymbolKind::ModportPort) {
+        const ast::Symbol* internal = symbol.as<ast::ModportPortSymbol>().internalSymbol;
+        if (internal == nullptr || !ast::ValueSymbol::isKind(internal->kind)) {
+            reportUnsupported(
+                symbol.location,
+                std::format("the modport port '{}', which names no signal", symbol.name));
+            return std::nullopt;
+        }
+        return objectFor(internal->as<ast::ValueSymbol>());
+    }
+
     const auto found = objectBySymbol.find(&symbol);
     if (found != objectBySymbol.end()) return found->second;
 
@@ -278,25 +644,111 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
         return std::nullopt;
     }
 
+    // A package variable is one variable however many modules use it, so a module refers to the
+    // package's own, at the root, as it would to another instance's (IEEE 1800 section 26.2).
+    // A static variable of a subroutine is named behind it, as nameWithinBody names it.
+    const ast::SubroutineSymbol* const subroutine = staticSubroutineOf(symbol);
+    std::string name(symbol.name);
+    if (subroutine != nullptr) name = std::format("{}.{}", subroutine->name, symbol.name);
+
+    const ast::PackageSymbol* const declaringPackage = packageOf(symbol);
+    if (declaringPackage != nullptr && declaringPackage != package) {
+        std::vector<const ast::ValueSymbol*>& used = *shared->packageVariables;
+        if (std::ranges::find(used, &symbol) == used.end()) used.push_back(&symbol);
+        return referenceThrough(symbol, std::format("/{}/{}", declaringPackage->name, name), *type);
+    }
+
+    // A symbol another instance declares is a hierarchical reference, a name here for that
+    // instance's object, and gets no storage of its own: elaboration binds it. Giving it storage
+    // would make a testbench reading `dut.state` read a copy nothing ever writes. A package's
+    // builder declares the package's own variables, and has no body to compare against.
+    if (declaringPackage == nullptr) {
+        const ast::InstanceBodySymbol* owner = nullptr;
+        const std::optional<std::string> nameThere = nameWithinBody(symbol, owner);
+        if (!nameThere.has_value() || owner == nullptr) {
+            reportUnsupported(symbol.location,
+                              std::format("a reference to '{}', which is not declared in a module "
+                                          "or a package",
+                                          symbol.name));
+            return std::nullopt;
+        }
+        // Within the module, a subroutine's static variable takes the generate blocks its
+        // subroutine is in as well.
+        if (subroutine != nullptr) name = *nameThere;
+        if (owner != body) {
+            // Reached through an interface port, the reference names the port rather than the
+            // interface it happens to be connected to here: one definition serves every
+            // instance, and each may be connected to a different one.
+            if (owner->parentInstance != nullptr) {
+                if (const std::string port = portReaching(*owner->parentInstance); !port.empty())
+                    return referenceThrough(symbol, std::format("{}/{}", port, *nameThere), *type);
+            }
+            return referenceTo(symbol, *owner, *nameThere, *type);
+        }
+    }
+
     eir::Object object;
-    object.name = uniqueObjectName(symbol.name);
+    object.name = uniqueObjectName(name);
     object.type = *type;
     object.kind = symbol.kind == slang::ast::SymbolKind::Net ? eir::ObjectKind::Net
                                                              : eir::ObjectKind::Variable;
     object.location = convertLocation(symbol.location);
     object.enumIndex = enumFor(symbol.getType());
+    object.subroutineStatic = subroutine != nullptr;
 
-    // A declaration initialiser is a time-zero value when it is constant. A non-constant
-    // one is a static initialisation that has to run, which needs the process machinery an
-    // `initial` block gets and is reported rather than silently dropped.
-    if (const ast::Expression* initializer = symbol.getInitializer(); initializer != nullptr) {
+    // An unpacked array keeps its declared dimensions, outermost first, for what reads it as an
+    // array rather than as the bits it is stored as: VPI, and the waveform database.
+    for (const ast::Type* level = &symbol.getType().getCanonicalType();
+         level->kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType;) {
+        const auto& array = level->as<ast::FixedSizeUnpackedArrayType>();
+        object.unpackedDimensions.push_back(
+            eir::UnpackedDimension{.left = array.range.left, .right = array.range.right});
+        level = &array.elementType.getCanonicalType();
+        if (level->kind != slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+            if (const std::optional<eir::Type> element = convertType(*level)) {
+                object.elementWidth = element->bitWidth();
+                object.elementSigned = element->isSigned();
+            }
+        }
+    }
+
+    if (symbol.kind == slang::ast::SymbolKind::Net) {
+        const auto& net = symbol.as<ast::NetSymbol>();
+        const std::optional<eir::NetKind> netKind = convertNetKind(net.netType.netKind);
+        if (!netKind.has_value()) {
+            reportUnsupported(symbol.location,
+                              std::format("a '{}' net", net.netType.name.empty()
+                                                            ? std::string_view("user-defined")
+                                                            : net.netType.name));
+            return std::nullopt;
+        }
+        object.netKind = *netKind;
+        // A net delay postpones every change by an inertial delay; dropping it would make the
+        // net change early and the design simulate to an answer that looks plausible.
+        if (net.getDelay() != nullptr) {
+            reportUnsupported(symbol.location, "a delay on a net");
+            return std::nullopt;
+        }
+        if (!checkDriveStrength(net.getDriveStrength(), symbol.location)) return std::nullopt;
+    }
+
+    // A net's initialiser is a continuous assignment, `wire w = a & b;`, translated with the
+    // module's other continuous assignments. An automatic variable's runs where it is declared,
+    // every time, and the process translator emits it there. A static variable's is a time-zero
+    // value when it is constant. A non-constant one is a static initialisation that has to run,
+    // which needs the process machinery an `initial` block gets and is reported rather than
+    // silently dropped.
+    const ast::Expression* initializer = symbol.getInitializer();
+    const bool automatic =
+        ast::VariableSymbol::isKind(symbol.kind)
+        && symbol.as<ast::VariableSymbol>().lifetime == ast::VariableLifetime::Automatic;
+    if (initializer != nullptr && symbol.kind == slang::ast::SymbolKind::Net) {
+        netAssignments.push_back(&symbol.as<ast::NetSymbol>());
+    } else if (initializer != nullptr && !automatic) {
         ast::EvalContext evalContext(symbol);
         const slang::ConstantValue value = initializer->eval(evalContext);
-        if (value.isInteger()) {
-            // One shared conversion, because the X/Z encodings of slang and Enzan differ
-            // and two copies of that mapping means one of them is wrong.
-            const eir::BitVector initial = toBitVector(value.integer());
-            object.initialValue = initial.resized(type->bitWidth(), type->isSigned());
+        if (std::optional<eir::BitVector> initial = constantBits(value, symbol.getType())) {
+            object.initialValue = std::move(*initial);
         } else {
             reportUnsupported(
                 symbol.location,
@@ -357,24 +809,41 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             break;
 
         case slang::ast::SymbolKind::Instance:
-            instances.push_back(&member.as<ast::InstanceSymbol>());
+            instances.push_back(
+                CollectedInstance{.prefix = prefix, .symbol = &member.as<ast::InstanceSymbol>()});
+            break;
+
+        case slang::ast::SymbolKind::InstanceArray:
+            // Each element is an instance of its own, named with its index.
+            collectInstanceArray(member.as<ast::InstanceArraySymbol>(), prefix);
             break;
 
         case slang::ast::SymbolKind::GenerateBlock: {
             // slang has already decided which generate branch is taken; an
             // uninstantiated one is the branch that was not, and must be skipped
             // rather than translated.
+            //
+            // An unnamed block is named `genblk<n>`, as IEEE 1800 section 27.6 names it.
             const auto& block = member.as<ast::GenerateBlockSymbol>();
             if (block.isUninstantiated) break;
-            if (!collectScope(block, prefix + std::string(block.name) + ".")) return false;
+            if (!collectScope(block, prefix + block.getExternalName() + ".")) return false;
             break;
         }
 
         case slang::ast::SymbolKind::GenerateBlockArray: {
+            // An iteration of a loop has no name of its own: it is the loop's name and its
+            // index, `gen[0]`, which is how the standard names it and how slang paths it.
             const auto& array = member.as<ast::GenerateBlockArraySymbol>();
+            const std::string arrayName = array.getExternalName();
             for (const ast::GenerateBlockSymbol* entry : array.entries) {
                 if (entry->isUninstantiated) continue;
-                if (!collectScope(*entry, prefix + std::string(entry->name) + ".")) return false;
+                const slang::SVInt* index = entry->getArrayIndex();
+                const std::string entryName =
+                    index != nullptr
+                        ? std::format("{}[{}]", arrayName,
+                                      index->toString(slang::LiteralBase::Decimal, false))
+                        : arrayName;
+                if (!collectScope(*entry, prefix + entryName + ".")) return false;
             }
             break;
         }
@@ -401,8 +870,12 @@ bool ModuleBuilder::collectDeclarations() {
     if (!collectScope(*body, "")) return false;
 
     for (const ast::Symbol* portSymbol : body->getPortList()) {
+        if (portSymbol->kind == slang::ast::SymbolKind::InterfacePort) {
+            interfacePorts.push_back(&portSymbol->as<ast::InterfacePortSymbol>());
+            continue;
+        }
         if (portSymbol->kind != slang::ast::SymbolKind::Port) {
-            reportUnsupported(portSymbol->location, "interface ports and multi-ports");
+            reportUnsupported(portSymbol->location, "multi-ports");
             continue;
         }
 
@@ -471,7 +944,7 @@ bool ModuleBuilder::translateProcesses() {
         if (bodyStatement->kind == ast::StatementKind::Timed) {
             const auto& timed = bodyStatement->as<ast::TimedStatement>();
             std::vector<eir::SensitivityEntry> sensitivity;
-            switch (extractSensitivity(timed.timing, sensitivity)) {
+            switch (extractSensitivity(translator, timed.timing, sensitivity)) {
             case SensitivityForm::Explicit:
                 translator.setSensitivity(std::move(sensitivity));
                 bodyStatement = &timed.stmt;
@@ -497,6 +970,8 @@ bool ModuleBuilder::translateProcesses() {
     }
 
     for (const ast::ContinuousAssignSymbol* assignment : continuousAssignments) {
+        if (!checkDriveStrength(assignment->getDriveStrength(), assignment->location)) continue;
+
         const SourceLocation location = convertLocation(assignment->location);
         ProcessTranslator translator(
             *this, eir::ProcessKind::ContinuousAssign,
@@ -504,7 +979,28 @@ bool ModuleBuilder::translateProcesses() {
                         shared->slangSources.getLineNumber(assignment->location)),
             location);
 
-        if (!translator.translateContinuousAssignment(assignment->getAssignment())) {
+        if (!translator.translateContinuousAssignment(assignment->getAssignment(),
+                                                      assignment->getDelay())) {
+            failed = true;
+            continue;
+        }
+
+        definitionValue.processes.push_back(translator.take());
+    }
+
+    // By index, because translating one initialiser may meet a net not yet seen and add it,
+    // which would invalidate a range-for's iterators.
+    // NOLINTNEXTLINE(modernize-loop-convert) — see above
+    for (std::size_t index = 0; index < netAssignments.size(); ++index) {
+        const ast::NetSymbol& net = *netAssignments[index];
+        const std::uint32_t objectIndex = objectBySymbol.at(&net);
+        ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
+                                     std::format("assign@{}:{}",
+                                                 shared->slangSources.getFileName(net.location),
+                                                 shared->slangSources.getLineNumber(net.location)),
+                                     convertLocation(net.location));
+
+        if (!translator.translateExpressionInto(objectIndex, *net.getInitializer())) {
             failed = true;
             continue;
         }
@@ -515,41 +1011,144 @@ bool ModuleBuilder::translateProcesses() {
     return !failed;
 }
 
+bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
+                                  const ast::PortConnection& connection, eir::Instance& result) {
+    const ast::Symbol* connected = connection.getIfaceConn().first;
+    std::string target;
+    if (connected != nullptr && connected->kind == slang::ast::SymbolKind::Instance) {
+        const auto& interface = connected->as<ast::InstanceSymbol>();
+        const ast::InstanceBodySymbol* owner = nullptr;
+        const std::optional<std::string> name = nameWithinBody(interface, owner);
+        target = name.has_value() && owner == body ? *name : portReaching(interface);
+    } else if (connected != nullptr && connected->kind == slang::ast::SymbolKind::InstanceArray) {
+        // A whole array, to an array port: what the elements are called here, or the port of
+        // this body it arrived through. slang hands the connection over as an array of its own,
+        // outside any scope, so the array is found through its elements.
+        if (const ast::InstanceArraySymbol* array =
+                declaredArrayOf(connected->as<ast::InstanceArraySymbol>())) {
+            const ast::InstanceBodySymbol* owner = nullptr;
+            const std::optional<std::string> name = nameWithinBody(*array, owner);
+            if (name.has_value() && owner == body) {
+                target = *name;
+            } else {
+                for (const ast::InterfacePortSymbol* port : interfacePorts) {
+                    const ast::Symbol* reached = port->getConnection().first;
+                    if (reached != nullptr && reached->kind == slang::ast::SymbolKind::InstanceArray
+                        && declaredArrayOf(reached->as<ast::InstanceArraySymbol>()) == array)
+                        target = std::format("@{}", port->name);
+                }
+            }
+        }
+    }
+    if (target.empty()) {
+        reportUnsupported(
+            instance.location,
+            std::format("the connection of interface port '{}' to {}", connection.port.name,
+                        connected == nullptr ? std::string_view("nothing")
+                                             : slang::ast::toString(connected->kind)));
+        return false;
+    }
+    result.interfaceBindings.push_back(
+        eir::InterfaceBinding{.port = std::string(connection.port.name), .target = target});
+    return true;
+}
+
+std::optional<std::uint32_t> ModuleBuilder::referenceTo(const ast::ValueSymbol& symbol,
+                                                        const ast::InstanceBodySymbol& owner,
+                                                        const std::string& name, eir::Type type) {
+    const std::optional<std::vector<std::string>> here = instanceChain(*body);
+    const std::optional<std::vector<std::string>> there = instanceChain(owner);
+    if (!here.has_value() || !there.has_value()) {
+        reportUnsupported(symbol.location,
+                          std::format("the hierarchical reference to '{}'", symbol.name));
+        return std::nullopt;
+    }
+
+    // Up from here to the instance both paths share, then down to the one declaring it.
+    std::size_t common = 0;
+    while (common < here->size() && common < there->size() && (*here)[common] == (*there)[common])
+        ++common;
+    std::string path;
+    for (std::size_t level = common; level < here->size(); ++level) path += "../";
+    for (std::size_t level = common; level < there->size(); ++level) path += (*there)[level] + "/";
+    path += name;
+
+    return referenceThrough(symbol, std::move(path), type);
+}
+
+std::optional<std::uint32_t> ModuleBuilder::referenceThrough(const ast::ValueSymbol& symbol,
+                                                             std::string path, eir::Type type) {
+    eir::Object object;
+    // A `$` keeps the made-up name out of the user's namespace, as a connection's is.
+    object.name = uniqueObjectName(std::format("ref${}", path));
+    object.type = type;
+    object.kind = symbol.kind == slang::ast::SymbolKind::Net ? eir::ObjectKind::Net
+                                                             : eir::ObjectKind::Variable;
+    object.location = convertLocation(symbol.location);
+    object.hierarchicalPath = std::move(path);
+    object.subroutineStatic = staticSubroutineOf(symbol) != nullptr;
+
+    const std::uint32_t index = definitionValue.addObject(std::move(object));
+    objectBySymbol.emplace(&symbol, index);
+    return index;
+}
+
+std::optional<eir::NetKind> ModuleBuilder::convertNetKind(ast::NetType::NetKind kind) {
+    switch (kind) {
+    case ast::NetType::Wire: return eir::NetKind::Wire;
+    case ast::NetType::Tri: return eir::NetKind::Tri;
+    case ast::NetType::WAnd: return eir::NetKind::WiredAnd;
+    case ast::NetType::WOr: return eir::NetKind::WiredOr;
+    case ast::NetType::TriAnd: return eir::NetKind::TriAnd;
+    case ast::NetType::TriOr: return eir::NetKind::TriOr;
+    case ast::NetType::Tri0: return eir::NetKind::Tri0;
+    case ast::NetType::Tri1: return eir::NetKind::Tri1;
+    case ast::NetType::Supply0: return eir::NetKind::Supply0;
+    case ast::NetType::Supply1: return eir::NetKind::Supply1;
+    case ast::NetType::UWire: return eir::NetKind::UWire;
+    // A trireg stores charge, an interconnect has no type of its own, and a user-defined
+    // nettype resolves with a function of its own; none of them is a table Enzan has.
+    case ast::NetType::TriReg:
+    case ast::NetType::Interconnect:
+    case ast::NetType::UserDefined:
+    case ast::NetType::Unknown: return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+bool ModuleBuilder::checkDriveStrength(
+    std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
+    slang::SourceLocation location) {
+    const auto isDefault = [](std::optional<ast::DriveStrength> value) {
+        return !value.has_value() || *value == ast::DriveStrength::Strong;
+    };
+    if (isDefault(strength.first) && isDefault(strength.second)) return true;
+
+    reportUnsupported(location, "a drive strength other than strong");
+    return false;
+}
+
 ModuleBuilder::SensitivityForm
-ModuleBuilder::extractSensitivity(const ast::TimingControl& timing,
+ModuleBuilder::extractSensitivity(ProcessTranslator& translator, const ast::TimingControl& timing,
                                   std::vector<eir::SensitivityEntry>& into) {
     switch (timing.kind) {
     case ast::TimingControlKind::SignalEvent: {
         const auto& event = timing.as<ast::SignalEventControl>();
         if (event.iffCondition != nullptr) return SensitivityForm::NotAnEventControl;
 
-        const ast::Expression& reference = withoutConversions(event.expr);
-        if (reference.kind != ast::ExpressionKind::NamedValue
-            && reference.kind != ast::ExpressionKind::HierarchicalValue) {
-            // An event on an expression — `@(a & b)` — is legal and needs a temporary
-            // the scheduler can watch. Left to the body, which reports it.
-            return SensitivityForm::NotAnEventControl;
-        }
-
-        const std::optional<std::uint32_t> objectIndex =
-            objectFor(reference.as<ast::ValueExpressionBase>().symbol);
-        if (!objectIndex.has_value()) return SensitivityForm::NotAnEventControl;
-
-        eir::EdgeKind edge = eir::EdgeKind::AnyChange;
-        switch (event.edge) {
-        case ast::EdgeKind::PosEdge: edge = eir::EdgeKind::Posedge; break;
-        case ast::EdgeKind::NegEdge: edge = eir::EdgeKind::Negedge; break;
-        case ast::EdgeKind::None:
-        case ast::EdgeKind::BothEdges: edge = eir::EdgeKind::AnyChange; break;
-        }
-
-        into.push_back(eir::SensitivityEntry{.objectIndex = *objectIndex, .edge = edge});
+        // A signal, or a constant select of one. An event on any other expression — `@(a &
+        // b)` — is legal and needs a temporary the scheduler can watch; it is left to the body,
+        // which reports it.
+        const std::optional<eir::SensitivityEntry> entry =
+            translator.eventEntry(event.expr, event.edge);
+        if (!entry.has_value()) return SensitivityForm::NotAnEventControl;
+        into.push_back(*entry);
         return SensitivityForm::Explicit;
     }
 
     case ast::TimingControlKind::EventList: {
         for (const ast::TimingControl* event : timing.as<ast::EventListControl>().events) {
-            if (extractSensitivity(*event, into) != SensitivityForm::Explicit)
+            if (extractSensitivity(translator, *event, into) != SensitivityForm::Explicit)
                 return SensitivityForm::NotAnEventControl;
         }
         return SensitivityForm::Explicit;
@@ -561,6 +1160,14 @@ ModuleBuilder::extractSensitivity(const ast::TimingControl& timing,
     }
 }
 
+bool ModuleBuilder::hasPortWidth(const ast::PortSymbol& port, const eir::Type& type) {
+    if (port.internalSymbol == nullptr || !ast::ValueSymbol::isKind(port.internalSymbol->kind))
+        return true;
+    const std::optional<eir::Type> portType =
+        convertType(port.internalSymbol->as<ast::ValueSymbol>().getType());
+    return !portType.has_value() || portType->bitWidth() == type.bitWidth();
+}
+
 std::optional<std::uint32_t>
 ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
                                      const ast::PortSymbol& port,
@@ -569,7 +1176,8 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
     // resolution and therefore M5. Inputs and outputs each need it in one direction only.
     if (port.direction == slang::ast::ArgumentDirection::InOut) {
         reportUnsupported(expression.sourceRange.start(),
-                          "an inout port connected to an expression rather than a signal");
+                          "an inout port connected to an expression, a hierarchical reference "
+                          "or a signal of another width");
         return std::nullopt;
     }
 
@@ -582,10 +1190,23 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
         return std::nullopt;
     }
 
+    // The object is what the port declares, since the port collapses onto it: an output the
+    // child writes procedurally is a variable, X until its first write, where a net would be
+    // `z`.
     eir::Object object;
     object.name = uniqueObjectName(std::format("{}${}", instance.name, port.name));
     object.type = *type;
-    object.kind = eir::ObjectKind::Net;
+    object.kind = eir::ObjectKind::Variable;
+    if (port.internalSymbol->kind == slang::ast::SymbolKind::Net) {
+        const std::optional<eir::NetKind> netKind =
+            convertNetKind(port.internalSymbol->as<ast::NetSymbol>().netType.netKind);
+        if (!netKind.has_value()) {
+            reportUnsupported(port.location, "the net type of this port");
+            return std::nullopt;
+        }
+        object.kind = eir::ObjectKind::Net;
+        object.netKind = *netKind;
+    }
     object.location = convertLocation(expression.sourceRange.start());
     const std::uint32_t objectIndex = definitionValue.addObject(std::move(object));
 
@@ -610,14 +1231,21 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
 }
 
 bool ModuleBuilder::addInstance(
-    const ast::InstanceSymbol& instance, const std::string& targetName,
+    const ast::InstanceSymbol& instance, const std::string& prefix, const std::string& targetName,
     const std::map<std::string, std::uint32_t, std::less<>>& targetPorts) {
+    // Named with the generate blocks it is inside, as an object is: two iterations of a loop
+    // each instantiating `u` are otherwise two instances with one name, and one path.
     eir::Instance result;
-    result.name = std::string(instance.name);
+    result.name = prefix + instanceName(instance);
     result.definitionName = targetName;
     result.location = convertLocation(instance.location);
 
     for (const ast::PortConnection* connection : instance.getPortConnections()) {
+        if (connection->port.kind == slang::ast::SymbolKind::InterfacePort) {
+            if (!bindInterface(instance, *connection, result)) return false;
+            continue;
+        }
+
         const auto portIndex = targetPorts.find(connection->port.name);
         if (portIndex == targetPorts.end()) {
             // A port the child could not translate; the diagnostic was already reported
@@ -643,6 +1271,15 @@ bool ModuleBuilder::addInstance(
         if (reference.kind == ast::ExpressionKind::NamedValue
             || reference.kind == ast::ExpressionKind::HierarchicalValue) {
             objectIndex = objectFor(reference.as<ast::ValueExpressionBase>().symbol);
+            // A hierarchical reference has no storage until elaboration binds it, so a port
+            // cannot be collapsed onto it; it is connected through an assignment instead. So is
+            // a signal of another width than the port, which elaboration can only collapse onto
+            // a port as wide as it: the assignment extends or truncates as one written out would
+            // (IEEE 1800 section 23.3.3.7).
+            if (objectIndex.has_value()
+                && (!definitionValue.objects[*objectIndex].hierarchicalPath.empty()
+                    || !hasPortWidth(port, definitionValue.objects[*objectIndex].type)))
+                objectIndex = materialiseConnection(instance, port, reference);
         } else {
             objectIndex = materialiseConnection(instance, port, reference);
         }
@@ -664,10 +1301,15 @@ bool ModuleBuilder::addInstance(
 class Walker {
 public:
     Walker(eir::Design& target, ModuleBuilder::Shared sharedState)
-        : design(&target), shared(sharedState) {}
+        : design(&target), shared(sharedState) {
+        shared.packageVariables = &packageVariables;
+    }
 
     /// Translates `instance`'s body if it has not been seen, and returns its EIR name.
     std::optional<std::string> translate(const ast::InstanceSymbol& instance);
+
+    /// Adds a definition for each package whose variables the translated modules refer to.
+    bool translatePackages();
 
     [[nodiscard]] bool ok() const noexcept { return succeeded; }
 
@@ -709,8 +1351,29 @@ private:
     /// binds no connections at all — quietly, with the design still elaborating and simulating
     /// to the wrong answer.
     std::map<std::string, BodyInfo, std::less<>> bodies;
+    std::vector<const ast::ValueSymbol*> packageVariables;
     bool succeeded = true;
 };
+
+bool Walker::translatePackages() {
+    // Packages in the order a module first used one of their variables, which is the order the
+    // modules were walked in, so the definitions come out the same on every run.
+    std::vector<const ast::PackageSymbol*> packages;
+    for (const ast::ValueSymbol* variable : packageVariables) {
+        const ast::PackageSymbol* package = ModuleBuilder::packageOf(*variable);
+        if (std::ranges::find(packages, package) == packages.end()) packages.push_back(package);
+    }
+
+    for (const ast::PackageSymbol* package : packages) {
+        ModuleBuilder builder(shared, *package);
+        for (const ast::ValueSymbol* variable : packageVariables) {
+            if (ModuleBuilder::packageOf(*variable) != package) continue;
+            if (!builder.objectFor(*variable).has_value()) return false;
+        }
+        design->addModule(builder.take());
+    }
+    return true;
+}
 
 std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
     std::string base(body.getDefinition().name);
@@ -727,7 +1390,10 @@ std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
         if (symbol.kind == ast::SymbolKind::Parameter) {
             rendered = symbol.as<ast::ParameterSymbol>().getValue().toString();
         } else if (symbol.kind == ast::SymbolKind::TypeParameter) {
-            rendered = symbol.as<ast::TypeParameterSymbol>().targetType.getType().toString();
+            rendered = symbol.as<ast::TypeParameterSymbol>()
+                           .targetType.getType()
+                           .getCanonicalType()
+                           .toString();
         } else {
             continue;
         }
@@ -768,9 +1434,11 @@ std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
 std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance) {
     const ast::InstanceBodySymbol& body = instance.body;
 
-    if (!instance.isModule()) {
+    // An interface instance is an instance like any other: its body becomes a definition, its
+    // signals get storage of their own, and what reaches them through a port is a reference.
+    if (!instance.isModule() && !instance.isInterface()) {
         shared.diagnostics.report(DiagCode::UnsupportedConstruct, SourceLocation(),
-                                  "interface and program instances");
+                                  "program instances");
         succeeded = false;
         return std::nullopt;
     }
@@ -791,7 +1459,8 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
     // than recursing until the stack runs out.
     bodies.emplace(name, BodyInfo{.name = name, .portIndices = builder.portIndices()});
 
-    for (const ast::InstanceSymbol* child : builder.instances) {
+    for (const ModuleBuilder::CollectedInstance& collected : builder.instances) {
+        const ast::InstanceSymbol* child = collected.symbol;
         const std::optional<std::string> childName = translate(*child);
         if (!childName.has_value()) {
             succeeded = false;
@@ -804,7 +1473,8 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
             return std::nullopt;
         }
 
-        if (!builder.addInstance(*child, *childName, childInfo->second.portIndices)) {
+        if (!builder.addInstance(*child, collected.prefix, *childName,
+                                 childInfo->second.portIndices)) {
             succeeded = false;
             return std::nullopt;
         }
@@ -862,6 +1532,11 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
 
     slang::ast::CompilationOptions compilationOptions;
     for (const std::string& top : options.topModules) compilationOptions.topModules.insert(top);
+    compilationOptions.paramOverrides = options.parameterOverrides;
+    if (const std::optional<slang::TimeUnit> unit = timeUnitOf(options.timeUnitExponent)) {
+        const slang::TimeScaleValue value(*unit, slang::TimeScaleMagnitude::One);
+        compilationOptions.defaultTimeScale = slang::TimeScale(value, value);
+    }
     bag.set(compilationOptions);
 
     slang::ast::Compilation compilation(bag);
@@ -875,7 +1550,11 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     const slang::DiagnosticEngine slangEngine(slangSources);
     bool hasError = false;
 
-    for (const slang::Diagnostic& diagnostic : compilation.getAllDiagnostics()) {
+    // Elaborated before anything is asked of the design, so that the dead code is known.
+    const slang::Diagnostics& slangDiagnostics = compilation.getAllDiagnostics();
+    const DeadCode deadCode(compilation.getRoot());
+
+    for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
         const slang::DiagnosticSeverity severity = slang::getDefaultSeverity(diagnostic.code);
         if (severity == slang::DiagnosticSeverity::Ignored) continue;
 
@@ -891,6 +1570,13 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             const std::size_t column = slangSources.getColumnNumber(diagnostic.location);
             return start.advanced(static_cast<std::uint32_t>(column > 0 ? column - 1 : 0));
         }();
+
+        // A degenerate construct a constant condition rules out is never translated, so it is
+        // reported and accepted rather than refused (see DeadCode).
+        if (severity == slang::DiagnosticSeverity::Error && deadCode.excuses(diagnostic)) {
+            diagnostics.report(DiagCode::ErrorInDeadCode, location, message);
+            continue;
+        }
 
         switch (severity) {
         case slang::DiagnosticSeverity::Note:
@@ -925,6 +1611,20 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     if (hasError) return nullptr;
 
     const slang::ast::RootSymbol& root = compilation.getRoot();
+
+    // slang applies an override to whichever top level has the parameter and ignores one that
+    // none has, which would let a misspelt `-G` change nothing without a word.
+    for (const std::string& override : options.parameterOverrides) {
+        const std::string_view name = std::string_view(override).substr(0, override.find('='));
+        const bool used = std::ranges::any_of(
+            root.topInstances, [name](const slang::ast::InstanceSymbol* instance) {
+                const slang::ast::Symbol* found = instance->body.find(name);
+                return found != nullptr && found->kind == slang::ast::SymbolKind::Parameter;
+            });
+        if (!used)
+            diagnostics.report(DiagCode::UnusedParameterOverride, SourceLocation(), override);
+    }
+
     if (root.topInstances.empty()) {
         diagnostics.report(DiagCode::NoTopLevelFound, SourceLocation());
         return nullptr;
@@ -942,7 +1642,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         if (!walker.translate(*instance).has_value()) return nullptr;
     }
 
-    if (!walker.ok()) return nullptr;
+    if (!walker.ok() || !walker.translatePackages()) return nullptr;
 
     // A frontend's output is verified before it is accepted. Section 4.2's core invariant —
     // a process is a pure function over a declared slice of the arena — is exactly the kind

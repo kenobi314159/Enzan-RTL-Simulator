@@ -4,6 +4,8 @@
 
 #include "eir/BitVector.h"
 #include "eir/Design.h"
+#include "eir/Module.h"
+#include "eir/Process.h"
 #include "eir/Type.h"
 
 #include <cstdint>
@@ -32,6 +34,23 @@ struct Slot {
     std::uint32_t wordOffset = 0;
 
     eir::Type type;
+
+    /// Whether the object that declared this slot is a net or a variable, which decides
+    /// whether two drivers of one bit are resolved or refused (DESIGN_GUIDE.md section 3.7).
+    eir::ObjectKind kind = eir::ObjectKind::Variable;
+
+    /// The kind of net, when `kind` is `Net`.
+    eir::NetKind netKind = eir::NetKind::Wire;
+
+    /// For a net, the bits some continuous assignment drives, as merged extents of this slot.
+    /// They start at X, as a variable does, until their driver first runs; the bits outside
+    /// them hold the net's undriven value for good (DESIGN_GUIDE.md section 3.7).
+    std::vector<eir::WriteExtent> drivenBits;
+
+    /// The unpacked dimensions and element width of the object that declared this slot, when
+    /// it is an unpacked array; see `eir::Object`.
+    std::vector<eir::UnpackedDimension> unpackedDimensions;
+    std::uint32_t elementWidth = 0;
 
     /// The hierarchical path of the object that declared this slot, for diagnostics
     /// and for the waveform database's default name.
@@ -76,6 +95,10 @@ struct Instance {
     /// absolute offsets in as constants, which is what section 4.3 anticipates.
     std::vector<std::uint32_t> objectSlots;
 
+    /// Each interface port, by name, and the path of the interface instance it reaches, for
+    /// the hierarchical references that go through it.
+    std::map<std::string, std::string, std::less<>> interfaces;
+
     static constexpr std::uint32_t NoParent = 0xFFFF'FFFFU;
 };
 
@@ -91,6 +114,52 @@ struct ProcessInstance {
 
     /// Index into the definition's process list.
     std::uint32_t processIndex = 0;
+};
+
+/// One driver of a resolved signal: one continuous process's write of one range of it
+/// (DESIGN_GUIDE.md section 3.7).
+///
+/// Only a signal with a bit driven more than once, or a pulled or supply net with any driver,
+/// has drivers at all. Every other signal is written straight into its slot, which is how a
+/// signal with one driver per bit bypasses resolution as a whole.
+struct Driver {
+    /// The slot driven, which is also the runtime's signal index.
+    std::uint32_t slot = 0;
+
+    /// The bits of the slot this driver drives.
+    std::uint32_t lowBit = 0;
+    std::uint32_t width = 0;
+
+    /// Index into the elaborated design's processes.
+    std::uint32_t process = 0;
+
+    /// The object, in that process's definition, the process writes this driver through.
+    std::uint32_t objectIndex = 0;
+
+    /// Where this driver's own value lives in the arena, both planes over its range.
+    std::uint32_t wordOffset = 0;
+
+    /// The segments of its slot this driver contributes to: contiguous, ordered by bit, and
+    /// together exactly its range.
+    std::uint32_t firstSegment = 0;
+    std::uint32_t segmentCount = 0;
+
+    [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + width; }
+};
+
+/// A maximal run of a resolved signal's bits driven by one set of drivers, which therefore
+/// resolve as one value.
+struct Segment {
+    std::uint32_t slot = 0;
+    std::uint32_t lowBit = 0;
+    std::uint32_t width = 0;
+
+    /// The drivers, as a run of `segmentDrivers()`, in driver order.
+    std::uint32_t firstDriver = 0;
+    std::uint32_t driverCount = 0;
+
+    /// How the drivers combine: the slot's net kind.
+    eir::NetKind netKind = eir::NetKind::Wire;
 };
 
 /// The result of elaborating one top level.
@@ -112,6 +181,21 @@ public:
     [[nodiscard]] std::span<const ProcessInstance> processes() const noexcept {
         return processList;
     }
+
+    /// Every driver of a resolved signal, ordered by process, then by object, then by bit, so
+    /// that one process's drivers through one object are a contiguous run.
+    [[nodiscard]] std::span<const Driver> drivers() const noexcept { return driverList; }
+
+    [[nodiscard]] std::span<const Segment> segments() const noexcept { return segmentList; }
+
+    /// Driver indices, referred to in runs by `Segment`.
+    [[nodiscard]] std::span<const std::uint32_t> segmentDrivers() const noexcept {
+        return segmentDriverList;
+    }
+
+    /// The widest driver, which bounds the scratch space resolution needs and lets the
+    /// runtime allocate it once rather than on the write path.
+    [[nodiscard]] std::uint32_t widestDriver() const noexcept { return widestDriverBits; }
 
     /// Total size of the state arena, in Words.
     [[nodiscard]] std::uint32_t arenaWords() const noexcept { return arenaSize; }
@@ -153,6 +237,10 @@ private:
     std::vector<Slot> slotList;
     std::vector<eir::EnumDefinition> enumList;
     std::vector<ProcessInstance> processList;
+    std::vector<Driver> driverList;
+    std::vector<Segment> segmentList;
+    std::vector<std::uint32_t> segmentDriverList;
+    std::uint32_t widestDriverBits = 0;
     std::uint32_t arenaSize = 0;
     std::string topName;
 
