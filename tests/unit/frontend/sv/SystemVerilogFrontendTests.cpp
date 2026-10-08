@@ -648,6 +648,7 @@ TEST_F(FrontendTest, ASubroutinesStaticVariableIsStorageEveryCallShares) {
     const enzan::eir::Object& count = top->objects[require(top->findObject("next_id.count"))];
     EXPECT_TRUE(count.subroutineStatic);
     ASSERT_TRUE(count.initialValue.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     EXPECT_EQ(count.initialValue->ref().toUInt64(), 5U);
     EXPECT_FALSE(top->findObject("n").has_value());
     EXPECT_FALSE(top->findObject("fresh.n").has_value());
@@ -663,6 +664,7 @@ TEST_F(FrontendTest, ASubroutinesStaticVariableIsStorageEveryCallShares) {
     const enzan::eir::Object& last = package->objects[require(package->findObject("serial.last"))];
     EXPECT_TRUE(last.subroutineStatic);
     ASSERT_TRUE(last.initialValue.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     EXPECT_EQ(last.initialValue->ref().toUInt64(), 7U);
 }
 
