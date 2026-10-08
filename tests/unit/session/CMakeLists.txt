@@ -6,7 +6,7 @@
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   enzan_add_unit_test(
     session
-    SOURCES FileListTests.cpp SessionTests.cpp
+    SOURCES ConstantFunctionRunnerTests.cpp FileListTests.cpp SessionTests.cpp
     DEPENDS enzan::session)
 
   enzan_use_test_plugins(enzan_unittest_session)

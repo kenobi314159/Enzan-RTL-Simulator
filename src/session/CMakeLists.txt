@@ -5,8 +5,8 @@
 
 enzan_add_component(
   session
-  SOURCES FileList.cpp Session.cpp
-  HEADERS FileList.h Session.h
+  SOURCES ConstantFunctionRunner.cpp FileList.cpp Session.cpp
+  HEADERS ConstantFunctionRunner.h FileList.h Session.h
   DEPENDS enzan::common enzan::eir enzan::elab enzan::runtime enzan::wavedb
   PRIVATE_DEPENDS enzan::codegen enzan::pli)
 

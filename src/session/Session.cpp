@@ -11,6 +11,7 @@
 #include "elab/Elaborator.h"
 #include "pli/VpiContext.h"
 #include "runtime/Image.h"
+#include "session/ConstantFunctionRunner.h"
 #include "wavedb/FstWriter.h"
 #include "wavedb/VcdWriter.h"
 
@@ -422,7 +423,9 @@ bool Session::elaborate(std::string_view topModule) {
     // half-replaced for the next command to find.
     discardElaboration();
 
-    elab::Elaborator elaborator(*design, diagnostics);
+    // A generic unit's parameters may call constant functions, which only the VM can run.
+    ConstantFunctionRunner functions(*design, sources, diagnostics);
+    elab::Elaborator elaborator(*design, diagnostics, &functions);
     std::unique_ptr<elab::ElaboratedDesign> tree = elaborator.elaborate(topModule);
     if (tree == nullptr) return false;
 

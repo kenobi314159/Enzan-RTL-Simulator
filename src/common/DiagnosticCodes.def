@@ -97,6 +97,9 @@ ENZAN_DIAG(UntypedParameterType, 3016, Error,
            "parameter '{}' of '{}' takes the type of its value, and instance '{}' gives it a {} "
            "where the unit was analysed with a {}; every width that depends on it would change, "
            "so analyse '{}' from source for this instance")
+ENZAN_DIAG(ConstantFunctionDisagrees, 3017, Error,
+           "constant function '{}' returns {} for the arguments it was analysed with, where the "
+           "frontend computed {}; its translation is wrong, so no width it decides is used")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 
