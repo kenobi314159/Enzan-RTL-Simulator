@@ -155,7 +155,8 @@ private:
 /// Evaluates nodes of one table against one set of formal values.
 ///
 /// Every node is evaluated at most once, however many others use it: a width referred to by a
-/// hundred registers costs one evaluation per parameterisation.
+/// hundred registers costs one evaluation per parameterisation. The table may grow while it is
+/// evaluated, as a frontend adds nodes and checks each against the representative's values.
 class ParameterEvaluator {
 public:
     /// `formals` holds each formal's value, by index; one with no value is absent. Both

@@ -146,7 +146,14 @@ ParameterEvaluator::ParameterEvaluator(const ParameterExpressions& table,
       empty(table.size(), false) {}
 
 const ParameterValue* ParameterEvaluator::value(std::uint32_t index) {
-    ENZAN_ASSERT(index < cache.size(), "a node of this evaluator's table");
+    ENZAN_ASSERT(index < expressions->size(), "a node of this evaluator's table");
+    // A table only grows, and a node never changes once added, so what was evaluated stays
+    // right and the cache only has to catch up with nodes added since.
+    if (index >= cache.size()) {
+        cache.resize(expressions->size());
+        attempted.resize(expressions->size(), false);
+        empty.resize(expressions->size(), false);
+    }
     if (cache[index].has_value()) return &*cache[index];
     if (attempted[index]) return nullptr;
     attempted[index] = true;
