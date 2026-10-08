@@ -527,6 +527,34 @@ TEST_F(FrontendTest, AModuleWhoseWidthsAParameterDecidesIsOneGenericUnit) {
     }
 }
 
+TEST_F(FrontendTest, AHundredWidthsOfOneModuleAreOneTranslation) {
+    // What M5.1's exit asks of analysis: a design with a hundred distinct parameterisations of
+    // one module costs a translation of it, not a hundred. slang still types a body per
+    // parameterisation; what is pinned here is that Enzan makes one unit of them.
+    std::string source = R"(
+        module stage #(parameter int W = 8) (input logic clk, input logic [W-1:0] d,
+                                             output logic [W-1:0] q);
+            always_ff @(posedge clk) q <= d + 1'b1;
+        endmodule
+        module top;
+            logic clk;
+    )";
+    for (int width = 1; width <= 100; ++width) {
+        source += std::format("logic [{0}:0] d{1}, q{1};\n", width - 1, width);
+        source += std::format("stage #(.W({0})) u{0} (.clk, .d(d{0}), .q(q{0}));\n", width);
+    }
+    source += "endmodule\n";
+
+    const std::unique_ptr<Design> design = analyse(source, "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_EQ(std::ranges::count(design->modules(), std::string_view("stage"),
+                                 &ModuleDefinition::sourceName),
+              1);
+    const ModuleDefinition* stage = design->findModule("stage");
+    ASSERT_NE(stage, nullptr);
+    EXPECT_TRUE(stage->isGeneric());
+}
+
 TEST_F(FrontendTest, AWidthThatATypeDeclaresKeepsTheModuleSpecialised) {
     // A type a parameter sizes would be an expression for a type, which a generic unit does not
     // have; a module using one is translated per parameterisation.
