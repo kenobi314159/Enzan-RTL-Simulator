@@ -166,6 +166,16 @@ std::uint32_t ProcessTranslator::addConstant(const eir::BitVector& value) {
     return static_cast<std::uint32_t>(process.constants.size() - 1);
 }
 
+std::uint32_t ProcessTranslator::addConstantAs(const eir::BitVector& value,
+                                               std::optional<std::uint32_t> expression) {
+    const std::uint32_t index = addConstant(value);
+    if (expression.has_value()) {
+        process.constantExpressions.resize(process.constants.size(), eir::NoExpression);
+        process.constantExpressions[index] = *expression;
+    }
+    return index;
+}
+
 std::uint32_t ProcessTranslator::addConstantOf(const eir::BitVector& value,
                                                const ast::Expression& expression) {
     const std::uint32_t index = addConstant(value);
@@ -196,6 +206,8 @@ void ProcessTranslator::noteRead(std::uint32_t objectIndex) {
 
 bool ProcessTranslator::noteWrite(std::uint32_t objectIndex, std::int64_t lowBit,
                                   std::int64_t width) {
+    // A window of an object a formal sizes would have to move and clip with it.
+    if (isSymbolic(module->definition().objects[objectIndex].type)) module->cannotBeGeneric();
     const std::int64_t objectWidth = module->definition().objects[objectIndex].type.bitWidth();
     const std::int64_t low = std::max<std::int64_t>(lowBit, 0);
     const std::int64_t end = std::min(lowBit + width, objectWidth);
@@ -208,8 +220,10 @@ bool ProcessTranslator::noteWrite(std::uint32_t objectIndex, std::int64_t lowBit
 }
 
 void ProcessTranslator::noteWholeWrite(std::uint32_t objectIndex) {
-    writes.push_back(eir::WriteExtent::whole(
-        objectIndex, module->definition().objects[objectIndex].type.bitWidth()));
+    const eir::Type& type = module->definition().objects[objectIndex].type;
+    eir::WriteExtent extent = eir::WriteExtent::whole(objectIndex, type.bitWidth());
+    extent.widthExpression = type.widthExpression();
+    writes.push_back(extent);
 }
 
 std::pair<std::int64_t, std::int64_t>
@@ -240,7 +254,10 @@ ProcessTranslator::reachOfSelect(const ast::Expression& index, std::int32_t rang
 }
 
 ProcessTranslator::Value ProcessTranslator::coerce(const Value& value, eir::Type type) {
-    if (value.type.bitWidth() == type.bitWidth()) return {.reg = value.reg, .type = type};
+    // Widths a formal decides are equal only when they are the same expression: two that
+    // agree for the representative may not elsewhere, and need the extension a specialisation
+    // can make a copy of.
+    if (sameWidth(value.type, type)) return {.reg = value.reg, .type = type};
 
     const std::uint32_t result = newRegister(type);
     eir::Instruction instruction = eir::Instruction::make(
@@ -922,6 +939,7 @@ bool ProcessTranslator::translateRepeatLoop(const ast::Statement& statement) {
     // A counter register initialised from the count and decremented each iteration. The
     // count is evaluated once, before the loop, which is what IEEE 1800 requires: changing
     // the expression inside the body does not change the number of iterations.
+    if (isSymbolic(count->type)) module->cannotBeGeneric();
     const eir::Type counterType = eir::Type::bits(count->type.bitWidth(), false, true);
     const std::uint32_t counter = newRegister(counterType);
     emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(counter),
@@ -994,6 +1012,11 @@ bool ProcessTranslator::translateForeverLoop(const ast::Statement& statement) {
 bool ProcessTranslator::translateForeachLoop(const ast::Statement& statement) {
     const auto& loop = statement.as<ast::ForeachLoopStatement>();
 
+    // The bounds are numbers; a formal that decides the array's shape would move them.
+    if (const std::optional<eir::Type> array = module->typeOf(loop.arrayRef);
+        array.has_value() && isSymbolic(*array))
+        module->cannotBeGeneric();
+
     // The dimensions it names; a skipped one, `foreach (a[, j])`, takes no loop.
     std::vector<std::pair<const ast::IteratorSymbol*, slang::ConstantRange>> dimensions;
     for (const ast::ForeachLoopStatement::LoopDim& dimension : loop.loopDims) {
@@ -1013,7 +1036,7 @@ bool ProcessTranslator::translateForeachLoop(const ast::Statement& statement) {
     // One counting loop per dimension, outermost first, each restarting the one inside it.
     std::vector<std::uint32_t> stepBlocks;
     for (const auto& [loopVariable, range] : dimensions) {
-        const std::optional<eir::Type> type = module->convertType(loopVariable->getType());
+        const std::optional<eir::Type> type = module->typeOfSymbol(*loopVariable);
         if (!type.has_value()) {
             failed = true;
             return false;
@@ -1198,7 +1221,7 @@ std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateExpression(const ast::Expression& expression) {
     if (failed) return std::nullopt;
 
-    const std::optional<eir::Type> type = module->convertType(*expression.type);
+    const std::optional<eir::Type> type = module->typeOf(expression);
 
     // Where an integral value comes out of a real computation, either the whole computation is
     // a constant or it cannot be translated; folding it is the one way it can work.
@@ -1235,8 +1258,17 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
 
     case ast::ExpressionKind::UnbasedUnsizedIntegerLiteral: {
         if (!type.has_value()) break;
+        // As wide as its context, which a formal may decide: then the constant is its one digit
+        // repeated across that width.
+        const auto& literal = expression.as<ast::UnbasedUnsizedIntegerLiteral>();
+        const slang::logic_t digit = literal.getLiteralValue();
+        const eir::Logic fill =
+            digit.isUnknown()
+                ? (digit.value == slang::logic_t::Z_VALUE ? eir::Logic::HighZ : eir::Logic::Unknown)
+            : digit.value != 0 ? eir::Logic::One
+                               : eir::Logic::Zero;
         const std::uint32_t constant =
-            addConstant(toBitVector(expression.as<ast::UnbasedUnsizedIntegerLiteral>().getValue()));
+            addConstantAs(toBitVector(literal.getValue()), module->filledOfWidth(fill, *type));
         const std::uint32_t result = newRegister(*type);
         emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
                                     eir::Operand::constant(constant)));
@@ -1357,8 +1389,7 @@ ProcessTranslator::Value ProcessTranslator::compare(eir::Opcode opcode, const Va
     // Comparison operands keep their own width, extended to whichever is wider, because the
     // result is one bit and the comparison itself decides the signedness.
     const bool isSigned = left.type.isSigned() && right.type.isSigned();
-    const std::uint32_t width = std::max(left.type.bitWidth(), right.type.bitWidth());
-    const eir::Type operandType = eir::Type::bits(width, isSigned, true);
+    const eir::Type operandType = module->widerOf(left.type, right.type);
 
     const Value a = coerce(left, operandType);
     const Value b = coerce(right, operandType);
@@ -1439,7 +1470,7 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
     const std::optional<Value> right = translateExpression(binary.right());
     if (!right.has_value()) return std::nullopt;
 
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    const std::optional<eir::Type> resultType = module->typeOf(expression);
     if (!resultType.has_value()) {
         module->reportUnsupported(expression.sourceRange.start(), "this operand type");
         failed = true;
@@ -1559,7 +1590,8 @@ ProcessTranslator::translateUnary(const ast::Expression& expression) {
         const bool increment = unary.op == ast::UnaryOperator::Preincrement
                                || unary.op == ast::UnaryOperator::Postincrement;
         const std::uint32_t one =
-            addConstant(eir::BitVector::fromUInt64(1, before->type.bitWidth()));
+            addConstantAs(eir::BitVector::fromUInt64(1, before->type.bitWidth()),
+                          module->constantOfWidth(1, before->type));
         const std::uint32_t oneRegister = newRegister(before->type);
         emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(oneRegister),
                                     eir::Operand::constant(one)));
@@ -1584,7 +1616,7 @@ ProcessTranslator::translateUnary(const ast::Expression& expression) {
     const std::optional<Value> operand = translateExpression(unary.operand());
     if (!operand.has_value()) return std::nullopt;
 
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    const std::optional<eir::Type> resultType = module->typeOf(expression);
     if (!resultType.has_value()) {
         module->reportUnsupported(expression.sourceRange.start(), "this operand type");
         failed = true;
@@ -1648,7 +1680,7 @@ ProcessTranslator::translateConditionalExpression(const ast::Expression& express
         return std::nullopt;
     }
 
-    const std::optional<eir::Type> knownType = module->convertType(*expression.type);
+    const std::optional<eir::Type> knownType = module->typeOf(expression);
 
     // A condition fixed by the parameters selects one arm for ever, as for `if`. An unknown one
     // merges both, so it is evaluated as any other condition would be. A dead arm slang could
@@ -1791,7 +1823,7 @@ std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateConcatenation(const ast::Expression& expression) {
     const auto& concatenation = expression.as<ast::ConcatenationExpression>();
 
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    const std::optional<eir::Type> resultType = module->typeOf(expression);
     if (!resultType.has_value()) {
         module->reportUnsupported(expression.sourceRange.start(), "this concatenation type");
         failed = true;
@@ -1804,7 +1836,9 @@ ProcessTranslator::translateConcatenation(const ast::Expression& expression) {
     emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
                                 eir::Operand::constant(zero)));
 
-    // Operands are written most significant first, which is the order they appear in.
+    // Operands are written most significant first, which is the order they appear in. Where a
+    // formal decides a width, the offsets would move with it, which is not yet said.
+    if (isSymbolic(*resultType)) module->cannotBeGeneric();
     std::uint32_t offset = resultType->bitWidth();
     for (const ast::Expression* operand : concatenation.operands()) {
         // A replication with a count of zero contributes nothing, which IEEE 1800 section
@@ -1837,7 +1871,7 @@ ProcessTranslator::translateConcatenation(const ast::Expression& expression) {
 
 std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression) {
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    const std::optional<eir::Type> resultType = module->typeOf(expression);
     if (!resultType.has_value()) {
         module->reportUnsupported(expression.sourceRange.start(), "this assignment pattern type");
         failed = true;
@@ -1864,9 +1898,10 @@ ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression)
     emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
                                 eir::Operand::constant(zero)));
 
+    if (isSymbolic(*resultType)) module->cannotBeGeneric();
     std::uint32_t offset = resultType->bitWidth();
     for (const ast::Expression* element : pattern->elements()) {
-        const std::optional<eir::Type> elementType = module->convertType(*element->type);
+        const std::optional<eir::Type> elementType = module->typeOf(*element);
         if (!elementType.has_value()) {
             module->reportUnsupported(element->sourceRange.start(), "this element type");
             failed = true;
@@ -1907,13 +1942,14 @@ ProcessTranslator::translateReplication(const ast::Expression& expression) {
     const std::optional<Value> inner = translateExpression(replication.concat());
     if (!inner.has_value()) return std::nullopt;
 
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    const std::optional<eir::Type> resultType = module->typeOf(expression);
     if (!resultType.has_value()) {
         module->reportUnsupported(expression.sourceRange.start(), "this replication type");
         failed = true;
         return std::nullopt;
     }
 
+    if (isSymbolic(*resultType)) module->cannotBeGeneric();
     const std::uint32_t zero =
         addConstant(eir::BitVector::filled(resultType->bitWidth(), eir::Logic::Zero));
     const std::uint32_t result = newRegister(*resultType);
@@ -1952,6 +1988,7 @@ ProcessTranslator::Value ProcessTranslator::widenForOffsetArithmetic(const Value
     // 32-bit quantity to begin with. Signedness is preserved so that a negative index stays
     // negative: it then becomes a very large unsigned offset, the select reads out of range,
     // and the result is X — which is what IEEE 1800 requires for an out-of-range select.
+    if (isSymbolic(index.type)) module->cannotBeGeneric();
     const std::uint32_t width = std::max(index.type.bitWidth(), 32U);
     if (index.type.bitWidth() == width) return index;
 
@@ -2063,6 +2100,7 @@ ProcessTranslator::Value ProcessTranslator::checkedOffset(const Value& offset, c
 ProcessTranslator::Location ProcessTranslator::narrowed(const Location& base,
                                                         std::optional<std::int64_t> constantLow,
                                                         std::optional<Value> low, eir::Type type) {
+    if (isSymbolic(base.type) || isSymbolic(type)) module->cannotBeGeneric();
     Location result = base;
     result.type = type;
     result.whole = false;
@@ -2140,12 +2178,15 @@ ProcessTranslator::locateElement(const ast::ElementSelectExpression& select) {
     const std::optional<Location> base = locate(select.value());
     if (!base.has_value()) return std::nullopt;
 
-    const std::optional<eir::Type> elementType = module->convertType(*select.type);
+    const std::optional<eir::Type> elementType = module->typeOf(select);
     if (!elementType.has_value()) {
         module->reportUnsupported(select.sourceRange.start(), "this element type");
         failed = true;
         return std::nullopt;
     }
+    // Positions, strides and the bounds an index is checked against are numbers here; where a
+    // formal decides the select's base or its element, they would have to move with it.
+    if (isSymbolic(base->type) || isSymbolic(*elementType)) module->cannotBeGeneric();
 
     const ast::Type& baseType = *select.value().type;
     const slang::ConstantRange range = baseType.getFixedRange();
@@ -2186,12 +2227,13 @@ ProcessTranslator::locateRange(const ast::RangeSelectExpression& select) {
     const std::optional<Location> base = locate(select.value());
     if (!base.has_value()) return std::nullopt;
 
-    const std::optional<eir::Type> partType = module->convertType(*select.type);
+    const std::optional<eir::Type> partType = module->typeOf(select);
     if (!partType.has_value()) {
         module->reportUnsupported(select.sourceRange.start(), "this part select type");
         failed = true;
         return std::nullopt;
     }
+    if (isSymbolic(base->type) || isSymbolic(*partType)) module->cannotBeGeneric();
 
     const ast::Type& baseType = *select.value().type;
     const slang::ConstantRange range = baseType.getFixedRange();
@@ -2293,7 +2335,7 @@ ProcessTranslator::locateMember(const ast::MemberAccessExpression& access) {
     }
     const auto& field = access.member.as<ast::FieldSymbol>();
 
-    const std::optional<eir::Type> fieldType = module->convertType(*access.type);
+    const std::optional<eir::Type> fieldType = module->typeOf(access);
     if (!fieldType.has_value()) {
         module->reportUnsupported(access.sourceRange.start(), "the type of this member");
         failed = true;
@@ -2328,8 +2370,9 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::readLocation(const Lo
 
     if (location.outOfRange) {
         // An out-of-range read is the type's default: X when four-state, zero when two-state.
-        const std::uint32_t constant = addConstant(eir::BitVector::filled(
-            type.bitWidth(), type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero));
+        const eir::Logic fill = type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero;
+        const std::uint32_t constant = addConstantAs(eir::BitVector::filled(type.bitWidth(), fill),
+                                                     module->filledOfWidth(fill, type));
         const std::uint32_t result = newRegister(type);
         emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
                                     eir::Operand::constant(constant)));
@@ -2454,7 +2497,7 @@ ProcessTranslator::translateFileOpen(const ast::CallExpression& call,
             eir::SysTaskArgument{.value = eir::Operand::reg(value->reg), .type = value->type});
     }
 
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    const std::optional<eir::Type> resultType = module->typeOf(expression);
     if (!resultType.has_value()) return std::nullopt;
     const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
     process.sysCalls.push_back(std::move(descriptor));
@@ -2496,7 +2539,7 @@ ProcessTranslator::translateRandom(std::string_view name, const ast::CallExpress
                                 eir::Operand::sysCall(index)));
 
     const eir::Type word = eir::Type::bits(32, isRandom, false);
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    const std::optional<eir::Type> resultType = module->typeOf(expression);
     if (!resultType.has_value()) return std::nullopt;
     if (!seeded) return coerce(Value{.reg = result, .type = word}, *resultType);
 
@@ -2526,7 +2569,7 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
     // is already an answer and needs no runtime support at all.
     if (const slang::ConstantValue* constant = expression.getConstant();
         constant != nullptr && constant->isInteger()) {
-        const std::optional<eir::Type> type = module->convertType(*expression.type);
+        const std::optional<eir::Type> type = module->typeOf(expression);
         if (type.has_value()) {
             const std::uint32_t index = addConstantOf(toBitVector(constant->integer()), expression);
             const std::uint32_t result = newRegister(*type);
@@ -2539,7 +2582,7 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
     if (call.isSystemCall()) {
         const std::string_view name = call.getSubroutineName();
         if (name == "$time" || name == "$stime" || name == "$realtime") {
-            const std::optional<eir::Type> type = module->convertType(*expression.type);
+            const std::optional<eir::Type> type = module->typeOf(expression);
             const eir::Type resultType = type.value_or(eir::Type::bits(64, false, false));
             const std::uint32_t result = newRegister(resultType);
             emit(eir::Instruction::make(eir::Opcode::ReadTime, eir::Operand::reg(result)));
@@ -2549,7 +2592,7 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
         // A cast in the form of a call: the bits are the argument's, and only the type that
         // reads them changes.
         if ((name == "$signed" || name == "$unsigned") && call.arguments().size() == 1) {
-            const std::optional<eir::Type> type = module->convertType(*expression.type);
+            const std::optional<eir::Type> type = module->typeOf(expression);
             const std::optional<Value> operand = translateExpression(*call.arguments()[0]);
             if (!operand.has_value() || !type.has_value()) return std::nullopt;
             return coerce(*operand, *type);
@@ -2560,8 +2603,11 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
         // `i < $bits(parity_t)`. The argument is not evaluated (IEEE 1800 section 20.6.2).
         if (name == "$bits" && call.arguments().size() == 1
             && call.arguments()[0]->type->isFixedSize()) {
-            const std::optional<eir::Type> type = module->convertType(*expression.type);
+            const std::optional<eir::Type> type = module->typeOf(expression);
             if (!type.has_value()) return std::nullopt;
+            if (const std::optional<eir::Type> argument = module->typeOf(*call.arguments()[0]);
+                argument.has_value() && isSymbolic(*argument))
+                module->cannotBeGeneric();
             const std::uint32_t index = addConstant(eir::BitVector::fromUInt64(
                 call.arguments()[0]->type->getBitstreamWidth(), type->bitWidth()));
             const std::uint32_t result = newRegister(*type);
@@ -2577,7 +2623,7 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
         // `$clog2` of a variable, such as a loop index; slang has folded every constant one.
         if (name == "$clog2" && call.arguments().size() == 1) {
             const std::optional<Value> operand = translateExpression(*call.arguments()[0]);
-            const std::optional<eir::Type> type = module->convertType(*expression.type);
+            const std::optional<eir::Type> type = module->typeOf(expression);
             if (!operand.has_value() || !type.has_value()) return std::nullopt;
             const std::uint32_t result = newRegister(*type);
             emit(eir::Instruction::make(eir::Opcode::CeilLog2, eir::Operand::reg(result),
@@ -2612,8 +2658,9 @@ ProcessTranslator::Value ProcessTranslator::copyOf(const Value& value) {
 }
 
 ProcessTranslator::Value ProcessTranslator::defaultValue(eir::Type type) {
-    const std::uint32_t constant = addConstant(eir::BitVector::filled(
-        type.bitWidth(), type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero));
+    const eir::Logic fill = type.isFourState() ? eir::Logic::Unknown : eir::Logic::Zero;
+    const std::uint32_t constant = addConstantAs(eir::BitVector::filled(type.bitWidth(), fill),
+                                                 module->filledOfWidth(fill, type));
     const std::uint32_t result = newRegister(type);
     emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
                                 eir::Operand::constant(constant)));
@@ -2635,7 +2682,7 @@ void ProcessTranslator::bindLocals(const ast::Scope& scope) {
         // through its object as any other is.
         if (staticSubroutineOf(variable) != nullptr) continue;
 
-        const std::optional<eir::Type> type = module->convertType(variable.getType());
+        const std::optional<eir::Type> type = module->typeOfSymbol(variable);
         if (!type.has_value()) {
             module->reportUnsupported(variable.location,
                                       std::format("the type of '{}'", variable.name));
@@ -2712,6 +2759,7 @@ ProcessTranslator::inlineCall(const ast::CallExpression& call, const ast::Expres
     inlineFrames.push_back(InlineFrame{.subroutine = &subroutine,
                                        .exitBlock = exitBlock,
                                        .returnVariable = subroutine.returnValVar});
+    module->prepareWidths(subroutine);
     const bool translated = translateStatement(subroutine.getBody());
     inlineFrames.pop_back();
     if (!translated) return std::nullopt;
@@ -2756,11 +2804,13 @@ ProcessTranslator::translateBitCount(std::string_view name, const ast::CallExpre
     const std::optional<Value> operand = translateExpression(*call.arguments()[0]);
     if (!operand.has_value()) return std::nullopt;
 
-    const std::optional<eir::Type> declared = module->convertType(*expression.type);
+    const std::optional<eir::Type> declared = module->typeOf(expression);
     const eir::Type resultType = declared.value_or(eir::Type::bit());
 
     const auto loadConstant = [&](std::uint64_t value, eir::Type type) {
-        const std::uint32_t index = addConstant(eir::BitVector::fromUInt64(value, type.bitWidth()));
+        const std::uint32_t index =
+            addConstantAs(eir::BitVector::fromUInt64(value, type.bitWidth()),
+                          module->constantOfWidth(value, type));
         const std::uint32_t reg = newRegister(type);
         emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(reg),
                                     eir::Operand::constant(index)));
@@ -2909,13 +2959,14 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
         std::uint32_t offset = value.type.bitWidth();
 
         for (const ast::Expression* operand : concatenation.operands()) {
-            const std::optional<eir::Type> pieceType = module->convertType(*operand->type);
+            const std::optional<eir::Type> pieceType = module->typeOf(*operand);
             if (!pieceType.has_value()) {
                 module->reportUnsupported(operand->sourceRange.start(),
                                           "this concatenation target type");
                 failed = true;
                 return false;
             }
+            if (isSymbolic(*pieceType) || isSymbolic(value.type)) module->cannotBeGeneric();
             if (pieceType->bitWidth() > offset) {
                 module->reportUnsupported(target.sourceRange.start(),
                                           "a concatenation target wider than its value");

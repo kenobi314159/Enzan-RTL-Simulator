@@ -632,23 +632,35 @@ instance named with its index, `u[2]`, and a port that takes an array reaches it
 one definition on two interfaces each reach their own. A modport restricts what a module may
 touch, which slang checks, and changes nothing about where a signal is.
 
-**A module whose parameters decide only values is one generic unit** (4.1, M5.1): one
-translation, named as the source names it, specialised at elaboration for each set of values
-its instances give it. Its formals are its parameters and local parameters, each default
+**A module whose parameters decide values, and the widths of the objects it declares, is
+one generic unit** (4.1, M5.1): one translation, named as the source names it, specialised at
+elaboration for each set of values its instances give it. Its formals are its parameters and local parameters, each default
 bound from the declaration — not from the parameter, whose initialiser is whatever the
 translated instance overrode it with. Every value of a process that names a formal is
 annotated with its expression, an instance of a generic child records the values it sets as
 expressions over its parent's formals, and a condition naming a formal is computed rather than
 taken as the dead-code rule of this section would take it.
 
+A declared object's width and bounds are expressions over the formals, from its
+dimensions. An expression's width is derived from its operands' by the sizing rules of IEEE
+1800 section 11.6, the context it is used in included, and every width derived is checked
+against slang's number for the representative. Two widths are taken to be equal only when
+they are the same expression, so a conversion is kept wherever they are not; specialisation
+removes one whose two sides came out equal, which is what a frontend translating that
+parameterisation directly would not have emitted.
+
 Which modules qualify is decided from the source, not from the parameterisations a design
 happens to have. A unit stays specialised when anything that decides a width or the generate
-structure — a dimension, a replication count, a size cast, a range select's bounds, a generate
-condition or loop — names a formal or a parameter or type declared from one; when a value
-naming a formal is used as a number the translation does not annotate, such as a select's
-position; when a parameter is a type, or not integral; and when the module has an interface
-port. Where the design has a second parameterisation of the module, the unit specialised at its
-values must also encode, byte for byte, as that parameterisation translated on its own.
+structure names a formal, or a parameter or type declared from one, other than a declared
+object's dimensions — a type's dimensions, a replication count, a size cast, a range select's
+bounds, a generate condition or loop; when the translation needs a number a formal decides
+that it does not yet derive — a select's position or a concatenation's offsets in an object a
+formal sizes, a value used as a count; when a parameter is a type, or not integral; when the
+module has an interface port or a hierarchical reference; and when, after translating, an
+instruction joins two widths that are equal for the representative but not as expressions,
+the trace a lost expression leaves. Where the design has a second parameterisation of the
+module, the unit specialised at its values must also encode, byte for byte, as that
+parameterisation translated on its own.
 
 **A function or task is inlined into the process that calls it.** The body is translated in
 place, its variables bound to registers, so a task's delays suspend the caller as its own
@@ -1016,13 +1028,15 @@ So `--in-lib` on `analyse` means *read these libraries' declarations*, and `--in
 on `run` means *resolve against these libraries' units*. The two are the same option
 because they name the same thing; what differs is which half of it is wanted.
 
-**A library is instantiable with parameters chosen by whoever uses it.** A
-parameterised module becomes one unit per parameterisation, so a unit is not baked
-with the parameters its library happened to be analysed with: the design that needs
-`Width=8` creates that specialisation from the declarations it read, and stores it in
-its own library. A specialisation the input library already holds is **not** stored a
-second time, because two libraries defining one name is exactly what an unqualified
-reference cannot resolve.
+**A library is instantiable with parameters chosen by whoever uses it.** A generic unit
+(5.1, M5.1) is stored once, named as the source names it, and specialised at elaboration
+for whatever values an instance gives it, so the design that needs `Width=8` stores nothing
+of it. A module that stays specialised becomes one unit per parameterisation, so it is not
+baked with the parameters its library happened to be analysed with either: the design that
+needs another parameterisation creates it from the declarations it read, and stores it in
+its own library. A unit the input library already holds is **not** stored a second time,
+because two libraries defining one name is exactly what an unqualified reference cannot
+resolve.
 
 This is what makes a library usable rather than what makes it save work. Reading the
 other library's sources means re-analysing them, so the boundary costs what it would

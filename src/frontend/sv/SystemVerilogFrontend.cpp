@@ -13,13 +13,16 @@
 #include "frontend/sv/ParameterLowering.h"
 #include "frontend/sv/ProcessTranslator.h"
 #include "frontend/sv/SvIntConversion.h"
+#include "frontend/sv/SymbolicWidths.h"
 
+#include "slang/ast/ASTVisitor.h"
 #include "slang/ast/Compilation.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/Expression.h"
 #include "slang/ast/Statement.h"
 #include "slang/ast/Symbol.h"
 #include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/ConversionExpression.h"
 #include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/statements/MiscStatements.h"
@@ -49,6 +52,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <span>
@@ -312,7 +316,9 @@ public:
 
     /// True when the unit was made generic and nothing translated since needed what generic
     /// units cannot say.
-    [[nodiscard]] bool isGeneric() const noexcept { return generic && !genericLost; }
+    [[nodiscard]] bool isGeneric() const noexcept {
+        return generic && !genericLost && (widths == nullptr || !widths->hasFailed());
+    }
 
     /// Adds an instance of an already-translated module, named `prefix` and its own name.
     /// `genericChild` is that module's unit when it is generic, whose formals the instance's
@@ -348,6 +354,25 @@ public:
     [[nodiscard]] bool namesFormal(const ast::Expression& expression) override;
 
     void usedAsNumber(const ast::Expression& expression) override;
+
+    std::optional<eir::Type> typeOf(const ast::Expression& expression) override;
+
+    std::optional<eir::Type> typeOfSymbol(const ast::ValueSymbol& symbol) override;
+
+    void prepareWidths(const ast::Statement& statement) override;
+
+    void prepareWidths(const ast::SubroutineSymbol& subroutine) override;
+
+    void prepareWidths(const ast::Expression& expression, const eir::Type& target) override;
+
+    eir::Type widerOf(const eir::Type& left, const eir::Type& right) override;
+
+    std::optional<std::uint32_t> constantOfWidth(std::uint64_t value,
+                                                 const eir::Type& type) override;
+
+    std::optional<std::uint32_t> filledOfWidth(eir::Logic fill, const eir::Type& type) override;
+
+    void cannotBeGeneric() override { genericLost = true; }
 
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
@@ -406,7 +431,8 @@ private:
     /// that is an expression rather than a plain signal.
     std::optional<std::uint32_t> materialiseConnection(const ast::InstanceSymbol& instance,
                                                        const ast::PortSymbol& port,
-                                                       const ast::Expression& expression);
+                                                       const ast::Expression& expression,
+                                                       const eir::ModuleDefinition* genericChild);
 
     /// Turns a block header's event control into a sensitivity list.
     /// Which kind of sensitivity a block header's timing control describes.
@@ -490,6 +516,10 @@ private:
 
     bool failed = false;
 
+    /// Gives `object`, declared by `symbol` in a generic unit, the expressions of the widths and
+    /// bounds a formal decides.
+    void annotateWidths(const ast::ValueSymbol& symbol, eir::Object& object);
+
     /// The parameter values an instance of the generic unit `child` sets, as expressions of this
     /// unit, onto `result`. False when one cannot be said.
     bool actualsOf(const ast::InstanceSymbol& instance, const eir::ModuleDefinition& child,
@@ -502,6 +532,11 @@ private:
 
     /// For a generic unit, each parameter symbol of the body and its formal's index.
     std::map<const ast::Symbol*, std::uint32_t> formalBySymbol;
+    /// For a generic unit, each formal's value for the body it is translated from, which every
+    /// width it derives is checked against.
+    std::vector<std::optional<eir::ParameterValue>> representative;
+    /// For a generic unit, its widths as expressions over its formals.
+    std::unique_ptr<SymbolicWidths> widths;
     bool generic = false;
     /// Set when something translated needs what a generic unit cannot say.
     bool genericLost = false;
@@ -729,6 +764,9 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
         // subroutine is in as well.
         if (subroutine != nullptr) name = *nameThere;
         if (owner != body) {
+            // Another instance's object is sized by that instance's parameters, which this
+            // unit's formals cannot say.
+            if (generic) genericLost = true;
             // Reached through an interface port, the reference names the port rather than the
             // interface it happens to be connected to here: one definition serves every
             // instance, and each may be connected to a different one.
@@ -743,6 +781,7 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     eir::Object object;
     object.name = uniqueObjectName(name);
     object.type = *type;
+    if (generic && declaringPackage == nullptr) annotateWidths(symbol, object);
     object.kind = symbol.kind == slang::ast::SymbolKind::Net ? eir::ObjectKind::Net
                                                              : eir::ObjectKind::Variable;
     object.location = convertLocation(symbol.location);
@@ -1020,6 +1059,7 @@ bool ModuleBuilder::translateProcesses() {
             }
         }
 
+        prepareWidths(*bodyStatement);
         if (!translator.translateBody(*bodyStatement)) {
             failed = true;
             continue;
@@ -1040,6 +1080,7 @@ bool ModuleBuilder::translateProcesses() {
                         shared->slangSources.getLineNumber(assignment->location)),
             location);
 
+        if (generic) widths->prepare(assignment->getAssignment(), std::nullopt);
         if (!translator.translateContinuousAssignment(assignment->getAssignment(),
                                                       assignment->getDelay())) {
             failed = true;
@@ -1061,6 +1102,7 @@ bool ModuleBuilder::translateProcesses() {
                                                  shared->slangSources.getLineNumber(net.location)),
                                      convertLocation(net.location));
 
+        prepareWidths(*net.getInitializer(), definitionValue.objects[objectIndex].type);
         if (!translator.translateExpressionInto(objectIndex, *net.getInitializer())) {
             failed = true;
             continue;
@@ -1124,12 +1166,21 @@ void addDependents(const syntax::SyntaxNode& node, Names& names) {
 }
 
 /// True when something in `node` that decides a width or the generate structure names one of
-/// `names`: a dimension, a replication count, a size cast, the bounds of a range select, a
-/// generate construct's condition or bounds. Values a formal decides are what a generic unit
-/// annotates; these are what it cannot yet.
-bool widthOrStructureMentions(const syntax::SyntaxNode& node, const Names& names) {
+/// `names` in a way a generic unit cannot say: a dimension of a type rather than of a declared
+/// object, a replication count, a size cast, the bounds of a range select, a generate
+/// construct's condition or bounds. `inType` is set inside a type declaration.
+bool widthOrStructureMentions(const syntax::SyntaxNode& node, const Names& names, bool inType) {
     switch (node.kind) {
-    case syntax::SyntaxKind::VariableDimension:
+    // A type a formal sizes would be a type expression of its own, which generic units do not
+    // have; the dimensions of a declared variable, net or port they do.
+    case syntax::SyntaxKind::TypedefDeclaration:
+    case syntax::SyntaxKind::ParameterDeclaration:
+    case syntax::SyntaxKind::StructType:
+    case syntax::SyntaxKind::UnionType:
+    case syntax::SyntaxKind::EnumType: inType = true; break;
+    // A dimension of a declared object is said by the object's width; its bounds are written
+    // as a range select is, and are not one.
+    case syntax::SyntaxKind::VariableDimension: return inType && mentions(&node, names);
     case syntax::SyntaxKind::SimpleRangeSelect:
     case syntax::SyntaxKind::TypeReference:
     case syntax::SyntaxKind::StreamingConcatenationExpression:
@@ -1161,7 +1212,7 @@ bool widthOrStructureMentions(const syntax::SyntaxNode& node, const Names& names
     }
     for (std::size_t index = 0; index < node.getChildCount(); ++index) {
         const syntax::SyntaxNode* child = node.childNode(index);
-        if (child != nullptr && widthOrStructureMentions(*child, names)) return true;
+        if (child != nullptr && widthOrStructureMentions(*child, names, inType)) return true;
     }
     return false;
 }
@@ -1175,6 +1226,109 @@ bool declaresType(const syntax::DataTypeSyntax* syntax) {
 }
 
 } // namespace
+
+/// True when every instruction of `unit`, a generic unit, has operands as wide as one another
+/// wherever its operation requires it, as expressions and not only for the representative.
+///
+/// What the translator derives from a width it can lose the expression of, and the width it
+/// then writes is the representative's number where an expression belonged: an instruction
+/// joining that number to the expression it came from is the trace such a loss leaves, and a
+/// unit with one is not generic.
+bool widthsAgree(const eir::ModuleDefinition& unit) {
+    for (const eir::Process& process : unit.processes) {
+        const auto registerType = [&](eir::Operand operand) -> std::optional<eir::Type> {
+            if (operand.kind() != eir::Operand::Kind::Register
+                || operand.index() >= process.registerTypes.size())
+                return std::nullopt;
+            return process.registerTypes[operand.index()];
+        };
+        const auto objectType = [&](eir::Operand operand) -> std::optional<eir::Type> {
+            if (operand.kind() != eir::Operand::Kind::Object
+                || operand.index() >= unit.objects.size())
+                return std::nullopt;
+            return unit.objects[operand.index()].type;
+        };
+        const auto same = [](std::optional<eir::Type> left, std::optional<eir::Type> right) {
+            return left.has_value() && right.has_value() && sameWidth(*left, *right);
+        };
+        const auto symbolic = [](std::optional<eir::Type> type) {
+            return type.has_value() && isSymbolic(*type);
+        };
+
+        for (const eir::BasicBlock& block : process.blocks) {
+            for (const eir::Instruction& instruction : block.instructions) {
+                const std::optional<eir::Type> dst = registerType(instruction.dst);
+                const std::optional<eir::Type> a = registerType(instruction.a);
+                const std::optional<eir::Type> b = registerType(instruction.b);
+                const std::optional<eir::Type> c = registerType(instruction.c);
+                bool agrees = true;
+                switch (instruction.opcode) {
+                case eir::Opcode::And:
+                case eir::Opcode::Or:
+                case eir::Opcode::Xor:
+                case eir::Opcode::Xnor:
+                case eir::Opcode::Add:
+                case eir::Opcode::Subtract:
+                case eir::Opcode::Multiply:
+                case eir::Opcode::Divide:
+                case eir::Opcode::Modulo: agrees = same(dst, a) && same(dst, b); break;
+                case eir::Opcode::Not:
+                case eir::Opcode::Negate:
+                case eir::Opcode::Move:
+                case eir::Opcode::CoerceTwoState:
+                case eir::Opcode::ShiftLeft:
+                case eir::Opcode::ShiftRightLogical:
+                case eir::Opcode::ShiftRightArithmetic:
+                case eir::Opcode::Power: agrees = same(dst, a); break;
+                case eir::Opcode::Equal:
+                case eir::Opcode::NotEqual:
+                case eir::Opcode::CaseEqual:
+                case eir::Opcode::CaseNotEqual:
+                case eir::Opcode::WildcardEqual:
+                case eir::Opcode::WildcardNotEqual:
+                case eir::Opcode::CaseZMatch:
+                case eir::Opcode::CaseXMatch:
+                case eir::Opcode::LessThan:
+                case eir::Opcode::LessEqual: agrees = same(a, b); break;
+                case eir::Opcode::Conditional: agrees = same(dst, b) && same(dst, c); break;
+                case eir::Opcode::ReadObject: agrees = same(dst, objectType(instruction.a)); break;
+                case eir::Opcode::Store:
+                case eir::Opcode::StoreNonBlocking:
+                case eir::Opcode::StoreDelayed:
+                case eir::Opcode::StoreNonBlockingDelayed:
+                    agrees = same(objectType(instruction.a), b);
+                    break;
+                case eir::Opcode::LoadConstant:
+                    // A constant as wide as a formal decides must say so.
+                    agrees = !symbolic(dst)
+                             || (instruction.a.index() < process.constantExpressions.size()
+                                 && process.constantExpressions[instruction.a.index()]
+                                        != eir::NoExpression);
+                    break;
+                case eir::Opcode::Extend:
+                case eir::Opcode::Truncate:
+                case eir::Opcode::ReduceAnd:
+                case eir::Opcode::ReduceOr:
+                case eir::Opcode::ReduceXor:
+                case eir::Opcode::LogicalAnd:
+                case eir::Opcode::LogicalOr:
+                case eir::Opcode::LogicalNot:
+                case eir::Opcode::BranchIf:
+                case eir::Opcode::Jump:
+                case eir::Opcode::Return:
+                case eir::Opcode::Nop: break;
+                // Anything else touching a width a formal decides is not yet said.
+                default:
+                    agrees = !symbolic(dst) && !symbolic(a) && !symbolic(b) && !symbolic(c)
+                             && !symbolic(objectType(instruction.a));
+                    break;
+                }
+                if (!agrees) return false;
+            }
+        }
+    }
+    return true;
+}
 
 bool ModuleBuilder::makeGeneric() {
     // An interface port reads parameters of whatever interface it is given, which generic
@@ -1235,11 +1389,122 @@ bool ModuleBuilder::makeGeneric() {
     const syntax::SyntaxNode* declaration = body->getDefinition().getSyntax();
     if (declaration == nullptr) return false;
     addDependents(*declaration, names);
-    if (widthOrStructureMentions(*declaration, names)) return false;
+    if (widthOrStructureMentions(*declaration, names, false)) return false;
 
+    for (const ast::ParameterSymbolBase* base : body->getParameters()) {
+        const auto& parameter = base->symbol.as<ast::ParameterSymbol>();
+        representative.emplace_back(eir::ParameterValue{
+            .bits = toBitVector(parameter.getValue().integer())
+                        .resized(parameter.getType().getBitWidth(), parameter.getType().isSigned()),
+            .isSigned = parameter.getType().isSigned()});
+    }
     definitionValue.formals = std::move(formals);
+    widths = std::make_unique<SymbolicWidths>(
+        definitionValue.expressions,
+        [this](const ast::Expression& expression) { return lowering(*body).lower(expression); },
+        [](const syntax::ExpressionSyntax& syntax,
+           const ast::Scope& scope) -> const ast::Expression* {
+            const ast::ASTContext context(scope, ast::LookupLocation::max);
+            const ast::Expression& bound = ast::Expression::bind(syntax, context);
+            return bound.bad() ? nullptr : &bound;
+        },
+        [this](const ast::Type& type) -> std::optional<std::uint32_t> {
+            const std::optional<eir::Type> converted = convertType(type);
+            if (!converted.has_value()) return std::nullopt;
+            return converted->bitWidth();
+        },
+        representative);
     generic = true;
     return true;
+}
+
+void ModuleBuilder::annotateWidths(const ast::ValueSymbol& symbol, eir::Object& object) {
+    const std::optional<Width> storage = widths->storage(symbol);
+    if (!storage.has_value()) {
+        genericLost = true;
+        return;
+    }
+    if (!storage->isFixed()) object.type = object.type.withWidthExpression(storage->expression);
+    if (object.unpackedDimensions.empty()) return;
+
+    const std::optional<std::vector<Bounds>> bounds = widths->unpacked(symbol);
+    const std::optional<Width> element = widths->packed(symbol);
+    if (!bounds.has_value() || !element.has_value()
+        || bounds->size() != object.unpackedDimensions.size()) {
+        genericLost = true;
+        return;
+    }
+    for (std::size_t index = 0; index < bounds->size(); ++index) {
+        object.unpackedDimensions[index].leftExpression = (*bounds)[index].left.expression;
+        object.unpackedDimensions[index].rightExpression = (*bounds)[index].right.expression;
+    }
+    object.elementWidthExpression = element->expression;
+}
+
+std::optional<eir::Type> ModuleBuilder::typeOf(const ast::Expression& expression) {
+    if (expression.type == nullptr) return std::nullopt;
+    const std::optional<eir::Type> type = convertType(*expression.type);
+    if (!type.has_value() || !generic) return type;
+    const std::optional<Width> width = widths->of(expression);
+    if (!width.has_value()) {
+        genericLost = true;
+        return type;
+    }
+    return width->isFixed() ? *type : type->withWidthExpression(width->expression);
+}
+
+std::optional<eir::Type> ModuleBuilder::typeOfSymbol(const ast::ValueSymbol& symbol) {
+    const std::optional<eir::Type> type = convertType(symbol.getType());
+    if (!type.has_value() || !generic) return type;
+    const std::optional<Width> width = widths->storage(symbol);
+    if (!width.has_value()) {
+        genericLost = true;
+        return type;
+    }
+    return width->isFixed() ? *type : type->withWidthExpression(width->expression);
+}
+
+void ModuleBuilder::prepareWidths(const ast::Statement& statement) {
+    if (generic) widths->prepare(statement);
+}
+
+void ModuleBuilder::prepareWidths(const ast::SubroutineSymbol& subroutine) {
+    if (generic) widths->prepare(subroutine);
+}
+
+void ModuleBuilder::prepareWidths(const ast::Expression& expression, const eir::Type& target) {
+    if (generic)
+        widths->prepare(expression,
+                        Width{.value = target.bitWidth(), .expression = target.widthExpression()});
+}
+
+eir::Type ModuleBuilder::widerOf(const eir::Type& left, const eir::Type& right) {
+    const bool isSigned = left.isSigned() && right.isSigned();
+    if (!generic || (!isSymbolic(left) && !isSymbolic(right)))
+        return eir::Type::bits(std::max(left.bitWidth(), right.bitWidth()), isSigned, true);
+    const Width wider =
+        widths->max(Width{.value = left.bitWidth(), .expression = left.widthExpression()},
+                    Width{.value = right.bitWidth(), .expression = right.widthExpression()});
+    return eir::Type::bits(wider.value, isSigned, true).withWidthExpression(wider.expression);
+}
+
+std::optional<std::uint32_t> ModuleBuilder::constantOfWidth(std::uint64_t value,
+                                                            const eir::Type& type) {
+    if (!isSymbolic(type)) return std::nullopt;
+    eir::ParameterExpressions& table = definitionValue.expressions;
+    return table.add(
+        eir::ParameterNode{.kind = eir::ParameterNodeKind::Extend,
+                           .widthNode = type.widthExpression(),
+                           .a = table.constant(eir::BitVector::fromUInt64(value, 64), false)});
+}
+
+std::optional<std::uint32_t> ModuleBuilder::filledOfWidth(eir::Logic fill, const eir::Type& type) {
+    if (!isSymbolic(type)) return std::nullopt;
+    eir::ParameterExpressions& table = definitionValue.expressions;
+    return table.add(
+        eir::ParameterNode{.kind = eir::ParameterNodeKind::Replicate,
+                           .a = type.widthExpression(),
+                           .b = table.constant(eir::BitVector::filled(1, fill), false)});
 }
 
 std::optional<std::uint32_t> ModuleBuilder::parameterExpression(const ast::Expression& expression) {
@@ -1250,7 +1515,23 @@ std::optional<std::uint32_t> ModuleBuilder::parameterExpression(const ast::Expre
 }
 
 bool ModuleBuilder::namesFormal(const ast::Expression& expression) {
-    return generic && lowering(*body).namesFormal(expression);
+    if (!generic) return false;
+    if (lowering(*body).namesFormal(expression)) return true;
+
+    // slang folds `$bits(data)` to the representative's number, which a formal decides when it
+    // decides `data`'s width; a constant made that way depends on one as much as `W` does.
+    bool dependent = false;
+    expression.visit(ast::makeVisitor([&](auto& visitor, const ast::CallExpression& call) {
+        if (call.isSystemCall()) {
+            for (const ast::Expression* argument : call.arguments()) {
+                if (argument == nullptr) continue;
+                const std::optional<Width> width = widths->of(*argument);
+                if (!width.has_value() || !width->isFixed()) dependent = true;
+            }
+        }
+        visitor.visitDefault(call);
+    }));
+    return dependent;
 }
 
 void ModuleBuilder::usedAsNumber(const ast::Expression& expression) {
@@ -1495,8 +1776,8 @@ bool ModuleBuilder::hasPortWidth(const ast::PortSymbol& port, const eir::Type& t
 
 std::optional<std::uint32_t>
 ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
-                                     const ast::PortSymbol& port,
-                                     const ast::Expression& expression) {
+                                     const ast::PortSymbol& port, const ast::Expression& expression,
+                                     const eir::ModuleDefinition* genericChild) {
     // An `inout` would need the assignment to run both ways at once, which is driver
     // resolution and therefore M5. Inputs and outputs each need it in one direction only.
     if (port.direction == slang::ast::ArgumentDirection::InOut) {
@@ -1534,6 +1815,17 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
     }
     object.location = convertLocation(expression.sourceRange.start());
     const std::uint32_t objectIndex = definitionValue.addObject(std::move(object));
+
+    // The port's width as this body sees it is a number; a generic child's own formals may
+    // decide it, and this unit's cannot say how.
+    if (generic && genericChild != nullptr) {
+        const auto childPort =
+            std::ranges::find(genericChild->ports, std::string_view(port.name), &eir::Port::name);
+        if (childPort == genericChild->ports.end()
+            || isSymbolic(genericChild->objects[childPort->objectIndex].type))
+            genericLost = true;
+    }
+    if (generic && isInput) prepareWidths(expression, *type);
 
     ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
                                  std::format("connection@{}:{}",
@@ -1616,9 +1908,9 @@ bool ModuleBuilder::addInstance(
             if (objectIndex.has_value()
                 && (!definitionValue.objects[*objectIndex].hierarchicalPath.empty()
                     || !hasPortWidth(port, definitionValue.objects[*objectIndex].type)))
-                objectIndex = materialiseConnection(instance, port, reference);
+                objectIndex = materialiseConnection(instance, port, reference, genericChild);
         } else {
-            objectIndex = materialiseConnection(instance, port, reference);
+            objectIndex = materialiseConnection(instance, port, reference, genericChild);
         }
 
         if (!objectIndex.has_value()) {
@@ -1811,7 +2103,9 @@ std::optional<Walker::Built> Walker::buildUnit(const ast::InstanceBodySymbol& bo
     if (!builder.translateProcesses()) return std::nullopt;
     if (generic && !builder.isGeneric()) return std::nullopt;
     std::map<std::string, std::uint32_t, std::less<>> ports = builder.portIndices();
-    return Built{.unit = builder.take(), .portIndices = std::move(ports)};
+    Built built{.unit = builder.take(), .portIndices = std::move(ports)};
+    if (generic && !widthsAgree(built.unit)) return std::nullopt;
+    return built;
 }
 
 bool Walker::agrees(const eir::ModuleDefinition& generic, const ast::InstanceBodySymbol& body,

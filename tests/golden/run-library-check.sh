@@ -196,23 +196,32 @@ grep -q 'more than one library' <<<"$clash" \
 # --- a library is parametrisable by whoever uses it ------------------------------------------------
 
 # The point of section 8.2's libraries: a unit is not baked with the parameters the library
-# happened to be analysed with. The consumer creates the parameterisation it needs, and it lands
-# in the consumer's library rather than being duplicated from the producer's.
+# happened to be analysed with. A generic unit is specialised for whatever an instance asks for;
+# one that stays specialised, as a type parameter keeps it, is specialised by the consumer, and
+# lands in the consumer's library rather than being duplicated from the producer's.
 mkdir -p par
 cat >par/counter.sv <<'EOF'
 module pcounter #(parameter int Width = 4) (output logic [Width-1:0] q);
     initial q = '1;
+endmodule
+
+module ptyped #(parameter type T = logic [3:0]) (output T q);
+    initial q = '0;
 endmodule
 EOF
 cat >par/wrap.sv <<'EOF'
 module pwrap_tb;
     logic [3:0] narrow;
     logic [7:0] wide;
+    logic [3:0] typed_narrow;
+    logic [7:0] typed_wide;
     pcounter #(.Width(4)) u_narrow(.q(narrow));
     pcounter #(.Width(8)) u_wide(.q(wide));
+    ptyped u_typed_narrow(.q(typed_narrow));
+    ptyped #(.T(logic [7:0])) u_typed_wide(.q(typed_wide));
     initial begin
         #1;
-        if (narrow !== 4'hF || wide !== 8'hFF) begin
+        if (narrow !== 4'hF || wide !== 8'hFF || typed_narrow !== 4'h0 || typed_wide !== 8'h0) begin
             $display("FAIL library: narrow=%0h wide=%0h", narrow, wide);
             $fatal(1);
         end
@@ -228,16 +237,26 @@ EOF
 "$enzan" analyse --in-lib libs/pc --out-lib libs/pw par/wrap.sv \
     || fail "a design could not be analysed against a library"
 
-# The suffix is the parameterisation, not a counter: a counter would number them in the order
-# one compilation walked them, and the same name would mean different modules in two libraries.
-"$enzan" lib list libs/pc | grep -q 'pcounter\$Width_4' \
-    || fail "the producer's library does not name its parameterisation: $("$enzan" lib list libs/pc)"
+# The counter's parameter decides only its widths, so it is one generic unit, specialised for each
+# width when a design is elaborated (DESIGN_GUIDE.md section 18, M5.1): the producer's library
+# holds it once, named as the source names it, and the consumer stores nothing of it, since a
+# second copy would make an unqualified reference ambiguous.
+producer=$("$enzan" lib list libs/pc)
+grep -qx '  pcounter' <<<"$producer" \
+    || fail "the producer's library does not hold the counter as one unit: $producer"
+grep -q 'pcounter\$' <<<"$producer" && fail "the producer's library holds a specialisation: $producer"
+"$enzan" lib list libs/pw | grep -q 'pcounter' \
+    && fail "the consumer stored a unit its input library already held"
 
-# The width the consumer asked for is stored by the consumer, and the one the producer already
-# has is not duplicated into it — duplicating it would make an unqualified reference ambiguous.
-"$enzan" lib list libs/pw | grep -q 'pcounter\$Width_8' \
+# A type parameter keeps a unit specialised, one per parameterisation and named for its values,
+# not by a counter: a counter would number them in the order one compilation walked them, and
+# the same name would mean different modules in two libraries. The consumer stores the one it
+# created, and not the one the producer already has.
+grep -q 'ptyped\$T_logic_3_0' <<<"$producer" \
+    || fail "the producer's library does not name its parameterisation: $producer"
+"$enzan" lib list libs/pw | grep -q 'ptyped\$T_logic_7_0' \
     || fail "the consumer's library does not hold the parameterisation it created"
-"$enzan" lib list libs/pw | grep -q 'pcounter\$Width_4' \
+"$enzan" lib list libs/pw | grep -q 'ptyped\$T_logic_3_0' \
     && fail "the consumer duplicated a parameterisation its input library already held"
 
 par_output=$("$enzan" run --in-lib libs/pc --in-lib libs/pw --timescale ns pwrap_tb) \

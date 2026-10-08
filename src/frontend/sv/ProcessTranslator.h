@@ -110,7 +110,50 @@ public:
     /// — a select's position, a count — which in a generic unit keeps it from being generic
     /// when the expression names a formal.
     virtual void usedAsNumber(const slang::ast::Expression& expression) = 0;
+
+    /// The EIR type of `expression` as slang typed it, its context included: in a generic unit,
+    /// with its width's expression when a formal decides it. Nothing when it is not a type Enzan
+    /// supports.
+    virtual std::optional<eir::Type> typeOf(const slang::ast::Expression& expression) = 0;
+
+    /// The EIR type of `symbol`'s storage, as `typeOf` gives an expression's.
+    virtual std::optional<eir::Type> typeOfSymbol(const slang::ast::ValueSymbol& symbol) = 0;
+
+    /// Records the contexts the expressions of `body`, or of `subroutine`'s body, are used in,
+    /// before either is translated, so that `typeOf` gives a context-determined one its width.
+    virtual void prepareWidths(const slang::ast::Statement& body) = 0;
+    virtual void prepareWidths(const slang::ast::SubroutineSymbol& subroutine) = 0;
+
+    /// As `prepareWidths`, for `expression` assigned to something of `target` type.
+    virtual void prepareWidths(const slang::ast::Expression& expression,
+                               const eir::Type& target) = 0;
+
+    /// The narrowest type both `left` and `right` fit, signed when both are: the wider of the
+    /// two, or in a generic unit an expression for it when they are not known to agree.
+    virtual eir::Type widerOf(const eir::Type& left, const eir::Type& right) = 0;
+
+    /// In a generic unit, the expression a constant of `type` holding `value`, extended to the
+    /// type's width, or `fill` in every bit, is, when the type's width is an expression's; nothing
+    /// for a type whose width is fixed.
+    virtual std::optional<std::uint32_t> constantOfWidth(std::uint64_t value,
+                                                         const eir::Type& type) = 0;
+    virtual std::optional<std::uint32_t> filledOfWidth(eir::Logic fill, const eir::Type& type) = 0;
+
+    /// Says that the translation needed a number of a width a formal decides, which it cannot
+    /// annotate; in a generic unit that keeps it from being generic.
+    virtual void cannotBeGeneric() = 0;
 };
+
+/// True when `left` and `right` are as wide as each other in every parameterisation: the same
+/// number with no expression, or the same expression.
+[[nodiscard]] inline bool sameWidth(const eir::Type& left, const eir::Type& right) noexcept {
+    return left.bitWidth() == right.bitWidth() && left.widthExpression() == right.widthExpression();
+}
+
+/// True when a formal decides `type`'s width.
+[[nodiscard]] inline bool isSymbolic(const eir::Type& type) noexcept {
+    return type.widthExpression() != eir::Type::NoWidthExpression;
+}
 
 /// Translates one procedural block or continuous assignment into an EIR process.
 ///
@@ -200,6 +243,11 @@ private:
     /// expression over its formals that it is.
     std::uint32_t addConstantOf(const eir::BitVector& value,
                                 const slang::ast::Expression& expression);
+
+    /// Adds `value`, annotated with `expression` when there is one: a constant whose width, or
+    /// value, a formal decides.
+    std::uint32_t addConstantAs(const eir::BitVector& value,
+                                std::optional<std::uint32_t> expression);
     std::uint32_t addString(std::string text);
 
     /// Switches emission to `block`.

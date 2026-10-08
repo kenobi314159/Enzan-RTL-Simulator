@@ -153,6 +153,10 @@ enzan_add_golden_test(type_parameters NO_DIFFERENTIAL)
 # instance at elaboration: the defaults, a local parameter, and a value a generic parent passes.
 enzan_add_golden_test(generic_parameters)
 
+# A module whose parameter decides its widths, made one generic unit: every width an expression
+# takes from its context moves with the parameter, wider for one instance and narrower for another.
+enzan_add_golden_test(generic_widths)
+
 # Packages, and package variables shared by every module that uses them.
 enzan_add_golden_test(packages)
 

@@ -3,8 +3,8 @@
 enzan_add_component(
   frontend_sv
   SOURCES DeadCode.cpp ParameterLowering.cpp ProcessTranslator.cpp SvIntConversion.cpp
-          SystemVerilogFrontend.cpp
+          SymbolicWidths.cpp SystemVerilogFrontend.cpp
   HEADERS DeadCode.h ParameterLowering.h ProcessTranslator.h SvIntConversion.h
-          SystemVerilogFrontend.h
+          SymbolicWidths.h SystemVerilogFrontend.h
   DEPENDS enzan::common enzan::eir
   PRIVATE_DEPENDS slang::slang)

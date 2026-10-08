@@ -228,14 +228,15 @@ TEST_F(FrontendTest, OneEnumerationIsRecordedOnceHoweverManyObjectsHaveIt) {
 }
 
 TEST_F(FrontendTest, ParametersAreRecordedWithWhatTheyResolvedTo) {
-    // A parameterised module is already one definition per parameterisation, so nothing here
-    // is used to simulate anything. It is recorded so that a reader looking at one of three
+    // A module kept specialised is one definition per parameterisation, so nothing here is used
+    // to simulate anything. It is recorded so that a reader looking at one of three
     // differently-configured copies of a module can see which copy they are looking at
-    // (DESIGN_GUIDE.md section 10.7).
+    // (DESIGN_GUIDE.md section 10.7). A type the parameter sizes keeps this one specialised.
     const std::unique_ptr<Design> design = analyse(R"(
         module leaf #(parameter int WIDTH = 8) ();
             localparam int BYTES = WIDTH / 8;
-            logic [WIDTH-1:0] q;
+            typedef logic [WIDTH-1:0] word_t;
+            word_t q;
         endmodule
 
         module m;
@@ -386,11 +387,11 @@ TEST_F(FrontendTest, ABareAlwaysLoopStartsAtTimeZero) {
 }
 
 TEST_F(FrontendTest, EachParameterisationBecomesItsOwnDefinition) {
-    // Keeping parameters out of EIR entirely is what makes an analysed unit reusable without
-    // re-evaluating anything (see eir/Module.h).
+    // A module whose parameter decides something a generic unit cannot say — here a replication
+    // count — is translated once per parameterisation, as every module was before M5.1.
     const std::unique_ptr<Design> design = analyse(R"(
         module leaf #(parameter int WIDTH = 8) (output logic [WIDTH-1:0] q);
-            assign q = '0;
+            assign q = {WIDTH{1'b0}};
         endmodule
 
         module top;
@@ -498,12 +499,39 @@ TEST_F(FrontendTest, AGenericUnitKeepsTheDeclaredDefaultsRatherThanAnOverride) {
     EXPECT_EQ(evaluator.integer(counter.formals[0].value), 9U);
 }
 
-TEST_F(FrontendTest, AWidthThatAParameterDecidesKeepsTheModuleSpecialised) {
-    // Directly, through a local parameter, and through a typedef: each makes a width depend on
-    // WIDTH, which a generic unit cannot say yet.
+TEST_F(FrontendTest, AModuleWhoseWidthsAParameterDecidesIsOneGenericUnit) {
+    // Directly and through a local parameter: each object's width is an expression over WIDTH,
+    // which elaboration evaluates for each instance.
     for (const std::string_view declaration :
-         {"logic [WIDTH-1:0] q;", "localparam int W = WIDTH; logic [W-1:0] q;",
-          "typedef logic [WIDTH-1:0] word_t; word_t q;"}) {
+         {"logic [WIDTH-1:0] q;", "localparam int W = WIDTH; logic [W-1:0] q;"}) {
+        const std::unique_ptr<Design> design = analyse(std::format(R"(
+            module leaf #(parameter int WIDTH = 8) (output logic out);
+                {}
+                assign out = ^q;
+            endmodule
+            module top;
+                logic a, b;
+                leaf #(.WIDTH(4)) u_a (.out(a));
+                leaf #(.WIDTH(16)) u_b (.out(b));
+            endmodule
+        )",
+                                                                   declaration),
+                                                       "top");
+        ASSERT_NE(design, nullptr) << consumer.messages.front();
+        const ModuleDefinition* leaf = design->findModule("leaf");
+        ASSERT_NE(leaf, nullptr) << declaration;
+        EXPECT_TRUE(leaf->isGeneric()) << declaration;
+        const enzan::eir::Object& q = leaf->objects[require(leaf->findObject("q"))];
+        EXPECT_EQ(q.type.bitWidth(), 4U) << "the representative's width, " << declaration;
+        EXPECT_NE(q.type.widthExpression(), enzan::eir::NoExpression) << declaration;
+    }
+}
+
+TEST_F(FrontendTest, AWidthThatATypeDeclaresKeepsTheModuleSpecialised) {
+    // A type a parameter sizes would be an expression for a type, which a generic unit does not
+    // have; a module using one is translated per parameterisation.
+    for (const std::string_view declaration : {"typedef logic [WIDTH-1:0] word_t; word_t q;",
+                                               "struct packed { logic [WIDTH-1:0] value; } q;"}) {
         const std::unique_ptr<Design> design = analyse(std::format(R"(
             module leaf #(parameter int WIDTH = 8) (output logic out);
                 {}
