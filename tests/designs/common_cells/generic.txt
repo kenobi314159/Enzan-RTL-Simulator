@@ -8,3 +8,4 @@ cc_sync_wedge
 cc_trip_counter
 tc_clk_delay
 tc_clk_gating
+enzan_lzc_tb
