@@ -11,6 +11,7 @@ enzan_add_unit_test(
           ParameterExpressionTests.cpp
           ProcessTests.cpp
           SerializationTests.cpp
+          SpecialiseTests.cpp
           TypeTests.cpp
           VerifierTests.cpp
   DEPENDS enzan::eir)

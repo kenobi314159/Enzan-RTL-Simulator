@@ -22,6 +22,75 @@ void resize(Type& type, std::uint32_t width) {
     if (type.isBits()) type = type.withWidth(width);
 }
 
+/// Removes from `process` every extension or truncation whose two widths turned out equal,
+/// using its source wherever its result was used, and closes up the registers that leaves
+/// unused.
+///
+/// A generic unit converts between two widths a formal decides wherever they are not the same
+/// expression, and a specialisation can make them equal: such a conversion is a copy, which a
+/// frontend translating that parameterisation would not have emitted. Only a conversion whose
+/// result and source are each written once is removed, so that every use of the one is a use of
+/// the other.
+void removeIdentityConversions(Process& process) {
+    const std::size_t registerCount = process.registerTypes.size();
+    std::vector<std::uint32_t> writes(registerCount, 0);
+    for (const BasicBlock& block : process.blocks) {
+        for (const Instruction& instruction : block.instructions) {
+            if (hasResult(instruction.opcode) && instruction.dst.kind() == Operand::Kind::Register
+                && instruction.dst.index() < registerCount)
+                ++writes[instruction.dst.index()];
+        }
+    }
+
+    // What each register stands for once the copies are gone.
+    std::vector<std::uint32_t> replacement(registerCount);
+    for (std::uint32_t reg = 0; reg < registerCount; ++reg) replacement[reg] = reg;
+    std::vector<bool> removed(registerCount, false);
+    for (BasicBlock& block : process.blocks) {
+        std::erase_if(block.instructions, [&](const Instruction& instruction) {
+            if (instruction.opcode != Opcode::Extend && instruction.opcode != Opcode::Truncate)
+                return false;
+            if (instruction.dst.kind() != Operand::Kind::Register
+                || instruction.a.kind() != Operand::Kind::Register)
+                return false;
+            const std::uint32_t dst = instruction.dst.index();
+            const std::uint32_t source = instruction.a.index();
+            if (dst >= registerCount || source >= registerCount || writes[dst] != 1
+                || writes[source] > 1
+                || process.registerTypes[dst].bitWidth()
+                       != process.registerTypes[source].bitWidth())
+                return false;
+            replacement[dst] = replacement[source];
+            removed[dst] = true;
+            return true;
+        });
+    }
+    if (std::ranges::none_of(removed, [](bool value) { return value; })) return;
+
+    std::vector<std::uint32_t> renumbered(registerCount, 0);
+    std::vector<Type> kept;
+    for (std::uint32_t reg = 0; reg < registerCount; ++reg) {
+        if (removed[reg]) continue;
+        renumbered[reg] = static_cast<std::uint32_t>(kept.size());
+        kept.push_back(process.registerTypes[reg]);
+    }
+    const auto rewrite = [&](Operand& operand) {
+        if (operand.kind() == Operand::Kind::Register && operand.index() < registerCount)
+            operand = Operand::reg(renumbered[replacement[operand.index()]]);
+    };
+    for (BasicBlock& block : process.blocks) {
+        for (Instruction& instruction : block.instructions) {
+            rewrite(instruction.dst);
+            rewrite(instruction.a);
+            rewrite(instruction.b);
+            rewrite(instruction.c);
+        }
+    }
+    for (SysTaskCall& call : process.sysCalls)
+        for (SysTaskArgument& argument : call.arguments) rewrite(argument.value);
+    process.registerTypes = std::move(kept);
+}
+
 } // namespace
 
 std::variant<std::vector<std::optional<ParameterValue>>, SpecialiseFailure>
@@ -183,6 +252,7 @@ specialiseAt(const ModuleDefinition& unit, std::span<const std::optional<Paramet
             extent.lowBitExpression = extent.widthExpression = NoExpression;
         }
         normaliseWriteSet(process.writeSet);
+        if (unit.isGeneric()) removeIdentityConversions(process);
 
         process.constantExpressions.clear();
     }
