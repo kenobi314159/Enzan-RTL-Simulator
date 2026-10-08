@@ -62,7 +62,7 @@ using InterfaceParameters =
 [[nodiscard]] std::variant<std::vector<std::optional<ParameterValue>>, SpecialiseFailure>
 formalValues(const ModuleDefinition& unit,
              const std::map<std::string, ParameterValue, std::less<>>& actuals,
-             const InterfaceParameters& interfaces);
+             const InterfaceParameters& interfaces, ConstantFunctions* functions = nullptr);
 
 /// `unit` at `values`, a value for each of its formals: every annotated number replaced by its
 /// expression's value, the actuals of its instances evaluated to constants of its own table,
@@ -70,8 +70,10 @@ formalValues(const ModuleDefinition& unit,
 /// parameterisation. Its name is left to the caller.
 ///
 /// A unit that is not generic comes back as it is, its instances' actuals evaluated likewise.
+/// `functions`, for both, runs the constant functions the unit's expressions call.
 [[nodiscard]] std::variant<ModuleDefinition, SpecialiseFailure>
-specialiseAt(const ModuleDefinition& unit, std::span<const std::optional<ParameterValue>> values);
+specialiseAt(const ModuleDefinition& unit, std::span<const std::optional<ParameterValue>> values,
+             ConstantFunctions* functions = nullptr);
 
 /// The value of each actual of `instance` of a unit `specialiseAt` returned, by formal name.
 [[nodiscard]] std::map<std::string, ParameterValue, std::less<>>

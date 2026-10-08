@@ -124,6 +124,29 @@ TEST_F(VerifierTest, AcceptsAWholeDesign) {
     EXPECT_TRUE(enzan::eir::verify(design, engine));
 }
 
+TEST_F(VerifierTest, AcceptsAConstantFunctionOfItsShape) {
+    // Arguments in, one result out, one initial process computing it: what running it relies
+    // on to know where the arguments go and where the result is.
+    ModuleDefinition function = makeValidModule();
+    function.isFunction = true;
+    function.processes[0].kind = ProcessKind::Initial;
+    function.ports = {enzan::eir::Port{.name = "source", .objectIndex = 0},
+                      enzan::eir::Port{.name = "sink",
+                                       .direction = enzan::eir::PortDirection::Output,
+                                       .objectIndex = 1}};
+    EXPECT_TRUE(check(function));
+    EXPECT_TRUE(consumer.messages.empty()) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, RejectsAConstantFunctionOfAnotherShape) {
+    ModuleDefinition function = makeValidModule();
+    function.isFunction = true;
+    function.ports = {enzan::eir::Port{.name = "sink", .objectIndex = 1}};
+    EXPECT_FALSE(check(function));
+    EXPECT_TRUE(reported("then one output"));
+    EXPECT_TRUE(reported("one initial process"));
+}
+
 // ---------------------------------------------------------------------------
 // The process purity invariant
 // ---------------------------------------------------------------------------

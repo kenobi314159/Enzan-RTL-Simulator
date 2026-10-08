@@ -30,8 +30,10 @@ namespace enzan::elab {
 /// costs elaboration the ones a design uses.
 class Specialiser {
 public:
-    /// `analysed` and `diagnostics` must outlive the specialiser.
-    Specialiser(const eir::Design& analysed, DiagnosticEngine& diagnostics) noexcept;
+    /// `analysed` and `diagnostics` must outlive the specialiser, and `functions`, which runs
+    /// the constant functions parameters call, too when given.
+    Specialiser(const eir::Design& analysed, DiagnosticEngine& diagnostics,
+                eir::ConstantFunctions* functions = nullptr) noexcept;
 
     /// The units under `top`, an index into the analysed design, with the top's own
     /// specialisation at `units->module(top)`; or nothing, having reported why.
@@ -71,6 +73,7 @@ private:
 
     const eir::Design& analysed;
     DiagnosticEngine& diagnostics;
+    eir::ConstantFunctions* functions;
     std::unique_ptr<eir::Design> units;
     /// The parameter values of each specialisation made so far, by name, for an interface
     /// whose parameters a unit it is connected to reads.

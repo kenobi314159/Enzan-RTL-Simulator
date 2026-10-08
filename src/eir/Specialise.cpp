@@ -96,7 +96,7 @@ void removeIdentityConversions(Process& process) {
 std::variant<std::vector<std::optional<ParameterValue>>, SpecialiseFailure>
 formalValues(const ModuleDefinition& unit,
              const std::map<std::string, ParameterValue, std::less<>>& actuals,
-             const InterfaceParameters& interfaces) {
+             const InterfaceParameters& interfaces, ConstantFunctions* functions) {
     for (const auto& [name, value] : actuals) {
         const bool known = std::ranges::any_of(unit.formals, [&](const ParameterFormal& formal) {
             return formal.kind == FormalKind::Parameter && formal.name == name;
@@ -109,7 +109,7 @@ formalValues(const ModuleDefinition& unit,
     }
 
     std::vector<std::optional<ParameterValue>> values(unit.formals.size());
-    ParameterEvaluator evaluator(unit.expressions, values);
+    ParameterEvaluator evaluator(unit.expressions, values, functions);
 
     for (std::size_t index = 0; index < unit.formals.size(); ++index) {
         const ParameterFormal& formal = unit.formals[index];
@@ -163,8 +163,9 @@ formalValues(const ModuleDefinition& unit,
 }
 
 std::variant<ModuleDefinition, SpecialiseFailure>
-specialiseAt(const ModuleDefinition& unit, std::span<const std::optional<ParameterValue>> values) {
-    ParameterEvaluator evaluator(unit.expressions, values);
+specialiseAt(const ModuleDefinition& unit, std::span<const std::optional<ParameterValue>> values,
+             ConstantFunctions* functions) {
+    ParameterEvaluator evaluator(unit.expressions, values, functions);
     std::optional<ParameterError> failure;
 
     const auto integer = [&](std::uint32_t expression, std::uint32_t& into) {

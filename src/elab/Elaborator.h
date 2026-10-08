@@ -27,8 +27,11 @@ namespace enzan::elab {
 /// units. A unit that is not generic is taken as the frontend emitted it.
 class Elaborator {
 public:
-    /// `design` and `diagnostics` must outlive the elaborator.
-    Elaborator(const eir::Design& analysedDesign, DiagnosticEngine& engine) noexcept;
+    /// `design` and `diagnostics` must outlive the elaborator, and `functions` too when given:
+    /// it runs the constant functions a generic unit's parameters call, which elaboration
+    /// cannot itself, and without it a parameterisation that needs one fails.
+    Elaborator(const eir::Design& analysedDesign, DiagnosticEngine& engine,
+               eir::ConstantFunctions* functions = nullptr) noexcept;
 
     /// Elaborates `topModuleName`, or returns nullptr having reported why.
     ///
@@ -43,6 +46,7 @@ private:
 
     const eir::Design& design;
     DiagnosticEngine& diagnostics;
+    eir::ConstantFunctions* functions;
 };
 
 } // namespace enzan::elab

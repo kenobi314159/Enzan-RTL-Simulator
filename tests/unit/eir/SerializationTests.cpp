@@ -205,6 +205,17 @@ TEST_F(SerializationTest, ModuleIdentityRoundTrips) {
     EXPECT_EQ(decoded.front().location, SourceLocation(buffer, 3));
 }
 
+TEST_F(SerializationTest, AConstantFunctionStaysOne) {
+    // Read back as a module, a function's unit would be offered as a top level and its process
+    // would run at time zero in whatever design loaded it.
+    ModuleDefinition function = richModule(buffer);
+    function.isFunction = true;
+    const std::vector<ModuleDefinition> decoded = roundTrip({function, richModule(buffer)});
+    ASSERT_EQ(decoded.size(), 2U);
+    EXPECT_TRUE(decoded[0].isFunction);
+    EXPECT_FALSE(decoded[1].isFunction);
+}
+
 TEST_F(SerializationTest, ObjectsRoundTrip) {
     const std::vector<ModuleDefinition> decoded = roundTrip({richModule(buffer)});
     ASSERT_EQ(decoded.size(), 1U);
@@ -399,7 +410,12 @@ TEST_F(SerializationTest, AGenericUnitRoundTripsWithItsAnnotations) {
     definition.objects[0].elementWidthExpression = one;
     definition.objects[0].unpackedDimensions[1].leftExpression = msb;
     definition.objects[0].unpackedDimensions[1].rightExpression = one;
-    definition.instances[0].parameterActuals = {ParameterActual{.formal = "N", .value = msb}};
+    const std::uint32_t called = table.add(ParameterNode{.kind = ParameterNodeKind::Call,
+                                                         .width = 8,
+                                                         .a = table.function("widths::f"),
+                                                         .b = width});
+    definition.instances[0].parameterActuals = {ParameterActual{.formal = "N", .value = msb},
+                                                ParameterActual{.formal = "M", .value = called}};
 
     Process& process = definition.processes[0];
     process.registerTypes[1] = process.registerTypes[1].withWidthExpression(width);
@@ -415,6 +431,7 @@ TEST_F(SerializationTest, AGenericUnitRoundTripsWithItsAnnotations) {
 
     EXPECT_TRUE(result.isGeneric());
     EXPECT_EQ(result.expressions, definition.expressions);
+    EXPECT_EQ(result.expressions.allFunctions().size(), 1U);
     ASSERT_EQ(result.formals.size(), 3U);
     for (std::size_t index = 0; index < 3; ++index) {
         const ParameterFormal& got = result.formals[index];

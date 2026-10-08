@@ -109,6 +109,19 @@ TEST(Design, APackageIsNeverATopLevel) {
     EXPECT_TRUE(design.findSpecialisations("config").empty());
 }
 
+TEST(Design, AConstantFunctionIsNeverATopLevel) {
+    // A function's unit is run by elaboration, not instantiated, and is no module's
+    // specialisation either.
+    Design design;
+    design.addModule(makeModule("testbench"));
+    ModuleDefinition function = makeModule("widths::index_width");
+    function.isFunction = true;
+    design.addModule(std::move(function));
+
+    EXPECT_EQ(design.candidateTopModules(), std::vector<std::string>{"testbench"});
+    EXPECT_TRUE(design.findSpecialisations("widths::index_width").empty());
+}
+
 TEST(Design, EveryModuleIsACandidateWhenNothingIsInstantiated) {
     Design design;
     design.addModule(makeModule("one"));

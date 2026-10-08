@@ -86,7 +86,8 @@ const ModuleDefinition& Design::module(std::uint32_t index) const {
 std::vector<std::uint32_t> Design::findSpecialisations(std::string_view sourceName) const {
     std::vector<std::uint32_t> found;
     for (std::uint32_t index = 0; index < definitions.size(); ++index) {
-        if (definitions[index].sourceName == sourceName && !definitions[index].isPackage)
+        if (definitions[index].sourceName == sourceName && !definitions[index].isPackage
+            && !definitions[index].isFunction)
             found.push_back(index);
     }
     return found;
@@ -101,10 +102,11 @@ std::vector<std::string> Design::candidateTopModules() const {
             instantiated.insert(instance.definitionName);
     }
 
-    // A package is never instantiated and never a top level either.
+    // A package is never instantiated and never a top level either, nor is a constant function.
     std::vector<std::string> result;
     for (const auto& [name, indices] : byName) {
-        if (!instantiated.contains(name) && !definitions[indices.front()].isPackage)
+        const ModuleDefinition& definition = definitions[indices.front()];
+        if (!instantiated.contains(name) && !definition.isPackage && !definition.isFunction)
             result.push_back(name);
     }
     return result;

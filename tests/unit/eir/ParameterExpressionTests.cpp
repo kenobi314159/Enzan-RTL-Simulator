@@ -5,11 +5,13 @@
 #include <gtest/gtest.h>
 
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace {
 
 using enzan::eir::BitVector;
+using enzan::eir::ConstantFunctions;
 using enzan::eir::Logic;
 using enzan::eir::Opcode;
 using enzan::eir::ParameterError;
@@ -258,6 +260,56 @@ TEST(ParameterEvaluator, EachNodeIsEvaluatedOnce) {
     EXPECT_EQ(evaluator.value(missing), nullptr);
     EXPECT_EQ(evaluator.value(missing), nullptr);
     EXPECT_EQ(evaluator.error(), ParameterError::MissingFormal);
+}
+
+/// Runs `double_it`, which doubles its one 32-bit argument, and counts how often it was asked.
+class Doubler final : public ConstantFunctions {
+public:
+    std::optional<BitVector> call(std::string_view function,
+                                  const std::optional<BitVector>& arguments,
+                                  std::uint32_t width) override {
+        ++calls;
+        if (function != "double_it" || !arguments.has_value() || arguments->width() != 32)
+            return std::nullopt;
+        return BitVector::fromUInt64(arguments->ref().toUInt64() * 2, width);
+    }
+
+    int calls = 0;
+};
+
+TEST(ParameterEvaluator, ACallIsAnsweredByWhatRunsFunctions) {
+    // A constant function has statements, which only something that executes them can say the
+    // value of; the evaluator hands it the arguments, concatenated, and takes the result.
+    ParameterExpressions table;
+    const std::uint32_t formal = table.formal(0, 32, true);
+    const std::uint32_t call = table.add(ParameterNode{.kind = ParameterNodeKind::Call,
+                                                       .width = 32,
+                                                       .a = table.function("double_it"),
+                                                       .b = formal});
+    const std::vector<std::optional<ParameterValue>> values{intValue(21)};
+
+    Doubler doubler;
+    ParameterEvaluator evaluator(table, values, &doubler);
+    EXPECT_EQ(evaluator.integer(call), 42U);
+    EXPECT_EQ(evaluator.integer(call), 42U);
+    EXPECT_EQ(doubler.calls, 1) << "a call is a node, evaluated once like any other";
+
+    ParameterEvaluator alone(table, values);
+    EXPECT_EQ(alone.value(call), nullptr);
+    EXPECT_EQ(alone.error(), ParameterError::CallFailed);
+}
+
+TEST(ParameterExpressions, AFunctionIsNamedOnceAndMustExist) {
+    ParameterExpressions table;
+    EXPECT_EQ(table.function("f"), 0U);
+    EXPECT_EQ(table.function("g"), 1U);
+    EXPECT_EQ(table.function("f"), 0U);
+    EXPECT_EQ(table.allFunctions().size(), 2U);
+
+    const ParameterNode call{.kind = ParameterNodeKind::Call, .width = 32, .a = 1};
+    EXPECT_TRUE(ParameterExpressions::fromParts({call}, {}, {"f", "g"}).has_value());
+    EXPECT_FALSE(ParameterExpressions::fromParts({call}, {}, {"f"}).has_value())
+        << "a function that does not exist";
 }
 
 } // namespace

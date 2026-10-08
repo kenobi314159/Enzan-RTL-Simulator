@@ -369,6 +369,17 @@ struct ModuleDefinition {
     /// them, and it is never a top level. Named `<package>::`, which no module can be.
     bool isPackage = false;
 
+    /// True for a constant function that a generic unit's parameters call (DESIGN_GUIDE.md
+    /// section 18, M5.1), rather than a module: its input ports are the function's arguments
+    /// in order, its one output port, last, is what it returns, and its one initial process
+    /// computes that. Named `<package>::<function>`, which no module can be. Never instantiated
+    /// nor a top level: elaboration runs it to evaluate a `ParameterNodeKind::Call`.
+    ///
+    /// Its ports' initial values are one call slang evaluated, the arguments and what came
+    /// back, so that what runs it can check the translation reproduces slang before trusting it
+    /// with arguments slang never saw.
+    bool isFunction = false;
+
     SourceLocation location;
 
     std::vector<Object> objects;

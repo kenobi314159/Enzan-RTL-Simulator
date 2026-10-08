@@ -43,6 +43,7 @@ public:
         for (const Process& process : definition.processes) checkProcess(definition, process);
 
         checkAnnotations(definition);
+        if (definition.isFunction) checkFunction(definition);
     }
 
 private:
@@ -58,6 +59,24 @@ private:
         diagnostics.report(
             DiagCode::InvalidEir, process.location,
             std::format("module '{}', process '{}': {}", definition.name, process.name, message));
+    }
+
+    /// Checks the shape a constant function's unit has (`ModuleDefinition::isFunction`), which
+    /// is what running it relies on: arguments in, one result out, one process computing it.
+    void checkFunction(const ModuleDefinition& definition) {
+        if (definition.ports.empty() || definition.ports.back().direction != PortDirection::Output
+            || std::ranges::any_of(
+                std::span(definition.ports).first(definition.ports.size() - 1),
+                [](const Port& port) { return port.direction != PortDirection::Input; })) {
+            report(definition, "a constant function's ports are its arguments, as inputs, and "
+                               "then one output");
+        }
+        if (definition.processes.size() != 1
+            || definition.processes.front().kind != ProcessKind::Initial
+            || !definition.instances.empty() || definition.isGeneric()) {
+            report(definition, "a constant function is one initial process, with no instances "
+                               "and no formals");
+        }
     }
 
     /// Checks what makes a unit generic (DESIGN_GUIDE.md section 18, M5.1): that every

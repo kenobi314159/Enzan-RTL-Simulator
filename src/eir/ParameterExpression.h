@@ -11,6 +11,8 @@
 #include <map>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace enzan::eir {
@@ -41,6 +43,12 @@ enum class ParameterNodeKind : std::uint8_t {
     /// The width of `a`'s value, as a 32-bit signed integer: `$bits` of something whose width
     /// is a parameter's.
     WidthOf,
+    /// A constant function applied to arguments: `a` indexes the table's functions, and `b` is
+    /// the arguments concatenated, the first highest, each converted to its formal's type; it
+    /// is `NoNode` for a function of none. The value is what the function returns, of the
+    /// node's width: the function is run by whatever the evaluator was given to run it with
+    /// (`ConstantFunctions`), since a function has statements, and BitOps evaluates operations.
+    Call,
 };
 
 /// One node of a parameter expression.
@@ -94,6 +102,25 @@ enum class ParameterError : std::uint8_t {
     SelectOutOfRange,
     /// A formal had no value: a parameter with no default that nothing set.
     MissingFormal,
+    /// A constant function could not be run: nothing was given to run it with, or the run
+    /// failed.
+    CallFailed,
+};
+
+/// What runs the constant functions a table's `Call` nodes name (DESIGN_GUIDE.md section 18,
+/// M5.1). Implemented above EIR, by what can execute a function's body.
+class ConstantFunctions {
+public:
+    ConstantFunctions() = default;
+    ConstantFunctions(const ConstantFunctions&) = delete;
+    ConstantFunctions& operator=(const ConstantFunctions&) = delete;
+    virtual ~ConstantFunctions() = default;
+
+    /// The value `function` returns for `arguments`, concatenated as a `Call` node holds them
+    /// and absent for a function of none, `width` bits wide; nothing when it cannot be had.
+    virtual std::optional<BitVector> call(std::string_view function,
+                                          const std::optional<BitVector>& arguments,
+                                          std::uint32_t width) = 0;
 };
 
 /// The expressions over a unit's formal parameters, which say what each number that depends on
@@ -134,19 +161,30 @@ public:
 
     [[nodiscard]] std::span<const BitVector> allConstants() const noexcept { return constants; }
 
+    /// The index of the constant function named `name` among those the table calls, added if
+    /// it is not there yet.
+    std::uint32_t function(std::string_view name);
+
+    /// The names of the constant functions `Call` nodes name, by index: units of the design
+    /// (`ModuleDefinition::isFunction`).
+    [[nodiscard]] std::span<const std::string> allFunctions() const noexcept { return functions; }
+
     /// Rebuilds a table from its parts, as a decoder has them. Returns nothing when a node
     /// refers to a node after itself or to a constant that does not exist, which is what makes
     /// evaluation terminate.
     static std::optional<ParameterExpressions> fromParts(std::vector<ParameterNode> nodes,
-                                                         std::vector<BitVector> constants);
+                                                         std::vector<BitVector> constants,
+                                                         std::vector<std::string> functions = {});
 
     friend bool operator==(const ParameterExpressions& left, const ParameterExpressions& right) {
-        return left.nodes == right.nodes && left.constants == right.constants;
+        return left.nodes == right.nodes && left.constants == right.constants
+               && left.functions == right.functions;
     }
 
 private:
     std::vector<ParameterNode> nodes;
     std::vector<BitVector> constants;
+    std::vector<std::string> functions;
     /// Position of each node, so that `add` finds an identical one without a scan. Ordered, so
     /// that nothing about the table depends on a hash (section 3.8).
     std::map<ParameterNode, std::uint32_t> positions;
@@ -161,8 +199,12 @@ class ParameterEvaluator {
 public:
     /// `formals` holds each formal's value, by index; one with no value is absent. Both
     /// arguments must outlive the evaluator.
+    ///
+    /// `functions` runs the constant functions `Call` nodes name; without it, such a node has no
+    /// value.
     ParameterEvaluator(const ParameterExpressions& expressions,
-                       std::span<const std::optional<ParameterValue>> formals);
+                       std::span<const std::optional<ParameterValue>> formals,
+                       ConstantFunctions* functions = nullptr);
 
     /// The value of node `index`, or why it has none.
     [[nodiscard]] const ParameterValue* value(std::uint32_t index);
@@ -184,6 +226,7 @@ private:
 
     const ParameterExpressions* expressions;
     std::span<const std::optional<ParameterValue>> formals;
+    ConstantFunctions* functions;
     std::vector<std::optional<ParameterValue>> cache;
     std::vector<bool> attempted;
     /// Nodes whose value has no bits: a replication of zero copies, or a concatenation of

@@ -59,6 +59,7 @@ std::array<std::uint32_t, 3> operandsOf(const ParameterNode& node) {
     case ParameterNodeKind::Constant:
     case ParameterNodeKind::Formal:
         return {ParameterNode::NoNode, ParameterNode::NoNode, ParameterNode::NoNode};
+    case ParameterNodeKind::Call: return {ParameterNode::NoNode, node.b, ParameterNode::NoNode};
     default: return {node.a, node.b, node.c};
     }
 }
@@ -117,10 +118,19 @@ std::uint32_t ParameterExpressions::formal(std::uint32_t formalIndex, std::uint3
                              .a = formalIndex});
 }
 
+std::uint32_t ParameterExpressions::function(std::string_view name) {
+    std::uint32_t position = 0;
+    while (position < functions.size() && functions[position] != name) ++position;
+    if (position == functions.size()) functions.emplace_back(name);
+    return position;
+}
+
 std::optional<ParameterExpressions>
-ParameterExpressions::fromParts(std::vector<ParameterNode> parts, std::vector<BitVector> values) {
+ParameterExpressions::fromParts(std::vector<ParameterNode> parts, std::vector<BitVector> values,
+                                std::vector<std::string> names) {
     ParameterExpressions result;
     result.constants = std::move(values);
+    result.functions = std::move(names);
     for (const ParameterNode& node : parts) {
         const auto position = static_cast<std::uint32_t>(result.nodes.size());
         for (const std::uint32_t operand : operandsOf(node))
@@ -128,6 +138,8 @@ ParameterExpressions::fromParts(std::vector<ParameterNode> parts, std::vector<Bi
         if (node.widthNode != ParameterNode::NoNode && node.widthNode >= position)
             return std::nullopt;
         if (node.kind == ParameterNodeKind::Constant && node.a >= result.constants.size())
+            return std::nullopt;
+        if (node.kind == ParameterNodeKind::Call && node.a >= result.functions.size())
             return std::nullopt;
         if (node.kind == ParameterNodeKind::Operation && !isExpressionOperation(node.opcode))
             return std::nullopt;
@@ -138,9 +150,11 @@ ParameterExpressions::fromParts(std::vector<ParameterNode> parts, std::vector<Bi
 }
 
 ParameterEvaluator::ParameterEvaluator(const ParameterExpressions& table,
-                                       std::span<const std::optional<ParameterValue>> values)
+                                       std::span<const std::optional<ParameterValue>> values,
+                                       ConstantFunctions* runner)
     : expressions(&table),
       formals(values),
+      functions(runner),
       cache(table.size()),
       attempted(table.size(), false),
       empty(table.size(), false) {}
@@ -290,6 +304,25 @@ const ParameterValue* ParameterEvaluator::compute(std::uint32_t index) {
         const ParameterValue* source = operand(node.a);
         if (source == nullptr) return nullptr;
         return store(BitVector::fromUInt64(source->bits.width(), 32));
+    }
+
+    case ParameterNodeKind::Call: {
+        std::optional<BitVector> arguments;
+        if (node.b != ParameterNode::NoNode) {
+            const ParameterValue* given = operand(node.b);
+            if (given == nullptr) return nullptr;
+            arguments = given->bits;
+        }
+        const std::optional<std::uint32_t> width = resultWidth(node);
+        if (!width.has_value()) return nullptr;
+        std::optional<BitVector> returned;
+        if (functions != nullptr)
+            returned = functions->call(expressions->allFunctions()[node.a], arguments, *width);
+        if (!returned.has_value() || returned->width() != *width) {
+            fail(index, ParameterError::CallFailed);
+            return nullptr;
+        }
+        return store(std::move(*returned));
     }
 
     case ParameterNodeKind::Operation: break;

@@ -33,6 +33,7 @@ std::string_view describe(eir::ParameterError error) {
     case eir::ParameterError::SelectOutOfRange: return "a part select reaches outside its value";
     case eir::ParameterError::MissingFormal:
         return "an expression uses a parameter that has no value yet";
+    case eir::ParameterError::CallFailed: return "a constant function could not be run";
     }
     return "an expression has no value";
 }
@@ -50,8 +51,9 @@ std::string referenceTo(const std::string& library, const std::string& name) {
 
 } // namespace
 
-Specialiser::Specialiser(const eir::Design& analysedDesign, DiagnosticEngine& engine) noexcept
-    : analysed(analysedDesign), diagnostics(engine) {}
+Specialiser::Specialiser(const eir::Design& analysedDesign, DiagnosticEngine& engine,
+                         eir::ConstantFunctions* runner) noexcept
+    : analysed(analysedDesign), diagnostics(engine), functions(runner) {}
 
 std::optional<Specialiser::Result> Specialiser::specialise(std::uint32_t top) {
     units = std::make_unique<eir::Design>();
@@ -179,7 +181,8 @@ std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
             const auto found = interface->second.parameters.find(name);
             if (found == interface->second.parameters.end()) return std::nullopt;
             return found->second;
-        });
+        },
+        functions);
     if (const auto* failure = std::get_if<eir::SpecialiseFailure>(&formals))
         return report(*failure);
     const auto& values = std::get<std::vector<std::optional<eir::ParameterValue>>>(formals);
@@ -225,7 +228,7 @@ std::optional<std::string> Specialiser::unitFor(std::uint32_t index,
         return std::nullopt;
     }
 
-    auto specialised = eir::specialiseAt(definition, values);
+    auto specialised = eir::specialiseAt(definition, values, functions);
     if (const auto* failure = std::get_if<eir::SpecialiseFailure>(&specialised))
         return report(*failure);
     eir::ModuleDefinition unit = std::move(std::get<eir::ModuleDefinition>(specialised));

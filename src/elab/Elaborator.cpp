@@ -51,8 +51,9 @@ std::string describeBits(std::uint32_t lowBit, std::uint32_t endBit, std::uint32
 /// all the mutable bookkeeping has a scope that ends.
 class Elaborator::Builder {
 public:
-    Builder(const eir::Design& analysedDesign, DiagnosticEngine& engine)
-        : analysed(analysedDesign), diagnostics(engine) {}
+    Builder(const eir::Design& analysedDesign, DiagnosticEngine& engine,
+            eir::ConstantFunctions* runner)
+        : analysed(analysedDesign), diagnostics(engine), functions(runner) {}
 
     std::unique_ptr<ElaboratedDesign> run(std::string_view topModuleName) {
         const std::optional<std::uint32_t> analysedTop = resolveTop(topModuleName);
@@ -60,7 +61,7 @@ public:
 
         // Every generic unit under the top becomes the specialisations its instances need, and
         // the rest of elaboration sees only those (DESIGN_GUIDE.md section 18, M5.1).
-        Specialiser specialiser(analysed, diagnostics);
+        Specialiser specialiser(analysed, diagnostics, functions);
         std::optional<Specialiser::Result> specialised = specialiser.specialise(*analysedTop);
         if (!specialised.has_value()) return nullptr;
         const std::uint32_t topIndex = specialised->top;
@@ -700,13 +701,15 @@ private:
     /// Definitions on the current path from the top, for recursion detection. An
     /// ordered set, so that the diagnostic it feeds is reproducible.
     std::set<std::uint32_t> activeDefinitions;
+    eir::ConstantFunctions* functions;
 };
 
-Elaborator::Elaborator(const eir::Design& analysedDesign, DiagnosticEngine& engine) noexcept
-    : design(analysedDesign), diagnostics(engine) {}
+Elaborator::Elaborator(const eir::Design& analysedDesign, DiagnosticEngine& engine,
+                       eir::ConstantFunctions* runner) noexcept
+    : design(analysedDesign), diagnostics(engine), functions(runner) {}
 
 std::unique_ptr<ElaboratedDesign> Elaborator::elaborate(std::string_view topModuleName) {
-    Builder builder(design, diagnostics);
+    Builder builder(design, diagnostics, functions);
     return builder.run(topModuleName);
 }
 

@@ -320,6 +320,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
     out.text(definition.name);
     out.text(definition.sourceName);
     out.boolean(definition.isPackage);
+    out.boolean(definition.isFunction);
     writeLocation(out, names, definition.location);
 
     out.u32(static_cast<std::uint32_t>(definition.objects.size()));
@@ -415,6 +416,8 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
     const ParameterExpressions& expressions = definition.expressions;
     out.u32(static_cast<std::uint32_t>(expressions.allConstants().size()));
     for (const BitVector& value : expressions.allConstants()) writeVector(out, value);
+    out.u32(static_cast<std::uint32_t>(expressions.allFunctions().size()));
+    for (const std::string& function : expressions.allFunctions()) out.text(function);
     out.u32(static_cast<std::uint32_t>(expressions.size()));
     for (const ParameterNode& node : expressions.allNodes()) {
         out.u8(static_cast<std::uint8_t>(node.kind));
@@ -624,6 +627,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     definition.name = in.text();
     definition.sourceName = in.text();
     definition.isPackage = in.boolean();
+    definition.isFunction = in.boolean();
     definition.location = readLocation(in, buffers);
 
     definition.objects.resize(in.count());
@@ -734,9 +738,13 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     expressionConstants.reserve(expressionConstantCount);
     for (std::uint32_t index = 0; index < expressionConstantCount && in.ok(); ++index)
         expressionConstants.push_back(readVector(in));
+    std::vector<std::string> functions(in.count());
+    for (std::string& function : functions) function = in.text();
     std::vector<ParameterNode> nodes(in.count());
     for (ParameterNode& node : nodes) {
-        node.kind = static_cast<ParameterNodeKind>(in.u8());
+        const std::uint8_t kind = in.u8();
+        if (kind > static_cast<std::uint8_t>(ParameterNodeKind::Call)) in.fail();
+        node.kind = static_cast<ParameterNodeKind>(kind);
         node.opcode = static_cast<Opcode>(in.u8());
         node.isSigned = in.boolean();
         node.operationSigned = in.boolean();
@@ -749,8 +757,8 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     // A table no `add` could have built — a node using one after it, a constant that does not
     // exist — would make evaluation read past the table or loop, so it fails the decode as a
     // truncated entry does.
-    std::optional<ParameterExpressions> expressions =
-        ParameterExpressions::fromParts(std::move(nodes), std::move(expressionConstants));
+    std::optional<ParameterExpressions> expressions = ParameterExpressions::fromParts(
+        std::move(nodes), std::move(expressionConstants), std::move(functions));
     if (!expressions.has_value()) {
         in.fail();
         return definition;
