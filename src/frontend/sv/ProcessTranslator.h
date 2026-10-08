@@ -248,6 +248,13 @@ public:
     std::optional<eir::SensitivityEntry> eventEntry(const slang::ast::Expression& expression,
                                                     slang::ast::EdgeKind edge);
 
+    /// Translates the body of the constant function `subroutine` as the one process of its unit
+    /// (eir::ModuleDefinition::isFunction): its arguments read from the objects `arguments`, in
+    /// order, and what it returns stored into `result`. False, having reported why, when the
+    /// body cannot be translated.
+    bool translateConstantFunction(const slang::ast::SubroutineSymbol& subroutine,
+                                   std::span<const std::uint32_t> arguments, std::uint32_t result);
+
     /// Hands over the finished process. The translator must not be used afterwards.
     eir::Process take();
 
@@ -406,6 +413,18 @@ private:
                                           const eir::Type& type);
     std::optional<Value> translateInside(const slang::ast::Expression& expression);
     std::optional<Value> translateAssignmentPattern(const slang::ast::Expression& expression);
+
+    /// What inlining a subroutine's body leaves: what it returns, and the value of each output
+    /// argument, by the argument's position.
+    struct Inlined {
+        std::optional<Value> result;
+        std::vector<std::pair<std::size_t, Value>> outputs;
+    };
+
+    /// Inlines the body of `subroutine` with `inputs` bound to its arguments, by position; an
+    /// output argument's input is absent. Restores the caller's bindings afterwards.
+    std::optional<Inlined> inlineBody(const slang::ast::SubroutineSymbol& subroutine,
+                                      std::span<const std::optional<Value>> inputs);
 
     /// Inlines a call of a user-defined function or task into this process, and returns the
     /// function's value, or a placeholder for a task or a void function.

@@ -555,6 +555,78 @@ TEST_F(FrontendTest, AHundredWidthsOfOneModuleAreOneTranslation) {
     EXPECT_TRUE(stage->isGeneric());
 }
 
+TEST_F(FrontendTest, AWidthAConstantFunctionComputesIsACallOfItsUnit) {
+    // DESIGN_GUIDE.md section 18, M5.1: a package's function is a unit of its own, which
+    // elaboration runs for each parameterisation, so the module calling it stays one unit.
+    const std::unique_ptr<Design> design = analyse(R"(
+        package widths;
+            function automatic int unsigned index_width(input int unsigned count);
+                return count > 1 ? $clog2(count) : 1;
+            endfunction
+        endpackage
+        module stage #(parameter int unsigned N = 4) (input logic clk,
+                                                     output logic [widths::index_width(N)-1:0] q);
+            always_ff @(posedge clk) q <= q + 1'b1;
+        endmodule
+        module top;
+            logic clk;
+            logic [2:0] a;
+            logic [4:0] b;
+            stage #(.N(8)) ua (.clk, .q(a));
+            stage #(.N(20)) ub (.clk, .q(b));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* stage = design->findModule("stage");
+    ASSERT_NE(stage, nullptr);
+    EXPECT_TRUE(stage->isGeneric());
+    ASSERT_EQ(stage->expressions.allFunctions().size(), 1U);
+    EXPECT_EQ(stage->expressions.allFunctions()[0], "widths::index_width");
+
+    const ModuleDefinition* function = design->findModule("widths::index_width");
+    ASSERT_NE(function, nullptr);
+    EXPECT_TRUE(function->isFunction);
+    ASSERT_EQ(function->ports.size(), 2U);
+    EXPECT_EQ(function->ports[0].direction, enzan::eir::PortDirection::Input);
+    EXPECT_EQ(function->ports[1].direction, enzan::eir::PortDirection::Output);
+    // The call slang evaluated for the representative, which running it is checked against.
+    const auto& result = function->objects[function->ports[1].objectIndex];
+    ASSERT_TRUE(result.initialValue.has_value());
+    EXPECT_EQ(result.initialValue->ref().toUInt64(), 3U);
+}
+
+TEST_F(FrontendTest, AFunctionThatCannotBeAUnitKeepsItsCallerSpecialised) {
+    // A function whose body Enzan cannot run, computing with reals, which have no runtime
+    // representation, leaves its caller specialised, as before generic units, rather than
+    // failing the design.
+    const std::unique_ptr<Design> design = analyse(R"(
+        package widths;
+            function automatic int unsigned halved(input int unsigned count);
+                real exact;
+                exact = count / 2.0;
+                return $rtoi(exact) + 1;
+            endfunction
+        endpackage
+        module stage #(parameter int unsigned N = 4) (input logic clk,
+                                                     output logic [widths::halved(N)-1:0] q);
+            always_ff @(posedge clk) q <= q + 1'b1;
+        endmodule
+        module top;
+            logic clk;
+            logic [4:0] a;
+            logic [2:0] b;
+            stage #(.N(8)) ua (.clk, .q(a));
+            stage #(.N(4)) ub (.clk, .q(b));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_EQ(design->findModule("stage"), nullptr) << "one unit per parameterisation";
+    EXPECT_EQ(design->findSpecialisations("stage").size(), 2U);
+    EXPECT_EQ(design->findModule("widths::halved"), nullptr);
+}
+
 TEST_F(FrontendTest, AWidthThatATypeDeclaresKeepsTheModuleSpecialised) {
     // A type a parameter sizes would be an expression for a type, which a generic unit does not
     // have; a module using one is translated per parameterisation.

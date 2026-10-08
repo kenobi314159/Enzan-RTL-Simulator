@@ -2801,6 +2801,80 @@ void ProcessTranslator::bindLocals(const ast::Scope& scope) {
     }
 }
 
+std::optional<ProcessTranslator::Inlined>
+ProcessTranslator::inlineBody(const ast::SubroutineSymbol& subroutine,
+                              std::span<const std::optional<Value>> inputs) {
+    const auto formals = subroutine.getArguments();
+
+    // Bind the callee's variables, keeping whatever they shadow for after the call.
+    const std::map<const ast::ValueSymbol*, Value> outer = locals;
+    bindLocals(subroutine);
+    if (failed) return std::nullopt;
+
+    for (std::size_t index = 0; index < formals.size(); ++index) {
+        const std::optional<Value>& input = inputs[index];
+        if (!input.has_value()) continue;
+        const Value& bound = locals.at(formals[index]);
+        const Value converted = coerceState(coerce(*input, bound.type), bound.type);
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(bound.reg),
+                                    eir::Operand::reg(converted.reg)));
+    }
+
+    const std::uint32_t exitBlock = newBlock("return");
+    inlineFrames.push_back(InlineFrame{.subroutine = &subroutine,
+                                       .exitBlock = exitBlock,
+                                       .returnVariable = subroutine.returnValVar});
+    module->prepareWidths(subroutine);
+    const bool translated = translateStatement(subroutine.getBody());
+    inlineFrames.pop_back();
+    if (!translated) return std::nullopt;
+    if (!currentBlockTerminated())
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(exitBlock)));
+    selectBlock(exitBlock);
+
+    // What the call returns and what it writes back are read before the callee's bindings
+    // are dropped.
+    Inlined inlined;
+    if (subroutine.returnValVar != nullptr) {
+        if (const Value* returned = localFor(*subroutine.returnValVar))
+            inlined.result = copyOf(*returned);
+    }
+    for (std::size_t index = 0; index < formals.size(); ++index) {
+        const ast::ArgumentDirection direction = formals[index]->direction;
+        if (direction == ast::ArgumentDirection::Out || direction == ast::ArgumentDirection::InOut)
+            inlined.outputs.emplace_back(index, copyOf(locals.at(formals[index])));
+    }
+    locals = outer;
+    return inlined;
+}
+
+bool ProcessTranslator::translateConstantFunction(const ast::SubroutineSymbol& subroutine,
+                                                  std::span<const std::uint32_t> arguments,
+                                                  std::uint32_t result) {
+    // Each argument is read from the input object it arrives in, as an inlined call's would be
+    // evaluated where the call is.
+    std::vector<std::optional<Value>> inputs;
+    for (const std::uint32_t argument : arguments) {
+        const eir::Type type = module->definition().objects[argument].type;
+        const std::uint32_t reg = newRegister(type);
+        noteRead(argument);
+        emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(reg),
+                                    eir::Operand::object(argument)));
+        inputs.emplace_back(Value{.reg = reg, .type = type});
+    }
+
+    const std::optional<Inlined> inlined = inlineBody(subroutine, inputs);
+    if (!inlined.has_value() || !inlined->result.has_value()) return false;
+
+    const eir::Type resultType = module->definition().objects[result].type;
+    const Value stored = coerceState(coerce(*inlined->result, resultType), resultType);
+    noteWholeWrite(result);
+    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(result),
+                                eir::Operand::reg(stored.reg)));
+    if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
+    return !failed;
+}
+
 std::optional<ProcessTranslator::Value>
 ProcessTranslator::inlineCall(const ast::CallExpression& call, const ast::Expression& expression) {
     const ast::SubroutineSymbol& subroutine = *std::get<0>(call.subroutine);
@@ -2847,52 +2921,16 @@ ProcessTranslator::inlineCall(const ast::CallExpression& call, const ast::Expres
         if (!inputs[index].has_value()) return std::nullopt;
     }
 
-    // Bind the callee's variables, keeping whatever they shadow for after the call.
-    const std::map<const ast::ValueSymbol*, Value> outer = locals;
-    bindLocals(subroutine);
-    if (failed) return std::nullopt;
+    std::optional<Inlined> inlined = inlineBody(subroutine, inputs);
+    if (!inlined.has_value()) return std::nullopt;
 
-    for (std::size_t index = 0; index < formals.size(); ++index) {
-        const std::optional<Value>& input = inputs[index];
-        if (!input.has_value()) continue;
-        const Value& bound = locals.at(formals[index]);
-        const Value converted = coerceState(coerce(*input, bound.type), bound.type);
-        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(bound.reg),
-                                    eir::Operand::reg(converted.reg)));
-    }
-
-    const std::uint32_t exitBlock = newBlock("return");
-    inlineFrames.push_back(InlineFrame{.subroutine = &subroutine,
-                                       .exitBlock = exitBlock,
-                                       .returnVariable = subroutine.returnValVar});
-    module->prepareWidths(subroutine);
-    const bool translated = translateStatement(subroutine.getBody());
-    inlineFrames.pop_back();
-    if (!translated) return std::nullopt;
-    if (!currentBlockTerminated())
-        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(exitBlock)));
-    selectBlock(exitBlock);
-
-    // What the call returns and what it writes back are read before the callee's bindings
-    // are dropped; the outputs are assigned with the caller's bindings back in place, since
-    // their targets are the caller's.
-    std::optional<Value> result;
-    if (subroutine.returnValVar != nullptr) {
-        if (const Value* returned = localFor(*subroutine.returnValVar)) result = copyOf(*returned);
-    }
-    std::vector<std::pair<std::size_t, Value>> outputs;
-    for (std::size_t index = 0; index < formals.size(); ++index) {
-        const ast::ArgumentDirection direction = formals[index]->direction;
-        if (direction == ast::ArgumentDirection::Out || direction == ast::ArgumentDirection::InOut)
-            outputs.emplace_back(index, copyOf(locals.at(formals[index])));
-    }
-    locals = outer;
-
-    for (const auto& [index, value] : outputs) {
+    // The outputs are assigned with the caller's bindings back in place, since their targets
+    // are the caller's.
+    for (const auto& [index, value] : inlined->outputs) {
         if (!assignTo(*targetOf(actuals[index]), value, false)) return std::nullopt;
     }
 
-    if (result.has_value()) return result;
+    if (inlined->result.has_value()) return inlined->result;
     // A task or a void function produces nothing; a placeholder keeps the callers that expect
     // a value, an expression statement among them, from having to tell two absences apart.
     return defaultValue(eir::Type::logic());

@@ -161,6 +161,10 @@ enzan_add_golden_test(generic_widths)
 # is the parameter, and a bit and a part at fixed positions.
 enzan_add_golden_test(generic_selects)
 
+# Widths a package's constant functions compute from a generic unit's parameters: each function
+# a unit of its own, run at elaboration for every parameterisation.
+enzan_add_golden_test(generic_functions)
+
 # Packages, and package variables shared by every module that uses them.
 enzan_add_golden_test(packages)
 

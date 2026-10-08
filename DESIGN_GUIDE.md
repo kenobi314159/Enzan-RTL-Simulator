@@ -2832,6 +2832,18 @@ operation rather than a second evaluator to keep in step with it. Elaboration MU
 depend on `codegen` or `runtime` (its own README), so it asks for the result through an
 interface the session implements with them.
 
+So a function is a unit of its own, named `<package>::<function>` and stored in the
+library beside the units that call it: an input port per argument, an output port for
+what it returns, and one initial process that computes it, which running the unit alone
+to quiescence executes. A call is an expression node naming that unit, its arguments
+concatenated. The unit's ports start at the one call slang evaluated, and the session
+runs that call before trusting the function with any other: a translation that does not
+reproduce slang is reported and decides no width. The frontend, which checks a generic
+unit against slang's numbers before elaboration exists, answers a call by having slang
+evaluate the function instead. Only a package's functions are units, since a module's
+may read the module, and one whose body Enzan cannot translate keeps its callers
+specialised.
+
 **Not every unit is generic, and that is accepted rather than a defect.** A unit whose
 parameters reach something the generic form does not cover — a type parameter, first
 of all — is still translated once per parameterisation, exactly as before this

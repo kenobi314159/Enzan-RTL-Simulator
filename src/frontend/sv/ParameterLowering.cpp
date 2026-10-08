@@ -2,17 +2,21 @@
 
 #include "frontend/sv/ParameterLowering.h"
 
+#include "eir/BitOps.h"
 #include "frontend/sv/SvIntConversion.h"
 
 #include "slang/ast/ASTVisitor.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/Expression.h"
+#include "slang/ast/Statement.h"
 #include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/ConversionExpression.h"
 #include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/expressions/OperatorExpressions.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/types/Type.h"
 
+#include <format>
 #include <utility>
 
 namespace enzan::frontend::sv {
@@ -62,6 +66,66 @@ std::optional<std::pair<Opcode, bool>> binaryOperation(ast::BinaryOperator op, b
 }
 
 } // namespace
+
+namespace {
+
+/// A call's arguments as a key: two calls with the same bits are the same call.
+std::string argumentKey(const std::optional<eir::BitVector>& arguments) {
+    return arguments.has_value() ? eir::toString(arguments->ref(), eir::Radix::Binary) : "";
+}
+
+} // namespace
+
+void FunctionUnits::remember(std::string_view function, const ast::SubroutineSymbol& subroutine) {
+    subroutines.insert_or_assign(std::string(function), &subroutine);
+}
+
+std::optional<eir::BitVector> FunctionUnits::call(std::string_view function,
+                                                  const std::optional<eir::BitVector>& arguments,
+                                                  std::uint32_t width) {
+    std::pair<std::string, std::string> key(std::string(function), argumentKey(arguments));
+    if (const auto found = results.find(key); found != results.end())
+        return found->second.resized(width, false);
+    const auto known = subroutines.find(function);
+    if (known == subroutines.end()) return std::nullopt;
+    const ast::SubroutineSymbol& subroutine = *known->second;
+
+    // As slang evaluates a call (CallExpression::evalImpl): a frame, the arguments as its
+    // locals, the body, and what the return variable holds after it.
+    ast::EvalContext context(subroutine);
+    if (!context.pushFrame(subroutine, subroutine.location, ast::LookupLocation::max))
+        return std::nullopt;
+    std::uint32_t low = arguments.has_value() ? arguments->width() : 0;
+    for (const ast::FormalArgumentSymbol* formal : subroutine.getArguments()) {
+        const ast::Type& type = formal->getType();
+        const std::uint32_t formalWidth = type.getBitWidth();
+        if (!arguments.has_value() || low < formalWidth) {
+            context.popFrame();
+            return std::nullopt;
+        }
+        low -= formalWidth;
+        eir::BitVector bits(formalWidth);
+        eir::bitops::partSelectAt(bits.mutableRef(), arguments->ref(), low);
+        slang::SVInt value = slang::SVInt::fromString(
+            std::format("{}'b{}", formalWidth, eir::toString(bits.ref(), eir::Radix::Binary)));
+        value.setSigned(type.isSigned());
+        context.createLocal(formal, slang::ConstantValue(std::move(value)));
+    }
+    context.createLocal(subroutine.returnValVar);
+    const ast::Statement::EvalResult evaluated = subroutine.getBody().eval(context);
+    const slang::ConstantValue returned = *context.findLocal(subroutine.returnValVar);
+    context.popFrame();
+    if ((evaluated != ast::Statement::EvalResult::Success
+         && evaluated != ast::Statement::EvalResult::Return)
+        || !returned.isInteger())
+        return std::nullopt;
+
+    eir::BitVector result = toBitVector(returned.integer())
+                                .resized(subroutine.getReturnType().getBitWidth(),
+                                         subroutine.getReturnType().isSigned());
+    results.emplace(std::move(key), result);
+    return result.resized(width, false);
+}
 
 bool ParameterLowering::namesFormal(const ast::Expression& expression) const {
     bool found = false;
@@ -223,7 +287,8 @@ std::optional<std::uint32_t> ParameterLowering::lower(const ast::Expression& exp
 
     case ast::ExpressionKind::Call: {
         const auto& call = expression.as<ast::CallExpression>();
-        if (!call.isSystemCall() || call.arguments().size() != 1) return std::nullopt;
+        if (!call.isSystemCall()) return lowerCall(call);
+        if (call.arguments().size() != 1) return std::nullopt;
         const std::string_view name = call.getSubroutineName();
         const std::optional<std::uint32_t> operand = lower(*call.arguments().front());
         if (!operand.has_value()) return std::nullopt;
@@ -242,6 +307,62 @@ std::optional<std::uint32_t> ParameterLowering::lower(const ast::Expression& exp
 
     default: return std::nullopt;
     }
+}
+
+std::optional<std::uint32_t> ParameterLowering::lowerCall(const ast::CallExpression& call) {
+    if (functions == nullptr || call.subroutine.index() != 0 || call.type == nullptr
+        || !call.type->isIntegral())
+        return std::nullopt;
+    const ast::SubroutineSymbol& subroutine = *std::get<0>(call.subroutine);
+    const auto formalArguments = subroutine.getArguments();
+    const auto actuals = call.arguments();
+    if (formalArguments.size() != actuals.size()) return std::nullopt;
+
+    // The arguments as one value, the first highest, each converted to its formal's type as
+    // the call converts it; and the same for the values slang gave them here.
+    ast::EvalContext context(*scope);
+    std::optional<std::uint32_t> arguments;
+    std::optional<eir::BitVector> argumentValues;
+    for (std::size_t index = 0; index < actuals.size(); ++index) {
+        const ast::Type& formalType = formalArguments[index]->getType();
+        if (formalArguments[index]->direction != ast::ArgumentDirection::In
+            || !formalType.isIntegral() || actuals[index]->type == nullptr)
+            return std::nullopt;
+        const std::optional<std::uint32_t> argument = lowerAs(*actuals[index], formalType);
+        const slang::ConstantValue value = actuals[index]->eval(context);
+        if (!argument.has_value() || !value.isInteger()) return std::nullopt;
+        const eir::BitVector bits =
+            toBitVector(value.integer())
+                .resized(actuals[index]->type->getBitWidth(), actuals[index]->type->isSigned())
+                .resized(formalType.getBitWidth(), actuals[index]->type->isSigned());
+
+        if (!arguments.has_value()) {
+            arguments = *argument;
+            argumentValues = bits;
+            continue;
+        }
+        arguments = table->add(
+            ParameterNode{.kind = ParameterNodeKind::Concat, .a = *arguments, .b = *argument});
+        eir::BitVector joined(argumentValues->width() + bits.width());
+        eir::bitops::assignPartAt(joined.mutableRef(), bits, 0);
+        eir::bitops::assignPartAt(joined.mutableRef(), *argumentValues, bits.width());
+        argumentValues = std::move(joined);
+    }
+
+    const slang::ConstantValue result = call.eval(context);
+    if (!result.isInteger()) return std::nullopt;
+    const eir::BitVector returned =
+        toBitVector(result.integer()).resized(call.type->getBitWidth(), call.type->isSigned());
+
+    const std::optional<std::string> unit =
+        functions->unitFor(subroutine, argumentValues, returned);
+    if (!unit.has_value()) return std::nullopt;
+    functions->remember(*unit, subroutine);
+    return table->add(ParameterNode{.kind = ParameterNodeKind::Call,
+                                    .isSigned = call.type->isSigned(),
+                                    .width = call.type->getBitWidth(),
+                                    .a = table->function(*unit),
+                                    .b = arguments.value_or(ParameterNode::NoNode)});
 }
 
 } // namespace enzan::frontend::sv

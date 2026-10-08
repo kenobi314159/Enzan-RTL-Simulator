@@ -70,8 +70,10 @@ public:
 
     /// `representative` holds the value of each formal for the parameterisation the unit is
     /// translated from. Everything given must outlive this.
+    /// `functions` answers the constant function calls the expressions make.
     SymbolicWidths(eir::ParameterExpressions& table, Lower lower, Bind bind, Numeric numeric,
-                   std::span<const std::optional<eir::ParameterValue>> representative);
+                   std::span<const std::optional<eir::ParameterValue>> representative,
+                   eir::ConstantFunctions* functions = nullptr);
 
     /// The width of the packed part of `symbol`'s declared type, or nothing when a formal
     /// decides it in a way this cannot say.

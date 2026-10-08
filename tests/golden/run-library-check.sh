@@ -266,11 +266,22 @@ grep -q 'parametrisable ok' <<<"$par_output" || fail "the parametrised run did n
 # A generic unit needs nothing of its library's sources to be instantiated at a width that library
 # never saw (DESIGN_GUIDE.md section 18, M5.1): with the counter's source gone, a design
 # instantiating it at 13 and 6 bits is analysed against the library, stores only itself, and runs.
+# A width a package's function computes is run at elaboration from the function's unit, so a
+# limit of 100 the library never saw sizes its counter too.
 mkdir -p unseen
 cat >unseen/clocked.sv <<'EOF'
+package uwidths;
+    function automatic int unsigned count_width(input int unsigned largest);
+        return largest > 0 ? unsigned'($clog2(largest + 1)) : 1;
+    endfunction
+endpackage
 module ucounter #(parameter int Width = 4) (input logic clk, input logic rst,
                                            output logic [Width-1:0] q);
     always_ff @(posedge clk) if (rst) q <= '0; else q <= q + 1'b1;
+endmodule
+module ulimited #(parameter int unsigned Limit = 5) (
+    input logic clk, input logic rst, output logic [uwidths::count_width(Limit)-1:0] q);
+    always_ff @(posedge clk) if (rst || q == Limit) q <= '0; else q <= q + 1'b1;
 endmodule
 EOF
 cat >unseen/wrap.sv <<'EOF'
@@ -278,15 +289,18 @@ module uwrap_tb;
     logic clk = 1'b0, rst = 1'b1;
     logic [12:0] odd;
     logic [5:0] six;
+    logic [6:0] limited;
     ucounter #(.Width(13)) u_odd (.clk(clk), .rst(rst), .q(odd));
     ucounter #(.Width(6)) u_six (.clk, .rst, .q(six));
+    ulimited #(.Limit(100)) u_limited (.clk, .rst, .q(limited));
     always #5 clk = ~clk;
     initial begin
         #12 rst = 1'b0;
         #700;
-        // 70 rising edges after reset, wrapped at 13 and at 6 bits.
-        if (odd !== 13'd70 || six !== 6'd6) begin
-            $display("FAIL library: odd=%0d six=%0d", odd, six);
+        // 70 rising edges after reset, wrapped at 13 and at 6 bits, and short of 100, which
+        // takes all seven bits the function gave the counter.
+        if (odd !== 13'd70 || six !== 6'd6 || limited !== 7'd70) begin
+            $display("FAIL library: odd=%0d six=%0d limited=%0d", odd, six, limited);
             $fatal(1);
         end
         $display("unseen widths ok");
@@ -301,7 +315,9 @@ EOF
 mv unseen/clocked.sv unseen/clocked.sv.gone
 "$enzan" analyse --in-lib libs/ucounter --out-lib libs/uwrap unseen/wrap.sv \
     || fail "a design could not be analysed against a library whose sources are gone"
-"$enzan" lib list libs/uwrap | grep -q 'ucounter' \
+"$enzan" lib list libs/ucounter | grep -qx '  ulimited (generic)' \
+    || fail "a unit a function sizes is not generic"
+"$enzan" lib list libs/uwrap | grep -q 'ucounter\|ulimited\|uwidths' \
     && fail "the design stored a unit its input library holds"
 unseen_output=$("$enzan" run --in-lib libs/ucounter --in-lib libs/uwrap uwrap_tb) \
     || fail "a library instantiated at widths it never saw did not run"

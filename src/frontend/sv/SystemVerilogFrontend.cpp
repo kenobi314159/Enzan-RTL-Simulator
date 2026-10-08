@@ -272,6 +272,10 @@ public:
         /// The units of the libraries analysed against, which an instantiation of a module no
         /// source defines is bound to; null when the sources must define every module.
         const eir::Design* libraryUnits = nullptr;
+
+        /// The units of the constant functions generic units' parameters call; null when a
+        /// call keeps a unit specialised.
+        FunctionUnits* functionUnits = nullptr;
     };
 
     ModuleBuilder(Shared& sharedState, std::string name, const ast::InstanceBodySymbol& bodySymbol)
@@ -289,6 +293,23 @@ public:
         definitionValue.location = convertLocation(packageSymbol.location);
         definitionValue.isPackage = true;
     }
+
+    /// A builder for the unit of the constant function `subroutine`, named `name`, which has no
+    /// body (eir::ModuleDefinition::isFunction).
+    ModuleBuilder(Shared& sharedState, const ast::SubroutineSymbol& subroutine, std::string name)
+        : shared(&sharedState), body(nullptr), function(&subroutine) {
+        definitionValue.name = name;
+        definitionValue.sourceName = std::move(name);
+        definitionValue.location = convertLocation(subroutine.location);
+        definitionValue.isFunction = true;
+    }
+
+    /// Builds a constant function's unit: an input port for each argument and an output port
+    /// for what it returns, initialised to the call slang evaluated — `arguments`, concatenated
+    /// first highest, and `returned` — and one process computing it. False, having reported
+    /// why, when the function cannot be one.
+    bool buildFunction(const std::optional<eir::BitVector>& arguments,
+                       const eir::BitVector& returned);
 
     /// The package that declares `symbol` directly, or declares the subroutine it is a static
     /// variable of, if one does.
@@ -353,7 +374,10 @@ public:
         return definitionValue;
     }
 
-    [[nodiscard]] const ast::Symbol& evaluationScope() const override { return *body; }
+    [[nodiscard]] const ast::Symbol& evaluationScope() const override {
+        if (function != nullptr) return *function;
+        return *body;
+    }
 
     std::optional<std::uint32_t> parameterExpression(const ast::Expression& expression) override;
 
@@ -463,6 +487,8 @@ private:
     const ast::InstanceBodySymbol* body;
     /// The package whose variables this builder declares, for a package's builder.
     const ast::PackageSymbol* package = nullptr;
+    /// The constant function a function's builder is building the unit of.
+    const ast::SubroutineSymbol* function = nullptr;
     eir::ModuleDefinition definitionValue;
 
     std::map<const ast::ValueSymbol*, std::uint32_t> objectBySymbol;
@@ -553,7 +579,8 @@ private:
 
     /// A lowering of this unit's constant expressions, folding what names no formal.
     ParameterLowering lowering(const ast::Symbol& scope) {
-        return ParameterLowering(definitionValue.expressions, formalBySymbol, scope);
+        return ParameterLowering(definitionValue.expressions, formalBySymbol, scope,
+                                 shared->functionUnits);
     }
 
     /// For a generic unit, each parameter symbol of the body and its formal's index.
@@ -765,8 +792,16 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     std::string name(symbol.name);
     if (subroutine != nullptr) name = std::format("{}.{}", subroutine->name, symbol.name);
 
+    // A constant function's unit holds the function's static variables and nothing else: what
+    // it returns may depend on nothing but its arguments.
+    if (function != nullptr && subroutine == nullptr) {
+        reportUnsupported(symbol.location,
+                          std::format("a constant function's reference to '{}'", symbol.name));
+        return std::nullopt;
+    }
+
     const ast::PackageSymbol* const declaringPackage = packageOf(symbol);
-    if (declaringPackage != nullptr && declaringPackage != package) {
+    if (declaringPackage != nullptr && declaringPackage != package && function == nullptr) {
         std::vector<const ast::ValueSymbol*>& used = *shared->packageVariables;
         if (std::ranges::find(used, &symbol) == used.end()) used.push_back(&symbol);
         return referenceThrough(symbol, std::format("/{}/{}", declaringPackage->name, name), *type);
@@ -776,7 +811,7 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     // instance's object, and gets no storage of its own: elaboration binds it. Giving it storage
     // would make a testbench reading `dut.state` read a copy nothing ever writes. A package's
     // builder declares the package's own variables, and has no body to compare against.
-    if (declaringPackage == nullptr) {
+    if (declaringPackage == nullptr && function == nullptr) {
         const ast::InstanceBodySymbol* owner = nullptr;
         const std::optional<std::string> nameThere = nameWithinBody(symbol, owner);
         if (!nameThere.has_value() || owner == nullptr) {
@@ -1451,7 +1486,7 @@ bool ModuleBuilder::makeGeneric() {
             if (!converted.has_value()) return std::nullopt;
             return converted->bitWidth();
         },
-        representative);
+        representative, shared->functionUnits);
     generic = true;
     return true;
 }
@@ -1727,6 +1762,52 @@ bool ModuleBuilder::actualsFrom(const syntax::SyntaxNode* instanceSyntax,
             eir::ParameterActual{.formal = std::string(name), .value = *node});
     }
     return true;
+}
+
+bool ModuleBuilder::buildFunction(const std::optional<eir::BitVector>& arguments,
+                                  const eir::BitVector& returned) {
+    std::vector<std::uint32_t> inputs;
+    std::uint32_t low = arguments.has_value() ? arguments->width() : 0;
+    for (const ast::FormalArgumentSymbol* argument : function->getArguments()) {
+        const std::optional<eir::Type> type = convertType(argument->getType());
+        if (!type.has_value() || argument->direction != ast::ArgumentDirection::In
+            || !arguments.has_value() || low < type->bitWidth()) {
+            reportUnsupported(argument->location, "this constant function's argument");
+            return false;
+        }
+        low -= type->bitWidth();
+        eir::BitVector value(type->bitWidth());
+        eir::bitops::partSelectAt(value.mutableRef(), arguments->ref(), low);
+        const std::uint32_t index =
+            definitionValue.addObject(eir::Object{.name = std::string(argument->name),
+                                                  .type = *type,
+                                                  .location = convertLocation(argument->location),
+                                                  .initialValue = std::move(value)});
+        definitionValue.ports.push_back(eir::Port{.name = std::string(argument->name),
+                                                  .direction = eir::PortDirection::Input,
+                                                  .objectIndex = index});
+        inputs.push_back(index);
+    }
+
+    const std::optional<eir::Type> resultType = convertType(function->getReturnType());
+    if (!resultType.has_value()) {
+        reportUnsupported(function->location, "this constant function's result");
+        return false;
+    }
+    const std::uint32_t result = definitionValue.addObject(
+        eir::Object{.name = std::string(function->name),
+                    .type = *resultType,
+                    .location = convertLocation(function->location),
+                    .initialValue = returned.resized(resultType->bitWidth(), false)});
+    definitionValue.ports.push_back(eir::Port{.name = std::string(function->name),
+                                              .direction = eir::PortDirection::Output,
+                                              .objectIndex = result});
+
+    ProcessTranslator translator(*this, eir::ProcessKind::Initial, std::string(function->name),
+                                 definitionValue.location);
+    if (!translator.translateConstantFunction(*function, inputs, result)) return false;
+    definitionValue.processes.push_back(translator.take());
+    return !failed;
 }
 
 bool ModuleBuilder::addLibraryInstances() {
@@ -2164,12 +2245,19 @@ bool ModuleBuilder::addInstance(
 }
 
 /// Walks the elaborated hierarchy, translating each distinct module body once.
-class Walker {
+class Walker final : public FunctionUnits {
 public:
     Walker(eir::Design& target, ModuleBuilder::Shared sharedState)
         : design(&target), shared(sharedState) {
         shared.packageVariables = &packageVariables;
+        shared.functionUnits = this;
     }
+
+    /// The unit of a function a package declares, built once, quietly: a function that cannot
+    /// be one keeps the units calling it specialised rather than failing the design.
+    std::optional<std::string> unitFor(const ast::SubroutineSymbol& subroutine,
+                                       const std::optional<eir::BitVector>& arguments,
+                                       const eir::BitVector& returned) override;
 
     /// Records the parameterisation `instance` is, and every one under it, so that whether a
     /// definition can be one generic unit is decided knowing all of them.
@@ -2257,6 +2345,8 @@ private:
     std::map<const ast::DefinitionSymbol*, std::vector<const ast::InstanceBodySymbol*>>
         parameterisations;
     std::set<std::string, std::less<>> discovered;
+    /// Constant functions found not to make a unit, so that each is tried once.
+    std::set<const ast::SubroutineSymbol*> refusedFunctions;
 };
 
 void Walker::discover(const ast::InstanceSymbol& instance) {
@@ -2319,7 +2409,8 @@ std::optional<Walker::Built> Walker::buildUnit(const ast::InstanceBodySymbol& bo
                                       .slangSources = shared.slangSources,
                                       .buffers = shared.buffers,
                                       .packageVariables = shared.packageVariables,
-                                      .libraryUnits = shared.libraryUnits};
+                                      .libraryUnits = shared.libraryUnits,
+                                      .functionUnits = shared.functionUnits};
     ModuleBuilder builder(
         quietShared, generic ? std::string(body.getDefinition().name) : specialisedModuleName(body),
         body);
@@ -2363,10 +2454,10 @@ bool Walker::agrees(const eir::ModuleDefinition& generic, const ast::InstanceBod
                                 .isSigned = parameter.getType().isSigned()});
     }
 
-    auto values = eir::formalValues(generic, actuals, {});
+    auto values = eir::formalValues(generic, actuals, {}, this);
     if (std::holds_alternative<eir::SpecialiseFailure>(values)) return false;
     auto specialised = eir::specialiseAt(
-        generic, std::get<std::vector<std::optional<eir::ParameterValue>>>(values));
+        generic, std::get<std::vector<std::optional<eir::ParameterValue>>>(values), this);
     if (std::holds_alternative<eir::SpecialiseFailure>(specialised)) return false;
     eir::ModuleDefinition& unit = std::get<eir::ModuleDefinition>(specialised);
     unit.name = own->unit.name;
@@ -2394,6 +2485,35 @@ bool Walker::tryGeneric(const ast::DefinitionSymbol& definition) {
     bodies.emplace(name, BodyInfo{.name = name, .portIndices = std::move(generic->portIndices)});
     design->addModule(std::move(generic->unit));
     return true;
+}
+
+std::optional<std::string> Walker::unitFor(const ast::SubroutineSymbol& subroutine,
+                                           const std::optional<eir::BitVector>& arguments,
+                                           const eir::BitVector& returned) {
+    const ast::Scope* parent = subroutine.getParentScope();
+    if (parent == nullptr || parent->asSymbol().kind != ast::SymbolKind::Package
+        || subroutine.subroutineKind != ast::SubroutineKind::Function)
+        return std::nullopt;
+    std::string name = std::format("{}::{}", parent->asSymbol().name, subroutine.name);
+    if (design->findModule(name) != nullptr) return name;
+    if (refusedFunctions.contains(&subroutine)) return std::nullopt;
+
+    DiagnosticEngine quiet(shared.sources);
+    ModuleBuilder::Shared quietShared{.design = shared.design,
+                                      .diagnostics = quiet,
+                                      .sources = shared.sources,
+                                      .slangSources = shared.slangSources,
+                                      .buffers = shared.buffers,
+                                      .packageVariables = shared.packageVariables,
+                                      .libraryUnits = shared.libraryUnits,
+                                      .functionUnits = this};
+    ModuleBuilder builder(quietShared, subroutine, name);
+    if (!builder.buildFunction(arguments, returned) || quiet.hasErrors()) {
+        refusedFunctions.insert(&subroutine);
+        return std::nullopt;
+    }
+    design->addModule(builder.take());
+    return name;
 }
 
 bool Walker::translatePackages() {

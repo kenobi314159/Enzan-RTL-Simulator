@@ -104,12 +104,13 @@ const ast::Type& packedPart(const ast::Type& type) {
 
 SymbolicWidths::SymbolicWidths(eir::ParameterExpressions& into, Lower lower, Bind bind,
                                Numeric numericWidth,
-                               std::span<const std::optional<eir::ParameterValue>> representative)
+                               std::span<const std::optional<eir::ParameterValue>> representative,
+                               eir::ConstantFunctions* functions)
     : table(&into),
       lowerExpression(std::move(lower)),
       bindExpression(std::move(bind)),
       numeric(std::move(numericWidth)),
-      evaluator(into, representative) {}
+      evaluator(into, representative, functions) {}
 
 std::uint32_t SymbolicWidths::node(const Width& width) {
     if (!width.isFixed()) return width.expression;
