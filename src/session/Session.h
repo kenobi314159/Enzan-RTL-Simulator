@@ -12,6 +12,7 @@
 #include <iosfwd>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -387,6 +388,14 @@ private:
     [[nodiscard]] static std::vector<eir::LibrarySource>
     librarySources(std::span<const std::filesystem::path> ordered,
                    std::span<const BufferId> buffers);
+
+    /// Analyses `ordered` — the context and this session's own sources, the first `firstStored`
+    /// of them context — against the input libraries without their sources, binding what the
+    /// design instantiates of theirs to their units, and stores the result as `analyse` does.
+    /// False, with nothing changed or reported, when the design needs the sources after all.
+    bool analyseWithoutLibrarySources(const std::vector<std::filesystem::path>& ordered,
+                                      const std::vector<BufferId>& buffers, std::size_t firstStored,
+                                      const std::set<std::string, std::less<>>& alreadyElsewhere);
 
     /// Opens `writer` on `path` and attaches it to the kernel.
     bool addWriter(std::unique_ptr<wavedb::WaveformWriter> writer,

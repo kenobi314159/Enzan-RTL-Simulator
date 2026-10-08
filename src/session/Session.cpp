@@ -114,11 +114,6 @@ bool Session::analyse(const AnalysisRequest& request) {
     // depend on which pass produced it.
     std::vector<std::filesystem::path> ordered;
     std::vector<BufferId> buffers;
-    const std::size_t total = contextFiles.size() + libraryFiles.size() + files.size();
-    ordered.reserve(total);
-    buffers.reserve(total);
-
-    // Context first, so that a package is in the compilation before whatever imports it.
     const auto read = [&](const std::filesystem::path& file) {
         const FileReadResult result = sources.readFile(file);
         if (!result.ok()) {
@@ -129,15 +124,41 @@ bool Session::analyse(const AnalysisRequest& request) {
         buffers.push_back(result.buffer);
         return true;
     };
+
+    // Context first, so that a package is in the compilation before whatever imports it, and
+    // this session's own sources after it.
     for (const std::filesystem::path& file : contextFiles)
         if (!read(file)) return false;
-
     const std::size_t firstStored = ordered.size();
-    for (const std::filesystem::path& file : libraryFiles)
-        if (!read(file)) return false;
-
     for (const std::filesystem::path& file : files)
         if (!read(file)) return false;
+
+    std::set<std::string, std::less<>> alreadyElsewhere;
+    for (const eir::Library& input : inputLibraries) {
+        for (const std::string& unit : input.unitNames()) alreadyElsewhere.insert(unit);
+    }
+
+    // Against libraries, first without their sources: a module of theirs the design instantiates
+    // is bound to their unit, which a generic one makes enough whatever its parameters
+    // (DESIGN_GUIDE.md sections 8.2 and 18, M5.1). Tried quietly and before their sources are
+    // even read, because what it cannot do — a package or an interface of theirs, a specialised
+    // unit at a new parameterisation — the analysis below does with the sources, and reports
+    // there if it cannot either.
+    if (!libraryFiles.empty()
+        && analyseWithoutLibrarySources(ordered, buffers, firstStored, alreadyElsewhere))
+        return true;
+
+    // The libraries' sources between the context and this session's own, as before.
+    std::vector<std::filesystem::path> own(
+        ordered.begin() + static_cast<std::ptrdiff_t>(firstStored), ordered.end());
+    std::vector<BufferId> ownBuffers(buffers.begin() + static_cast<std::ptrdiff_t>(firstStored),
+                                     buffers.end());
+    ordered.resize(firstStored);
+    buffers.resize(firstStored);
+    for (const std::filesystem::path& file : libraryFiles)
+        if (!read(file)) return false;
+    ordered.insert(ordered.end(), own.begin(), own.end());
+    buffers.insert(buffers.end(), ownBuffers.begin(), ownBuffers.end());
 
     // This session's own sources, plus the sources of the libraries it resolves against: a
     // parameterisation those libraries do not hold was created *here*, for this design, and has
@@ -145,11 +166,6 @@ bool Session::analyse(const AnalysisRequest& request) {
     // excluded below rather than duplicated (8.2).
     const std::vector<eir::LibrarySource> stored = librarySources(
         std::span(ordered).subspan(firstStored), std::span(buffers).subspan(firstStored));
-
-    std::set<std::string, std::less<>> alreadyElsewhere;
-    for (const eir::Library& input : inputLibraries) {
-        for (const std::string& unit : input.unitNames()) alreadyElsewhere.insert(unit);
-    }
 
     loadedFromLibrary = false;
     if (library.isOpen()) {
@@ -208,6 +224,57 @@ bool Session::analyse(const AnalysisRequest& request) {
     return false;
 #endif
 }
+
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+bool Session::analyseWithoutLibrarySources(
+    const std::vector<std::filesystem::path>& ordered, const std::vector<BufferId>& buffers,
+    std::size_t firstStored, const std::set<std::string, std::less<>>& alreadyElsewhere) {
+    DiagnosticEngine quiet(sources);
+    eir::Design units;
+    for (const eir::Library& input : inputLibraries)
+        if (!input.loadAll(units, quiet)) return false;
+
+    const std::vector<eir::LibrarySource> stored = librarySources(
+        std::span(ordered).subspan(firstStored), std::span(buffers).subspan(firstStored));
+
+    loadedFromLibrary = false;
+    if (library.isOpen()) {
+        library.setOptions(defines, includeDirectories, parameters, scale.precisionExponent());
+        auto reused = std::make_unique<eir::Design>();
+        if (library.load(stored, sources, *reused)) {
+            design = std::move(reused);
+            loadedFromLibrary = true;
+            lastFilesRead.clear();
+            return true;
+        }
+    }
+
+    frontend::sv::Options options;
+    options.filesRead = &lastFilesRead;
+    options.files = ordered;
+    options.buffers = buffers;
+    options.defines = defines;
+    options.includeDirectories = includeDirectories;
+    options.timeUnitExponent = scale.precisionExponent();
+    options.parameterOverrides = parameters;
+    options.libraryUnits = &units;
+
+    std::unique_ptr<eir::Design> result = frontend::sv::analyse(options, sources, quiet);
+    if (result == nullptr) return false;
+    design = std::move(result);
+
+    if (library.isOpen()) {
+        const std::set<std::filesystem::path> named(ordered.begin(), ordered.end());
+        std::vector<std::filesystem::path> dependencies;
+        for (const std::filesystem::path& file : lastFilesRead) {
+            if (!named.contains(file)) dependencies.push_back(file);
+        }
+        static_cast<void>(
+            library.store(stored, sources, *design, diagnostics, alreadyElsewhere, dependencies));
+    }
+    return true;
+}
+#endif
 
 bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
     // Every open library that holds units, with its unit: the output library as well as the

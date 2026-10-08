@@ -57,6 +57,14 @@ struct Options {
     /// Overrides of the top level's parameters, each `NAME=VALUE` (`enzan -G`).
     std::vector<std::string> parameterOverrides;
 
+    /// The units of the libraries this analysis resolves against, when it is to do without
+    /// their sources (DESIGN_GUIDE.md section 8.2, M5.1): an instantiation of a module no source
+    /// defines is then bound to the unit of that name, which must be generic or have no
+    /// parameters, and is connected by name. Anything that needs more — a package, an
+    /// interface, a connection that is an expression — fails the analysis, which the caller then
+    /// makes again with the sources. Null when every module must be defined by a source.
+    const eir::Design* libraryUnits = nullptr;
+
     /// The time unit, as a power of ten of a second, that a design element without a
     /// `` `timescale `` or `timeunit` of its own is taken to be in.
     ///

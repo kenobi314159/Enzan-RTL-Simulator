@@ -1021,15 +1021,26 @@ rather than where it lives.
 #### Where a library boundary may fall
 
 **A library records the sources it was analysed from**, and a design analysed against
-it reads them. That is what makes the boundary crossable at all: slang type-checks
-from syntax, so a unit instantiating one from another library needs that unit's
-declaration however it was analysed before, and EIR does not feed back into slang.
-Paths rather than text, because duplicating the RTL into every library that uses it
-would make a library a copy of the design instead of an index of it.
+it reads them when it has to. slang type-checks from syntax and EIR does not feed back into
+it, so a package or an interface of another library, or a unit of it that stays specialised
+and is wanted at a new parameterisation, needs that library's declarations however it was
+analysed before. Paths rather than text, because duplicating the RTL into every library
+that uses it would make a library a copy of the design instead of an index of it.
 
-So `--in-lib` on `analyse` means *read these libraries' declarations*, and `--in-lib`
-on `run` means *resolve against these libraries' units*. The two are the same option
-because they name the same thing; what differs is which half of it is wanted.
+**A generic unit needs none of that** (M5.1). A design analysed against libraries is first
+analysed without their sources: slang accepts a module no source defines, and the frontend
+binds each such instantiation to the library unit of its name, which must be generic or have
+no parameters, setting its parameters from the instantiation and connecting its ports by
+name — each to a signal of the instantiating module, since an expression would need the
+port's width to be translated, and that width is the library's. Elaboration then specialises
+the unit, joining a port whose width a formal decides to whatever it was connected to. Only
+when something needs the sources after all is the analysis made again with them, so that a
+library of generic units is reused rather than re-analysed.
+
+So `--in-lib` on `analyse` means *resolve against these libraries, reading their
+declarations where that is the only way*, and `--in-lib` on `run` means *resolve against
+these libraries' units*. The two are the same option because they name the same thing;
+what differs is which half of it is wanted.
 
 **A library is instantiable with parameters chosen by whoever uses it.** A generic unit
 (5.1, M5.1) is stored once, named as the source names it, and specialised at elaboration
@@ -1041,10 +1052,10 @@ its own library. A unit the input library already holds is **not** stored a seco
 because two libraries defining one name is exactly what an unqualified reference cannot
 resolve.
 
-This is what makes a library usable rather than what makes it save work. Reading the
-other library's sources means re-analysing them, so the boundary costs what it would
-have cost without the library. M5.1 removes that by making a unit generic over its
-parameters, and rewrites this subsection and the naming rule below when it lands.
+For a unit that stays specialised this makes a library usable rather than what makes it
+save work: reading the other library's sources means re-analysing them, so the boundary
+costs what it would have cost without the library. A generic unit is what makes it save
+work.
 
 **A specialisation's name MUST be a function of its parameter values.** A counter
 numbers the parameterisations in the order one compilation walked them, which makes

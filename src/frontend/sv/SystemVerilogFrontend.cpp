@@ -22,6 +22,7 @@
 #include "slang/ast/Expression.h"
 #include "slang/ast/Statement.h"
 #include "slang/ast/Symbol.h"
+#include "slang/ast/expressions/AssertionExpr.h"
 #include "slang/ast/expressions/AssignmentExpressions.h"
 #include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/ConversionExpression.h"
@@ -267,6 +268,10 @@ public:
         /// the package definitions that hold them. Only those: a package may declare variables
         /// of types Enzan does not have, and one nothing uses should not stop a design.
         std::vector<const ast::ValueSymbol*>* packageVariables = nullptr;
+
+        /// The units of the libraries analysed against, which an instantiation of a module no
+        /// source defines is bound to; null when the sources must define every module.
+        const eir::Design* libraryUnits = nullptr;
     };
 
     ModuleBuilder(Shared& sharedState, std::string name, const ast::InstanceBodySymbol& bodySymbol)
@@ -529,6 +534,22 @@ private:
     /// unit, onto `result`. False when one cannot be said.
     bool actualsOf(const ast::InstanceSymbol& instance, const eir::ModuleDefinition& child,
                    eir::Instance& result);
+
+    /// `actualsOf` from the instantiation's syntax: `syntax` is the instance's, `scope` where its
+    /// values are bound, and `ordered` the parameters an ordered assignment sets, in order.
+    bool actualsFrom(const slang::syntax::SyntaxNode* instanceSyntax, const ast::Scope& scope,
+                     std::span<const std::string_view> ordered, const eir::ModuleDefinition& child,
+                     eir::Instance& result);
+
+public:
+    /// Adds the instances of modules none of the sources define, each bound to the library unit
+    /// of its name (DESIGN_GUIDE.md section 8.2, M5.1). False, having said why to the quiet
+    /// engine, when one cannot be bound without the library's sources.
+    bool addLibraryInstances();
+
+private:
+    /// Instantiations slang left unknown, with the generate blocks they are inside.
+    std::vector<std::pair<std::string, const ast::UninstantiatedDefSymbol*>> libraryInstances;
 
     /// A lowering of this unit's constant expressions, folding what names no formal.
     ParameterLowering lowering(const ast::Symbol& scope) {
@@ -921,6 +942,10 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
         case slang::ast::SymbolKind::InstanceArray:
             // Each element is an instance of its own, named with its index.
             collectInstanceArray(member.as<ast::InstanceArraySymbol>(), prefix);
+            break;
+
+        case slang::ast::SymbolKind::UninstantiatedDef:
+            libraryInstances.emplace_back(prefix, &member.as<ast::UninstantiatedDefSymbol>());
             break;
 
         case slang::ast::SymbolKind::GenerateBlock: {
@@ -1622,13 +1647,6 @@ void ModuleBuilder::usedAsNumber(const ast::Expression& expression) {
 
 bool ModuleBuilder::actualsOf(const ast::InstanceSymbol& instance,
                               const eir::ModuleDefinition& child, eir::Instance& result) {
-    const syntax::SyntaxNode* syntax = instance.getSyntax();
-    if (syntax == nullptr || syntax->parent == nullptr
-        || syntax->parent->kind != syntax::SyntaxKind::HierarchyInstantiation)
-        return true;
-    const auto& instantiation = syntax->parent->as<syntax::HierarchyInstantiationSyntax>();
-    if (instantiation.parameters == nullptr) return true;
-
     // An ordered assignment sets the parameters of the parameter port list in order, or the
     // body's when there is no such list (IEEE 1800 section 23.10.2.1).
     const ast::DefinitionSymbol& definition = instance.getDefinition();
@@ -1639,9 +1657,21 @@ bool ModuleBuilder::actualsOf(const ast::InstanceSymbol& instance,
         if (declaration.isPortParam == hasPortList && !declaration.isLocalParam)
             ordered.push_back(declaration.name);
     }
-
     const ast::Scope* scope = instance.getParentScope();
     if (scope == nullptr) return false;
+    return actualsFrom(instance.getSyntax(), *scope, ordered, child, result);
+}
+
+bool ModuleBuilder::actualsFrom(const syntax::SyntaxNode* instanceSyntax,
+                                const ast::Scope& scopeRef,
+                                std::span<const std::string_view> ordered,
+                                const eir::ModuleDefinition& child, eir::Instance& result) {
+    if (instanceSyntax == nullptr || instanceSyntax->parent == nullptr
+        || instanceSyntax->parent->kind != syntax::SyntaxKind::HierarchyInstantiation)
+        return true;
+    const auto& instantiation = instanceSyntax->parent->as<syntax::HierarchyInstantiationSyntax>();
+    if (instantiation.parameters == nullptr) return true;
+    const ast::Scope* scope = &scopeRef;
     std::size_t position = 0;
     for (const syntax::ParamAssignmentSyntax* assignment : instantiation.parameters->parameters) {
         std::string_view name;
@@ -1697,6 +1727,131 @@ bool ModuleBuilder::actualsOf(const ast::InstanceSymbol& instance,
             eir::ParameterActual{.formal = std::string(name), .value = *node});
     }
     return true;
+}
+
+bool ModuleBuilder::addLibraryInstances() {
+    for (const auto& [prefix, unknown] : libraryInstances) {
+        const eir::ModuleDefinition* unit =
+            shared->libraryUnits != nullptr
+                ? shared->libraryUnits->findModule(unknown->definitionName)
+                : nullptr;
+        // A unit specialised per parameterisation, or one whose ports reach an interface, needs
+        // what only the library's sources can say.
+        const bool parameterised =
+            std::ranges::any_of(unit != nullptr ? unit->parameters : std::vector<eir::Parameter>{},
+                                [](const eir::Parameter& parameter) { return !parameter.isLocal; });
+        if (unit == nullptr || (parameterised && !unit->isGeneric())
+            || std::ranges::any_of(unit->objects, [](const eir::Object& object) {
+                   return object.hierarchicalPath.starts_with('@');
+               })) {
+            reportUnsupported(unknown->location,
+                              std::format("module '{}', which no source defines and no library "
+                                          "holds in a form usable without its sources",
+                                          unknown->definitionName));
+            return false;
+        }
+
+        eir::Instance result;
+        result.name = prefix + std::string(unknown->name);
+        result.definitionName = unit->name;
+        result.location = convertLocation(unknown->location);
+
+        std::vector<std::string_view> ordered;
+        for (const eir::ParameterFormal& formal : unit->formals)
+            if (formal.kind == eir::FormalKind::Parameter) ordered.push_back(formal.name);
+        const ast::Scope* scope = unknown->getParentScope();
+        if (scope == nullptr
+            || !actualsFrom(unknown->getSyntax(), *scope, ordered, *unit, result)) {
+            reportUnsupported(unknown->location, "this instance's parameter values");
+            return false;
+        }
+
+        // Connected by name, or in order; a connection is a signal of this module, since an
+        // expression would need the port's width to be translated, which is the library's.
+        // Read from the syntax: slang binds a connection to a port it knows, and knows none here.
+        const syntax::SyntaxNode* instanceSyntax = unknown->getSyntax();
+        if (instanceSyntax == nullptr
+            || instanceSyntax->kind != syntax::SyntaxKind::HierarchicalInstance) {
+            reportUnsupported(unknown->location, "this instance's connections");
+            return false;
+        }
+        const auto& hierarchical = instanceSyntax->as<syntax::HierarchicalInstanceSyntax>();
+        std::size_t position = 0;
+        for (const syntax::PortConnectionSyntax* connection : hierarchical.connections) {
+            std::string_view name;
+            const syntax::PropertyExprSyntax* property = nullptr;
+            bool implicitName = false;
+            if (connection->kind == syntax::SyntaxKind::NamedPortConnection) {
+                const auto& named = connection->as<syntax::NamedPortConnectionSyntax>();
+                name = named.name.valueText();
+                property = named.expr;
+                implicitName = !named.openParen;
+            } else if (connection->kind == syntax::SyntaxKind::OrderedPortConnection) {
+                if (position >= unit->ports.size()) {
+                    reportUnsupported(unknown->location, "more connections than ports");
+                    return false;
+                }
+                name = unit->ports[position].name;
+                property = connection->as<syntax::OrderedPortConnectionSyntax>().expr;
+            } else {
+                reportUnsupported(unknown->location, "`.*` to a library's module");
+                return false;
+            }
+            ++position;
+
+            const auto port = std::ranges::find(unit->ports, name, &eir::Port::name);
+            if (port == unit->ports.end()) {
+                reportUnsupported(unknown->location, std::format("port '{}'", name));
+                return false;
+            }
+            eir::PortConnection bound{.portIndex =
+                                          static_cast<std::uint32_t>(port - unit->ports.begin())};
+
+            // The connected name: the port's own for `.name`, the expression's when it is one.
+            std::string_view signal = implicitName ? name : std::string_view();
+            if (!implicitName && property != nullptr) {
+                const syntax::ExpressionSyntax* expression = nullptr;
+                if (property->kind == syntax::SyntaxKind::SimplePropertyExpr) {
+                    const syntax::SequenceExprSyntax* sequence =
+                        property->as<syntax::SimplePropertyExprSyntax>().expr;
+                    if (sequence->kind == syntax::SyntaxKind::SimpleSequenceExpr)
+                        expression = sequence->as<syntax::SimpleSequenceExprSyntax>().expr;
+                }
+                if (expression == nullptr
+                    || expression->kind != syntax::SyntaxKind::IdentifierName) {
+                    reportUnsupported(unknown->location,
+                                      "a connection to a library's module that is not a signal");
+                    return false;
+                }
+                signal = expression->as<syntax::IdentifierNameSyntax>().identifier.valueText();
+            }
+
+            if (!signal.empty()) {
+                const ast::Symbol* found = scope->lookupName(signal);
+                if (found == nullptr || !ast::ValueSymbol::isKind(found->kind)) {
+                    reportUnsupported(unknown->location,
+                                      std::format("the connection of port '{}'", name));
+                    return false;
+                }
+                const std::optional<std::uint32_t> object =
+                    objectFor(found->as<ast::ValueSymbol>());
+                if (!object.has_value()) return false;
+                // A port a formal sizes is joined at elaboration, which converts what differs;
+                // one of a fixed width must already match.
+                const eir::Type& portType = unit->objects[port->objectIndex].type;
+                if (!isSymbolic(portType)
+                    && portType.bitWidth() != definitionValue.objects[*object].type.bitWidth()) {
+                    reportUnsupported(unknown->location,
+                                      "a connection to a library's port of another width");
+                    return false;
+                }
+                bound.objectIndex = *object;
+            }
+            result.connections.push_back(bound);
+        }
+        definitionValue.instances.push_back(std::move(result));
+    }
+    return !failed;
 }
 
 bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
@@ -2163,7 +2318,8 @@ std::optional<Walker::Built> Walker::buildUnit(const ast::InstanceBodySymbol& bo
                                       .sources = shared.sources,
                                       .slangSources = shared.slangSources,
                                       .buffers = shared.buffers,
-                                      .packageVariables = shared.packageVariables};
+                                      .packageVariables = shared.packageVariables,
+                                      .libraryUnits = shared.libraryUnits};
     ModuleBuilder builder(
         quietShared, generic ? std::string(body.getDefinition().name) : specialisedModuleName(body),
         body);
@@ -2182,7 +2338,7 @@ std::optional<Walker::Built> Walker::buildUnit(const ast::InstanceBodySymbol& bo
             return std::nullopt;
     }
 
-    if (!builder.translateProcesses()) return std::nullopt;
+    if (!builder.addLibraryInstances() || !builder.translateProcesses()) return std::nullopt;
     if (generic && !builder.isGeneric()) return std::nullopt;
     std::map<std::string, std::uint32_t, std::less<>> ports = builder.portIndices();
     Built built{.unit = builder.take(), .portIndices = std::move(ports)};
@@ -2367,7 +2523,7 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
         }
     }
 
-    if (!builder.translateProcesses()) {
+    if (!builder.addLibraryInstances() || !builder.translateProcesses()) {
         succeeded = false;
         return std::nullopt;
     }
@@ -2420,6 +2576,12 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     slang::ast::CompilationOptions compilationOptions;
     for (const std::string& top : options.topModules) compilationOptions.topModules.insert(top);
     compilationOptions.paramOverrides = options.parameterOverrides;
+    // A module no source defines may be a library's, bound by the frontend; a reference into
+    // one is still an error, since nothing here knows what it holds.
+    if (options.libraryUnits != nullptr) {
+        compilationOptions.flags |= slang::ast::CompilationFlags::IgnoreUnknownModules;
+        compilationOptions.flags |= slang::ast::CompilationFlags::DisallowRefsToUnknownInstances;
+    }
     if (const std::optional<slang::TimeUnit> unit = timeUnitOf(options.timeUnitExponent)) {
         const slang::TimeScaleValue value(*unit, slang::TimeScaleMagnitude::One);
         compilationOptions.defaultTimeScale = slang::TimeScale(value, value);
@@ -2522,7 +2684,8 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
                                        .diagnostics = diagnostics,
                                        .sources = sources,
                                        .slangSources = slangSources,
-                                       .buffers = buffers};
+                                       .buffers = buffers,
+                                       .libraryUnits = options.libraryUnits};
 
     Walker walker(*design, shared);
     for (const slang::ast::InstanceSymbol* instance : root.topInstances) walker.discover(*instance);

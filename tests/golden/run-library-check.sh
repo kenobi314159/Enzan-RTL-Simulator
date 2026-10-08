@@ -263,6 +263,50 @@ par_output=$("$enzan" run --in-lib libs/pc --in-lib libs/pw --timescale ns pwrap
     || fail "a parametrised design split across libraries did not run"
 grep -q 'parametrisable ok' <<<"$par_output" || fail "the parametrised run did not check out"
 
+# A generic unit needs nothing of its library's sources to be instantiated at a width that library
+# never saw (DESIGN_GUIDE.md section 18, M5.1): with the counter's source gone, a design
+# instantiating it at 13 and 6 bits is analysed against the library, stores only itself, and runs.
+mkdir -p unseen
+cat >unseen/clocked.sv <<'EOF'
+module ucounter #(parameter int Width = 4) (input logic clk, input logic rst,
+                                           output logic [Width-1:0] q);
+    always_ff @(posedge clk) if (rst) q <= '0; else q <= q + 1'b1;
+endmodule
+EOF
+cat >unseen/wrap.sv <<'EOF'
+module uwrap_tb;
+    logic clk = 1'b0, rst = 1'b1;
+    logic [12:0] odd;
+    logic [5:0] six;
+    ucounter #(.Width(13)) u_odd (.clk(clk), .rst(rst), .q(odd));
+    ucounter #(.Width(6)) u_six (.clk, .rst, .q(six));
+    always #5 clk = ~clk;
+    initial begin
+        #12 rst = 1'b0;
+        #700;
+        // 70 rising edges after reset, wrapped at 13 and at 6 bits.
+        if (odd !== 13'd70 || six !== 6'd6) begin
+            $display("FAIL library: odd=%0d six=%0d", odd, six);
+            $fatal(1);
+        end
+        $display("unseen widths ok");
+        $finish;
+    end
+endmodule
+EOF
+"$enzan" lib create libs/ucounter >/dev/null || fail "libs/ucounter could not be created"
+"$enzan" lib create libs/uwrap >/dev/null || fail "libs/uwrap could not be created"
+"$enzan" analyse --timescale ns --out-lib libs/ucounter unseen/clocked.sv \
+    || fail "the counter library could not be analysed"
+mv unseen/clocked.sv unseen/clocked.sv.gone
+"$enzan" analyse --in-lib libs/ucounter --out-lib libs/uwrap unseen/wrap.sv \
+    || fail "a design could not be analysed against a library whose sources are gone"
+"$enzan" lib list libs/uwrap | grep -q 'ucounter' \
+    && fail "the design stored a unit its input library holds"
+unseen_output=$("$enzan" run --in-lib libs/ucounter --in-lib libs/uwrap uwrap_tb) \
+    || fail "a library instantiated at widths it never saw did not run"
+grep -q 'unseen widths ok' <<<"$unseen_output" || fail "the unseen widths did not check out"
+
 # A parameterised top is named by its parameter values, so the name the user wrote has to find
 # it; otherwise `run <top>` could not name a parameterised testbench at all.
 "$enzan" run --in-lib libs/pw --in-lib libs/pc --timescale ns pwrap_tb >/dev/null \
