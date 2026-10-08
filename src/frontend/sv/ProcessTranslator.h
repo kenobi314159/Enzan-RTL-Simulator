@@ -372,6 +372,12 @@ private:
     std::optional<Value> translateConditionalExpression(const slang::ast::Expression& expression);
     std::optional<Value> translateConcatenation(const slang::ast::Expression& expression);
     std::optional<Value> translateReplication(const slang::ast::Expression& expression);
+
+    /// In a generic unit, a concatenation or a replication of constants whose shape a formal
+    /// decides — `{W{1'b1}}`, `{{W-1{1'b0}}, 1'b1}` — as one constant annotated with its
+    /// expression, which moves with the formal as the copies and offsets of translating it
+    /// would not. Nothing for one that names no formal or is not a constant.
+    std::optional<Value> foldFormalConstant(const slang::ast::Expression& expression);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
 
     /// `$readmemh` and `$readmemb`, which write a whole memory from a file.

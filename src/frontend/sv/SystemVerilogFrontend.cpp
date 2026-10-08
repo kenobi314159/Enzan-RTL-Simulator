@@ -1256,10 +1256,6 @@ bool widthOrStructureMentions(const syntax::SyntaxNode& node, const Names& names
     case syntax::SyntaxKind::DescendingRangeSelect:
         if (mentions(node.as<syntax::RangeSelectSyntax>().right, names)) return true;
         break;
-    case syntax::SyntaxKind::MultipleConcatenationExpression:
-        if (mentions(node.as<syntax::MultipleConcatenationExpressionSyntax>().expression, names))
-            return true;
-        break;
     case syntax::SyntaxKind::CastExpression:
         if (mentions(node.as<syntax::CastExpressionSyntax>().left, names)) return true;
         break;

@@ -1840,6 +1840,7 @@ ProcessTranslator::translateShortCircuit(const ast::Expression& expression, cons
 std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateConcatenation(const ast::Expression& expression) {
     const auto& concatenation = expression.as<ast::ConcatenationExpression>();
+    if (std::optional<Value> folded = foldFormalConstant(expression)) return folded;
 
     const std::optional<eir::Type> resultType = module->typeOf(expression);
     if (!resultType.has_value()) {
@@ -1946,8 +1947,25 @@ ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression)
 }
 
 std::optional<ProcessTranslator::Value>
+ProcessTranslator::foldFormalConstant(const ast::Expression& expression) {
+    if (!module->namesFormal(expression)) return std::nullopt;
+    const std::optional<eir::Type> type = module->typeOf(expression);
+    if (!type.has_value()) return std::nullopt;
+    ast::EvalContext context(module->evaluationScope());
+    const slang::ConstantValue value = expression.eval(context);
+    if (!value.isInteger()) return std::nullopt;
+
+    const std::uint32_t index = addConstantOf(toBitVector(value.integer()), expression);
+    const std::uint32_t result = newRegister(*type);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(index)));
+    return Value{.reg = result, .type = *type};
+}
+
+std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateReplication(const ast::Expression& expression) {
     const auto& replication = expression.as<ast::ReplicationExpression>();
+    if (std::optional<Value> folded = foldFormalConstant(expression)) return folded;
 
     const std::optional<std::int64_t> count = constantValueOf(replication.count());
     if (!count.has_value() || *count < 0) {
