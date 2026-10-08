@@ -3,7 +3,7 @@
 #
 # The ratchet a conformance suite's pass list is held to (DESIGN_GUIDE.md sections 14.4 and 14.6).
 #
-#   ratchet.sh <passing-list> <passed>
+#   ratchet.sh <passing-list> <passed> [<state>]
 #
 # <passing-list> names, one per line, every case that has passed before; `#` starts a comment.
 # <passed> names every case that passed in this run. The ratchet fails when a case on the list
@@ -11,23 +11,28 @@
 # as the change that made it pass. A pass rate alone would let one case start passing while
 # another stopped and report no change at all, which is why the list is the ratchet and not
 # the number.
+#
+# <state> is what being on the list says of a case, `passing` unless given: the share of generic
+# units is held the same way, a list of the modules that are generic (DESIGN_GUIDE.md section 18,
+# M5.1).
 
 set -uo pipefail
 
-if [[ $# -ne 2 ]]; then
-    printf 'usage: %s <passing-list> <passed>\n' "$0" >&2
+if [[ $# -ne 2 && $# -ne 3 ]]; then
+    printf 'usage: %s <passing-list> <passed> [<state>]\n' "$0" >&2
     exit 2
 fi
 
 readonly list="$1"
 readonly passed="$2"
+readonly state="${3:-passing}"
 
 # `|| [[ -n ... ]]` so that a last line with no newline after it is read too.
 status=0
 while read -r expected || [[ -n "$expected" ]]; do
     [[ -z "$expected" || "$expected" == \#* ]] && continue
     if ! grep -qxF -- "$expected" "$passed"; then
-        printf 'REGRESSED %s, which %s lists as passing\n' "$expected" "$list"
+        printf 'REGRESSED %s, which %s lists as %s\n' "$expected" "$list" "$state"
         status=1
     fi
 done <"$list"
@@ -35,7 +40,7 @@ done <"$list"
 while read -r name || [[ -n "$name" ]]; do
     [[ -z "$name" ]] && continue
     if ! grep -qxF -- "$name" "$list"; then
-        printf 'NEW %s passes; add it to %s\n' "$name" "$list"
+        printf 'NEW %s is %s; add it to %s\n' "$name" "$state" "$list"
     fi
 done <"$passed"
 

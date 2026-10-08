@@ -19,6 +19,9 @@
 # A testbench passes when Enzan exits with 0 and nothing reported an error. Concurrent
 # assertions are SVA, which M5 does not have, so common_cells' own are compiled out with
 # ASSERTS_OFF, the switch its sources provide for simulators without them.
+#
+# The sources and the testbenches are also analysed into a library, and the modules generic in it
+# are held to generic.txt by ../generic-units.sh (DESIGN_GUIDE.md section 18, M5.1).
 
 set -uo pipefail
 
@@ -47,10 +50,11 @@ readonly sources=(
 )
 
 # The clock generator and the clock cells take their delays in picoseconds.
+readonly options=(--timescale ps -D ASSERTS_OFF -I "$cells/include")
+testbenches=()
 run() {
     local testbench="$1" file="$2"
-    (cd "$work" && "$enzan" --top "$testbench" --timescale ps -D ASSERTS_OFF \
-        -I "$cells/include" "${sources[@]}" "$file") \
+    (cd "$work" && "$enzan" --top "$testbench" "${options[@]}" "${sources[@]}" "$file") \
         >"$work/$testbench.txt" 2>"$work/$testbench.log"
     local status=$?
     if [[ $status -ne 0 ]]; then
@@ -64,9 +68,24 @@ run() {
 status=0
 for testbench in cc_addr_decode_tb cc_graycode_tb cc_sub_per_hash_tb; do
     run "$testbench" "$cells/test/$testbench.sv" || status=1
+    testbenches+=("$cells/test/$testbench.sv")
 done
 for file in "$here"/tb/*.sv; do
     run "$(basename "$file" .sv)" "$file" || status=1
+    testbenches+=("$file")
 done
+
+# Afresh, so that a library left by an earlier run does not answer for this one. An analysis
+# into a library keeps every module of its sources, so one holds all of common_cells.
+readonly library="$work/forms"
+rm -rf "$library"
+if "$enzan" lib create "$library" >/dev/null \
+    && "$enzan" analyse "${options[@]}" --out-lib "$library" "${sources[@]}" \
+        "${testbenches[@]}" >"$work/forms.log" 2>&1; then
+    "$here/../generic-units.sh" "$enzan" "$here/generic.txt" "$library" || status=1
+else
+    printf 'FAIL common_cells was not analysed into a library (%s)\n' "$work/forms.log"
+    status=1
+fi
 
 exit "$status"

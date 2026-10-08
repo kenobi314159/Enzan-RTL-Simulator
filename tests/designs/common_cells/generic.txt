@@ -1,0 +1,10 @@
+# The modules of common_cells' testbenches that are generic units (DESIGN_GUIDE.md section 18,
+# M5.1), held by ../generic-units.sh: one that stops being generic fails the run.
+cc_cdc_reset_ctrlr
+cc_cdc_reset_ctrlr_half
+cc_max_counter
+cc_plru_tree
+cc_sync_wedge
+cc_trip_counter
+tc_clk_delay
+tc_clk_gating

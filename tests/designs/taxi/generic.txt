@@ -1,0 +1,14 @@
+# The modules of taxi's AXI stream testbenches that are generic units (DESIGN_GUIDE.md
+# section 18, M5.1), held by ../generic-units.sh: one that stops being generic fails the run.
+taxi_axis_if
+test_taxi_axis_adapter
+test_taxi_axis_arb_mux
+test_taxi_axis_broadcast
+test_taxi_axis_cobs_encode
+test_taxi_axis_concat
+test_taxi_axis_demux
+test_taxi_axis_mux
+test_taxi_axis_pad
+test_taxi_axis_pipeline_fifo
+test_taxi_axis_pipeline_register
+test_taxi_axis_register

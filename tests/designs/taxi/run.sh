@@ -44,6 +44,7 @@ expected_testbench() { grep -qx -- "$1" <(grep -v '^#' "$here/expected.txt"); }
 expected_case() { grep -qxF -- "$1 $2" <(grep -v '^#' "$here/expected.txt"); }
 
 status=0
+libraries=()
 for directory in "$source"/src/axis/tb/*/; do
     testbench="$(basename "$directory")"
     if expected_testbench "$testbench"; then
@@ -59,7 +60,28 @@ for directory in "$source"/src/axis/tb/*/; do
             enzan-parameters)"
         timeout 1800 make SIM=enzan COCOTB_MAKEFILES_DIR="$work/makefiles" \
             COMPILE_ARGS="$parameters" >"$work/$testbench.log" 2>&1
+
+        # The design as the testbench has it, analysed into a library of its own for the share of
+        # generic units: afresh, so that one left by an earlier run does not answer for this one.
+        # A library is named after its directory, so the directory is the testbench's name.
+        read -r -a analysis < <(make -s --no-print-directory SIM=enzan \
+            COCOTB_MAKEFILES_DIR="$work/makefiles" \
+            --eval 'enzan-analysis: ; @echo --top $(TOPLEVEL) --timescale $(ENZAN_TIMESCALE) $(VERILOG_SOURCES)' \
+            enzan-analysis)
+        rm -rf "$work/forms/$testbench"
+        mkdir -p "$work/forms"
+        "$enzan" lib create "$work/forms/$testbench" >/dev/null \
+            && "$enzan" analyse $parameters "${analysis[@]}" --out-lib "$work/forms/$testbench" \
+                >"$work/$testbench.forms.log" 2>&1
     )
+    # The subshell's status is the analysis's; the run's is in results.xml.
+    if [[ $? -ne 0 ]]; then
+        printf 'FAIL %s: not analysed into a library (%s)\n' "$testbench" \
+            "$work/$testbench.forms.log"
+        status=1
+    else
+        libraries+=("$work/forms/$testbench")
+    fi
 
     results="$directory/results.xml"
     if [[ ! -f "$results" ]]; then
@@ -102,5 +124,9 @@ PY
         printf 'PASS %s: %d cases, %d skipped by the testbench\n' "$testbench" "$passed" "$skipped"
     fi
 done
+
+if [[ ${#libraries[@]} -gt 0 ]]; then
+    "$here/../generic-units.sh" "$enzan" "$here/generic.txt" "${libraries[@]}" || status=1
+fi
 
 exit "$status"

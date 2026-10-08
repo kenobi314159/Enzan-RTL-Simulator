@@ -2839,7 +2839,11 @@ milestone, and named for its values (8.2). The two kinds of unit coexist in one
 library and one design. What is tracked is the share of the design regression's module
 definitions (14.5) that come out generic, and it is held by the ratchet of 14.4 as a
 pass rate is: a change that turns a generic unit back into specialised ones is a
-regression.
+regression. As there, the ratchet is a list and not the number: each design's
+`generic.txt` names its modules that are generic, `tests/designs/generic-units.sh`
+prints the share and holds the design to its list from what `enzan lib list` says of
+each unit, and a design whose modules have no parameters, as the AES core's do not,
+has no list.
 
 **Before M6, and that is the point of placing it here.** VHDL generics are this
 problem in another language, so an NVC adapter written against parameter-resolved
