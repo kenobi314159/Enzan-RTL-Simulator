@@ -79,6 +79,17 @@ TEST(TimeAxisTests, ZoomingInStopsAtOneUnit) {
         << "zooming past a unit per pixel would be zooming into the gaps between instants";
 }
 
+TEST(TimeAxisTests, ZoomingOutFromOneUnitWidensTheView) {
+    // A step of 1.25 on a span of a few units is less than one unit more, and dropping the
+    // fraction would leave the span where it was and the view stuck zoomed in.
+    TimeAxis axis = axisOf(800, 0, TimeAxis::MinimumSpan);
+
+    for (SimTime span = TimeAxis::MinimumSpan; span < 100; span = axis.span()) {
+        axis.zoom(1.25, 400.0);
+        ASSERT_GT(axis.span(), span) << "zooming out did not widen a span of " << span;
+    }
+}
+
 TEST(TimeAxisTests, ZoomingOutDoesNotWrapPastTheEndOfTime) {
     TimeAxis axis = axisOf(800, 0, 1000);
 

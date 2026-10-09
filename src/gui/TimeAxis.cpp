@@ -54,7 +54,10 @@ void TimeAxis::zoom(double factor, double anchorX) noexcept {
 
     const runtime::SimTime anchorTime = timeAt(anchorX);
 
-    const double wanted = static_cast<double>(rangeSpan) * factor;
+    // Zooming out rounds up. A step on a span of a few units is less than one unit more, and
+    // rounding it down would leave the span unchanged, so the view could never zoom back out.
+    const double scaled = static_cast<double>(rangeSpan) * factor;
+    const double wanted = factor > 1.0 ? std::ceil(scaled) : scaled;
     const auto limit = static_cast<double>(runtime::NoTime);
     const auto newSpan = static_cast<runtime::SimTime>(
         std::clamp(wanted, static_cast<double>(MinimumSpan), limit / 2.0));
