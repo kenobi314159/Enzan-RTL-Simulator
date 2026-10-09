@@ -81,8 +81,19 @@ public:
     /// intervals a reader can divide by in their head.
     [[nodiscard]] runtime::SimTime gridStep(double minimumPixels) const noexcept;
 
-    /// Formats `time` for the ruler, using `scale`'s unit.
+    /// Formats `time` in `scale`'s unit, exactly. For a cursor or the status bar, where the
+    /// reader wants the instant itself rather than a round number near it.
     [[nodiscard]] static QString format(runtime::SimTime time, runtime::TimeScale scale);
+
+    /// Formats a ruler tick at `time`, a multiple of `step`, in the coarsest unit from seconds
+    /// down to the precision in which `step` is at least a tenth of a unit.
+    ///
+    /// The unit follows the zoom so that a ruler zoomed out to microseconds reads `1.5us` rather
+    /// than `1500000ps`. It is chosen from the step rather than from each tick so that every
+    /// label on the ruler is in the same unit, and a tenth is the finest it goes so that a label
+    /// needs at most one decimal place. The arithmetic is on integers, so a label is exact.
+    [[nodiscard]] static QString formatTick(runtime::SimTime time, runtime::SimTime step,
+                                            runtime::TimeScale scale);
 
 private:
     int viewportWidth = 1;

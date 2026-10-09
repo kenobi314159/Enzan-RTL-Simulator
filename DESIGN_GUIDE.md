@@ -1582,6 +1582,15 @@ writes them directly, where the stroker sets up a pen and a clip per call; on a
 wide window with a line per row it was a third of what the ruler cost, paid on
 every repaint.
 
+**The ruler's unit follows the zoom.** Its labels are written in the coarsest of
+s, ms, us, ns, ps and fs in which the step between ticks is at least a tenth of a
+unit, so a window zoomed out to microseconds reads `1.5us` rather than
+`1500000ps`. The unit is chosen once for the whole ruler, from the step, so every
+label on it is in the same unit; and a tenth is the finest it goes, so a label has
+at most one decimal place. It is computed on integers, never rounded. A cursor's
+label and the status bar keep the time precision, because there the reader wants
+the instant itself rather than a round number near it.
+
 Required features: multiple named cursors, cursor locking, zoom and pan, signal
 grouping, extracting a bit range of a signal into a separate displayed signal,
 and per-signal value radix selection.

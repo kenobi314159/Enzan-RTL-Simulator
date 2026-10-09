@@ -137,4 +137,28 @@ QString TimeAxis::format(runtime::SimTime time, runtime::TimeScale scale) {
     return QString::fromStdString(scale.format(time));
 }
 
+QString TimeAxis::formatTick(runtime::SimTime time, runtime::SimTime step,
+                             runtime::TimeScale scale) {
+    const runtime::TimeExponent precision = scale.precisionExponent();
+
+    // Only the named units are candidates, which is why the walk starts at seconds and goes
+    // down in thousands. A precision with no name of its own, such as 100ps, is still labelled
+    // in a named unit whenever a tenth of that unit is a whole number of time units.
+    for (int unit = 0; unit >= precision; unit -= 3) {
+        const auto unitScale = runtime::TimeScale(static_cast<runtime::TimeExponent>(unit));
+        if (unit == precision) return format(time, unitScale);
+
+        runtime::SimTime tenth = 1;
+        for (int i = precision + 1; i < unit; ++i) tenth *= 10;
+        if (step % tenth != 0) continue;
+
+        const runtime::SimTime tenths = time / tenth;
+        QString label = QString::number(tenths / 10);
+        if (tenths % 10 != 0) label += QLatin1Char('.') + QString::number(tenths % 10);
+        return label + QString::fromStdString(unitScale.unitName());
+    }
+
+    return format(time, scale);
+}
+
 } // namespace enzan::gui
