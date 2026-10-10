@@ -128,9 +128,29 @@ directory. Analysis output is *independent of any particular top-level design*
 and is therefore cacheable and reusable across runs and across designs. This is
 the phase Questa exposes as `vlog`/`vcom`.
 
-**Elaboration** takes a named top level plus the libraries, resolves parameters
-and generics, expands generate constructs, builds the instance tree, binds
-ports, computes the flat state layout, and produces an executable image.
+**A parameterised SystemVerilog module is analysed once per parameterisation the
+design uses.** slang is an elaborating frontend (5.1): it type-checks a body in the
+context of the values it is given, because a type can depend on a parameter, and it
+offers no body generic over them. So parameter resolution and generate expansion
+happen in analysis, inside slang, and a parameterised module becomes one unit per
+set of values, named for them (8.2). Each unit is still independent of the top
+level — the same values make the same unit wherever it is produced — but which
+units exist depends on what the design instantiates, so a library is re-runnable
+rather than reusable at values it has never seen: a design that needs new ones
+reads the sources again.
+
+Enzan does not rebuild that elaboration to make a unit generic. Doing so would
+spare Enzan's own translation of each parameterisation and a library's sources at
+the boundary, but slang would still elaborate every parameterisation of the design
+being analysed. And a unit derived from one of slang's bodies would be checked
+against slang only at the values slang saw, and trusted at the others; 1.2 ranks a
+slower analysis above a result that is trusted rather than checked. Whether VHDL
+generics take the same shape is decided by the M6 spike (5.2).
+
+**Elaboration** takes a named top level plus the libraries, binds each instance
+to the unit for its values, resolves whatever parameters and generics analysis
+left open, builds the instance tree, binds ports, computes the flat state layout,
+and produces an executable image.
 Elaboration is inherently per-design and **cannot** be cached across different
 top levels or parameterisations. Optimisation passes — inlining, selective
 flattening, process merging, partitioning — belong here.
@@ -708,6 +728,17 @@ unconstrained arrays sized by a generic are Enzan's work, not NVC's, and the
 VHDL elaborator therefore reimplements them rather than reusing NVC's `elab`.
 The spike MUST size this before the milestone commits to the boundary.
 
+**The spike also decides where generics are folded** *(open)*, which 2.1 leaves
+open for VHDL. Unlike slang, NVC hands over a tree with the expressions over
+generics still in it, so the adapter can either fold them as it translates each
+instance — one unit per set of values, as SystemVerilog has — or emit units that
+carry those expressions for elaboration to evaluate per instance. The second gives VHDL the
+reusable library of 2.1, at the cost of EIR holding expressions over a unit's
+generics, an elaborator that specialises units by them, and constant functions
+run at elaboration; the first needs none of these. Subtypes, generate statements
+and constant functions that depend on a generic are what the spike sizes the two
+against.
+
 Known risks, to be confirmed by a spike at the start of M6: NVC's internal APIs
 are not stability-guaranteed and will drift; NVC is C and uses its own arena
 allocators and global state, so reentrancy and ownership need checking; and the
@@ -999,8 +1030,8 @@ reference cannot resolve.
 
 This is what makes a library usable rather than what makes it save work. Reading the
 other library's sources means re-analysing them, so the boundary costs what it would
-have cost without the library. M5.1 removes that by making a unit generic over its
-parameters, and rewrites this subsection and the naming rule below when it lands.
+have cost without the library. Removing that would take a unit generic over its
+parameters, which 2.1 explains SystemVerilog analysis does not produce.
 
 **A specialisation's name MUST be a function of its parameter values.** A counter
 numbers the parameterisations in the order one compilation walked them, which makes
@@ -2725,66 +2756,13 @@ testbenches above pass under Enzan; a design whose instance count is a
 parameter and whose ports are bits of one array simulates, while two drivers of one
 bit are still refused — a variable with an error and a net by resolving them.
 
-### M5.1 — Parameter-generic analysis
-
-**What this closes is a gap between this document and the code, not a new design.**
-2.1 already says analysis output is independent of any particular top level and
-that elaboration is what resolves parameters and generics; 4.1 already lists
-parameters among the things EIR-S describes. Analysis has never worked that way. A
-parameterised module is translated once per parameterisation, with the values baked
-into each unit's types and mangled into its name, so a unit exists only because
-something instantiated it with particular values.
-
-Two consequences follow from that, and they are the reason to do this rather than
-leave the gap open:
-
-- **A library is not reusable, only re-runnable.** A design analysed *against*
-  another library re-reads and re-analyses that library's sources, because the units
-  in it are specialisations of no use to a different instantiation (8.2). The library
-  saves nothing across the boundary; it is a file list with a cache attached.
-- **Analysis cost scales with distinct parameterisations.** M3.1 removed the cost
-  that scaled with *instances*; what remains is genuine work under the current design
-  and unnecessary work under this one — a hundred widths of one module are a hundred
-  translations of it.
-
-**The change.** EIR-S holds one unit per source module, carrying its formal
-parameters. An object's type carries its width as an expression over those
-parameters rather than as a number, and an instance carries the values it sets.
-Elaboration evaluates those expressions and materialises the concrete types, which
-is where 2.1 already says parameter resolution belongs. Everything downstream of
-elaboration — codegen, the runtime, the waveform database — sees what it sees today,
-because it only ever sees elaborated output.
-
-**Before M6, and that is the point of placing it here.** VHDL generics are this
-problem in another language, so an NVC adapter written against parameter-resolved
-EIR would be written twice.
-
-**Spike first, as M6 does.** slang is an elaborating front end: it type-checks a
-body in the context of an instance, because a type can depend on a parameter, and it
-does not offer a parameter-generic typed body. Whether one can be obtained — and
-what the alternative is if not — is the first question this milestone answers, and
-it is answered before the EIR change is committed to rather than discovered
-half way through it.
-
-**What this removes.** The specialisation naming of 8.2 exists only because
-specialisations are units; with generic units there is nothing to name. `--in-lib`
-on `analyse` stops needing to read the other library's sources, so the boundary rule
-of 8.2 loses its exception and `--context` narrows again. Those sections are rewritten
-by this milestone rather than extended.
-
-**Exit:** a library analysed once is instantiated at a width it has never seen
-without re-reading its sources; analysing a design with a hundred distinct
-parameterisations of one module costs what one of them costs; the `.f`-and-library
-Makefile of 8.3 still builds, and the conformance and design regression pass rates
-of 14.4 and 14.5 do not move.
-
 ### M6 — VHDL via NVC
 
 NVC integration spike first, to confirm the approach in 5.2 before committing
 to it; vendored pinned fork; NVC tree to EIR adapter; `std_logic` value model;
-VHDL generic and subtype elaboration; Enzan's own implementations of the
-predefined and foreign subprograms NVC's runtime would have resolved; VHDL
-simulation cycle; VHPI subset for cocotb.
+VHDL generic and subtype elaboration, with generics folded where the spike decides
+(5.2); Enzan's own implementations of the predefined and foreign subprograms NVC's
+runtime would have resolved; VHDL simulation cycle; VHPI subset for cocotb.
 
 **Exit:** NEORV32 simulates; the VUnit suite runs.
 
@@ -2815,10 +2793,9 @@ constraint solver); save and restore; multiple clock domain tooling; UVM.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| slang cannot yield a parameter-generic typed body | High — blocks M5.1, and a library stays a file list | Spike before committing to the EIR change (M5.1); the fallback is to keep specialisation in analysis and accept that libraries do not save work across a boundary |
 | NVC internal APIs drift or prove unusable as a frontend | High — blocks VHDL | Spike first in M6; pin the revision; thin adapter in one directory; documented co-simulation fallback (5.2) |
 | The predefined and foreign subprograms NVC's runtime resolved are a larger body of work than estimated | High — inflates M6 | Enumerate the set during the M6 spike by walking the analysed tree, before the milestone is planned (5.2) |
-| VHDL generic and subtype elaboration must be reimplemented rather than reused from NVC | Medium — inflates M6 | Sized by the M6 spike; the tree boundary is reconsidered if it proves worse than the alternative (5.2) |
+| VHDL generic and subtype elaboration must be reimplemented rather than reused from NVC | Medium — inflates M6 | Sized by the M6 spike, which also decides whether generics are folded by the adapter or by elaboration (5.2); the tree boundary is reconsidered if it proves worse than the alternative (5.2) |
 | A defect inherited from NVC's frontend is invisible to differential testing against NVC | High — silent wrong results | GHDL is the primary VHDL reference and both conformance suites are run (14.3, 14.4) |
 | Mixed-language delta semantics differ from commercial tools | High — silent wrong results | Specify explicitly (3.5); golden tests against references before declaring it working |
 | Event-driven interpretation misses the performance target | Medium | Bytecode VM from the start; JIT-ready EIR; continuous benchmarking from M1 |
@@ -2839,8 +2816,9 @@ same simulated time.
 **Elaboration** — building the instance tree and state layout for a specific
 top level. Not cacheable across designs.
 
-**Analysis** — compiling one design unit to EIR, independent of any top level.
-Cacheable and reusable.
+**Analysis** — compiling one design unit to EIR, independent of any top level;
+a parameterised SystemVerilog module once per parameterisation the design uses
+(2.1). Cacheable and reusable.
 
 **Region** — one of the ordered phases within a SystemVerilog time slot.
 
