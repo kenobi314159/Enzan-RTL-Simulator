@@ -1048,6 +1048,18 @@ other library's sources means re-analysing them, so the boundary costs what it w
 have cost without the library. Removing that would take a unit generic over its
 parameters, which 2.1 explains SystemVerilog analysis does not produce.
 
+**So a split is for names, not for speed.** Splitting a SystemVerilog design across
+libraries saves no analysis and adds some. An edit to a library's sources rebuilds
+that library and every library analysed against it, each reading those sources again.
+A library analysed on its own holds its modules at their default values, which a
+consumer using other values never instantiates and creates again for itself, while a
+run still loads both. Measured on 3000 parameterised modules used at a width other
+than their default, a two-library build cost 554 ms against 260 ms for one library,
+an edit to the testbench rebuilt in 295 ms against 268 ms, and a run took 79 ms
+against 46 ms. **A design is therefore built as one library** unless names have to be
+kept apart: two vendors' modules sharing a name, the `library` clauses of a VHDL
+design (M6), or units whose owner and build are not the design's.
+
 **A specialisation's name MUST be a function of its parameter values.** A counter
 numbers the parameterisations in the order one compilation walked them, which makes
 the name meaningless outside it — `counter$1` from one analysis and `counter$1` from
@@ -1135,6 +1147,10 @@ The workflow this section exists to serve, in full. Three things are worth readi
 out of it: the library is the unit of rebuild, the `.f` file is the only
 prerequisite written by hand, and the two `run` forms differ by nothing but a flag.
 
+It is split into three libraries to show the boundary of 8.2 at work, which is the
+shape for a design with names to keep apart. A design without that reason is better
+built as one library (8.2): the same Makefile with one stamp and one `.f` file.
+
 ```make
 ENZAN ?= enzan
 PKG   := rtl/pkg/types_pkg.sv
@@ -1162,9 +1178,11 @@ libs/uart/.stamp: rtl/uart.f | libs/uart/.created
 	         --depfile libs/uart/deps.d --depfile-target $@
 	@touch $@
 
-libs/tb/.stamp: rtl/tb.f | libs/tb/.created
+# The testbench instantiates the UART, so it is analysed against libs/uart, which
+# reads that library's sources (8.2) and names them in its dependency file.
+libs/tb/.stamp: rtl/tb.f libs/uart/.stamp | libs/tb/.created
 	$(ENZAN) analyse $(UNIT) --out-lib libs/tb -f rtl/tb.f --context $(PKG) \
-	         --depfile libs/tb/deps.d --depfile-target $@
+	         --in-lib libs/uart --depfile libs/tb/deps.d --depfile-target $@
 	@touch $@
 
 # Every file each analysis read. Until these exist a `.f` file is the only
@@ -1187,10 +1205,12 @@ clean:
 	rm -rf libs
 ```
 
-Editing a file in `rtl/uart` rebuilds `libs/uart` and nothing else; editing
-`types_pkg.sv` rebuilds all three, because each named it. `make check` is the
-elaboration-only form of 8.1, which is what a CI job wants when it only needs to
-know that the design still builds.
+Editing a file in `rtl/tb` rebuilds `libs/tb` alone, though that analysis reads the
+UART's sources again; editing one in `rtl/uart` rebuilds `libs/uart` and `libs/tb`,
+which read it; editing `types_pkg.sv` rebuilds all three, because each named it.
+None of these is cheaper than rebuilding one library holding the whole design.
+`make check` is the elaboration-only form of 8.1, which is what a CI job wants when
+it only needs to know that the design still builds.
 
 ### 8.4 The graphical front end
 
