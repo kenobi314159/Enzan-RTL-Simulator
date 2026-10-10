@@ -1119,6 +1119,41 @@ TEST_F(FrontendTest, AMemberReachedThroughAnInterfacePortGoesThroughThePort) {
               (std::vector<InterfaceBinding>{InterfaceBinding{.port = "in", .target = "@in"}}));
 }
 
+TEST_F(FrontendTest, AModuleGivenInterfacesOfTwoWidthsIsTwoParameterisations) {
+    // `sink` sets no parameter of its own, yet its widths come from the interface it is
+    // given. Two instances agreeing on their own parameters are therefore not one
+    // parameterisation, and sharing a translation between them gave one the other's widths.
+    const std::unique_ptr<Design> design = analyse(R"(
+        interface bus_if #(parameter int W = 8);
+            logic [W-1:0] data;
+        endinterface
+
+        module sink (bus_if b);
+            localparam int W = b.W;
+            logic [W-1:0] copy;
+            assign copy = b.data;
+        endmodule
+
+        module top;
+            bus_if #(.W(8))  narrow ();
+            bus_if #(.W(16)) wide ();
+            sink u_narrow (.b(narrow));
+            sink u_wide (.b(wide));
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const std::vector<std::uint32_t> sinks = design->findSpecialisations("sink");
+    ASSERT_EQ(sinks.size(), 2U);
+    std::set<std::uint32_t> widths;
+    for (const std::uint32_t index : sinks) {
+        const ModuleDefinition& sink = design->module(index);
+        widths.insert(sink.objects[require(sink.findObject("copy"))].type.bitWidth());
+    }
+    EXPECT_EQ(widths, (std::set<std::uint32_t>{8, 16}));
+}
+
 TEST_F(FrontendTest, AParameterOverrideSetsTheTopLevelsParameter) {
     const std::unique_ptr<Design> design =
         analyse("module top #(parameter int W = 4); endmodule\n", "top", {"W=9"});
@@ -1135,6 +1170,30 @@ TEST_F(FrontendTest, AnOverrideNamingNoParameterIsReported) {
         analyse("module top #(parameter int W = 4); endmodule\n", "top", {"WIDTH=9"});
     EXPECT_NE(design, nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::UnusedParameterOverride));
+}
+
+TEST_F(FrontendTest, AParameterOverrideIsNotAFileRead) {
+    // slang parses each override from text of its own, in a buffer with a made-up name, and a
+    // dependency file naming it has a prerequisite that never exists, so `make` re-analyses on
+    // every run. The hierarchical form becomes a `defparam` and gets a buffer as well.
+    const std::filesystem::path header = directory / "width.svh";
+    std::ofstream(header) << "`define DEPTH 2\n";
+    const std::filesystem::path source = directory / "design.sv";
+    std::ofstream(source) << "`include \"width.svh\"\n"
+                             "module leaf #(parameter int D = `DEPTH); endmodule\n"
+                             "module top #(parameter int W = 4); leaf u(); endmodule\n";
+
+    std::vector<std::filesystem::path> read;
+    enzan::frontend::sv::Options options;
+    options.files.push_back(source);
+    options.includeDirectories.emplace_back(directory);
+    options.topModules.emplace_back("top");
+    options.parameterOverrides = {"W=9", "top.u.D=3"};
+    options.filesRead = &read;
+
+    ASSERT_NE(enzan::frontend::sv::analyse(options, sources, engine), nullptr)
+        << consumer.messages.front();
+    EXPECT_EQ(read, (std::vector<std::filesystem::path>{source, header}));
 }
 
 TEST_F(FrontendTest, FoldsAComparisonOfConstantTimes) {
@@ -1242,6 +1301,25 @@ TEST_F(FrontendTest, TheSameSelectLiveInAnotherInstanceIsStillAnError) {
                       "top"),
               nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::SystemVerilogError));
+}
+
+TEST_F(FrontendTest, ADeadBranchInTwoCopiesOfOneParameterisationIsAWarning) {
+    // slang elaborates the second copy's body as a duplicate of the first, and the dead code is
+    // found in the first alone; the second must not count as an instance in which it can run.
+    EXPECT_NE(analyse(R"(
+        module sub #(parameter int W = 0) (input logic [7:0] x, output logic [7:0] y);
+            always_comb if (W > 0) y = x[7 -: W]; else y = x;
+        endmodule
+        module top;
+            logic [7:0] x, a, b;
+            sub #(.W(0)) u_a (.x, .y(a));
+            sub #(.W(0)) u_b (.x, .y(b));
+        endmodule
+    )",
+                      "top"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::ErrorInDeadCode));
+    EXPECT_FALSE(reportedCode(DiagCode::SystemVerilogError));
 }
 
 TEST_F(FrontendTest, ADegenerateSelectInLiveCodeIsStillAnError) {

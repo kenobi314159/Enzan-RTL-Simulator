@@ -400,6 +400,29 @@ TEST_F(SerializationTest, EncodingIsStableForTheSameInput) {
               enzan::eir::encodeModules(modules, sources));
 }
 
+TEST_F(SerializationTest, ContentLeavesOutWhereAUnitCameFrom) {
+    // A unit a session analysed has its locations; the same unit read from a library has none.
+    // They are one unit, and two libraries holding it must be usable together (section 8.2).
+    const std::vector<ModuleDefinition> analysed{richModule(buffer)};
+    std::vector<ModuleDefinition> stored;
+    ASSERT_TRUE(enzan::eir::decodeModules(
+        enzan::eir::encodeModules(analysed, sources), [](std::string_view) { return BufferId(); },
+        stored));
+
+    EXPECT_NE(enzan::eir::encodeModules(analysed, sources),
+              enzan::eir::encodeModules(stored, sources));
+    EXPECT_EQ(enzan::eir::encodeContent(analysed.front(), sources),
+              enzan::eir::encodeContent(stored.front(), sources));
+}
+
+TEST_F(SerializationTest, ContentDiffersWhenTheUnitDoes) {
+    const ModuleDefinition one = richModule(buffer);
+    ModuleDefinition other = richModule(buffer);
+    other.objects[1].type = Type::bits(9, true, true);
+
+    EXPECT_NE(enzan::eir::encodeContent(one, sources), enzan::eir::encodeContent(other, sources));
+}
+
 // ---------------------------------------------------------------------------
 // Refusing what is not a library of this version
 // ---------------------------------------------------------------------------

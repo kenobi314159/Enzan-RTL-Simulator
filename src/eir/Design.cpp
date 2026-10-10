@@ -4,6 +4,7 @@
 
 #include "common/Assert.h"
 
+#include <algorithm>
 #include <set>
 #include <utility>
 
@@ -30,6 +31,7 @@ QualifiedName splitQualified(std::string_view name) {
 
 std::uint32_t Design::addModule(ModuleDefinition module) {
     std::vector<std::uint32_t>& indices = byName[module.name];
+    for (const std::uint32_t existing : indices) duplicates.erase(existing);
 
     // Replacing the definition from the *same* library, because re-analysing a changed
     // source must update what is stored. A same-named unit from another library is a
@@ -66,7 +68,9 @@ Design::findModuleIndex(std::string_view name, std::vector<std::string_view>* am
         return std::nullopt;
     }
 
-    if (found->second.size() == 1) return found->second.front();
+    const auto distinct = std::ranges::count_if(
+        found->second, [this](std::uint32_t index) { return !duplicates.contains(index); });
+    if (distinct == 1) return found->second.front();
 
     // More than one library defines it, so there is no answer to an unqualified
     // question. Reported rather than resolved: see the header.
@@ -86,10 +90,33 @@ const ModuleDefinition& Design::module(std::uint32_t index) const {
 std::vector<std::uint32_t> Design::findSpecialisations(std::string_view sourceName) const {
     std::vector<std::uint32_t> found;
     for (std::uint32_t index = 0; index < definitions.size(); ++index) {
-        if (definitions[index].sourceName == sourceName && !definitions[index].isPackage)
+        if (definitions[index].sourceName == sourceName && !definitions[index].isPackage
+            && !duplicates.contains(index))
             found.push_back(index);
     }
     return found;
+}
+
+void Design::mergeIdenticalDefinitions(
+    const std::function<std::string(const ModuleDefinition&)>& contentOf) {
+    duplicates.clear();
+    for (const auto& [name, indices] : byName) {
+        if (indices.size() < 2) continue;
+
+        // Compared with every distinct copy before it, not only the first: a copy may differ
+        // from the first library's and still agree with the second's.
+        std::vector<std::pair<std::uint32_t, std::string>> distinct;
+        for (const std::uint32_t index : indices) {
+            std::string content = contentOf(definitions[index]);
+            const bool seen = std::ranges::any_of(
+                distinct, [&](const auto& earlier) { return earlier.second == content; });
+            if (seen) {
+                duplicates.insert(index);
+            } else {
+                distinct.emplace_back(index, std::move(content));
+            }
+        }
+    }
 }
 
 std::vector<std::string> Design::candidateTopModules() const {

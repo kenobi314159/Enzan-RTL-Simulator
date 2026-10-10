@@ -128,9 +128,29 @@ directory. Analysis output is *independent of any particular top-level design*
 and is therefore cacheable and reusable across runs and across designs. This is
 the phase Questa exposes as `vlog`/`vcom`.
 
-**Elaboration** takes a named top level plus the libraries, resolves parameters
-and generics, expands generate constructs, builds the instance tree, binds
-ports, computes the flat state layout, and produces an executable image.
+**A parameterised SystemVerilog module is analysed once per parameterisation the
+design uses.** slang is an elaborating frontend (5.1): it type-checks a body in the
+context of the values it is given, because a type can depend on a parameter, and it
+offers no body generic over them. So parameter resolution and generate expansion
+happen in analysis, inside slang, and a parameterised module becomes one unit per
+set of values, named for them (8.2). Each unit is still independent of the top
+level — the same values make the same unit wherever it is produced — but which
+units exist depends on what the design instantiates, so a library is re-runnable
+rather than reusable at values it has never seen: a design that needs new ones
+reads the sources again.
+
+Enzan does not rebuild that elaboration to make a unit generic. Doing so would
+spare Enzan's own translation of each parameterisation and a library's sources at
+the boundary, but slang would still elaborate every parameterisation of the design
+being analysed. And a unit derived from one of slang's bodies would be checked
+against slang only at the values slang saw, and trusted at the others; 1.2 ranks a
+slower analysis above a result that is trusted rather than checked. Whether VHDL
+generics take the same shape is decided by the M6 spike (5.2).
+
+**Elaboration** takes a named top level plus the libraries, binds each instance
+to the unit for its values, resolves whatever parameters and generics analysis
+left open, builds the instance tree, binds ports, computes the flat state layout,
+and produces an executable image.
 Elaboration is inherently per-design and **cannot** be cached across different
 top levels or parameterisations. Optimisation passes — inlining, selective
 flattening, process merging, partitioning — belong here.
@@ -708,6 +728,17 @@ unconstrained arrays sized by a generic are Enzan's work, not NVC's, and the
 VHDL elaborator therefore reimplements them rather than reusing NVC's `elab`.
 The spike MUST size this before the milestone commits to the boundary.
 
+**The spike also decides where generics are folded** *(open)*, which 2.1 leaves
+open for VHDL. Unlike slang, NVC hands over a tree with the expressions over
+generics still in it, so the adapter can either fold them as it translates each
+instance — one unit per set of values, as SystemVerilog has — or emit units that
+carry those expressions for elaboration to evaluate per instance. The second gives VHDL the
+reusable library of 2.1, at the cost of EIR holding expressions over a unit's
+generics, an elaborator that specialises units by them, and constant functions
+run at elaboration; the first needs none of these. Subtypes, generate statements
+and constant functions that depend on a generic are what the spike sizes the two
+against.
+
 Known risks, to be confirmed by a spike at the start of M6: NVC's internal APIs
 are not stability-guaranteed and will drift; NVC is C and uses its own arena
 allocators and global state, so reentrancy and ownership need checking; and the
@@ -967,6 +998,16 @@ loaded first is the failure mode 1.2 ranks worst, and it is what happens today �
 `Design::findModule` takes a bare name and `addModule` is additive, so **EIR MUST
 carry the logical library on every unit** for any of this to hold.
 
+**Two copies of one unit are not two definitions.** Libraries analysed against one
+IP each store the parameterisations they needed (below), so two of them can both hold
+`fifo$Width_8`; and a design analysed and run in one go against a library reproduces
+the units it reads from that library's sources. Where every copy of a name encodes
+identically once its source locations are left out, the copies are one unit, and the
+name resolves. A copy that differs in anything, as one from another version of the
+source or from other defines can, or another module that happens to share the name, is
+a different unit, and the name is an error as above. Comparing what the units are rather than where they came
+from is what makes this safe: a stale library is refused, not chosen.
+
 **An entry's path MUST be derivable from the source it holds**, not from a hash of
 that source's text. Entries are per source file (4.4), because that is what the
 frontend produces in one piece, so the name comes from the file rather than from any
@@ -985,6 +1026,12 @@ declaration however it was analysed before, and EIR does not feed back into slan
 Paths rather than text, because duplicating the RTL into every library that uses it
 would make a library a copy of the design instead of an index of it.
 
+**A file is analysed once however often it is named.** Two libraries built on one IP
+both record its sources, and a file can be a source, a context file and a library's
+source at once. Two readings of one file would define every module in it twice, so a
+repeat — by path, after `.`, `..` and symbolic links are resolved — is dropped, and the
+first naming keeps its role: a file named as context stays unstored.
+
 So `--in-lib` on `analyse` means *read these libraries' declarations*, and `--in-lib`
 on `run` means *resolve against these libraries' units*. The two are the same option
 because they name the same thing; what differs is which half of it is wanted.
@@ -994,13 +1041,24 @@ parameterised module becomes one unit per parameterisation, so a unit is not bak
 with the parameters its library happened to be analysed with: the design that needs
 `Width=8` creates that specialisation from the declarations it read, and stores it in
 its own library. A specialisation the input library already holds is **not** stored a
-second time, because two libraries defining one name is exactly what an unqualified
-reference cannot resolve.
+second time, since a second copy of it would only be a second thing to keep current.
 
 This is what makes a library usable rather than what makes it save work. Reading the
 other library's sources means re-analysing them, so the boundary costs what it would
-have cost without the library. M5.1 removes that by making a unit generic over its
-parameters, and rewrites this subsection and the naming rule below when it lands.
+have cost without the library. Removing that would take a unit generic over its
+parameters, which 2.1 explains SystemVerilog analysis does not produce.
+
+**So a split is for names, not for speed.** Splitting a SystemVerilog design across
+libraries saves no analysis and adds some. An edit to a library's sources rebuilds
+that library and every library analysed against it, each reading those sources again.
+A library analysed on its own holds its modules at their default values, which a
+consumer using other values never instantiates and creates again for itself, while a
+run still loads both. Measured on 3000 parameterised modules used at a width other
+than their default, a two-library build cost 554 ms against 260 ms for one library,
+an edit to the testbench rebuilt in 295 ms against 268 ms, and a run took 79 ms
+against 46 ms. **A design is therefore built as one library** unless names have to be
+kept apart: two vendors' modules sharing a name, the `library` clauses of a VHDL
+design (M6), or units whose owner and build are not the design's.
 
 **A specialisation's name MUST be a function of its parameter values.** A counter
 numbers the parameterisations in the order one compilation walked them, which makes
@@ -1009,6 +1067,12 @@ another are different modules wearing one name, and an instance binds to the wro
 body with nothing on screen to say so. Naming it for the values gives a
 specialisation one identity wherever it is produced, which is the whole of what makes
 libraries composable.
+
+**The interfaces a body is given are among those values.** A module reads an interface's
+parameters through its port — `localparam W = bus.W` — so two instances setting none of
+their own can differ in every width that depends on the bus. Where an interface port is
+connected to a parameterised interface, to an array of them, or is generic, the name
+carries what it is connected to, as it carries a parameter.
 
 **A parameterised top is named for its values too**, so the name a user writes is the
 one the *source* gave it. A top is therefore resolved by source name when no unit has
@@ -1083,6 +1147,12 @@ The workflow this section exists to serve, in full. Three things are worth readi
 out of it: the library is the unit of rebuild, the `.f` file is the only
 prerequisite written by hand, and the two `run` forms differ by nothing but a flag.
 
+It is split into three libraries to show the boundary of 8.2 at work, which is the
+shape for a design with names to keep apart: two IP blocks, a UART and an SPI
+controller, that share a package and do not depend on each other, and a testbench
+that instantiates both. A design without that reason is better built as one library
+(8.2): the same Makefile with one stamp and one `.f` file.
+
 ```make
 ENZAN ?= enzan
 PKG   := rtl/pkg/types_pkg.sv
@@ -1098,20 +1168,26 @@ libs/%/.created:
 
 # One stamp per library rather than one target per unit: within a library a hit is
 # all or nothing (4.4), so the library is the smallest thing make can rebuild.
-libs/pkg/.stamp: rtl/pkg.f | libs/pkg/.created
-	$(ENZAN) analyse $(UNIT) --out-lib libs/pkg -f rtl/pkg.f \
-	         --depfile libs/pkg/deps.d --depfile-target $@
-	@touch $@
-
-# The package is read for resolution and stored only in libs/pkg, so there is
-# exactly one of it to resolve against at elaboration (8.2).
+#
+# Neither IP library stores the package: each reads it for resolution only, so
+# there is exactly one of it to resolve against at elaboration (8.2).
 libs/uart/.stamp: rtl/uart.f | libs/uart/.created
 	$(ENZAN) analyse $(UNIT) --out-lib libs/uart -f rtl/uart.f --context $(PKG) \
 	         --depfile libs/uart/deps.d --depfile-target $@
 	@touch $@
 
-libs/tb/.stamp: rtl/tb.f | libs/tb/.created
-	$(ENZAN) analyse $(UNIT) --out-lib libs/tb -f rtl/tb.f --context $(PKG) \
+libs/spi/.stamp: rtl/spi.f | libs/spi/.created
+	$(ENZAN) analyse $(UNIT) --out-lib libs/spi -f rtl/spi.f --context $(PKG) \
+	         --depfile libs/spi/deps.d --depfile-target $@
+	@touch $@
+
+# The testbench's list names the package as a source of its own, so the package is
+# stored here, with the design that ties the two IPs together. The testbench
+# instantiates both, so it is analysed against both libraries, which reads their
+# sources (8.2) and names them in its dependency file.
+libs/tb/.stamp: rtl/tb.f libs/uart/.stamp libs/spi/.stamp | libs/tb/.created
+	$(ENZAN) analyse $(UNIT) --out-lib libs/tb -f rtl/tb.f \
+	         --in-lib libs/uart --in-lib libs/spi \
 	         --depfile libs/tb/deps.d --depfile-target $@
 	@touch $@
 
@@ -1119,8 +1195,8 @@ libs/tb/.stamp: rtl/tb.f | libs/tb/.created
 # prerequisite make knows about, which is enough, because nothing is built yet.
 -include $(wildcard libs/*/deps.d)
 
-IN     := --in-lib libs/pkg --in-lib libs/uart --in-lib libs/tb
-STAMPS := libs/pkg/.stamp libs/uart/.stamp libs/tb/.stamp
+IN     := --in-lib libs/uart --in-lib libs/spi --in-lib libs/tb
+STAMPS := libs/uart/.stamp libs/spi/.stamp libs/tb/.stamp
 
 sim: $(STAMPS)
 	$(ENZAN) run $(IN) --fst wave.fst tb
@@ -1135,10 +1211,12 @@ clean:
 	rm -rf libs
 ```
 
-Editing a file in `rtl/uart` rebuilds `libs/uart` and nothing else; editing
-`types_pkg.sv` rebuilds all three, because each named it. `make check` is the
-elaboration-only form of 8.1, which is what a CI job wants when it only needs to
-know that the design still builds.
+Editing a file in `rtl/tb` rebuilds `libs/tb` alone, though that analysis reads both
+IPs' sources again; editing one in `rtl/uart` rebuilds `libs/uart` and `libs/tb`,
+which read it, and leaves `libs/spi` alone; editing `types_pkg.sv` rebuilds all
+three, because each named it. None of these is cheaper than rebuilding one library
+holding the whole design. `make check` is the elaboration-only form of 8.1, which is
+what a CI job wants when it only needs to know that the design still builds.
 
 ### 8.4 The graphical front end
 
@@ -1581,6 +1659,15 @@ One-pixel rules — the grid, the ruler ticks, the line between rows — are
 writes them directly, where the stroker sets up a pen and a clip per call; on a
 wide window with a line per row it was a third of what the ruler cost, paid on
 every repaint.
+
+**The ruler's unit follows the zoom.** Its labels are written in the coarsest of
+s, ms, us, ns, ps and fs in which the step between ticks is at least a tenth of a
+unit, so a window zoomed out to microseconds reads `1.5us` rather than
+`1500000ps`. The unit is chosen once for the whole ruler, from the step, so every
+label on it is in the same unit; and a tenth is the finest it goes, so a label has
+at most one decimal place. It is computed on integers, never rounded. A cursor's
+label and the status bar keep the time precision, because there the reader wants
+the instant itself rather than a round number near it.
 
 Required features: multiple named cursors, cursor locking, zoom and pan, signal
 grouping, extracting a bit range of a signal into a separate displayed signal,
@@ -2635,12 +2722,12 @@ whose entries `make` can name and a boundary rule a user can follow, so that fin
 incrementality is a frontend change later rather than a redesign.
 
 **Exit:** the Makefile of 8.3 builds and simulates a design split across three
-libraries; editing one library's source rebuilds that library alone, editing a
-context file rebuilds every library that named it, and editing nothing rebuilds
-nothing; two libraries defining one name are reported rather than silently resolved;
-`enzan run --gui` opens a window on a design it elaborated, and closing that window
-ends the kernel, while closing a window that reached the kernel through
-`--gui --attach` leaves it running.
+libraries; editing one library's source rebuilds that library and the libraries
+analysed against it and no other, editing a context file rebuilds every library that
+named it, and editing nothing rebuilds nothing; two libraries defining one name are
+reported rather than silently resolved; `enzan run --gui` opens a window on a design
+it elaborated, and closing that window ends the kernel, while closing a window that
+reached the kernel through `--gui --attach` leaves it running.
 
 ### M3.1 — Analysis cost proportional to the design
 
@@ -2710,66 +2797,13 @@ testbenches above pass under Enzan; a design whose instance count is a
 parameter and whose ports are bits of one array simulates, while two drivers of one
 bit are still refused — a variable with an error and a net by resolving them.
 
-### M5.1 — Parameter-generic analysis
-
-**What this closes is a gap between this document and the code, not a new design.**
-2.1 already says analysis output is independent of any particular top level and
-that elaboration is what resolves parameters and generics; 4.1 already lists
-parameters among the things EIR-S describes. Analysis has never worked that way. A
-parameterised module is translated once per parameterisation, with the values baked
-into each unit's types and mangled into its name, so a unit exists only because
-something instantiated it with particular values.
-
-Two consequences follow from that, and they are the reason to do this rather than
-leave the gap open:
-
-- **A library is not reusable, only re-runnable.** A design analysed *against*
-  another library re-reads and re-analyses that library's sources, because the units
-  in it are specialisations of no use to a different instantiation (8.2). The library
-  saves nothing across the boundary; it is a file list with a cache attached.
-- **Analysis cost scales with distinct parameterisations.** M3.1 removed the cost
-  that scaled with *instances*; what remains is genuine work under the current design
-  and unnecessary work under this one — a hundred widths of one module are a hundred
-  translations of it.
-
-**The change.** EIR-S holds one unit per source module, carrying its formal
-parameters. An object's type carries its width as an expression over those
-parameters rather than as a number, and an instance carries the values it sets.
-Elaboration evaluates those expressions and materialises the concrete types, which
-is where 2.1 already says parameter resolution belongs. Everything downstream of
-elaboration — codegen, the runtime, the waveform database — sees what it sees today,
-because it only ever sees elaborated output.
-
-**Before M6, and that is the point of placing it here.** VHDL generics are this
-problem in another language, so an NVC adapter written against parameter-resolved
-EIR would be written twice.
-
-**Spike first, as M6 does.** slang is an elaborating front end: it type-checks a
-body in the context of an instance, because a type can depend on a parameter, and it
-does not offer a parameter-generic typed body. Whether one can be obtained — and
-what the alternative is if not — is the first question this milestone answers, and
-it is answered before the EIR change is committed to rather than discovered
-half way through it.
-
-**What this removes.** The specialisation naming of 8.2 exists only because
-specialisations are units; with generic units there is nothing to name. `--in-lib`
-on `analyse` stops needing to read the other library's sources, so the boundary rule
-of 8.2 loses its exception and `--context` narrows again. Those sections are rewritten
-by this milestone rather than extended.
-
-**Exit:** a library analysed once is instantiated at a width it has never seen
-without re-reading its sources; analysing a design with a hundred distinct
-parameterisations of one module costs what one of them costs; the `.f`-and-library
-Makefile of 8.3 still builds, and the conformance and design regression pass rates
-of 14.4 and 14.5 do not move.
-
 ### M6 — VHDL via NVC
 
 NVC integration spike first, to confirm the approach in 5.2 before committing
 to it; vendored pinned fork; NVC tree to EIR adapter; `std_logic` value model;
-VHDL generic and subtype elaboration; Enzan's own implementations of the
-predefined and foreign subprograms NVC's runtime would have resolved; VHDL
-simulation cycle; VHPI subset for cocotb.
+VHDL generic and subtype elaboration, with generics folded where the spike decides
+(5.2); Enzan's own implementations of the predefined and foreign subprograms NVC's
+runtime would have resolved; VHDL simulation cycle; VHPI subset for cocotb.
 
 **Exit:** NEORV32 simulates; the VUnit suite runs.
 
@@ -2800,10 +2834,9 @@ constraint solver); save and restore; multiple clock domain tooling; UVM.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| slang cannot yield a parameter-generic typed body | High — blocks M5.1, and a library stays a file list | Spike before committing to the EIR change (M5.1); the fallback is to keep specialisation in analysis and accept that libraries do not save work across a boundary |
 | NVC internal APIs drift or prove unusable as a frontend | High — blocks VHDL | Spike first in M6; pin the revision; thin adapter in one directory; documented co-simulation fallback (5.2) |
 | The predefined and foreign subprograms NVC's runtime resolved are a larger body of work than estimated | High — inflates M6 | Enumerate the set during the M6 spike by walking the analysed tree, before the milestone is planned (5.2) |
-| VHDL generic and subtype elaboration must be reimplemented rather than reused from NVC | Medium — inflates M6 | Sized by the M6 spike; the tree boundary is reconsidered if it proves worse than the alternative (5.2) |
+| VHDL generic and subtype elaboration must be reimplemented rather than reused from NVC | Medium — inflates M6 | Sized by the M6 spike, which also decides whether generics are folded by the adapter or by elaboration (5.2); the tree boundary is reconsidered if it proves worse than the alternative (5.2) |
 | A defect inherited from NVC's frontend is invisible to differential testing against NVC | High — silent wrong results | GHDL is the primary VHDL reference and both conformance suites are run (14.3, 14.4) |
 | Mixed-language delta semantics differ from commercial tools | High — silent wrong results | Specify explicitly (3.5); golden tests against references before declaring it working |
 | Event-driven interpretation misses the performance target | Medium | Bytecode VM from the start; JIT-ready EIR; continuous benchmarking from M1 |
@@ -2824,8 +2857,9 @@ same simulated time.
 **Elaboration** — building the instance tree and state layout for a specific
 top level. Not cacheable across designs.
 
-**Analysis** — compiling one design unit to EIR, independent of any top level.
-Cacheable and reusable.
+**Analysis** — compiling one design unit to EIR, independent of any top level;
+a parameterised SystemVerilog module once per parameterisation the design uses
+(2.1). Cacheable and reusable.
 
 **Region** — one of the ordered phases within a SystemVerilog time slot.
 

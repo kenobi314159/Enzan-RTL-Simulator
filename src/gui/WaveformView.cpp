@@ -676,7 +676,7 @@ void WaveformView::paintRuler(QPainter& painter) {
         painter.fillRect(QRect(column, ruler.bottom() - 4, 1, 5),
                          theme->color(ThemeColor::WaveRulerForeground));
         painter.drawText(column + 3, metrics.ascent() + 2,
-                         TimeAxis::format(time, kernelSession->timeScale()));
+                         TimeAxis::formatTick(time, step, kernelSession->timeScale()));
 
         // Guards against a step small enough that the loop would not terminate on overflow.
         if (time > runtime::NoTime - step) break;

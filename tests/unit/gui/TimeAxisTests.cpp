@@ -19,6 +19,7 @@ namespace {
 using enzan::gui::TimeAxis;
 using enzan::runtime::NoTime;
 using enzan::runtime::SimTime;
+using enzan::runtime::TimeScale;
 
 TimeAxis axisOf(int width, SimTime start, SimTime span) {
     TimeAxis axis;
@@ -76,6 +77,17 @@ TEST(TimeAxisTests, ZoomingInStopsAtOneUnit) {
 
     EXPECT_EQ(axis.span(), TimeAxis::MinimumSpan)
         << "zooming past a unit per pixel would be zooming into the gaps between instants";
+}
+
+TEST(TimeAxisTests, ZoomingOutFromOneUnitWidensTheView) {
+    // A step of 1.25 on a span of a few units is less than one unit more, and dropping the
+    // fraction would leave the span where it was and the view stuck zoomed in.
+    TimeAxis axis = axisOf(800, 0, TimeAxis::MinimumSpan);
+
+    for (SimTime span = TimeAxis::MinimumSpan; span < 100; span = axis.span()) {
+        axis.zoom(1.25, 400.0);
+        ASSERT_GT(axis.span(), span) << "zooming out did not widen a span of " << span;
+    }
 }
 
 TEST(TimeAxisTests, ZoomingOutDoesNotWrapPastTheEndOfTime) {
@@ -177,6 +189,52 @@ TEST(TimeAxisTests, AGridStepIsWideEnoughToLabel) {
     const SimTime step = axis.gridStep(90.0);
     const double pixels = axis.xOf(step) - axis.xOf(0);
     EXPECT_GE(pixels, 90.0) << "the labels would collide and the ruler would be unreadable";
+}
+
+TEST(TimeAxisTests, ATickIsLabelledInTheCoarsestUnitItsStepAllows) {
+    const TimeScale ps(-12);
+
+    EXPECT_EQ(TimeAxis::formatTick(3'000'000, 1'000'000, ps), "3us");
+    EXPECT_EQ(TimeAxis::formatTick(40'000'000'000'000, 20'000'000'000'000, ps), "40s");
+    EXPECT_EQ(TimeAxis::formatTick(7'000, 1'000, ps), "7ns");
+    EXPECT_EQ(TimeAxis::formatTick(0, 1'000'000'000, ps), "0ms");
+}
+
+TEST(TimeAxisTests, ATickNeedsAtMostOneDecimalPlace) {
+    // Half a unit reads better as 1.5us than as 1500ns, but a step of a twentieth would need
+    // two decimals, so the label drops to the finer unit instead.
+    const TimeScale ps(-12);
+
+    EXPECT_EQ(TimeAxis::formatTick(1'500'000, 500'000, ps), "1.5us");
+    EXPECT_EQ(TimeAxis::formatTick(1'000'000, 500'000, ps), "1us");
+    EXPECT_EQ(TimeAxis::formatTick(300'000, 100'000, ps), "0.3us");
+    EXPECT_EQ(TimeAxis::formatTick(150'000, 50'000, ps), "150ns");
+}
+
+TEST(TimeAxisTests, ATickFinerThanATenthOfANanosecondStaysInThePrecision) {
+    const TimeScale ps(-12);
+
+    EXPECT_EQ(TimeAxis::formatTick(250, 50, ps), "250ps");
+    EXPECT_EQ(TimeAxis::formatTick(7, 1, ps), "7ps");
+    EXPECT_EQ(TimeAxis::formatTick(9, 1, TimeScale(-15)), "9fs");
+}
+
+TEST(TimeAxisTests, ATickLabelIsExactFarIntoALongRun) {
+    // Integer arithmetic: a double would have started rounding these digits away.
+    const TimeScale fs(-15);
+
+    EXPECT_EQ(TimeAxis::formatTick(18'000'000'000'000'500, 500, fs), "18000000000000.5ps");
+}
+
+TEST(TimeAxisTests, ATickInAPrecisionWithNoNameIsShownInANamedUnit) {
+    // 100ps has no name of its own, but a tick of a tenth of a nanosecond does.
+    const TimeScale hundredPs(-10);
+
+    EXPECT_EQ(TimeAxis::formatTick(3, 1, hundredPs), "0.3ns");
+    EXPECT_EQ(TimeAxis::formatTick(20'000, 10'000, hundredPs), "2us");
+
+    // Ten seconds has no named unit at or below it to fall back to.
+    EXPECT_EQ(TimeAxis::formatTick(4, 1, TimeScale(1)), TimeAxis::format(4, TimeScale(1)));
 }
 
 TEST(TimeAxisTests, AWidthOfZeroDoesNotDivideByZero) {

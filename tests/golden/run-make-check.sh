@@ -37,7 +37,7 @@ EOF
 
 cat >rtl/tb.sv <<'EOF'
 `include "widths.svh"
-module tb;
+module tb #(parameter int Runs = 0);
     logic [`COUNTER_WIDTH-1:0] q;
     counter u_counter (.q(q));
     initial begin
@@ -64,7 +64,7 @@ libs/counter/.stamp: rtl/counter.f | libs/counter/.created
 	@touch $@
 
 libs/tb/.stamp: rtl/tb.f | libs/tb/.created
-	$(ENZAN) analyse --timescale ns --in-lib libs/counter --out-lib libs/tb -f rtl/tb.f \
+	$(ENZAN) analyse --timescale ns --in-lib libs/counter --out-lib libs/tb -f rtl/tb.f -G Runs=1 \
 	         --depfile libs/tb/deps.d --depfile-target $@
 	@touch $@
 
@@ -86,6 +86,8 @@ run_make() { make ENZAN="$enzan" "$@" 2>&1; }
 out=$(run_make sim) || { echo "$out" >&2; fail "the cold build did not run"; }
 grep -q 'PASS make q=15' <<<"$out" || fail "the simulation did not produce its check: $out"
 
+# libs/tb is analysed with a `-G`, which slang parses from text of its own: a dependency file
+# that named that text as a file would have make analyse here on every run.
 out=$(run_make sim) || { echo "$out" >&2; fail "the warm build failed"; }
 grep -q 'analyse' <<<"$out" && fail "nothing changed and make analysed anyway"
 

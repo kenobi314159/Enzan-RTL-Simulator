@@ -7,6 +7,7 @@
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Design.h"
+#include "eir/Serialization.h"
 #include "elab/ElaboratedDesign.h"
 #include "elab/Elaborator.h"
 #include "pli/VpiContext.h"
@@ -118,8 +119,20 @@ bool Session::analyse(const AnalysisRequest& request) {
     ordered.reserve(total);
     buffers.reserve(total);
 
+    // Each file once, however many times it is named. Two input libraries built on one IP both
+    // record its sources, and a file can be a source, a context file and a library's source
+    // at once; slang refuses a second buffer at one path and keeps both at two spellings of
+    // it, so a repeat is dropped here. Canonical, so that `./ip.sv` and `ip.sv` are one file,
+    // and the first naming keeps its role: a context file stays unstored.
+    std::set<std::filesystem::path> seen;
+
     // Context first, so that a package is in the compilation before whatever imports it.
     const auto read = [&](const std::filesystem::path& file) {
+        std::error_code failure;
+        std::filesystem::path key = std::filesystem::weakly_canonical(file, failure);
+        if (failure) key = file;
+        if (!seen.insert(std::move(key)).second) return true;
+
         const FileReadResult result = sources.readFile(file);
         if (!result.ok()) {
             reportFileReadFailure(diagnostics, file, result);
@@ -350,6 +363,13 @@ bool Session::elaborate(std::string_view topModule) {
         diagnostics.report(DiagCode::NothingAnalysed, SourceLocation());
         return false;
     }
+
+    // Two libraries built on one IP each hold the parameterisations they needed, and a design
+    // analysed here against a library reproduces the units it reads from that library's
+    // sources. Copies that are the same unit are one; any that differ stay ambiguous (8.2).
+    design->mergeIdenticalDefinitions([this](const eir::ModuleDefinition& definition) {
+        return eir::encodeContent(definition, sources);
+    });
 
     // Before anything new is built, so that a failed elaboration on a running design leaves nothing
     // half-replaced for the next command to find.

@@ -209,6 +209,84 @@ TEST(Design, AMangledParameterisationIsNotMistakenForAQualifiedName) {
     EXPECT_NE(design.findModule("work.leaf$1"), nullptr);
 }
 
+/// What `mergeIdenticalDefinitions` compares by in these tests: a unit's source name stands
+/// in for its content, so two copies agree exactly when their source names do.
+std::string sourceNameOf(const ModuleDefinition& definition) {
+    return definition.sourceName;
+}
+
+TEST(Design, CopiesOfOneUnitInTwoLibrariesAreOneDefinition) {
+    // Two libraries that each needed `fifo` at one width both store it.
+    Design design;
+    design.addModule(makeModule("fifo$W_8", "tb"));
+    design.addModule(makeModule("fifo$W_8", "other"));
+    design.mergeIdenticalDefinitions(sourceNameOf);
+
+    std::vector<std::string_view> ambiguity;
+    EXPECT_EQ(design.findModuleIndex("fifo$W_8", &ambiguity), 0U);
+    EXPECT_TRUE(ambiguity.empty());
+
+    // Each copy is kept, so a qualified name still finds its own.
+    EXPECT_EQ(design.findModuleIndex("other.fifo$W_8"), 1U);
+}
+
+TEST(Design, CopiesThatDifferStayAmbiguous) {
+    Design design;
+    design.addModule(makeModule("fifo", "acme"));
+    ModuleDefinition changed = makeModule("fifo", "local");
+    changed.sourceName = "fifo_v2";
+    design.addModule(std::move(changed));
+    design.mergeIdenticalDefinitions(sourceNameOf);
+
+    std::vector<std::string_view> ambiguity;
+    EXPECT_FALSE(design.findModuleIndex("fifo", &ambiguity).has_value());
+    EXPECT_EQ(ambiguity, std::vector<std::string_view>({"acme", "local"}));
+}
+
+TEST(Design, ACopyThatAgreesWithAnyEarlierOneIsNotAnotherChoice) {
+    Design design;
+    design.addModule(makeModule("fifo", "acme"));
+    ModuleDefinition changed = makeModule("fifo", "local");
+    changed.sourceName = "fifo_v2";
+    design.addModule(changed);
+    changed.library = "vendor";
+    design.addModule(std::move(changed));
+    design.mergeIdenticalDefinitions(sourceNameOf);
+
+    // Still ambiguous between the two that differ, and every library holding it is named.
+    std::vector<std::string_view> ambiguity;
+    EXPECT_FALSE(design.findModuleIndex("fifo", &ambiguity).has_value());
+    EXPECT_EQ(ambiguity, std::vector<std::string_view>({"acme", "local", "vendor"}));
+}
+
+TEST(Design, AParameterisedTopInTwoLibrariesIsOneChoice) {
+    // A top is named by its source name, so the copies must not count as two parameterisations.
+    Design design;
+    ModuleDefinition first = makeModule("tb$N_2", "one");
+    first.sourceName = "tb";
+    ModuleDefinition second = first;
+    second.library = "two";
+    design.addModule(std::move(first));
+    design.addModule(std::move(second));
+    design.mergeIdenticalDefinitions(sourceNameOf);
+
+    EXPECT_EQ(design.findSpecialisations("tb"), std::vector<std::uint32_t>({0}));
+}
+
+TEST(Design, ReplacingACopyForgetsThatItWasOne) {
+    // The replacement may differ, and nothing has compared it yet.
+    Design design;
+    design.addModule(makeModule("fifo", "acme"));
+    design.addModule(makeModule("fifo", "local"));
+    design.mergeIdenticalDefinitions(sourceNameOf);
+
+    ModuleDefinition again = makeModule("fifo", "local");
+    again.sourceName = "fifo_v2";
+    design.addModule(std::move(again));
+
+    EXPECT_FALSE(design.findModuleIndex("fifo").has_value());
+}
+
 TEST(Design, AUnitWithNoLibraryIsStillFound) {
     // A one-time analysis writes no library, so every unit carries an empty name.
     Design design;
