@@ -58,4 +58,17 @@ constexpr std::uint32_t SerializationFormatVersion = 38;
                                  const std::function<BufferId(std::string_view)>& resolveBuffer,
                                  std::vector<ModuleDefinition>& modules);
 
+/// Encodes what `definition` is, leaving out where it came from.
+///
+/// Two copies of one unit agree on this byte for byte however each reached the caller: one a
+/// session analysed, with its source locations, and one an input library decoded, without them
+/// (section 8.2). Anything else that differs — a width, a statement, a name — makes the bytes
+/// differ, so equal bytes are the same unit and not merely the same name.
+///
+/// The locations are left out by the route a library read takes: the unit is encoded, decoded
+/// without resolving a buffer, and encoded again, so nothing has to list where a unit keeps a
+/// location for this to stay right when a new one is added.
+[[nodiscard]] std::string encodeContent(const ModuleDefinition& definition,
+                                        const SourceManager& sources);
+
 } // namespace enzan::eir

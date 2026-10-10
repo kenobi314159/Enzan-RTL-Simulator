@@ -2,6 +2,7 @@
 
 #include "eir/Serialization.h"
 
+#include "common/Assert.h"
 #include "common/SourceManager.h"
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
@@ -718,6 +719,15 @@ bool decodeModules(std::string_view bytes,
 
     for (ModuleDefinition& definition : decoded) modules.push_back(std::move(definition));
     return true;
+}
+
+std::string encodeContent(const ModuleDefinition& definition, const SourceManager& sources) {
+    std::vector<ModuleDefinition> located;
+    const bool decoded = decodeModules(
+        encodeModules(std::span(&definition, 1), sources),
+        [](std::string_view) { return BufferId(); }, located);
+    ENZAN_ALWAYS_ASSERT(decoded && located.size() == 1, "a unit did not survive its own encoding");
+    return encodeModules(located, sources);
 }
 
 } // namespace enzan::eir
