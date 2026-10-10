@@ -1172,6 +1172,30 @@ TEST_F(FrontendTest, AnOverrideNamingNoParameterIsReported) {
     EXPECT_TRUE(reportedCode(DiagCode::UnusedParameterOverride));
 }
 
+TEST_F(FrontendTest, AParameterOverrideIsNotAFileRead) {
+    // slang parses each override from text of its own, in a buffer with a made-up name, and a
+    // dependency file naming it has a prerequisite that never exists, so `make` re-analyses on
+    // every run. The hierarchical form becomes a `defparam` and gets a buffer as well.
+    const std::filesystem::path header = directory / "width.svh";
+    std::ofstream(header) << "`define DEPTH 2\n";
+    const std::filesystem::path source = directory / "design.sv";
+    std::ofstream(source) << "`include \"width.svh\"\n"
+                             "module leaf #(parameter int D = `DEPTH); endmodule\n"
+                             "module top #(parameter int W = 4); leaf u(); endmodule\n";
+
+    std::vector<std::filesystem::path> read;
+    enzan::frontend::sv::Options options;
+    options.files.push_back(source);
+    options.includeDirectories.emplace_back(directory);
+    options.topModules.emplace_back("top");
+    options.parameterOverrides = {"W=9", "top.u.D=3"};
+    options.filesRead = &read;
+
+    ASSERT_NE(enzan::frontend::sv::analyse(options, sources, engine), nullptr)
+        << consumer.messages.front();
+    EXPECT_EQ(read, (std::vector<std::filesystem::path>{source, header}));
+}
+
 TEST_F(FrontendTest, FoldsAComparisonOfConstantTimes) {
     // `2ps` is a real; with a parameter on the other side the comparison is a constant.
     const auto design = analyse(R"(

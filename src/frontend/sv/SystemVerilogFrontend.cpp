@@ -1646,8 +1646,14 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         // Sorted, because slang hands them back in whatever order it opened them and section
         // 3.8 puts observable ordering beyond that. Duplicates dropped: one file included
         // twice is one prerequisite.
+        //
+        // Only the sources handed in and what they included are files. slang parses each `-G`
+        // from text of its own, in a buffer it names `<unnamed_buffer0>`, and a prerequisite
+        // that no file will ever satisfy makes `make` rebuild on every run.
         std::set<std::filesystem::path> opened;
         for (const slang::BufferID buffer : slangSources.getAllBuffers()) {
+            if (!buffers.contains(buffer) && !slangSources.getIncludedFrom(buffer).valid())
+                continue;
             const std::filesystem::path& path = slangSources.getFullPath(buffer);
             if (!path.empty()) opened.insert(path);
         }
