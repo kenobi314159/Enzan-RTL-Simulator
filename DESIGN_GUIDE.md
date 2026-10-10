@@ -998,6 +998,16 @@ loaded first is the failure mode 1.2 ranks worst, and it is what happens today â
 `Design::findModule` takes a bare name and `addModule` is additive, so **EIR MUST
 carry the logical library on every unit** for any of this to hold.
 
+**Two copies of one unit are not two definitions.** Libraries analysed against one
+IP each store the parameterisations they needed (below), so two of them can both hold
+`fifo$Width_8`; and a design analysed and run in one go against a library reproduces
+the units it reads from that library's sources. Where every copy of a name encodes
+identically once its source locations are left out, the copies are one unit, and the
+name resolves. A copy that differs in anything, as one from another version of the
+source or from other defines can, or another module that happens to share the name, is
+a different unit, and the name is an error as above. Comparing what the units are rather than where they came
+from is what makes this safe: a stale library is refused, not chosen.
+
 **An entry's path MUST be derivable from the source it holds**, not from a hash of
 that source's text. Entries are per source file (4.4), because that is what the
 frontend produces in one piece, so the name comes from the file rather than from any
@@ -1031,8 +1041,7 @@ parameterised module becomes one unit per parameterisation, so a unit is not bak
 with the parameters its library happened to be analysed with: the design that needs
 `Width=8` creates that specialisation from the declarations it read, and stores it in
 its own library. A specialisation the input library already holds is **not** stored a
-second time, because two libraries defining one name is exactly what an unqualified
-reference cannot resolve.
+second time, since a second copy of it would only be a second thing to keep current.
 
 This is what makes a library usable rather than what makes it save work. Reading the
 other library's sources means re-analysing them, so the boundary costs what it would

@@ -7,6 +7,7 @@
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Design.h"
+#include "eir/Serialization.h"
 #include "elab/ElaboratedDesign.h"
 #include "elab/Elaborator.h"
 #include "pli/VpiContext.h"
@@ -362,6 +363,13 @@ bool Session::elaborate(std::string_view topModule) {
         diagnostics.report(DiagCode::NothingAnalysed, SourceLocation());
         return false;
     }
+
+    // Two libraries built on one IP each hold the parameterisations they needed, and a design
+    // analysed here against a library reproduces the units it reads from that library's
+    // sources. Copies that are the same unit are one; any that differ stay ambiguous (8.2).
+    design->mergeIdenticalDefinitions([this](const eir::ModuleDefinition& definition) {
+        return eir::encodeContent(definition, sources);
+    });
 
     // Before anything new is built, so that a failed elaboration on a running design leaves nothing
     // half-replaced for the next command to find.

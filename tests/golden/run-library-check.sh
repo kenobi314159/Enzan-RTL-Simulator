@@ -179,9 +179,17 @@ both=$("$enzan" run --in-lib libs/one --in-lib libs/two --timescale ns two_tb) \
     || fail "two libraries could not be combined"
 grep -q 'PASS split' <<<"$both" || fail "the combined run did not reach the design's check"
 
-# One name in two libraries is reported rather than silently resolved (8.2).
+# One name for two different units in two libraries is reported rather than silently resolved
+# (8.2). A different body, since two copies of one unit are not a collision.
+mkdir -p split/clash
+cat >split/clash/two.sv <<'EOF'
+module two_tb;
+    initial begin $display("PASS split, the other one"); $finish; end
+endmodule
+EOF
 "$enzan" lib create libs/clash >/dev/null
-"$enzan" analyse --timescale ns --out-lib libs/clash split/two.sv || fail "libs/clash could not be analysed"
+"$enzan" analyse --timescale ns --out-lib libs/clash split/clash/two.sv \
+    || fail "libs/clash could not be analysed"
 
 clash=$("$enzan" run --in-lib libs/two --in-lib libs/clash --timescale ns two_tb 2>&1 || true)
 [[ $(status_of "$enzan" run --in-lib libs/two --in-lib libs/clash --timescale ns two_tb) -ne 0 ]] \
@@ -269,6 +277,62 @@ EOF
 both_output=$("$enzan" run --in-lib libs/pc --in-lib libs/pw --in-lib libs/pb --timescale ns \
                   pboth_tb) || fail "a design over two libraries recording one source did not run"
 grep -q 'shared source ok' <<<"$both_output" || fail "the shared-source run did not check out"
+
+# Two libraries analysed against libs/pc alone, each needing pcounter at a width libs/pc lacks,
+# both store that parameterisation. They are copies of one unit, and a design using both runs.
+cat >par/left.sv <<'EOF'
+module pleft (output logic [15:0] q);
+    pcounter #(.Width(16)) u(.q(q));
+endmodule
+EOF
+cat >par/right.sv <<'EOF'
+module pright (output logic [15:0] q);
+    pcounter #(.Width(16)) u(.q(q));
+endmodule
+EOF
+cat >par/sides.sv <<'EOF'
+module psides_tb;
+    logic [15:0] left, right;
+    pleft u_left(.q(left));
+    pright u_right(.q(right));
+    initial begin
+        #1;
+        if (left !== 16'hFFFF || right !== 16'hFFFF) $fatal(1, "FAIL library: %0h %0h", left, right);
+        $display("sibling copies ok");
+        $finish;
+    end
+endmodule
+EOF
+for side in left right; do
+    "$enzan" lib create "libs/p$side" >/dev/null || fail "libs/p$side could not be created"
+    "$enzan" analyse --in-lib libs/pc --out-lib "libs/p$side" "par/$side.sv" \
+        || fail "the $side library could not be analysed"
+    "$enzan" lib list "libs/p$side" | grep -q 'pcounter\$Width_16' \
+        || fail "the $side library does not hold the parameterisation it created"
+done
+"$enzan" lib create libs/psides >/dev/null || fail "libs/psides could not be created"
+"$enzan" analyse --in-lib libs/pc --in-lib libs/pleft --in-lib libs/pright --out-lib libs/psides \
+    par/sides.sv || fail "a design over two sibling libraries could not be analysed"
+sides_output=$("$enzan" run --in-lib libs/pc --in-lib libs/pleft --in-lib libs/pright \
+                   --in-lib libs/psides --timescale ns psides_tb) \
+    || fail "two libraries holding copies of one parameterisation could not be used together"
+grep -q 'sibling copies ok' <<<"$sides_output" || fail "the sibling-library run did not check out"
+
+# Analysing and running in one go against a library reproduces the library's own units from
+# its sources, which are copies of what it holds rather than rivals to it.
+oneshot_output=$("$enzan" --in-lib libs/pc --timescale ns --top pwrap_tb par/wrap.sv) \
+    || fail "a design analysed and run in one go against a library did not run"
+grep -q 'parametrisable ok' <<<"$oneshot_output" || fail "the one-go run did not check out"
+
+# A copy that differs is a different unit under the same name, and stays refused.
+mkdir -p par/fork
+sed 's/initial q = .1;/initial q = '"'"'0;/' par/counter.sv >par/fork/counter.sv
+"$enzan" lib create libs/pfork >/dev/null || fail "libs/pfork could not be created"
+"$enzan" analyse --timescale ns --out-lib libs/pfork par/fork/counter.sv \
+    || fail "the forked counter could not be analysed"
+[[ $(status_of "$enzan" run --in-lib libs/pc --in-lib libs/pfork --in-lib libs/pw \
+         --timescale ns pwrap_tb) -eq 2 ]] \
+    || fail "two different units under one name were not refused"
 
 # --- the socket a served kernel binds ---------------------------------------------------------------
 
