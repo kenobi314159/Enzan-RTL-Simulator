@@ -249,6 +249,27 @@ grep -q 'parametrisable ok' <<<"$par_output" || fail "the parametrised run did n
 "$enzan" run --in-lib libs/pw --in-lib libs/pc --timescale ns pwrap_tb >/dev/null \
     || fail "the libraries could not be given in the other order"
 
+# libs/pw stored a parameterisation of pcounter, so it records counter.sv among its sources as
+# libs/pc does. A design analysed against both reads that file once, not twice.
+cat >par/both.sv <<'EOF'
+module pboth_tb;
+    logic [7:0] wide;
+    pcounter #(.Width(8)) u_wide(.q(wide));
+    initial begin
+        #1;
+        if (wide !== 8'hFF) $fatal(1, "FAIL library: wide=%0h", wide);
+        $display("shared source ok");
+        $finish;
+    end
+endmodule
+EOF
+"$enzan" lib create libs/pb >/dev/null || fail "libs/pb could not be created"
+"$enzan" analyse --in-lib libs/pc --in-lib libs/pw --out-lib libs/pb par/both.sv \
+    || fail "a design could not be analysed against two libraries recording one source"
+both_output=$("$enzan" run --in-lib libs/pc --in-lib libs/pw --in-lib libs/pb --timescale ns \
+                  pboth_tb) || fail "a design over two libraries recording one source did not run"
+grep -q 'shared source ok' <<<"$both_output" || fail "the shared-source run did not check out"
+
 # --- the socket a served kernel binds ---------------------------------------------------------------
 
 # A signal that is not handled ends a process without running a destructor, so the listener's own

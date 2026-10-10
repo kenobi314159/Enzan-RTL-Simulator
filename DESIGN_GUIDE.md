@@ -1016,6 +1016,12 @@ declaration however it was analysed before, and EIR does not feed back into slan
 Paths rather than text, because duplicating the RTL into every library that uses it
 would make a library a copy of the design instead of an index of it.
 
+**A file is analysed once however often it is named.** Two libraries built on one IP
+both record its sources, and a file can be a source, a context file and a library's
+source at once. Two readings of one file would define every module in it twice, so a
+repeat — by path, after `.`, `..` and symbolic links are resolved — is dropped, and the
+first naming keeps its role: a file named as context stays unstored.
+
 So `--in-lib` on `analyse` means *read these libraries' declarations*, and `--in-lib`
 on `run` means *resolve against these libraries' units*. The two are the same option
 because they name the same thing; what differs is which half of it is wanted.

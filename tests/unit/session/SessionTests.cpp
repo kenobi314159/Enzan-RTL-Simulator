@@ -187,6 +187,30 @@ TEST_F(SessionTest, ASecondAnalysisKeepsWhatTheFirstAnalysed) {
     EXPECT_TRUE(session.elaborate("tb")) << firstMessage();
 }
 
+TEST_F(SessionTest, AFileNamedTwiceIsAnalysedOnce) {
+    // slang refuses a second buffer at one path, and keeps both at two spellings of it, which
+    // would define every module in the file twice.
+    workspace.write("counter.sv", CounterSource);
+
+    Session::AnalysisRequest request;
+    request.files.push_back(workspace / "counter.sv");
+    request.files.push_back(workspace / "." / "counter.sv");
+    request.libraryFiles.push_back(workspace / "counter.sv");
+    request.contextFiles.push_back(workspace / "counter.sv");
+
+    ASSERT_TRUE(session.analyse(request)) << firstMessage();
+    EXPECT_TRUE(consumer.received.empty()) << firstMessage();
+    EXPECT_TRUE(session.elaborate("tb")) << firstMessage();
+}
+
+TEST_F(SessionTest, AFileASecondAnalysisNamesAgainIsAnalysedOnce) {
+    // A session accumulates what each analysis names, so naming a file again is a repeat too.
+    ASSERT_TRUE(analyse("counter.sv", CounterSource)) << firstMessage();
+    ASSERT_TRUE(analyse("counter.sv", CounterSource)) << firstMessage();
+    EXPECT_TRUE(consumer.received.empty()) << firstMessage();
+    EXPECT_TRUE(session.elaborate("tb")) << firstMessage();
+}
+
 // ---------------------------------------------------------------------------
 // Running
 // ---------------------------------------------------------------------------
