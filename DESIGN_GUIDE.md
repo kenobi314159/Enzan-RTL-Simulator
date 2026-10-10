@@ -1148,8 +1148,10 @@ out of it: the library is the unit of rebuild, the `.f` file is the only
 prerequisite written by hand, and the two `run` forms differ by nothing but a flag.
 
 It is split into three libraries to show the boundary of 8.2 at work, which is the
-shape for a design with names to keep apart. A design without that reason is better
-built as one library (8.2): the same Makefile with one stamp and one `.f` file.
+shape for a design with names to keep apart: two IP blocks, a UART and an SPI
+controller, that share a package and do not depend on each other, and a testbench
+that instantiates both. A design without that reason is better built as one library
+(8.2): the same Makefile with one stamp and one `.f` file.
 
 ```make
 ENZAN ?= enzan
@@ -1166,31 +1168,35 @@ libs/%/.created:
 
 # One stamp per library rather than one target per unit: within a library a hit is
 # all or nothing (4.4), so the library is the smallest thing make can rebuild.
-libs/pkg/.stamp: rtl/pkg.f | libs/pkg/.created
-	$(ENZAN) analyse $(UNIT) --out-lib libs/pkg -f rtl/pkg.f \
-	         --depfile libs/pkg/deps.d --depfile-target $@
-	@touch $@
-
-# The package is read for resolution and stored only in libs/pkg, so there is
-# exactly one of it to resolve against at elaboration (8.2).
+#
+# Neither IP library stores the package: each reads it for resolution only, so
+# there is exactly one of it to resolve against at elaboration (8.2).
 libs/uart/.stamp: rtl/uart.f | libs/uart/.created
 	$(ENZAN) analyse $(UNIT) --out-lib libs/uart -f rtl/uart.f --context $(PKG) \
 	         --depfile libs/uart/deps.d --depfile-target $@
 	@touch $@
 
-# The testbench instantiates the UART, so it is analysed against libs/uart, which
-# reads that library's sources (8.2) and names them in its dependency file.
-libs/tb/.stamp: rtl/tb.f libs/uart/.stamp | libs/tb/.created
-	$(ENZAN) analyse $(UNIT) --out-lib libs/tb -f rtl/tb.f --context $(PKG) \
-	         --in-lib libs/uart --depfile libs/tb/deps.d --depfile-target $@
+libs/spi/.stamp: rtl/spi.f | libs/spi/.created
+	$(ENZAN) analyse $(UNIT) --out-lib libs/spi -f rtl/spi.f --context $(PKG) \
+	         --depfile libs/spi/deps.d --depfile-target $@
+	@touch $@
+
+# The testbench's list names the package as a source of its own, so the package is
+# stored here, with the design that ties the two IPs together. The testbench
+# instantiates both, so it is analysed against both libraries, which reads their
+# sources (8.2) and names them in its dependency file.
+libs/tb/.stamp: rtl/tb.f libs/uart/.stamp libs/spi/.stamp | libs/tb/.created
+	$(ENZAN) analyse $(UNIT) --out-lib libs/tb -f rtl/tb.f \
+	         --in-lib libs/uart --in-lib libs/spi \
+	         --depfile libs/tb/deps.d --depfile-target $@
 	@touch $@
 
 # Every file each analysis read. Until these exist a `.f` file is the only
 # prerequisite make knows about, which is enough, because nothing is built yet.
 -include $(wildcard libs/*/deps.d)
 
-IN     := --in-lib libs/pkg --in-lib libs/uart --in-lib libs/tb
-STAMPS := libs/pkg/.stamp libs/uart/.stamp libs/tb/.stamp
+IN     := --in-lib libs/uart --in-lib libs/spi --in-lib libs/tb
+STAMPS := libs/uart/.stamp libs/spi/.stamp libs/tb/.stamp
 
 sim: $(STAMPS)
 	$(ENZAN) run $(IN) --fst wave.fst tb
@@ -1205,12 +1211,12 @@ clean:
 	rm -rf libs
 ```
 
-Editing a file in `rtl/tb` rebuilds `libs/tb` alone, though that analysis reads the
-UART's sources again; editing one in `rtl/uart` rebuilds `libs/uart` and `libs/tb`,
-which read it; editing `types_pkg.sv` rebuilds all three, because each named it.
-None of these is cheaper than rebuilding one library holding the whole design.
-`make check` is the elaboration-only form of 8.1, which is what a CI job wants when
-it only needs to know that the design still builds.
+Editing a file in `rtl/tb` rebuilds `libs/tb` alone, though that analysis reads both
+IPs' sources again; editing one in `rtl/uart` rebuilds `libs/uart` and `libs/tb`,
+which read it, and leaves `libs/spi` alone; editing `types_pkg.sv` rebuilds all
+three, because each named it. None of these is cheaper than rebuilding one library
+holding the whole design. `make check` is the elaboration-only form of 8.1, which is
+what a CI job wants when it only needs to know that the design still builds.
 
 ### 8.4 The graphical front end
 
@@ -2716,12 +2722,12 @@ whose entries `make` can name and a boundary rule a user can follow, so that fin
 incrementality is a frontend change later rather than a redesign.
 
 **Exit:** the Makefile of 8.3 builds and simulates a design split across three
-libraries; editing one library's source rebuilds that library alone, editing a
-context file rebuilds every library that named it, and editing nothing rebuilds
-nothing; two libraries defining one name are reported rather than silently resolved;
-`enzan run --gui` opens a window on a design it elaborated, and closing that window
-ends the kernel, while closing a window that reached the kernel through
-`--gui --attach` leaves it running.
+libraries; editing one library's source rebuilds that library and the libraries
+analysed against it and no other, editing a context file rebuilds every library that
+named it, and editing nothing rebuilds nothing; two libraries defining one name are
+reported rather than silently resolved; `enzan run --gui` opens a window on a design
+it elaborated, and closing that window ends the kernel, while closing a window that
+reached the kernel through `--gui --attach` leaves it running.
 
 ### M3.1 — Analysis cost proportional to the design
 
