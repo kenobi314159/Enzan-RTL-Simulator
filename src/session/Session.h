@@ -110,6 +110,12 @@ public:
 
     [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
 
+    /// Sets where VHDL's standard libraries are, for a program that does not keep them beside
+    /// itself; by default they are where `frontend::vhdl::standardLibraryDirectory` says.
+    void setVhdlLibraryDirectory(std::filesystem::path directory) {
+        vhdlLibraries = std::move(directory);
+    }
+
     /// Sets the delta cycles allowed at one timestamp. Takes effect at the next elaboration.
     void setDeltaLimit(std::uint32_t limit) noexcept { deltaLimit = limit; }
 
@@ -144,6 +150,14 @@ public:
 
         /// Top-level parameter overrides, each `NAME=VALUE`.
         std::vector<std::string> parameters;
+
+        /// The top level the design will be elaborated from, when it is known.
+        ///
+        /// VHDL's adapter translates the hierarchy under its top rather than every unit analysed,
+        /// so that a unit nothing instantiates cannot stop a design for using something the
+        /// adapter lacks (DESIGN_GUIDE.md section 5.2); without one it translates every entity
+        /// that nothing instantiates. SystemVerilog's analysis does not use it.
+        std::string top;
     };
 
     /// Analyses `request` together with everything analysed before it.
@@ -158,6 +172,11 @@ public:
     /// is analysed and every entry rewritten.
     bool analyse(const AnalysisRequest& request);
 
+private:
+    /// `analyse` for a design whose sources are VHDL.
+    bool analyseVhdl(const AnalysisRequest& request);
+
+public:
     [[nodiscard]] bool hasDesign() const noexcept { return design != nullptr; }
 
     /// Every file the last `analyse` read: the sources, the files they included, and the
@@ -436,6 +455,12 @@ private:
     std::vector<std::string> scopes;
 
     runtime::TimeScale scale;
+
+    /// True when the unit was chosen, by `--timescale` or by a library holding units, rather than
+    /// left at its default: a VHDL design then counts in it instead of in femtoseconds.
+    bool scaleChosen = false;
+
+    std::filesystem::path vhdlLibraries;
     runtime::RunStatus status = runtime::RunStatus::Quiescent;
     std::uint32_t deltaLimit = 10'000;
     std::uint32_t seed = 0;

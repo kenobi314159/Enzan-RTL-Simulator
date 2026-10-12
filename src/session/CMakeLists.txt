@@ -13,3 +13,6 @@ enzan_add_component(
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   target_link_libraries(enzan_session PRIVATE enzan::frontend_sv)
 endif()
+if(ENZAN_ENABLE_VHDL)
+  target_link_libraries(enzan_session PRIVATE enzan::frontend_vhdl)
+endif()

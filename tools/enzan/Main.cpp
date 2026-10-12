@@ -34,7 +34,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+// Simulating needs a frontend to analyse with, and either language's will do.
+#if defined(ENZAN_WITH_SYSTEMVERILOG) || defined(ENZAN_WITH_VHDL)
+#define ENZAN_WITH_FRONTEND
+#endif
+
+#ifdef ENZAN_WITH_FRONTEND
 #include "ipc/KernelServer.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
@@ -580,7 +585,7 @@ std::filesystem::path frontEndProgram() {
     return "enzan-gui";
 }
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
 
 /// The socket a signal handler has to remove, and nothing else.
 ///
@@ -620,7 +625,7 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
     }
 }
 
-#endif // ENZAN_WITH_SYSTEMVERILOG
+#endif // ENZAN_WITH_FRONTEND
 
 /// The window's own options, as the front end spells them.
 ///
@@ -667,7 +672,7 @@ std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::exit(static_cast<int>(ExitStatus::Usage));
 }
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
 
 /// Starts a window attached to `socketPath`, and returns its process id or -1.
 ///
@@ -699,7 +704,7 @@ std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::_Exit(static_cast<int>(ExitStatus::Usage));
 }
 
-#endif // ENZAN_WITH_SYSTEMVERILOG
+#endif // ENZAN_WITH_FRONTEND
 
 /// Replaces this process with a window attached to an already-listening kernel.
 ///
@@ -737,10 +742,11 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
         request.parameters.push_back(parameter);
 
     request.contextFiles = invocation.contextFiles;
+    request.top = invocation.topModule;
     return true;
 }
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
 
 /// Builds the session every path shares: analysis and elaboration, once.
 ///
@@ -944,9 +950,9 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     return ExitStatus::Success;
 }
 
-#endif // ENZAN_WITH_SYSTEMVERILOG
+#endif // ENZAN_WITH_FRONTEND
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
 
 /// Writes a `make`-style dependency file naming every file the analysis read (8.3).
 ///
@@ -988,7 +994,7 @@ bool writeDependencyFile(const Invocation& invocation, const enzan::session::Ses
     return false;
 }
 
-#endif // ENZAN_WITH_SYSTEMVERILOG
+#endif // ENZAN_WITH_FRONTEND
 
 /// `enzan lib create|list|clean`.
 ExitStatus runLibCommand(const Invocation& invocation, enzan::DiagnosticEngine& diagnostics) {
@@ -1185,7 +1191,7 @@ int main(int argc, char** argv) {
         return static_cast<int>(printExpandedSources(invocation, sources, diagnostics));
     }
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
     if (invocation.command == Command::Analyse) {
         enzan::session::Session session(sources, diagnostics);
         const bool analysed = analyseOnly(invocation, session, sources, diagnostics);
@@ -1212,7 +1218,8 @@ int main(int argc, char** argv) {
     // Building without the frontend is a legitimate configuration — it is what the CI build
     // matrix uses — so it must fail with the reason rather than with a link error.
     diagnostics.report(enzan::DiagCode::NotYetImplemented, enzan::SourceLocation(),
-                       "simulation in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF");
+                       "simulation in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF "
+                       "and -DENZAN_ENABLE_VHDL=OFF");
     return static_cast<int>(ExitStatus::AnalysisFailed);
 #endif
 }

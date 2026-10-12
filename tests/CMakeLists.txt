@@ -6,8 +6,11 @@ include(GoogleTest)
 
 add_subdirectory(unit)
 
-# Golden tests need the simulator, so they exist only when the frontend does.
+# Golden tests need the simulator, so they exist only when a frontend does.
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   add_subdirectory(golden)
+endif()
+if(ENZAN_ENABLE_VHDL)
+  add_subdirectory(golden/vhdl)
 endif()
 # add_subdirectory(conformance)  # M5 — sv-tests, ivtest harnesses

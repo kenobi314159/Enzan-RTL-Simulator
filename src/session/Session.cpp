@@ -18,8 +18,12 @@
 #ifdef ENZAN_WITH_SYSTEMVERILOG
 #include "frontend/sv/SystemVerilogFrontend.h"
 #endif
+#ifdef ENZAN_WITH_VHDL
+#include "frontend/vhdl/VhdlFrontend.h"
+#endif
 
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <map>
 #include <set>
@@ -28,6 +32,14 @@
 namespace enzan::session {
 
 namespace {
+
+/// True when `file` is named as a VHDL source is: `.vhd` or `.vhdl`, in any case.
+bool isVhdlSource(const std::filesystem::path& file) {
+    std::string extension = file.extension().string();
+    for (char& character : extension)
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    return extension == ".vhd" || extension == ".vhdl";
+}
 
 /// Matches `text` against a glob of `*` and `?`.
 ///
@@ -108,6 +120,8 @@ bool Session::analyse(const AnalysisRequest& request) {
         diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
         return false;
     }
+
+    if (std::ranges::any_of(files, isVhdlSource)) return analyseVhdl(request);
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
     // Read here rather than by the frontend, so that each file has exactly one buffer: the
@@ -222,6 +236,67 @@ bool Session::analyse(const AnalysisRequest& request) {
 #endif
 }
 
+bool Session::analyseVhdl(const AnalysisRequest& request) {
+#ifdef ENZAN_WITH_VHDL
+    if (!std::ranges::all_of(files, isVhdlSource) || !contextFiles.empty()
+        || !libraryFiles.empty()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "a design mixing VHDL and SystemVerilog sources");
+        return false;
+    }
+    if (library.isOpen() || !inputLibraries.empty()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "analysing VHDL into an Enzan library, or against one");
+        return false;
+    }
+    if (!parameters.empty()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "-G for a VHDL top level");
+        return false;
+    }
+
+    // VHDL counts time in femtoseconds, its resolution limit, and a design is simulated in the
+    // finest unit anything in it asks for (section 3.1), unless `--timescale` said otherwise.
+    if (!scaleChosen) scale = runtime::TimeScale(runtime::FinestTimeExponent);
+
+    frontend::vhdl::DesignOptions options;
+    std::set<std::filesystem::path> seen;
+    for (const std::filesystem::path& file : files) {
+        std::error_code failure;
+        std::filesystem::path key = std::filesystem::weakly_canonical(file, failure);
+        if (failure) key = file;
+        if (!seen.insert(std::move(key)).second) continue;
+
+        const FileReadResult result = sources.readFile(file);
+        if (!result.ok()) {
+            reportFileReadFailure(diagnostics, file, result);
+            return false;
+        }
+        options.units.sources.push_back(result.buffer);
+    }
+    options.units.work = frontend::vhdl::UnitLibrary{.name = "work", .directory = {}};
+    options.units.searchDirectories.push_back(
+        vhdlLibraries.empty() ? frontend::vhdl::standardLibraryDirectory() : vhdlLibraries);
+    options.top = request.top;
+    options.timeUnitExponent = scale.precisionExponent();
+
+    std::unique_ptr<eir::Design> analysed = frontend::vhdl::analyse(options, sources, diagnostics);
+    if (analysed == nullptr) return false;
+
+    design = std::move(analysed);
+    loadedFromLibrary = false;
+    lastFilesRead.assign(files.begin(), files.end());
+    std::ranges::sort(lastFilesRead);
+    lastFilesRead.erase(std::ranges::unique(lastFilesRead).begin(), lastFilesRead.end());
+    return true;
+#else
+    static_cast<void>(request);
+    diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                       "VHDL analysis in a build configured with -DENZAN_ENABLE_VHDL=OFF");
+    return false;
+#endif
+}
+
 bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
     // Every open library that holds units, with its unit: the output library as well as the
     // inputs, since analysing into a library adds to what it holds.
@@ -245,6 +320,7 @@ bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
 
     if (holding.empty()) {
         scale = requested.value_or(runtime::TimeScale());
+        scaleChosen = requested.has_value();
         return true;
     }
 
@@ -256,6 +332,7 @@ bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
         return false;
     }
     scale = unit;
+    scaleChosen = true;
     return true;
 }
 

@@ -91,6 +91,13 @@ gtkwave wave.fst
 `--vcd` writes a VCD instead, and both may be given at once. Prefer FST unless you want to read or
 diff the file yourself: it is far smaller on a real design and a viewer can seek in it.
 
+A VHDL design runs the same way, from `.vhd` or `.vhdl` files given in the order VHDL analyses
+them; it counts time in femtoseconds unless `--timescale` says otherwise:
+
+```sh
+enzan --top tb counter.vhd counter_tb.vhd
+```
+
 `enzan --help` lists the options.
 
 ### Running a simulation under the GUI
@@ -214,7 +221,10 @@ arrays, `real`, `string` and structs, which Enzan does not analyse yet.
 | Driver resolution, multiple drivers per signal | not yet — M5 |
 | VPI, and cocotb testbenches through it | yes — modules, generate blocks, nets, variables, bits, parameters; every callback cocotb uses |
 | `` `timescale `` and `timeunit` | not yet — every delay is counted in the `--timescale` unit |
-| The Processes and Source windows, VHDL | not yet — M6 |
+| VHDL: entities, architectures, processes, scalar types, `wait`, `assert`, `report` | yes — M6 is under way |
+| VHDL: arrays, records, `std_logic`, `numeric_std`, subprograms, packages | not yet — reported by name |
+| A design mixing VHDL and SystemVerilog | not yet — M7 |
+| The Processes and Source windows | not yet — M6 |
 
 Anything unsupported is reported with a source location and the construct named, never
 mistranslated: a partially translated design would simulate and give the wrong answer, which is
