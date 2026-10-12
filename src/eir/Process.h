@@ -49,6 +49,11 @@ enum class SysTaskKind : std::uint8_t {
     /// follow (IEEE 1800 section 21.4).
     ReadMemHex,
     ReadMemBinary,
+    /// VHDL's `report`, and its `assert` when the condition is false: the first argument is the
+    /// severity, as the position of `std.standard.severity_level` (note, warning, error,
+    /// failure), and the format string with the rest is the message. A failure stops the run,
+    /// as GHDL's default does; an error is reported and the run goes on to fail at its end.
+    Report,
 
     // System functions, run by SysFunction, which have a result.
 
@@ -321,12 +326,24 @@ struct Body {
 struct Process : Body {
     ProcessKind kind = ProcessKind::Always;
 
+    /// True when every object the process writes, it drives, as a continuous assignment drives
+    /// its target, rather than merely writing it as a procedural block does.
+    ///
+    /// A VHDL process is one (IEEE 1076 section 14.7.2): each signal it assigns has a driver of
+    /// its own in that process, so two processes assigning one unresolved signal are an error and
+    /// not a race the last write wins. Elaboration treats its writes as it treats a continuous
+    /// assignment's (DESIGN_GUIDE.md section 3.7).
+    bool drivesSignals = false;
+
     /// Explicit sensitivity. Empty for `initial`, `final` and `always_comb`, whose
     /// triggering is derived from the kind and the read set instead.
     std::vector<SensitivityEntry> sensitivity;
 
     /// The event lists `WaitEvents` waits on, by index: `@(posedge a or negedge b)` inside a
     /// body is one, and resumes on whichever of its entries happens first.
+    ///
+    /// An empty list waits for nothing, so the process never resumes: VHDL's `wait;`, which is
+    /// how a testbench process ends.
     std::vector<std::vector<SensitivityEntry>> eventLists;
 };
 

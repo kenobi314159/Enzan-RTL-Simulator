@@ -60,6 +60,11 @@ public:
         return static_cast<std::uint32_t>(body.blocks.size() - 1);
     }
 
+    /// The index the next `block` will return, for a jump to a block not started yet.
+    [[nodiscard]] std::uint32_t nextBlock() const {
+        return static_cast<std::uint32_t>(body.blocks.size());
+    }
+
     /// Sets the source location stamped onto everything emitted after it.
     ///
     /// The frontend stamps every instruction with the statement it came from, so a test that
@@ -98,6 +103,16 @@ public:
         writes.push_back(eir::WriteExtent::whole(objectIndex, widthOf(source)));
         emit(eir::Instruction::make(eir::Opcode::StoreNonBlocking, {},
                                     eir::Operand::object(objectIndex), eir::Operand::reg(source)));
+    }
+
+    /// A VHDL signal assignment's transaction, `delayRegister` from now: `Drive` when `inertial`,
+    /// `DriveTransport` otherwise.
+    void drive(std::uint32_t objectIndex, std::uint32_t source, std::uint32_t delayRegister,
+               bool inertial = true) {
+        writes.push_back(eir::WriteExtent::whole(objectIndex, widthOf(source)));
+        emit(eir::Instruction::make(inertial ? eir::Opcode::Drive : eir::Opcode::DriveTransport, {},
+                                    eir::Operand::object(objectIndex), eir::Operand::reg(source),
+                                    eir::Operand::reg(delayRegister)));
     }
 
     /// A part store whose index is a register, which drives every bit of the object because

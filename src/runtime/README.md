@@ -15,7 +15,10 @@ elaborated, compiled design.
   wheel, and the non-blocking update queue. Holds ordering, not policy.
 - **The interpreter** (`Interpreter.h`) — executes compiled bodies.
 - **The kernel** (`Kernel.h`) — drives the regions, applies updates, detects value
-  changes, resolves drivers, enforces the delta limit and performs system tasks.
+  changes, resolves drivers, enforces the delta limit and performs system tasks. It also
+  keeps each VHDL driver's projected waveform, which is what a VHDL signal assignment acts
+  on (section 3.4): the transactions an assignment deletes are taken out of the time wheel,
+  so they leave no time step behind.
 - **Formatting** (`Format.h`) — the `$display` conversions.
 
 ## Invariants this component is responsible for

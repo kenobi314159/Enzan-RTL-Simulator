@@ -279,7 +279,6 @@ private:
         for (const SensitivityEntry& entry : process.sensitivity)
             checkSensitivityEntry(definition, process, entry);
         for (const std::vector<SensitivityEntry>& list : process.eventLists) {
-            if (list.empty()) reportBody(definition, process, "has an empty event list");
             for (const SensitivityEntry& entry : list)
                 checkSensitivityEntry(definition, process, entry);
         }
@@ -582,6 +581,8 @@ private:
             case Opcode::StorePartNonBlocking:
             case Opcode::StoreDelayed:
             case Opcode::StoreNonBlockingDelayed:
+            case Opcode::Drive:
+            case Opcode::DriveTransport:
                 reportBody(definition, body,
                            std::format("{} schedules a write, which a subprogram may not; its "
                                        "stores are immediate",
@@ -610,6 +611,8 @@ private:
 
         case Opcode::StoreDelayed:
         case Opcode::StoreNonBlockingDelayed:
+        case Opcode::Drive:
+        case Opcode::DriveTransport:
             checkObjectAccess(definition, body, instruction.a, true, where);
             checkObjectWidth(definition, body, instruction.a, instruction.b, where);
             registerWidth(definition, body, instruction.c, where);

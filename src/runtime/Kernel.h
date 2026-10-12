@@ -393,6 +393,20 @@ public:
                               std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
                               bool nonBlocking);
 
+    /// Adds a transaction of `value` to the projected waveform of the driver a VHDL process has
+    /// through its write position `position`, `delay` from now (IEEE 1076 section 10.5.2.2).
+    ///
+    /// The driver's transactions at or after the new one's time are deleted first. An `inertial`
+    /// one also deletes those within `delay` before it, but for a run of transactions of its
+    /// value immediately before it: a pulse shorter than the delay never reaches the signal.
+    ///
+    /// A transaction for now takes effect in the next delta cycle, after every process of this
+    /// one has run, which is when a non-blocking update does. A later one takes effect when its
+    /// time step begins, before any process runs in it, which is VHDL's signal update phase
+    /// mapped onto the start of the Active region (DESIGN_GUIDE.md section 3.5).
+    void drive(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,
+               eir::ConstBitRef value, SimTime delay, bool inertial);
+
     /// Suspends a process until `edge` occurs on `signalIndex`.
     void suspendForEdge(std::uint32_t processIndex, std::uint32_t signalIndex, eir::EdgeKind edge,
                         std::uint32_t resumePc);
@@ -579,6 +593,9 @@ private:
         std::uint32_t position = 0;
         std::uint32_t signalIndex = 0;
         bool nonBlocking = false;
+
+        /// A transaction of a VHDL driver, applied only if still on its projected waveform.
+        bool transaction = false;
         std::uint64_t serial = 0;
         eir::BitVector value;
     };
@@ -598,6 +615,41 @@ private:
 
     /// Performs every delayed write due at the current time.
     void applyDelayedWrites();
+
+    /// A transaction on the projected waveform of a VHDL driver. One for now is also in
+    /// `deltaTransactions`, and a later one in `delayedWrites`, both by its serial.
+    struct Transaction {
+        SimTime time = 0;
+        std::uint64_t serial = 0;
+        eir::BitVector value;
+    };
+
+    /// Each VHDL driver's projected waveform, in time order, indexed by `driverBase` of its
+    /// process plus its write position. Flat, so that finding one costs an addition.
+    std::vector<std::vector<Transaction>> projectedWaveforms;
+    std::vector<std::uint32_t> driverBase;
+
+    /// The transactions due in the next delta cycle, in the order they were made.
+    struct DeltaTransaction {
+        std::uint32_t processIndex = 0;
+        std::uint32_t position = 0;
+        std::uint32_t signalIndex = 0;
+        std::uint64_t serial = 0;
+    };
+
+    std::vector<DeltaTransaction> deltaTransactions;
+
+    /// Deletes `transaction`, a later one, from `delayedWrites`, taking its time step with it
+    /// when nothing else is due then: a deleted transaction leaves no step behind.
+    void unscheduleTransaction(const Transaction& transaction);
+
+    /// Takes the transaction `serial` off its driver's projected waveform, returning its value,
+    /// or nothing when a later assignment has already deleted it.
+    std::optional<eir::BitVector> takeTransaction(std::uint32_t processIndex,
+                                                  std::uint32_t position, std::uint64_t serial);
+
+    /// Applies the transactions due in this delta cycle.
+    void applyDeltaTransactions();
 
     /// A write as a Store makes it: through the process's drivers when its route has any.
     void writeRouted(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,

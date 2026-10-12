@@ -747,7 +747,8 @@ private:
             const eir::Process& process = processOf(processInstance);
             const std::vector<eir::Object>& objects =
                 design.module(instance.definitionIndex).objects;
-            const bool continuous = process.kind == eir::ProcessKind::ContinuousAssign;
+            const bool continuous =
+                process.kind == eir::ProcessKind::ContinuousAssign || process.drivesSignals;
 
             // A subroutine's static variable is written by every call of it, and a call inlined
             // into a continuous assignment no more drives it than one in an `always` does.

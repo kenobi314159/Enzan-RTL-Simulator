@@ -160,6 +160,17 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             break;
         }
 
+        case eir::Opcode::Drive:
+        case eir::Opcode::DriveTransport: {
+            const eir::ConstBitRef delay = reg(instruction.c, instruction.cWidth);
+            kernel.drive(processIndex, instruction.dst, current.objectSignals[instruction.a],
+                         reg(instruction.b, instruction.bWidth),
+                         delay.hasUnknown() ? 0 : delay.toUInt64(),
+                         instruction.opcode == eir::Opcode::Drive);
+            if (kernel.errorRequested) return ExecutionResult::Stopped;
+            break;
+        }
+
         case eir::Opcode::StoreNonBlocking:
             kernel.scheduleNonBlocking(current.objectSignals[instruction.a],
                                        reg(instruction.b, instruction.bWidth));

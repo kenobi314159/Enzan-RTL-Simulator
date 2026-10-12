@@ -299,6 +299,23 @@ Per IEEE 1076, a VHDL simulation cycle is:
    next process timeout.
 6. If `Tn == Tc`, the next cycle is a delta cycle.
 
+**A signal assignment is a transaction of its process's driver.** A VHDL process has one
+driver for each signal it assigns, and each driver a projected waveform of transactions
+waiting for their time (IEEE 1076 section 14.7.2). The kernel keeps that waveform per
+driver, because the language defines an assignment by what it does to it (section
+10.5.2.2): the driver's transactions at or after the new one's time are deleted, so of a
+process's assignments to one signal in one run the last is what happens and the others
+leave no event; and an inertial assignment also deletes those within its rejection limit
+before it, but for a run of its own value ending there, so a pulse shorter than the
+limit never reaches the signal. Treating an assignment as a SystemVerilog non-blocking
+update instead gives every one of them its own event, and a design whose clock stops by
+reassigning it toggles once more.
+
+A transaction for the current time takes effect in the next delta cycle, after every
+process of this one has run. A later one takes effect when its time step begins, before
+any process resumes in it, which is step 2 coming before step 3: a process woken by a
+timeout sees the values signals take at that time, not the ones they had before it.
+
 ### 3.5 Mixed-language interleaving
 
 **This is the single hardest correctness problem in the project and it is

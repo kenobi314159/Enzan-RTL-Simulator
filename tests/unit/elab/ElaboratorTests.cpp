@@ -532,6 +532,25 @@ TEST_F(ElaboratorTest, RejectsTwoContinuousAssignmentsDrivingOneObject) {
     EXPECT_TRUE(reported("/tb/net")) << "the report must name the object";
 }
 
+TEST_F(ElaboratorTest, AProcessThatDrivesItsSignalsIsADriverOfThem) {
+    // Each VHDL process has a driver of its own for every signal it assigns, so two of them
+    // assigning one unresolved signal is the error two continuous assignments are, not a race
+    // the last write wins.
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::bits(8, false, false)});
+    top.addObject(Object{.name = "sig", .type = Type::bits(8, false, false)});
+    for (int copy = 0; copy < 2; ++copy) {
+        Process process = makeCopyProcess(ProcessKind::Always, 0, 1, Type::bits(8, false, false));
+        process.drivesSignals = true;
+        top.processes.push_back(std::move(process));
+    }
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+}
+
 TEST_F(ElaboratorTest, ASubroutinesStaticVariableIsNoContinuousDriversTarget) {
     // Every call of a static function writes its variables, and a call inlined into a
     // continuous assignment is no more their driver than one in an `always`: two assignments

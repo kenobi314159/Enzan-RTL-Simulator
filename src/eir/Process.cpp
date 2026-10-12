@@ -66,6 +66,7 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::FileFlush: return "$fflush";
     case SysTaskKind::ReadMemHex: return "$readmemh";
     case SysTaskKind::ReadMemBinary: return "$readmemb";
+    case SysTaskKind::Report: return "report";
     case SysTaskKind::FileOpen: return "$fopen";
     }
     return "$unknown";

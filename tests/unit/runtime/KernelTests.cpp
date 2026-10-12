@@ -706,6 +706,200 @@ TEST(Kernel, SeverityTasksReportThroughTheDiagnosticEngine) {
     EXPECT_TRUE(simulation.transcript().empty()) << "$error is a diagnostic, not output";
 }
 
+TEST(Kernel, AReportsSeverityChoosesItsDiagnostic) {
+    // VHDL's `report` and failed `assert`: note, warning and error are reported and the run goes
+    // on, and failure stops it, as GHDL's default does.
+    ProcessBuilder builder(ProcessKind::Initial, "reporter");
+    const std::uint32_t severity = builder.reg(Type::bits(8, false, false));
+    std::vector<std::uint32_t> constants;
+    std::vector<std::uint32_t> descriptors;
+    for (const std::string_view level : {"8'd0", "8'd1", "8'd2", "8'd3"}) {
+        constants.push_back(builder.constant(level));
+        SysTaskCall call;
+        call.kind = SysTaskKind::Report;
+        call.formatIndex = builder.string(std::string("severity ") + std::string(level));
+        call.arguments.push_back(
+            SysTaskArgument{.value = Operand::reg(severity), .type = Type::bits(8, false, false)});
+        descriptors.push_back(builder.sysCall(std::move(call)));
+    }
+
+    builder.block("entry");
+    for (std::size_t index = 0; index < constants.size(); ++index) {
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(severity),
+                                       Operand::constant(constants[index])));
+        builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(descriptors[index])));
+    }
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_EQ(simulation.simulationKernel().exitStatus(), 1);
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::UserInfo));
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::UserWarning));
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::UserError));
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::AssertionFailure));
+    // The severity is not part of the message.
+    EXPECT_EQ(simulation.messages().back(), "severity 8'd3");
+}
+
+TEST(Kernel, AnEmptyEventListWaitsForEver) {
+    // VHDL's `wait;`, which ends a testbench process: nothing wakes it, and what follows never
+    // runs.
+    ProcessBuilder builder(ProcessKind::Always, "waiter");
+    SysTaskCall call;
+    call.kind = SysTaskKind::Display;
+    call.formatIndex = builder.string("woken");
+    const std::uint32_t descriptor = builder.sysCall(std::move(call));
+
+    builder.block("entry");
+    builder.waitEvents({}, 1);
+    builder.block("after");
+    builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(descriptor)));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_TRUE(simulation.transcript().empty());
+}
+
+// ---------------------------------------------------------------------------
+// VHDL drivers (IEEE 1076 section 10.5.2.2)
+// ---------------------------------------------------------------------------
+
+/// A VHDL-style process: `steps` run in order, each loading `value` into a register and driving
+/// object 0 with it `delay` from now, `inertial` or not; a `wait` of `waitBefore` comes first when
+/// it is not zero. Then it waits for ever.
+struct DriveStep {
+    std::uint64_t waitBefore = 0;
+    std::uint8_t value = 0;
+    std::uint64_t delay = 0;
+    bool inertial = true;
+};
+
+Process makeDriver(const std::vector<DriveStep>& steps) {
+    ProcessBuilder builder(ProcessKind::Always, "driver");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t delay = builder.reg(Type::bits(64, true, false));
+    builder.block("entry");
+    for (const DriveStep& step : steps) {
+        if (step.waitBefore != 0) {
+            builder.emit(Instruction::make(
+                Opcode::LoadConstant, Operand::reg(delay),
+                Operand::constant(builder.constant("64'd" + std::to_string(step.waitBefore)))));
+            const auto resume = builder.nextBlock();
+            builder.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay),
+                                           Operand::block(resume)));
+            builder.block("resumed");
+        }
+        builder.emit(Instruction::make(
+            Opcode::LoadConstant, Operand::reg(value),
+            Operand::constant(builder.constant("8'd" + std::to_string(step.value)))));
+        builder.emit(Instruction::make(
+            Opcode::LoadConstant, Operand::reg(delay),
+            Operand::constant(builder.constant("64'd" + std::to_string(step.delay)))));
+        builder.drive(0, value, delay, step.inertial);
+    }
+    const auto end = builder.nextBlock();
+    builder.waitEvents({}, end);
+    builder.block("end");
+    builder.emit(Instruction::make(Opcode::Return));
+    Process process = builder.finish();
+    process.drivesSignals = true;
+    return process;
+}
+
+ModuleDefinition driven(std::vector<Process> processes) {
+    return makeTop(std::move(processes),
+                   {Object{.name = "s", .type = Type::bits(8, false, false)},
+                    Object{.name = "seen", .type = Type::bits(8, false, false)}});
+}
+
+TEST(Kernel, ADriveDeletesWhatItsDriverHadPendingFromItsTimeOn) {
+    // s <= transport 1 after 10; s <= transport 2 after 5: the second deletes the first.
+    Simulation simulation(
+        designOf(driven({makeDriver({{.value = 1, .delay = 10, .inertial = false},
+                                     {.value = 2, .delay = 5, .inertial = false}})})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "2");
+    EXPECT_EQ(simulation.time(), 5U) << "the deleted transaction leaves no time step behind";
+}
+
+TEST(Kernel, OfTwoAssignmentsInOneDeltaTheLastHappens) {
+    // s <= 1; s <= 2; in one run of a process: one transaction, so one event.
+    Simulation simulation(designOf(driven({makeDriver({{.value = 1}, {.value = 2}})})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "2");
+}
+
+TEST(Kernel, AnInertialDriveRejectsAPulseShorterThanItsDelay) {
+    // s <= 1 after 10; then at 2, s <= 0 after 10: the 1 would last less than the delay, so it is
+    // rejected and s never leaves 0.
+    Simulation simulation(
+        designOf(driven(
+            {makeDriver({{.value = 1, .delay = 10}, {.waitBefore = 2, .value = 0, .delay = 10}})})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(11), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "0");
+}
+
+TEST(Kernel, AnInertialDriveKeepsARunOfItsOwnValue) {
+    // s <= 1 after 10; then at 2, s <= 1 after 10: the earlier 1 is part of the new one's run, so
+    // s becomes 1 at 10 rather than at 12.
+    Simulation simulation(
+        designOf(driven(
+            {makeDriver({{.value = 1, .delay = 10}, {.waitBefore = 2, .value = 1, .delay = 10}})})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(10), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "1");
+}
+
+TEST(Kernel, ATransportDriveRejectsNothing) {
+    Simulation simulation(designOf(driven({makeDriver(
+                              {{.value = 1, .delay = 10, .inertial = false},
+                               {.waitBefore = 2, .value = 0, .delay = 10, .inertial = false}})})),
+                          "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(10), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "1");
+}
+
+TEST(Kernel, ATransactionTakesEffectBeforeProcessesResumeAtItsTime) {
+    // A process waking from `wait for 5` at 5 sees what a transaction for 5 set, since VHDL
+    // updates signals before it resumes processes (IEEE 1076 section 14.7.5).
+    ProcessBuilder reader(ProcessKind::Initial, "reader");
+    const std::uint32_t delay = reader.reg(Type::bits(64, true, false));
+    const std::uint32_t value = reader.reg(Type::bits(8, false, false));
+    reader.block("entry");
+    reader.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(delay),
+                                  Operand::constant(reader.constant("64'd5"))));
+    reader.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    reader.block("after");
+    reader.readObject(value, 0);
+    reader.store(1, value);
+    reader.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(
+        designOf(driven({makeDriver({{.value = 7, .delay = 5}}), reader.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/seen", Radix::Decimal), "7");
+}
+
 TEST(Kernel, TimeIsReadableAsAValue) {
     ProcessBuilder builder(ProcessKind::Initial, "timer");
     const std::uint32_t delay = builder.reg(Type::bits(32, false, false));

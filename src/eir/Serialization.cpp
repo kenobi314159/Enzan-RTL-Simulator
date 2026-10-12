@@ -303,6 +303,7 @@ void writeBody(Writer& out, NameTable& names, const Body& body) {
 
 void writeProcess(Writer& out, NameTable& names, const Process& process) {
     out.u8(static_cast<std::uint8_t>(process.kind));
+    out.boolean(process.drivesSignals);
     writeBody(out, names, process);
 
     out.u32(static_cast<std::uint32_t>(process.sensitivity.size()));
@@ -590,6 +591,7 @@ void readBody(Reader& in, BufferResolver& buffers, Body& body) {
 Process readProcess(Reader& in, BufferResolver& buffers) {
     Process process;
     process.kind = static_cast<ProcessKind>(in.u8());
+    process.drivesSignals = in.boolean();
     readBody(in, buffers, process);
 
     const auto readEntry = [&in](SensitivityEntry& entry) {

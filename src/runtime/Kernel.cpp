@@ -17,8 +17,10 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace enzan::runtime {
@@ -150,6 +152,16 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
       windowScratch(windowScratchWords(designImageToRun), 0),
       edgeWaiters(designImageToRun.signals().size()) {
     callsInProgress.reserve(callDepthCapacity);
+
+    // One projected waveform per object each process writes, which is one per driver a VHDL
+    // process has; a process of another language never fills its own.
+    driverBase.reserve(processes.size());
+    std::uint32_t drivers = 0;
+    for (const ProcessState& state : processes) {
+        driverBase.push_back(drivers);
+        drivers += static_cast<std::uint32_t>(state.writeRoutes.size());
+    }
+    projectedWaveforms.resize(drivers);
 }
 
 Kernel::~Kernel() = default;
@@ -171,6 +183,8 @@ void Kernel::initialize() {
     scheduler.clear();
     delayedWrites.clear();
     pendingInertial.clear();
+    deltaTransactions.clear();
+    for (std::vector<Transaction>& waveform : projectedWaveforms) waveform.clear();
     processes.assign(designImage->processes().begin(), designImage->processes().end());
     for (ProcessState& state : processes)
         state.randomState = processRandomState(options.seed, state.name);
@@ -228,7 +242,8 @@ RunStatus Kernel::run(SimTime until) {
             return lastStatus;
         }
 
-        if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates() || pliWorkDue()) {
+        if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates()
+            || !deltaTransactions.empty() || pliWorkDue()) {
             if (!runTimeSlot()) {
                 lastStatus = errorRequested ? RunStatus::Error : RunStatus::Finished;
                 runFinalProcesses();
@@ -274,8 +289,12 @@ bool Kernel::runTimeSlot() {
             continue;
         }
 
-        if (scheduler.hasNonBlockingUpdates()) {
+        // VHDL's transactions for the next delta cycle are applied with SystemVerilog's NBA
+        // updates: either way, after every process of this iteration has run (section 3.5).
+        if (scheduler.hasNonBlockingUpdates() || !deltaTransactions.empty()) {
             applyNonBlockingUpdates();
+            if (halted()) return false;
+            applyDeltaTransactions();
             if (halted()) return false;
             if (!countDelta()) return false;
             continue;
@@ -799,12 +818,102 @@ void Kernel::applyDelayedWrites() {
     delayedWrites.erase(due);
 
     for (const DelayedWrite& write : writes) {
+        if (write.transaction) {
+            const std::optional<eir::BitVector> value =
+                takeTransaction(write.processIndex, write.position, write.serial);
+            if (value)
+                writeRouted(write.processIndex, write.position, write.signalIndex, value->ref());
+            continue;
+        }
         if (write.nonBlocking) {
             scheduler.appendNonBlocking(write.signalIndex, write.value.ref(), 0, false);
             continue;
         }
         pendingInertial.erase(std::pair{write.processIndex, write.position});
         writeRouted(write.processIndex, write.position, write.signalIndex, write.value.ref());
+    }
+}
+
+void Kernel::drive(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,
+                   eir::ConstBitRef value, SimTime delay, bool inertial) {
+    if (delay > NoTime - currentTime) {
+        diagnostics.report(DiagCode::TimeOverflow, SourceLocation(), currentTime,
+                           options.timeScale.unitName());
+        errorRequested = true;
+        return;
+    }
+    const SimTime time = currentTime + delay;
+    std::vector<Transaction>& waveform = projectedWaveforms[driverBase[processIndex] + position];
+    eir::BitVector stored = eir::BitVector::from(value);
+
+    // Every transaction at or after the new one's time is deleted (IEEE 1076 section
+    // 10.5.2.2), so of a process's assignments to a signal in one run, the last is what happens.
+    while (!waveform.empty() && waveform.back().time >= time) {
+        unscheduleTransaction(waveform.back());
+        waveform.pop_back();
+    }
+
+    // Inertially, so are those within the rejection limit before it — which is the delay, so
+    // every one still pending — except for a run of transactions of the new value immediately
+    // before it, which the new one only prolongs.
+    if (inertial && delay > 0) {
+        std::size_t kept = waveform.size();
+        while (kept > 0 && waveform[kept - 1].value == stored) --kept;
+        for (std::size_t index = 0; index < kept; ++index) unscheduleTransaction(waveform[index]);
+        waveform.erase(waveform.begin(), waveform.begin() + static_cast<std::ptrdiff_t>(kept));
+    }
+
+    const std::uint64_t serial = ++nextWriteSerial;
+    if (delay == 0) {
+        deltaTransactions.push_back(DeltaTransaction{.processIndex = processIndex,
+                                                     .position = position,
+                                                     .signalIndex = signalIndex,
+                                                     .serial = serial});
+    } else {
+        // The value stays on the waveform, where a later assignment compares against it.
+        delayedWrites[time].push_back(DelayedWrite{.processIndex = processIndex,
+                                                   .position = position,
+                                                   .signalIndex = signalIndex,
+                                                   .nonBlocking = false,
+                                                   .transaction = true,
+                                                   .serial = serial,
+                                                   .value = eir::BitVector(1)});
+    }
+    waveform.push_back(Transaction{.time = time, .serial = serial, .value = std::move(stored)});
+}
+
+void Kernel::unscheduleTransaction(const Transaction& transaction) {
+    // One for now waits in `deltaTransactions`, which skips it once it is off its waveform.
+    if (transaction.time == currentTime) return;
+    const auto slot = delayedWrites.find(transaction.time);
+    if (slot == delayedWrites.end()) return;
+    std::erase_if(slot->second, [&transaction](const DelayedWrite& queued) {
+        return queued.transaction && queued.serial == transaction.serial;
+    });
+    if (slot->second.empty()) delayedWrites.erase(slot);
+}
+
+std::optional<eir::BitVector>
+Kernel::takeTransaction(std::uint32_t processIndex, std::uint32_t position, std::uint64_t serial) {
+    std::vector<Transaction>& waveform = projectedWaveforms[driverBase[processIndex] + position];
+    const auto found = std::ranges::find(waveform, serial, &Transaction::serial);
+    if (found == waveform.end()) return std::nullopt;
+    eir::BitVector value = std::move(found->value);
+    waveform.erase(found);
+    return value;
+}
+
+void Kernel::applyDeltaTransactions() {
+    // Taken as a batch, as non-blocking updates are: a value-change callback may assign, and
+    // what it assigns belongs to the delta cycle after this one.
+    const std::vector<DeltaTransaction> due = std::exchange(deltaTransactions, {});
+    for (const DeltaTransaction& transaction : due) {
+        const std::optional<eir::BitVector> value =
+            takeTransaction(transaction.processIndex, transaction.position, transaction.serial);
+        if (!value) continue;
+        writeRouted(transaction.processIndex, transaction.position, transaction.signalIndex,
+                    value->ref());
+        if (stopping()) break;
     }
 }
 
@@ -956,6 +1065,13 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
         arguments.erase(arguments.begin());
     }
 
+    // A VHDL report's severity comes first too, and is not part of its message either.
+    std::uint64_t severity = 0;
+    if (descriptor.kind == eir::SysTaskKind::Report && !arguments.empty()) {
+        severity = arguments.front().value.toUInt64();
+        arguments.erase(arguments.begin());
+    }
+
     const elab::Instance& instance =
         designImage->elaboratedDesign().instances()[state.instanceIndex];
     const FormatContext context{
@@ -991,6 +1107,20 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::Info:
         diagnostics.report(DiagCode::UserInfo, descriptor.location, text);
         return;
+
+    // The positions of std.standard.severity_level: note, warning, error, failure.
+    case eir::SysTaskKind::Report:
+        switch (severity) {
+        case 0: diagnostics.report(DiagCode::UserInfo, descriptor.location, text); return;
+        case 1: diagnostics.report(DiagCode::UserWarning, descriptor.location, text); return;
+        case 2: diagnostics.report(DiagCode::UserError, descriptor.location, text); return;
+        default:
+            diagnostics.report(DiagCode::AssertionFailure, descriptor.location, text);
+            finishRequested = true;
+            errorRequested = true;
+            finishStatus = 1;
+            return;
+        }
 
     case eir::SysTaskKind::DumpFile:
         for (ValueChangeListener* listener : listeners) listener->onDumpFile(text);
