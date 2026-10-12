@@ -239,36 +239,36 @@ void writeInstruction(Writer& out, NameTable& names, const Instruction& instruct
     previous = instruction.location;
 }
 
-void writeProcess(Writer& out, NameTable& names, const Process& process) {
-    out.u8(static_cast<std::uint8_t>(process.kind));
-    out.text(process.name);
-    writeLocation(out, names, process.location);
+/// Writes what a process and a subprogram both are (`Body`).
+void writeBody(Writer& out, NameTable& names, const Body& body) {
+    out.text(body.name);
+    writeLocation(out, names, body.location);
 
-    out.u32(static_cast<std::uint32_t>(process.registerTypes.size()));
-    for (const Type& type : process.registerTypes) writeType(out, type);
+    out.u32(static_cast<std::uint32_t>(body.registerTypes.size()));
+    for (const Type& type : body.registerTypes) writeType(out, type);
 
-    out.u32(static_cast<std::uint32_t>(process.constants.size()));
-    for (const BitVector& value : process.constants) writeVector(out, value);
+    out.u32(static_cast<std::uint32_t>(body.constants.size()));
+    for (const BitVector& value : body.constants) writeVector(out, value);
 
-    out.u32(static_cast<std::uint32_t>(process.strings.size()));
-    for (const std::string& value : process.strings) out.text(value);
+    out.u32(static_cast<std::uint32_t>(body.strings.size()));
+    for (const std::string& value : body.strings) out.text(value);
 
-    // One running location for the whole process rather than one per block, so that a block
+    // One running location for the whole body rather than one per block, so that a block
     // whose first statement continues the previous block's still pays a byte for it. The
     // decoder threads the same value through in the same order, which is what makes the two
     // agree without the encoding having to say where the run began.
     SourceLocation previousLocation;
 
-    out.u32(static_cast<std::uint32_t>(process.blocks.size()));
-    for (const BasicBlock& block : process.blocks) {
+    out.u32(static_cast<std::uint32_t>(body.blocks.size()));
+    for (const BasicBlock& block : body.blocks) {
         out.text(block.label);
         out.u32(static_cast<std::uint32_t>(block.instructions.size()));
         for (const Instruction& instruction : block.instructions)
             writeInstruction(out, names, instruction, previousLocation);
     }
 
-    out.u32(static_cast<std::uint32_t>(process.sysCalls.size()));
-    for (const SysTaskCall& call : process.sysCalls) {
+    out.u32(static_cast<std::uint32_t>(body.sysCalls.size()));
+    for (const SysTaskCall& call : body.sysCalls) {
         out.u8(static_cast<std::uint8_t>(call.kind));
         out.u32(call.formatIndex);
         out.u32(call.objectIndex);
@@ -279,6 +279,31 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
             writeType(out, argument.type);
         }
     }
+
+    out.u32(static_cast<std::uint32_t>(body.calls.size()));
+    for (const CallSite& call : body.calls) {
+        out.text(call.definition);
+        out.text(call.subprogram);
+        out.u32(static_cast<std::uint32_t>(call.arguments.size()));
+        for (const Operand argument : call.arguments) writeOperand(out, argument);
+        writeOperand(out, call.result);
+        writeLocation(out, names, call.location);
+    }
+
+    out.u32(static_cast<std::uint32_t>(body.readSet.size()));
+    for (const std::uint32_t index : body.readSet) out.u32(index);
+
+    out.u32(static_cast<std::uint32_t>(body.writeSet.size()));
+    for (const WriteExtent& extent : body.writeSet) {
+        out.u32(extent.objectIndex);
+        out.u32(extent.lowBit);
+        out.u32(extent.width);
+    }
+}
+
+void writeProcess(Writer& out, NameTable& names, const Process& process) {
+    out.u8(static_cast<std::uint8_t>(process.kind));
+    writeBody(out, names, process);
 
     out.u32(static_cast<std::uint32_t>(process.sensitivity.size()));
     const auto writeEntry = [&out](const SensitivityEntry& entry) {
@@ -293,16 +318,19 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
         out.u32(static_cast<std::uint32_t>(list.size()));
         for (const SensitivityEntry& entry : list) writeEntry(entry);
     }
+}
 
-    out.u32(static_cast<std::uint32_t>(process.readSet.size()));
-    for (const std::uint32_t index : process.readSet) out.u32(index);
+void writeSubprogram(Writer& out, NameTable& names, const Subprogram& subprogram) {
+    writeBody(out, names, subprogram);
 
-    out.u32(static_cast<std::uint32_t>(process.writeSet.size()));
-    for (const WriteExtent& extent : process.writeSet) {
-        out.u32(extent.objectIndex);
-        out.u32(extent.lowBit);
-        out.u32(extent.width);
+    out.u32(static_cast<std::uint32_t>(subprogram.parameters.size()));
+    for (const SubprogramParameter& parameter : subprogram.parameters) {
+        out.text(parameter.name);
+        out.u8(static_cast<std::uint8_t>(parameter.mode));
+        out.u32(parameter.registerIndex);
     }
+    writeType(out, subprogram.resultType);
+    out.u32(subprogram.resultRegister);
 }
 
 void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definition) {
@@ -360,6 +388,10 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
 
     out.u32(static_cast<std::uint32_t>(definition.processes.size()));
     for (const Process& process : definition.processes) writeProcess(out, names, process);
+
+    out.u32(static_cast<std::uint32_t>(definition.subprograms.size()));
+    for (const Subprogram& subprogram : definition.subprograms)
+        writeSubprogram(out, names, subprogram);
 
     out.u32(static_cast<std::uint32_t>(definition.enums.size()));
     for (const EnumDefinition& enumeration : definition.enums) {
@@ -471,6 +503,7 @@ Operand readOperand(Reader& in) {
     case Operand::Kind::Block: return Operand::block(index);
     case Operand::Kind::SysCall: return Operand::sysCall(index);
     case Operand::Kind::Immediate: return Operand::immediate(index);
+    case Operand::Kind::Call: return Operand::call(index);
     }
 
     in.fail();
@@ -493,36 +526,35 @@ Instruction readInstruction(Reader& in, BufferResolver& buffers, SourceLocation&
     return instruction;
 }
 
-Process readProcess(Reader& in, BufferResolver& buffers) {
-    Process process;
-    process.kind = static_cast<ProcessKind>(in.u8());
-    process.name = in.text();
-    process.location = readLocation(in, buffers);
+/// Reads what `writeBody` wrote, into `body`.
+void readBody(Reader& in, BufferResolver& buffers, Body& body) {
+    body.name = in.text();
+    body.location = readLocation(in, buffers);
 
-    process.registerTypes.resize(in.count());
-    for (Type& type : process.registerTypes) type = readType(in);
+    body.registerTypes.resize(in.count());
+    for (Type& type : body.registerTypes) type = readType(in);
 
     const std::uint32_t constantCount = in.count();
-    process.constants.reserve(constantCount);
+    body.constants.reserve(constantCount);
     for (std::uint32_t index = 0; index < constantCount && in.ok(); ++index)
-        process.constants.push_back(readVector(in));
+        body.constants.push_back(readVector(in));
 
-    process.strings.resize(in.count());
-    for (std::string& value : process.strings) value = in.text();
+    body.strings.resize(in.count());
+    for (std::string& value : body.strings) value = in.text();
 
     // The running location the writer threaded through the same traversal.
     SourceLocation previousLocation;
 
-    process.blocks.resize(in.count());
-    for (BasicBlock& block : process.blocks) {
+    body.blocks.resize(in.count());
+    for (BasicBlock& block : body.blocks) {
         block.label = in.text();
         block.instructions.resize(in.count());
         for (Instruction& instruction : block.instructions)
             instruction = readInstruction(in, buffers, previousLocation);
     }
 
-    process.sysCalls.resize(in.count());
-    for (SysTaskCall& call : process.sysCalls) {
+    body.sysCalls.resize(in.count());
+    for (SysTaskCall& call : body.sysCalls) {
         call.kind = static_cast<SysTaskKind>(in.u8());
         call.formatIndex = in.u32();
         call.objectIndex = in.u32();
@@ -533,6 +565,32 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
             argument.type = readType(in);
         }
     }
+
+    body.calls.resize(in.count());
+    for (CallSite& call : body.calls) {
+        call.definition = in.text();
+        call.subprogram = in.text();
+        call.arguments.resize(in.count());
+        for (Operand& argument : call.arguments) argument = readOperand(in);
+        call.result = readOperand(in);
+        call.location = readLocation(in, buffers);
+    }
+
+    body.readSet.resize(in.count());
+    for (std::uint32_t& index : body.readSet) index = in.u32();
+
+    body.writeSet.resize(in.count());
+    for (WriteExtent& extent : body.writeSet) {
+        extent.objectIndex = in.u32();
+        extent.lowBit = in.u32();
+        extent.width = in.u32();
+    }
+}
+
+Process readProcess(Reader& in, BufferResolver& buffers) {
+    Process process;
+    process.kind = static_cast<ProcessKind>(in.u8());
+    readBody(in, buffers, process);
 
     const auto readEntry = [&in](SensitivityEntry& entry) {
         entry.objectIndex = in.u32();
@@ -548,17 +606,22 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
         for (SensitivityEntry& entry : list) readEntry(entry);
     }
 
-    process.readSet.resize(in.count());
-    for (std::uint32_t& index : process.readSet) index = in.u32();
-
-    process.writeSet.resize(in.count());
-    for (WriteExtent& extent : process.writeSet) {
-        extent.objectIndex = in.u32();
-        extent.lowBit = in.u32();
-        extent.width = in.u32();
-    }
-
     return process;
+}
+
+Subprogram readSubprogram(Reader& in, BufferResolver& buffers) {
+    Subprogram subprogram;
+    readBody(in, buffers, subprogram);
+
+    subprogram.parameters.resize(in.count());
+    for (SubprogramParameter& parameter : subprogram.parameters) {
+        parameter.name = in.text();
+        parameter.mode = static_cast<ParameterMode>(in.u8());
+        parameter.registerIndex = in.u32();
+    }
+    subprogram.resultType = readType(in);
+    subprogram.resultRegister = in.u32();
+    return subprogram;
 }
 
 ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
@@ -618,6 +681,11 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     definition.processes.reserve(processCount);
     for (std::uint32_t index = 0; index < processCount && in.ok(); ++index)
         definition.processes.push_back(readProcess(in, buffers));
+
+    const std::uint32_t subprogramCount = in.count();
+    definition.subprograms.reserve(subprogramCount);
+    for (std::uint32_t index = 0; index < subprogramCount && in.ok(); ++index)
+        definition.subprograms.push_back(readSubprogram(in, buffers));
 
     definition.enums.resize(in.count());
     for (EnumDefinition& enumeration : definition.enums) {

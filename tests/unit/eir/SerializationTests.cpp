@@ -29,6 +29,7 @@ using enzan::SourceLocation;
 using enzan::SourceManager;
 using enzan::eir::BasicBlock;
 using enzan::eir::BitVector;
+using enzan::eir::CallSite;
 using enzan::eir::EdgeKind;
 using enzan::eir::EnumDefinition;
 using enzan::eir::EnumMember;
@@ -41,12 +42,15 @@ using enzan::eir::ObjectKind;
 using enzan::eir::Opcode;
 using enzan::eir::Operand;
 using enzan::eir::Parameter;
+using enzan::eir::ParameterMode;
 using enzan::eir::Port;
 using enzan::eir::PortConnection;
 using enzan::eir::PortDirection;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::SensitivityEntry;
+using enzan::eir::Subprogram;
+using enzan::eir::SubprogramParameter;
 using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
@@ -178,7 +182,37 @@ ModuleDefinition richModule(BufferId buffer) {
     // wrong order or an extent dropped shows up.
     process.writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
                         WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}};
+    process.calls.push_back(CallSite{.definition = "arith::",
+                                     .subprogram = "accumulate$8",
+                                     .arguments = {Operand::reg(1), Operand::constant(0)},
+                                     .result = Operand::reg(1),
+                                     .location = SourceLocation(buffer, 22)});
     definition.processes.push_back(std::move(process));
+
+    // A subprogram, with a parameter of each mode but one, a result, and a call of its own: a
+    // body is written once for both kinds, so this is what shows the subprogram's half of it.
+    Subprogram accumulate;
+    accumulate.name = "accumulate$8";
+    accumulate.location = SourceLocation(buffer, 30);
+    accumulate.registerTypes = {Type::bits(8, false, true), Type::bits(8, false, true),
+                                Type::bits(8, false, true)};
+    accumulate.parameters = {
+        SubprogramParameter{.name = "total", .mode = ParameterMode::InOut, .registerIndex = 0},
+        SubprogramParameter{.name = "step", .mode = ParameterMode::In, .registerIndex = 1}};
+    accumulate.resultType = Type::bits(8, false, true);
+    accumulate.resultRegister = 2;
+    accumulate.readSet = {1};
+    accumulate.calls.push_back(CallSite{.definition = "",
+                                        .subprogram = "accumulate$8",
+                                        .arguments = {Operand::reg(0), Operand::reg(1)},
+                                        .result = Operand::reg(2),
+                                        .location = SourceLocation(buffer, 31)});
+    BasicBlock accumulateEntry;
+    accumulateEntry.label = "entry";
+    accumulateEntry.instructions.push_back(Instruction::make(Opcode::Call, {}, Operand::call(0)));
+    accumulateEntry.instructions.push_back(Instruction::make(Opcode::Return));
+    accumulate.blocks.push_back(std::move(accumulateEntry));
+    definition.subprograms.push_back(std::move(accumulate));
 
     definition.parameters.push_back(Parameter{.name = "WIDTH",
                                               .value = literal("32'd8"),
@@ -294,6 +328,46 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     EXPECT_EQ(process.writeSet,
               (std::vector<WriteExtent>{WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
                                         WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}}));
+}
+
+TEST_F(SerializationTest, SubprogramsAndCallsRoundTrip) {
+    const std::vector<ModuleDefinition> decoded = roundTrip({richModule(buffer)});
+    const ModuleDefinition& definition = decoded.front();
+
+    ASSERT_EQ(definition.processes.front().calls.size(), 1U);
+    const CallSite& call = definition.processes.front().calls.front();
+    EXPECT_EQ(call.definition, "arith::");
+    EXPECT_EQ(call.subprogram, "accumulate$8");
+    EXPECT_EQ(call.arguments, (std::vector<Operand>{Operand::reg(1), Operand::constant(0)}));
+    EXPECT_EQ(call.result, Operand::reg(1));
+    EXPECT_EQ(call.location, SourceLocation(buffer, 22));
+
+    ASSERT_EQ(definition.subprograms.size(), 1U);
+    const Subprogram& subprogram = definition.subprograms.front();
+    EXPECT_EQ(subprogram.name, "accumulate$8");
+    EXPECT_EQ(subprogram.location, SourceLocation(buffer, 30));
+    EXPECT_EQ(subprogram.registerTypes.size(), 3U);
+    EXPECT_EQ(
+        subprogram.parameters,
+        (std::vector<SubprogramParameter>{
+            SubprogramParameter{.name = "total", .mode = ParameterMode::InOut, .registerIndex = 0},
+            SubprogramParameter{.name = "step", .mode = ParameterMode::In, .registerIndex = 1}}));
+    EXPECT_EQ(subprogram.resultType, Type::bits(8, false, true));
+    EXPECT_EQ(subprogram.resultRegister, 2U);
+    EXPECT_EQ(subprogram.readSet, (std::vector<std::uint32_t>{1}));
+    ASSERT_EQ(subprogram.calls.size(), 1U);
+    EXPECT_TRUE(subprogram.calls.front().definition.empty());
+    EXPECT_FALSE(subprogram.calls.front().arguments.empty());
+    ASSERT_EQ(subprogram.blocks.size(), 1U);
+    EXPECT_EQ(subprogram.blocks.front().instructions.front().a, Operand::call(0));
+}
+
+TEST_F(SerializationTest, AProcedureRoundTripsWithoutAResult) {
+    ModuleDefinition definition = richModule(buffer);
+    definition.subprograms.front().resultType = Type::voidType();
+
+    const std::vector<ModuleDefinition> decoded = roundTrip({definition});
+    EXPECT_FALSE(decoded.front().subprograms.front().isFunction());
 }
 
 TEST_F(SerializationTest, InstructionLocationsRoundTrip) {

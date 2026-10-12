@@ -10,7 +10,10 @@
 
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace enzan::eir {
 
@@ -41,6 +44,20 @@ public:
         for (const Instance& instance : definition.instances) checkInstance(definition, instance);
 
         for (const Process& process : definition.processes) checkProcess(definition, process);
+
+        for (std::size_t index = 0; index < definition.subprograms.size(); ++index) {
+            const Subprogram& subprogram = definition.subprograms[index];
+            for (std::size_t earlier = 0; earlier < index; ++earlier) {
+                if (definition.subprograms[earlier].name == subprogram.name) {
+                    report(definition,
+                           std::format("declares two subprograms called '{}'; a call names its "
+                                       "callee by name, so it could not tell them apart",
+                                       subprogram.name));
+                    break;
+                }
+            }
+            checkSubprogram(definition, subprogram);
+        }
     }
 
 private:
@@ -50,12 +67,12 @@ private:
                            std::format("module '{}': {}", definition.name, message));
     }
 
-    void reportProcess(const ModuleDefinition& definition, const Process& process,
-                       const std::string& message) {
+    void reportBody(const ModuleDefinition& definition, const Body& body,
+                    const std::string& message) {
         ++problems;
         diagnostics.report(
-            DiagCode::InvalidEir, process.location,
-            std::format("module '{}', process '{}': {}", definition.name, process.name, message));
+            DiagCode::InvalidEir, body.location,
+            std::format("module '{}', {} '{}': {}", definition.name, bodyNoun, body.name, message));
     }
 
     void checkInstance(const ModuleDefinition& definition, const Instance& instance) {
@@ -91,51 +108,49 @@ private:
     }
 
     /// Checks that an object index is in range and is declared in the given set.
-    void checkObjectAccess(const ModuleDefinition& definition, const Process& process,
-                           Operand operand, bool isWrite, std::string_view where) {
+    void checkObjectAccess(const ModuleDefinition& definition, const Body& body, Operand operand,
+                           bool isWrite, std::string_view where) {
         if (operand.kind() != Operand::Kind::Object) {
-            reportProcess(definition, process, std::format("{} expects an object operand", where));
+            reportBody(definition, body, std::format("{} expects an object operand", where));
             return;
         }
         if (operand.index() >= definition.objects.size()) {
-            reportProcess(definition, process,
-                          std::format("{} names object {}, but the module has {} objects", where,
-                                      operand.index(), definition.objects.size()));
+            reportBody(definition, body,
+                       std::format("{} names object {}, but the module has {} objects", where,
+                                   operand.index(), definition.objects.size()));
             return;
         }
 
         // The core invariant of section 4.2. A process that touches an object it did
         // not declare is not a pure function over a known slice of the arena, and
         // every optimisation that depends on read/write sets would then be unsound.
-        const bool declared = isWrite
-                                  ? writesObject(process.writeSet, operand.index())
-                                  : std::ranges::binary_search(process.readSet, operand.index());
+        const bool declared = isWrite ? writesObject(body.writeSet, operand.index())
+                                      : std::ranges::binary_search(body.readSet, operand.index());
         if (!declared) {
-            reportProcess(definition, process,
-                          std::format("{} touches object '{}' which is not in the declared {}",
-                                      where, definition.objects[operand.index()].name,
-                                      isWrite ? "write set" : "read set"));
+            reportBody(definition, body,
+                       std::format("{} touches object '{}' which is not in the declared {}", where,
+                                   definition.objects[operand.index()].name,
+                                   isWrite ? "write set" : "read set"));
         }
     }
 
-    void checkDeclaredSet(const ModuleDefinition& definition, const Process& process,
+    void checkDeclaredSet(const ModuleDefinition& definition, const Body& body,
                           const std::vector<std::uint32_t>& set, std::string_view name) {
         if (!std::ranges::is_sorted(set)) {
-            reportProcess(definition, process,
-                          std::format("the declared {} is not sorted; set operations and "
-                                      "iteration order both depend on it",
-                                      name));
+            reportBody(definition, body,
+                       std::format("the declared {} is not sorted; set operations and "
+                                   "iteration order both depend on it",
+                                   name));
         }
         if (std::ranges::adjacent_find(set) != set.end()) {
-            reportProcess(definition, process,
-                          std::format("the declared {} contains a duplicate", name));
+            reportBody(definition, body, std::format("the declared {} contains a duplicate", name));
         }
         for (const std::uint32_t index : set) {
             if (index >= definition.objects.size()) {
-                reportProcess(definition, process,
-                              std::format("the declared {} names object {}, but the module has "
-                                          "{} objects",
-                                          name, index, definition.objects.size()));
+                reportBody(definition, body,
+                           std::format("the declared {} names object {}, but the module has "
+                                       "{} objects",
+                                       name, index, definition.objects.size()));
             }
         }
     }
@@ -147,28 +162,28 @@ private:
     /// by comparing extents (section 3.7): two touching extents of one process would be read as
     /// two drivers of that process, and an extent past the end of its object would claim bits
     /// that do not exist.
-    void checkWriteSet(const ModuleDefinition& definition, const Process& process) {
+    void checkWriteSet(const ModuleDefinition& definition, const Body& body) {
         const WriteExtent* previous = nullptr;
-        for (const WriteExtent& extent : process.writeSet) {
+        for (const WriteExtent& extent : body.writeSet) {
             if (extent.objectIndex >= definition.objects.size()) {
-                reportProcess(definition, process,
-                              std::format("the declared write set names object {}, but the module "
-                                          "has {} objects",
-                                          extent.objectIndex, definition.objects.size()));
+                reportBody(definition, body,
+                           std::format("the declared write set names object {}, but the module "
+                                       "has {} objects",
+                                       extent.objectIndex, definition.objects.size()));
                 return;
             }
             const Object& object = definition.objects[extent.objectIndex];
 
             if (extent.width == 0) {
-                reportProcess(
-                    definition, process,
+                reportBody(
+                    definition, body,
                     std::format("the declared write set has an empty extent of '{}'", object.name));
             } else if (extent.endBit() > object.type.bitWidth()) {
-                reportProcess(definition, process,
-                              std::format("the declared write set writes bits [{}:{}] of '{}', "
-                                          "which is {} bits wide",
-                                          extent.endBit() - 1, extent.lowBit, object.name,
-                                          object.type.bitWidth()));
+                reportBody(definition, body,
+                           std::format("the declared write set writes bits [{}:{}] of '{}', "
+                                       "which is {} bits wide",
+                                       extent.endBit() - 1, extent.lowBit, object.name,
+                                       object.type.bitWidth()));
             }
 
             if (previous != nullptr) {
@@ -176,126 +191,283 @@ private:
                                      || (previous->objectIndex == extent.objectIndex
                                          && previous->endBit() < extent.lowBit);
                 if (!ordered) {
-                    reportProcess(definition, process,
-                                  std::format("the declared write set is not normalised at '{}'; "
-                                              "extents must be ordered, and one object's must "
-                                              "neither overlap nor touch",
-                                              object.name));
+                    reportBody(definition, body,
+                               std::format("the declared write set is not normalised at '{}'; "
+                                           "extents must be ordered, and one object's must "
+                                           "neither overlap nor touch",
+                                           object.name));
                 }
             }
             previous = &extent;
         }
     }
 
-    void checkSensitivityEntry(const ModuleDefinition& definition, const Process& process,
+    void checkSensitivityEntry(const ModuleDefinition& definition, const Body& body,
                                const SensitivityEntry& entry) {
         if (entry.objectIndex >= definition.objects.size()) {
-            reportProcess(definition, process,
-                          std::format("is sensitive to object {}, but the module has {} objects",
-                                      entry.objectIndex, definition.objects.size()));
+            reportBody(definition, body,
+                       std::format("is sensitive to object {}, but the module has {} objects",
+                                   entry.objectIndex, definition.objects.size()));
             return;
         }
         // A process triggered by a signal depends on that signal's value, so the signal
         // belongs in the read set; otherwise activity-based scheduling and partitioning would
         // both draw the dependency graph wrongly.
         const Object& object = definition.objects[entry.objectIndex];
-        if (!std::ranges::binary_search(process.readSet, entry.objectIndex)) {
-            reportProcess(definition, process,
-                          std::format("is sensitive to '{}' but does not declare it in its read "
-                                      "set",
-                                      object.name));
+        if (!std::ranges::binary_search(body.readSet, entry.objectIndex)) {
+            reportBody(definition, body,
+                       std::format("is sensitive to '{}' but does not declare it in its read "
+                                   "set",
+                                   object.name));
         }
         if (entry.width != 0 && entry.lowBit + entry.width > object.type.bitWidth()) {
-            reportProcess(definition, process,
-                          std::format("is sensitive to bits [{}:{}] of '{}', which is {} bits wide",
-                                      entry.lowBit + entry.width - 1, entry.lowBit, object.name,
-                                      object.type.bitWidth()));
+            reportBody(definition, body,
+                       std::format("is sensitive to bits [{}:{}] of '{}', which is {} bits wide",
+                                   entry.lowBit + entry.width - 1, entry.lowBit, object.name,
+                                   object.type.bitWidth()));
         }
     }
 
     /// Returns the width of an operand that must be a register, or 0 when it is not
     /// usable, having reported why.
-    std::uint32_t registerWidth(const ModuleDefinition& definition, const Process& process,
+    std::uint32_t registerWidth(const ModuleDefinition& definition, const Body& body,
                                 Operand operand, std::string_view where) {
         if (operand.kind() != Operand::Kind::Register) {
-            reportProcess(definition, process, std::format("{} expects a register operand", where));
+            reportBody(definition, body, std::format("{} expects a register operand", where));
             return 0;
         }
-        if (operand.index() >= process.registerTypes.size()) {
-            reportProcess(definition, process,
-                          std::format("{} uses register {}, but the process declares {}", where,
-                                      operand.index(), process.registerTypes.size()));
+        if (operand.index() >= body.registerTypes.size()) {
+            reportBody(definition, body,
+                       std::format("{} uses register {}, but the {} declares {}", where,
+                                   operand.index(), bodyNoun, body.registerTypes.size()));
             return 0;
         }
-        return process.registerTypes[operand.index()].bitWidth();
+        return body.registerTypes[operand.index()].bitWidth();
     }
 
     /// Checks that a whole-object access moves a register of the object's width.
     ///
     /// A mismatch means the frontend omitted an extension or a truncation, which
     /// would silently read or write the wrong number of bits.
-    void checkObjectWidth(const ModuleDefinition& definition, const Process& process,
+    void checkObjectWidth(const ModuleDefinition& definition, const Body& body,
                           Operand objectOperand, Operand registerOperand, std::string_view where) {
         if (objectOperand.kind() != Operand::Kind::Object
             || objectOperand.index() >= definition.objects.size())
             return;
         if (registerOperand.kind() != Operand::Kind::Register
-            || registerOperand.index() >= process.registerTypes.size())
+            || registerOperand.index() >= body.registerTypes.size())
             return;
 
         const Type objectType = definition.objects[objectOperand.index()].type;
-        const Type registerType = process.registerTypes[registerOperand.index()];
+        const Type registerType = body.registerTypes[registerOperand.index()];
         if (!objectType.isBits() || !registerType.isBits()) return;
 
         if (objectType.bitWidth() != registerType.bitWidth()) {
-            reportProcess(definition, process,
-                          std::format("{} moves a {}-bit register to or from object '{}', which "
-                                      "is {} bits wide",
-                                      where, registerType.bitWidth(),
-                                      definition.objects[objectOperand.index()].name,
-                                      objectType.bitWidth()));
+            reportBody(definition, body,
+                       std::format("{} moves a {}-bit register to or from object '{}', which "
+                                   "is {} bits wide",
+                                   where, registerType.bitWidth(),
+                                   definition.objects[objectOperand.index()].name,
+                                   objectType.bitWidth()));
         }
     }
 
     void checkProcess(const ModuleDefinition& definition, const Process& process) {
-        checkDeclaredSet(definition, process, process.readSet, "read set");
-        checkWriteSet(definition, process);
-
-        // A call that writes an object writes it as a store does, so the object must be in the
-        // write set, or the drivers and the scheduler would not know the process writes it.
-        for (const SysTaskCall& call : process.sysCalls) {
-            if (call.objectIndex != SysTaskCall::NoObject) {
-                checkObjectAccess(definition, process, Operand::object(call.objectIndex), true,
-                                  toString(call.kind));
-            }
-        }
-
-        if (process.blocks.empty()) {
-            reportProcess(definition, process, "has no basic blocks");
-            return;
-        }
+        bodyNoun = "process";
+        currentProcess = &process;
 
         for (const SensitivityEntry& entry : process.sensitivity)
             checkSensitivityEntry(definition, process, entry);
         for (const std::vector<SensitivityEntry>& list : process.eventLists) {
-            if (list.empty()) reportProcess(definition, process, "has an empty event list");
+            if (list.empty()) reportBody(definition, process, "has an empty event list");
             for (const SensitivityEntry& entry : list)
                 checkSensitivityEntry(definition, process, entry);
         }
 
-        for (std::size_t blockIndex = 0; blockIndex < process.blocks.size(); ++blockIndex)
-            checkBlock(definition, process, static_cast<std::uint32_t>(blockIndex));
+        checkBody(definition, process);
+        currentProcess = nullptr;
     }
 
-    void checkBlock(const ModuleDefinition& definition, const Process& process,
+    void checkSubprogram(const ModuleDefinition& definition, const Subprogram& subprogram) {
+        bodyNoun = "subprogram";
+        currentProcess = nullptr;
+
+        const std::size_t registers = subprogram.registerTypes.size();
+        for (std::size_t index = 0; index < subprogram.parameters.size(); ++index) {
+            const SubprogramParameter& parameter = subprogram.parameters[index];
+            if (parameter.registerIndex >= registers) {
+                reportBody(definition, subprogram,
+                           std::format("parameter '{}' is register {}, but the subprogram "
+                                       "declares {}",
+                                       parameter.name, parameter.registerIndex, registers));
+            }
+            for (std::size_t earlier = 0; earlier < index; ++earlier) {
+                if (subprogram.parameters[earlier].registerIndex == parameter.registerIndex) {
+                    reportBody(definition, subprogram,
+                               std::format("parameters '{}' and '{}' share register {}, so a call "
+                                           "would overwrite one with the other",
+                                           subprogram.parameters[earlier].name, parameter.name,
+                                           parameter.registerIndex));
+                }
+            }
+        }
+
+        if (subprogram.isFunction()) {
+            if (subprogram.resultRegister >= registers) {
+                reportBody(definition, subprogram,
+                           std::format("its result is register {}, but the subprogram declares {}",
+                                       subprogram.resultRegister, registers));
+            } else if (subprogram.registerTypes[subprogram.resultRegister]
+                       != subprogram.resultType) {
+                reportBody(
+                    definition, subprogram,
+                    std::format("its result is {}, but the register holding it is {}",
+                                subprogram.resultType.toString(),
+                                subprogram.registerTypes[subprogram.resultRegister].toString()));
+            }
+        }
+
+        checkBody(definition, subprogram);
+    }
+
+    void checkBody(const ModuleDefinition& definition, const Body& body) {
+        checkDeclaredSet(definition, body, body.readSet, "read set");
+        checkWriteSet(definition, body);
+
+        // A call that writes an object writes it as a store does, so the object must be in the
+        // write set, or the drivers and the scheduler would not know the process writes it.
+        for (const SysTaskCall& call : body.sysCalls) {
+            if (call.objectIndex != SysTaskCall::NoObject) {
+                checkObjectAccess(definition, body, Operand::object(call.objectIndex), true,
+                                  toString(call.kind));
+            }
+        }
+
+        for (const CallSite& call : body.calls) checkCallSite(definition, body, call);
+
+        if (body.blocks.empty()) {
+            reportBody(definition, body, "has no basic blocks");
+            return;
+        }
+
+        for (std::size_t blockIndex = 0; blockIndex < body.blocks.size(); ++blockIndex)
+            checkBlock(definition, body, static_cast<std::uint32_t>(blockIndex));
+    }
+
+    /// Checks one call site's operands, and against its callee when the callee is in reach.
+    ///
+    /// A callee in another definition may be in a library this design has not gathered yet, as
+    /// an instance's definition may be, so not finding it is elaboration's to report. Finding it
+    /// means the call can be held to the callee's parameters, which is what keeps a call from
+    /// copying a value of one width into a register of another.
+    void checkCallSite(const ModuleDefinition& definition, const Body& body, const CallSite& call) {
+        const std::string where = std::format("the call of '{}'", call.subprogram);
+
+        const auto operandWidth = [&](Operand operand) -> std::optional<std::uint32_t> {
+            if (operand.kind() == Operand::Kind::Register) {
+                if (operand.index() < body.registerTypes.size())
+                    return body.registerTypes[operand.index()].bitWidth();
+                reportBody(definition, body,
+                           std::format("{} uses register {}, but the {} declares {}", where,
+                                       operand.index(), bodyNoun, body.registerTypes.size()));
+                return std::nullopt;
+            }
+            if (operand.kind() == Operand::Kind::Constant) {
+                if (operand.index() < body.constants.size())
+                    return body.constants[operand.index()].width();
+                reportBody(definition, body,
+                           std::format("{} uses constant {}, but the {} has {}", where,
+                                       operand.index(), bodyNoun, body.constants.size()));
+                return std::nullopt;
+            }
+            reportBody(definition, body,
+                       std::format("{} passes an argument that is neither a register nor a "
+                                   "constant",
+                                   where));
+            return std::nullopt;
+        };
+
+        std::vector<std::optional<std::uint32_t>> argumentWidths;
+        argumentWidths.reserve(call.arguments.size());
+        for (const Operand argument : call.arguments)
+            argumentWidths.push_back(operandWidth(argument));
+
+        std::optional<std::uint32_t> resultWidth;
+        if (call.result.valid()) {
+            if (call.result.kind() != Operand::Kind::Register) {
+                reportBody(definition, body,
+                           std::format("{} returns its result into something other than a "
+                                       "register",
+                                       where));
+            } else {
+                resultWidth = operandWidth(call.result);
+            }
+        }
+
+        const ModuleDefinition* calleeDefinition = &definition;
+        if (!call.definition.empty()) {
+            calleeDefinition = design == nullptr ? nullptr : design->findModule(call.definition);
+            if (calleeDefinition == nullptr) return;
+        }
+        const std::optional<std::uint32_t> calleeIndex =
+            calleeDefinition->findSubprogram(call.subprogram);
+        if (!calleeIndex) {
+            reportBody(definition, body,
+                       std::format("calls '{}', which '{}' does not declare", call.subprogram,
+                                   calleeDefinition->name));
+            return;
+        }
+        const Subprogram& callee = calleeDefinition->subprograms[*calleeIndex];
+
+        if (call.arguments.size() != callee.parameters.size()) {
+            reportBody(definition, body,
+                       std::format("{} passes {} arguments to {} parameters", where,
+                                   call.arguments.size(), callee.parameters.size()));
+            return;
+        }
+        for (std::size_t index = 0; index < callee.parameters.size(); ++index) {
+            const SubprogramParameter& parameter = callee.parameters[index];
+            if (parameter.mode != ParameterMode::In
+                && call.arguments[index].kind() != Operand::Kind::Register) {
+                reportBody(definition, body,
+                           std::format("{} passes its {} parameter '{}' something other than a "
+                                       "register to copy it back into",
+                                       where, toString(parameter.mode), parameter.name));
+            }
+            if (parameter.registerIndex >= callee.registerTypes.size()) continue;
+            const std::uint32_t parameterWidth =
+                callee.registerTypes[parameter.registerIndex].bitWidth();
+            // An argument already reported as unusable has no width to compare.
+            const std::uint32_t argumentWidth = argumentWidths[index].value_or(parameterWidth);
+            if (argumentWidth != parameterWidth) {
+                reportBody(definition, body,
+                           std::format("{} passes {} bits to parameter '{}', which is {} bits",
+                                       where, argumentWidth, parameter.name, parameterWidth));
+            }
+        }
+
+        if (callee.isFunction() != call.result.valid()) {
+            reportBody(definition, body,
+                       callee.isFunction()
+                           ? std::format("{} drops the result of a function", where)
+                           : std::format("{} expects a result from a procedure", where));
+        } else if (const std::uint32_t width = resultWidth.value_or(callee.resultType.bitWidth());
+                   width != callee.resultType.bitWidth()) {
+            reportBody(definition, body,
+                       std::format("{} copies a {}-bit result into a {}-bit register", where,
+                                   callee.resultType.bitWidth(), width));
+        }
+    }
+
+    void checkBlock(const ModuleDefinition& definition, const Body& body,
                     std::uint32_t blockIndex) {
-        const BasicBlock& block = process.blocks[blockIndex];
+        const BasicBlock& block = body.blocks[blockIndex];
 
         if (block.instructions.empty()) {
-            reportProcess(definition, process,
-                          std::format("block {} ('{}') is empty; every block must end in a "
-                                      "terminator",
-                                      blockIndex, block.label));
+            reportBody(definition, body,
+                       std::format("block {} ('{}') is empty; every block must end in a "
+                                   "terminator",
+                                   blockIndex, block.label));
             return;
         }
 
@@ -306,32 +478,32 @@ private:
                                                   mnemonic(instruction.opcode));
 
             if (isTerminator(instruction.opcode) != last) {
-                reportProcess(
-                    definition, process,
+                reportBody(
+                    definition, body,
                     last ? std::format("{} is not a terminator but ends its block", where)
                          : std::format("{} is a terminator in the middle of its block", where));
             }
 
-            checkInstruction(definition, process, instruction, where);
+            checkInstruction(definition, body, instruction, where);
         }
     }
 
-    void checkInstruction(const ModuleDefinition& definition, const Process& process,
+    void checkInstruction(const ModuleDefinition& definition, const Body& body,
                           const Instruction& instruction, const std::string& where) {
         const Opcode opcode = instruction.opcode;
 
         if (hasResult(opcode) != instruction.dst.valid()) {
-            reportProcess(definition, process,
-                          std::format("{} {} a destination operand", where,
-                                      hasResult(opcode) ? "is missing" : "must not have"));
+            reportBody(definition, body,
+                       std::format("{} {} a destination operand", where,
+                                   hasResult(opcode) ? "is missing" : "must not have"));
         }
 
         const std::array<Operand, 3> sources{instruction.a, instruction.b, instruction.c};
         for (std::size_t index = 0; index < sources.size(); ++index) {
             const bool expected = index < sourceCount(opcode);
             if (sources[index].valid() != expected) {
-                reportProcess(
-                    definition, process,
+                reportBody(
+                    definition, body,
                     std::format("{} expects {} source operands", where, sourceCount(opcode)));
                 break;
             }
@@ -345,33 +517,31 @@ private:
                                                  instruction.c};
         for (const Operand operand : allOperands) {
             if (operand.kind() == Operand::Kind::Register
-                && operand.index() >= process.registerTypes.size()) {
-                reportProcess(definition, process,
-                              std::format("{} uses register {}, but the process declares {}", where,
-                                          operand.index(), process.registerTypes.size()));
+                && operand.index() >= body.registerTypes.size()) {
+                reportBody(definition, body,
+                           std::format("{} uses register {}, but the {} declares {}", where,
+                                       operand.index(), bodyNoun, body.registerTypes.size()));
             }
         }
 
         // Block targets must exist, or the interpreter jumps into nothing.
         for (const Operand operand : sources) {
-            if (operand.kind() == Operand::Kind::Block
-                && operand.index() >= process.blocks.size()) {
-                reportProcess(definition, process,
-                              std::format("{} branches to block {}, but the process has {}", where,
-                                          operand.index(), process.blocks.size()));
+            if (operand.kind() == Operand::Kind::Block && operand.index() >= body.blocks.size()) {
+                reportBody(definition, body,
+                           std::format("{} branches to block {}, but the {} has {}", where,
+                                       operand.index(), bodyNoun, body.blocks.size()));
             }
             if (operand.kind() == Operand::Kind::Constant
-                && operand.index() >= process.constants.size()) {
-                reportProcess(definition, process,
-                              std::format("{} uses constant {}, but the process has {}", where,
-                                          operand.index(), process.constants.size()));
+                && operand.index() >= body.constants.size()) {
+                reportBody(definition, body,
+                           std::format("{} uses constant {}, but the {} has {}", where,
+                                       operand.index(), bodyNoun, body.constants.size()));
             }
             if (operand.kind() == Operand::Kind::SysCall
-                && operand.index() >= process.sysCalls.size()) {
-                reportProcess(definition, process,
-                              std::format("{} calls system task descriptor {}, but the process "
-                                          "has {}",
-                                          where, operand.index(), process.sysCalls.size()));
+                && operand.index() >= body.sysCalls.size()) {
+                reportBody(definition, body,
+                           std::format("{} calls system task descriptor {}, but the {} has {}",
+                                       where, operand.index(), bodyNoun, body.sysCalls.size()));
             }
         }
 
@@ -382,49 +552,74 @@ private:
             && !allowsAliasedDestination(opcode)) {
             for (const Operand source : sources) {
                 if (source == instruction.dst) {
-                    reportProcess(definition, process,
-                                  std::format("{} uses register {} as both its destination and "
-                                              "a source, which this operation does not allow",
-                                              where, instruction.dst.index()));
+                    reportBody(definition, body,
+                               std::format("{} uses register {} as both its destination and "
+                                           "a source, which this operation does not allow",
+                                           where, instruction.dst.index()));
                     break;
                 }
             }
         }
 
-        checkOpcodeSpecifics(definition, process, instruction, where);
+        checkOpcodeSpecifics(definition, body, instruction, where);
     }
 
-    void checkOpcodeSpecifics(const ModuleDefinition& definition, const Process& process,
+    void checkOpcodeSpecifics(const ModuleDefinition& definition, const Body& body,
                               const Instruction& instruction, const std::string& where) {
+        // A subprogram runs to its return on the kernel's one call stack (section 4.1), which a
+        // suspension would leave holding its frame; and its stores go straight to objects no
+        // driver resolves, which a non-blocking or delayed write, scheduled through the drivers
+        // of a process, is not.
+        if (currentProcess == nullptr) {
+            if (suspends(instruction.opcode)) {
+                reportBody(definition, body,
+                           std::format("{} suspends, which a subprogram may not; one that waits "
+                                       "is inlined into its caller",
+                                       where));
+            }
+            switch (instruction.opcode) {
+            case Opcode::StoreNonBlocking:
+            case Opcode::StorePartNonBlocking:
+            case Opcode::StoreDelayed:
+            case Opcode::StoreNonBlockingDelayed:
+                reportBody(definition, body,
+                           std::format("{} schedules a write, which a subprogram may not; its "
+                                       "stores are immediate",
+                                       where));
+                break;
+            default: break;
+            }
+        }
+
         switch (instruction.opcode) {
         case Opcode::ReadObject:
-            checkObjectAccess(definition, process, instruction.a, false, where);
-            checkObjectWidth(definition, process, instruction.a, instruction.dst, where);
+            checkObjectAccess(definition, body, instruction.a, false, where);
+            checkObjectWidth(definition, body, instruction.a, instruction.dst, where);
             break;
 
         // A window of an object, which may be narrower than it, so only the object is checked.
         case Opcode::ReadObjectPart:
-            checkObjectAccess(definition, process, instruction.a, false, where);
+            checkObjectAccess(definition, body, instruction.a, false, where);
             break;
 
         case Opcode::Store:
         case Opcode::StoreNonBlocking:
-            checkObjectAccess(definition, process, instruction.a, true, where);
-            checkObjectWidth(definition, process, instruction.a, instruction.b, where);
+            checkObjectAccess(definition, body, instruction.a, true, where);
+            checkObjectWidth(definition, body, instruction.a, instruction.b, where);
             break;
 
         case Opcode::StoreDelayed:
         case Opcode::StoreNonBlockingDelayed:
-            checkObjectAccess(definition, process, instruction.a, true, where);
-            checkObjectWidth(definition, process, instruction.a, instruction.b, where);
-            registerWidth(definition, process, instruction.c, where);
+            checkObjectAccess(definition, body, instruction.a, true, where);
+            checkObjectWidth(definition, body, instruction.a, instruction.b, where);
+            registerWidth(definition, body, instruction.c, where);
             break;
 
         // A part store deliberately moves a narrower value than the object holds,
         // so only the object itself is checked.
         case Opcode::StorePart:
         case Opcode::StorePartNonBlocking:
-            checkObjectAccess(definition, process, instruction.a, true, where);
+            checkObjectAccess(definition, body, instruction.a, true, where);
             break;
 
         // A system task has no result and a system function has one, so each opcode runs only
@@ -432,25 +627,33 @@ private:
         case Opcode::SysTask:
         case Opcode::SysFunction:
             if (instruction.a.kind() == Operand::Kind::SysCall
-                && instruction.a.index() < process.sysCalls.size()
-                && isSystemFunction(process.sysCalls[instruction.a.index()].kind)
+                && instruction.a.index() < body.sysCalls.size()
+                && isSystemFunction(body.sysCalls[instruction.a.index()].kind)
                        != (instruction.opcode == Opcode::SysFunction)) {
-                reportProcess(definition, process,
-                              std::format("{} runs {} with the wrong opcode", where,
-                                          toString(process.sysCalls[instruction.a.index()].kind)));
+                reportBody(definition, body,
+                           std::format("{} runs {} with the wrong opcode", where,
+                                       toString(body.sysCalls[instruction.a.index()].kind)));
             }
             break;
 
         case Opcode::WaitEdge:
-            checkObjectAccess(definition, process, instruction.a, false, where);
+            checkObjectAccess(definition, body, instruction.a, false, where);
+            break;
+
+        case Opcode::Call:
+            if (instruction.a.kind() != Operand::Kind::Call
+                || instruction.a.index() >= body.calls.size()) {
+                reportBody(
+                    definition, body,
+                    std::format("{} names a call site the {} does not have", where, bodyNoun));
+            }
             break;
 
         case Opcode::WaitEvents:
-            if (instruction.a.kind() != Operand::Kind::Immediate
-                || instruction.a.index() >= process.eventLists.size()) {
-                reportProcess(
-                    definition, process,
-                    std::format("{} names an event list the process does not have", where));
+            if (currentProcess == nullptr || instruction.a.kind() != Operand::Kind::Immediate
+                || instruction.a.index() >= currentProcess->eventLists.size()) {
+                reportBody(definition, body,
+                           std::format("{} names an event list the process does not have", where));
             }
             break;
 
@@ -467,15 +670,14 @@ private:
         case Opcode::Multiply:
         case Opcode::Divide:
         case Opcode::Modulo: {
-            const std::uint32_t dstWidth =
-                registerWidth(definition, process, instruction.dst, where);
-            const std::uint32_t aWidth = registerWidth(definition, process, instruction.a, where);
-            const std::uint32_t bWidth = registerWidth(definition, process, instruction.b, where);
+            const std::uint32_t dstWidth = registerWidth(definition, body, instruction.dst, where);
+            const std::uint32_t aWidth = registerWidth(definition, body, instruction.a, where);
+            const std::uint32_t bWidth = registerWidth(definition, body, instruction.b, where);
             if (dstWidth != 0 && (dstWidth != aWidth || dstWidth != bWidth)) {
-                reportProcess(definition, process,
-                              std::format("{} mixes widths {}, {} and {}; this operation "
-                                          "requires all three to be equal",
-                                          where, dstWidth, aWidth, bWidth));
+                reportBody(definition, body,
+                           std::format("{} mixes widths {}, {} and {}; this operation "
+                                       "requires all three to be equal",
+                                       where, dstWidth, aWidth, bWidth));
             }
             break;
         }
@@ -498,13 +700,12 @@ private:
         case Opcode::LogicalOr:
         case Opcode::LogicalNot:
         case Opcode::BitSelect: {
-            const std::uint32_t dstWidth =
-                registerWidth(definition, process, instruction.dst, where);
+            const std::uint32_t dstWidth = registerWidth(definition, body, instruction.dst, where);
             if (dstWidth != 0 && dstWidth != 1) {
-                reportProcess(definition, process,
-                              std::format("{} writes a {}-bit destination, but this "
-                                          "operation produces a single bit",
-                                          where, dstWidth));
+                reportBody(definition, body,
+                           std::format("{} writes a {}-bit destination, but this "
+                                       "operation produces a single bit",
+                                       where, dstWidth));
             }
             break;
         }
@@ -517,6 +718,13 @@ private:
     DiagnosticEngine& diagnostics;
     std::string context;
     unsigned problems = 0;
+
+    /// What the body being checked is called in a message: a process or a subprogram.
+    std::string_view bodyNoun = "process";
+
+    /// The process being checked, or null while checking a subprogram, which has none of a
+    /// process's event lists and may neither suspend nor schedule a write.
+    const Process* currentProcess = nullptr;
 };
 
 } // namespace

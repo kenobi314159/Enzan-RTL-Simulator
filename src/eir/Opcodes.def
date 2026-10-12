@@ -218,6 +218,20 @@ ENZAN_OPCODE(SysFunction, "sysfunc", true, 1,
              "a system function's result depends on state the runtime keeps, such as "
              "a random generator")
 
+// --- Calls -----------------------------------------------------------------
+//
+// A call runs a subprogram's body to its return (DESIGN_GUIDE.md section 4.1). It never
+// suspends: a subprogram that waits is inlined into its caller instead, which is what lets the
+// callee be an ordinary LLVM function and its registers live on one stack.
+
+ENZAN_OPCODE(Call, "call", false, 1,
+             "a `call` of the LLVM function the callee's body is compiled to, the call site "
+             "the first operand names giving its in arguments by value and pointers to the "
+             "caller's registers for its out and inout ones; the callee's registers are an "
+             "`alloca` of that function, as they are the kernel's call stack in the "
+             "interpreter, and a function's result is copied into the call site's register "
+             "after the `ret`")
+
 // --- Suspension ------------------------------------------------------------
 //
 // A process suspends by returning to the scheduler. The lowering of a suspension

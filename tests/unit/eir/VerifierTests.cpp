@@ -24,15 +24,19 @@ using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
 using enzan::eir::BasicBlock;
+using enzan::eir::CallSite;
 using enzan::eir::Design;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
 using enzan::eir::Opcode;
 using enzan::eir::Operand;
+using enzan::eir::ParameterMode;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::SensitivityEntry;
+using enzan::eir::Subprogram;
+using enzan::eir::SubprogramParameter;
 using enzan::eir::Type;
 using enzan::eir::WriteExtent;
 
@@ -74,6 +78,44 @@ protected:
         process.blocks.push_back(std::move(entry));
 
         definition.processes.push_back(std::move(process));
+        return definition;
+    }
+
+    /// A function of one 8-bit parameter returning it doubled, as a module's subprogram.
+    static Subprogram makeDoubler() {
+        Subprogram doubler;
+        doubler.name = "double";
+        doubler.registerTypes = {Type::bits(8, false, true), Type::bits(8, false, true)};
+        doubler.parameters.push_back(
+            SubprogramParameter{.name = "value", .mode = ParameterMode::In, .registerIndex = 0});
+        doubler.resultType = Type::bits(8, false, true);
+        doubler.resultRegister = 1;
+
+        BasicBlock entry;
+        entry.label = "entry";
+        entry.instructions.push_back(
+            Instruction::make(Opcode::Add, Operand::reg(1), Operand::reg(0), Operand::reg(0)));
+        entry.instructions.push_back(Instruction::make(Opcode::Return));
+        doubler.blocks.push_back(std::move(entry));
+        return doubler;
+    }
+
+    /// The valid module, with its process copying `double(source)` to `sink` through a call.
+    static ModuleDefinition makeModuleWithCall() {
+        ModuleDefinition definition = makeValidModule();
+        definition.subprograms.push_back(makeDoubler());
+
+        Process& process = definition.processes[0];
+        process.registerTypes.push_back(Type::bits(8, false, true));
+        process.calls.push_back(CallSite{.definition = "",
+                                         .subprogram = "double",
+                                         .arguments = {Operand::reg(0)},
+                                         .result = Operand::reg(1),
+                                         .location = {}});
+
+        std::vector<Instruction>& code = process.blocks[0].instructions;
+        code.insert(code.begin() + 1, Instruction::make(Opcode::Call, {}, Operand::call(0)));
+        code[2].b = Operand::reg(1);
         return definition;
     }
 
@@ -458,6 +500,155 @@ TEST_F(VerifierTest, ReportsNameTheModuleAndTheProcess) {
     EXPECT_FALSE(check(definition));
     EXPECT_TRUE(reported("module 'copier'"));
     EXPECT_TRUE(reported("process 'always_comb@copier'"));
+}
+
+// ---------------------------------------------------------------------------
+// Subprograms and calls
+// ---------------------------------------------------------------------------
+
+TEST_F(VerifierTest, AcceptsAFunctionAndACallOfIt) {
+    EXPECT_TRUE(check(makeModuleWithCall()));
+    EXPECT_TRUE(consumer.messages.empty()) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, HoldsASubprogramToItsOwnDeclaredSets) {
+    // The invariant of section 4.2 is a body's, whichever kind of body it is.
+    ModuleDefinition definition = makeModuleWithCall();
+    Subprogram& doubler = definition.subprograms[0];
+    doubler.registerTypes.push_back(Type::bits(8, false, true));
+    std::vector<Instruction>& code = doubler.blocks[0].instructions;
+    code.insert(code.begin(),
+                Instruction::make(Opcode::ReadObject, Operand::reg(2), Operand::object(0)));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("subprogram 'double'"));
+    EXPECT_TRUE(reported("not in the declared read set"));
+}
+
+TEST_F(VerifierTest, RejectsASubprogramThatSuspends) {
+    // Its frame lives on the kernel's one stack, which a suspension would leave holding it.
+    ModuleDefinition definition = makeModuleWithCall();
+    Subprogram& doubler = definition.subprograms[0];
+    std::vector<Instruction>& code = doubler.blocks[0].instructions;
+    code.back() = Instruction::make(Opcode::WaitTime, {}, Operand::reg(0), Operand::block(1));
+    BasicBlock resumed;
+    resumed.label = "resumed";
+    resumed.instructions.push_back(Instruction::make(Opcode::Return));
+    doubler.blocks.push_back(std::move(resumed));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("which a subprogram may not; one that waits is inlined"));
+}
+
+TEST_F(VerifierTest, RejectsANonBlockingStoreInASubprogram) {
+    ModuleDefinition definition = makeModuleWithCall();
+    Subprogram& doubler = definition.subprograms[0];
+    doubler.writeSet = {WriteExtent::whole(1, 8)};
+    std::vector<Instruction>& code = doubler.blocks[0].instructions;
+    code.insert(code.end() - 1, Instruction::make(Opcode::StoreNonBlocking, {}, Operand::object(1),
+                                                  Operand::reg(1)));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("schedules a write, which a subprogram may not"));
+}
+
+TEST_F(VerifierTest, RejectsACallOfASubprogramTheDefinitionDoesNotDeclare) {
+    ModuleDefinition definition = makeModuleWithCall();
+    definition.processes[0].calls[0].subprogram = "triple";
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("calls 'triple', which 'copier' does not declare"));
+}
+
+TEST_F(VerifierTest, RejectsAnArgumentOfAnotherWidthThanItsParameter) {
+    ModuleDefinition definition = makeModuleWithCall();
+    definition.subprograms[0].registerTypes[0] = Type::bits(16, false, true);
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("passes 8 bits to parameter 'value', which is 16 bits"));
+}
+
+TEST_F(VerifierTest, RejectsTheWrongNumberOfArguments) {
+    ModuleDefinition definition = makeModuleWithCall();
+    definition.processes[0].calls[0].arguments.push_back(Operand::reg(0));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("passes 2 arguments to 1 parameters"));
+}
+
+TEST_F(VerifierTest, RejectsAnOutArgumentWithNowhereToCopyItBack) {
+    ModuleDefinition definition = makeModuleWithCall();
+    definition.subprograms[0].parameters[0].mode = ParameterMode::InOut;
+    Process& process = definition.processes[0];
+    process.constants.push_back(enzan::eir::BitVector::fromUInt64(3, 8));
+    process.calls[0].arguments[0] = Operand::constant(0);
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("passes its inout parameter 'value' something other than a register"));
+}
+
+TEST_F(VerifierTest, RejectsAFunctionWhoseResultIsDropped) {
+    ModuleDefinition definition = makeModuleWithCall();
+    definition.processes[0].calls[0].result = Operand::none();
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("drops the result of a function"));
+}
+
+TEST_F(VerifierTest, RejectsAResultRegisterOfAnotherTypeThanTheResult) {
+    ModuleDefinition definition = makeModuleWithCall();
+    definition.subprograms[0].resultType = Type::bits(8, true, true);
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("but the register holding it is"));
+}
+
+TEST_F(VerifierTest, RejectsTwoSubprogramsOfOneName) {
+    ModuleDefinition definition = makeModuleWithCall();
+    definition.subprograms.push_back(makeDoubler());
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("declares two subprograms called 'double'"));
+}
+
+TEST_F(VerifierTest, RejectsACallInstructionNamingNoCallSite) {
+    ModuleDefinition definition = makeModuleWithCall();
+    definition.processes[0].blocks[0].instructions[1].a = Operand::call(1);
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("names a call site the process does not have"));
+}
+
+TEST_F(VerifierTest, HoldsACallIntoAnotherDefinitionToItsCallee) {
+    // The callee is a package's, which the design gathers; with it in reach, the call is
+    // checked as one into its own definition would be.
+    ModuleDefinition package;
+    package.name = "arith::";
+    package.sourceName = "arith";
+    package.isPackage = true;
+    package.subprograms.push_back(makeDoubler());
+    package.subprograms[0].registerTypes[0] = Type::bits(4, false, true);
+
+    ModuleDefinition caller = makeModuleWithCall();
+    caller.subprograms.clear();
+    caller.processes[0].calls[0].definition = "arith::";
+
+    Design design;
+    design.addModule(std::move(package));
+    design.addModule(std::move(caller));
+
+    EXPECT_FALSE(enzan::eir::verify(design, engine));
+    EXPECT_TRUE(reported("passes 8 bits to parameter 'value', which is 4 bits"));
+}
+
+TEST_F(VerifierTest, LeavesACallIntoAnUnknownDefinitionToElaboration) {
+    // As an instance of a module no library has yet is: analysis is per unit, and the callee
+    // may be in a library gathered later.
+    ModuleDefinition definition = makeModuleWithCall();
+    definition.subprograms.clear();
+    definition.processes[0].calls[0].definition = "elsewhere::";
+
+    EXPECT_TRUE(check(definition));
 }
 
 } // namespace

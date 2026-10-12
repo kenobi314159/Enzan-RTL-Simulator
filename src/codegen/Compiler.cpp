@@ -139,6 +139,14 @@ bool Compiler::compileProcess(const eir::ModuleDefinition& definition, const eir
         out.blockStarts.push_back(static_cast<std::uint32_t>(out.code.size()));
 
         for (const eir::Instruction& source : block.instructions) {
+            if (source.opcode == eir::Opcode::Call) {
+                diagnostics.report(DiagCode::NotYetImplemented, source.location,
+                                   std::format("compiling a call of a subprogram, in process "
+                                               "'{}' of '{}',",
+                                               process.name, definition.name));
+                return false;
+            }
+
             Instruction emitted;
             emitted.opcode = source.opcode;
             emitted.isSigned = source.isSigned;

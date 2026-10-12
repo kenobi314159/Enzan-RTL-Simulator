@@ -99,6 +99,8 @@ public:
         /// A small literal carried in the instruction, used for enumerations such
         /// as EdgeKind rather than for values.
         Immediate,
+        /// An index into the body's call sites (`Body::calls`).
+        Call,
     };
 
     constexpr Operand() noexcept = default;
@@ -122,6 +124,8 @@ public:
     static constexpr Operand immediate(std::uint32_t value) noexcept {
         return {Kind::Immediate, value};
     }
+
+    static constexpr Operand call(std::uint32_t index) noexcept { return {Kind::Call, index}; }
 
     [[nodiscard]] constexpr Kind kind() const noexcept { return operandKind; }
 

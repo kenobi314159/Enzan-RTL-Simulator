@@ -215,33 +215,85 @@ void normaliseWriteSet(std::vector<WriteExtent>& extents);
 /// from here.
 [[nodiscard]] std::vector<std::uint32_t> writtenObjects(const std::vector<WriteExtent>& writeSet);
 
-/// An EIR-B process: the body of one procedural block, as a control-flow graph.
+/// How a subprogram's parameter passes its value.
 ///
-/// **The core invariant.** A process is expressible as a pure function over an
-/// explicit state arena, with a declared read set and write set (DESIGN_GUIDE.md
-/// section 4.2). This is the single most important structural rule in the project:
-/// static partitioning for threading, JIT compilation, activity-based scheduling
-/// and checkpointing all depend on knowing exactly what a process touches. A
-/// process that reaches arbitrary global state closes those doors permanently.
-///
-/// The invariant is not left to review. `verify()` in Verifier.h checks that every
-/// object an instruction touches appears in the declared sets, and the frontends'
-/// output is verified before it is accepted.
-struct Process {
-    ProcessKind kind = ProcessKind::Always;
+/// By copy in both directions, which is what VHDL requires of a scalar and allows of a
+/// composite, and what SystemVerilog's `input`, `output` and `inout` mean.
+enum class ParameterMode : std::uint8_t {
+    /// Copied into the callee's register when it is called: `in`, `input`.
+    In,
+    /// Copied back into the caller's register when the callee returns: `out`, `output`.
+    Out,
+    /// Both: `inout`.
+    InOut,
+};
 
-    /// A readable identifier such as `always_ff@counter.sv:14`, used in diagnostics,
-    /// in the Processes window and in delta-loop reports.
+std::string_view toString(ParameterMode mode) noexcept;
+
+/// One parameter of a subprogram.
+struct SubprogramParameter {
+    std::string name;
+
+    ParameterMode mode = ParameterMode::In;
+
+    /// The register of the subprogram's own register file that holds the parameter.
+    std::uint32_t registerIndex = 0;
+
+    friend bool operator==(const SubprogramParameter&, const SubprogramParameter&) = default;
+};
+
+/// A call of a subprogram, described once and referred to by index from the instruction
+/// stream, as a system task call is.
+///
+/// Kept out of the instruction for the same reason: a call has as many arguments as its callee
+/// has parameters, and an instruction is fixed-size.
+struct CallSite {
+    /// The definition declaring the callee, named as an instance names the definition it
+    /// instantiates (`Instance::definitionName`), or empty for the calling body's own.
+    ///
+    /// A name rather than an index for the same reason as there: a package may be analysed in
+    /// another library, or later, than the unit calling into it.
+    std::string definition;
+
+    /// The callee's name within that definition (`Subprogram::name`).
+    std::string subprogram;
+
+    /// One per parameter of the callee, in order: a register or a constant for an `In`
+    /// parameter, and for an `Out` or `InOut` one the register its value is copied back into.
+    std::vector<Operand> arguments;
+
+    /// The register a function's result is copied into, or no operand for a procedure.
+    Operand result;
+
+    SourceLocation location;
+};
+
+/// What a process and a subprogram both are: a body of EIR-B over registers of its own, as a
+/// control-flow graph, with the read and write sets of everything it touches.
+///
+/// **The core invariant.** A body is expressible as a pure function over an explicit state
+/// arena, with a declared read set and write set (DESIGN_GUIDE.md section 4.2). This is the
+/// single most important structural rule in the project: static partitioning for threading,
+/// JIT compilation, activity-based scheduling and checkpointing all depend on knowing exactly
+/// what a process touches. A body that reaches arbitrary global state closes those doors
+/// permanently.
+///
+/// The invariant is not left to review. `verify()` in Verifier.h checks that every object an
+/// instruction touches appears in the declared sets, and the frontends' output is verified
+/// before it is accepted. A body's sets are its own: what its callees touch is theirs, and
+/// elaboration adds it to a process's when it binds the calls (section 4.1).
+struct Body {
+    /// A readable identifier such as `always_ff@counter.sv:14`, used in diagnostics, in the
+    /// Processes window and in delta-loop reports. For a subprogram, the name calls name it by.
     std::string name;
 
     SourceLocation location;
 
-    /// Type of each virtual register, indexed by register number. Registers are not
-    /// in SSA form: the compiler reuses them, and `codegen` maps them to scratch
-    /// offsets.
+    /// Type of each virtual register, indexed by register number. Registers are not in SSA
+    /// form: the compiler reuses them, and `codegen` maps them to scratch offsets.
     std::vector<Type> registerTypes;
 
-    /// Constant values referred to by LoadConstant and by system task arguments.
+    /// Constant values referred to by LoadConstant, by system task arguments and by calls.
     std::vector<BitVector> constants;
 
     /// String literals, referred to by system task descriptors.
@@ -252,6 +304,23 @@ struct Process {
 
     std::vector<SysTaskCall> sysCalls;
 
+    /// The subprograms this body calls, referred to by `Call` instructions.
+    std::vector<CallSite> calls;
+
+    /// Object indices this body reads. Sorted and duplicate-free, so that comparing or
+    /// intersecting two bodies' sets is cheap and so that iteration order cannot vary between
+    /// runs (section 3.8).
+    std::vector<std::uint32_t> readSet;
+
+    /// The bits this body writes, normalised by `normaliseWriteSet` so that the same
+    /// guarantees hold.
+    std::vector<WriteExtent> writeSet;
+};
+
+/// An EIR-B process: the body of one procedural block, scheduled by the kernel.
+struct Process : Body {
+    ProcessKind kind = ProcessKind::Always;
+
     /// Explicit sensitivity. Empty for `initial`, `final` and `always_comb`, whose
     /// triggering is derived from the kind and the read set instead.
     std::vector<SensitivityEntry> sensitivity;
@@ -259,15 +328,25 @@ struct Process {
     /// The event lists `WaitEvents` waits on, by index: `@(posedge a or negedge b)` inside a
     /// body is one, and resumes on whichever of its entries happens first.
     std::vector<std::vector<SensitivityEntry>> eventLists;
+};
 
-    /// Object indices this process reads. Sorted and duplicate-free, so that
-    /// comparing or intersecting two processes' sets is cheap and so that iteration
-    /// order cannot vary between runs (section 3.8).
-    std::vector<std::uint32_t> readSet;
+/// A body that is called rather than scheduled (DESIGN_GUIDE.md section 4.1): a VHDL function or
+/// procedure, and in time a SystemVerilog function.
+///
+/// It runs to its `Return` without suspending — a subprogram that waits is inlined into its
+/// caller instead, which is what lets every call's registers live on the kernel's one stack —
+/// and it writes only objects that no driver resolves, since a store into a resolved signal
+/// goes through the drivers of the process making it.
+struct Subprogram : Body {
+    std::vector<SubprogramParameter> parameters;
 
-    /// The bits this process writes, normalised by `normaliseWriteSet` so that the same
-    /// guarantees hold.
-    std::vector<WriteExtent> writeSet;
+    /// The result: void for a procedure.
+    Type resultType;
+
+    /// The register holding the result when the body returns. Meaningless for a procedure.
+    std::uint32_t resultRegister = 0;
+
+    [[nodiscard]] bool isFunction() const noexcept { return !resultType.isVoid(); }
 };
 
 /// True when `process` must be scheduled once at time zero, before anything it

@@ -388,6 +388,11 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
                                      reg(instruction.dst, instruction.dstWidth));
             break;
 
+        case eir::Opcode::Call:
+            // Codegen refuses a call until calls are compiled, so none reaches here.
+            ENZAN_ASSERT(false, "a call reached the interpreter before calls are compiled");
+            return ExecutionResult::Stopped;
+
         case eir::Opcode::SysTask:
             kernel.runSystemTask(processIndex, instruction.a);
             if (kernel.finishRequested || kernel.errorRequested) return ExecutionResult::Stopped;

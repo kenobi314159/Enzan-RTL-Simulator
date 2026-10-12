@@ -304,6 +304,10 @@ struct ModuleDefinition {
     std::vector<Instance> instances;
     std::vector<Process> processes;
 
+    /// The subprograms this definition declares, which calls name by definition and name
+    /// (`CallSite`). A package's are its own, so one definition serves every caller.
+    std::vector<Subprogram> subprograms;
+
     /// The enumerations objects here refer to by index.
     std::vector<EnumDefinition> enums;
 
@@ -318,6 +322,11 @@ struct ModuleDefinition {
 
     /// Adds an object and returns its index.
     std::uint32_t addObject(Object object);
+
+    /// Returns the index of the subprogram called `name`, or nothing.
+    ///
+    /// A linear scan, as `findObject` is, and for the same reasons.
+    [[nodiscard]] std::optional<std::uint32_t> findSubprogram(std::string_view wanted) const;
 
     /// Adds an enumeration, or returns the index of an identical one already here.
     ///

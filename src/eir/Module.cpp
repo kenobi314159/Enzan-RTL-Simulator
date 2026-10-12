@@ -83,6 +83,14 @@ std::optional<std::uint32_t> ModuleDefinition::findObject(std::string_view wante
     return static_cast<std::uint32_t>(found - objects.begin());
 }
 
+std::optional<std::uint32_t> ModuleDefinition::findSubprogram(std::string_view wanted) const {
+    const auto found = std::ranges::find_if(
+        subprograms, [wanted](const Subprogram& subprogram) { return subprogram.name == wanted; });
+    if (found == subprograms.end()) return std::nullopt;
+
+    return static_cast<std::uint32_t>(found - subprograms.begin());
+}
+
 std::uint32_t ModuleDefinition::addObject(Object object) {
     const auto index = static_cast<std::uint32_t>(objects.size());
     objects.push_back(std::move(object));

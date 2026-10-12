@@ -71,6 +71,15 @@ std::string_view toString(SysTaskKind kind) noexcept {
     return "$unknown";
 }
 
+std::string_view toString(ParameterMode mode) noexcept {
+    switch (mode) {
+    case ParameterMode::In: return "in";
+    case ParameterMode::Out: return "out";
+    case ParameterMode::InOut: return "inout";
+    }
+    return "?";
+}
+
 std::string_view toString(ProcessKind kind) noexcept {
     switch (kind) {
     case ProcessKind::Initial: return "initial";
