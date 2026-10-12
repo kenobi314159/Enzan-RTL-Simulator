@@ -42,6 +42,13 @@ spinning in the Active region forever.
 the whole design, the non-blocking update pool keeps its capacity between time slots, and
 the region queues reuse their storage.
 
+**One call stack** (section 4.1). A call's registers go on a stack that follows the processes'
+frames in that one allocation, since a subprogram never suspends and every call a process makes
+has returned before it does. The image measures the deepest chain of calls the design can make
+and the stack is laid out for exactly that; where a call can reach itself again, it is laid out
+for `KernelOptions::callDepthLimit` calls, 10,000 by default, and a run that would go deeper
+stops with ENZ5011 naming the subprogram.
+
 **Single-threaded.** That is the plan and not a fallback (section 6.4): a cache-friendly
 single-threaded loop outperforms a naively parallel one, and determinism comes free.
 

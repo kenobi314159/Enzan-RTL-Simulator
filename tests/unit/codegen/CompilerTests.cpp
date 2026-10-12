@@ -11,6 +11,7 @@
 #include "eir/Type.h"
 
 #include "support/Literals.h"
+#include "support/ProcessBuilder.h"
 
 #include <gtest/gtest.h>
 
@@ -33,11 +34,14 @@ using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
 using enzan::eir::Opcode;
 using enzan::eir::Operand;
+using enzan::eir::ParameterMode;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
 using enzan::eir::WriteExtent;
 using enzan::test::literal;
+using enzan::test::ProcessBuilder;
+using enzan::test::SubprogramBuilder;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -445,6 +449,59 @@ TEST_F(CompilerTest, RejectsAFormatStringIndexOutOfRange) {
     design.addModule(makeModule(std::move(process)));
     EXPECT_EQ(compile(), nullptr);
     EXPECT_TRUE(reported("names string 3"));
+}
+
+TEST_F(CompilerTest, ACallKeepsTheCallersHalfAndTheCalleeKeepsItsOwn) {
+    // A call resolves only what the caller knows — where its arguments are and where the
+    // result goes. Where the callee keeps its parameters is on the callee, since which
+    // binding of it a call reaches is elaboration's to say.
+    SubprogramBuilder callee("scale");
+    const std::uint32_t wide = callee.reg(Type::bits(128, false, true));
+    const std::uint32_t factor =
+        callee.parameter("factor", Type::bits(8, false, true), ParameterMode::InOut);
+    const std::uint32_t result = callee.result(Type::bits(8, false, true));
+    callee.block("entry");
+    callee.emit(Instruction::make(Opcode::Move, Operand::reg(result), Operand::reg(factor)));
+    callee.emit(Instruction::make(Opcode::Return));
+    static_cast<void>(wide);
+
+    ProcessBuilder caller(ProcessKind::Initial, "caller");
+    const std::uint32_t padding = caller.reg(Type::bits(64, false, true));
+    const std::uint32_t argument = caller.reg(Type::bits(8, false, true));
+    const std::uint32_t returned = caller.reg(Type::bits(8, false, true));
+    caller.block("entry");
+    caller.call("", "scale", {Operand::reg(argument)}, Operand::reg(returned));
+    caller.emit(Instruction::make(Opcode::Return));
+    static_cast<void>(padding);
+
+    ModuleDefinition definition = makeModule(caller.finish());
+    definition.subprograms.push_back(callee.finish());
+    design.addModule(std::move(definition));
+
+    const std::unique_ptr<CompiledDesign> compiled = compile();
+    ASSERT_NE(compiled, nullptr) << consumer.messages.front();
+
+    const std::uint32_t calleeIndex = compiled->subprogramBodyIndex(0, 0);
+    ASSERT_NE(calleeIndex, CompiledDesign::NotCompiled);
+    const enzan::codegen::CompiledBody& calleeBody = compiled->body(calleeIndex);
+    // A 128-bit register takes four Words, both planes of two, before the parameter's.
+    ASSERT_EQ(calleeBody.parameters.size(), 1U);
+    EXPECT_EQ(calleeBody.parameters[0].offset, 4U);
+    EXPECT_EQ(calleeBody.parameters[0].bitWidth, 8U);
+    EXPECT_EQ(calleeBody.parameters[0].mode, ParameterMode::InOut);
+    EXPECT_EQ(calleeBody.resultOffset, 6U);
+    EXPECT_EQ(calleeBody.resultWidth, 8U);
+
+    const enzan::codegen::CompiledBody& callerBody = compiled->body(compiled->bodyIndex(0, 0));
+    ASSERT_EQ(callerBody.calls.size(), 1U);
+    const enzan::codegen::CallDescriptor& call = callerBody.calls[0];
+    ASSERT_EQ(call.arguments.size(), 1U);
+    EXPECT_FALSE(call.arguments[0].isConstant);
+    EXPECT_EQ(call.arguments[0].location, 2U);
+    EXPECT_TRUE(call.hasResult);
+    EXPECT_EQ(call.resultLocation, 4U);
+    EXPECT_EQ(callerBody.code[0].opcode, Opcode::Call);
+    EXPECT_EQ(callerBody.code[0].a, 0U);
 }
 
 } // namespace

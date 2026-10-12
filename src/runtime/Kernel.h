@@ -14,9 +14,11 @@
 #include <iosfwd>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace enzan {
@@ -164,6 +166,28 @@ struct KernelOptions {
     /// process's `$urandom` generator is derived from. Zero by default, which is where other
     /// simulators start `$random` too.
     std::uint32_t seed = 0;
+
+    /// Calls one process may have in progress at once, in a design where a call can reach
+    /// itself again (DESIGN_GUIDE.md section 4.1). The call stack is laid out for this many when
+    /// the kernel is built, and a run that would go deeper stops with a diagnostic naming the
+    /// subprogram, as the delta limit stops a design that does not settle. A design that cannot
+    /// recurse is given exactly the stack its deepest chain of calls needs, and no limit.
+    std::uint32_t callDepthLimit = 10'000;
+};
+
+/// The body the interpreter is running and what it is bound to: a process's own, or that of a
+/// subprogram the process called.
+struct Activation {
+    const codegen::CompiledBody* body = nullptr;
+
+    /// Word offset of the body's registers in the kernel's frame storage.
+    std::uint32_t frameOffset = 0;
+
+    std::span<const std::uint32_t> objectSignals;
+    std::span<const WriteRoute> writeRoutes;
+
+    /// For each of the body's call sites, the bound subprogram it calls.
+    std::span<const std::uint32_t> calls;
 };
 
 /// The simulation kernel: one time wheel, one event queue, one arena.
@@ -377,12 +401,29 @@ public:
     void suspendForEvents(std::uint32_t processIndex, std::uint32_t listIndex,
                           std::uint32_t resumePc);
 
-    /// Performs a system task call.
-    void runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallIndex);
+    /// Performs a system task call of `activation`'s body, for process `processIndex`.
+    void runSystemTask(std::uint32_t processIndex, const Activation& activation,
+                       std::uint32_t sysCallIndex);
 
     /// Performs a system function call, writing its result to `result`.
-    void runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCallIndex,
-                           eir::BitRef result);
+    void runSystemFunction(std::uint32_t processIndex, const Activation& activation,
+                           std::uint32_t sysCallIndex, eir::BitRef result);
+
+    /// Starts the call `callIndex` of `caller`'s body: lays the callee's registers out on the
+    /// call stack, copies the arguments in, and returns the callee's activation, the caller's
+    /// being kept to return to at `resumePc`. Returns nothing having stopped the run when the
+    /// call would go deeper than the stack holds.
+    std::optional<Activation> enterCall(std::uint32_t processIndex, const Activation& caller,
+                                        std::uint32_t callIndex, std::uint32_t resumePc);
+
+    /// Returns from the innermost call to the activation that made it, copying the result and
+    /// the `out` and `inout` parameters back, and returns that activation and the instruction
+    /// to resume it at. Returns nothing when no call is in progress: the body returning is the
+    /// process's own.
+    std::optional<std::pair<Activation, std::uint32_t>> leaveCall(const Activation& callee);
+
+    /// Abandons every call in progress, for a process that stops the run from inside one.
+    void unwindCalls() noexcept;
 
 private:
     /// Runs one timestamp to completion, iterating the regions per section 3.3.
@@ -444,7 +485,28 @@ private:
     KernelOptions options;
 
     Arena stateArena;
+
+    /// Every process's registers, then the call stack (DESIGN_GUIDE.md section 4.1).
     std::vector<eir::Word> frameStorage;
+
+    /// A call in progress: the activation that made it, the call it made, and where to resume.
+    struct CallInProgress {
+        Activation caller;
+        std::uint32_t callIndex = 0;
+        std::uint32_t resumePc = 0;
+    };
+
+    /// The calls in progress, innermost last. Empty whenever no process is running, since a
+    /// subprogram never suspends; reserved for the deepest the stack allows, so that a call
+    /// does not allocate (section 13.4).
+    std::vector<CallInProgress> callsInProgress;
+
+    /// Where the call stack starts in `frameStorage`, and where its next frame goes.
+    std::uint32_t callStackBase = 0;
+    std::uint32_t callStackTop = 0;
+
+    /// How many calls the stack holds at once.
+    std::uint32_t callDepthCapacity = 0;
     Scheduler scheduler;
 
     /// Mutable per-process state. A copy of the image's list, because `resumePc` and
@@ -488,7 +550,8 @@ private:
 
     /// Runs `$readmemh` or `$readmemb`, whose arguments are the file name and the optional
     /// start and end addresses.
-    void readMemory(std::uint32_t processIndex, const codegen::SysTaskDescriptor& descriptor,
+    void readMemory(std::span<const std::uint32_t> objectSignals,
+                    const codegen::SysTaskDescriptor& descriptor,
                     std::span<const FormatArgument> arguments);
 
     /// Opens `name` for `$fopen`, and returns its descriptor or 0.

@@ -8,7 +8,10 @@
 #include "eir/Process.h"
 
 #include <algorithm>
+#include <array>
 #include <format>
+#include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -86,9 +89,11 @@ public:
             createInstance("/" + topName, topName, *topIndex, Instance::NoParent);
         if (!expand(topInstance)) return nullptr;
         if (!instantiatePackages()) return nullptr;
+        if (!instantiateCalledDefinitions()) return nullptr;
         if (!bindHierarchicalReferences()) return nullptr;
 
         collectProcesses();
+        if (!bindCalls()) return nullptr;
         if (!checkDrivers()) return nullptr;
 
         return std::move(result);
@@ -389,6 +394,66 @@ private:
         });
     }
 
+    /// The instance at the root that `definitionIndex` has, if it has one: the top's, or a
+    /// package's.
+    [[nodiscard]] std::optional<std::uint32_t> rootInstanceOf(std::uint32_t definitionIndex) const {
+        for (std::uint32_t index = 0; index < result->instanceList.size(); ++index) {
+            const Instance& instance = result->instanceList[index];
+            if (instance.parent == Instance::NoParent
+                && instance.definitionIndex == definitionIndex)
+                return index;
+        }
+        return std::nullopt;
+    }
+
+    /// Gives each definition a call reaches into, and that holds objects, an instance at the
+    /// root as a package has, so that the subprograms called there have slots for their
+    /// objects (DESIGN_GUIDE.md section 4.1). A definition holding none needs no instance: what
+    /// its subprograms touch is their parameters and registers.
+    ///
+    /// The instances' own bodies may call further, so the list is walked as it grows.
+    bool instantiateCalledDefinitions() {
+        // The list grows as it is walked, which an iterator would neither see nor survive.
+        // NOLINTNEXTLINE(modernize-loop-convert)
+        for (std::size_t next = 0; next < result->instanceList.size(); ++next) {
+            const std::uint32_t definitionIndex = result->instanceList[next].definitionIndex;
+            const eir::ModuleDefinition& definition = design.module(definitionIndex);
+
+            const auto instantiateCallees = [&](const eir::Body& body) {
+                return std::ranges::all_of(body.calls, [&](const eir::CallSite& call) {
+                    if (call.definition.empty()) return true;
+
+                    // A callee that cannot be found is reported when a process is found to
+                    // reach it, which is the only case in which it matters.
+                    const std::optional<std::uint32_t> callee =
+                        design.findModuleIndex(call.definition);
+                    if (!callee.has_value() || *callee == definitionIndex) return true;
+                    if (design.module(*callee).objects.empty() || rootInstanceOf(*callee))
+                        return true;
+                    return instantiateAtRoot(*callee);
+                });
+            };
+
+            for (const eir::Process& process : definition.processes)
+                if (!instantiateCallees(process)) return false;
+            for (const eir::Subprogram& subprogram : definition.subprograms)
+                if (!instantiateCallees(subprogram)) return false;
+        }
+        return true;
+    }
+
+    /// Creates the one instance of `definitionIndex` at the root, named as a package's is.
+    bool instantiateAtRoot(std::uint32_t definitionIndex) {
+        const eir::ModuleDefinition& definition = design.module(definitionIndex);
+        const std::string name =
+            definition.sourceName.empty() ? definition.name : definition.sourceName;
+        if (name == result->topName) {
+            diagnostics.report(DiagCode::PackageNamedAsTop, definition.location, name, name);
+            return false;
+        }
+        return expand(createInstance("/" + name, name, definitionIndex, Instance::NoParent));
+    }
+
     bool bindHierarchicalReferences() {
         bool ok = true;
         for (Instance& instance : result->instanceList) {
@@ -455,6 +520,210 @@ private:
         }
     }
 
+    /// Binds every call a process can reach to a subprogram instance, and records what each
+    /// process's callees read and write (DESIGN_GUIDE.md section 4.1).
+    ///
+    /// A subprogram of the caller's own definition runs on the caller's instance; one of
+    /// another definition runs on that definition's instance at the root, or on none when it
+    /// holds no objects. One binding is made once however many calls reach it, which is also
+    /// what makes a recursive call terminate here: it reaches a binding that already exists.
+    bool bindCalls() {
+        std::map<std::array<std::uint32_t, 3>, std::uint32_t> bound;
+        std::vector<std::uint32_t> pending;
+        bool ok = true;
+
+        const auto bind = [&](std::uint32_t callerDefinition, std::uint32_t callerInstance,
+                              const eir::CallSite& call,
+                              const std::string& caller) -> std::uint32_t {
+            std::uint32_t calleeDefinition = callerDefinition;
+            if (!call.definition.empty()) {
+                std::vector<std::string_view> ambiguity;
+                const std::optional<std::uint32_t> found =
+                    design.findModuleIndex(call.definition, &ambiguity);
+                if (!found.has_value()) {
+                    if (ambiguity.empty()) {
+                        diagnostics.report(DiagCode::UnresolvedSubprogram, call.location, caller,
+                                           call.subprogram, call.definition);
+                    } else {
+                        diagnostics.report(DiagCode::AmbiguousModule, call.location,
+                                           call.definition, joinNames(ambiguity), call.definition);
+                    }
+                    ok = false;
+                    return SubprogramInstance::NoInstance;
+                }
+                calleeDefinition = *found;
+            }
+
+            const eir::ModuleDefinition& definition = design.module(calleeDefinition);
+            const std::optional<std::uint32_t> subprogramIndex =
+                definition.findSubprogram(call.subprogram);
+            if (!subprogramIndex.has_value()) {
+                diagnostics.report(DiagCode::UnresolvedSubprogram, call.location, caller,
+                                   call.subprogram, definition.name);
+                ok = false;
+                return SubprogramInstance::NoInstance;
+            }
+
+            const std::uint32_t instance =
+                calleeDefinition == callerDefinition
+                    ? callerInstance
+                    : rootInstanceOf(calleeDefinition).value_or(SubprogramInstance::NoInstance);
+            const std::array<std::uint32_t, 3> key{calleeDefinition, *subprogramIndex, instance};
+            if (const auto existing = bound.find(key); existing != bound.end())
+                return existing->second;
+
+            const auto index = static_cast<std::uint32_t>(result->subprogramList.size());
+            result->subprogramList.push_back(SubprogramInstance{.definitionIndex = calleeDefinition,
+                                                                .subprogramIndex = *subprogramIndex,
+                                                                .instanceIndex = instance,
+                                                                .calls = {}});
+            bound.emplace(key, index);
+            pending.push_back(index);
+            return index;
+        };
+
+        for (std::uint32_t processIndex = 0; processIndex < result->processList.size();
+             ++processIndex) {
+            const ProcessInstance& processInstance = result->processList[processIndex];
+            const std::uint32_t instanceIndex = processInstance.instanceIndex;
+            const std::uint32_t definitionIndex =
+                result->instanceList[instanceIndex].definitionIndex;
+            std::vector<std::uint32_t> calls;
+            for (const eir::CallSite& call : processOf(processInstance).calls)
+                calls.push_back(
+                    bind(definitionIndex, instanceIndex, call, describeProcess(processIndex)));
+            result->processList[processIndex].calls = std::move(calls);
+        }
+
+        // Each binding's own calls, as bindings are found; `pending` and `subprogramList` grow
+        // meanwhile, so they are indexed rather than iterated.
+        // NOLINTNEXTLINE(modernize-loop-convert)
+        for (std::size_t next = 0; next < pending.size(); ++next) {
+            const std::uint32_t index = pending[next];
+            const SubprogramInstance subprogramInstance = result->subprogramList[index];
+            const eir::ModuleDefinition& definition =
+                design.module(subprogramInstance.definitionIndex);
+            const eir::Subprogram& subprogram =
+                definition.subprograms[subprogramInstance.subprogramIndex];
+            const std::string caller =
+                std::format("subprogram '{}' of '{}'", subprogram.name, definition.name);
+
+            std::vector<std::uint32_t> calls;
+            calls.reserve(subprogram.calls.size());
+            for (const eir::CallSite& call : subprogram.calls)
+                calls.push_back(bind(subprogramInstance.definitionIndex,
+                                     subprogramInstance.instanceIndex, call, caller));
+            result->subprogramList[index].calls = std::move(calls);
+        }
+
+        if (ok) collectCalleeSets();
+        return ok;
+    }
+
+    /// Records, for each process, the slots its callees read and the bits they write, through
+    /// any depth of calls, and which subprogram writes each, for the check in `checkDrivers`.
+    void collectCalleeSets() {
+        calleeWriters.assign(result->processList.size(), {});
+
+        for (std::uint32_t processIndex = 0; processIndex < result->processList.size();
+             ++processIndex) {
+            ProcessInstance& processInstance = result->processList[processIndex];
+
+            std::vector<bool> visited(result->subprogramList.size(), false);
+            std::vector<std::uint32_t> toVisit = processInstance.calls;
+            while (!toVisit.empty()) {
+                const std::uint32_t index = toVisit.back();
+                toVisit.pop_back();
+                if (index == SubprogramInstance::NoInstance || visited[index]) continue;
+                visited[index] = true;
+
+                const SubprogramInstance& subprogramInstance = result->subprogramList[index];
+                toVisit.insert(toVisit.end(), subprogramInstance.calls.begin(),
+                               subprogramInstance.calls.end());
+                if (subprogramInstance.instanceIndex == SubprogramInstance::NoInstance) continue;
+
+                const eir::Subprogram& subprogram =
+                    design.module(subprogramInstance.definitionIndex)
+                        .subprograms[subprogramInstance.subprogramIndex];
+                const std::vector<std::uint32_t>& slots =
+                    result->instanceList[subprogramInstance.instanceIndex].objectSlots;
+
+                for (const std::uint32_t objectIndex : subprogram.readSet)
+                    processInstance.calleeReads.push_back(slots[objectIndex]);
+                for (const eir::WriteExtent& extent : subprogram.writeSet) {
+                    const SlotRange range{.slot = slots[extent.objectIndex],
+                                          .lowBit = extent.lowBit,
+                                          .width = extent.width};
+                    processInstance.calleeWrites.push_back(range);
+                    calleeWriters[processIndex].emplace_back(range, index);
+                }
+            }
+
+            std::ranges::sort(processInstance.calleeReads);
+            processInstance.calleeReads.erase(
+                std::ranges::unique(processInstance.calleeReads).begin(),
+                processInstance.calleeReads.end());
+            normaliseRanges(processInstance.calleeWrites);
+        }
+    }
+
+    /// Orders ranges by slot and bit, and merges those of one slot that overlap or touch, as
+    /// `eir::normaliseWriteSet` does a write set.
+    static void normaliseRanges(std::vector<SlotRange>& ranges) {
+        std::ranges::sort(ranges, [](const SlotRange& left, const SlotRange& right) {
+            if (left.slot != right.slot) return left.slot < right.slot;
+            return left.lowBit < right.lowBit;
+        });
+        std::vector<SlotRange> merged;
+        for (const SlotRange& range : ranges) {
+            if (!merged.empty() && merged.back().slot == range.slot
+                && range.lowBit <= merged.back().endBit()) {
+                SlotRange& last = merged.back();
+                last.width = std::max(last.endBit(), range.endBit()) - last.lowBit;
+                continue;
+            }
+            merged.push_back(range);
+        }
+        ranges = std::move(merged);
+    }
+
+    /// Reports the first write a process's callees make into a bit something drives, and
+    /// returns false if there was one.
+    ///
+    /// A subprogram's stores are immediate and go to no driver (DESIGN_GUIDE.md section 4.1), so
+    /// one landing on a resolved signal would bypass its resolution, and one on a variable that
+    /// a continuous assignment drives is the procedural write beside a continuous driver that
+    /// `MixedDriverKinds` refuses of a process.
+    bool checkCalleeWrites(const std::vector<std::vector<DriverRange>>& rangesBySlot,
+                           const std::vector<bool>& resolved) {
+        for (std::uint32_t processIndex = 0; processIndex < calleeWriters.size(); ++processIndex) {
+            for (const auto& [range, subprogramIndex] : calleeWriters[processIndex]) {
+                const auto driver = std::ranges::find_if(
+                    rangesBySlot[range.slot], [&range](const DriverRange& candidate) {
+                        return candidate.continuous && candidate.lowBit < range.endBit()
+                               && range.lowBit < candidate.endBit();
+                    });
+                if (driver == rangesBySlot[range.slot].end() && !resolved[range.slot]) continue;
+
+                const Slot& slot = result->slotList[range.slot];
+                const SubprogramInstance& subprogramInstance =
+                    result->subprogramList[subprogramIndex];
+                const eir::Subprogram& subprogram =
+                    design.module(subprogramInstance.definitionIndex)
+                        .subprograms[subprogramInstance.subprogramIndex];
+                const std::string drivenBy = driver != rangesBySlot[range.slot].end()
+                                                 ? describeProcess(driver->process)
+                                                 : std::string("its drivers");
+                diagnostics.report(DiagCode::SubprogramWritesDrivenSignal, subprogram.location,
+                                   slot.path,
+                                   describeBits(range.lowBit, range.endBit(), slot.type.bitWidth()),
+                                   subprogram.name, describeProcess(processIndex), drivenBy);
+                return false;
+            }
+        }
+        return true;
+    }
+
     /// Finds bits with more than one driver, reports those the language does not allow, and
     /// builds the drivers and segments of the signals that resolve (DESIGN_GUIDE.md section
     /// 3.7).
@@ -506,7 +775,7 @@ private:
             resolved[slotIndex] = resolves(slotIndex, ranges);
             recordDrivenBits(slotIndex, ranges);
         }
-        if (!ok) return false;
+        if (!ok || !checkCalleeWrites(rangesBySlot, resolved)) return false;
 
         buildDrivers(resolved);
         return true;
@@ -701,6 +970,10 @@ private:
     /// Definitions on the current path from the top, for recursion detection. An
     /// ordered set, so that the diagnostic it feeds is reproducible.
     std::set<std::uint32_t> activeDefinitions;
+
+    /// For each process, every range its callees write and the subprogram instance writing it,
+    /// kept for the diagnostic `checkCalleeWrites` gives.
+    std::vector<std::vector<std::pair<SlotRange, std::uint32_t>>> calleeWriters;
 };
 
 Elaborator::Elaborator(const eir::Design& analysedDesign, DiagnosticEngine& engine) noexcept

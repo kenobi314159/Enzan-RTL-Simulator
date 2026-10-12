@@ -12,6 +12,7 @@
 #include "eir/Type.h"
 
 #include "support/Optionals.h"
+#include "support/ProcessBuilder.h"
 
 #include <gtest/gtest.h>
 
@@ -43,7 +44,11 @@ using enzan::eir::WriteExtent;
 using enzan::elab::ElaboratedDesign;
 using enzan::elab::Elaborator;
 using enzan::elab::Instance;
+using enzan::elab::SlotRange;
+using enzan::elab::SubprogramInstance;
+using enzan::test::ProcessBuilder;
 using enzan::test::require;
+using enzan::test::SubprogramBuilder;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -921,6 +926,113 @@ TEST_F(ElaboratorTest, APackageNamedAsTheTopLevelIsReported) {
 
     EXPECT_EQ(elaborate("counters"), nullptr);
     EXPECT_TRUE(reportedCode(enzan::DiagCode::PackageNamedAsTop));
+}
+
+// ---------------------------------------------------------------------------
+// Calls of subprograms (DESIGN_GUIDE.md section 4.1)
+// ---------------------------------------------------------------------------
+
+/// A process of `definition` that calls `subprogram` of `callee` with no arguments.
+Process makeCaller(std::string callee, std::string subprogram) {
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    builder.block("entry");
+    builder.call(std::move(callee), std::move(subprogram), {});
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+TEST_F(ElaboratorTest, BindsAModulesSubprogramToEachInstanceThatCallsIt) {
+    // One compiled body, two bindings: each instance's call reaches its own `x`.
+    ModuleDefinition leaf;
+    leaf.name = "leaf";
+    leaf.addObject(Object{.name = "x", .type = Type::bits(8, false, true)});
+    SubprogramBuilder touch("touch");
+    const std::uint32_t value = touch.reg(Type::bits(8, false, true));
+    touch.block("entry");
+    touch.readObject(value, 0);
+    touch.emit(Instruction::make(Opcode::Return));
+    leaf.subprograms.push_back(touch.finish());
+    leaf.processes.push_back(makeCaller("", "touch"));
+
+    ModuleDefinition top;
+    top.name = "top";
+    top.instances.push_back(enzan::eir::Instance{.name = "u0", .definitionName = "leaf"});
+    top.instances.push_back(enzan::eir::Instance{.name = "u1", .definitionName = "leaf"});
+
+    design.addModule(std::move(leaf));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("top");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->subprograms().size(), 2U);
+    ASSERT_EQ(elaborated->processes().size(), 2U);
+
+    for (const enzan::elab::ProcessInstance& process : elaborated->processes()) {
+        ASSERT_EQ(process.calls.size(), 1U);
+        const SubprogramInstance& bound = elaborated->subprograms()[process.calls.front()];
+        EXPECT_EQ(bound.instanceIndex, process.instanceIndex);
+
+        const std::string& path = elaborated->instances()[process.instanceIndex].path;
+        EXPECT_EQ(process.calleeReads,
+                  std::vector<std::uint32_t>{require(elaborated->findSlot(path + "/x"))});
+    }
+}
+
+TEST_F(ElaboratorTest, BindsAPackagesSubprogramToThePackagesOneInstance) {
+    ModuleDefinition package;
+    package.name = "pkg::";
+    package.sourceName = "pkg";
+    package.isPackage = true;
+    package.addObject(Object{.name = "state", .type = Type::bits(8, false, true)});
+    SubprogramBuilder set("set");
+    const std::uint32_t value = set.reg(Type::bits(8, false, true));
+    set.block("entry");
+    set.store(0, value);
+    set.emit(Instruction::make(Opcode::Return));
+    package.subprograms.push_back(set.finish());
+
+    ModuleDefinition top;
+    top.name = "top";
+    top.processes.push_back(makeCaller("pkg::", "set"));
+
+    design.addModule(std::move(package));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("top");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->subprograms().size(), 1U);
+    EXPECT_EQ(elaborated->subprograms().front().instanceIndex,
+              require(elaborated->findInstance("/pkg")));
+
+    const std::uint32_t state = require(elaborated->findSlot("/pkg/state"));
+    EXPECT_EQ(elaborated->processes().front().calleeWrites,
+              (std::vector<SlotRange>{SlotRange{.slot = state, .lowBit = 0, .width = 8}}));
+}
+
+TEST_F(ElaboratorTest, APackageHoldingNoObjectsIsGivenNoInstance) {
+    // Its subprograms touch only their parameters and registers, so there is nothing for an
+    // instance to hold.
+    ModuleDefinition package;
+    package.name = "pure::";
+    package.sourceName = "pure";
+    package.isPackage = true;
+    SubprogramBuilder nothing("nothing");
+    nothing.block("entry");
+    nothing.emit(Instruction::make(Opcode::Return));
+    package.subprograms.push_back(nothing.finish());
+
+    ModuleDefinition top;
+    top.name = "top";
+    top.processes.push_back(makeCaller("pure::", "nothing"));
+
+    design.addModule(std::move(package));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("top");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(elaborated->findInstance("/pure").has_value());
+    ASSERT_EQ(elaborated->subprograms().size(), 1U);
+    EXPECT_EQ(elaborated->subprograms().front().instanceIndex, SubprogramInstance::NoInstance);
 }
 
 } // namespace

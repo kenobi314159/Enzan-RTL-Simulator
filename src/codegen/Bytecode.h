@@ -106,13 +106,40 @@ struct SysTaskDescriptor {
     }
 };
 
-/// One compiled process body.
+/// The caller's half of a call: where each argument is, and where the result goes.
+///
+/// The callee's half — where its parameters and its result live in its own registers — is on
+/// the callee's body, and which body that is, elaboration decides (elab::SubprogramInstance):
+/// one call in a compiled body reaches a different binding of the callee in each instance.
+struct CallDescriptor {
+    struct Argument {
+        /// True when the value comes from the constant pool rather than the frame.
+        bool isConstant = false;
+
+        /// Frame Word offset, or constant pool index.
+        std::uint32_t location = 0;
+
+        std::uint32_t bitWidth = 0;
+    };
+
+    /// One per parameter of the callee, in order.
+    std::vector<Argument> arguments;
+
+    /// True for a call of a function, whose result is copied into `resultLocation`.
+    bool hasResult = false;
+    std::uint32_t resultLocation = 0;
+    std::uint32_t resultWidth = 0;
+
+    SourceLocation location;
+};
+
+/// One compiled body: a process's, or a subprogram's.
 ///
 /// Shared by every instance of the module that declares it: the body refers to state
 /// by EIR object index, and the runtime resolves those per instance. That is what
 /// keeps compiled code proportional to the source rather than to the elaborated
 /// hierarchy.
-struct CompiledProcess {
+struct CompiledBody {
     /// The instructions, with blocks laid out one after another.
     std::vector<Instruction> code;
 
@@ -135,7 +162,25 @@ struct CompiledProcess {
     std::vector<std::string> strings;
     std::vector<SysTaskDescriptor> sysCalls;
 
-    // --- Metadata the scheduler needs, copied from EIR ---------------------
+    /// The calls this body makes, indexed by a `Call` instruction's first operand.
+    std::vector<CallDescriptor> calls;
+
+    // --- What a call of a subprogram's body needs --------------------------
+
+    /// Each parameter's register, as a frame Word offset, with its width and mode.
+    struct Parameter {
+        std::uint32_t offset = 0;
+        std::uint32_t bitWidth = 0;
+        eir::ParameterMode mode = eir::ParameterMode::In;
+    };
+
+    std::vector<Parameter> parameters;
+
+    /// The register holding a function's result when the body returns.
+    std::uint32_t resultOffset = 0;
+    std::uint32_t resultWidth = 0;
+
+    // --- Metadata the scheduler needs, copied from EIR; a subprogram's is unused --
 
     eir::ProcessKind kind = eir::ProcessKind::Always;
     std::string name;
@@ -159,22 +204,24 @@ struct CompiledProcess {
 /// processes.
 class CompiledDesign {
 public:
-    [[nodiscard]] std::span<const CompiledProcess> bodies() const noexcept { return processes; }
+    [[nodiscard]] std::span<const CompiledBody> bodies() const noexcept { return processes; }
 
-    [[nodiscard]] const CompiledProcess& body(std::uint32_t index) const {
-        return processes[index];
-    }
+    [[nodiscard]] const CompiledBody& body(std::uint32_t index) const { return processes[index]; }
 
     /// Returns the body index for a definition's process, or `NotCompiled`.
     [[nodiscard]] std::uint32_t bodyIndex(std::uint32_t definitionIndex,
                                           std::uint32_t processIndex) const;
+
+    /// Returns the body index for a definition's subprogram, or `NotCompiled`.
+    [[nodiscard]] std::uint32_t subprogramBodyIndex(std::uint32_t definitionIndex,
+                                                    std::uint32_t subprogramIndex) const;
 
     static constexpr std::uint32_t NotCompiled = 0xFFFF'FFFFU;
 
 private:
     friend class Compiler;
 
-    std::vector<CompiledProcess> processes;
+    std::vector<CompiledBody> processes;
 
     /// (definitionIndex, processIndex) to body index. A flat sorted vector rather than
     /// a hash map: it is built once, queried once per elaborated process, and its
@@ -186,6 +233,12 @@ private:
     };
 
     std::vector<Key> keys;
+
+    /// The same, for subprograms, whose `processIndex` is the subprogram's index.
+    std::vector<Key> subprogramKeys;
+
+    static std::uint32_t findBody(const std::vector<Key>& keys, std::uint32_t definitionIndex,
+                                  std::uint32_t index);
 };
 
 } // namespace enzan::codegen

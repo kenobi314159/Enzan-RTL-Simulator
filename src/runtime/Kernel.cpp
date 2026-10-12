@@ -116,6 +116,18 @@ bool edgeMatches(eir::EdgeKind edge, eir::Logic before, eir::Logic after) noexce
     return false;
 }
 
+/// How many calls the stack must hold at once: the deepest chain, or the limit where a call can
+/// reach itself again and no chain is the deepest.
+std::uint32_t callDepthFor(const CallStackShape& shape, std::uint32_t limit) {
+    return shape.recursive ? limit : shape.depth;
+}
+
+/// The call stack's size in Words: the deepest chain's frames, or as many of the largest frame as
+/// the limit allows calls.
+std::size_t callStackWordsFor(const CallStackShape& shape, std::uint32_t limit) {
+    return shape.recursive ? std::size_t{limit} * shape.largestFrame : shape.words;
+}
+
 } // namespace
 
 Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOptions kernelOptions)
@@ -123,13 +135,22 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
       diagnostics(engine),
       options(kernelOptions),
       stateArena(designImageToRun.arenaWords()),
-      frameStorage(designImageToRun.frameWords(), 0),
+      frameStorage(
+          designImageToRun.frameWords()
+              + callStackWordsFor(designImageToRun.callStackShape(), kernelOptions.callDepthLimit),
+          0),
+      callStackBase(designImageToRun.frameWords()),
+      callStackTop(designImageToRun.frameWords()),
+      callDepthCapacity(
+          callDepthFor(designImageToRun.callStackShape(), kernelOptions.callDepthLimit)),
       processes(designImageToRun.processes().begin(), designImageToRun.processes().end()),
       resolvedScratch(eir::storageWordsFor(designImageToRun.elaboratedDesign().widestDriver()), 0),
       segmentScratch(resolvedScratch.size(), 0),
       driverScratch(resolvedScratch.size(), 0),
       windowScratch(windowScratchWords(designImageToRun), 0),
-      edgeWaiters(designImageToRun.signals().size()) {}
+      edgeWaiters(designImageToRun.signals().size()) {
+    callsInProgress.reserve(callDepthCapacity);
+}
 
 Kernel::~Kernel() = default;
 
@@ -164,6 +185,7 @@ void Kernel::initialize() {
         list.sweepAt = MinimumWaiterSweep;
     }
     std::ranges::fill(frameStorage, eir::Word{});
+    unwindCalls();
 
     // A force does not survive a restart either: a signal still pinned from the last run would
     // be state the user did not ask to keep.
@@ -179,7 +201,7 @@ void Kernel::initialize() {
     currentTime = 0;
 
     for (std::uint32_t processIndex = 0; processIndex < processes.size(); ++processIndex) {
-        const codegen::CompiledProcess& body =
+        const codegen::CompiledBody& body =
             designImage->compiledDesign().body(processes[processIndex].bodyIndex);
         if (body.startsAtTimeZero) wake(processIndex);
     }
@@ -343,7 +365,7 @@ void Kernel::drain(Region region) {
 
         if (result != ExecutionResult::Completed) continue;
 
-        const codegen::CompiledProcess& body =
+        const codegen::CompiledBody& body =
             designImage->compiledDesign().body(processes[processIndex].bodyIndex);
 
         // A bare `always` loop has nothing to wait for, so completing means going round
@@ -419,7 +441,7 @@ void Kernel::runFinalProcesses() {
 
     bool any = false;
     for (std::uint32_t processIndex = 0; processIndex < processes.size(); ++processIndex) {
-        const codegen::CompiledProcess& body =
+        const codegen::CompiledBody& body =
             designImage->compiledDesign().body(processes[processIndex].bodyIndex);
         if (body.kind != eir::ProcessKind::Final) continue;
 
@@ -810,7 +832,7 @@ void Kernel::suspendForEvents(std::uint32_t processIndex, std::uint32_t listInde
                               std::uint32_t resumePc) {
     ProcessState& state = processes[processIndex];
     state.resumePc = resumePc;
-    const codegen::CompiledProcess& body = designImage->compiledDesign().body(state.bodyIndex);
+    const codegen::CompiledBody& body = designImage->compiledDesign().body(state.bodyIndex);
     for (const eir::SensitivityEntry& entry : body.eventLists[listIndex]) {
         armWaiter(state.objectSignals[entry.objectIndex],
                   EdgeWaiter{.processIndex = processIndex,
@@ -833,17 +855,91 @@ void Kernel::armWaiter(std::uint32_t signalIndex, const EdgeWaiter& waiter) {
     list.waiters.push_back(waiter);
 }
 
-void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallIndex) {
+std::optional<Activation> Kernel::enterCall(std::uint32_t processIndex, const Activation& caller,
+                                            std::uint32_t callIndex, std::uint32_t resumePc) {
+    const codegen::CallDescriptor& call = caller.body->calls[callIndex];
+    const BoundSubprogram& callee = designImage->subprograms()[caller.calls[callIndex]];
+    const codegen::CompiledBody& body = designImage->compiledDesign().body(callee.bodyIndex);
+
+    if (callsInProgress.size() >= callDepthCapacity) {
+        diagnostics.report(DiagCode::CallDepthExceeded, call.location, options.callDepthLimit,
+                           body.name, processes[processIndex].name,
+                           options.timeScale.format(currentTime));
+        errorRequested = true;
+        unwindCalls();
+        return std::nullopt;
+    }
+
+    // The callee's registers start at zero on every call, so that nothing of an earlier call's
+    // can be read by this one (section 3.8).
+    const std::uint32_t frame = callStackTop;
+    callStackTop += body.frameWords;
+    std::fill(frameStorage.begin() + frame, frameStorage.begin() + callStackTop, eir::Word{});
+
+    for (std::size_t index = 0; index < call.arguments.size(); ++index) {
+        const codegen::CallDescriptor::Argument& argument = call.arguments[index];
+        const codegen::CompiledBody::Parameter& parameter = body.parameters[index];
+        // An `out` parameter starts as the callee's own, not as the caller's value.
+        if (parameter.mode == eir::ParameterMode::Out) continue;
+        const eir::ConstBitRef value =
+            argument.isConstant
+                ? caller.body->constant(argument.location)
+                : frameAt(caller.frameOffset + argument.location, argument.bitWidth);
+        eir::bitops::copy(frameAt(frame + parameter.offset, parameter.bitWidth), value);
+    }
+
+    callsInProgress.push_back(
+        CallInProgress{.caller = caller, .callIndex = callIndex, .resumePc = resumePc});
+    return Activation{.body = &body,
+                      .frameOffset = frame,
+                      .objectSignals = callee.objectSignals,
+                      .writeRoutes = callee.writeRoutes,
+                      .calls = callee.calls};
+}
+
+std::optional<std::pair<Activation, std::uint32_t>> Kernel::leaveCall(const Activation& callee) {
+    if (callsInProgress.empty()) return std::nullopt;
+
+    const CallInProgress returning = callsInProgress.back();
+    callsInProgress.pop_back();
+    const Activation& caller = returning.caller;
+    const codegen::CallDescriptor& call = caller.body->calls[returning.callIndex];
+    const codegen::CompiledBody& body = *callee.body;
+
+    if (call.hasResult) {
+        eir::bitops::copy(frameAt(caller.frameOffset + call.resultLocation, call.resultWidth),
+                          frameAt(callee.frameOffset + body.resultOffset, body.resultWidth));
+    }
+    for (std::size_t index = 0; index < call.arguments.size(); ++index) {
+        const codegen::CompiledBody::Parameter& parameter = body.parameters[index];
+        if (parameter.mode == eir::ParameterMode::In) continue;
+        const codegen::CallDescriptor::Argument& argument = call.arguments[index];
+        eir::bitops::copy(frameAt(caller.frameOffset + argument.location, argument.bitWidth),
+                          frameAt(callee.frameOffset + parameter.offset, parameter.bitWidth));
+    }
+
+    callStackTop = callee.frameOffset;
+    return std::pair{caller, returning.resumePc};
+}
+
+void Kernel::unwindCalls() noexcept {
+    callsInProgress.clear();
+    callStackTop = callStackBase;
+}
+
+void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activation,
+                           std::uint32_t sysCallIndex) {
     const ProcessState& state = processes[processIndex];
-    const codegen::CompiledProcess& body = designImage->compiledDesign().body(state.bodyIndex);
+    const codegen::CompiledBody& body = *activation.body;
     const codegen::SysTaskDescriptor& descriptor = body.sysCalls[sysCallIndex];
 
     std::vector<FormatArgument> arguments;
     arguments.reserve(descriptor.arguments.size());
     for (const codegen::SysTaskDescriptor::Argument& argument : descriptor.arguments) {
         const eir::ConstBitRef value =
-            argument.isConstant ? body.constant(argument.location)
-                                : frameAt(state.frameOffset + argument.location, argument.bitWidth);
+            argument.isConstant
+                ? body.constant(argument.location)
+                : frameAt(activation.frameOffset + argument.location, argument.bitWidth);
         arguments.push_back(FormatArgument{.value = value, .isSigned = argument.isSigned});
     }
 
@@ -935,7 +1031,9 @@ void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallInde
         return;
 
     case eir::SysTaskKind::ReadMemHex:
-    case eir::SysTaskKind::ReadMemBinary: readMemory(processIndex, descriptor, arguments); return;
+    case eir::SysTaskKind::ReadMemBinary:
+        readMemory(activation.objectSignals, descriptor, arguments);
+        return;
 
     case eir::SysTaskKind::Random:
     case eir::SysTaskKind::URandom:
@@ -946,18 +1044,19 @@ void Kernel::runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallInde
     }
 }
 
-void Kernel::runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCallIndex,
-                               eir::BitRef result) {
+void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& activation,
+                               std::uint32_t sysCallIndex, eir::BitRef result) {
     ProcessState& state = processes[processIndex];
-    const codegen::CompiledProcess& body = designImage->compiledDesign().body(state.bodyIndex);
+    const codegen::CompiledBody& body = *activation.body;
     const codegen::SysTaskDescriptor& descriptor = body.sysCalls[sysCallIndex];
 
     // An argument as a number; an unknown bit reads as 0, as other simulators read it.
     const auto argument = [&](std::size_t index) -> std::uint64_t {
         const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[index];
         const eir::ConstBitRef value =
-            compiled.isConstant ? body.constant(compiled.location)
-                                : frameAt(state.frameOffset + compiled.location, compiled.bitWidth);
+            compiled.isConstant
+                ? body.constant(compiled.location)
+                : frameAt(activation.frameOffset + compiled.location, compiled.bitWidth);
         std::uint64_t number = value.aval()[0] & ~value.bval()[0];
         if (value.width() < 64) number &= (std::uint64_t{1} << value.width()) - 1;
         return number;
@@ -969,7 +1068,7 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCall
             return toAsciiString(
                 compiled.isConstant
                     ? body.constant(compiled.location)
-                    : frameAt(state.frameOffset + compiled.location, compiled.bitWidth));
+                    : frameAt(activation.frameOffset + compiled.location, compiled.bitWidth));
         };
         const std::uint32_t opened =
             openFile(text(0), descriptor.arguments.size() > 1 ? text(1) : std::string(),
@@ -1017,7 +1116,8 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCall
     result.canonicalize();
 }
 
-void Kernel::readMemory(std::uint32_t processIndex, const codegen::SysTaskDescriptor& descriptor,
+void Kernel::readMemory(std::span<const std::uint32_t> objectSignals,
+                        const codegen::SysTaskDescriptor& descriptor,
                         std::span<const FormatArgument> arguments) {
     const std::string task(eir::toString(descriptor.kind));
     const std::string name = toAsciiString(arguments[0].value);
@@ -1039,7 +1139,7 @@ void Kernel::readMemory(std::uint32_t processIndex, const codegen::SysTaskDescri
 
     // The memory as it is, so that what the file does not reach keeps its value, written back
     // whole: one change, which wakes what reads the memory once.
-    const std::uint32_t signalIndex = processes[processIndex].objectSignals[descriptor.objectIndex];
+    const std::uint32_t signalIndex = objectSignals[descriptor.objectIndex];
     const elab::Slot& slot = designImage->elaboratedDesign().slots()[signalIndex];
     const Signal& signal = designImage->signals()[signalIndex];
     eir::BitVector memory = eir::BitVector::from(stateArena.at(signal.wordOffset, signal.bitWidth));

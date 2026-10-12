@@ -7,6 +7,7 @@
 #include "eir/Module.h"
 #include "eir/Process.h"
 
+#include <algorithm>
 #include <format>
 #include <vector>
 
@@ -19,6 +20,8 @@ Image::Image(const eir::Design& analysedDesign, const elab::ElaboratedDesign& el
     buildSignals();
     buildInstanceTables();
     buildProcesses();
+    buildSubprograms();
+    measureCallStack();
 }
 
 void Image::buildSignals() {
@@ -65,7 +68,7 @@ void Image::buildProcesses() {
         ENZAN_ALWAYS_ASSERT(bodyIndex != codegen::CompiledDesign::NotCompiled,
                             "every elaborated process must have a compiled body");
 
-        const codegen::CompiledProcess& body = compiled->body(bodyIndex);
+        const codegen::CompiledBody& body = compiled->body(bodyIndex);
 
         ProcessState state;
         state.bodyIndex = bodyIndex;
@@ -73,6 +76,7 @@ void Image::buildProcesses() {
         state.frameOffset = frameSize;
         state.objectOffsets = instanceObjectOffsets[processInstance.instanceIndex];
         state.objectSignals = instanceObjectSignals[processInstance.instanceIndex];
+        state.calls = processInstance.calls;
         state.name = std::format("{} {}", instance.path, body.name);
         frameSize += body.frameWords;
 
@@ -130,6 +134,92 @@ void Image::buildProcesses() {
         }
 
         processList.push_back(std::move(state));
+    }
+}
+
+void Image::buildSubprograms() {
+    const std::span<const elab::SubprogramInstance> bound = elaborated->subprograms();
+    subprogramList.reserve(bound.size());
+    subprogramWriteRoutes.resize(bound.size());
+
+    for (std::size_t index = 0; index < bound.size(); ++index) {
+        const elab::SubprogramInstance& subprogramInstance = bound[index];
+        const std::uint32_t bodyIndex = compiled->subprogramBodyIndex(
+            subprogramInstance.definitionIndex, subprogramInstance.subprogramIndex);
+        ENZAN_ALWAYS_ASSERT(bodyIndex != codegen::CompiledDesign::NotCompiled,
+                            "every bound subprogram must have a compiled body");
+
+        BoundSubprogram subprogram;
+        subprogram.bodyIndex = bodyIndex;
+        subprogram.calls = subprogramInstance.calls;
+        if (subprogramInstance.instanceIndex != elab::SubprogramInstance::NoInstance) {
+            subprogram.objectOffsets = instanceObjectOffsets[subprogramInstance.instanceIndex];
+            subprogram.objectSignals = instanceObjectSignals[subprogramInstance.instanceIndex];
+        }
+
+        std::vector<WriteRoute>& routes = subprogramWriteRoutes[index];
+        routes.assign(eir::writtenObjects(compiled->body(bodyIndex).writeSet).size(),
+                      WriteRoute{.firstDriver = 0, .driverCount = 0});
+        subprogram.writeRoutes = routes;
+
+        subprogramList.push_back(subprogram);
+    }
+}
+
+void Image::measureCallStack() {
+    // Depth-first over the bound calls, memoising each subprogram's deepest chain. A call that
+    // reaches a subprogram still on the path is recursion, which no depth bounds.
+    constexpr std::uint8_t Unvisited = 0;
+    constexpr std::uint8_t OnPath = 1;
+    constexpr std::uint8_t Done = 2;
+    std::vector<std::uint8_t> state(subprogramList.size(), Unvisited);
+    std::vector<std::uint32_t> depth(subprogramList.size(), 0);
+    std::vector<std::uint32_t> words(subprogramList.size(), 0);
+
+    struct Step {
+        std::uint32_t subprogram;
+        std::size_t nextCall;
+    };
+
+    std::vector<Step> path;
+
+    for (std::uint32_t root = 0; root < subprogramList.size(); ++root) {
+        if (state[root] != Unvisited) continue;
+        state[root] = OnPath;
+        path.push_back(Step{.subprogram = root, .nextCall = 0});
+
+        while (!path.empty()) {
+            Step& step = path.back();
+            const BoundSubprogram& subprogram = subprogramList[step.subprogram];
+            if (step.nextCall < subprogram.calls.size()) {
+                const std::uint32_t callee = subprogram.calls[step.nextCall++];
+                if (state[callee] == OnPath) stackShape.recursive = true;
+                if (state[callee] != Unvisited) continue;
+                state[callee] = OnPath;
+                path.push_back(Step{.subprogram = callee, .nextCall = 0});
+                continue;
+            }
+
+            const std::uint32_t frame = compiled->body(subprogram.bodyIndex).frameWords;
+            stackShape.largestFrame = std::max(stackShape.largestFrame, frame);
+            std::uint32_t deepest = 0;
+            std::uint32_t heaviest = 0;
+            for (const std::uint32_t callee : subprogram.calls) {
+                deepest = std::max(deepest, depth[callee]);
+                heaviest = std::max(heaviest, words[callee]);
+            }
+            depth[step.subprogram] = deepest + 1;
+            words[step.subprogram] = heaviest + frame;
+            state[step.subprogram] = Done;
+            path.pop_back();
+        }
+    }
+
+    for (const ProcessState& process : processList) {
+        for (const std::uint32_t callee : process.calls) {
+            stackShape.depth = std::max(stackShape.depth, depth[callee]);
+            stackShape.words = std::max(stackShape.words, words[callee]);
+        }
     }
 }
 

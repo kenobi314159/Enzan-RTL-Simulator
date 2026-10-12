@@ -7,6 +7,9 @@
 #include "eir/BitOps.h"
 #include "runtime/Kernel.h"
 
+#include <optional>
+#include <utility>
+
 namespace enzan::runtime {
 
 namespace bitops = eir::bitops;
@@ -15,17 +18,23 @@ Interpreter::Interpreter(Kernel& owner) noexcept : kernel(owner) {}
 
 ExecutionResult Interpreter::run(std::uint32_t processIndex) {
     ProcessState& state = kernel.processes[processIndex];
-    const codegen::CompiledProcess& body =
-        kernel.designImage->compiledDesign().body(state.bodyIndex);
+
+    // The body running and what it is bound to: the process's own, until it calls a subprogram
+    // and while it is in one. Everything below reaches registers, objects and routes through
+    // this, so a subprogram's body runs as a process's does.
+    Activation current{.body = &kernel.designImage->compiledDesign().body(state.bodyIndex),
+                       .frameOffset = state.frameOffset,
+                       .objectSignals = state.objectSignals,
+                       .writeRoutes = state.writeRoutes,
+                       .calls = state.calls};
 
     // Register and object access are the two innermost operations, so each is a single
     // helper that the compiler can inline into every case below.
-    const std::uint32_t frameBase = state.frameOffset;
     const auto reg = [&](std::uint32_t offset, std::uint32_t width) {
-        return kernel.frameAt(frameBase + offset, width);
+        return kernel.frameAt(current.frameOffset + offset, width);
     };
     const auto objectValue = [&](std::uint32_t objectIndex) {
-        const std::uint32_t signalIndex = state.objectSignals[objectIndex];
+        const std::uint32_t signalIndex = current.objectSignals[objectIndex];
         const Signal& signal = kernel.designImage->signals()[signalIndex];
         return kernel.stateArena.at(signal.wordOffset, signal.bitWidth);
     };
@@ -33,8 +42,8 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
     std::uint32_t pc = state.resumePc;
     state.resumePc = 0;
 
-    while (pc < body.code.size()) {
-        const codegen::Instruction& instruction = body.code[pc];
+    while (pc < current.body->code.size()) {
+        const codegen::Instruction& instruction = current.body->code[pc];
         ++kernel.instructionCount;
         ++pc;
 
@@ -52,11 +61,19 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             break;
         }
 
-        case eir::Opcode::Return: return ExecutionResult::Completed;
+        case eir::Opcode::Return: {
+            // The process's own return completes it; a subprogram's goes back to its caller.
+            const std::optional<std::pair<Activation, std::uint32_t>> caller =
+                kernel.leaveCall(current);
+            if (!caller.has_value()) return ExecutionResult::Completed;
+            current = caller->first;
+            pc = caller->second;
+            break;
+        }
 
         case eir::Opcode::LoadConstant:
-            bitops::extend(reg(instruction.dst, instruction.dstWidth), body.constant(instruction.a),
-                           instruction.isSigned);
+            bitops::extend(reg(instruction.dst, instruction.dstWidth),
+                           current.body->constant(instruction.a), instruction.isSigned);
             break;
 
         case eir::Opcode::Move:
@@ -104,9 +121,9 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             // A store goes straight into the signal unless what it writes is resolved with
             // other drivers, in which case it goes through this process's driver (section
             // 3.7). One load and a compare on the common path.
-            const WriteRoute& route = state.writeRoutes[instruction.dst];
+            const WriteRoute& route = current.writeRoutes[instruction.dst];
             if (route.direct()) {
-                kernel.writeSignal(state.objectSignals[instruction.a],
+                kernel.writeSignal(current.objectSignals[instruction.a],
                                    reg(instruction.b, instruction.bWidth));
             } else {
                 kernel.writeThroughDrivers(route, reg(instruction.b, instruction.bWidth), 0);
@@ -120,9 +137,9 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
                 // The target of the write is unknown, so nothing may be written.
                 break;
             }
-            const WriteRoute& route = state.writeRoutes[instruction.dst];
+            const WriteRoute& route = current.writeRoutes[instruction.dst];
             if (route.direct()) {
-                kernel.writeSignalPart(state.objectSignals[instruction.a],
+                kernel.writeSignalPart(current.objectSignals[instruction.a],
                                        reg(instruction.b, instruction.bWidth), index.toUInt64());
             } else {
                 kernel.writeThroughDrivers(route, reg(instruction.b, instruction.bWidth),
@@ -136,7 +153,7 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             // An unknown delay is zero, as for `#` (see WaitTime).
             const eir::ConstBitRef delay = reg(instruction.c, instruction.cWidth);
             kernel.scheduleDelayedWrite(
-                processIndex, instruction.dst, state.objectSignals[instruction.a],
+                processIndex, instruction.dst, current.objectSignals[instruction.a],
                 reg(instruction.b, instruction.bWidth), delay.hasUnknown() ? 0 : delay.toUInt64(),
                 instruction.opcode == eir::Opcode::StoreNonBlockingDelayed);
             if (kernel.errorRequested) return ExecutionResult::Stopped;
@@ -144,14 +161,14 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
         }
 
         case eir::Opcode::StoreNonBlocking:
-            kernel.scheduleNonBlocking(state.objectSignals[instruction.a],
+            kernel.scheduleNonBlocking(current.objectSignals[instruction.a],
                                        reg(instruction.b, instruction.bWidth));
             break;
 
         case eir::Opcode::StorePartNonBlocking: {
             const eir::ConstBitRef index = reg(instruction.c, instruction.cWidth);
             if (index.hasUnknown()) break;
-            kernel.scheduleNonBlockingPart(state.objectSignals[instruction.a],
+            kernel.scheduleNonBlockingPart(current.objectSignals[instruction.a],
                                            reg(instruction.b, instruction.bWidth),
                                            index.toUInt64());
             break;
@@ -384,18 +401,26 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
         }
 
         case eir::Opcode::SysFunction:
-            kernel.runSystemFunction(processIndex, instruction.a,
+            kernel.runSystemFunction(processIndex, current, instruction.a,
                                      reg(instruction.dst, instruction.dstWidth));
             break;
 
-        case eir::Opcode::Call:
-            // Codegen refuses a call until calls are compiled, so none reaches here.
-            ENZAN_ASSERT(false, "a call reached the interpreter before calls are compiled");
-            return ExecutionResult::Stopped;
+        case eir::Opcode::Call: {
+            const std::optional<Activation> callee =
+                kernel.enterCall(processIndex, current, instruction.a, pc);
+            if (!callee.has_value()) return ExecutionResult::Stopped;
+            current = *callee;
+            pc = 0;
+            break;
+        }
 
         case eir::Opcode::SysTask:
-            kernel.runSystemTask(processIndex, instruction.a);
-            if (kernel.finishRequested || kernel.errorRequested) return ExecutionResult::Stopped;
+            kernel.runSystemTask(processIndex, current, instruction.a);
+            if (kernel.finishRequested || kernel.errorRequested) {
+                // A run that stops inside a call leaves nothing of the call behind.
+                kernel.unwindCalls();
+                return ExecutionResult::Stopped;
+            }
             break;
 
         case eir::Opcode::WaitTime: {
@@ -414,7 +439,7 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
             return ExecutionResult::Suspended;
 
         case eir::Opcode::WaitEdge:
-            kernel.suspendForEdge(processIndex, state.objectSignals[instruction.a],
+            kernel.suspendForEdge(processIndex, current.objectSignals[instruction.a],
                                   static_cast<eir::EdgeKind>(instruction.b), instruction.c);
             return ExecutionResult::Suspended;
         }

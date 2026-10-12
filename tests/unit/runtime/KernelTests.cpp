@@ -43,10 +43,12 @@ using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
 using enzan::eir::Opcode;
 using enzan::eir::Operand;
+using enzan::eir::ParameterMode;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::Radix;
 using enzan::eir::SensitivityEntry;
+using enzan::eir::Subprogram;
 using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
@@ -60,6 +62,7 @@ using enzan::runtime::SimTime;
 using enzan::test::literal;
 using enzan::test::ProcessBuilder;
 using enzan::test::Simulation;
+using enzan::test::SubprogramBuilder;
 
 // NOLINTEND(misc-unused-using-decls)
 
@@ -1764,6 +1767,307 @@ TEST(Kernel, ADepositOnAResolvedNetHoldsOnlyUntilADriverChanges) {
     simulation.simulationKernel().deposit(simulation.signal("/tb/b"), literal("1'b1"));
     simulation.run();
     EXPECT_EQ(simulation.value("/tb/n"), "1");
+}
+
+// ---------------------------------------------------------------------------
+// Calls of subprograms (DESIGN_GUIDE.md section 4.1)
+// ---------------------------------------------------------------------------
+
+/// Every message a simulation reported, one per line, for a failed assertion to show.
+std::string reportedMessages(const Simulation& simulation) {
+    std::string text;
+    for (const std::string& message : simulation.messages()) text += message + '\n';
+    return text;
+}
+
+/// `double(value)`: an 8-bit function returning its parameter twice over.
+Subprogram makeDoubler() {
+    SubprogramBuilder builder("double");
+    const std::uint32_t value = builder.parameter("value", Type::bits(8, false, true));
+    const std::uint32_t result = builder.result(Type::bits(8, false, true));
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::Add, Operand::reg(result), Operand::reg(value),
+                                   Operand::reg(value)));
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+TEST(Kernel, AFunctionsResultReachesItsCaller) {
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t argument = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t result = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t value = builder.constant("8'h15");
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(argument), Operand::constant(value)));
+    builder.call("", "double", {Operand::reg(argument)}, Operand::reg(result));
+    builder.store(1, result);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({builder.finish()});
+    definition.subprograms.push_back(makeDoubler());
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "2a");
+}
+
+TEST(Kernel, OutParametersAreCopiedBackAndInOutOnesInAsWell) {
+    // `accumulate(total, step)` adds to an inout parameter, so what it starts from is the
+    // caller's; `produce(value)` sets an out one, so the caller's value never reaches it.
+    SubprogramBuilder accumulate("accumulate");
+    const std::uint32_t total =
+        accumulate.parameter("total", Type::bits(8, false, true), ParameterMode::InOut);
+    const std::uint32_t step = accumulate.parameter("step", Type::bits(8, false, true));
+    const std::uint32_t sum = accumulate.reg(Type::bits(8, false, true));
+    accumulate.block("entry");
+    accumulate.emit(
+        Instruction::make(Opcode::Add, Operand::reg(sum), Operand::reg(total), Operand::reg(step)));
+    accumulate.emit(Instruction::make(Opcode::Move, Operand::reg(total), Operand::reg(sum)));
+    accumulate.emit(Instruction::make(Opcode::Return));
+
+    SubprogramBuilder produce("produce");
+    const std::uint32_t produced =
+        produce.parameter("value", Type::bits(8, false, true), ParameterMode::Out);
+    const std::uint32_t nine = produce.constant("8'h09");
+    produce.block("entry");
+    produce.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(produced), Operand::constant(nine)));
+    produce.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t running = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t other = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t five = builder.constant("8'h05");
+    const std::uint32_t three = builder.constant("8'h03");
+    const std::uint32_t junk = builder.constant("8'h55");
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(running), Operand::constant(five)));
+    builder.call("", "accumulate", {Operand::reg(running), Operand::constant(three)});
+    builder.call("", "accumulate", {Operand::reg(running), Operand::constant(three)});
+    builder.store(0, running);
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(other), Operand::constant(junk)));
+    builder.call("", "produce", {Operand::reg(other)});
+    builder.store(1, other);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({builder.finish()});
+    definition.subprograms.push_back(accumulate.finish());
+    definition.subprograms.push_back(produce.finish());
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Hexadecimal), "0b");
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "09");
+}
+
+/// `factorial(n)`, recursively, in 16 bits.
+Subprogram makeFactorial() {
+    SubprogramBuilder builder("factorial");
+    const Type word = Type::bits(16, false, true);
+    const std::uint32_t n = builder.parameter("n", word);
+    const std::uint32_t result = builder.result(word);
+    const std::uint32_t one = builder.reg(word);
+    const std::uint32_t atMostOne = builder.reg(Type::bits(1, false, true));
+    const std::uint32_t smaller = builder.reg(word);
+    const std::uint32_t product = builder.reg(word);
+    const std::uint32_t oneValue = builder.constant("16'd1");
+
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(one), Operand::constant(oneValue)));
+    builder.emit(Instruction::make(Opcode::LessEqual, Operand::reg(atMostOne), Operand::reg(n),
+                                   Operand::reg(one)));
+    builder.emit(Instruction::make(Opcode::BranchIf, {}, Operand::reg(atMostOne), Operand::block(1),
+                                   Operand::block(2)));
+
+    builder.block("base");
+    builder.emit(Instruction::make(Opcode::Move, Operand::reg(result), Operand::reg(one)));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    builder.block("recurse");
+    builder.emit(Instruction::make(Opcode::Subtract, Operand::reg(smaller), Operand::reg(n),
+                                   Operand::reg(one)));
+    builder.call("", "factorial", {Operand::reg(smaller)}, Operand::reg(product));
+    builder.emit(Instruction::make(Opcode::Multiply, Operand::reg(result), Operand::reg(n),
+                                   Operand::reg(product)));
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+TEST(Kernel, ARecursiveFunctionCallsItself) {
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t n = builder.reg(Type::bits(16, false, true));
+    const std::uint32_t result = builder.reg(Type::bits(16, false, true));
+    const std::uint32_t five = builder.constant("16'd5");
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(n), Operand::constant(five)));
+    builder.call("", "factorial", {Operand::reg(n)}, Operand::reg(result));
+    builder.store(1, result);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition =
+        makeTop({builder.finish()}, {Object{.name = "a", .type = Type::bits(16, false, true)},
+                                     Object{.name = "b", .type = Type::bits(16, false, true)}});
+    definition.subprograms.push_back(makeFactorial());
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Decimal), "120");
+}
+
+TEST(Kernel, ARecursionWithoutEndStopsAtTheCallDepthLimit) {
+    SubprogramBuilder forever("forever");
+    const std::uint32_t value = forever.parameter("value", Type::bits(8, false, true));
+    const std::uint32_t result = forever.result(Type::bits(8, false, true));
+    forever.block("entry");
+    forever.call("", "forever", {Operand::reg(value)}, Operand::reg(result));
+    forever.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t argument = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t returned = builder.reg(Type::bits(8, false, true));
+    builder.block("entry");
+    builder.call("", "forever", {Operand::reg(argument)}, Operand::reg(returned));
+    builder.store(1, returned);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({builder.finish()});
+    definition.subprograms.push_back(forever.finish());
+
+    const std::uint32_t previous = Simulation::callDepthLimit;
+    Simulation::callDepthLimit = 50;
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    Simulation::callDepthLimit = previous;
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::CallDepthExceeded))
+        << reportedMessages(simulation);
+}
+
+TEST(Kernel, APackagesSubprogramReachesThePackagesOwnObjects) {
+    // One instance of the package, at the root, holds `count`, so two calls see one count.
+    ModuleDefinition package;
+    package.name = "counter_pkg::";
+    package.sourceName = "counter_pkg";
+    package.isPackage = true;
+    package.addObject(Object{.name = "count",
+                             .type = Type::bits(8, false, true),
+                             .initialValue = BitVector::parse("8'h00")});
+
+    SubprogramBuilder bump("bump");
+    const std::uint32_t current = bump.reg(Type::bits(8, false, true));
+    const std::uint32_t one = bump.reg(Type::bits(8, false, true));
+    const std::uint32_t oneValue = bump.constant("8'h01");
+    const std::uint32_t result = bump.result(Type::bits(8, false, true));
+    bump.block("entry");
+    bump.readObject(current, 0);
+    bump.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(one), Operand::constant(oneValue)));
+    bump.emit(Instruction::make(Opcode::Add, Operand::reg(result), Operand::reg(current),
+                                Operand::reg(one)));
+    bump.store(0, result);
+    bump.emit(Instruction::make(Opcode::Return));
+    package.subprograms.push_back(bump.finish());
+
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t first = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t second = builder.reg(Type::bits(8, false, true));
+    builder.block("entry");
+    builder.call("counter_pkg::", "bump", {}, Operand::reg(first));
+    builder.call("counter_pkg::", "bump", {}, Operand::reg(second));
+    builder.store(1, second);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Design design;
+    design.addModule(std::move(package));
+    design.addModule(makeTop({builder.finish()}));
+
+    Simulation simulation(std::move(design), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "02");
+    EXPECT_EQ(simulation.value("/counter_pkg/count", Radix::Hexadecimal), "02");
+}
+
+TEST(Kernel, ASystemTaskInASubprogramReadsTheSubprogramsRegisters) {
+    SubprogramBuilder show("show");
+    const std::uint32_t value = show.parameter("value", Type::bits(8, false, true));
+    const std::uint32_t format = show.string("shown %0d");
+    SysTaskCall display;
+    display.kind = SysTaskKind::Display;
+    display.formatIndex = format;
+    display.arguments.push_back(
+        SysTaskArgument{.value = Operand::reg(value), .type = Type::bits(8, false, true)});
+    const std::uint32_t descriptor = show.sysCall(std::move(display));
+    show.block("entry");
+    show.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(descriptor)));
+    show.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t seven = builder.constant("8'd7");
+    builder.block("entry");
+    builder.call("", "show", {Operand::constant(seven)});
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({builder.finish()});
+    definition.subprograms.push_back(show.finish());
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.transcript(), "shown 7\n");
+}
+
+TEST(Kernel, ASubprogramMayNotWriteASignalSomethingDrives) {
+    // Its writes are immediate and go through no driver, so `a`, which a continuous
+    // assignment drives, would be written past its driver.
+    ProcessBuilder assign(ProcessKind::ContinuousAssign, "assign");
+    const std::uint32_t copied = assign.reg(Type::bits(8, false, true));
+    assign.block("entry");
+    assign.readObject(copied, 1);
+    assign.store(0, copied);
+    assign.emit(Instruction::make(Opcode::Return));
+
+    SubprogramBuilder clobber("clobber");
+    const std::uint32_t value = clobber.reg(Type::bits(8, false, true));
+    const std::uint32_t constant = clobber.constant("8'h3c");
+    clobber.block("entry");
+    clobber.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(constant)));
+    clobber.store(0, value);
+    clobber.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder caller(ProcessKind::Initial, "caller");
+    caller.block("entry");
+    caller.call("", "clobber", {});
+    caller.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({assign.finish(), caller.finish()});
+    definition.subprograms.push_back(clobber.finish());
+
+    const Simulation simulation(designOf(std::move(definition)), "tb");
+    EXPECT_FALSE(simulation.ready());
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::SubprogramWritesDrivenSignal))
+        << reportedMessages(simulation);
+}
+
+TEST(Kernel, ACallOfASubprogramNoUnitDeclaresIsAnElaborationError) {
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    builder.block("entry");
+    builder.call("elsewhere::", "missing", {});
+    builder.emit(Instruction::make(Opcode::Return));
+
+    const Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    EXPECT_FALSE(simulation.ready());
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::UnresolvedSubprogram))
+        << reportedMessages(simulation);
 }
 
 } // namespace

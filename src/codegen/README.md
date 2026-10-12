@@ -12,6 +12,10 @@ executes (DESIGN_GUIDE.md section 6.1).
 - Write every width the operation needs into the instruction, so that the interpreter's
   inner loop needs nothing but the instruction and the data.
 - Resolve system task arguments to frame offsets and constant indices.
+- Compile every subprogram's body as a process's is (DESIGN_GUIDE.md section 4.1). A call keeps
+  the caller's half — where its arguments are and where the result goes — and the callee's body
+  keeps where its parameters and result live; which binding of the callee a call reaches is
+  elaboration's to say, so nothing here resolves one to the other.
 
 ## What this component deliberately does not do
 

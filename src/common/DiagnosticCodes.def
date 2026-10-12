@@ -94,6 +94,12 @@ ENZAN_DIAG(UnresolvedHierarchicalReference, 3011, Error,
 ENZAN_DIAG(PackageNamedAsTop, 3012, Error,
            "package '{}' has the name of the top-level module; its variables live at '/{}', "
            "which is the top level's path")
+ENZAN_DIAG(UnresolvedSubprogram, 3013, Error,
+           "{} calls '{}' of '{}', which no unit of the design declares")
+ENZAN_DIAG(SubprogramWritesDrivenSignal, 3014, Error,
+           "'{}' has {} written by the subprogram '{}', called from {}, and also driven by {}; a "
+           "subprogram's writes are immediate, and a signal that is driven has to be written "
+           "through its drivers")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 
@@ -102,6 +108,9 @@ ENZAN_DIAG(UnconnectedPort, 3008, Warning,
 ENZAN_DIAG(DeltaLimitExceeded, 5001, Error,
            "exceeded the delta cycle limit of {} at time {}; the design is not settling. "
            "Still active: {}")
+ENZAN_DIAG(CallDepthExceeded, 5011, Error,
+           "exceeded the call depth limit of {} calling '{}' from {} at time {}; the design "
+           "recurses deeper than the limit, or without end")
 ENZAN_DIAG(TimeOverflow, 5002, Error,
            "a delay at time {} would advance simulated time past the 64-bit range; time is "
            "counted in units of {}")

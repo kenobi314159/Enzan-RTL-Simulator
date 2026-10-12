@@ -67,6 +67,17 @@ struct Slot {
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
 };
 
+/// Some bits of one slot.
+struct SlotRange {
+    std::uint32_t slot = 0;
+    std::uint32_t lowBit = 0;
+    std::uint32_t width = 0;
+
+    [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + width; }
+
+    friend bool operator==(SlotRange, SlotRange) noexcept = default;
+};
+
 /// One instantiated module.
 struct Instance {
     /// Full hierarchical path, with `/` separators and no trailing slash: `/tb/u_dut`.
@@ -114,6 +125,37 @@ struct ProcessInstance {
 
     /// Index into the definition's process list.
     std::uint32_t processIndex = 0;
+
+    /// For each of the process's call sites, the subprogram instance it calls.
+    std::vector<std::uint32_t> calls;
+
+    /// The slots the process's callees read, through any depth of calls, sorted and each once:
+    /// what it reaches beyond its own read set (DESIGN_GUIDE.md section 4.2).
+    std::vector<std::uint32_t> calleeReads;
+
+    /// The bits of slots its callees write, likewise.
+    std::vector<SlotRange> calleeWrites;
+};
+
+/// A subprogram bound to the instance whose objects it reaches (DESIGN_GUIDE.md section 4.1).
+///
+/// One declared by a module is bound to the instance whose process calls it; a package's to the
+/// package's one instance; one whose definition holds no objects to no instance at all. A pair
+/// rather than a copy of the body, as a process instance is, so one compiled body serves every
+/// binding.
+struct SubprogramInstance {
+    std::uint32_t definitionIndex = 0;
+
+    /// Index into the definition's subprogram list.
+    std::uint32_t subprogramIndex = 0;
+
+    /// The instance whose slots the subprogram's object indices resolve to, or `NoInstance`.
+    std::uint32_t instanceIndex = NoInstance;
+
+    /// For each of the subprogram's call sites, the subprogram instance it calls.
+    std::vector<std::uint32_t> calls;
+
+    static constexpr std::uint32_t NoInstance = 0xFFFF'FFFFU;
 };
 
 /// One driver of a resolved signal: one continuous process's write of one range of it
@@ -182,6 +224,11 @@ public:
         return processList;
     }
 
+    /// Every subprogram a process can reach through its calls, bound to its instance, each once.
+    [[nodiscard]] std::span<const SubprogramInstance> subprograms() const noexcept {
+        return subprogramList;
+    }
+
     /// Every driver of a resolved signal, ordered by process, then by object, then by bit, so
     /// that one process's drivers through one object are a contiguous run.
     [[nodiscard]] std::span<const Driver> drivers() const noexcept { return driverList; }
@@ -237,6 +284,7 @@ private:
     std::vector<Slot> slotList;
     std::vector<eir::EnumDefinition> enumList;
     std::vector<ProcessInstance> processList;
+    std::vector<SubprogramInstance> subprogramList;
     std::vector<Driver> driverList;
     std::vector<Segment> segmentList;
     std::vector<std::uint32_t> segmentDriverList;
