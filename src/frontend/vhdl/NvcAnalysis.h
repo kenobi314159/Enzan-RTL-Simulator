@@ -4,6 +4,8 @@
 
 #include "frontend/vhdl/VhdlFrontend.h"
 
+#include <string>
+
 namespace enzan {
 struct Diagnostic;
 class SourceManager;
@@ -37,5 +39,13 @@ public:
 /// names the file and line in a note instead.
 unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources,
                         DiagnosticSink& sink);
+
+/// Analyses as `runNvcAnalysis` does and translates the design under `options.top` into EIR,
+/// returning the number of errors either reported.
+///
+/// `encoded` receives the translated definitions as `eir::encodeModules` writes them, when there
+/// were no errors.
+unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources,
+                      DiagnosticSink& sink, std::string& encoded);
 
 } // namespace enzan::frontend::vhdl

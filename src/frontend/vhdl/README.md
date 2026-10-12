@@ -9,7 +9,7 @@ analysis (section 5.2). Built only with `-DENZAN_ENABLE_VHDL=ON`.
   and bounds checking — into NVC's units in a library, and translate NVC's diagnostics into
   Enzan's diagnostic engine (ENZ2001–ENZ2004).
 - Walk NVC's analysed trees and emit EIR, one unit per entity, architecture and set of generic
-  values, folding generics as it goes (section 5.2). *Not yet written.*
+  values, folding generics as it goes (section 5.2), from the top down the hierarchy.
 
 ## How NVC is run
 
@@ -26,6 +26,30 @@ same buffer every other diagnostic quotes.
 **With its constant evaluator replaced**, by `third_party/nvc-analysis`, so analysis folds
 nothing through NVC's JIT and this adapter folds as it translates. `docs/nvc_integration.md`
 measures what that changes.
+
+**Translating in the same child.** `analyse` runs the analysis and then the translation in one
+child, and the child sends the design back in EIR's own encoding: NVC's trees never reach the
+parent. A design's work library is NVC's in-memory one, written nowhere.
+
+## Files
+
+- `VhdlFrontend.h/.cpp` — the interface the rest of Enzan sees, and the child process.
+- `NvcAnalysis.h/.cpp` — NVC set up for one run: its analysis, and its locations in Enzan's
+  buffers.
+- `Translator.h/.cpp` — the hierarchy walk: which architecture an entity is bound to, generics
+  bound and folded, one definition per architecture and values, ports, signals and instances.
+- `ProcessTranslator.h/.cpp` — a process's statements and expressions, as EIR-B.
+- `Folder.h/.cpp` — static evaluation: generics, constants, bounds and delays.
+- `Types.h/.cpp` — how a VHDL type is held in EIR (section 3.6).
+
+## What is translated
+
+So far: entities, architectures, entity instances, scalar generics; signals and ports of
+enumeration, integer and physical types; processes with variables, `if`, `case`, loops, `exit`,
+`next`, `wait` (but not one with both a timeout and a sensitivity or condition), signal
+assignments with inertial and transport delay, `assert`, `report` with messages built from
+literals and `'image`, `std.env.finish` and `stop`, and the predefined operators on scalars.
+Anything else is refused with ENZ2005 naming it, never left out.
 
 ## Rules
 

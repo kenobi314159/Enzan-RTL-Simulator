@@ -4,7 +4,9 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "eir/Serialization.h"
 #include "frontend/vhdl/NvcApi.h"
+#include "frontend/vhdl/Translator.h"
 
 #include <cstdint>
 #include <string>
@@ -106,7 +108,7 @@ bool codeFor(diag_level_t level, DiagCode& code) {
 void translate(diag_t* nvcDiagnostic, void* context) {
     const Translation& translation = *static_cast<const Translation*>(context);
 
-    DiagCode code{};
+    DiagCode code = DiagCode::VhdlError;
     if (!codeFor(diag_level(nvcDiagnostic, nullptr), code)) return;
 
     Diagnostic diagnostic;
@@ -143,58 +145,136 @@ vhdl_standard_t nvcStandard(Standard standard) {
     return STD_08;
 }
 
+/// Forwards what the adapter reports to the sink NVC's own diagnostics go to, so that the parent
+/// receives both as one stream in the order they were made.
+class SinkConsumer final : public DiagnosticConsumer {
+public:
+    explicit SinkConsumer(DiagnosticSink& destination) noexcept : sink(destination) {}
+
+    void consume(const Diagnostic& diagnostic) override { sink.deliver(diagnostic); }
+
+private:
+    DiagnosticSink& sink;
+};
+
+/// NVC, set up for one run, and what the run analysed.
+class Run {
+public:
+    Run(const UnitOptions& unitOptions, const SourceManager& sourceManager, DiagnosticSink& sink)
+        : options(unitOptions),
+          sources(sourceManager),
+          translation{.sources = sourceManager, .sink = sink, .files = {}} {
+        // What NVC's own driver does before anything else (src/nvc.c), less what concerns a
+        // terminal or the simulation it would go on to run.
+        term_init();
+        thread_init();
+        set_default_options();
+        intern_strings();
+
+        set_standard(nvcStandard(options.standard));
+        if (options.bootstrap) opt_set_int(OPT_BOOTSTRAP, 1);
+        for (const std::filesystem::path& directory : options.searchDirectories)
+            lib_add_search_path(directory.c_str());
+
+        diag_set_consumer(translate, &translation);
+
+        // NAME:DIRECTORY names the library and fixes where it lives, rather than searching for
+        // it; with no directory the library is NVC's in-memory one, which nothing writes out.
+        if (options.work.directory.empty()) {
+            work = lib_tmp(options.work.name.c_str());
+        } else {
+            const std::string spec = options.work.name + ":" + options.work.directory.string();
+            work = lib_new(spec.c_str());
+        }
+        lib_set_work(work);
+    }
+
+    Run(const Run&) = delete;
+    Run& operator=(const Run&) = delete;
+    Run(Run&&) = delete;
+    Run& operator=(Run&&) = delete;
+
+    ~Run() { diag_set_consumer(nullptr, nullptr); }
+
+    /// Exactly the loop of NVC's `nvc -a` (src/nvc.c), with the constant evaluator replaced
+    /// (third_party/nvc-analysis/enzan_nvc_seam.c), so simplification is given no JIT. Returns
+    /// the error count.
+    unsigned analyse() {
+        for (const BufferId buffer : options.sources) {
+            const std::string name(sources.bufferName(buffer));
+            const std::string_view text = sources.bufferText(buffer);
+            // NVC keeps the pointer to quote lines from, which it stops at a newline; the source
+            // manager's text is terminated besides.
+            // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
+            const file_ref_t reference = loc_file_ref(name.c_str(), text.data());
+            translation.files.emplace_back(reference, buffer);
+
+            input_from_buffer(text.data(), text.size(), reference, SOURCE_VHDL);
+            for (;;) {
+                const unsigned before = error_count();
+                tree_t unit = parse();
+                if (unit == nullptr) break;
+
+                if (error_count() == before) {
+                    lib_put(work, unit);
+                    simplify_local(unit, nullptr, nullptr, nullptr);
+                    bounds_check(unit);
+                    units.push_back(unit);
+                } else {
+                    lib_put_error(work, unit);
+                }
+            }
+        }
+
+        if (error_count() == 0 && !options.work.directory.empty()) lib_save(work);
+        return error_count();
+    }
+
+    [[nodiscard]] SourceLocation locate(const loc_t* location) const {
+        return vhdl::locate(translation, location);
+    }
+
+    [[nodiscard]] lib_t workLibrary() const noexcept { return work; }
+
+    [[nodiscard]] const std::vector<tree_t>& analysed() const noexcept { return units; }
+
+private:
+    const UnitOptions& options;
+    const SourceManager& sources;
+    Translation translation;
+    lib_t work = nullptr;
+    std::vector<tree_t> units;
+};
+
 } // namespace
 
 unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources,
                         DiagnosticSink& sink) {
-    // What NVC's own driver does before anything else (src/nvc.c), less what concerns a terminal
-    // or the simulation it would go on to run.
-    term_init();
-    thread_init();
-    set_default_options();
-    intern_strings();
+    Run run(options, sources, sink);
+    return run.analyse();
+}
 
-    set_standard(nvcStandard(options.standard));
-    if (options.bootstrap) opt_set_int(OPT_BOOTSTRAP, 1);
-    for (const std::filesystem::path& directory : options.searchDirectories)
-        lib_add_search_path(directory.c_str());
+unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources,
+                      DiagnosticSink& sink, std::string& encoded) {
+    Run run(options.units, sources, sink);
+    const unsigned analysisErrors = run.analyse();
+    if (analysisErrors != 0) return analysisErrors;
 
-    Translation translation{.sources = sources, .sink = sink, .files = {}};
-    diag_set_consumer(translate, &translation);
+    DiagnosticEngine engine(sources);
+    SinkConsumer consumer(sink);
+    engine.addConsumer(consumer);
 
-    // NAME:DIRECTORY names the library and fixes where it lives, rather than searching for it.
-    const std::string spec = options.work.name + ":" + options.work.directory.string();
-    lib_t work = lib_new(spec.c_str());
-    lib_set_work(work);
+    const DesignRequest request{.top = options.top,
+                                .timeUnitExponent = options.timeUnitExponent,
+                                .work = run.workLibrary(),
+                                .analysed = run.analysed()};
+    const std::vector<eir::ModuleDefinition> modules = translateDesign(
+        request, [&run](const loc_t* location) { return run.locate(location); }, engine);
 
-    // Exactly the loop of NVC's `nvc -a` (src/nvc.c), with the constant evaluator replaced
-    // (third_party/nvc-analysis/enzan_nvc_seam.c), so simplification is given no JIT.
-    for (const BufferId buffer : options.sources) {
-        const std::string name(sources.bufferName(buffer));
-        const std::string_view text = sources.bufferText(buffer);
-        const file_ref_t reference = loc_file_ref(name.c_str(), text.data());
-        translation.files.emplace_back(reference, buffer);
-
-        input_from_buffer(text.data(), text.size(), reference, SOURCE_VHDL);
-        for (;;) {
-            const unsigned before = error_count();
-            tree_t unit = parse();
-            if (unit == nullptr) break;
-
-            if (error_count() == before) {
-                lib_put(work, unit);
-                simplify_local(unit, nullptr, nullptr, nullptr);
-                bounds_check(unit);
-            } else {
-                lib_put_error(work, unit);
-            }
-        }
-    }
-
-    if (error_count() == 0) lib_save(work);
-
-    diag_set_consumer(nullptr, nullptr);
-    return error_count();
+    const unsigned errors = engine.errorCount() + error_count();
+    if (errors == 0) encoded = eir::encodeModules(modules, sources);
+    engine.removeConsumer(consumer);
+    return errors;
 }
 
 } // namespace enzan::frontend::vhdl

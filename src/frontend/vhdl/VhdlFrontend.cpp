@@ -4,6 +4,9 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "eir/Design.h"
+#include "eir/Serialization.h"
+#include "eir/Verifier.h"
 #include "frontend/vhdl/NvcAnalysis.h"
 
 #include <array>
@@ -11,10 +14,13 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -36,6 +42,8 @@ enum class Record : std::uint8_t {
     /// The analysis ran to its end, followed by its error count. A stream without one is a child
     /// that NVC ended part-way.
     Finished = 2,
+    /// The translated design, as `eir::encodeModules` wrote it.
+    Design = 3,
 };
 
 class Encoder {
@@ -139,6 +147,13 @@ public:
         static_cast<void>(writeAll(output, encoder.view()));
     }
 
+    void design(std::string_view encoded) const {
+        Encoder encoder;
+        encoder.byte(static_cast<std::uint8_t>(Record::Design));
+        encoder.text(encoded);
+        static_cast<void>(writeAll(output, encoder.view()));
+    }
+
     void finish(unsigned errors) const {
         Encoder encoder;
         encoder.byte(static_cast<std::uint8_t>(Record::Finished));
@@ -153,9 +168,12 @@ private:
 /// The status a child ends with when NVC ended it, rather than the analysis finishing.
 constexpr int StoppedByNvc = 3;
 
+/// What the child does with NVC: the work of one call, reporting through the sink it is given and
+/// returning its error count.
+using Job = std::function<unsigned(PipeSink&)>;
+
 /// Runs in the child, and never returns.
-[[noreturn]] void runChild(const UnitOptions& options, const SourceManager& sources, int records,
-                           int errors) {
+[[noreturn]] void runChild(const Job& job, int records, int errors) {
     // NVC leaves a fatal error through exit(), and in a forked child exit() would run the exit
     // handlers and static destructors of the parent it is a copy of: everything Enzan registered
     // to tidy up its own process, done a second time by one that owns none of it. A handler
@@ -170,7 +188,7 @@ constexpr int StoppedByNvc = 3;
     ::close(errors);
 
     PipeSink sink(records);
-    const unsigned errorCount = runNvcAnalysis(options, sources, sink);
+    const unsigned errorCount = job(sink);
     sink.finish(errorCount);
 
     // _Exit, not exit: the child is a copy of Enzan, and running Enzan's exit handlers and static
@@ -234,6 +252,9 @@ struct Outcome {
     /// True when NVC reported its fatal error through the consumer, as it does for a library it
     /// cannot find, rather than only printing it on its way out.
     bool stopReported = false;
+
+    /// The translated design, when the child sent one.
+    std::optional<std::string> design;
 };
 
 /// Reports what the child wrote, record by record.
@@ -246,6 +267,11 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
             outcome.errors = decoder.u32();
             return outcome;
         }
+        if (kind == static_cast<std::uint8_t>(Record::Design)) {
+            outcome.design = decoder.text();
+            if (!outcome.design) return outcome;
+            continue;
+        }
         if (kind != static_cast<std::uint8_t>(Record::Diagnostic)) return outcome;
 
         const std::optional<std::uint32_t> code = decoder.u32();
@@ -256,9 +282,10 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
         outcome.stopReported =
             outcome.stopReported || static_cast<DiagCode>(*code) == DiagCode::VhdlAnalysisStopped;
 
-        DiagnosticBuilder builder =
-            diagnostics.report(static_cast<DiagCode>(*code), *location, *message);
-        for (std::uint32_t index = 0; index < *noteCount; ++index) {
+        // Formatted already, by NVC or by the child's own engine.
+        DiagnosticBuilder builder = diagnostics.reportFormatted(
+            static_cast<DiagCode>(*code), location.value_or(SourceLocation()), *message);
+        for (std::uint32_t index = 0; index < noteCount.value_or(0); ++index) {
             const std::optional<SourceLocation> noteLocation = decoder.location();
             std::optional<std::string> noteMessage = decoder.text();
             if (!noteLocation || !noteMessage) return outcome;
@@ -268,24 +295,23 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
     return outcome;
 }
 
-} // namespace
-
-bool analyseUnits(const UnitOptions& options, const SourceManager& sources,
-                  DiagnosticEngine& diagnostics) {
+/// Runs `job` in a child process and reports what it said, returning what its stream held, or
+/// nothing having reported why the child did not finish.
+std::optional<Outcome> inChild(const Job& job, DiagnosticEngine& diagnostics) {
     std::array<int, 2> records{-1, -1};
     std::array<int, 2> errors{-1, -1};
     if (::pipe2(records.data(), O_CLOEXEC) != 0 || ::pipe2(errors.data(), O_CLOEXEC) != 0) {
         diagnostics.report(DiagCode::InternalError, SourceLocation(),
                            std::string("cannot create a pipe for VHDL analysis: ")
                                + std::strerror(errno));
-        return false;
+        return std::nullopt;
     }
 
     const pid_t child = ::fork();
     if (child == 0) {
         ::close(records[0]);
         ::close(errors[0]);
-        runChild(options, sources, records[1], errors[1]);
+        runChild(job, records[1], errors[1]);
     }
 
     ::close(records[1]);
@@ -295,7 +321,7 @@ bool analyseUnits(const UnitOptions& options, const SourceManager& sources,
         ::close(errors[0]);
         diagnostics.report(DiagCode::InternalError, SourceLocation(),
                            std::string("cannot start VHDL analysis: ") + std::strerror(errno));
-        return false;
+        return std::nullopt;
     }
 
     const auto [stream, printed] = drain(records[0], errors[0]);
@@ -305,7 +331,7 @@ bool analyseUnits(const UnitOptions& options, const SourceManager& sources,
     int status = 0;
     while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {}
 
-    const Outcome outcome = report(stream, diagnostics);
+    Outcome outcome = report(stream, diagnostics);
 
     // A child that finished printed nothing NVC meant as a diagnostic, since those all came
     // through the consumer. Whatever it did print is something else — a sanitiser's report from
@@ -317,9 +343,65 @@ bool analyseUnits(const UnitOptions& options, const SourceManager& sources,
             diagnostics.report(DiagCode::VhdlAnalysisStopped, SourceLocation(),
                                stopReason(printed, status));
         }
-        return false;
+        return std::nullopt;
     }
-    return *outcome.errors == 0;
+    return outcome;
+}
+
+} // namespace
+
+bool analyseUnits(const UnitOptions& options, const SourceManager& sources,
+                  DiagnosticEngine& diagnostics) {
+    const std::optional<Outcome> outcome = inChild(
+        [&options, &sources](PipeSink& sink) { return runNvcAnalysis(options, sources, sink); },
+        diagnostics);
+    return outcome && outcome->errors == 0U;
+}
+
+std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
+                                     DiagnosticEngine& diagnostics) {
+    const std::optional<Outcome> outcome = inChild(
+        [&options, &sources](PipeSink& sink) {
+            std::string encoded;
+            const unsigned errors = runNvcDesign(options, sources, sink, encoded);
+            if (errors == 0) sink.design(encoded);
+            return errors;
+        },
+        diagnostics);
+    if (!outcome || outcome->errors != 0U) return nullptr;
+    if (!outcome->design) {
+        diagnostics.report(DiagCode::InternalError, SourceLocation(),
+                           "VHDL analysis finished without sending the design");
+        return nullptr;
+    }
+
+    // The child is a copy of this process, so the buffers it located against are these, by name.
+    std::map<std::string, BufferId, std::less<>> buffers;
+    for (const BufferId buffer : options.units.sources)
+        buffers.emplace(std::string(sources.bufferName(buffer)), buffer);
+    const auto resolve = [&buffers](std::string_view name) {
+        const auto found = buffers.find(name);
+        return found == buffers.end() ? BufferId() : found->second;
+    };
+
+    std::vector<eir::ModuleDefinition> modules;
+    if (!eir::decodeModules(*outcome->design, resolve, modules)) {
+        diagnostics.report(DiagCode::InternalError, SourceLocation(),
+                           "the design VHDL analysis sent could not be decoded");
+        return nullptr;
+    }
+
+    auto design = std::make_unique<eir::Design>();
+    for (eir::ModuleDefinition& definition : modules) design->addModule(std::move(definition));
+    if (!eir::verify(*design, diagnostics)) return nullptr;
+    return design;
+}
+
+std::filesystem::path standardLibraryDirectory() {
+    std::error_code failure;
+    const std::filesystem::path program = std::filesystem::read_symlink("/proc/self/exe", failure);
+    if (failure) return {};
+    return (program.parent_path() / ".." / "lib" / "enzan" / "vhdl").lexically_normal();
 }
 
 } // namespace enzan::frontend::vhdl

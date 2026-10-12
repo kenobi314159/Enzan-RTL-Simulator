@@ -61,6 +61,10 @@ ENZAN_DIAG(VhdlError, 2001, Error, "{}")
 ENZAN_DIAG(VhdlWarning, 2002, Warning, "{}")
 ENZAN_DIAG(VhdlNote, 2003, Note, "{}")
 ENZAN_DIAG(VhdlAnalysisStopped, 2004, Fatal, "VHDL analysis stopped: {}")
+ENZAN_DIAG(VhdlUnsupported, 2005, Error, "{} is not supported by the VHDL frontend yet")
+ENZAN_DIAG(VhdlProcessNeverWaits, 2006, Error,
+           "this process has no sensitivity list and no wait statement, so once started it would "
+           "run for ever without letting simulated time advance")
 
 // --- 3000-3999: elaboration -------------------------------------------------
 

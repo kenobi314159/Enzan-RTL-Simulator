@@ -891,6 +891,32 @@ is reported as a diagnostic, and every analysis starts from NVC's initial state
 rather than the previous one's. The child reports each of NVC's diagnostics back as
 NVC gives it, so what the user sees is what one process would have shown.
 
+**The child translates as well.** A design to simulate is analysed and translated in
+one child, which sends the parent the result in EIR's own encoding (4.4), so NVC's
+trees, and NVC's memory, never reach the process that runs the simulation. What the
+child translates is the hierarchy under the top, or under every entity of the sources
+that none of them instantiates when no top is named: a unit nothing instantiates cannot
+stop a design for using something the adapter lacks.
+
+What a VHDL unit becomes in EIR:
+
+- An entity's ports and its architecture's signals are objects holding codes (3.6),
+  each starting at its declared value or its type's left bound, as VHDL's objects do.
+- A process is an EIR process that loops for ever, its declarations initialised on
+  entry; its variables are registers, which keep their values while it waits. It is
+  marked as **driving** the signals it assigns, so that elaboration counts each as a
+  driver as it counts a continuous assignment (3.7), and two processes assigning one
+  unresolved signal are refused. A process that cannot suspend is refused too, since it
+  would never let time advance.
+- A signal assignment is `Drive`, or `DriveTransport` for a transport assignment and
+  for each element of a waveform after the first: the transactions of 3.4.
+- `report` and a failed `assert` are one system task taking the severity as an
+  argument: note, warning and error are reported and the run goes on, and failure ends
+  it with a failing status, as GHDL's default does. `wait;` waits on an empty event list,
+  which nothing ever wakes.
+- Time is a count of femtoseconds, VHDL's resolution limit, and a design with VHDL in it
+  is simulated in femtoseconds unless `--timescale` names another unit (3.1).
+
 Mitigations: pin the revision, keep the adapter thin and confined to one
 directory, document the rebase procedure in `docs/nvc_integration.md`, and rely
 on golden tests to catch drift on upgrade.

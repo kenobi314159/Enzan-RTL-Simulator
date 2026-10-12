@@ -22,3 +22,12 @@ extern "C" {
 #include "type.h"
 #include "util.h"
 }
+
+// NVC's thread.h spells its atomics as macros named like the standard library's functions, which
+// break <atomic> and <memory> when either is included after this. Nothing outside NVC uses them.
+#undef atomic_add
+#undef atomic_fetch_add
+#undef atomic_load
+#undef atomic_store
+#undef atomic_xchg
+#undef atomic_cas

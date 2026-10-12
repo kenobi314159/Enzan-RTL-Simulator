@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,10 @@ namespace enzan {
 class DiagnosticEngine;
 class SourceManager;
 } // namespace enzan
+
+namespace enzan::eir {
+class Design;
+}
 
 /// The VHDL frontend.
 ///
@@ -44,7 +49,8 @@ struct UnitOptions {
     /// units already analysed (IEEE 1076 section 13.1), so a package comes before what uses it.
     std::vector<BufferId> sources;
 
-    /// Where the analysed units go.
+    /// Where the analysed units go. With no directory, they are held in memory for the run and
+    /// written nowhere.
     UnitLibrary work;
 
     /// Directories holding the other libraries a design refers to, searched in order.
@@ -76,5 +82,33 @@ struct UnitOptions {
 /// Returns true when every source analysed without error and the library was written.
 bool analyseUnits(const UnitOptions& options, const SourceManager& sources,
                   DiagnosticEngine& diagnostics);
+
+/// What to simulate: the sources to analyse, and the entity to translate the design from.
+struct DesignOptions {
+    /// Analysed first, into `units.work`, as `analyseUnits` would.
+    UnitOptions units;
+
+    /// The top entity, in any case. Empty means every entity the sources declare that none of their
+    /// architectures instantiates.
+    std::string top;
+
+    /// The unit EIR's delays count, as a power of ten of a second.
+    std::int8_t timeUnitExponent = -15;
+};
+
+/// Analyses `options.units` and translates the design under the top into EIR (section 5.2).
+///
+/// In the child process `analyseUnits` describes, which hands the parent the translated design as
+/// EIR's own encoding: NVC's trees live in the child and end with it, and nothing of NVC reaches
+/// the parent's memory.
+///
+/// Returns nothing having reported why, when a source does not analyse or the design uses
+/// something the adapter does not translate yet.
+std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
+                                     DiagnosticEngine& diagnostics);
+
+/// Where the standard libraries built with Enzan are: `lib/enzan/vhdl` beside the directory of the
+/// running program, which is where a build puts them and an installation keeps them (section 4.4).
+std::filesystem::path standardLibraryDirectory();
 
 } // namespace enzan::frontend::vhdl

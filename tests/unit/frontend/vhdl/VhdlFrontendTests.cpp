@@ -33,7 +33,9 @@ using enzan::frontend::vhdl::UnitOptions;
 using enzan::test::Workspace;
 
 /// Where the build put the standard libraries.
-const std::filesystem::path Libraries = ENZAN_VHDL_LIBRARY_ROOT;
+std::filesystem::path libraries() {
+    return ENZAN_VHDL_LIBRARY_ROOT;
+}
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -56,7 +58,7 @@ protected:
         UnitOptions options;
         options.sources = {buffer};
         options.work = {.name = std::string(name), .directory = workspace / name};
-        options.searchDirectories = {Libraries, workspace.path()};
+        options.searchDirectories = {libraries(), workspace.path()};
         options.standard = standard;
         return analyseUnits(options, sources, engine);
     }
@@ -81,11 +83,11 @@ protected:
 TEST(VhdlLibrariesTest, TheBuildHoldsTheStandardLibrariesOfEachRevision) {
     for (const std::string suffix : {"", ".08", ".19"}) {
         SCOPED_TRACE("revision suffix '" + suffix + "'");
-        EXPECT_TRUE(std::filesystem::exists(Libraries / ("std" + suffix) / "STD.STANDARD"));
-        EXPECT_TRUE(std::filesystem::exists(Libraries / ("std" + suffix) / "STD.TEXTIO-body"));
+        EXPECT_TRUE(std::filesystem::exists(libraries() / ("std" + suffix) / "STD.STANDARD"));
+        EXPECT_TRUE(std::filesystem::exists(libraries() / ("std" + suffix) / "STD.TEXTIO-body"));
         EXPECT_TRUE(
-            std::filesystem::exists(Libraries / ("ieee" + suffix) / "IEEE.NUMERIC_STD-body"));
-        EXPECT_TRUE(std::filesystem::exists(Libraries / ("nvc" + suffix) / "NVC.PSL_SUPPORT"));
+            std::filesystem::exists(libraries() / ("ieee" + suffix) / "IEEE.NUMERIC_STD-body"));
+        EXPECT_TRUE(std::filesystem::exists(libraries() / ("nvc" + suffix) / "NVC.PSL_SUPPORT"));
     }
 }
 
@@ -266,7 +268,7 @@ TEST_F(VhdlAnalysisTest, StartsEachAnalysisAfresh) {
     UnitOptions options;
     options.sources = {buffer};
     options.work = {.name = "work", .directory = elsewhere / "work"};
-    options.searchDirectories = {Libraries};
+    options.searchDirectories = {libraries()};
     ASSERT_TRUE(analyseUnits(options, sources, engine)) << transcript();
 
     EXPECT_TRUE(std::filesystem::exists(workspace / "work" / "WORK.FIRST"));
