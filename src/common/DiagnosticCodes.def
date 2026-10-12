@@ -55,6 +55,13 @@ ENZAN_DIAG(ErrorInDeadCode, 1008, Warning,
 ENZAN_DIAG(UnusedParameterOverride, 1007, Warning,
            "-G {} names no parameter of a top level, and changes nothing")
 
+// --- 2000-2999: VHDL frontend -----------------------------------------------
+
+ENZAN_DIAG(VhdlError, 2001, Error, "{}")
+ENZAN_DIAG(VhdlWarning, 2002, Warning, "{}")
+ENZAN_DIAG(VhdlNote, 2003, Note, "{}")
+ENZAN_DIAG(VhdlAnalysisStopped, 2004, Fatal, "VHDL analysis stopped: {}")
+
 // --- 3000-3999: elaboration -------------------------------------------------
 
 ENZAN_DIAG(TopModuleNotFound, 3001, Error,

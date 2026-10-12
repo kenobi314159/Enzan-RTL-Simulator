@@ -46,6 +46,8 @@ The build prefers a system package and falls back to building from source. See
 | [Tcl](https://www.tcl-lang.org/) | 8.6 or later | BSD-style | GUI theme language (M2) | system package |
 | [Qt](https://www.qt.io/) | 6.4 or later | LGPLv3 | graphical front end (M2) | system package, dynamically linked |
 | [LLVM](https://llvm.org/) | 17 or later | Apache-2.0 with LLVM exception | JIT backend (M8, optional) | system package, off by default |
+| [flex](https://github.com/westes/flex) | 2.6 or later | BSD-style; the scanners it generates carry no restriction | generating NVC's lexer when the VHDL frontend is built (M6); nothing of it is linked | system package |
+| [zstd](https://github.com/facebook/zstd) | 1.4 or later | BSD-3-Clause, or GPL-2.0 at the user's choice | the analysed units NVC writes into a library, which it compresses (M6) | system package |
 | [cocotb](https://github.com/cocotb/cocotb) | `2.1.0`, pinned in `tests/conformance/cocotb/requirements.txt` | BSD-3-Clause | the cocotb golden test and regression suite (M4); loaded with `--vpi`, never linked | `pip`; its test suite is fetched at the matching tag and never vendored |
 
 slang itself builds against fmt, Boost headers and mimalloc, which it acquires

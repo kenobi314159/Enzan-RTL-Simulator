@@ -3,3 +3,7 @@
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   add_subdirectory(sv)
 endif()
+
+if(ENZAN_ENABLE_VHDL)
+  add_subdirectory(vhdl)
+endif()

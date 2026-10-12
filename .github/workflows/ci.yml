@@ -66,13 +66,17 @@ jobs:
       matrix:
         preset: [gcc-debug, gcc-release, clang-debug, clang-release]
     steps:
+      # NVC, which the VHDL frontend builds part of, is a submodule.
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
+      # flex and zstd build NVC's analysis (DESIGN_GUIDE.md section 11.3).
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev flex libzstd-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -86,11 +90,14 @@ jobs:
       # times per commit would spend most of the CI budget on a dependency that
       # one job proves just as well.
       #
+      # The VHDL frontend is on, since the part of NVC it builds compiles in
+      # seconds and is C that each compiler should see.
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
           -DENZAN_WERROR=ON
           -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+          -DENZAN_ENABLE_VHDL=ON
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
@@ -107,12 +114,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev flex libzstd-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -121,11 +130,13 @@ jobs:
           key: ccache-sanitize-${{ github.sha }}
           restore-keys: ccache-sanitize-
 
+      # With the VHDL frontend, so that NVC's analysis runs instrumented too.
       - name: Configure
         run: >
           cmake --preset clang-sanitize
           -DENZAN_WERROR=ON
           -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+          -DENZAN_ENABLE_VHDL=ON
 
       - name: Build
         run: cmake --build --preset clang-sanitize
@@ -144,13 +155,15 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ccache clang clang-tidy-18 libgtest-dev zlib1g-dev \
-            qt6-base-dev tcl-dev
+            qt6-base-dev tcl-dev flex libzstd-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -162,11 +175,13 @@ jobs:
       # Every optional component is enabled here even though it makes this the second job that
       # builds slang. Linting a translation unit that the configured build does not compile
       # does not merely skip it: clang-tidy falls back to default flags, fails to find the
-      # slang or Qt headers, and then reports whatever its half-parsed view of the file
+      # slang, NVC or Qt headers, and then reports whatever its half-parsed view of the file
       # suggests. That produced nineteen findings that were not defects, and would have hidden
       # any real one behind them.
       - name: Configure
-        run: cmake --preset clang-debug -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_BUILD_GUI=ON
+        run: >
+          cmake --preset clang-debug -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_BUILD_GUI=ON
+          -DENZAN_ENABLE_VHDL=ON
 
       # The generated version header is produced at configure time, but
       # GoogleTest's headers may only appear after a build when they were

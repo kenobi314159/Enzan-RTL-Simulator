@@ -46,10 +46,11 @@ statically against `libnvc.a`, a driver doing nothing but the sequence above pul
 102 objects, about 142,000 of NVC's 172,000 lines of C**. That is not the small subset 5.2
 counted on, and it is exactly the path 5.2 says Enzan does not use.
 
-**The seam is three functions.** `simp.c` reaches the evaluator only through `eval_possible`,
-`eval_try_fold` and `eval_must_fold`. Enzan does not compile `eval.c` and supplies those three
-itself; with `eval_possible` answering no, analysis needs **34 objects, about 66,000 lines**, and
-none of the lowering, JIT, runtime or `libffi`. No NVC source changes.
+**The seam is two functions.** `simp.c` reaches the evaluator only through `eval_possible` and
+`eval_try_fold`; nothing else Enzan builds calls into `eval.c`. Enzan does not compile it and
+supplies those two itself (`third_party/nvc-analysis/enzan_nvc_seam.c`); with `eval_possible`
+answering no, analysis needs **34 objects, about 66,000 lines**, and none of the lowering, JIT,
+runtime or `libffi`. No NVC source changes.
 
 What that costs was measured on NEORV32 (61 files, 160 design units). NVC's evaluator folds 159
 expressions during its analysis: 135 implicit type conversions, such as the bounds of `for i in 0
@@ -58,7 +59,23 @@ a second either way. The trees therefore reach the adapter with those expression
 the adapter folds them as it translates. A static bound error that NVC would have reported during
 analysis by folding is left for Enzan to find when it folds.
 
-### The files
+It changes nothing else, measured over two suites. Each of the 1,205 files of NVC's regression
+suite was analysed both ways: every file one analysed without error the other did too, and the one
+apparent difference, `order4`, is about saving a library rather than folding. Of the 1,624
+compliant cases of VESTs, 1,590 analyse as VHDL-2008 with the evaluator replaced, and none stops
+with a fatal error, which is how NVC's bounds checker reacts to a range it expected folded and found
+unfolded.
+
+### The build
+
+`third_party/nvc-analysis` builds the files below into the static library `enzan::nvc`, with
+Enzan's own `config.h` in place of the one NVC's configure writes, flex run on NVC's lexer, and
+NVC's copy of FastLZ renamed where it is compiled, since GTKWave's FST library, also built by
+Enzan, vendors the same file under the same names. It also generates C++ copies of NVC's headers
+for the adapter: NVC's are C that C++ rejects in three places, parameters named `new` and
+`class` and C11's `_Static_assert`, and the copies change only those.
+
+## The files
 
 From `src/`: `bounds.c`, `common.c`, `debug.c`, `diag.c`, `fbuf.c`, `hash.c`, `ident.c`,
 `lexer.l`, `lib.c`, `mask.c`, `names.c`, `object.c`, `option.c`, `parse.c`, `printf.c`, `scan.c`,
@@ -131,14 +148,22 @@ generics' values, and 5.2 rules out NVC's evaluator for it.
   `diag_get_hint`, which is what translating them into ENZ2000–2999 needs (section 10.6).
 - **Fatal errors end the process.** `fatal`, `fatal_at`, `fatal_errno` and `fatal_trace` detach the
   consumer, print to standard error and call `exit(1)`, which is Enzan's status for a wrong command
-  line (section 8.1). An unreadable source is one such path, which Enzan's own reading of the file
-  forestalls; the rest are NVC's internal errors. Containing them takes running the analysis in a
-  child process, which also bounds NVC's global state to one analysis.
+  line (section 8.1). Not all of them are NVC's internal errors: a design whose `library` clause
+  names a library nobody built reaches one, and so does an unreadable source, which Enzan's own
+  reading of the file forestalls.
+
+So the adapter runs NVC's analysis in a child process, forked for each analysis: a fatal error
+ends the child, and every analysis starts from NVC's initial state. The child writes each
+diagnostic back through a pipe as NVC reports it, and NVC's last words on a fatal error are read
+from its standard error, which the child points at a second pipe. One thing about the fork had to
+be undone: NVC leaves through `exit`, which in a forked copy of Enzan would run Enzan's exit
+handlers and static destructors a second time, so the child registers a handler of its own that
+ends it before they can run.
 
 ## Upgrading
 
 1. Move the pin, then build NVC as its own README says, without LLVM.
-2. Link a driver doing only the sequence above, with Enzan's three evaluator functions, against
+2. Link a driver doing only the sequence above, with `enzan_nvc_seam.c` in place of `eval.c`, against
    `lib/libnvc.a` with `-Wl,-Map=<file>`. The archive members the map lists as included are the
    file list; compare them with the list above.
 3. Repeat the NEORV32 measurements above, and run the VHDL golden tests (section 5.2 relies on them

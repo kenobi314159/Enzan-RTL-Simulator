@@ -1,0 +1,39 @@
+# `src/frontend/vhdl` — the VHDL frontend
+
+Turns VHDL source text into EIR, and nothing else (DESIGN_GUIDE.md section 5), on top of NVC's
+analysis (section 5.2). Built only with `-DENZAN_ENABLE_VHDL=ON`.
+
+## Responsibility
+
+- Drive NVC's analysis over the sources — lexing, parsing, semantic checking, simplification
+  and bounds checking — into NVC's units in a library, and translate NVC's diagnostics into
+  Enzan's diagnostic engine (ENZ2001–ENZ2004).
+- Walk NVC's analysed trees and emit EIR, one unit per entity, architecture and set of generic
+  values, folding generics as it goes (section 5.2). *Not yet written.*
+
+## How NVC is run
+
+**In a child process, one per analysis.** NVC keeps its state in globals for the life of a
+process, and ends the process on a fatal error, a library a design names and nobody built among
+them. The child is forked, runs NVC, and writes each diagnostic back to the parent through a pipe
+as NVC reports it; the parent reports them as though NVC had run in it. A child that NVC ends
+before the analysis finishes is reported as ENZ2004 with the message NVC printed on its way out.
+
+**From Enzan's buffers.** Each source is handed to NVC as the text the source manager already
+holds, rather than as a file for NVC to open, so a location in a diagnostic is a location in the
+same buffer every other diagnostic quotes.
+
+**With its constant evaluator replaced**, by `third_party/nvc-analysis`, so analysis folds
+nothing through NVC's JIT and this adapter folds as it translates. `docs/nvc_integration.md`
+measures what that changes.
+
+## Rules
+
+- **NVC's types stay in this directory.** Only `NvcApi.h` includes NVC's headers, and only files
+  here include it (section 17.4); `VhdlFrontend.h` is the whole of what the rest of Enzan sees.
+- **NVC's headers are the C++ copies** that `third_party/nvc-analysis` generates, never the
+  originals, which C++ rejects.
+
+## Allowed dependencies
+
+`common` and `eir`, as every frontend (section 5.3), and NVC's analysis (`enzan::nvc`).

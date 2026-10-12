@@ -1,0 +1,77 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/*
+ * Enzan's stand-in for the config.h NVC's autoconf would write, covering the files Enzan builds
+ * of it (docs/nvc_integration.md). CMake fills it in from the checks in CMakeLists.txt beside it.
+ */
+
+#ifndef ENZAN_NVC_CONFIG_H
+#define ENZAN_NVC_CONFIG_H
+
+/* What autoconf's AC_USE_SYSTEM_EXTENSIONS turns on, which NVC's sources assume. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+
+/*
+ * NVC's identity, from the AC_INIT of the pinned revision. PACKAGE_STRING is also the marker NVC
+ * writes at the head of every library it saves and checks when it opens one, so it says Enzan
+ * built the library as well: a unit Enzan's analysis wrote has its locally static expressions
+ * unfolded, and an NVC that opened it as one of its own would not know that.
+ */
+#define PACKAGE "nvc"
+#define PACKAGE_NAME "nvc"
+#define PACKAGE_VERSION "@ENZAN_NVC_VERSION@"
+#define VERSION "@ENZAN_NVC_VERSION@"
+#define PACKAGE_STRING "nvc @ENZAN_NVC_VERSION@ (Enzan)"
+#define PACKAGE_BUGREPORT "https://github.com/nickg/nvc/issues"
+#define PACKAGE_URL "https://www.nickg.me.uk/nvc/"
+
+/* Linux's separators, the only system Enzan targets (DESIGN_GUIDE.md section 1.3). */
+#define DIR_SEP "/"
+#define PATH_SEP ":"
+
+/* What NVC's report of an internal error names as the platform. */
+#define TARGET_SYSTEM "@CMAKE_SYSTEM_PROCESSOR@-linux"
+
+/*
+ * Where an installed NVC keeps its libraries. Enzan names the directories NVC searches itself and
+ * never searches an installed NVC's, so ENABLE_DEFAULT_PATHS is left undefined and these are only
+ * what the code that would use them needs in order to compile.
+ */
+#define LIBDIR ""
+#define DATADIR ""
+#define LIBEXECDIR ""
+
+/* The C library: checked rather than assumed, since NVC compiles a fallback for each absent one. */
+#cmakedefine HAVE_GETLINE 1
+#cmakedefine HAVE_STRNDUP 1
+#cmakedefine HAVE_STRCHRNUL 1
+#cmakedefine HAVE_STRCASESTR 1
+#cmakedefine HAVE_MEMMEM 1
+#cmakedefine HAVE_FSEEKO 1
+#cmakedefine HAVE_FTELLO 1
+#cmakedefine HAVE_GETTID 1
+#cmakedefine HAVE_GETCONTEXT 1
+#cmakedefine HAVE_TCGETWINSIZE 1
+#cmakedefine HAVE_UCONTEXT_H 1
+#cmakedefine HAVE_SYS_UCONTEXT_H 1
+#cmakedefine HAVE_SYS_PRCTL_H 1
+#cmakedefine HAVE_SYS_PTRACE_H 1
+#cmakedefine HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC 1
+#define HAVE_PTHREAD 1
+
+/* GCC and Clang, the only compilers Enzan builds with (DESIGN_GUIDE.md section 11.1), both have it. */
+#define HAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL 1
+
+/*
+ * Left undefined on purpose:
+ *
+ * - HAVE_AVX2, HAVE_SSE41, HAVE_SSE_SHA, HAVE_POPCNT, HAVE_ARM_CRYPTO: instruction-set extensions
+ *   NVC's configure probes the build machine for. A binary built with them does not run on a
+ *   machine without them, and analysis gains nothing measurable from them.
+ * - HAVE_LIBDW, HAVE_LIBDWARF: symbolised stack traces when NVC crashes, at the price of two more
+ *   dependencies.
+ * - ENABLE_LLVM, ENABLE_TCL: parts of NVC Enzan does not build.
+ */
+
+#endif /* ENZAN_NVC_CONFIG_H */

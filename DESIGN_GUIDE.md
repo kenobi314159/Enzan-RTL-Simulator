@@ -724,7 +724,7 @@ The integration plan is therefore:
   expressions by lowering them and running them on its JIT interpreter, so
   analysis as NVC builds it links 80 of its 102 objects, the path the previous
   point rules out among them. Enzan does not compile `eval.c` and supplies the
-  three functions the simplifier calls instead, so a tree arrives with those
+  two functions the simplifier calls instead, so a tree arrives with those
   expressions unfolded and the adapter folds them as it translates. On NEORV32
   that is 159 expressions, 135 of them implicit type conversions, and the
   analysis is otherwise unchanged.
@@ -794,6 +794,12 @@ C/C++20 boundary needs careful `extern "C"` wrapping. The spike found one
 analysis context per process, no threads started by analysis, and fatal errors
 that end the process with status 1 rather than reaching Enzan's diagnostics; its
 findings are in `docs/nvc_integration.md`.
+
+**So NVC runs in a child process**, forked for each analysis. A fatal error, which
+a design naming a library nobody built is enough to cause, then ends the child and
+is reported as a diagnostic, and every analysis starts from NVC's initial state
+rather than the previous one's. The child reports each of NVC's diagnostics back as
+NVC gives it, so what the user sees is what one process would have shown.
 
 Mitigations: pin the revision, keep the adapter thin and confined to one
 directory, document the rebase procedure in `docs/nvc_integration.md`, and rely
@@ -2231,6 +2237,8 @@ license check against section 1.4.
 |---|---|---|
 | slang | SystemVerilog frontend | system, FetchContent fallback |
 | NVC | VHDL frontend (M6) | vendored submodule, pinned |
+| flex | generating NVC's lexer when the VHDL frontend is built; nothing linked | system |
+| zstd | the analysed units NVC writes into a library, which it compresses (M6) | system |
 | Tcl 8.6+ | GUI theme language (M2); signal list syntax (M2.2) | system |
 | Qt 6 | GUI (M2) | system |
 | GoogleTest | unit tests | system, FetchContent fallback |
