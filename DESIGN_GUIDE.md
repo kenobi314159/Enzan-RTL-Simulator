@@ -687,7 +687,8 @@ NVC wins on everything else, and the balance is not close:
   its maintainer is responsive on frontend-level defects, which matters when the
   dependency is on internals nobody has promised to keep.
 
-The M6 exit criteria — NEORV32, VUnit, OSVVM — are all first-class NVC targets.
+The VHDL designs Enzan is measured against — NEORV32 in M6, VUnit and OSVVM in M6.1 —
+are all first-class NVC targets.
 
 **Understand the integration honestly before working on it.** NVC is not a
 frontend library; it is a complete simulator written in C that lowers VHDL
@@ -2363,12 +2364,14 @@ The same reasoning will apply to any future frontend dependency.
 ### 14.4 Conformance suites
 
 Run against public suites and **track the pass rate as a number over time**:
-`sv-tests` (CHIPS Alliance) for SystemVerilog, `ivtest` for Verilog, and the
-GHDL/NVC VHDL suites plus VUnit and OSVVM for VHDL. A published compliance
+`sv-tests` (CHIPS Alliance) for SystemVerilog, `ivtest` for Verilog, and for VHDL
+the VESTs suite and GHDL's and NVC's own test suites. A published compliance
 percentage is also a credible public signal of maturity.
 
 The GHDL and NVC suites are both run for the reason given in 14.3: NVC's suite
-cannot exercise a defect Enzan inherited from NVC's own frontend.
+cannot exercise a defect Enzan inherited from NVC's own frontend. VESTs is
+GPL-2.0 and ships inside GHDL's test suite, and every one of its compliant cases
+checks itself, reporting `PASSED TEST` or `FAILED TEST`.
 
 **The pass rate MUST NOT regress.** This is a ratchet: a change that lowers it
 is a defect unless the regression is explicitly justified.
@@ -2392,14 +2395,17 @@ Real designs, fetched at pinned revisions:
 - SystemVerilog: secworks `aes`, fpganinja `taxi`, PULP `common_cells`; then the
   processors picorv32, VexRiscv (generated), Ibex and CVA6, which each need a program
   compiled for them.
-- VHDL: NEORV32, plus the VUnit and OSVVM suites.
+- VHDL: NEORV32; then SLAC `surf`, an IP library whose cocotb testbenches exercise its RTL as
+  `taxi`'s do, and the VUnit and OSVVM suites, which need the verification-library language of
+  M6.1.
 
 Start with the small ones and add larger designs as capability grows.
 
 Each design is a directory under `tests/designs/` holding the revision it is pinned at and a
 `run.sh` that fetches it there (`tests/fetch-revision.sh`, which every suite shares), runs its
 own testbenches and says PASS or FAIL for each. A testbench passes when it reports success
-and, where Icarus Verilog runs it, when Enzan's transcript is the reference's line for line, so
+and, where the reference simulator runs it — Icarus Verilog for SystemVerilog, GHDL for VHDL
+(14.3) — when Enzan's transcript is the reference's line for line, so
 a pass is a design checking its own answers and two simulators agreeing on them. Testbenches
 the reference cannot run are held to their own verdicts alone, and the harness says why. A
 testbench or a case that cannot pass for a reason outside Enzan — a design slang rightly
@@ -2444,6 +2450,11 @@ cases share one design that uses unpacked arrays, structs, `real`, `string` and 
 and a design that does not analyse fails every test in it. The cases that do analyse are what
 exercise VPI, and the golden cocotb test of `tests/golden/` pins the VPI behaviour cocotb
 relies on whatever the rate is.
+
+**A VHDL toplevel is a second run of the same suite**, once VHPI lands (M6). Most of cocotb's
+cases have a VHDL design beside the Verilog one, chosen by `TOPLEVEL_LANG=vhdl`, so the suite
+runs twice and each run has its own pass list: a case passing in one language says nothing
+about the other.
 
 ### 14.7 Sanitisers and fuzzing
 
@@ -2805,7 +2816,50 @@ VHDL generic and subtype elaboration, with generics folded where the spike decid
 (5.2); Enzan's own implementations of the predefined and foreign subprograms NVC's
 runtime would have resolved; VHDL simulation cycle; VHPI subset for cocotb.
 
-**Exit:** NEORV32 simulates; the VUnit suite runs.
+**M6 is cut at the language designs are written in, not the language verification
+libraries are written in.** Synthesisable VHDL and the testbenches shipped beside it use
+almost nothing of what VUnit and OSVVM are built from: protected types, generic packages,
+configurations, external names, and access types used as a general heap. Measured over
+their sources, VUnit allocates in 37 files and OSVVM declares protected types in 31 and
+configurations in 389, while NEORV32 does none of these. The verification libraries are
+M6.1, so that the VHDL frontend, the simulation cycle and VHPI are proven on designs before
+they are asked to carry a library's runtime.
+
+**Access types are in M6 only as far as `std.textio` needs them.** NEORV32 cannot be
+simulated without `line`: its UART prints what the program sends through `write` and
+`writeline` in every simulation, from its RTL rather than its testbench, and the testbench
+logs both UARTs to files and can load a memory from one. So M6 decides how a value of an
+access type is stored *(open)* — section 4.3 lays every piece of state out at elaboration and
+13.4 forbids allocating on the write path, so it is a design of its own, as SystemVerilog's
+`string` is (M5) — and makes it work for an access to an array, as `std.textio` uses one.
+Whatever is decided must not need redesigning for M6.1's general heap.
+
+The exit designs need no program compiled for them, for the reason M5 gives:
+
+- **NEORV32**, simulated by its own testbench with the program image its repository
+  commits. The testbench drives the on-chip debugger over JTAG — halting the CPU, writing
+  memory through it, resetting and resuming it — and asserts each step.
+- **cocotb's VHDL designs**, through its own test cases with a VHDL toplevel (14.6). These
+  are what VHPI is measured by, as cocotb's suite measured VPI in M4.
+- **VESTs and GHDL's and NVC's own suites** (14.4). Most of each needs nothing M6.1 brings,
+  and a pass list per suite lets the rest wait without hiding a regression.
+
+**Exit:** NEORV32's testbench completes its debugger sequence under Enzan with no assertion
+failing, and its transcript is GHDL's line for line; cocotb's suite runs with a VHDL
+toplevel with a recorded pass rate; VESTs and GHDL's and NVC's suites run with recorded pass
+rates.
+
+### M6.1 — VHDL verification libraries
+
+What VUnit and OSVVM are built from: access types as a general heap, with `deallocate`;
+protected types and shared variables of them; generic packages and their instantiation;
+configurations; external names. VUnit's simulator interface for Enzan, which VUnit chooses
+by name as cocotb chooses a makefile (9.6).
+
+Numbered with the VHDL milestone and placed straight after it, while the frontend is warm.
+Nothing in M7 depends on it: a mixed-language design is RTL meeting RTL.
+
+**Exit:** VUnit's own suite and OSVVM's regression each run with a recorded pass rate.
 
 ### M7 — Mixed language
 
