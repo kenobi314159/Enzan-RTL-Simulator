@@ -349,12 +349,30 @@ two-state. The runtime SHOULD branch to specialised two-state operations in
 that case. Two-state is an optimisation of the four-state representation, never
 a separate engine.
 
-**VHDL `std_logic`** has nine values (`U X 0 1 Z W L H -`) and does not fit two
-planes. It is stored as **one byte per element**, holding the enumeration
-value. Conversion to the packed two-plane form happens at language boundaries,
-in the waveform database, and in the PLI, with `L`→`0`, `H`→`1`, `W`/`U`/`-`→`X`.
-A future optimisation MAY pack `std_logic_vector` values that provably carry
-only `{0,1,X,Z}`; this is not part of the initial implementation.
+**VHDL's values are codes in the same vectors.** `std_logic` has nine values
+(`U X 0 1 Z W L H -`) and does not fit two planes as a value, so it is not stored
+as one: a VHDL scalar is a two-state code in EIR's packed vector type. An
+enumeration, `std_ulogic` among them, is its position in as many whole bytes as
+its values need — **one byte per element** for `std_ulogic`, `bit`, `boolean` and
+`character`, holding the enumeration value — and an integer or a physical value
+such as `time` is signed, 32 or 64 bits as its range needs. Records and
+constrained arrays are flat, as SystemVerilog's aggregates are (4.3), so a
+`std_logic_vector(7 downto 0)` is a 64-bit vector of eight codes.
+
+So everything built on bit ranges serves VHDL unchanged: drivers per range and
+resolved segments (3.7), part stores, change detection, waveform capture and
+VPI. What VHDL adds is what a code means, which the type carries — for display,
+for conversion at language boundaries and for range checks. The second plane of
+such a vector is always zero, so a `std_logic` costs two bytes of arena rather
+than one until two-state values are packed into one plane, an optimisation
+`Type::storageWords` already anticipates.
+
+Conversion to the four-state form happens at language boundaries, in the
+waveform database and in the PLI, with `L`→`0`, `H`→`1`, `W`/`U`/`-`→`X`.
+
+A new kind of storage for VHDL was rejected because each of the mechanisms above
+would have needed a second path kept in step with the first, which is the
+second engine this section exists to forbid.
 
 Integers, reals, strings and aggregate types use native representations
 described in the EIR type system (section 4).
@@ -402,9 +420,18 @@ Further requirements:
 - VHDL resolution functions are arbitrary user code. They are compiled to EIR like
   any other subprogram and invoked by the runtime. The runtime MUST NOT assume
   resolution is a built-in table.
-- **Single-driver bits MUST bypass resolution entirely**, and a signal all of whose
-  bits have one driver MUST bypass it as a whole rather than bit by bit. This is the
-  common case and it is on the hot path (13.4).
+- **Single-driver bits MUST bypass resolution entirely** where resolving a lone
+  driver is known to return its value unchanged, and a signal all of whose bits
+  are such MUST bypass it as a whole rather than bit by bit. This is the common
+  case and it is on the hot path (13.4). It is known of the built-in tables of
+  every net kind but the pulled and supply ones, and of a VHDL resolution
+  function that elaboration proves to be the identity on a lone driver by calling
+  it once with each value of its element type, where that is an enumeration of
+  sixteen values or fewer, as NVC does; `ieee.std_logic_1164.resolved` is one.
+- **Any other resolution function is called for a lone driver too.** VHDL defines a
+  resolved signal's value as its resolution function applied to its sources,
+  however many there are (IEEE 1076 section 14.7.3.2), and a user's function need
+  not return a lone driver's value. Bypassing it would be a different language.
 - A driver's range is fixed at elaboration. A part-select whose bounds are not
   constant does not create a driver over the bits it might touch; it is a write
   through the driver that owns them, and a design that drives one signal from two
@@ -418,9 +445,10 @@ select — so the drivers of a signal are known before anything runs, and elabor
 finds where they overlap. The runtime keeps no record of which driver owns which bit, because nothing
 about ownership changes once elaboration is done.
 
-- **A signal none of whose bits has two drivers carries no driver state at all.**
-  Every legal variable is one, and so is most of every net. A write goes straight
-  into the signal, which is how such a signal bypasses resolution as a whole.
+- **A signal none of whose bits has two drivers carries no driver state at all**,
+  unless its resolution must still be applied to a lone driver, as above. Every
+  legal variable is one, and so is most of every net. A write goes straight into
+  the signal, which is how such a signal bypasses resolution as a whole.
 - **A signal with a bit driven more than once is split into segments**: maximal runs
   of bits driven by the same set of drivers. Each driver of such a signal has its own
   value in the arena, in both planes, over its range; each segment lists its drivers
@@ -501,6 +529,39 @@ cover arithmetic, logical and bitwise ops, part- and bit-selects, concatenation,
 comparison, branching, calls, signal reads, blocking and non-blocking drives,
 and the suspension primitives (`wait` on event, on time, on condition).
 
+**A subprogram is a body that is called rather than scheduled.** It is the same
+control-flow graph a process is, over registers of its own, with parameters, a
+result, and the read and write sets of what it reaches beyond its parameters
+(4.2). It belongs to the definition that declares it — a package's to the
+package, an architecture's to the architecture — and a call names it by its
+definition and its name, resolved when the design is compiled as an instance is
+resolved at elaboration. Nothing in it is particular to VHDL: a SystemVerilog
+function is the same thing, and the frontend that inlines one today can call it
+instead without anything downstream changing.
+
+- **A subprogram is specialised by the lengths of its unconstrained
+  parameters**, as a unit is by its generics (5.2), so that every width in EIR
+  stays fixed: `numeric_std."+"` called on 8-bit and on 32-bit operands is two
+  bodies, each named for its lengths.
+- **A call's frame lives on one stack the kernel owns.** A subprogram never
+  suspends — a VHDL procedure that waits, like a SystemVerilog task with a delay,
+  is inlined into its caller, and so is one with a signal parameter, whose body
+  needs to know which signal it is — so every frame a process pushes is popped
+  before the process suspends, and one stack serves every process of a
+  single-threaded kernel (6.4). It is laid out at elaboration, sized for the
+  deepest chain of calls the design can make, and a recursive design is given a
+  depth limit, configurable, past which the run stops with a diagnostic naming the
+  subprogram, as the delta limit does (3.2).
+- **A caller's sets include its callees'.** A process declares what it touches
+  itself; elaboration adds what its callees touch, bound to the instances they
+  touch it in, so the bound process's sets are exactly what a run of it can reach
+  (4.2).
+- **A value whose length is known only when it is computed** — `integer'image`,
+  `to_string`, a concatenation of either — lives in scratch the kernel resets
+  whenever a process suspends. It is a temporary of one activation, which is all
+  a VHDL expression of unconstrained type is; anything that has to outlive it is
+  stored in an object of fixed size or in the heap of 4.3.
+
 ### 4.2 The core invariant
 
 **Every EIR process MUST be expressible as a pure function over an explicit
@@ -539,6 +600,17 @@ bit has nothing here but itself. The segment tables and the store routing of 3.7
 fixed at elaboration and only read during a run, so they belong to the image rather
 than to the arena, and a checkpoint has nothing of theirs to save. Nothing about
 drivers is sized at run time, which on the write path 13.4 forbids.
+
+**An access value is a handle.** What VHDL's `new` allocates — a textio `line`, a
+VUnit queue — has a number and a size known only as the design runs, which is
+what the arena cannot hold. It lives in a heap the kernel owns, beside the arena,
+and an access value in the arena is a handle into that heap: an integer, numbered
+in the order the allocations happen, so that a run allocates the same handles
+every time (3.8) and change detection, waveforms and VPI see an integer like any
+other. Allocating and deallocating are calls into the runtime from a process,
+which RTL's write path never makes; textio is where they happen. The heap is
+state a process reaches, so a process that dereferences a handle has the heap in
+its read or write set (4.2), and a checkpoint (M9) saves it with the arena.
 
 ### 4.4 Libraries
 
@@ -666,8 +738,9 @@ place, its variables bound to registers, so a task's delays suspend the caller a
 statements would, the caller's read and write sets are exactly what the call touches (4.2),
 and nothing at run time keeps a call stack. A recursive call is refused, since an inlined
 body cannot contain itself; slang folds a recursive call with constant arguments before
-Enzan sees it, which is where recursion in RTL usually is. EIR gains a callable subprogram
-when one is needed rather than sooner: VHDL resolution functions are the first case (3.7, M6).
+Enzan sees it, which is where recursion in RTL usually is. EIR has callable subprograms
+(4.1), which the VHDL frontend uses; calling a SystemVerilog function rather than inlining it
+is a change to this frontend alone, and a task with a delay stays inlined either way.
 
 slang requires **C++20**, which sets the project's language floor.
 
@@ -832,6 +905,10 @@ Requirements:
 
 - Each process has its own register file. Wide vectors that do not fit in a
   register spill to a per-process scratch area.
+- A call pushes the callee's register file onto the kernel's one call stack (4.1)
+  and a return pops it. The lowering is an LLVM function per subprogram body and
+  a `call` to it, which is why a subprogram never suspends: an LLVM function
+  cannot return to the scheduler half-way and be resumed.
 - The dispatch loop SHOULD use computed goto (threaded dispatch) rather than a
   `switch`.
 - **Every opcode MUST have an obvious, documented lowering to LLVM IR.** The JIT
@@ -2892,11 +2969,11 @@ they are asked to carry a library's runtime.
 **Access types are in M6 only as far as `std.textio` needs them.** NEORV32 cannot be
 simulated without `line`: its UART prints what the program sends through `write` and
 `writeline` in every simulation, from its RTL rather than its testbench, and the testbench
-logs both UARTs to files and can load a memory from one. So M6 decides how a value of an
-access type is stored *(open)* — section 4.3 lays every piece of state out at elaboration and
-13.4 forbids allocating on the write path, so it is a design of its own, as SystemVerilog's
-`string` is (M5) — and makes it work for an access to an array, as `std.textio` uses one.
-Whatever is decided must not need redesigning for M6.1's general heap.
+logs both UARTs to files and can load a memory from one. So M6 builds the heap of 4.3 —
+access values are handles in the arena into a heap the kernel owns, since 4.3 lays out every
+piece of state at elaboration and 13.4 forbids allocating on the write path — and makes it
+work for an access to an array, as `std.textio` uses one. M6.1 uses the same heap for
+everything else.
 
 The exit designs need no program compiled for them, for the reason M5 gives:
 
