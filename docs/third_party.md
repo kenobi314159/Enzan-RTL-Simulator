@@ -16,6 +16,7 @@ dependency below is compatible with that.
 | [FST](https://github.com/gtkwave/gtkwave) (`fstapi`) | tag `v3.3.116`, from `gtkwave3-gtk3/src/helpers/fst/` | MIT | FST waveform output | see `third_party/fst/README.md` |
 | [FastLZ](https://github.com/ariya/FastLZ) | as shipped with the above | MIT | FST block compression | vendored by GTKWave, kept with it |
 | [LZ4](https://github.com/lz4/lz4) | as shipped with the above | BSD-2-Clause | FST block compression | vendored by GTKWave, kept with it |
+| [NVC](https://github.com/nickg/nvc) | tag `r1.23.0` (`cba10a2`), a git submodule | GPL-3.0-or-later | VHDL frontend (M6) | see `docs/nvc_integration.md` |
 
 Vendoring is reserved for cases where it is unavoidable. FST qualifies because it is not released
 as a library: no distribution packages a `libfst` with headers, and GTKWave ships it as source
@@ -25,9 +26,11 @@ inside its own tree. Verilator vendors the same files for the same reason.
 `config.h`, and carries Enzan's GPLv3 licence. Everything else in that directory is byte-identical
 to upstream, which is what makes the next update a replacement rather than a merge.
 
-NVC is the other expected case, since it is consumed at a pinned revision of its internal APIs
-rather than as a released library (DESIGN_GUIDE.md section 5.2); it arrives at M6, and
-`docs/nvc_integration.md` records which of its files Enzan builds and why.
+NVC is the other case, since it is consumed at a pinned revision of its internal APIs rather than
+as a released library (DESIGN_GUIDE.md section 5.2). It is a git submodule rather than a copy, so
+`third_party/nvc` is NVC's own tree at the pinned commit, licence included, and
+`git submodule update --init third_party/nvc` fetches it; `docs/nvc_integration.md` records which
+of its files Enzan builds and why.
 
 ## Acquired at configure time
 
@@ -43,7 +46,6 @@ The build prefers a system package and falls back to building from source. See
 | [Tcl](https://www.tcl-lang.org/) | 8.6 or later | BSD-style | GUI theme language (M2) | system package |
 | [Qt](https://www.qt.io/) | 6.4 or later | LGPLv3 | graphical front end (M2) | system package, dynamically linked |
 | [LLVM](https://llvm.org/) | 17 or later | Apache-2.0 with LLVM exception | JIT backend (M8, optional) | system package, off by default |
-| [NVC](https://github.com/nickg/nvc) | pinned at M6 | GPLv3 | VHDL frontend (M6) | vendored submodule |
 | [cocotb](https://github.com/cocotb/cocotb) | `2.1.0`, pinned in `tests/conformance/cocotb/requirements.txt` | BSD-3-Clause | the cocotb golden test and regression suite (M4); loaded with `--vpi`, never linked | `pip`; its test suite is fetched at the matching tag and never vendored |
 
 slang itself builds against fmt, Boost headers and mimalloc, which it acquires
