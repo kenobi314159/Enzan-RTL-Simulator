@@ -144,8 +144,11 @@ spare Enzan's own translation of each parameterisation and a library's sources a
 the boundary, but slang would still elaborate every parameterisation of the design
 being analysed. And a unit derived from one of slang's bodies would be checked
 against slang only at the values slang saw, and trusted at the others; 1.2 ranks a
-slower analysis above a result that is trusted rather than checked. Whether VHDL
-generics take the same shape is decided by the M6 spike (5.2).
+slower analysis above a result that is trusted rather than checked.
+
+**VHDL generics take the same shape** (5.2). An entity and its architecture become one
+unit per set of generic values, named for them, with the values folded by the VHDL
+adapter rather than by elaboration.
 
 **Elaboration** takes a named top level plus the libraries, binds each instance
 to the unit for its values, resolves whatever parameters and generics analysis
@@ -580,6 +583,21 @@ version is disciplined, but a cache that can change a simulation result is a thi
 a user must be able to stop doing without having to find it first — and a cache
 that appeared without being asked for is one they would have to find first.
 
+**VHDL's standard libraries are part of the tool, not a cache.** `std`, `ieee` and
+NVC's own `nvc`, which NVC's 2008 `ieee` bodies use, are analysed from the sources
+NVC ships when Enzan is built, and are found beside the executable without being
+named. Nothing a user does writes to them, they change only when Enzan does, and
+`library ieee;` has to resolve with no flag in every VHDL tool, so none of the
+reasons above applies; they are to a VHDL design what a compiler's standard headers
+are to a C one. A library the user names `ieee` replaces them (8.2).
+
+**A VHDL entry also holds NVC's analysed units.** VHDL is analysed one unit at a time
+against units already analysed — `use work.pkg.all`, an entity bound to a component —
+so a library holding only EIR could not be analysed against. A VHDL source's entry
+therefore keeps NVC's serialised units beside the EIR, and the NVC revision and the
+VHDL standard are in its key with everything else that changes what analysis
+produces.
+
 A hit is currently all or nothing, and that is a property of the frontend rather
 than of the store. SystemVerilog analysis hands every source to one slang
 compilation, because a module cannot be type-checked without the packages it
@@ -734,11 +752,11 @@ M6 rather than an argument about 5.2.
 simplification and bounds checking is the right boundary: it is what section 5
 means by a frontend that does not flatten hierarchy, and Enzan elaborates for
 itself. The consequence is that generic folding, subtype resolution and
-unconstrained arrays sized by a generic are Enzan's work, not NVC's, and the
-VHDL elaborator therefore reimplements them rather than reusing NVC's `elab`.
-The spike MUST size this before the milestone commits to the boundary.
+unconstrained arrays sized by a generic are Enzan's work, not NVC's, and Enzan
+reimplements them rather than reusing NVC's `elab`. The spike sized this
+(`docs/nvc_integration.md`), and the adapter does it, as the next paragraph decides.
 
-**The spike also decides where generics are folded** *(open)*, which 2.1 leaves
+**The adapter folds generics.** That was the spike's to decide, since 2.1 had left it
 open for VHDL. Unlike slang, NVC hands over a tree with the expressions over
 generics still in it, so the adapter can either fold them as it translates each
 instance — one unit per set of values, as SystemVerilog has — or emit units that
@@ -756,6 +774,18 @@ such as `index_size_f(IMEM_SIZE)` in a subtype. Since NVC's evaluator is replace
 **both choices run those functions with the generics' values** — the first in the
 adapter, the second at elaboration — so constant functions are not what tells them
 apart.
+
+The first was chosen. The adapter translates an entity and its architecture once per
+set of generic values a design gives them, into a unit named for the values as a
+SystemVerilog specialisation is (8.2): subtypes sized, generate statements expanded and
+constant functions run as it goes, starting from the units a design names as its top
+and following its instances down. EIR holds no expression over a generic, and
+elaboration specialises nothing. The second would have made generate statements
+conditional structure in EIR and every width an expression, the largest change to
+EIR, elaboration and VPI that anything in M6 would make, to buy libraries reusable at
+values no design has asked for; what a VHDL library keeps for those values instead is
+NVC's analysed units (4.4), from which a design that needs them translates them
+without parsing anything again.
 
 Known risks, to be confirmed by a spike at the start of M6: NVC's internal APIs
 are not stability-guaranteed and will drift; NVC is C and uses its own arena
@@ -959,7 +989,8 @@ analysis output lives and dies with the process and a simulation runs from a
 one-time analysis. A directory that appeared because the user ran the tool would be
 a cache they did not ask for, and section 4.4 explains why that is worse than no
 cache: it can change a result, and they would have to find it before they could
-stop using it.
+stop using it. VHDL's `std`, `ieee` and `nvc` are not caches and are found without
+being named (4.4); `--in-lib ieee=<dir>` replaces them.
 
 ```
 enzan lib create [--name <n>] <dir>   creates a library and fixes its logical name
@@ -1009,7 +1040,9 @@ reference — a package import, an interface named in a port list — because sl
 type-checks from syntax and EIR does not feed back into it. Commercial tools manage
 this because their compiled library is a semantic artifact their own front end
 re-consumes; ours is not. A reader who assumes otherwise will write a library split
-that cannot be analysed.
+that cannot be analysed. **VHDL is the exception**, because a VHDL entry holds NVC's
+analysed units (4.4): `use uart.uart_pkg.all` resolves against a library on
+`--in-lib` as the language requires, with no source read again.
 
 **Libraries are searched in the order given**, left to right.
 
@@ -1045,7 +1078,10 @@ it reads them. That is what makes the boundary crossable at all: slang type-chec
 from syntax, so a unit instantiating one from another library needs that unit's
 declaration however it was analysed before, and EIR does not feed back into slang.
 Paths rather than text, because duplicating the RTL into every library that uses it
-would make a library a copy of the design instead of an index of it.
+would make a library a copy of the design instead of an index of it. This is the
+SystemVerilog rule; a VHDL library carries NVC's analysed units instead (4.4), and a
+design needing a VHDL unit at generic values its library does not hold translates it
+from those, parsing nothing again.
 
 **A file is analysed once however often it is named.** Two libraries built on one IP
 both record its sources, and a file can be a source, a context file and a library's
@@ -2832,8 +2868,7 @@ bit are still refused — a variable with an error and a net by resolving them.
 
 NVC integration spike first, to confirm the approach in 5.2 before committing
 to it; NVC vendored at a pinned revision; NVC tree to EIR adapter; `std_logic` value model;
-VHDL generic and subtype elaboration, with generics folded where the spike decides
-(5.2); Enzan's own implementations of the predefined and foreign subprograms NVC's
+VHDL generic and subtype elaboration, with generics folded by the adapter (5.2); Enzan's own implementations of the predefined and foreign subprograms NVC's
 runtime would have resolved; VHDL simulation cycle; VHPI subset for cocotb.
 
 **M6 is cut at the language designs are written in, not the language verification
@@ -2932,8 +2967,8 @@ same simulated time.
 top level. Not cacheable across designs.
 
 **Analysis** — compiling one design unit to EIR, independent of any top level;
-a parameterised SystemVerilog module once per parameterisation the design uses
-(2.1). Cacheable and reusable.
+a parameterised SystemVerilog module, or a VHDL entity with generics, once per
+parameterisation the design uses (2.1). Cacheable and reusable.
 
 **Region** — one of the ordered phases within a SystemVerilog time slot.
 
