@@ -2297,6 +2297,7 @@ Enzan-RTL-Simulator/
 ├── tools/
 │   ├── enzan/                headless kernel CLI
 │   ├── enzan-gui/            Qt 6 front end, started by `enzan --gui`
+│   ├── vhdl-libraries/       builds VHDL's standard libraries at build time (4.4)
 │   └── cocotb/               cocotb's simulator makefile for Enzan (section 9.6)
 ├── tests/
 │   ├── unit/                 GoogleTest, mirrors src/ layout

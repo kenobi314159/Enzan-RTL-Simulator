@@ -3,7 +3,7 @@
 enzan_add_unit_test(frontend_vhdl SOURCES VhdlFrontendTests.cpp
                     DEPENDS enzan::frontend_vhdl)
 
-# The suite bootstraps `std` from the source NVC ships, since every analysis needs it.
-target_compile_definitions(
-  enzan_unittest_frontend_vhdl
-  PRIVATE ENZAN_NVC_SOURCE_DIR="${PROJECT_SOURCE_DIR}/third_party/nvc")
+# Every analysis is against the standard libraries the build analysed.
+add_dependencies(enzan_unittest_frontend_vhdl enzan-vhdl-libraries)
+target_compile_definitions(enzan_unittest_frontend_vhdl
+                           PRIVATE ENZAN_VHDL_LIBRARY_ROOT="${ENZAN_VHDL_LIBRARY_ROOT}")

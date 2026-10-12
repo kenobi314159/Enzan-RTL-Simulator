@@ -2,7 +2,8 @@
 //
 // Unit tests for running NVC's analysis: units reaching the library, NVC's diagnostics reaching
 // Enzan's engine where they belong, and NVC's fatal errors stopping the analysis rather than
-// Enzan.
+// Enzan. Each analysis runs against the standard libraries the build analysed
+// (tools/vhdl-libraries).
 
 #include "frontend/vhdl/VhdlFrontend.h"
 
@@ -15,7 +16,6 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -28,8 +28,12 @@ using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
 using enzan::SourceManager;
 using enzan::frontend::vhdl::analyseUnits;
+using enzan::frontend::vhdl::Standard;
 using enzan::frontend::vhdl::UnitOptions;
 using enzan::test::Workspace;
+
+/// Where the build put the standard libraries.
+const std::filesystem::path Libraries = ENZAN_VHDL_LIBRARY_ROOT;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -38,40 +42,22 @@ public:
     std::vector<Diagnostic> received;
 };
 
-/// Analyses VHDL text against a `std` the suite bootstraps once from NVC's own source.
+/// Analyses VHDL text against the standard libraries and the workspace.
 class VhdlAnalysisTest : public ::testing::Test {
 protected:
-    static void SetUpTestSuite() {
-        libraries = std::make_unique<Workspace>();
-
-        SourceManager standardSources;
-        DiagnosticEngine standardDiagnostics(standardSources);
-        const enzan::FileReadResult standard = standardSources.readFile(
-            std::filesystem::path(ENZAN_NVC_SOURCE_DIR) / "lib" / "std.08" / "standard.vhd");
-        ASSERT_TRUE(standard.ok());
-
-        UnitOptions options;
-        options.sources = {standard.buffer};
-        options.work = {.name = "std", .directory = *libraries / "std.08"};
-        options.bootstrap = true;
-        bootstrapped = analyseUnits(options, standardSources, standardDiagnostics);
-    }
-
-    static void TearDownTestSuite() { libraries.reset(); }
-
     VhdlAnalysisTest() : engine(sources) { engine.addConsumer(consumer); }
 
-    void SetUp() override { ASSERT_TRUE(bootstrapped) << "std.standard did not bootstrap"; }
-
-    /// Analyses `text` into a library called `name` in the workspace, against `std` and whatever
-    /// else the workspace holds.
-    bool analyse(std::string_view text, std::string_view name = "work") {
+    /// Analyses `text` into a library called `name` in the workspace, against the standard
+    /// libraries and whatever else the workspace holds.
+    bool analyse(std::string_view text, std::string_view name = "work",
+                 Standard standard = Standard::Vhdl2008) {
         const enzan::BufferId buffer = sources.addBuffer(
             "design" + std::to_string(sources.bufferCount()) + ".vhd", std::string(text));
         UnitOptions options;
         options.sources = {buffer};
         options.work = {.name = std::string(name), .directory = workspace / name};
-        options.searchDirectories = {libraries->path(), workspace.path()};
+        options.searchDirectories = {Libraries, workspace.path()};
+        options.standard = standard;
         return analyseUnits(options, sources, engine);
     }
 
@@ -86,17 +72,73 @@ protected:
         return text;
     }
 
-    static inline std::unique_ptr<Workspace> libraries;
-    static inline bool bootstrapped = false;
-
     Workspace workspace;
     SourceManager sources;
     DiagnosticEngine engine;
     CollectingConsumer consumer;
 };
 
-TEST_F(VhdlAnalysisTest, BootstrapsTheStandardPackage) {
-    EXPECT_TRUE(std::filesystem::exists(*libraries / "std.08" / "STD.STANDARD"));
+TEST(VhdlLibrariesTest, TheBuildHoldsTheStandardLibrariesOfEachRevision) {
+    for (const std::string suffix : {"", ".08", ".19"}) {
+        SCOPED_TRACE("revision suffix '" + suffix + "'");
+        EXPECT_TRUE(std::filesystem::exists(Libraries / ("std" + suffix) / "STD.STANDARD"));
+        EXPECT_TRUE(std::filesystem::exists(Libraries / ("std" + suffix) / "STD.TEXTIO-body"));
+        EXPECT_TRUE(
+            std::filesystem::exists(Libraries / ("ieee" + suffix) / "IEEE.NUMERIC_STD-body"));
+        EXPECT_TRUE(std::filesystem::exists(Libraries / ("nvc" + suffix) / "NVC.PSL_SUPPORT"));
+    }
+}
+
+TEST_F(VhdlAnalysisTest, AnalysesAgainstIeeeAsVhdl2008HasIt) {
+    // A concurrent assertion brings in NVC's psl_support, and stop() is std.env's.
+    EXPECT_TRUE(analyse("library ieee;\n"
+                        "use ieee.std_logic_1164.all;\n"
+                        "use ieee.numeric_std.all;\n"
+                        "entity counter is\n"
+                        "  port (clk : in std_logic; count : out unsigned(7 downto 0));\n"
+                        "end entity;\n"
+                        "architecture rtl of counter is\n"
+                        "  signal value : unsigned(7 downto 0) := (others => '0');\n"
+                        "begin\n"
+                        "  value <= value + 1 when rising_edge(clk);\n"
+                        "  count <= value;\n"
+                        "  assert value /= x\"ff\" report \"wrapped\";\n"
+                        "  process begin\n"
+                        "    wait for 10 ns;\n"
+                        "    std.env.stop;\n"
+                        "  end process;\n"
+                        "end architecture;\n"))
+        << transcript();
+}
+
+TEST_F(VhdlAnalysisTest, AnalysesAgainstSynopsysPackagesAsVhdl1993HasThem) {
+    EXPECT_TRUE(analyse("library ieee;\n"
+                        "use ieee.std_logic_1164.all;\n"
+                        "use ieee.std_logic_unsigned.all;\n"
+                        "entity adder is\n"
+                        "  port (a, b : in std_logic_vector(3 downto 0);\n"
+                        "        sum : out std_logic_vector(3 downto 0));\n"
+                        "end entity;\n"
+                        "architecture rtl of adder is\n"
+                        "begin\n"
+                        "  sum <= a + b;\n"
+                        "end architecture;\n",
+                        "work", Standard::Vhdl1993))
+        << transcript();
+}
+
+TEST_F(VhdlAnalysisTest, AnalysesAgainstVhdl2019sLibraries) {
+    EXPECT_TRUE(analyse("library ieee;\n"
+                        "use ieee.std_logic_1164.all;\n"
+                        "entity inverter is\n"
+                        "  port (a : in std_logic; y : out std_logic);\n"
+                        "end entity;\n"
+                        "architecture rtl of inverter is\n"
+                        "begin\n"
+                        "  y <= not a;\n"
+                        "end architecture;\n",
+                        "work", Standard::Vhdl2019))
+        << transcript();
 }
 
 TEST_F(VhdlAnalysisTest, WritesEachUnitIntoTheLibrary) {
@@ -224,7 +266,7 @@ TEST_F(VhdlAnalysisTest, StartsEachAnalysisAfresh) {
     UnitOptions options;
     options.sources = {buffer};
     options.work = {.name = "work", .directory = elsewhere / "work"};
-    options.searchDirectories = {libraries->path()};
+    options.searchDirectories = {Libraries};
     ASSERT_TRUE(analyseUnits(options, sources, engine)) << transcript();
 
     EXPECT_TRUE(std::filesystem::exists(workspace / "work" / "WORK.FIRST"));

@@ -103,13 +103,22 @@ With the evaluator replaced, the subset analyses from source everything NEORV32 
 takes a fraction of a second, and NEORV32 then analyses against those libraries with no error, so
 nothing in the chain needs NVC's own build.
 
+**Enzan's build does the same** (`tools/vhdl-libraries`). It reads the order from the `deps.mk`
+files NVC's tree carries beside each library's sources, which name every unit, the file it comes
+from and the units it needs first, and analyses each file with `enzan-vhdl-library`, a build-time
+tool around the frontend, into `lib/enzan/vhdl` beside `bin/`. It builds the libraries of 1993,
+which serve 2000 and 2002 as well, 2008 and 2019, with the Synopsys packages NVC puts in `ieee`
+and without VITAL, the gate-level timing library section 1.3 rules out: 129 analyses, a few
+seconds of a build.
+
 **Each `ieee` file is analysed by a separate run**, as NVC's own build does. Analysing several of
 them in one run reports eight errors in `numeric_std`'s body, eight `?=` and `?/=` operators on
 `std_ulogic` that do not resolve. NVC's own `nvc -a` analyses the same files in one run without
 error, and the evaluator is not the cause, since a driver with NVC's evaluator linked fails the same
 way. Something in NVC's driver that the sequence above leaves out makes the difference, and it
 should be found before Enzan analyses a user's library of packages in one run. NEORV32's 61 files,
-its package among them, analyse in one run without error.
+its package among them, analyse in one run without error, through Enzan's frontend and against the
+libraries Enzan's build made, in about a second.
 
 ## What Enzan must implement
 
