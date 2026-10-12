@@ -675,9 +675,10 @@ NVC wins on everything else, and the balance is not close:
   elaboration ordering, a secondary stack, and exceptions at the boundary. It
   also degrades the sanitiser configuration of 11.4, which would no longer see
   into the frontend. NVC is C11: one toolchain, one runtime, `extern "C"`.
-- **Only NVC can be consumed in part.** Its analysis stage pulls in no LLVM, so
-  the vendored subset is small (see the integration plan below). GHDL has no
-  equivalent subset; `libghdl` is built whole, with GNAT, or not at all.
+- **Only NVC can be consumed in part.** Its analysis stage pulls in no LLVM, and
+  with NVC's constant evaluator replaced (see the integration plan below) it is 34
+  of NVC's C files, about 66,000 of its 172,000 lines. GHDL has no equivalent
+  subset; `libghdl` is built whole, with GNAT, or not at all.
 - **`tree_t` is a better tree to walk.** It is arena-allocated behind uniform
   accessors that assert node kinds at runtime with usable messages. GHDL's `Iir`
   is an untyped integer handle over several hundred node kinds with heavy field
@@ -701,6 +702,14 @@ The integration plan is therefore:
 - Use its lexer, parser and semantic analysis, consuming the resulting `tree_t`
   after its simplification and bounds-check passes.
 - **Do not** use its `lower`/`vcode`/LLVM path, its runtime, or its scheduler.
+- **Replace its constant evaluator.** NVC's simplification folds locally static
+  expressions by lowering them and running them on its JIT interpreter, so
+  analysis as NVC builds it links 80 of its 102 objects, the path the previous
+  point rules out among them. Enzan does not compile `eval.c` and supplies the
+  three functions the simplifier calls instead, so a tree arrives with those
+  expressions unfolded and the adapter folds them as it translates. On NEORV32
+  that is 159 expressions, 135 of them implicit type conversions, and the
+  analysis is otherwise unchanged.
 - `src/frontend/vhdl/` walks the analysed tree and emits EIR, exactly as the
   SystemVerilog adapter does.
 
@@ -736,14 +745,25 @@ instance — one unit per set of values, as SystemVerilog has — or emit units 
 carry those expressions for elaboration to evaluate per instance. The second gives VHDL the
 reusable library of 2.1, at the cost of EIR holding expressions over a unit's
 generics, an elaborator that specialises units by them, and constant functions
-run at elaboration; the first needs none of these. Subtypes, generate statements
+run at elaboration; the first needs neither of the first two. Subtypes, generate statements
 and constant functions that depend on a generic are what the spike sizes the two
 against.
+
+Measured on NEORV32 (`docs/nvc_integration.md`): 60 of its 77 entities have
+generics, 610 in all; outside processes and subprograms its architectures refer to
+them 802 times, hold 209 generate statements, and call user functions 61 times,
+such as `index_size_f(IMEM_SIZE)` in a subtype. Since NVC's evaluator is replaced,
+**both choices run those functions with the generics' values** — the first in the
+adapter, the second at elaboration — so constant functions are not what tells them
+apart.
 
 Known risks, to be confirmed by a spike at the start of M6: NVC's internal APIs
 are not stability-guaranteed and will drift; NVC is C and uses its own arena
 allocators and global state, so reentrancy and ownership need checking; and the
-C/C++20 boundary needs careful `extern "C"` wrapping.
+C/C++20 boundary needs careful `extern "C"` wrapping. The spike found one
+analysis context per process, no threads started by analysis, and fatal errors
+that end the process with status 1 rather than reaching Enzan's diagnostics; its
+findings are in `docs/nvc_integration.md`.
 
 Mitigations: pin the revision, keep the adapter thin and confined to one
 directory, document the rebase procedure in `docs/nvc_integration.md`, and rely
@@ -2162,8 +2182,8 @@ dependencies" means a user reading the CMake output knows exactly what to
 install.
 
 Vendoring in `third_party/` is reserved for cases where it is unavoidable — NVC
-is the expected case, since it is consumed as a pinned fork rather than as a
-released library.
+is the expected case, since it is consumed at a pinned revision of its internals
+rather than as a released library.
 
 Adding a dependency requires: an entry in this section, a `find_package` path
 with a good error message, a `FetchContent` fallback, CI installation, and a
@@ -2811,7 +2831,7 @@ bit are still refused — a variable with an error and a net by resolving them.
 ### M6 — VHDL via NVC
 
 NVC integration spike first, to confirm the approach in 5.2 before committing
-to it; vendored pinned fork; NVC tree to EIR adapter; `std_logic` value model;
+to it; NVC vendored at a pinned revision; NVC tree to EIR adapter; `std_logic` value model;
 VHDL generic and subtype elaboration, with generics folded where the spike decides
 (5.2); Enzan's own implementations of the predefined and foreign subprograms NVC's
 runtime would have resolved; VHDL simulation cycle; VHPI subset for cocotb.

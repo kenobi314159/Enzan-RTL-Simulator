@@ -25,8 +25,9 @@ inside its own tree. Verilator vendors the same files for the same reason.
 `config.h`, and carries Enzan's GPLv3 licence. Everything else in that directory is byte-identical
 to upstream, which is what makes the next update a replacement rather than a merge.
 
-NVC is the other expected case, since it is consumed as a pinned fork of internal APIs rather than
-as a released library (DESIGN_GUIDE.md section 5.2); it arrives at M6.
+NVC is the other expected case, since it is consumed at a pinned revision of its internal APIs
+rather than as a released library (DESIGN_GUIDE.md section 5.2); it arrives at M6, and
+`docs/nvc_integration.md` records which of its files Enzan builds and why.
 
 ## Acquired at configure time
 
