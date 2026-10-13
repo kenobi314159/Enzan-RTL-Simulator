@@ -18,7 +18,8 @@ elaborated, compiled design.
   changes, resolves drivers, enforces the delta limit and performs system tasks. It also
   keeps each VHDL driver's projected waveform, which is what a VHDL signal assignment acts
   on (section 3.4): the transactions an assignment deletes are taken out of the time wheel,
-  so they leave no time step behind.
+  so they leave no time step behind. And it keeps the heap of section 4.3, where std.textio's
+  lines live by handle, and runs textio's subprograms on them natively.
 - **Formatting** (`Format.h`) — the `$display` conversions.
 
 ## Invariants this component is responsible for

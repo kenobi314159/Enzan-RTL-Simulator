@@ -583,14 +583,33 @@ private:
     /// A file the design opened with `$fopen`: by descriptor, `0x8000'0000` with a number
     /// above the standard streams' 0 to 2, or by one channel bit of a multichannel descriptor
     /// when it was opened with no mode (IEEE 1800 section 21.3.1).
+    ///
+    /// A file opened for reading, as VHDL's are, has `input` rather than `stream`.
     struct OpenFile {
         std::uint32_t descriptor = 0;
         std::unique_ptr<std::ostream> stream;
+        std::unique_ptr<std::istream> input;
     };
 
     std::vector<OpenFile> openFiles;
     std::uint32_t nextFileNumber = 3;
     std::uint32_t nextChannel = 1;
+
+    /// The heap of DESIGN_GUIDE.md section 4.3: what VHDL allocates, std.textio's lines so far,
+    /// by handle. Handle `n` is entry `n - 1`, and 0 is `null`; a freed entry is empty until an
+    /// allocation reuses it, the last freed first, so that a run allocates the same handles every
+    /// time.
+    std::vector<std::optional<std::string>> heap;
+    std::vector<std::uint64_t> freedHandles;
+
+    /// Allocates a line holding `text` and returns its handle.
+    std::uint64_t allocateLine(std::string text);
+
+    /// The line `handle` designates, or null for `null` and for one freed.
+    std::string* lineAt(std::uint64_t handle);
+
+    /// Frees the line `handle` designates; freeing `null` does nothing.
+    void freeLine(std::uint64_t handle);
 
     /// Runs `$readmemh` or `$readmemb`, whose arguments are the file name and the optional
     /// start and end addresses.
@@ -598,7 +617,8 @@ private:
                     const codegen::SysTaskDescriptor& descriptor,
                     std::span<const FormatArgument> arguments);
 
-    /// Opens `name` for `$fopen`, and returns its descriptor or 0.
+    /// Opens `name` for `$fopen`, or for VHDL's `file_open` with `r` to read it, and returns its
+    /// descriptor or 0.
     std::uint32_t openFile(const std::string& name, const std::string& mode,
                            SourceLocation location);
 

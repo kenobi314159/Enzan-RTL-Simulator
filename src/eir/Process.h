@@ -54,6 +54,9 @@ enum class SysTaskKind : std::uint8_t {
     /// failure), and the format string with the rest is the message. A failure stops the run,
     /// as GHDL's default does; an error is reported and the run goes on to fail at its end.
     Report,
+    /// std.textio's `deallocate` of a line: frees what the argument's handle designates, a
+    /// handle into the heap of DESIGN_GUIDE.md section 4.3.
+    LineDeallocate,
 
     // System functions, run by SysFunction, which have a result.
 
@@ -69,6 +72,28 @@ enum class SysTaskKind : std::uint8_t {
     /// `$fopen(name, mode)`: a file descriptor, or with no mode a channel of a multichannel
     /// descriptor; 0 when the file cannot be opened.
     FileOpen,
+
+    // std.textio, run natively over the heap of section 4.3, whose lines are handles: 0 for
+    // `null`, and otherwise numbered as they are allocated, freed ones reused last first, so that
+    // a run allocates the same handles every time.
+
+    /// `write`: appends the message the format and the arguments after the first three make to
+    /// the line the first argument designates, allocating one when it is null, justified as the
+    /// second says (0 right, 1 left) in a field as wide as the third. The result is the line's
+    /// handle.
+    LineWrite,
+    /// `writeline`: writes the line the second argument designates, and a line feed, to the file
+    /// the first names, frees it, and results in the handle of a new empty line.
+    LineWriteLine,
+    /// `readline`: frees the line the second argument designates and results in the handle of a
+    /// new one holding the next line of the file the first names, without its line end.
+    LineReadLine,
+    /// `read` of a character: takes the first character off the line the argument designates.
+    /// The result is the character's code in its low byte, and above it a bit saying whether
+    /// there was one.
+    LineReadCharacter,
+    /// `endfile`: whether the file the argument names has nothing left to read.
+    FileEnd,
 };
 
 std::string_view toString(SysTaskKind kind) noexcept;

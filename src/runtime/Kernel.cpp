@@ -1268,8 +1268,10 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::FileFlush:
         if (descriptor.arguments.empty()) {
             transcriptStream().flush();
-            for (OpenFile& file : openFiles) file.stream->flush();
-        } else if (OpenFile* file = fileFor(fileDescriptor)) {
+            for (OpenFile& file : openFiles) {
+                if (file.stream) file.stream->flush();
+            }
+        } else if (OpenFile* file = fileFor(fileDescriptor); file != nullptr && file->stream) {
             file->stream->flush();
         } else {
             transcriptStream().flush();
@@ -1281,10 +1283,19 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
         readMemory(activation.objectSignals, descriptor, arguments);
         return;
 
+    case eir::SysTaskKind::LineDeallocate:
+        if (!arguments.empty()) freeLine(arguments.front().value.toUInt64());
+        return;
+
     case eir::SysTaskKind::Random:
     case eir::SysTaskKind::URandom:
     case eir::SysTaskKind::URandomRange:
     case eir::SysTaskKind::FileOpen:
+    case eir::SysTaskKind::LineWrite:
+    case eir::SysTaskKind::LineWriteLine:
+    case eir::SysTaskKind::LineReadLine:
+    case eir::SysTaskKind::LineReadCharacter:
+    case eir::SysTaskKind::FileEnd:
         ENZAN_ASSERT(false, "a system function run as a system task; run the EIR verifier");
         return;
     }
@@ -1328,6 +1339,80 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
 
     std::uint64_t value = 0;
     switch (descriptor.kind) {
+    // std.textio over the heap: the line `write` appends to, justified in its field.
+    case eir::SysTaskKind::LineWrite: {
+        std::vector<FormatArgument> rest;
+        for (std::size_t index = 3; index < descriptor.arguments.size(); ++index) {
+            const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[index];
+            rest.push_back(FormatArgument{
+                .value = compiled.isConstant ? body.constant(compiled.location)
+                                             : frameAt(activation.frameOffset + compiled.location,
+                                                       compiled.bitWidth),
+                .isSigned = compiled.isSigned});
+        }
+        const elab::Instance& instance =
+            designImage->elaboratedDesign().instances()[state.instanceIndex];
+        const FormatContext context{
+            .time = currentTime, .timeScale = options.timeScale, .scopeName = instance.path};
+        std::string text =
+            descriptor.hasFormat()
+                ? formatSystemTask(body.strings[descriptor.formatIndex], rest, context)
+                : formatDefault(rest);
+        const std::size_t field = argument(2);
+        if (text.size() < field) {
+            const std::string padding(field - text.size(), ' ');
+            text = argument(1) != 0 ? text + padding : padding + text;
+        }
+        value = argument(0);
+        if (std::string* line = lineAt(value)) {
+            *line += text;
+        } else {
+            value = allocateLine(std::move(text));
+        }
+        break;
+    }
+
+    case eir::SysTaskKind::LineWriteLine: {
+        const std::string* line = lineAt(argument(1));
+        writeToDescriptor(static_cast<std::uint32_t>(argument(0)),
+                          (line != nullptr ? *line : std::string()) + '\n', "writeline",
+                          descriptor.location);
+        freeLine(argument(1));
+        value = allocateLine({});
+        break;
+    }
+
+    case eir::SysTaskKind::LineReadLine: {
+        freeLine(argument(1));
+        std::string text;
+        OpenFile* file = fileFor(static_cast<std::uint32_t>(argument(0)));
+        if (file != nullptr && file->input) {
+            std::getline(*file->input, text);
+            if (text.ends_with('\r')) text.pop_back();
+        } else {
+            diagnostics.report(DiagCode::FileNotOpen, descriptor.location, "readline",
+                               static_cast<std::uint32_t>(argument(0)));
+        }
+        value = allocateLine(std::move(text));
+        break;
+    }
+
+    case eir::SysTaskKind::LineReadCharacter:
+        if (std::string* line = lineAt(argument(0)); line != nullptr && !line->empty()) {
+            value = 0x100U | static_cast<unsigned char>(line->front());
+            line->erase(0, 1);
+        }
+        break;
+
+    case eir::SysTaskKind::FileEnd: {
+        OpenFile* file = fileFor(static_cast<std::uint32_t>(argument(0)));
+        value =
+            file == nullptr || !file->input || file->input->peek() == std::char_traits<char>::eof()
+                ? 1
+                : 0;
+        break;
+    }
+
     case eir::SysTaskKind::Random:
         if (descriptor.arguments.empty()) {
             value = static_cast<std::uint32_t>(ieeeRandom(randomSeed));
@@ -1402,12 +1487,24 @@ void Kernel::readMemory(std::span<const std::uint32_t> objectSignals,
 
 std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,
                                SourceLocation location) {
-    // Writing only: a file opened for reading has nothing that reads it yet, and opening one
-    // anyway would let a testbench read as if it had read nothing.
+    // Writing, or reading for VHDL's textio, which is what reads a file; SystemVerilog's
+    // reading tasks are not there yet, and a file they opened would read as nothing.
     const bool channel = mode.empty();
+    if (mode.starts_with('r')) {
+        auto input = std::make_unique<std::ifstream>(name);
+        if (!input->is_open()) {
+            diagnostics.report(DiagCode::FileNotOpened, location, name, mode,
+                               "the file could not be opened");
+            return 0;
+        }
+        const std::uint32_t descriptor = 0x8000'0000U | nextFileNumber++;
+        openFiles.push_back(
+            OpenFile{.descriptor = descriptor, .stream = {}, .input = std::move(input)});
+        return descriptor;
+    }
     if (!channel && !mode.starts_with('w') && !mode.starts_with('a')) {
         diagnostics.report(DiagCode::FileNotOpened, location, name, mode,
-                           "Enzan opens files for writing only");
+                           "Enzan opens files for writing, or for textio to read");
         return 0;
     }
     if (channel && nextChannel > 30) {
@@ -1426,8 +1523,32 @@ std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,
 
     const std::uint32_t descriptor =
         channel ? std::uint32_t{1} << nextChannel++ : 0x8000'0000U | nextFileNumber++;
-    openFiles.push_back(OpenFile{.descriptor = descriptor, .stream = std::move(stream)});
+    openFiles.push_back(
+        OpenFile{.descriptor = descriptor, .stream = std::move(stream), .input = {}});
     return descriptor;
+}
+
+std::uint64_t Kernel::allocateLine(std::string text) {
+    if (!freedHandles.empty()) {
+        const std::uint64_t handle = freedHandles.back();
+        freedHandles.pop_back();
+        heap[handle - 1] = std::move(text);
+        return handle;
+    }
+    heap.emplace_back(std::move(text));
+    return heap.size();
+}
+
+std::string* Kernel::lineAt(std::uint64_t handle) {
+    if (handle == 0 || handle > heap.size()) return nullptr;
+    std::optional<std::string>& entry = heap[handle - 1];
+    return entry.has_value() ? &entry.value() : nullptr;
+}
+
+void Kernel::freeLine(std::uint64_t handle) {
+    if (lineAt(handle) == nullptr) return;
+    heap[handle - 1].reset();
+    freedHandles.push_back(handle);
 }
 
 Kernel::OpenFile* Kernel::fileFor(std::uint32_t descriptor) {
@@ -1443,7 +1564,7 @@ void Kernel::writeToDescriptor(std::uint32_t descriptor, std::string_view text,
             transcriptStream() << text;
         } else if (descriptor == 0x8000'0002U) {
             std::cerr << text;
-        } else if (OpenFile* file = fileFor(descriptor)) {
+        } else if (OpenFile* file = fileFor(descriptor); file != nullptr && file->stream) {
             *file->stream << text;
         } else {
             diagnostics.report(DiagCode::FileNotOpen, location, task, descriptor);
@@ -1454,7 +1575,8 @@ void Kernel::writeToDescriptor(std::uint32_t descriptor, std::string_view text,
     // A multichannel descriptor: bit 0 is the standard output, each other bit one file.
     if ((descriptor & 1U) != 0) transcriptStream() << text;
     for (OpenFile& file : openFiles) {
-        if ((file.descriptor & 0x8000'0000U) == 0 && (descriptor & file.descriptor) != 0)
+        if ((file.descriptor & 0x8000'0000U) == 0 && (descriptor & file.descriptor) != 0
+            && file.stream)
             *file.stream << text;
     }
 }

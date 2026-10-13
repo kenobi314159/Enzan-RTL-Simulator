@@ -42,8 +42,18 @@ std::vector<std::uint32_t> writtenObjects(const std::vector<WriteExtent>& writeS
 }
 
 bool isSystemFunction(SysTaskKind kind) noexcept {
-    return kind == SysTaskKind::Random || kind == SysTaskKind::URandom
-           || kind == SysTaskKind::URandomRange || kind == SysTaskKind::FileOpen;
+    switch (kind) {
+    case SysTaskKind::Random:
+    case SysTaskKind::URandom:
+    case SysTaskKind::URandomRange:
+    case SysTaskKind::FileOpen:
+    case SysTaskKind::LineWrite:
+    case SysTaskKind::LineWriteLine:
+    case SysTaskKind::LineReadLine:
+    case SysTaskKind::LineReadCharacter:
+    case SysTaskKind::FileEnd: return true;
+    default: return false;
+    }
 }
 
 std::string_view toString(SysTaskKind kind) noexcept {
@@ -68,6 +78,12 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::ReadMemBinary: return "$readmemb";
     case SysTaskKind::Report: return "report";
     case SysTaskKind::FileOpen: return "$fopen";
+    case SysTaskKind::LineDeallocate: return "deallocate";
+    case SysTaskKind::LineWrite: return "write";
+    case SysTaskKind::LineWriteLine: return "writeline";
+    case SysTaskKind::LineReadLine: return "readline";
+    case SysTaskKind::LineReadCharacter: return "read";
+    case SysTaskKind::FileEnd: return "endfile";
     }
     return "$unknown";
 }

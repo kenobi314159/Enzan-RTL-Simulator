@@ -643,7 +643,15 @@ every time (3.8) and change detection, waveforms and VPI see an integer like any
 other. Allocating and deallocating are calls into the runtime from a process,
 which RTL's write path never makes; textio is where they happen. The heap is
 state a process reaches, so a process that dereferences a handle has the heap in
-its read or write set (4.2), and a checkpoint (M9) saves it with the arena.
+its read or write set (4.2), and a checkpoint (M9) saves it with the arena. A
+freed handle is reused, the last freed first, which keeps a run's handles the same
+every time without the heap growing with every line written.
+
+**std.textio runs natively.** NVC's textio body grows a line through accesses to strings
+of run-time lengths, which registers of fixed width cannot hold, so it is not translated:
+`write`, `writeline`, `readline`, `read` and `endfile` are system functions the runtime
+runs over its heap and its files, as NVC's runtime runs its foreign subprograms, and the
+adapter calls them for textio's subprograms and VHDL's predefined file operations.
 
 ### 4.4 Libraries
 

@@ -647,6 +647,72 @@ TEST(Kernel, DisplayWritesToTheTranscript) {
     EXPECT_EQ(simulation.transcript(), "value = 42 at 0ps in /tb\n");
 }
 
+TEST(Kernel, TextioLinesLiveInTheHeapAndAreWrittenWhole) {
+    // `write(l, 42, left, 5); write(l, -7); writeline(output, l)`: the first write allocates a
+    // line, the second appends to it, and writeline prints it and leaves a new empty one, the
+    // handle the first freed (DESIGN_GUIDE.md section 4.3).
+    ProcessBuilder builder(ProcessKind::Initial, "writer");
+    const Type handle = Type::bits(64, false, false);
+    const Type integer = Type::bits(32, true, false);
+    const std::uint32_t line = builder.reg(handle);
+    const std::uint32_t left = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t right = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t field = builder.reg(integer);
+    const std::uint32_t none = builder.reg(integer);
+    const std::uint32_t first = builder.reg(integer);
+    const std::uint32_t second = builder.reg(integer);
+    const std::uint32_t output = builder.reg(Type::bits(32, false, false));
+    const std::uint32_t written = builder.reg(handle);
+    const std::uint32_t decimal = builder.string("%0d");
+
+    const auto argument = [](std::uint32_t reg, Type type) {
+        return SysTaskArgument{.value = Operand::reg(reg), .type = type};
+    };
+    const auto write = [&](std::uint32_t justified, std::uint32_t width, std::uint32_t value) {
+        SysTaskCall call;
+        call.kind = SysTaskKind::LineWrite;
+        call.formatIndex = decimal;
+        call.arguments = {argument(line, handle), argument(justified, Type::bits(8, false, false)),
+                          argument(width, integer), argument(value, integer)};
+        return builder.sysCall(std::move(call));
+    };
+    const std::uint32_t writeFirst = write(left, field, first);
+    const std::uint32_t writeSecond = write(right, none, second);
+    SysTaskCall writeLine;
+    writeLine.kind = SysTaskKind::LineWriteLine;
+    writeLine.arguments = {argument(output, Type::bits(32, false, false)), argument(line, handle)};
+    const std::uint32_t printLine = builder.sysCall(std::move(writeLine));
+
+    const auto load = [&](std::uint32_t reg, std::string_view literal) {
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(reg),
+                                       Operand::constant(builder.constant(literal))));
+    };
+    builder.block("entry");
+    load(line, "64'd0");
+    load(left, "8'd1");
+    load(right, "8'd0");
+    load(field, "32'sd5");
+    load(none, "32'sd0");
+    load(first, "32'sd42");
+    load(second, "32'hfffffff9");
+    load(output, "32'h80000001");
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(line), Operand::sysCall(writeFirst)));
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(line), Operand::sysCall(writeSecond)));
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(written), Operand::sysCall(printLine)));
+    builder.store(0, written);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(
+        designOf(makeTop({builder.finish()}, {Object{.name = "after", .type = handle}})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.transcript(), "42   -7\n");
+    EXPECT_EQ(simulation.value("/tb/after", Radix::Decimal), "1");
+}
+
 TEST(Kernel, FinishEndsTheRun) {
     ProcessBuilder builder(ProcessKind::Initial, "quitter");
     SysTaskCall call;
