@@ -373,8 +373,8 @@ std::uint32_t ArchitectureTranslator::enumFor(type_t type) {
 
 bool ArchitectureTranslator::addObject(tree_t declaration) {
     type_t type = tree_type(declaration);
-    const std::optional<eir::Type> storage = storageOf(type);
-    if (!storage) {
+    const std::optional<Layout> layout = layoutOf(type, folding);
+    if (!layout) {
         unsupported(declaration, std::format("a signal of type {}", type_pp(type)));
         return false;
     }
@@ -382,15 +382,15 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     // Every VHDL object has a value from the start: its own initial value, or its type's left
     // bound (IEEE 1076 section 14.4.2.5). A port's is the default it declares, which is what an
     // unconnected port reads; a connected one is the signal it connects.
-    std::optional<std::int64_t> initial;
+    std::optional<eir::BitVector> initial;
     if (tree_has_value(declaration)) {
-        initial = folding.integer(tree_value(declaration));
+        initial = constantBits(tree_value(declaration), *layout, folding);
         if (!initial) {
             unsupported(tree_value(declaration), "an initial value that is not static");
             return false;
         }
     } else {
-        initial = folding.left(type);
+        initial = defaultBits(type, *layout, folding);
         if (!initial) {
             unsupported(declaration, std::format("the initial value of a {}", type_pp(type)));
             return false;
@@ -399,11 +399,11 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
 
     eir::Object object;
     object.name = simpleName(tree_ident(declaration));
-    object.type = *storage;
+    object.type = layout->storage;
     object.kind = eir::ObjectKind::Variable;
     object.location = locate(declaration);
-    object.initialValue = encode(*initial, *storage);
-    object.enumIndex = enumFor(type);
+    object.initialValue = std::move(initial);
+    object.enumIndex = layout->isArray() ? eir::Object::NoEnum : enumFor(type);
     objects.emplace(declaration, result.addObject(std::move(object)));
     return true;
 }
@@ -416,7 +416,7 @@ eir::ModuleDefinition ArchitectureTranslator::translate() {
 
     for (unsigned index = 0; index < tree_generics(entity); ++index) {
         tree_t generic = tree_generic(entity, index);
-        const std::optional<eir::Type> storage = storageOf(tree_type(generic));
+        const std::optional<eir::Type> storage = scalarStorage(tree_type(generic));
         if (!storage) continue;
         result.parameters.push_back(
             eir::Parameter{.name = simpleName(tree_ident(generic)),
@@ -564,18 +564,19 @@ void ArchitectureTranslator::instance(tree_t statement) {
         // nothing drives, connects as a signal does.
         if (objectIndex == eir::PortConnection::Unconnected) {
             tree_t port = tree_port(entity, portNumber);
-            const std::optional<eir::Type> storage = storageOf(tree_type(port));
-            const std::optional<std::int64_t> value = folding.integer(actual);
-            if (!storage || !value || tree_subkind(port) != PORT_IN) {
+            const std::optional<Layout> layout = layoutOf(tree_type(port), folding);
+            std::optional<eir::BitVector> value;
+            if (layout) value = constantBits(actual, *layout, folding);
+            if (!layout || !value || tree_subkind(port) != PORT_IN) {
                 unsupported(actual, "a port actual that is not a signal or a static value");
                 continue;
             }
             eir::Object tied;
             tied.name = std::format("{}${}", created.name, simpleName(tree_ident(port)));
-            tied.type = *storage;
+            tied.type = layout->storage;
             tied.location = locate(actual);
-            tied.initialValue = encode(*value, *storage);
-            tied.enumIndex = enumFor(tree_type(port));
+            tied.initialValue = std::move(value);
+            tied.enumIndex = layout->isArray() ? eir::Object::NoEnum : enumFor(tree_type(port));
             objectIndex = result.addObject(std::move(tied));
         }
 

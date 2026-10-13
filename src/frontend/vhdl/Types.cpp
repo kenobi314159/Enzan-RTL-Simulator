@@ -2,9 +2,13 @@
 
 #include "frontend/vhdl/Types.h"
 
+#include "eir/BitOps.h"
+
 #include <cctype>
 #include <limits>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace enzan::frontend::vhdl {
 
@@ -36,9 +40,177 @@ std::uint32_t enumerationBits(std::uint32_t count) {
     return 32;
 }
 
+/// What a static array value's elements are: their type and how each is laid out.
+struct Elements {
+    type_t type = nullptr;
+    Layout layout;
+};
+
+/// The elements of a static array value, left to right; nothing when the value is not static.
+/// `length` is the context's, which an aggregate with `others` needs.
+std::optional<std::vector<eir::BitVector>> elementsOf(tree_t expression, const Elements& element,
+                                                      std::optional<std::int64_t> length,
+                                                      const Folder& folder);
+
+/// Places `elements` into the bits of an array laid out as `layout`, or nothing when there are not
+/// as many as it holds.
+std::optional<eir::BitVector> pack(const std::vector<eir::BitVector>& elements,
+                                   const Layout& layout) {
+    if (static_cast<std::int64_t>(elements.size()) != layout.index.length()) return std::nullopt;
+    eir::BitVector bits = eir::BitVector::filled(layout.storage.bitWidth(), eir::Logic::Zero);
+    for (std::size_t position = 0; position < elements.size(); ++position) {
+        const auto step = static_cast<std::int64_t>(position);
+        const std::int64_t index =
+            layout.index.ascending ? layout.index.left + step : layout.index.left - step;
+        eir::bitops::assignPartAt(bits.mutableRef(), elements[position].ref(),
+                                  static_cast<std::uint64_t>(layout.bitOffset(index)));
+    }
+    return bits;
+}
+
+std::optional<std::vector<eir::BitVector>> aggregateElements(tree_t aggregate,
+                                                             const Elements& element,
+                                                             std::optional<std::int64_t> length,
+                                                             const Folder& folder) {
+    // A named association names an index, so it needs the bounds of the type the aggregate has;
+    // a positional one counts from the left.
+    const std::optional<Folder::Range> bounds = folder.rangeOf(tree_type(aggregate));
+    const auto positionOf = [&bounds](std::int64_t index) -> std::optional<std::size_t> {
+        if (!bounds) return std::nullopt;
+        const std::int64_t offset = bounds->ascending ? index - bounds->left : bounds->left - index;
+        if (offset < 0 || offset >= bounds->length()) return std::nullopt;
+        return static_cast<std::size_t>(offset);
+    };
+
+    std::vector<std::optional<eir::BitVector>> slots;
+    const auto place = [&slots](std::size_t position, eir::BitVector value) {
+        if (slots.size() <= position) slots.resize(position + 1);
+        slots[position] = std::move(value);
+    };
+
+    std::size_t next = 0;
+    tree_t others = nullptr;
+    const unsigned count = tree_assocs(aggregate);
+    for (unsigned index = 0; index < count; ++index) {
+        tree_t association = tree_assoc(aggregate, index);
+        tree_t value = tree_value(association);
+        switch (tree_subkind(association)) {
+        case A_POS: {
+            std::optional<eir::BitVector> bits = constantBits(value, element.layout, folder);
+            if (!bits) return std::nullopt;
+            place(next++, std::move(*bits));
+            break;
+        }
+        case A_CONCAT: {
+            std::optional<std::vector<eir::BitVector>> pieces =
+                elementsOf(value, element, std::nullopt, folder);
+            if (!pieces) return std::nullopt;
+            for (eir::BitVector& piece : *pieces) place(next++, std::move(piece));
+            break;
+        }
+        case A_NAMED: {
+            const std::optional<std::int64_t> at = folder.integer(tree_name(association));
+            const std::optional<std::size_t> position = at ? positionOf(*at) : std::nullopt;
+            std::optional<eir::BitVector> bits = constantBits(value, element.layout, folder);
+            if (!position || !bits) return std::nullopt;
+            place(*position, std::move(*bits));
+            break;
+        }
+        case A_RANGE: {
+            const std::optional<Folder::Range> range = folder.range(tree_range(association, 0));
+            const std::optional<eir::BitVector> bits = constantBits(value, element.layout, folder);
+            if (!range || !bits) return std::nullopt;
+            const Folder::Range span = *range;
+            const eir::BitVector& one = *bits;
+            for (std::int64_t at = span.low(); at <= span.high(); ++at) {
+                const std::optional<std::size_t> position = positionOf(at);
+                if (!position) return std::nullopt;
+                place(*position, one);
+            }
+            break;
+        }
+        case A_OTHERS: others = value; break;
+        default: return std::nullopt;
+        }
+    }
+
+    if (others != nullptr) {
+        if (!length) return std::nullopt;
+        const std::optional<eir::BitVector> bits = constantBits(others, element.layout, folder);
+        if (!bits) return std::nullopt;
+        slots.resize(static_cast<std::size_t>(*length));
+        for (std::optional<eir::BitVector>& slot : slots) {
+            if (!slot) slot = *bits;
+        }
+    }
+
+    std::vector<eir::BitVector> elements;
+    elements.reserve(slots.size());
+    for (std::optional<eir::BitVector>& slot : slots) {
+        if (!slot) return std::nullopt;
+        elements.push_back(std::move(*slot));
+    }
+    return elements;
+}
+
+std::optional<std::vector<eir::BitVector>> elementsOf(tree_t expression, const Elements& element,
+                                                      std::optional<std::int64_t> length,
+                                                      const Folder& folder) {
+    switch (tree_kind(expression)) {
+    case T_STRING: {
+        std::vector<eir::BitVector> elements;
+        const unsigned count = tree_chars(expression);
+        for (unsigned index = 0; index < count; ++index) {
+            tree_t character = tree_char(expression, index);
+            if (!tree_has_ref(character) || tree_kind(tree_ref(character)) != T_ENUM_LIT)
+                return std::nullopt;
+            elements.push_back(encode(tree_pos(tree_ref(character)), element.layout.storage));
+        }
+        return elements;
+    }
+
+    case T_AGGREGATE: return aggregateElements(expression, element, length, folder);
+
+    case T_QUALIFIED:
+    case T_TYPE_CONV: return elementsOf(tree_value(expression), element, length, folder);
+
+    case T_REF: {
+        if (!tree_has_ref(expression)) return std::nullopt;
+        tree_t declaration = tree_ref(expression);
+        if ((tree_kind(declaration) == T_CONST_DECL || tree_kind(declaration) == T_ALIAS)
+            && tree_has_value(declaration))
+            return elementsOf(tree_value(declaration), element, length, folder);
+        return std::nullopt;
+    }
+
+    case T_FCALL: {
+        // A concatenation of static pieces: arrays, and single elements.
+        if (!tree_has_ref(expression) || tree_subkind(tree_ref(expression)) != S_CONCAT)
+            return std::nullopt;
+        std::vector<eir::BitVector> elements;
+        for (unsigned index = 0; index < tree_params(expression); ++index) {
+            tree_t operand = tree_value(tree_param(expression, index));
+            if (type_eq(tree_type(operand), element.type)) {
+                std::optional<eir::BitVector> bits = constantBits(operand, element.layout, folder);
+                if (!bits) return std::nullopt;
+                elements.push_back(std::move(*bits));
+                continue;
+            }
+            std::optional<std::vector<eir::BitVector>> pieces =
+                elementsOf(operand, element, std::nullopt, folder);
+            if (!pieces) return std::nullopt;
+            for (eir::BitVector& piece : *pieces) elements.push_back(std::move(piece));
+        }
+        return elements;
+    }
+
+    default: return std::nullopt;
+    }
+}
+
 } // namespace
 
-std::optional<eir::Type> storageOf(type_t type) {
+std::optional<eir::Type> scalarStorage(type_t type) {
     if (type == nullptr) return std::nullopt;
     type_t base = type_base_recur(type);
     switch (type_kind(base)) {
@@ -60,6 +232,32 @@ std::optional<eir::Type> storageOf(type_t type) {
     }
 }
 
+std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType,
+                                  const Folder& folder) {
+    const std::optional<Layout> element = layoutOf(elementType, folder);
+    if (!element || index.length() <= 0) return std::nullopt;
+    const std::int64_t bits = index.length() * element->storage.bitWidth();
+    if (std::cmp_greater(bits, std::numeric_limits<std::uint32_t>::max())) return std::nullopt;
+    return Layout{.storage = eir::Type::bits(static_cast<std::uint32_t>(bits), false, false),
+                  .array = true,
+                  .index = index,
+                  .elementBits = element->storage.bitWidth(),
+                  .elementType = elementType};
+}
+
+std::optional<Layout> layoutOf(type_t type, const Folder& folder) {
+    if (type == nullptr) return std::nullopt;
+    if (type_is_array(type)) {
+        if (dimension_of(type) != 1) return std::nullopt;
+        const std::optional<Folder::Range> index = folder.rangeOf(type);
+        if (!index) return std::nullopt;
+        return arrayLayout(*index, type_elem(type), folder);
+    }
+    const std::optional<eir::Type> storage = scalarStorage(type);
+    if (!storage) return std::nullopt;
+    return Layout{.storage = *storage};
+}
+
 bool isSignedScalar(type_t type) {
     if (type == nullptr) return false;
     const type_kind_t kind = type_kind(type_base_recur(type));
@@ -71,7 +269,7 @@ std::optional<eir::EnumDefinition> enumerationOf(type_t type) {
     type_t base = type_base_recur(type);
     if (type_kind(base) != T_ENUM) return std::nullopt;
 
-    const eir::Type storage = storageOf(base).value_or(eir::Type::bits(8, false, false));
+    const eir::Type storage = scalarStorage(base).value_or(eir::Type::bits(8, false, false));
     eir::EnumDefinition definition;
     definition.name = type_has_ident(base) ? simpleName(type_ident(base)) : std::string();
     const unsigned count = type_enum_literals(base);
@@ -92,6 +290,36 @@ eir::BitVector encode(std::int64_t value, eir::Type type) {
     return type.isSigned()
                ? eir::BitVector::fromInt64(value, type.bitWidth())
                : eir::BitVector::fromUInt64(static_cast<std::uint64_t>(value), type.bitWidth());
+}
+
+std::optional<eir::BitVector> constantBits(tree_t expression, const Layout& layout,
+                                           const Folder& folder) {
+    if (!layout.isArray()) {
+        const std::optional<std::int64_t> value = folder.integer(expression);
+        if (!value) return std::nullopt;
+        return encode(*value, layout.storage);
+    }
+    const std::optional<Layout> element = layoutOf(layout.elementType, folder);
+    if (!element) return std::nullopt;
+    const std::optional<std::vector<eir::BitVector>> elements =
+        elementsOf(expression, Elements{.type = layout.elementType, .layout = *element},
+                   layout.index.length(), folder);
+    if (!elements) return std::nullopt;
+    return pack(*elements, layout);
+}
+
+std::optional<eir::BitVector> defaultBits(type_t type, const Layout& layout, const Folder& folder) {
+    if (!layout.isArray()) {
+        const std::optional<std::int64_t> left = folder.left(type);
+        if (!left) return std::nullopt;
+        return encode(*left, layout.storage);
+    }
+    const std::optional<Layout> element = layoutOf(layout.elementType, folder);
+    if (!element) return std::nullopt;
+    const std::optional<eir::BitVector> one = defaultBits(layout.elementType, *element, folder);
+    if (!one) return std::nullopt;
+    return pack(std::vector<eir::BitVector>(static_cast<std::size_t>(layout.index.length()), *one),
+                layout);
 }
 
 } // namespace enzan::frontend::vhdl

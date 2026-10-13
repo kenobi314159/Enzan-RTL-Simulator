@@ -31,3 +31,7 @@ enzan_add_vhdl_golden_test(counter)
 # Sequential statements: loops, case, the arithmetic operators' signs, short-circuit operators,
 # waits for time and for conditions, and a clock that stops by reassigning itself.
 enzan_add_vhdl_golden_test(statements)
+
+# Arrays of bits and of arrays: aggregates, slices, elements by static and dynamic index, signal
+# assignments to parts, concatenation, and the operators on arrays.
+enzan_add_vhdl_golden_test(arrays)

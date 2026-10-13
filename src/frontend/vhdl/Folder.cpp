@@ -261,11 +261,14 @@ std::optional<Folder::Range> Folder::range(tree_t range) const {
 std::optional<Folder::Range> Folder::rangeOf(type_t type, unsigned dimension) const {
     if (type == nullptr) return std::nullopt;
     if (type_is_array(type)) {
-        // A constrained array subtype's index constraint, or an unconstrained one's index type,
-        // which has no static range of the array's own.
-        if (type_kind(type) != T_SUBTYPE || !type_has_constraint(type)) return std::nullopt;
+        // The nearest index constraint among the subtypes it is declared through; an array type
+        // with none is unconstrained, and has no range of its own.
+        type_t constrained = type;
+        while (type_kind(constrained) == T_SUBTYPE && !type_has_constraint(constrained))
+            constrained = type_base(constrained);
+        if (type_kind(constrained) != T_SUBTYPE) return std::nullopt;
         if (dimension >= dimension_of(type)) return std::nullopt;
-        return range(range_of(type, dimension));
+        return range(range_of(constrained, dimension));
     }
     if (!type_is_scalar(type) || dimension != 0) return std::nullopt;
     if (dimension_of(type) == 0) return std::nullopt;

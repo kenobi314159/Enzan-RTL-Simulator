@@ -10,6 +10,7 @@
 #include "eir/Type.h"
 #include "frontend/vhdl/Folder.h"
 #include "frontend/vhdl/NvcApi.h"
+#include "frontend/vhdl/Types.h"
 
 #include <cstdint>
 #include <map>
@@ -86,6 +87,25 @@ private:
         std::uint32_t reg = 0;
         eir::Type type;
         type_t vhdlType = nullptr;
+
+        /// The bounds and the elements of an array value, which a scalar's leaves empty.
+        Layout layout;
+    };
+
+    /// What a name designates: a signal, a port or a variable, or a part of one, an element or a
+    /// slice, through indices that may be known only at run time.
+    struct Place {
+        /// A variable's register, or else a signal or a port.
+        bool isVariable = false;
+        Value variable;
+        std::uint32_t objectIndex = 0;
+
+        /// How the part designated is laid out, and where its bits start in the whole: from a
+        /// static offset, or from the 64-bit register `offset` holds.
+        Layout layout;
+        std::int64_t staticOffset = 0;
+        std::optional<Value> offset;
+        bool whole = true;
     };
 
     /// A loop that `exit` and `next` can name.
@@ -113,8 +133,17 @@ private:
     /// `value` sign- or zero-extended, or truncated, to `width` bits.
     Value resize(const Value& value, std::uint32_t width);
 
+    /// A register holding `bits`, an array value laid out as `layout`.
+    Value constantArray(const eir::BitVector& bits, const Layout& layout, type_t vhdlType);
+
+    /// How a value of `type` is laid out, with this instance's generics bound.
+    [[nodiscard]] std::optional<Layout> layoutFor(type_t type) const;
+
     void noteRead(std::uint32_t objectIndex);
-    void noteWrite(std::uint32_t objectIndex);
+
+    /// Records that the process writes `place`: the bits it designates when they are known, and
+    /// the whole object when an index is not (DESIGN_GUIDE.md section 3.7).
+    void noteWrite(const Place& place);
 
     bool fail(tree_t where, std::string_view what);
 
@@ -145,8 +174,39 @@ private:
     bool messageParts(tree_t message, std::string& format,
                       std::vector<eir::SysTaskArgument>& arguments);
 
-    /// The object a signal assignment writes, when it is a whole signal or port.
-    std::optional<std::uint32_t> targetObject(tree_t target);
+    /// What `name` designates: a signal, a port or a variable of the process, or an element or a
+    /// slice of one. Nothing having reported why for anything else.
+    std::optional<Place> place(tree_t name);
+
+    /// True when `name` is a signal, a port or a variable of the process, or a part of one, so that
+    /// `place` can find it.
+    [[nodiscard]] bool designatesStorage(tree_t name) const;
+
+    /// The value at `place`.
+    Value read(const Place& place, type_t vhdlType);
+
+    /// A register holding the offset of `place`'s part, for an instruction that takes one.
+    std::uint32_t offsetRegister(const Place& place);
+
+    /// The offset of the element `index` designates in an array laid out as `layout`: a static
+    /// one, or a register holding it once checked to lie inside the bounds. Nothing having
+    /// reported why when a static index lies outside them.
+    struct Offset {
+        std::int64_t staticOffset = 0;
+        std::optional<Value> dynamic;
+    };
+
+    std::optional<Offset> elementOffset(const Layout& layout, tree_t index);
+
+    /// The element of `array` that `index` designates.
+    std::optional<Value> element(const Value& array, tree_t index, type_t vhdlType);
+
+    /// The slice of `array` that `range` designates.
+    std::optional<Value> slice(const Value& array, tree_t range, type_t vhdlType);
+
+    /// The layout of a slice by `range` of an array laid out as `layout`, and the offset of its
+    /// bits, or nothing having reported why.
+    std::optional<std::pair<Layout, std::int64_t>> sliceOf(const Layout& layout, tree_t range);
 
     /// A register holding `delay`, a value of `time` in femtoseconds, as a count of EIR's unit.
     std::optional<Value> delay(tree_t delay);
@@ -156,8 +216,29 @@ private:
 
     // --- expressions ---------------------------------------------------------
 
-    std::optional<Value> expression(tree_t expression);
+    /// The value of `expression`. `context` is the layout of where the value goes, which an
+    /// aggregate with `others` takes its bounds from, as VHDL's does from its context.
+    std::optional<Value> expression(tree_t expression, const Layout* context = nullptr);
     std::optional<Value> reference(tree_t expression);
+
+    /// An aggregate of values not all static, built element by element into a register.
+    std::optional<Value> aggregate(tree_t expression, const Layout& layout);
+
+    /// An aggregate of positional elements and whole arrays, which is what NVC makes of a chain of
+    /// concatenations: its length is its pieces', and its bounds `layout`'s when that is given.
+    std::optional<Value> positionalAggregate(tree_t expression, const Layout* layout);
+
+    /// The layout of an array of `type` with `length` elements and no bounds of its own: those
+    /// of the index subtype's left bound and direction, as VHDL-2008 gives a concatenation (IEEE
+    /// 1076-2008 section 9.2.5).
+    std::optional<Layout> unboundedLayout(type_t type, std::int64_t length, tree_t where);
+
+    /// A concatenation of arrays and elements, the left operand in the highest bits.
+    std::optional<Value> concatenation(tree_t expression);
+
+    /// The predefined operators on arrays: equality, ordering, and the logical operators on
+    /// arrays of `bit` and `boolean`.
+    std::optional<Value> arrayOperator(tree_t expression, subprogram_kind_t kind);
     std::optional<Value> call(tree_t expression);
     std::optional<Value> conversion(tree_t expression);
 
@@ -193,7 +274,7 @@ private:
     SourceLocation statementLocation;
 
     std::set<std::uint32_t> reads;
-    std::set<std::uint32_t> written;
+    std::vector<eir::WriteExtent> writes;
 
     /// The register of each variable, constant and loop parameter declared in the process.
     std::map<tree_t, Value> locals;

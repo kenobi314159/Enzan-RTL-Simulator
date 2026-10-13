@@ -297,6 +297,57 @@ end architecture;
     EXPECT_EQ(deep->parameters[0].name, "depth");
 }
 
+TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
+    // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
+    // when the index is known.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable v : bit_vector(3 downto 0) := "0101";
+    variable i : integer := 2;
+  begin
+    i := i + 2;
+    v(i) := '1';
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
+}
+
+TEST_F(VhdlDesignTest, ADelayedAssignmentToPartOfASignalIsRefused) {
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal v : bit_vector(3 downto 0);
+begin
+  process
+  begin
+    v(1) <= '1' after 2 ns;
+    wait;
+  end process;
+end architecture;
+)");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(unsupported, nullptr) << transcript();
+    EXPECT_EQ(unsupported->message, "a delayed assignment to part of a signal is not supported by "
+                                    "the VHDL frontend yet");
+}
+
 TEST_F(VhdlDesignTest, WhatTheAdapterCannotTranslateIsReportedNotDropped) {
     const std::unique_ptr<enzan::eir::Design> design = translate(R"(
 entity uses_real is

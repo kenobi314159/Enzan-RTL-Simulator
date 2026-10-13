@@ -913,7 +913,12 @@ What a VHDL unit becomes in EIR:
   unresolved signal are refused. A process that cannot suspend is refused too, since it
   would never let time advance.
 - A signal assignment is `Drive`, or `DriveTransport` for a transport assignment and
-  for each element of a waveform after the first: the transactions of 3.4.
+  for each element of a waveform after the first: the transactions of 3.4. One to an
+  element or a slice is `DrivePart`, at the offset of its bits.
+- An array is its elements end to end, the left element highest (3.6), with bounds the
+  adapter has folded. An element or a slice of a variable is spliced into its register;
+  an index known only at run time is checked against the bounds, and one outside them
+  ends the run with a failure, as VHDL's index check does.
 - `report` and a failed `assert` are one system task taking the severity as an
   argument: note, warning and error are reported and the run goes on, and failure ends
   it with a failing status, as GHDL's default does. `wait;` waits on an empty event list,
