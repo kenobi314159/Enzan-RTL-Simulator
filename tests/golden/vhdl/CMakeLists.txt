@@ -76,3 +76,9 @@ enzan_add_vhdl_golden_test(generate)
 
 # Report messages built from strings a design computes.
 enzan_add_vhdl_golden_test(messages)
+
+# Loops unrolled because a slice in them moves with their parameter.
+enzan_add_vhdl_golden_test(unrolled)
+
+# numeric_std's shifts by run-time amounts, which assign slices of run-time lengths.
+enzan_add_vhdl_golden_test(shifts)

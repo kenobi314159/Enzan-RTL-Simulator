@@ -53,10 +53,11 @@ generate statements and blocks; constant functions; processes with variables, `i
 `exit`, `next`, `wait` (but not one with both a timeout and a sensitivity or condition), signal
 assignments with inertial and transport delay (to an element or a slice with no delay), `assert`,
 `report` with messages built from any strings and characters and the `'image` of integers and times,
-`std.env.finish` and `stop`; aggregates, strings, elements and slices, concatenation, the predefined
-operators on scalars and arrays, `'event` and `'last_value`; functions and procedures of packages
-and architectures, std_logic_1164's and numeric_std's among them. Anything else is refused with
-ENZ2005 naming it, never left out.
+`std.env.finish` and `stop`; aggregates, strings, elements and slices, with loops unrolled for
+slices that move with their parameter and variable slices of run-time lengths, concatenation, the
+predefined operators on scalars and arrays, `'event` and `'last_value`; functions and procedures of
+packages and architectures, std_logic_1164's and numeric_std's among them. Anything else is refused
+with ENZ2005 naming it, never left out.
 
 ## Rules
 

@@ -255,6 +255,31 @@ private:
     bool forLoop(tree_t statement);
     bool loopJump(tree_t statement, bool isExit);
     bool waitStatement(tree_t statement);
+
+    /// Where a slice whose bounds are known only at run time lies in an array laid out as
+    /// `layout`: the offset of its lowest bit, and how many bits it holds, which is not positive
+    /// for a null slice. Both are 64-bit signed registers.
+    struct MovingSlice {
+        Value lowBit;
+        Value bits;
+    };
+
+    std::optional<MovingSlice> movingSlice(tree_t range, const Layout& layout);
+
+    /// A variable assignment to a slice whose bounds are known only at run time, as numeric_std's
+    /// shifts by a count have, `r(l downto n) := a(l - n downto 0)`: its value shifted into place
+    /// and merged under a mask of the slice's bits.
+    bool movingSliceAssignment(tree_t statement);
+
+    /// True when a slice in `loop` has bounds naming `parameter`, the loop's.
+    static bool slicesMoveWith(tree_t loop, tree_t parameter);
+
+    /// `statement`, a for loop over `range`, as one copy of its body for each value, with the
+    /// parameter bound to it, so that what depends on it folds.
+    bool unrolledLoop(tree_t statement, tree_t parameter, const Folder::Range& range);
+
+    /// How many iterations a loop may have to be unrolled.
+    static constexpr std::int64_t MaxUnrolledIterations = 1024;
     bool assertion(tree_t statement);
     bool report(tree_t statement);
     bool procedureCall(tree_t statement);

@@ -599,6 +599,8 @@ bool BodyTranslator::signalAssignment(tree_t statement) {
 
 bool BodyTranslator::variableAssignment(tree_t statement) {
     tree_t name = tree_target(statement);
+    if (tree_kind(name) == T_ARRAY_SLICE && !folder().range(tree_range(name, 0)))
+        return movingSliceAssignment(statement);
     const std::optional<Place> target = place(name);
     if (!target) return false;
     if (target->empty) return true;
@@ -784,6 +786,13 @@ bool BodyTranslator::forLoop(tree_t statement) {
     // The bounds are evaluated once, before the first iteration (IEEE 1076 section 10.10). An
     // attribute's range, `v'range`, has bounds the adapter has folded.
     tree_t range = tree_range(statement, 0);
+
+    // A slice whose bounds move with the parameter, `d(4*i+3 downto 4*i)`, has a length only each
+    // iteration's value shows, so a loop with one is unrolled, each iteration with its value.
+    if (const std::optional<Folder::Range> folded = folder().range(range);
+        folded && folded->length() <= MaxUnrolledIterations && slicesMoveWith(statement, parameter))
+        return unrolledLoop(statement, parameter, *folded);
+
     bool ascending = tree_subkind(range) == RANGE_TO;
     std::optional<Value> left;
     std::optional<Value> right;
@@ -843,6 +852,177 @@ bool BodyTranslator::forLoop(tree_t statement) {
     jump(body);
 
     selectBlock(exit);
+    return true;
+}
+
+bool BodyTranslator::slicesMoveWith(tree_t loop, tree_t parameter) {
+    std::vector<tree_t> slices;
+    tree_visit_only(
+        loop,
+        [](tree_t slice, void* context) {
+            static_cast<std::vector<tree_t>*>(context)->push_back(slice);
+        },
+        &slices, T_ARRAY_SLICE);
+
+    struct Search {
+        tree_t parameter;
+        bool found;
+    };
+
+    Search search{.parameter = parameter, .found = false};
+    for (tree_t slice : slices) {
+        tree_visit_only(
+            tree_range(slice, 0),
+            [](tree_t reference, void* context) {
+                auto* searching = static_cast<Search*>(context);
+                if (tree_has_ref(reference) && tree_ref(reference) == searching->parameter)
+                    searching->found = true;
+            },
+            &search, T_REF);
+        if (search.found) return true;
+    }
+    return false;
+}
+
+bool BodyTranslator::unrolledLoop(tree_t statement, tree_t parameter, const Folder::Range& range) {
+    const std::uint32_t exit = newBlock("for-exit");
+    ident_t label = tree_has_ident(statement) ? tree_ident(statement) : nullptr;
+    for (std::int64_t offset = 0; offset < range.length(); ++offset) {
+        const std::int64_t value = range.ascending ? range.left + offset : range.left - offset;
+        const std::uint32_t next = newBlock("for-next");
+        Folder bound = folder();
+        bound.bind(parameter, value);
+        folders.push_back(std::move(bound));
+        loops.push_back(Loop{.label = label, .exitBlock = exit, .nextBlock = next});
+        const bool translated = statements(statement);
+        loops.pop_back();
+        folders.pop_back();
+        if (!translated) return false;
+        jump(next);
+        selectBlock(next);
+    }
+    jump(exit);
+    selectBlock(exit);
+    return true;
+}
+
+std::optional<BodyTranslator::MovingSlice> BodyTranslator::movingSlice(tree_t range,
+                                                                       const Layout& layout) {
+    const auto kind = static_cast<range_kind_t>(tree_subkind(range));
+    if ((kind != RANGE_TO && kind != RANGE_DOWNTO)
+        || (kind == RANGE_TO) != layout.index.ascending) {
+        fail(range, "a slice whose bounds are not static and run the other way than its array's");
+        return std::nullopt;
+    }
+    const eir::Type type = eir::Type::bits(64, true, false);
+    const std::optional<Value> left = expression(tree_left(range));
+    const std::optional<Value> right = expression(tree_right(range));
+    if (!left || !right) return std::nullopt;
+    const Value first = resize(*left, 64);
+    const Value last = resize(*right, 64);
+    const auto binary = [&](eir::Opcode opcode, const Value& a, const Value& b) {
+        const Value result{.reg = newRegister(type), .type = type, .vhdlType = nullptr};
+        emit(eir::Instruction::make(opcode, eir::Operand::reg(result.reg), eir::Operand::reg(a.reg),
+                                    eir::Operand::reg(b.reg)));
+        return result;
+    };
+
+    // Whichever way the array runs, the slice's right element is in its lowest bits (section
+    // 3.6), at the offset that element would have in the whole.
+    const Value right0 = constant(layout.index.right, type, nullptr);
+    const Value elementBits = constant(layout.elementBits, type, nullptr);
+    const Value fromRight = layout.index.ascending ? binary(eir::Opcode::Subtract, right0, last)
+                                                   : binary(eir::Opcode::Subtract, last, right0);
+    const Value span = layout.index.ascending ? binary(eir::Opcode::Subtract, last, first)
+                                              : binary(eir::Opcode::Subtract, first, last);
+    const Value length = binary(eir::Opcode::Add, span, constant(1, type, nullptr));
+    return MovingSlice{.lowBit = binary(eir::Opcode::Multiply, fromRight, elementBits),
+                       .bits = binary(eir::Opcode::Multiply, length, elementBits)};
+}
+
+bool BodyTranslator::movingSliceAssignment(tree_t statement) {
+    tree_t name = tree_target(statement);
+    const std::optional<Place> outer = place(tree_value(name));
+    if (!outer) return false;
+    if (!outer->isVariable || !outer->whole || !outer->layout.isArray()
+        || !outer->layout.inner.empty())
+        return fail(name, "a slice whose bounds are not static of anything but a whole variable "
+                          "of one dimension");
+    const Layout& layout = outer->layout;
+    const std::uint32_t width = layout.storage.bitWidth();
+    const std::optional<MovingSlice> to = movingSlice(tree_range(name, 0), layout);
+    if (!to) return false;
+
+    // The value's elements from bit 0 up, the right one lowest: a slice of an array that moves
+    // too, an `others` of one element, or a value of a length of its own.
+    tree_t valueTree = tree_value(statement);
+    std::optional<Value> aligned;
+    if (tree_kind(valueTree) == T_ARRAY_SLICE && !folder().range(tree_range(valueTree, 0))) {
+        const std::optional<Value> whole = expression(tree_value(valueTree));
+        if (!whole) return false;
+        if (!whole->layout.isArray() || !whole->layout.inner.empty())
+            return fail(valueTree, "a slice whose bounds are not static of this");
+        const std::optional<MovingSlice> from =
+            movingSlice(tree_range(valueTree, 0), whole->layout);
+        if (!from) return false;
+        const std::uint32_t shifted = newRegister(whole->type);
+        emit(eir::Instruction::make(eir::Opcode::ShiftRightLogical, eir::Operand::reg(shifted),
+                                    eir::Operand::reg(whole->reg),
+                                    eir::Operand::reg(from->lowBit.reg)));
+        aligned = resize(Value{.reg = shifted, .type = whole->type, .vhdlType = nullptr}, width);
+    } else if (tree_kind(valueTree) == T_AGGREGATE && tree_assocs(valueTree) == 1
+               && tree_subkind(tree_assoc(valueTree, 0)) == A_OTHERS) {
+        const std::optional<Layout> element = elementLayout(layout, folder());
+        if (!element) return fail(valueTree, "an aggregate of these elements");
+        const std::optional<Value> one =
+            expression(tree_value(tree_assoc(valueTree, 0)), &*element);
+        if (!one) return false;
+        aligned = constantArray(eir::BitVector::filled(width, eir::Logic::Zero), layout, nullptr);
+        for (std::uint32_t at = 0; at + layout.elementBits <= width; at += layout.elementBits) {
+            emit(eir::Instruction::make(
+                eir::Opcode::SplicePart, eir::Operand::reg(aligned->reg),
+                eir::Operand::reg(resize(*one, layout.elementBits).reg),
+                eir::Operand::reg(constant(at, eir::Type::bits(32, false, false), nullptr).reg)));
+        }
+    } else {
+        const std::optional<Value> value = expression(valueTree);
+        if (!value) return false;
+        aligned = resize(*value, width);
+    }
+
+    // `target = (target & ~mask) | (value << low & mask)`, the mask `bits` ones from `low` up; a
+    // null slice changes nothing.
+    const std::uint32_t assign = newBlock("slice-assign");
+    const std::uint32_t join = newBlock("slice-join");
+    const std::uint32_t any = compare(
+        eir::Opcode::LessThan, constant(0, eir::Type::bits(64, true, false), nullptr), to->bits);
+    emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(any),
+                                eir::Operand::block(assign), eir::Operand::block(join)));
+    selectBlock(assign);
+    const eir::Type wide = layout.storage;
+    const auto op = [&](eir::Opcode opcode, std::uint32_t a, std::uint32_t b) {
+        const std::uint32_t result = newRegister(wide);
+        emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(a),
+                                    eir::Operand::reg(b)));
+        return result;
+    };
+    const auto invert = [&](std::uint32_t a) {
+        const std::uint32_t result = newRegister(wide);
+        emit(eir::Instruction::make(eir::Opcode::Not, eir::Operand::reg(result),
+                                    eir::Operand::reg(a)));
+        return result;
+    };
+    const Value ones =
+        constantArray(eir::BitVector::filled(width, eir::Logic::One), layout, nullptr);
+    const std::uint32_t lowOnes = invert(op(eir::Opcode::ShiftLeft, ones.reg, to->bits.reg));
+    const std::uint32_t mask = op(eir::Opcode::ShiftLeft, lowOnes, to->lowBit.reg);
+    const std::uint32_t placed = op(eir::Opcode::ShiftLeft, aligned->reg, to->lowBit.reg);
+    const std::uint32_t kept = op(eir::Opcode::And, outer->variable.reg, invert(mask));
+    const std::uint32_t merged = op(eir::Opcode::Or, kept, op(eir::Opcode::And, placed, mask));
+    emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(outer->variable.reg),
+                                eir::Operand::reg(merged)));
+    jump(join);
+    selectBlock(join);
     return true;
 }
 
