@@ -58,7 +58,9 @@ enum class SysTaskKind : std::uint8_t {
     /// handle into the heap of DESIGN_GUIDE.md section 4.3.
     LineDeallocate,
     /// VHDL's `write` to a file of a type other than text: writes the second argument's bits to
-    /// the file the first names, in whole bytes, the lowest first.
+    /// the file the first names, in whole bytes, the lowest first. A third argument, for a file
+    /// of an unconstrained array type, is the value's count of elements, written before it in
+    /// four bytes, the lowest first, for a read to learn its length from.
     FileWriteValue,
 
     // System functions, run by SysFunction, which have a result.
@@ -102,7 +104,11 @@ enum class SysTaskKind : std::uint8_t {
     /// justified and in a field as for LineWrite. The result is the first line's handle.
     LineAppend,
     /// VHDL's `read` from a file of a type other than text: the next value of the file the
-    /// argument names, as FileWriteValue wrote it, as wide as the result.
+    /// argument names, as FileWriteValue wrote it, as wide as the result. With a second argument,
+    /// the width of an element of an unconstrained array, and a third, the array read into, the
+    /// value is one written with its count of elements: the result is how many of them were read
+    /// in its top 32 bits, and below them the array with its leftmost elements replaced by the
+    /// value's leftmost, as many as fit.
     FileReadValue,
 };
 

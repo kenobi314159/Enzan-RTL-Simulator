@@ -286,21 +286,44 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
         if (!file || !written) return false;
         native.kind = eir::SysTaskKind::FileWriteValue;
         native.arguments = {argument(*file), argument(*written)};
+        // An unconstrained array's values differ in length, so each goes with its count.
+        if (type_is_unconstrained(type_designated(tree_type((*actuals)[0])))) {
+            if (!written->layout.isArray())
+                return fail(call, "a write of this value to a file of arrays");
+            native.arguments.push_back(argument(constant(
+                written->layout.index.length(), eir::Type::bits(32, false, false), nullptr)));
+        }
         emit(eir::Instruction::make(eir::Opcode::SysTask, {},
                                     eir::Operand::sysCall(addSysCall(std::move(native)))));
         return true;
     }
     case S_FILE_READ: {
-        if (actuals->size() != 2)
-            return fail(call, "a read of an array whose length the file gives");
         const std::optional<Value> file = fileDescriptor((*actuals)[0]);
         const std::optional<Place> target = place((*actuals)[1]);
         if (!file || !target) return false;
         native.kind = eir::SysTaskKind::FileReadValue;
         native.arguments = {argument(*file)};
-        const Value read = systemFunction(
-            std::move(native), eir::Type::bits(target->layout.storage.bitWidth(), false, false));
-        return assignWhole((*actuals)[1], read);
+        const std::uint32_t width = target->layout.storage.bitWidth();
+        if (actuals->size() == 2) {
+            const Value read =
+                systemFunction(std::move(native), eir::Type::bits(width, false, false));
+            return assignWhole((*actuals)[1], read);
+        }
+
+        // `read(f, value, length)` of an unconstrained array: the value's leftmost elements, as
+        // many as fit, over the array's own and, above them, how many there are (IEEE 1076
+        // section 5.5.2), which is what GHDL gives.
+        if (!target->layout.isArray() || !target->layout.inner.empty())
+            return fail(call, "a read of this value from a file of arrays");
+        const std::optional<Value> before = value(1);
+        if (!before) return false;
+        native.arguments.push_back(argument(
+            constant(target->layout.elementBits, eir::Type::bits(32, false, false), nullptr)));
+        native.arguments.push_back(argument(*before));
+        const Value read =
+            systemFunction(std::move(native), eir::Type::bits(width + 32, false, false));
+        if (!assignWhole((*actuals)[1], bitsOf(read, 0, width))) return false;
+        return assignWhole((*actuals)[2], bitsOf(read, width, 32));
     }
 
     case S_FILE_CLOSE: {

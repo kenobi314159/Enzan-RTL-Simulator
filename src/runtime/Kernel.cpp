@@ -13,6 +13,7 @@
 #include "runtime/ReadMem.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -1502,7 +1503,7 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
         return;
 
     case eir::SysTaskKind::FileWriteValue: {
-        if (arguments.size() != 2) return;
+        if (arguments.size() < 2) return;
         const auto file = static_cast<std::uint32_t>(arguments[0].value.toUInt64());
         OpenFile* open = fileFor(file);
         if (open == nullptr || !open->stream) {
@@ -1510,7 +1511,15 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
             return;
         }
         // Whole bytes of the value's bits, the lowest first: Enzan's own format for a file of a
-        // type, which a run reads back as it wrote it.
+        // type, which a run reads back as it wrote it. An unconstrained array's count of elements
+        // comes first.
+        if (arguments.size() == 3) {
+            const std::uint64_t count = arguments[2].value.toUInt64();
+            std::array<char, 4> header{};
+            for (std::size_t index = 0; index < header.size(); ++index)
+                header.at(index) = static_cast<char>(count >> (8 * index) & 0xFFU);
+            open->stream->write(header.data(), header.size());
+        }
         const eir::ConstBitRef value = arguments[1].value;
         std::string bytes((value.width() + 7) / 8, '\0');
         for (std::uint32_t bit = 0; bit < value.width(); ++bit) {
@@ -1665,11 +1674,41 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
                                static_cast<std::uint32_t>(argument(0)));
             return;
         }
-        std::string bytes((result.width() + 7) / 8, '\0');
+        // How many bits the value has, and from which bit of the result its lowest goes: all of
+        // the result, or for an unconstrained array the elements the header counts, the leftmost
+        // as many as fit, placed from the left of the array read into, below how many they are.
+        std::uint64_t valueBits = result.width();
+        std::int64_t shift = 0;
+        std::uint32_t valueTop = result.width();
+        if (descriptor.arguments.size() == 3) {
+            std::array<char, 4> header{};
+            file->input->read(header.data(), header.size());
+            std::uint64_t count = 0;
+            for (std::size_t index = 0; index < header.size(); ++index)
+                count |= std::uint64_t{static_cast<unsigned char>(header.at(index))} << (8 * index);
+            const std::uint64_t elementBits = std::max<std::uint64_t>(argument(1), 1);
+            valueTop = result.width() - 32;
+            const codegen::SysTaskDescriptor::Argument& into = descriptor.arguments[2];
+            bitops::assignPartAt(
+                result,
+                into.isConstant ? body.constant(into.location)
+                                : frameAt(activation.frameOffset + into.location, into.bitWidth),
+                0);
+            valueBits = count * elementBits;
+            shift = static_cast<std::int64_t>(valueTop) - static_cast<std::int64_t>(valueBits);
+            const std::uint64_t read = std::min<std::uint64_t>(count, valueTop / elementBits);
+            for (std::uint32_t bit = 0; bit < 32; ++bit) {
+                result.set(valueTop + bit,
+                           (read >> bit & 1U) != 0 ? eir::Logic::One : eir::Logic::Zero);
+            }
+        }
+        std::string bytes((valueBits + 7) / 8, '\0');
         file->input->read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        for (std::uint32_t bit = 0; bit < result.width(); ++bit) {
-            if ((static_cast<unsigned char>(bytes[bit / 8]) >> (bit % 8) & 1U) != 0)
-                result.set(bit, eir::Logic::One);
+        for (std::uint64_t bit = 0; bit < valueBits; ++bit) {
+            const std::int64_t to = static_cast<std::int64_t>(bit) + shift;
+            if (to < 0 || std::cmp_greater_equal(to, valueTop)) continue;
+            const bool one = (static_cast<unsigned char>(bytes[bit / 8]) >> (bit % 8) & 1U) != 0;
+            result.set(static_cast<std::uint32_t>(to), one ? eir::Logic::One : eir::Logic::Zero);
         }
         return;
     }

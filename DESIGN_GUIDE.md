@@ -682,7 +682,10 @@ of run-time lengths, which registers of fixed width cannot hold, so it is not tr
 runs over its heap and its files, as NVC's runtime runs its foreign subprograms, and the
 adapter calls them for textio's subprograms and VHDL's predefined file operations. A file
 of a type other than text holds its values' bits in whole bytes, the lowest first: Enzan's
-own format, as each simulator has its own, which a run reads back as it wrote it. A
+own format, as each simulator has its own, which a run reads back as it wrote it. A value
+of an unconstrained array type goes with its count of elements, so that `read(f, v, n)`
+gives `v` as many of its leftmost elements as fit, leaves the rest of `v` as it was, and
+gives `n` how many it read, as GHDL does. A
 string whose length only the run shows, which a function builds from images and writes,
 is built in a line of its own: the function is inlined with its `return`s appending
 their pieces to that line, and the line is appended to the one written.
