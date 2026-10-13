@@ -120,3 +120,6 @@ enzan_add_vhdl_golden_test(files)
 
 # Waveforms to parts of signals, delayed and inertial.
 enzan_add_vhdl_golden_test(parts)
+
+# A wait of no time resumes in the next delta cycle, after the signals update.
+enzan_add_vhdl_golden_test(delta)

@@ -205,6 +205,7 @@ void Kernel::initialize() {
     delayedWrites.clear();
     pendingInertial.clear();
     deltaTransactions.clear();
+    nextCycleResumes.clear();
     for (std::vector<Transaction>& waveform : projectedWaveforms) waveform.clear();
 
     // Before its first change, a signal's 'last_value is its value.
@@ -274,7 +275,7 @@ RunStatus Kernel::run(SimTime until) {
         }
 
         if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates()
-            || !deltaTransactions.empty() || pliWorkDue()) {
+            || !deltaTransactions.empty() || !nextCycleResumes.empty() || pliWorkDue()) {
             if (!runTimeSlot()) {
                 lastStatus = errorRequested ? RunStatus::Error : RunStatus::Finished;
                 runFinalProcesses();
@@ -321,13 +322,17 @@ bool Kernel::runTimeSlot() {
         }
 
         // VHDL's transactions for the next delta cycle are applied with SystemVerilog's NBA
-        // updates: either way, after every process of this iteration has run (section 3.5).
-        if (scheduler.hasNonBlockingUpdates() || !deltaTransactions.empty()) {
+        // updates: either way, after every process of this iteration has run (section 3.5). The
+        // processes waiting no time resume after them, in the cycle they begin.
+        if (scheduler.hasNonBlockingUpdates() || !deltaTransactions.empty()
+            || !nextCycleResumes.empty()) {
             ++cycle;
             applyNonBlockingUpdates();
             if (halted()) return false;
             applyDeltaTransactions();
             if (halted()) return false;
+            for (const std::uint32_t processIndex : std::exchange(nextCycleResumes, {}))
+                scheduler.schedule(Region::Active, processIndex);
             if (!countDelta()) return false;
             continue;
         }
@@ -855,9 +860,14 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
     state.resumePc = resumePc;
 
     if (delay == 0) {
+        state.queued = true;
+        // VHDL's resumes in the next delta cycle, after its transactions are applied.
+        if (designImage->compiledDesign().body(state.bodyIndex).resumesNextCycle) {
+            nextCycleResumes.push_back(processIndex);
+            return;
+        }
         // `#0` resumes in this timestamp but after everything currently Active, which is
         // exactly what the Inactive region is for (section 3.3).
-        state.queued = true;
         scheduler.schedule(Region::Inactive, processIndex);
         return;
     }

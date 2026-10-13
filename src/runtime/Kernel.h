@@ -711,6 +711,10 @@ private:
 
     std::vector<DeltaTransaction> deltaTransactions;
 
+    /// The VHDL processes whose wait of no time resumes them in the next delta cycle, run with
+    /// those its transactions wake (codegen::CompiledBody::resumesNextCycle).
+    std::vector<std::uint32_t> nextCycleResumes;
+
     /// Deletes `transaction`, a later one, from `delayedWrites`, taking its time step with it
     /// when nothing else is due then: a deleted transaction leaves no step behind.
     void unscheduleTransaction(const Transaction& transaction);

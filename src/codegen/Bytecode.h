@@ -187,6 +187,12 @@ struct CompiledBody {
     // --- Metadata the scheduler needs, copied from EIR; a subprogram's is unused --
 
     eir::ProcessKind kind = eir::ProcessKind::Always;
+
+    /// True for a VHDL process, eir::Process::drivesSignals: its wait of no time resumes in the
+    /// next simulation cycle, once the signals have taken what that cycle's transactions assign
+    /// (IEEE 1076 section 14.7.5.3), where `#0` resumes in the Inactive region before them.
+    bool resumesNextCycle = false;
+
     std::string name;
     SourceLocation location;
     std::vector<eir::SensitivityEntry> sensitivity;

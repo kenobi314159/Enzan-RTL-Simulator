@@ -341,6 +341,11 @@ commercial tools on real designs, this section is what gets updated.
 - VHDL has no non-blocking-assignment region. A VHDL delta cycle therefore
   corresponds to one full Active/Inactive/NBA iteration of the SystemVerilog
   time slot.
+- A VHDL process's `wait for 0 ns` is not `#0`: it resumes in the next delta
+  cycle, after that cycle's signal update, where `#0` resumes in Inactive
+  before the NBA updates. The kernel holds such a process until the delta
+  cycle's transactions are applied and then schedules it in Active with the
+  processes those updates wake.
 - A port connection crossing a language boundary is modelled as a zero-delay
   continuous assignment and **consumes one delta cycle**. This MUST be
   documented in the user manual, because it is observable and will surprise
