@@ -10,7 +10,8 @@ every golden case, and GHDL is M6's reference for VHDL. Two things are compared:
   is not.
 * **What every signal GHDL records did**, as a waveform: the value it settled on at each time step.
   A VCD records settled values, so two correct simulators agree on it whatever order they ran their
-  processes in within a step (section 14.3).
+  processes in within a step (section 14.3). A generate block is a scope of GHDL's, `g(0)`, and part
+  of a name of Enzan's, `g(0).u`, so both are paths `g(0)/u`.
 
 GHDL writes `std_logic` as its nine values and Enzan as the four-state bits they stand for, L as 0,
 H as 1, and U, W and - unknown (section 3.6), so GHDL's are mapped the same way before comparing.
@@ -75,7 +76,11 @@ def read_vcd(path: Path) -> dict[str, list[tuple[int, str]]]:
             width = int(tokens[position + 2])
             identifier = tokens[position + 3]
             name = re.sub(r"\[.*\]$", "", tokens[position + 4]).lower()
-            names.setdefault(identifier, []).append("/".join([*scopes, name]))
+            # Enzan flattens a generate block into the design unit it is in, and names what it
+            # declares `g(0).u`; GHDL nests a scope for it. No VHDL name has a dot, so a dot is
+            # a scope either way.
+            path = "/".join([*scopes, name]).replace(".", "/")
+            names.setdefault(identifier, []).append(path)
             widths[identifier] = width
             position = tokens.index("$end", position) + 1
         elif token in ("$date", "$version", "$timescale", "$comment"):

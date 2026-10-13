@@ -926,7 +926,8 @@ What a VHDL unit becomes in EIR:
   element or a slice is `DrivePart`, at the offset of its bits.
 - An array is its elements end to end, the left element highest (3.6), with bounds the
   adapter has folded; a record is its fields end to end, the first highest. A field is
-  at an offset its type fixes, so a field of a signal is a part of it like a slice. An element or a slice of a variable is spliced into its register;
+  at an offset its type fixes, so a field of a signal is a part of it like a slice. An
+  element or a slice of a variable is spliced into its register;
   an index known only at run time is checked against the bounds, and one outside them
   ends the run with a failure, as VHDL's index check does.
 - A function is a callable subprogram (4.1), translated once for each shape it is called
@@ -938,6 +939,16 @@ What a VHDL unit becomes in EIR:
   instance of. A procedure, a subprogram taking a signal, and one a process declares are
   inlined into their caller, since a body of its own could not wait, assign a signal, read
   a signal's attributes or reach the process's variables.
+- A generate statement is flattened into the architecture it is in, as SystemVerilog's
+  are (5.1): the alternative whose condition folds true, or each iteration of a loop with
+  its parameter bound, and what each declares is named inside it, `g(0).u`. A block is the
+  same, named by its label.
+- A port associated with a whole signal is that signal's storage. One associated with
+  part of a signal, with an expression, or in parts is connected through an object of
+  the instantiating definition, `u$port`, which a process for each association keeps
+  equal to its actual: into it for an input, out of it for an output. That costs the
+  delta a collapsed port does not, so a clock through such an association lags its data
+  by one; a clock is rarely one.
 - A null array, a generic left at `""` most often, has no bits to hold, so it is its bounds:
   a comparison or an attribute of it folds, and a call given one is inlined, where its
   uses can fold too. A testbench that reads a file only when a name is given needs no

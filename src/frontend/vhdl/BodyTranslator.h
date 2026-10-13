@@ -135,6 +135,20 @@ public:
     /// The translated process, or nothing having reported why.
     std::optional<eir::Process> translate();
 
+    /// A process that keeps one end of a port association equal to the other, for a port
+    /// associated in parts or with something other than a whole signal: `target <= value`, then a
+    /// wait on whatever that read, over and over. A null end is the whole of the port, which is
+    /// `portObject` here, laid out as `portLayout`; a formal naming part of the port names part of
+    /// that object.
+    ///
+    /// When `seed` holds a value, the port object's initial one, the bits the association gives the
+    /// target at the start are spliced into it where they can be known statically: the actual's
+    /// initial value or its static value.
+    std::optional<eir::Process> translateAssociation(tree_t target, tree_t value,
+                                                     std::uint32_t portObject,
+                                                     const Layout& portLayout,
+                                                     std::optional<eir::BitVector>* seed);
+
     /// The translated subprogram and its result's layout, or nothing having reported why.
     struct Translated {
         eir::Subprogram subprogram;

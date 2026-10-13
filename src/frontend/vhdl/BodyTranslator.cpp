@@ -2,6 +2,8 @@
 
 #include "frontend/vhdl/BodyTranslator.h"
 
+#include "eir/BitOps.h"
+
 #include "frontend/vhdl/Types.h"
 
 #include <algorithm>
@@ -257,6 +259,92 @@ std::optional<eir::Process> BodyTranslator::translate() {
     selectBlock(loop);
     if (!statements(source)) return std::nullopt;
     jump(loop);
+
+    body().readSet.assign(reads.begin(), reads.end());
+    body().writeSet = writes;
+    eir::normaliseWriteSet(body().writeSet);
+    return std::move(process);
+}
+
+std::optional<eir::Process>
+BodyTranslator::translateAssociation(tree_t target, tree_t value, std::uint32_t portObject,
+                                     const Layout& portLayout,
+                                     std::optional<eir::BitVector>* seed) {
+    const Place port{.objectIndex = portObject, .layout = portLayout};
+    const std::uint32_t entry = newBlock("entry");
+    selectBlock(entry);
+    statementLocation = owner.locate(source);
+    const std::uint32_t loop = newBlock("process");
+    jump(loop);
+    selectBlock(loop);
+
+    const std::optional<Place> to = target == nullptr ? std::optional(port) : place(target);
+    if (!to) return std::nullopt;
+    if (to->isVariable || to->offset || to->empty) {
+        fail(target, "associating a port with this");
+        return std::nullopt;
+    }
+    const std::uint32_t width = to->layout.storage.bitWidth();
+
+    // What the value reads is what the process waits on: the whole of each object, which wakes it
+    // for a change elsewhere in one too, and driving the same value again changes nothing.
+    std::optional<Value> given;
+    std::optional<eir::BitVector> start;
+    if (value == nullptr) {
+        given = read(port, nullptr);
+        noteRead(portObject);
+    } else {
+        start = constantBits(value, to->layout, folder());
+        if (designatesStorage(value)) {
+            const std::optional<Place> from = place(value);
+            if (!from || from->isVariable || from->empty) {
+                fail(value, "associating a port with this");
+                return std::nullopt;
+            }
+            given = read(*from, nullptr);
+            const std::optional<eir::BitVector>& initial =
+                owner.definition().objects.at(from->objectIndex).initialValue;
+            if (!from->offset && initial) {
+                eir::BitVector bits(from->layout.storage.bitWidth());
+                eir::bitops::partSelectAt(bits.mutableRef(), initial->ref(),
+                                          static_cast<std::uint32_t>(from->staticOffset));
+                start = std::move(bits);
+            }
+        } else {
+            given = expression(value, &to->layout);
+        }
+    }
+    if (!given) return std::nullopt;
+    if (given->type.bitWidth() != width) {
+        fail(value != nullptr ? value : target, "a port association of another length than its "
+                                                "port");
+        return std::nullopt;
+    }
+    if (seed != nullptr && seed->has_value() && start && start->width() == width) {
+        eir::bitops::assignPartAt((*seed)->mutableRef(), start->ref(),
+                                  static_cast<std::uint32_t>(to->staticOffset));
+    }
+
+    if (to->whole) {
+        emit(eir::Instruction::make(
+            eir::Opcode::Drive, {}, eir::Operand::object(to->objectIndex),
+            eir::Operand::reg(given->reg),
+            eir::Operand::reg(constant(0, eir::Type::bits(64, true, false), nullptr).reg)));
+    } else {
+        emit(eir::Instruction::make(
+            eir::Opcode::DrivePart, {}, eir::Operand::object(to->objectIndex),
+            eir::Operand::reg(given->reg), eir::Operand::reg(offsetRegister(*to))));
+    }
+    noteWrite(*to);
+
+    std::vector<eir::SensitivityEntry> entries;
+    entries.reserve(reads.size());
+    for (const std::uint32_t object : reads)
+        entries.push_back(eir::SensitivityEntry{.objectIndex = object});
+    const auto list = static_cast<std::uint32_t>(process.eventLists.size());
+    process.eventLists.push_back(std::move(entries));
+    emit(eir::Instruction::make(eir::Opcode::WaitEvents, {}, eir::Operand::immediate(list),
+                                eir::Operand::block(loop)));
 
     body().readSet.assign(reads.begin(), reads.end());
     body().writeSet = writes;

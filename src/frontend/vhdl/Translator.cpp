@@ -119,6 +119,24 @@ private:
     void statements(tree_t container);
     void instance(tree_t statement);
 
+    /// Connects `port` of `created` through an object of this definition standing for it, kept
+    /// equal to its actuals by a process for each of `associations`: for a port associated in
+    /// parts, or with part of a signal or an expression. The extra process costs a delta that a
+    /// port collapsed onto its actual does not (DESIGN_GUIDE.md section 5.2).
+    void connectThrough(eir::Instance& created, unsigned portNumber, tree_t port,
+                        const std::vector<tree_t>& associations, const Folder& childGenerics);
+
+    /// The statements of a generate statement's chosen alternative, or of each of its loop's
+    /// iterations, or of a block, flattened into this definition.
+    void ifGenerate(tree_t statement);
+    void forGenerate(tree_t statement);
+    void block(tree_t statement);
+
+    /// Translates the declarations and statements of `container` with what they declare named
+    /// inside `name`, as `name.` begins each, and forgets them after: an iteration of a loop
+    /// declares them again.
+    void nested(tree_t container, const std::string& name);
+
     /// The index of the enumeration `type` is in this definition's table, adding it the first
     /// time, or `NoEnum`.
     std::uint32_t enumFor(type_t type);
@@ -129,6 +147,10 @@ private:
     eir::ModuleDefinition result;
     std::map<tree_t, std::uint32_t> objects;
     std::map<type_t, std::uint32_t> enums;
+
+    /// What a name declared where translation is begins with: the generate blocks and blocks it
+    /// is inside, each followed by a dot, as SystemVerilog's are (DESIGN_GUIDE.md section 5.1).
+    std::string prefix;
 };
 
 /// The definition a package's subprograms are translated into: one with no objects, which a call
@@ -686,7 +708,7 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     }
 
     eir::Object object;
-    object.name = simpleName(tree_ident(declaration));
+    object.name = prefix + simpleName(tree_ident(declaration));
     object.type = layout->storage;
     object.kind = eir::ObjectKind::Variable;
     object.location = locate(declaration);
@@ -752,7 +774,9 @@ void ArchitectureTranslator::declarations(tree_t container) {
         switch (tree_kind(declaration)) {
         case T_SIGNAL_DECL: static_cast<void>(addObject(declaration)); break;
 
-        // Folded where they are used, so they need nothing of their own.
+        // Folded where they are used, so they need nothing of their own; a generate loop's
+        // parameter among them, bound to each iteration's value.
+        case T_GENERIC_DECL:
         case T_CONST_DECL:
         case T_TYPE_DECL:
         case T_SUBTYPE_DECL:
@@ -779,13 +803,16 @@ void ArchitectureTranslator::statements(tree_t container) {
         tree_t statement = tree_stmt(container, index);
         switch (tree_kind(statement)) {
         case T_PROCESS: {
-            BodyTranslator translator(*this, statement, simpleName(tree_ident(statement)));
+            BodyTranslator translator(*this, statement, prefix + simpleName(tree_ident(statement)));
             if (std::optional<eir::Process> translated = translator.translate())
                 result.processes.push_back(std::move(*translated));
             break;
         }
 
         case T_INSTANCE: instance(statement); break;
+        case T_IF_GENERATE: ifGenerate(statement); break;
+        case T_FOR_GENERATE: forGenerate(statement); break;
+        case T_BLOCK: block(statement); break;
 
         default:
             unsupported(statement, std::format("the concurrent statement {}",
@@ -793,6 +820,69 @@ void ArchitectureTranslator::statements(tree_t container) {
             break;
         }
     }
+}
+
+void ArchitectureTranslator::nested(tree_t container, const std::string& name) {
+    const std::string outer = prefix;
+    prefix += name + '.';
+    declarations(container);
+    statements(container);
+    for (unsigned index = 0; index < tree_decls(container); ++index)
+        objects.erase(tree_decl(container, index));
+    prefix = outer;
+}
+
+void ArchitectureTranslator::ifGenerate(tree_t statement) {
+    // The first alternative whose condition holds is the one elaborated, and the others are not
+    // (IEEE 1076 section 14.5.3); an `else` has no condition and always holds.
+    for (unsigned index = 0; index < tree_conds(statement); ++index) {
+        tree_t alternative = tree_cond(statement, index);
+        if (tree_has_value(alternative)) {
+            const std::optional<std::int64_t> holds = folding.integer(tree_value(alternative));
+            if (!holds) {
+                unsupported(tree_value(alternative), "a generate condition that is not static");
+                return;
+            }
+            if (*holds == 0) continue;
+        }
+        nested(alternative, simpleName(tree_ident(statement)));
+        return;
+    }
+}
+
+void ArchitectureTranslator::forGenerate(tree_t statement) {
+    tree_t parameter = nullptr;
+    for (unsigned index = 0; index < tree_decls(statement) && parameter == nullptr; ++index) {
+        if (tree_kind(tree_decl(statement, index)) == T_GENERIC_DECL)
+            parameter = tree_decl(statement, index);
+    }
+    const std::optional<Folder::Range> folded = folding.range(tree_range(statement, 0));
+    if (parameter == nullptr || !folded) {
+        unsupported(statement, "a generate loop whose range is not static");
+        return;
+    }
+    const Folder::Range range = *folded;
+
+    // Each iteration is a block of its own, named with its parameter's value as VHDL's path
+    // names have it: `g(0)`, or `g(red)` for one over an enumeration.
+    type_t base = type_base_recur(tree_type(parameter));
+    const std::string label = simpleName(tree_ident(statement));
+    for (std::int64_t offset = 0; offset < range.length(); ++offset) {
+        const std::int64_t value = range.ascending ? range.left + offset : range.left - offset;
+        folding.bind(parameter, value);
+        std::string shown = std::to_string(value);
+        if (type_is_enum(base) && value >= 0 && std::cmp_less(value, type_enum_literals(base)))
+            shown = simpleName(tree_ident(type_enum_literal(base, static_cast<unsigned>(value))));
+        nested(statement, std::format("{}({})", label, shown));
+    }
+}
+
+void ArchitectureTranslator::block(tree_t statement) {
+    if (tree_ports(statement) != 0 || tree_generics(statement) != 0) {
+        unsupported(statement, "a block with ports or generics");
+        return;
+    }
+    nested(statement, simpleName(tree_ident(statement)));
 }
 
 void ArchitectureTranslator::instance(tree_t statement) {
@@ -819,68 +909,130 @@ void ArchitectureTranslator::instance(tree_t statement) {
 
     std::optional<Folder> generics = design.bindGenerics(entity, statement, folding);
     if (!generics) return;
+    const Folder childGenerics = *generics;
 
     eir::Instance created;
-    created.name = simpleName(tree_ident(statement));
+    created.name = prefix + simpleName(tree_ident(statement));
     created.definitionName = design.definitionFor(entity, architecture, std::move(*generics));
     created.location = locate(statement);
 
-    const unsigned count = tree_params(statement);
-    for (unsigned index = 0; index < count; ++index) {
+    // Each port's associations, in order: one, or one for each part of a port associated in
+    // parts (IEEE 1076 section 6.5.7.1).
+    std::vector<std::vector<tree_t>> byPort(tree_ports(entity));
+    for (unsigned index = 0; index < tree_params(statement); ++index) {
         tree_t association = tree_param(statement, index);
-
-        std::optional<std::uint32_t> portIndex;
+        std::optional<unsigned> portIndex;
         if (tree_subkind(association) == P_POS) {
             portIndex = tree_pos(association);
         } else {
             tree_t formal = tree_name(association);
-            if (tree_kind(formal) != T_REF || !tree_has_ref(formal)) {
-                unsupported(formal, "associating part of a port");
-                continue;
-            }
+            while (tree_kind(formal) == T_ARRAY_REF || tree_kind(formal) == T_ARRAY_SLICE
+                   || tree_kind(formal) == T_RECORD_REF)
+                formal = tree_value(formal);
             for (unsigned port = 0; port < tree_ports(entity); ++port) {
-                if (tree_port(entity, port) == tree_ref(formal)) portIndex = port;
+                if (tree_kind(formal) == T_REF && tree_has_ref(formal)
+                    && tree_port(entity, port) == tree_ref(formal))
+                    portIndex = port;
             }
         }
-        const std::uint32_t portNumber = portIndex.value_or(tree_ports(entity));
+        const unsigned portNumber = portIndex.value_or(tree_ports(entity));
         if (portNumber >= tree_ports(entity)) {
             unsupported(association, "this port association");
             continue;
         }
+        byPort[portNumber].push_back(association);
+    }
 
-        // An open port keeps its own storage and its default, so it needs no connection at all.
-        tree_t actual = tree_value(association);
-        if (tree_kind(actual) == T_OPEN) continue;
+    for (unsigned portNumber = 0; portNumber < tree_ports(entity); ++portNumber) {
+        const std::vector<tree_t>& associations = byPort[portNumber];
+        if (associations.empty()) continue;
+        tree_t port = tree_port(entity, portNumber);
+        tree_t first = associations.front();
+        const bool whole =
+            associations.size() == 1
+            && (tree_subkind(first) == P_POS || tree_kind(tree_name(first)) == T_REF);
 
-        std::uint32_t objectIndex = eir::PortConnection::Unconnected;
-        if (tree_kind(actual) == T_REF && tree_has_ref(actual))
-            objectIndex = objectFor(tree_ref(actual)).value_or(eir::PortConnection::Unconnected);
-
-        // A static actual, as an input tied to a constant is: an object holding the value, which
-        // nothing drives, connects as a signal does.
-        if (objectIndex == eir::PortConnection::Unconnected) {
-            tree_t port = tree_port(entity, portNumber);
-            const std::optional<Layout> layout = layoutOf(tree_type(port), folding);
-            std::optional<eir::BitVector> value;
-            if (layout) value = constantBits(actual, *layout, folding);
-            if (!layout || !value || tree_subkind(port) != PORT_IN) {
-                unsupported(actual, "a port actual that is not a signal or a static value");
-                continue;
+        // An open port keeps its own storage and its default, so it needs no connection at all;
+        // a whole signal is the port's storage itself.
+        if (whole) {
+            tree_t actual = tree_value(first);
+            if (tree_kind(actual) == T_OPEN) continue;
+            if (tree_kind(actual) == T_REF && tree_has_ref(actual)) {
+                if (const std::optional<std::uint32_t> object = objectFor(tree_ref(actual))) {
+                    created.connections.push_back(
+                        eir::PortConnection{.portIndex = portNumber, .objectIndex = *object});
+                    continue;
+                }
             }
-            eir::Object tied;
-            tied.name = std::format("{}${}", created.name, simpleName(tree_ident(port)));
-            tied.type = layout->storage;
-            tied.location = locate(actual);
-            tied.initialValue = std::move(value);
-            tied.enumIndex = layout->isArray() ? eir::Object::NoEnum : enumFor(tree_type(port));
-            tied.encoding = encodingOf(tree_type(port));
-            objectIndex = result.addObject(std::move(tied));
         }
-
-        created.connections.push_back(
-            eir::PortConnection{.portIndex = portNumber, .objectIndex = objectIndex});
+        connectThrough(created, portNumber, port, associations, childGenerics);
     }
     result.instances.push_back(std::move(created));
+}
+
+void ArchitectureTranslator::connectThrough(eir::Instance& created, unsigned portNumber,
+                                            tree_t port, const std::vector<tree_t>& associations,
+                                            const Folder& childGenerics) {
+    const std::optional<Layout> layout = layoutOf(tree_type(port), childGenerics);
+    if (!layout) {
+        unsupported(associations.front(),
+                    "associating a port whose bounds come from its actual with this");
+        return;
+    }
+    const bool input = tree_subkind(port) == PORT_IN;
+    if (!input && tree_subkind(port) != PORT_OUT && tree_subkind(port) != PORT_BUFFER) {
+        unsupported(associations.front(), "associating an inout port with this");
+        return;
+    }
+
+    // An object standing for the port in this definition: its default to start with, which an
+    // input's actuals overwrite where their initial values are known.
+    eir::Object through;
+    through.name = std::format("{}${}", created.name, simpleName(tree_ident(port)));
+    through.type = layout->storage;
+    through.location = locate(associations.front());
+    through.initialValue = tree_has_value(port)
+                               ? constantBits(tree_value(port), *layout, childGenerics)
+                               : defaultBits(tree_type(port), *layout, childGenerics);
+    through.enumIndex = layout->isComposite() ? eir::Object::NoEnum : enumFor(tree_type(port));
+    through.encoding = encodingOf(tree_type(port));
+    const std::uint32_t throughIndex = result.addObject(std::move(through));
+    created.connections.push_back(
+        eir::PortConnection{.portIndex = portNumber, .objectIndex = throughIndex});
+
+    // A formal names the port, which is that object here, and its bounds fold with the instance's
+    // generics.
+    const Folder outer = folding;
+    folding.absorb(childGenerics);
+    objects.insert_or_assign(port, throughIndex);
+    std::optional<eir::BitVector> start = result.objects[throughIndex].initialValue;
+    for (std::size_t index = 0; index < associations.size(); ++index) {
+        tree_t association = associations[index];
+        tree_t actual = tree_value(association);
+        if (tree_kind(actual) == T_OPEN) continue;
+        tree_t formal = tree_subkind(association) == P_POS ? nullptr : tree_name(association);
+        if (formal != nullptr && tree_kind(formal) == T_REF) formal = nullptr;
+
+        // A whole input tied to a static value is that value from the start, and nothing drives
+        // it after.
+        if (input && formal == nullptr) {
+            if (std::optional<eir::BitVector> bits = constantBits(actual, *layout, folding)) {
+                start = std::move(bits);
+                continue;
+            }
+        }
+
+        std::string name = result.objects[throughIndex].name;
+        if (associations.size() > 1) name += std::format("${}", index);
+        BodyTranslator translator(*this, association, std::move(name));
+        std::optional<eir::Process> process =
+            input ? translator.translateAssociation(formal, actual, throughIndex, *layout, &start)
+                  : translator.translateAssociation(actual, formal, throughIndex, *layout, nullptr);
+        if (process) result.processes.push_back(std::move(*process));
+    }
+    result.objects[throughIndex].initialValue = std::move(start);
+    objects.erase(port);
+    folding = outer;
 }
 
 } // namespace

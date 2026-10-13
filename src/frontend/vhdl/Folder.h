@@ -40,6 +40,17 @@ public:
         composites.insert_or_assign(declaration, std::move(bits));
     }
 
+    /// Binds everything `other` binds as well, replacing what both bind: an instance's generics
+    /// where the instance is, so that its ports' bounds fold there.
+    void absorb(const Folder& other) {
+        for (const auto& [declaration, value] : other.generics)
+            generics.insert_or_assign(declaration, value);
+        for (const auto& [declaration, bits] : other.composites)
+            composites.insert_or_assign(declaration, bits);
+        for (const auto& [declaration, bounds] : other.objectBounds)
+            objectBounds.insert_or_assign(declaration, bounds);
+    }
+
     /// The bits an array generic is bound to, or null when it is not one bound here.
     [[nodiscard]] const eir::BitVector* compositeOf(tree_t declaration) const {
         const auto found = composites.find(declaration);

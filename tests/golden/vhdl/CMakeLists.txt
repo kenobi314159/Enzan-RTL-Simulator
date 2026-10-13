@@ -69,3 +69,7 @@ enzan_add_vhdl_golden_test(fifo)
 
 # Records: as signals, variables and ports, with fields assigned and aggregates of every kind.
 enzan_add_vhdl_golden_test(records)
+
+# Generate statements and blocks, flattened into the architecture they are in, and ports
+# associated with parts of signals or in parts.
+enzan_add_vhdl_golden_test(generate)
