@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,7 +18,8 @@ class SourceManager;
 
 namespace enzan::eir {
 class Design;
-}
+struct ModuleDefinition;
+} // namespace enzan::eir
 
 /// The VHDL frontend.
 ///
@@ -106,6 +108,40 @@ struct DesignOptions {
 /// something the adapter does not translate yet.
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
                                      DiagnosticEngine& diagnostics);
+
+/// A resolution function asked for by how many drivers it resolves (DESIGN_GUIDE.md section 3.7):
+/// `function` names it as `eir::Resolution` does.
+struct ResolutionRequest {
+    std::string function;
+    std::uint32_t drivers = 0;
+
+    friend bool operator==(const ResolutionRequest&, const ResolutionRequest&) = default;
+};
+
+/// Where a requested resolution function is: a subprogram of a definition.
+struct ResolutionAnswer {
+    std::string definition;
+    std::string subprogram;
+};
+
+/// What `resolutions` translated: the definitions holding the functions, and where each request's
+/// is, in the order they were asked for.
+struct ResolvedFunctions {
+    std::vector<eir::ModuleDefinition> definitions;
+    std::vector<ResolutionAnswer> answers;
+};
+
+/// Analyses `options.units` again and translates each of `requests`, its function specialised to
+/// an array of as many values as it has drivers, indexed from 0 (section 3.7), in a child as
+/// `analyse` translates a design. Elaboration asks for these once it has counted a resolved
+/// signal's drivers, which the first translation could not know.
+///
+/// Returns nothing having reported why, when a source does not analyse again or a function is
+/// not one the adapter can translate.
+std::optional<ResolvedFunctions> resolutions(const DesignOptions& options,
+                                             const SourceManager& sources,
+                                             const std::vector<ResolutionRequest>& requests,
+                                             DiagnosticEngine& diagnostics);
 
 /// Where the standard libraries built with Enzan are: `lib/enzan/vhdl` beside the directory of the
 /// running program, which is where a build puts them and an installation keeps them (section 4.4).

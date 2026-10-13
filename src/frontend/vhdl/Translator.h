@@ -5,6 +5,7 @@
 #include "common/SourceLocation.h"
 #include "eir/Module.h"
 #include "frontend/vhdl/NvcApi.h"
+#include "frontend/vhdl/VhdlFrontend.h"
 
 #include <cstdint>
 #include <functional>
@@ -51,5 +52,13 @@ struct DesignRequest {
 /// section 1.2 ranks worst, so nothing partial may be run.
 std::vector<eir::ModuleDefinition>
 translateDesign(const DesignRequest& request, const Locate& locate, DiagnosticEngine& diagnostics);
+
+/// Translates each of `requests`, a resolution function specialised to an array of as many values
+/// as it has drivers, indexed from 0 (DESIGN_GUIDE.md section 3.7), into the definitions of the
+/// packages that declare them, which it returns; `answers` receives where each is, in order.
+std::vector<eir::ModuleDefinition>
+translateResolutions(const DesignRequest& request, const std::vector<ResolutionRequest>& requests,
+                     std::vector<ResolutionAnswer>& answers, const Locate& locate,
+                     DiagnosticEngine& diagnostics);
 
 } // namespace enzan::frontend::vhdl

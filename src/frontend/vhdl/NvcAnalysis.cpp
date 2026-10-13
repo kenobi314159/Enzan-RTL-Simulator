@@ -282,4 +282,34 @@ unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources
     return errors;
 }
 
+unsigned runNvcResolutions(const DesignOptions& options, const SourceManager& sources,
+                           const std::vector<ResolutionRequest>& requests, DiagnosticSink& sink,
+                           std::string& encoded, std::vector<std::string>& libraries,
+                           std::vector<ResolutionAnswer>& answers) {
+    Run run(options.units, sources, sink);
+    const unsigned analysisErrors = run.analyse();
+    if (analysisErrors != 0) return analysisErrors;
+
+    DiagnosticEngine engine(sources);
+    SinkConsumer consumer(sink);
+    engine.addConsumer(consumer);
+
+    const DesignRequest request{.top = options.top,
+                                .timeUnitExponent = options.timeUnitExponent,
+                                .work = run.workLibrary(),
+                                .analysed = run.analysed()};
+    const std::vector<eir::ModuleDefinition> modules = translateResolutions(
+        request, requests, answers, [&run](const loc_t* location) { return run.locate(location); },
+        engine);
+
+    const unsigned errors = engine.errorCount() + error_count();
+    if (errors == 0) {
+        encoded = eir::encodeModules(modules, sources);
+        for (const eir::ModuleDefinition& definition : modules)
+            libraries.push_back(definition.library);
+    }
+    engine.removeConsumer(consumer);
+    return errors;
+}
+
 } // namespace enzan::frontend::vhdl

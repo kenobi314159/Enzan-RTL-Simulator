@@ -220,8 +220,60 @@ public:
             ArchitectureTranslator translator(*this, next);
             modules.push_back(translator.translate());
         }
+        return takePackages();
+    }
+
+    /// Each requested resolution function, specialised to its driver count: an array parameter
+    /// of `0 to drivers - 1`.
+    std::vector<eir::ModuleDefinition> resolve(const std::vector<ResolutionRequest>& requests,
+                                               std::vector<ResolutionAnswer>& answers) {
+        for (const ResolutionRequest& wanted : requests) {
+            tree_t declaration = resolutionFunction(wanted.function);
+            if (declaration == nullptr) {
+                engine.report(DiagCode::VhdlError, SourceLocation(),
+                              std::format("the resolution function {} could not be found again",
+                                          wanted.function));
+                continue;
+            }
+            const Shape shape{
+                .bounds = {Folder::Range{.left = 0,
+                                         .right = static_cast<std::int64_t>(wanted.drivers) - 1,
+                                         .ascending = true}},
+                .values = {std::nullopt}};
+            const std::optional<Callee> made = callee(declaration, shape, declaration, nullptr);
+            if (!made) continue;
+            answers.push_back(
+                ResolutionAnswer{.definition = made->definition, .subprogram = made->name});
+        }
+        return takePackages();
+    }
+
+    /// Every package definition translated so far, which a run hands over at its end.
+    std::vector<eir::ModuleDefinition> takePackages() {
         for (auto& [name, package] : packages) modules.push_back(std::move(package.module));
         return std::move(modules);
+    }
+
+    /// The function a resolution names, `IEEE.STD_LOGIC_1164.RESOLVED(Y)U`: declared by the
+    /// package its first two parts name, or null.
+    [[nodiscard]] tree_t resolutionFunction(const std::string& function) const {
+        const std::size_t library = function.find('.');
+        const std::size_t unit =
+            library == std::string::npos ? std::string::npos : function.find('.', library + 1);
+        if (unit == std::string::npos) return nullptr;
+        ident_t libraryName = ident_new(function.substr(0, library).c_str());
+        lib_t found =
+            libraryName == lib_name(request.work) ? request.work : lib_require(libraryName);
+        if (found == nullptr) return nullptr;
+        tree_t package = lib_get(found, ident_new(function.substr(0, unit).c_str()));
+        if (package == nullptr || tree_kind(package) != T_PACKAGE) return nullptr;
+        ident_t wanted = ident_new(function.c_str());
+        for (unsigned index = 0; index < tree_decls(package); ++index) {
+            tree_t declaration = tree_decl(package, index);
+            if (tree_kind(declaration) == T_FUNC_DECL && tree_ident2(declaration) == wanted)
+                return declaration;
+        }
+        return nullptr;
     }
 
     /// The subprogram `declaration` specialised for `shape` (DESIGN_GUIDE.md section 4.1): from
@@ -1155,6 +1207,14 @@ std::vector<eir::ModuleDefinition>
 translateDesign(const DesignRequest& request, const Locate& locate, DiagnosticEngine& diagnostics) {
     DesignTranslator translator(request, locate, diagnostics);
     return translator.run();
+}
+
+std::vector<eir::ModuleDefinition>
+translateResolutions(const DesignRequest& request, const std::vector<ResolutionRequest>& requests,
+                     std::vector<ResolutionAnswer>& answers, const Locate& locate,
+                     DiagnosticEngine& diagnostics) {
+    DesignTranslator translator(request, locate, diagnostics);
+    return translator.resolve(requests, answers);
 }
 
 } // namespace enzan::frontend::vhdl

@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -905,6 +906,82 @@ end architecture;
     EXPECT_FALSE(resolution("plain").resolved());
     EXPECT_TRUE(resolution("any").function.starts_with("WORK.WIRED.WIRED_OR"))
         << resolution("any").function;
+}
+
+TEST_F(VhdlDesignTest, AResolutionFunctionIsTranslatedForTheDriversElaborationCounted) {
+    // Asked for by name and driver count, as elaboration asks once it has counted them: the
+    // function's array parameter holds that many values, and its result is one subelement.
+    DesignOptions options;
+    options.units.sources = {sources.addBuffer("design.vhd", R"(
+package wired is
+  type bit_list is array (natural range <>) of bit;
+  function wired_or (drivers : bit_list) return bit;
+  subtype or_bit is wired_or bit;
+end package;
+
+package body wired is
+  function wired_or (drivers : bit_list) return bit is
+  begin
+    for i in drivers'range loop
+      if drivers(i) = '1' then
+        return '1';
+      end if;
+    end loop;
+    return '0';
+  end function;
+end package body;
+
+use work.wired.all;
+
+entity top is
+end entity;
+
+architecture rtl of top is
+  signal any : or_bit;
+begin
+end architecture;
+)")};
+    options.units.work = {.name = "work", .directory = {}};
+    options.units.searchDirectories = {libraries()};
+    options.top = "top";
+    std::unique_ptr<enzan::eir::Design> design =
+        enzan::frontend::vhdl::analyse(options, sources, engine);
+    ASSERT_NE(design, nullptr) << transcript();
+    std::string wiredOr;
+    for (const enzan::eir::Object& object : design->findModule("top")->objects)
+        if (object.name == "any") wiredOr = object.resolution.function;
+    ASSERT_FALSE(wiredOr.empty());
+
+    const std::vector<enzan::frontend::vhdl::ResolutionRequest> requests{
+        {.function = "IEEE.STD_LOGIC_1164.RESOLVED(Y)U", .drivers = 2},
+        {.function = wiredOr, .drivers = 3}};
+    const std::optional<enzan::frontend::vhdl::ResolvedFunctions> found =
+        enzan::frontend::vhdl::resolutions(options, sources, requests, engine);
+    ASSERT_TRUE(found.has_value()) << transcript();
+    const enzan::frontend::vhdl::ResolvedFunctions resolved =
+        found.value_or(enzan::frontend::vhdl::ResolvedFunctions{});
+    ASSERT_EQ(resolved.answers.size(), 2U);
+
+    const auto subprogram = [&](const enzan::frontend::vhdl::ResolutionAnswer& answer)
+        -> const enzan::eir::Subprogram* {
+        // A package's definition is named in its library, as a call names it.
+        for (const enzan::eir::ModuleDefinition& definition : resolved.definitions) {
+            if (definition.library + "." + definition.name != answer.definition) continue;
+            for (const enzan::eir::Subprogram& candidate : definition.subprograms)
+                if (candidate.name == answer.subprogram) return &candidate;
+        }
+        return nullptr;
+    };
+    const std::array<std::uint32_t, 2> drivers{2, 3};
+    for (std::size_t index = 0; index < 2; ++index) {
+        const enzan::eir::Subprogram* function = subprogram(resolved.answers[index]);
+        ASSERT_NE(function, nullptr)
+            << resolved.answers[index].definition << " " << resolved.answers[index].subprogram;
+        ASSERT_EQ(function->parameters.size(), 1U);
+        EXPECT_EQ(function->registerTypes[function->parameters[0].registerIndex].bitWidth(),
+                  drivers[index] * 8);
+        EXPECT_EQ(function->resultType.bitWidth(), 8U);
+    }
 }
 
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {

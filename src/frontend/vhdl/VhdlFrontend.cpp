@@ -45,6 +45,9 @@ enum class Record : std::uint8_t {
     /// The translated design, as `eir::encodeModules` wrote it, then how many definitions it holds
     /// and the library of each, which that encoding leaves out.
     Design = 3,
+    /// Where each requested resolution function is: how many, then the definition and the
+    /// subprogram of each.
+    Resolutions = 4,
 };
 
 class Encoder {
@@ -157,6 +160,17 @@ public:
         static_cast<void>(writeAll(output, encoder.view()));
     }
 
+    void answers(const std::vector<ResolutionAnswer>& found) const {
+        Encoder encoder;
+        encoder.byte(static_cast<std::uint8_t>(Record::Resolutions));
+        encoder.u32(static_cast<std::uint32_t>(found.size()));
+        for (const ResolutionAnswer& answer : found) {
+            encoder.text(answer.definition);
+            encoder.text(answer.subprogram);
+        }
+        static_cast<void>(writeAll(output, encoder.view()));
+    }
+
     void finish(unsigned errors) const {
         Encoder encoder;
         encoder.byte(static_cast<std::uint8_t>(Record::Finished));
@@ -259,6 +273,9 @@ struct Outcome {
     /// The translated design, when the child sent one, and the library of each definition.
     std::optional<std::string> design;
     std::vector<std::string> libraries;
+
+    /// Where each requested resolution function is, when the child was asked for some.
+    std::vector<ResolutionAnswer> answers;
 };
 
 /// Reports what the child wrote, record by record.
@@ -279,6 +296,19 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
                 std::optional<std::string> library = decoder.text();
                 if (!library) return outcome;
                 outcome.libraries.push_back(std::move(*library));
+            }
+            continue;
+        }
+        if (kind == static_cast<std::uint8_t>(Record::Resolutions)) {
+            const std::optional<std::uint32_t> count = decoder.u32();
+            if (!count) return outcome;
+            const std::uint32_t total = *count;
+            for (std::uint32_t index = 0; index < total; ++index) {
+                std::optional<std::string> definition = decoder.text();
+                std::optional<std::string> subprogram = decoder.text();
+                if (!definition || !subprogram) return outcome;
+                outcome.answers.push_back(ResolutionAnswer{.definition = std::move(*definition),
+                                                           .subprogram = std::move(*subprogram)});
             }
             continue;
         }
@@ -368,6 +398,43 @@ bool analyseUnits(const UnitOptions& options, const SourceManager& sources,
     return outcome && outcome->errors == 0U;
 }
 
+namespace {
+
+/// The definitions a child sent, decoded against the buffers this process holds, each in the
+/// library the child named; nothing, having reported why, when they cannot be.
+std::optional<std::vector<eir::ModuleDefinition>> definitionsFrom(const Outcome& outcome,
+                                                                  const UnitOptions& units,
+                                                                  const SourceManager& sources,
+                                                                  DiagnosticEngine& diagnostics) {
+    if (!outcome.design) {
+        diagnostics.report(DiagCode::InternalError, SourceLocation(),
+                           "VHDL analysis finished without sending the design");
+        return std::nullopt;
+    }
+
+    // The child is a copy of this process, so the buffers it located against are these, by name.
+    std::map<std::string, BufferId, std::less<>> buffers;
+    for (const BufferId buffer : units.sources)
+        buffers.emplace(std::string(sources.bufferName(buffer)), buffer);
+    const auto resolve = [&buffers](std::string_view name) {
+        const auto found = buffers.find(name);
+        return found == buffers.end() ? BufferId() : found->second;
+    };
+
+    std::vector<eir::ModuleDefinition> modules;
+    if (!eir::decodeModules(*outcome.design, resolve, modules)
+        || modules.size() != outcome.libraries.size()) {
+        diagnostics.report(DiagCode::InternalError, SourceLocation(),
+                           "the design VHDL analysis sent could not be decoded");
+        return std::nullopt;
+    }
+    for (std::size_t index = 0; index < modules.size(); ++index)
+        modules[index].library = outcome.libraries[index];
+    return modules;
+}
+
+} // namespace
+
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
                                      DiagnosticEngine& diagnostics) {
     const std::optional<Outcome> outcome = inChild(
@@ -380,36 +447,45 @@ std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceM
         },
         diagnostics);
     if (!outcome || outcome->errors != 0U) return nullptr;
-    if (!outcome->design) {
-        diagnostics.report(DiagCode::InternalError, SourceLocation(),
-                           "VHDL analysis finished without sending the design");
-        return nullptr;
-    }
-
-    // The child is a copy of this process, so the buffers it located against are these, by name.
-    std::map<std::string, BufferId, std::less<>> buffers;
-    for (const BufferId buffer : options.units.sources)
-        buffers.emplace(std::string(sources.bufferName(buffer)), buffer);
-    const auto resolve = [&buffers](std::string_view name) {
-        const auto found = buffers.find(name);
-        return found == buffers.end() ? BufferId() : found->second;
-    };
-
-    std::vector<eir::ModuleDefinition> modules;
-    if (!eir::decodeModules(*outcome->design, resolve, modules)
-        || modules.size() != outcome->libraries.size()) {
-        diagnostics.report(DiagCode::InternalError, SourceLocation(),
-                           "the design VHDL analysis sent could not be decoded");
-        return nullptr;
-    }
+    std::optional<std::vector<eir::ModuleDefinition>> modules =
+        definitionsFrom(*outcome, options.units, sources, diagnostics);
+    if (!modules) return nullptr;
 
     auto design = std::make_unique<eir::Design>();
-    for (std::size_t index = 0; index < modules.size(); ++index) {
-        modules[index].library = outcome->libraries[index];
-        design->addModule(std::move(modules[index]));
-    }
+    for (eir::ModuleDefinition& module : *modules) design->addModule(std::move(module));
     if (!eir::verify(*design, diagnostics)) return nullptr;
     return design;
+}
+
+std::optional<ResolvedFunctions> resolutions(const DesignOptions& options,
+                                             const SourceManager& sources,
+                                             const std::vector<ResolutionRequest>& requests,
+                                             DiagnosticEngine& diagnostics) {
+    const std::optional<Outcome> outcome = inChild(
+        [&options, &sources, &requests](PipeSink& sink) {
+            std::string encoded;
+            std::vector<std::string> libraries;
+            std::vector<ResolutionAnswer> answers;
+            const unsigned errors =
+                runNvcResolutions(options, sources, requests, sink, encoded, libraries, answers);
+            if (errors == 0) {
+                sink.design(encoded, libraries);
+                sink.answers(answers);
+            }
+            return errors;
+        },
+        diagnostics);
+    if (!outcome || outcome->errors != 0U) return std::nullopt;
+    std::optional<std::vector<eir::ModuleDefinition>> modules =
+        definitionsFrom(*outcome, options.units, sources, diagnostics);
+    if (!modules) return std::nullopt;
+    if (outcome->answers.size() != requests.size()) {
+        diagnostics.report(DiagCode::InternalError, SourceLocation(),
+                           "VHDL analysis answered a different number of resolution functions "
+                           "than it was asked for");
+        return std::nullopt;
+    }
+    return ResolvedFunctions{.definitions = std::move(*modules), .answers = outcome->answers};
 }
 
 std::filesystem::path standardLibraryDirectory() {

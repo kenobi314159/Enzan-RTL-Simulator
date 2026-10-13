@@ -50,4 +50,11 @@ unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources
                       DiagnosticSink& sink, std::string& encoded,
                       std::vector<std::string>& libraries);
 
+/// Analyses as `runNvcAnalysis` does and translates each of `requests`, filling `encoded` and
+/// `libraries` as `runNvcDesign` does and `answers` with where each request's function is.
+unsigned runNvcResolutions(const DesignOptions& options, const SourceManager& sources,
+                           const std::vector<ResolutionRequest>& requests, DiagnosticSink& sink,
+                           std::string& encoded, std::vector<std::string>& libraries,
+                           std::vector<ResolutionAnswer>& answers);
+
 } // namespace enzan::frontend::vhdl
