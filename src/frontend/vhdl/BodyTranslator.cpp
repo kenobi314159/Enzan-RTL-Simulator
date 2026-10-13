@@ -1481,6 +1481,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     // Nor can a body of its own take a null array, which has no bits to pass; inlined, it is its
     // bounds, which is all its uses can fold to.
     for (tree_t actual : *actuals) {
+        if (!type_is_array(tree_type(actual))) continue;
         const std::optional<Folder::Range> bounds = folder().boundsOf(actual);
         inlineIt = inlineIt || (bounds && bounds->length() == 0);
     }

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <utility>
@@ -111,9 +112,15 @@ public:
 
         [[nodiscard]] std::int64_t high() const noexcept { return ascending ? right : left; }
 
-        /// How many values it holds, which is zero for a null range such as `1 to 0`.
+        /// How many values it holds, which is zero for a null range such as `1 to 0`, and at most
+        /// the largest 64-bit integer for one spanning every 64-bit value.
         [[nodiscard]] std::int64_t length() const noexcept {
-            return high() < low() ? 0 : high() - low() + 1;
+            if (high() < low()) return 0;
+            const std::uint64_t span =
+                static_cast<std::uint64_t>(high()) - static_cast<std::uint64_t>(low());
+            return span >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())
+                       ? std::numeric_limits<std::int64_t>::max()
+                       : static_cast<std::int64_t>(span) + 1;
         }
     };
 
