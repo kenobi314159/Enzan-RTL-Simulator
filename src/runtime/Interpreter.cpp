@@ -7,12 +7,56 @@
 #include "eir/BitOps.h"
 #include "runtime/Kernel.h"
 
+#include <cmath>
 #include <optional>
 #include <utility>
 
 namespace enzan::runtime {
 
 namespace bitops = eir::bitops;
+
+namespace {
+
+/// Runs `instruction`, whose first source operand is a real, when it is an operation that
+/// computes on reals, and returns false for any other, which works on the bits as for any value.
+template<typename Registers>
+bool runReal(const codegen::Instruction& instruction, const Registers& reg) {
+    const auto a = [&] { return bitops::realOf(reg(instruction.a, instruction.aWidth)); };
+    const auto b = [&] { return bitops::realOf(reg(instruction.b, instruction.bWidth)); };
+    const auto result = [&](double value) {
+        bitops::assignReal(reg(instruction.dst, instruction.dstWidth), value);
+    };
+    const auto truth = [&](bool value) {
+        bitops::copy(reg(instruction.dst, instruction.dstWidth),
+                     eir::BitVector::fromUInt64(value ? 1 : 0, 1).ref());
+    };
+    switch (instruction.opcode) {
+    case eir::Opcode::Add: result(a() + b()); return true;
+    case eir::Opcode::Subtract: result(a() - b()); return true;
+    case eir::Opcode::Multiply: result(a() * b()); return true;
+    case eir::Opcode::Divide: result(a() / b()); return true;
+    case eir::Opcode::Negate: result(-a()); return true;
+    case eir::Opcode::Power: {
+        // An integer exponent, signed as the immediate third operand says.
+        const eir::ConstBitRef exponent = reg(instruction.b, instruction.bWidth);
+        const double power = instruction.c != 0 ? static_cast<double>(exponent.toInt64())
+                                                : static_cast<double>(exponent.toUInt64());
+        result(std::pow(a(), power));
+        return true;
+    }
+    case eir::Opcode::Equal: truth(a() == b()); return true;
+    case eir::Opcode::NotEqual: truth(a() != b()); return true;
+    case eir::Opcode::LessThan: truth(a() < b()); return true;
+    case eir::Opcode::LessEqual: truth(a() <= b()); return true;
+    case eir::Opcode::Convert:
+        bitops::realToInteger(reg(instruction.dst, instruction.dstWidth),
+                              reg(instruction.a, instruction.aWidth));
+        return true;
+    default: return false;
+    }
+}
+
+} // namespace
 
 Interpreter::Interpreter(Kernel& owner) noexcept : kernel(owner) {}
 
@@ -47,6 +91,10 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
         ++kernel.instructionCount;
         ++pc;
 
+        // Reals compute as doubles; every other operation on them, a move or a store, is the
+        // one for their bits.
+        if (instruction.isReal && runReal(instruction, reg)) continue;
+
         switch (instruction.opcode) {
         case eir::Opcode::Nop: break;
 
@@ -79,6 +127,12 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
         case eir::Opcode::Move:
             bitops::copy(reg(instruction.dst, instruction.dstWidth),
                          reg(instruction.a, instruction.aWidth));
+            break;
+
+        // Into a real from an integer; the other way is runReal's.
+        case eir::Opcode::Convert:
+            bitops::integerToReal(reg(instruction.dst, instruction.dstWidth),
+                                  reg(instruction.a, instruction.aWidth), instruction.isSigned);
             break;
 
         case eir::Opcode::Extend:

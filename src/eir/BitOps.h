@@ -42,6 +42,18 @@ namespace enzan::eir::bitops {
 /// `source`.
 void copy(BitRef dst, ConstBitRef source);
 
+/// The double a real's bits hold (eir::Type::Kind::Real): the aval plane of a 64-bit value.
+[[nodiscard]] double realOf(ConstBitRef value) noexcept;
+
+/// Writes `value` into `dst`, a 64-bit real, with the second plane zero.
+void assignReal(BitRef dst, double value) noexcept;
+
+/// Convert's two directions: `source`, an integer of either signedness, into the real `dst`; and
+/// the real `source` into the integer `dst`, rounded halfway away from zero and wrapped to its
+/// width.
+void integerToReal(BitRef dst, ConstBitRef source, bool isSigned);
+void realToInteger(BitRef dst, ConstBitRef source);
+
 /// Copies `source` into `dst` at any width, zero-extending, sign-extending or
 /// truncating as required. `dst` may alias `source` only when the widths are
 /// equal.

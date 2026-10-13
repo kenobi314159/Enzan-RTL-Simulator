@@ -205,6 +205,9 @@ bool Compiler::compileBody(const eir::ModuleDefinition& definition, const eir::B
             Instruction emitted;
             emitted.opcode = source.opcode;
             emitted.isSigned = source.isSigned;
+            emitted.isReal = source.a.kind() == eir::Operand::Kind::Register
+                             && source.a.index() < body.registerTypes.size()
+                             && body.registerTypes[source.a.index()].isReal();
 
             // An operand is resolved by its own kind. EIR-B fixes an operand's kind per
             // opcode, so nothing here has to know which opcode it is looking at — which

@@ -26,6 +26,10 @@ public:
         Bits,
         /// An IEEE 754 double. `real` and `shortreal` both map here; Enzan does not
         /// model the reduced precision of `shortreal`, and says so in the manual.
+        ///
+        /// Held as 64 Bits are, in both planes with the second zero, so that a move, a
+        /// store and change detection have the one value path of section 17.4 for it too;
+        /// only arithmetic, comparison and Convert read the bits as the double.
         Real,
         /// A character string. Held in the constant pool rather than the state
         /// arena in the M1 subset, which is enough for `$display` format strings.
@@ -83,6 +87,8 @@ public:
 
     [[nodiscard]] constexpr bool isVoid() const noexcept { return typeKind == Kind::Void; }
 
+    [[nodiscard]] constexpr bool isReal() const noexcept { return typeKind == Kind::Real; }
+
     /// Width in bits. Meaningful for Bits and Real; zero for Void and String.
     [[nodiscard]] constexpr std::uint32_t bitWidth() const noexcept { return width; }
 
@@ -110,8 +116,8 @@ public:
         switch (typeKind) {
         case Kind::Void:
         case Kind::String: return 0;
-        case Kind::Bits: return storageWordsFor(width);
-        case Kind::Real: return 1;
+        case Kind::Bits:
+        case Kind::Real: return storageWordsFor(width);
         }
         return 0;
     }

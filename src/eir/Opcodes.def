@@ -46,6 +46,11 @@ ENZAN_OPCODE(Truncate, "trunc", true, 1, "trunc of both planes")
 ENZAN_OPCODE(CoerceTwoState, "twostate", true, 1,
              "aval := aval & ~bval, bval := 0, which is the X-to-zero conversion an "
              "assignment into a two-state object performs")
+ENZAN_OPCODE(Convert, "conv", true, 1,
+             "between a real and an integer, one of which the source is: sitofp or uitofp by "
+             "the source's signedness into a real, and llvm.round, halfway away from zero as "
+             "IEEE 1076 section 9.3.6 and IEEE 1800 section 6.12.2 both round, then fptosi "
+             "out of one; an unknown bit of an integer source converts as zero")
 
 // --- State access ----------------------------------------------------------
 //
@@ -149,7 +154,9 @@ ENZAN_OPCODE(LogicalNot, "lnot", true, 1, "the three-valued negation of the trut
 ENZAN_OPCODE(Add, "add", true, 2,
              "a branch on the combined bval planes; the known path is `add` with "
              "llvm.uadd.with.overflow chaining across limbs, the unknown path stores "
-             "all-ones to both planes")
+             "all-ones to both planes; on reals, fadd of the aval planes as doubles, as "
+             "Subtract, Multiply, Divide, Negate and Power are fsub, fmul, fdiv, fneg and "
+             "llvm.powi")
 ENZAN_OPCODE(Subtract, "sub", true, 2, "as Add with `sub` and borrow chaining")
 ENZAN_OPCODE(Multiply, "mul", true, 2,
              "as Add with `mul`; wide values call the runtime helper, since LLVM has "
@@ -200,7 +207,9 @@ ENZAN_OPCODE(CaseXMatch, "cxmatch", true, 2,
              "is set, which is how `casex` compares an item with its selector")
 ENZAN_OPCODE(LessThan, "lt", true, 2,
              "a branch on the combined bval planes to the X result, then icmp ult or "
-             "icmp slt on the aval planes according to the signed flag")
+             "icmp slt on the aval planes according to the signed flag; on reals, fcmp olt "
+             "of the aval planes as doubles, as Equal, NotEqual and LessEqual are fcmp oeq, "
+             "une and ole")
 ENZAN_OPCODE(LessEqual, "le", true, 2, "as LessThan with icmp ule or icmp sle")
 
 // --- Selection and splicing ------------------------------------------------

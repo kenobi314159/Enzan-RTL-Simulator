@@ -390,6 +390,40 @@ TEST_F(VerifierTest, RejectsMixedWidthsInABinaryOperation) {
     EXPECT_TRUE(reported("requires all three to be equal"));
 }
 
+TEST_F(VerifierTest, RejectsAnOperationMixingARealWithBits) {
+    // Adding a real to 64 bits would read the bits as a double, or the double as bits; which
+    // was meant is the frontend's to say with a Convert.
+    ModuleDefinition definition = makeValidModule();
+    Process& process = definition.processes[0];
+    process.registerTypes.push_back(Type::real());
+    process.registerTypes.push_back(Type::bits(64, true, false));
+    process.registerTypes.push_back(Type::real());
+
+    auto& instructions = process.blocks[0].instructions;
+    instructions.insert(
+        instructions.begin() + 1,
+        Instruction::make(Opcode::Add, Operand::reg(3), Operand::reg(1), Operand::reg(2)));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("mixes reals with bits"));
+    EXPECT_EQ(consumer.messages.size(), 1U);
+}
+
+TEST_F(VerifierTest, RejectsAConversionWithARealOnNeitherSide) {
+    ModuleDefinition definition = makeValidModule();
+    Process& process = definition.processes[0];
+    process.registerTypes.push_back(Type::bits(64, true, false));
+    process.registerTypes.push_back(Type::bits(64, true, false));
+
+    auto& instructions = process.blocks[0].instructions;
+    instructions.insert(instructions.begin() + 1,
+                        Instruction::make(Opcode::Convert, Operand::reg(1), Operand::reg(2)));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("converts between two bits"));
+    EXPECT_EQ(consumer.messages.size(), 1U);
+}
+
 TEST_F(VerifierTest, RejectsAWidePredicateDestination) {
     ModuleDefinition definition = makeValidModule();
     Process& process = definition.processes[0];

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <format>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -243,6 +244,32 @@ private:
             return 0;
         }
         return body.registerTypes[operand.index()].bitWidth();
+    }
+
+    /// True when `operand` is a register of a real; false for anything else, which the width
+    /// checks report if it matters.
+    [[nodiscard]] static bool isRealRegister(const Body& body, Operand operand) {
+        return operand.kind() == Operand::Kind::Register
+               && operand.index() < body.registerTypes.size()
+               && body.registerTypes[operand.index()].isReal();
+    }
+
+    /// Checks the rule for reals: an operation computes on reals or on bits, never both, so
+    /// each operand in `same` is a real exactly when the first is, and none in `never` is one.
+    void checkReals(const ModuleDefinition& definition, const Body& body,
+                    std::initializer_list<Operand> same, std::initializer_list<Operand> never,
+                    std::string_view where) {
+        const bool real = same.size() != 0 && isRealRegister(body, *same.begin());
+        const bool mixed = std::ranges::any_of(
+            same, [&](Operand operand) { return isRealRegister(body, operand) != real; });
+        const bool forbidden = std::ranges::any_of(
+            never, [&](Operand operand) { return isRealRegister(body, operand); });
+        if (mixed || forbidden) {
+            reportBody(definition, body,
+                       std::format("{} mixes reals with bits in a way this operation does not "
+                                   "define",
+                                   where));
+        }
     }
 
     /// Checks that a whole-object access moves a register of the object's width.
@@ -685,6 +712,17 @@ private:
         case Opcode::Multiply:
         case Opcode::Divide:
         case Opcode::Modulo: {
+            // Reals add, subtract, multiply and divide as doubles; the others are of bits.
+            const bool arithmetic =
+                instruction.opcode == Opcode::Add || instruction.opcode == Opcode::Subtract
+                || instruction.opcode == Opcode::Multiply || instruction.opcode == Opcode::Divide;
+            if (arithmetic) {
+                checkReals(definition, body, {instruction.dst, instruction.a, instruction.b}, {},
+                           where);
+            } else {
+                checkReals(definition, body, {}, {instruction.dst, instruction.a, instruction.b},
+                           where);
+            }
             const std::uint32_t dstWidth = registerWidth(definition, body, instruction.dst, where);
             const std::uint32_t aWidth = registerWidth(definition, body, instruction.a, where);
             const std::uint32_t bWidth = registerWidth(definition, body, instruction.b, where);
@@ -696,6 +734,28 @@ private:
             }
             break;
         }
+
+        case Opcode::Negate:
+            checkReals(definition, body, {instruction.dst, instruction.a}, {}, where);
+            break;
+
+        // A real raised to an integer power, or bits to bits.
+        case Opcode::Power:
+            checkReals(definition, body, {instruction.dst, instruction.a}, {instruction.b}, where);
+            break;
+
+        // Between a real and an integer, so exactly one side is a real.
+        case Opcode::Convert:
+            static_cast<void>(registerWidth(definition, body, instruction.dst, where));
+            static_cast<void>(registerWidth(definition, body, instruction.a, where));
+            if (isRealRegister(body, instruction.dst) == isRealRegister(body, instruction.a)) {
+                reportBody(definition, body,
+                           std::format("{} converts between two {}; one side must be a real "
+                                       "and the other bits",
+                                       where,
+                                       isRealRegister(body, instruction.a) ? "reals" : "bits"));
+            }
+            break;
 
         // Predicates and reductions produce exactly one bit.
         case Opcode::Equal:
@@ -715,6 +775,15 @@ private:
         case Opcode::LogicalOr:
         case Opcode::LogicalNot:
         case Opcode::BitSelect: {
+            // Reals compare as doubles, with each other only; the rest are of bits.
+            const bool comparison = instruction.opcode == Opcode::Equal
+                                    || instruction.opcode == Opcode::NotEqual
+                                    || instruction.opcode == Opcode::LessThan
+                                    || instruction.opcode == Opcode::LessEqual;
+            if (comparison) {
+                checkReals(definition, body, {instruction.a, instruction.b}, {instruction.dst},
+                           where);
+            }
             const std::uint32_t dstWidth = registerWidth(definition, body, instruction.dst, where);
             if (dstWidth != 0 && dstWidth != 1) {
                 reportBody(definition, body,

@@ -382,7 +382,10 @@ as one: a VHDL scalar is a two-state code in EIR's packed vector type. An
 enumeration, `std_ulogic` among them, is its position in as many whole bytes as
 its values need — **one byte per element** for `std_ulogic`, `bit`, `boolean` and
 `character`, holding the enumeration value — and an integer or a physical value
-such as `time` is signed, 32 or 64 bits as its range needs. Records and
+such as `time` is signed, 32 or 64 bits as its range needs. A real, VHDL's or
+SystemVerilog's, is its IEEE 754 double's 64 bits in EIR's real type, held as 64 bits
+are; arithmetic and comparison read them as the double, and Convert goes between it
+and an integer, rounding halfway away from zero as both languages round. Records and
 constrained arrays are flat, as SystemVerilog's aggregates are (4.3), so a
 `std_logic_vector(7 downto 0)` is a 64-bit vector of eight codes.
 

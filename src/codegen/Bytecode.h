@@ -34,6 +34,10 @@ struct Instruction {
     /// True when the operation treats its operands as signed.
     bool isSigned = false;
 
+    /// True when the first source operand is a real, so that arithmetic and comparison are a
+    /// double's and Convert goes from a real to an integer rather than the other way.
+    bool isReal = false;
+
     /// Operand values. What each one means depends on the opcode, exactly as in
     /// EIR-B (see eir/Opcodes.def), with these resolutions applied:
     ///

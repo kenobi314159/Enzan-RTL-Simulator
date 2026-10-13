@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
+#include <cstdint>
 #include <limits>
 #include <span>
 #include <vector>
@@ -1014,6 +1016,40 @@ void pullHighImpedance(BitRef value, Logic pull) {
         if (pull == Logic::One) value.aval()[index] |= isHighZ;
     }
     value.canonicalize();
+}
+
+double realOf(ConstBitRef value) noexcept {
+    return std::bit_cast<double>(value.toUInt64());
+}
+
+void assignReal(BitRef dst, double value) noexcept {
+    copy(dst, BitVector::fromUInt64(std::bit_cast<std::uint64_t>(value), dst.width()).ref());
+}
+
+void integerToReal(BitRef dst, ConstBitRef source, bool isSigned) {
+    BitVector known(source.width());
+    copy(known.mutableRef(), source);
+    for (Word& word : known.mutableRef().bvalWords()) word = 0;
+    const double value = isSigned ? static_cast<double>(known.ref().toInt64())
+                                  : static_cast<double>(known.ref().toUInt64());
+    assignReal(dst, value);
+}
+
+void realToInteger(BitRef dst, ConstBitRef source) {
+    // std::round rounds halfway away from zero, as both languages do. A value past what 64 bits
+    // hold, or not a number, has no integer to be; it saturates rather than being undefined.
+    const double rounded = std::round(realOf(source));
+    std::int64_t value = 0;
+    if (std::isnan(rounded)) {
+        value = 0;
+    } else if (rounded >= 0x1p63) {
+        value = std::numeric_limits<std::int64_t>::max();
+    } else if (rounded < -0x1p63) {
+        value = std::numeric_limits<std::int64_t>::min();
+    } else {
+        value = static_cast<std::int64_t>(rounded);
+    }
+    copy(dst, BitVector::fromInt64(value, dst.width()).ref());
 }
 
 } // namespace enzan::eir::bitops
