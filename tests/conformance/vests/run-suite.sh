@@ -16,6 +16,10 @@
 # units belong to a library other than work, LIBRARY=, is run as the rest are and fails until
 # Enzan analyses several libraries in one run.
 #
+# A case that writes a file another reads, OUTPUT=, runs before every case that reads one, INPUT=,
+# as GHDL's suite runs them in order: each simulator reads back the files it wrote, in its own
+# format, and the files the suite commits are another tool's.
+#
 # Prints PASS or FAIL for each case, then the counts, and writes the cases that passed to
 # <work-directory>/passed.txt, for ratchet.sh to hold to passing.txt.
 
@@ -35,10 +39,16 @@ readonly source="$work/ghdl-$revision"
 "$here/../../fetch-revision.sh" https://github.com/ghdl/ghdl.git "$revision" "$source" || exit 1
 readonly vests="$source/testsuite/vests/vhdl-93"
 
+# What an earlier run's cases wrote beside them would be read as this run's.
+git -C "$source" clean -fdxq testsuite
+
 # One line per case: its name, its directory, its top, its stop time, then its sources, the
 # units built before it first. Names are the case's path under vhdl-93, which the pass list holds.
+# The cases that write files are listed apart, to run first.
 cases="$work/cases.txt"
+writers="$work/writers.txt"
 : >"$cases"
+: >"$writers"
 while read -r exp; do
     directory="$(dirname "$exp")"
     built=()
@@ -48,10 +58,12 @@ while read -r exp; do
         run_compliant_test)
             entity=""
             stop=""
+            list="$cases"
             for option in $options; do
                 case "$option" in
                 ENTITY=*) entity="${option#ENTITY=}" ;;
                 STOP=*) stop="${option#STOP=}" ;;
+                OUTPUT=*) list="$writers" ;;
                 esac
             done
             if [[ -z "$entity" ]]; then
@@ -59,7 +71,7 @@ while read -r exp; do
                     "$directory/$file" | tail -1)"
             fi
             printf '%s\t%s\t%s\t%s\t%s\n' "${directory#"$vests"/}/$file" "$directory" \
-                "${entity:-none}" "${stop:-none}" "${built[*]} $directory/$file" >>"$cases"
+                "${entity:-none}" "${stop:-none}" "${built[*]} $directory/$file" >>"$list"
             ;;
         esac
     done < <(grep -E '^(build|run)_compliant_test ' "$exp")
@@ -103,8 +115,11 @@ export -f run_case
 
 mkdir -p "$work/logs"
 export ENZAN="$enzan" WORK="$work"
-tr '\n' '\0' <"$cases" | xargs -0 -P "$(nproc)" -I{} bash -c 'run_case "$1"' _ {} \
-    | sort -k2 >"$work/results.txt"
+{
+    for list in "$writers" "$cases"; do
+        tr '\n' '\0' <"$list" | xargs -0 -P "$(nproc)" -I{} bash -c 'run_case "$1"' _ {}
+    done
+} | sort -k2 >"$work/results.txt"
 cat "$work/results.txt"
 
 grep '^PASS ' "$work/results.txt" | cut -d' ' -f2 >"$work/passed.txt"
