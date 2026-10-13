@@ -1739,6 +1739,18 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
     case T_TYPE_CONV: return conversion(expression);
     case T_ATTR_REF: return attribute(expression);
 
+    // A conversion function of a port association, `f(port) => s`: the function on its one
+    // argument, inlined.
+    case T_CONV_FUNC: {
+        tree_t declaration = tree_has_ref(expression) ? tree_ref(expression) : nullptr;
+        tree_t body = declaration == nullptr ? nullptr : subprogramBody(declaration);
+        if (body == nullptr || tree_ports(declaration) != 1) {
+            fail(expression, "this conversion function");
+            return std::nullopt;
+        }
+        return inlineCall(expression, declaration, body, {tree_value(expression)});
+    }
+
     case T_RECORD_REF: {
         // A field of a signal or a variable is read without reading the rest of it.
         if (designatesStorage(expression)) {

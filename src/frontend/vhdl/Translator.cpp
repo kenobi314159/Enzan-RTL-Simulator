@@ -1125,10 +1125,20 @@ void ArchitectureTranslator::instance(tree_t statement) {
         if (tree_subkind(association) == P_POS) {
             formalIndex = tree_pos(association);
         } else {
+            // A part of the port, or a conversion of an output's value, `f(port) => s` (IEEE 1076
+            // section 6.5.7.1), names the port inside it.
             tree_t formal = tree_name(association);
-            while (tree_kind(formal) == T_ARRAY_REF || tree_kind(formal) == T_ARRAY_SLICE
-                   || tree_kind(formal) == T_RECORD_REF)
-                formal = tree_value(formal);
+            for (;;) {
+                const tree_kind_t kind = tree_kind(formal);
+                if (kind == T_ARRAY_REF || kind == T_ARRAY_SLICE || kind == T_RECORD_REF
+                    || kind == T_TYPE_CONV || kind == T_CONV_FUNC) {
+                    formal = tree_value(formal);
+                } else if (kind == T_FCALL && tree_params(formal) == 1) {
+                    formal = tree_value(tree_param(formal, 0));
+                } else {
+                    break;
+                }
+            }
             for (unsigned port = 0; port < tree_ports(formals); ++port) {
                 if (tree_kind(formal) == T_REF && tree_has_ref(formal)
                     && tree_port(formals, port) == tree_ref(formal))
