@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace enzan::frontend::vhdl {
 
@@ -46,6 +47,10 @@ struct Layout {
     std::uint32_t elementBits = 0;
     type_t elementType = nullptr;
 
+    /// The dimensions after the first, of an array of more than one: an element of the first is
+    /// then a row, an array over these of `elementType`, `elementBits` wide.
+    std::vector<Folder::Range> inner;
+
     [[nodiscard]] bool isArray() const noexcept { return array; }
 
     /// The offset of the bits of the element at `position` of the index range, which must lie
@@ -57,13 +62,18 @@ struct Layout {
 };
 
 /// How `type` is laid out, or nothing when it is a type the adapter cannot hold yet: a real, a
-/// record, an access or a file type, an array of more than one dimension, or an array whose bounds
-/// are not static or hold nothing.
+/// record, an access or a file type, or an array whose bounds are not static or hold nothing.
 [[nodiscard]] std::optional<Layout> layoutOf(type_t type, const Folder& folder);
 
-/// The layout of an array with `index` as its bounds and elements of `elementType`.
+/// The layout of an array with `index` as its bounds and elements of `elementType`, and with the
+/// further dimensions `inner` when it has more than one.
 [[nodiscard]] std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType,
-                                                const Folder& folder);
+                                                const Folder& folder,
+                                                const std::vector<Folder::Range>& inner = {});
+
+/// The layout of one element of the first dimension of an array laid out as `layout`: its element
+/// type's, or a row of the dimensions after it.
+[[nodiscard]] std::optional<Layout> elementLayout(const Layout& layout, const Folder& folder);
 
 /// The storage of a scalar `type`, which needs no folding; nothing for anything else.
 [[nodiscard]] std::optional<eir::Type> scalarStorage(type_t type);

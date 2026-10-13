@@ -42,7 +42,8 @@ enum class Record : std::uint8_t {
     /// The analysis ran to its end, followed by its error count. A stream without one is a child
     /// that NVC ended part-way.
     Finished = 2,
-    /// The translated design, as `eir::encodeModules` wrote it.
+    /// The translated design, as `eir::encodeModules` wrote it, then how many definitions it holds
+    /// and the library of each, which that encoding leaves out.
     Design = 3,
 };
 
@@ -147,10 +148,12 @@ public:
         static_cast<void>(writeAll(output, encoder.view()));
     }
 
-    void design(std::string_view encoded) const {
+    void design(std::string_view encoded, const std::vector<std::string>& libraries) const {
         Encoder encoder;
         encoder.byte(static_cast<std::uint8_t>(Record::Design));
         encoder.text(encoded);
+        encoder.u32(static_cast<std::uint32_t>(libraries.size()));
+        for (const std::string& library : libraries) encoder.text(library);
         static_cast<void>(writeAll(output, encoder.view()));
     }
 
@@ -253,8 +256,9 @@ struct Outcome {
     /// cannot find, rather than only printing it on its way out.
     bool stopReported = false;
 
-    /// The translated design, when the child sent one.
+    /// The translated design, when the child sent one, and the library of each definition.
     std::optional<std::string> design;
+    std::vector<std::string> libraries;
 };
 
 /// Reports what the child wrote, record by record.
@@ -269,7 +273,13 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
         }
         if (kind == static_cast<std::uint8_t>(Record::Design)) {
             outcome.design = decoder.text();
-            if (!outcome.design) return outcome;
+            const std::optional<std::uint32_t> count = decoder.u32();
+            if (!outcome.design || !count) return outcome;
+            for (std::uint32_t index = 0; index < *count; ++index) {
+                std::optional<std::string> library = decoder.text();
+                if (!library) return outcome;
+                outcome.libraries.push_back(std::move(*library));
+            }
             continue;
         }
         if (kind != static_cast<std::uint8_t>(Record::Diagnostic)) return outcome;
@@ -363,8 +373,9 @@ std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceM
     const std::optional<Outcome> outcome = inChild(
         [&options, &sources](PipeSink& sink) {
             std::string encoded;
-            const unsigned errors = runNvcDesign(options, sources, sink, encoded);
-            if (errors == 0) sink.design(encoded);
+            std::vector<std::string> libraries;
+            const unsigned errors = runNvcDesign(options, sources, sink, encoded, libraries);
+            if (errors == 0) sink.design(encoded, libraries);
             return errors;
         },
         diagnostics);
@@ -385,14 +396,18 @@ std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceM
     };
 
     std::vector<eir::ModuleDefinition> modules;
-    if (!eir::decodeModules(*outcome->design, resolve, modules)) {
+    if (!eir::decodeModules(*outcome->design, resolve, modules)
+        || modules.size() != outcome->libraries.size()) {
         diagnostics.report(DiagCode::InternalError, SourceLocation(),
                            "the design VHDL analysis sent could not be decoded");
         return nullptr;
     }
 
     auto design = std::make_unique<eir::Design>();
-    for (eir::ModuleDefinition& definition : modules) design->addModule(std::move(definition));
+    for (std::size_t index = 0; index < modules.size(); ++index) {
+        modules[index].library = outcome->libraries[index];
+        design->addModule(std::move(modules[index]));
+    }
     if (!eir::verify(*design, diagnostics)) return nullptr;
     return design;
 }

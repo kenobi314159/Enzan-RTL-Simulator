@@ -233,8 +233,15 @@ std::optional<eir::Type> scalarStorage(type_t type) {
 }
 
 std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType,
-                                  const Folder& folder) {
-    const std::optional<Layout> element = layoutOf(elementType, folder);
+                                  const Folder& folder, const std::vector<Folder::Range>& inner) {
+    // A row of the further dimensions is laid out as an array of its own.
+    std::optional<Layout> element;
+    if (inner.empty()) {
+        element = layoutOf(elementType, folder);
+    } else {
+        element = arrayLayout(inner.front(), elementType, folder,
+                              std::vector<Folder::Range>(inner.begin() + 1, inner.end()));
+    }
     if (!element || index.length() <= 0) return std::nullopt;
     const std::int64_t bits = index.length() * element->storage.bitWidth();
     if (std::cmp_greater(bits, std::numeric_limits<std::uint32_t>::max())) return std::nullopt;
@@ -242,16 +249,29 @@ std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType
                   .array = true,
                   .index = index,
                   .elementBits = element->storage.bitWidth(),
-                  .elementType = elementType};
+                  .elementType = elementType,
+                  .inner = inner};
+}
+
+std::optional<Layout> elementLayout(const Layout& layout, const Folder& folder) {
+    if (layout.inner.empty()) return layoutOf(layout.elementType, folder);
+    return arrayLayout(layout.inner.front(), layout.elementType, folder,
+                       std::vector<Folder::Range>(layout.inner.begin() + 1, layout.inner.end()));
 }
 
 std::optional<Layout> layoutOf(type_t type, const Folder& folder) {
     if (type == nullptr) return std::nullopt;
     if (type_is_array(type)) {
-        if (dimension_of(type) != 1) return std::nullopt;
-        const std::optional<Folder::Range> index = folder.rangeOf(type);
-        if (!index) return std::nullopt;
-        return arrayLayout(*index, type_elem(type), folder);
+        const unsigned dimensions = dimension_of(type);
+        std::vector<Folder::Range> ranges;
+        for (unsigned dimension = 0; dimension < dimensions; ++dimension) {
+            const std::optional<Folder::Range> range = folder.rangeOf(type, dimension);
+            if (!range) return std::nullopt;
+            ranges.push_back(*range);
+        }
+        if (ranges.empty()) return std::nullopt;
+        return arrayLayout(ranges.front(), type_elem(type), folder,
+                           std::vector<Folder::Range>(ranges.begin() + 1, ranges.end()));
     }
     const std::optional<eir::Type> storage = scalarStorage(type);
     if (!storage) return std::nullopt;
@@ -299,11 +319,12 @@ std::optional<eir::BitVector> constantBits(tree_t expression, const Layout& layo
         if (!value) return std::nullopt;
         return encode(*value, layout.storage);
     }
-    const std::optional<Layout> element = layoutOf(layout.elementType, folder);
+    const std::optional<Layout> element = elementLayout(layout, folder);
     if (!element) return std::nullopt;
-    const std::optional<std::vector<eir::BitVector>> elements =
-        elementsOf(expression, Elements{.type = layout.elementType, .layout = *element},
-                   layout.index.length(), folder);
+    const std::optional<std::vector<eir::BitVector>> elements = elementsOf(
+        expression,
+        Elements{.type = layout.inner.empty() ? layout.elementType : nullptr, .layout = *element},
+        layout.index.length(), folder);
     if (!elements) return std::nullopt;
     return pack(*elements, layout);
 }
@@ -314,9 +335,11 @@ std::optional<eir::BitVector> defaultBits(type_t type, const Layout& layout, con
         if (!left) return std::nullopt;
         return encode(*left, layout.storage);
     }
-    const std::optional<Layout> element = layoutOf(layout.elementType, folder);
+    const std::optional<Layout> element = elementLayout(layout, folder);
     if (!element) return std::nullopt;
-    const std::optional<eir::BitVector> one = defaultBits(layout.elementType, *element, folder);
+    const std::optional<eir::BitVector> one =
+        element->isArray() ? defaultBits(nullptr, *element, folder)
+                           : defaultBits(layout.elementType, *element, folder);
     if (!one) return std::nullopt;
     return pack(std::vector<eir::BitVector>(static_cast<std::size_t>(layout.index.length()), *one),
                 layout);

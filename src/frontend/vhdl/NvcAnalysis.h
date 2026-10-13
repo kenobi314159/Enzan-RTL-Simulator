@@ -5,6 +5,7 @@
 #include "frontend/vhdl/VhdlFrontend.h"
 
 #include <string>
+#include <vector>
 
 namespace enzan {
 struct Diagnostic;
@@ -44,8 +45,9 @@ unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources
 /// returning the number of errors either reported.
 ///
 /// `encoded` receives the translated definitions as `eir::encodeModules` writes them, when there
-/// were no errors.
+/// were no errors, and `libraries` the library of each in order, which that encoding leaves out.
 unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources,
-                      DiagnosticSink& sink, std::string& encoded);
+                      DiagnosticSink& sink, std::string& encoded,
+                      std::vector<std::string>& libraries);
 
 } // namespace enzan::frontend::vhdl

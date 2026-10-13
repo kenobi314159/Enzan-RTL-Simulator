@@ -35,3 +35,9 @@ enzan_add_vhdl_golden_test(statements)
 # Arrays of bits and of arrays: aggregates, slices, elements by static and dynamic index, signal
 # assignments to parts, concatenation, and the operators on arrays.
 enzan_add_vhdl_golden_test(arrays)
+
+# Subprograms, callable and inlined, of a package and of an architecture.
+enzan_add_vhdl_golden_test(subprograms)
+
+# A counter on std_logic and numeric_std, which are translated from the IEEE packages' own bodies.
+enzan_add_vhdl_golden_test(ieee_counter)

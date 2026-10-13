@@ -23,12 +23,16 @@ namespace enzan::frontend::vhdl {
 /// and the caller either computes it at run time or reports it.
 class Folder {
 public:
-    /// Values of generics, by declaration: an instance's, which the hierarchy walk binds.
+    /// Values of generics, by declaration: an instance's, which the hierarchy walk binds. A
+    /// subprogram's specialisation binds the parameters its bounds depend on here too.
     using Generics = std::map<tree_t, std::int64_t>;
 
     Folder() = default;
 
     explicit Folder(Generics bound) : generics(std::move(bound)) {}
+
+    /// Binds `declaration`, a generic or a parameter, to `value`.
+    void bind(tree_t declaration, std::int64_t value) { generics[declaration] = value; }
 
     /// The value of `expression`, or nothing when it is not one this can fold.
     [[nodiscard]] std::optional<std::int64_t> integer(tree_t expression) const;
@@ -61,12 +65,21 @@ public:
 
     [[nodiscard]] const Generics& bindings() const noexcept { return generics; }
 
+    /// Gives `declaration`, an object of an unconstrained array type, the bounds it takes from its
+    /// context: a parameter's from the actual of the call, so that `l'length` folds.
+    void bindBounds(tree_t declaration, const Range& bounds) { objectBounds[declaration] = bounds; }
+
+    /// The bounds of dimension `dimension` of the array `name` designates: those bound to the
+    /// object it names, or its subtype's.
+    [[nodiscard]] std::optional<Range> boundsOf(tree_t name, unsigned dimension = 0) const;
+
 private:
     [[nodiscard]] std::optional<std::int64_t> call(tree_t expression) const;
     [[nodiscard]] std::optional<std::int64_t> attribute(tree_t expression) const;
     [[nodiscard]] std::optional<std::int64_t> reference(tree_t expression) const;
 
     Generics generics;
+    std::map<tree_t, Range> objectBounds;
 };
 
 } // namespace enzan::frontend::vhdl

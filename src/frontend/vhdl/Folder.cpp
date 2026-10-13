@@ -2,6 +2,7 @@
 
 #include "frontend/vhdl/Folder.h"
 
+#include <string>
 #include <vector>
 
 namespace enzan::frontend::vhdl {
@@ -13,6 +14,20 @@ namespace {
 std::int64_t modulo(std::int64_t left, std::int64_t right) {
     const std::int64_t remainder = left % right;
     return remainder != 0 && ((remainder < 0) != (right < 0)) ? remainder + right : remainder;
+}
+
+/// The value of a deferred constant whose full declaration computes it with one of NVC's foreign
+/// functions, which Enzan supplies (DESIGN_GUIDE.md section 5.2), or nothing for any other.
+std::optional<std::int64_t> foreignConstant(tree_t declaration) {
+    tree_t unit = tree_container(declaration);
+    if (tree_kind(unit) != T_PACKAGE) return std::nullopt;
+    const std::string name =
+        std::string(istr(tree_ident(unit))) + "." + istr(tree_ident(declaration));
+
+    // Whether numeric_std's warnings of metavalues and truncation are silenced: they are not, as
+    // they are not by default in GHDL or in the IEEE packages themselves.
+    if (name == "NVC.SIM_PKG.IEEE_NO_WARNING") return 0;
+    return std::nullopt;
 }
 
 std::optional<std::int64_t> power(std::int64_t base, std::int64_t exponent) {
@@ -69,10 +84,11 @@ std::optional<std::int64_t> Folder::reference(tree_t expression) const {
     // A deferred constant has its value in the package body, which a design need not have
     // analysed; that one is not folded.
     case T_CONST_DECL:
-        if (!tree_has_value(declaration)) return std::nullopt;
+        if (!tree_has_value(declaration)) return foreignConstant(declaration);
         return integer(tree_value(declaration));
 
-    case T_GENERIC_DECL: {
+    case T_GENERIC_DECL:
+    case T_PARAM_DECL: {
         const auto bound = generics.find(declaration);
         if (bound != generics.end()) return bound->second;
         return std::nullopt;
@@ -196,7 +212,7 @@ std::optional<std::int64_t> Folder::attribute(tree_t expression) const {
             if (!given || *given < 1) return std::nullopt;
             dimension = static_cast<unsigned>(*given - 1);
         }
-        const std::optional<Range> folded = rangeOf(tree_type(prefix), dimension);
+        const std::optional<Range> folded = boundsOf(prefix, dimension);
         if (!folded) return std::nullopt;
         switch (kind) {
         case ATTR_LEFT: return folded->left;
@@ -246,7 +262,7 @@ std::optional<Folder::Range> Folder::range(tree_t range) const {
             if (!given || *given < 1) return std::nullopt;
             dimension = static_cast<unsigned>(*given - 1);
         }
-        std::optional<Range> folded = rangeOf(tree_type(prefix), dimension);
+        std::optional<Range> folded = boundsOf(prefix, dimension);
         if (folded && tree_subkind(attribute) == ATTR_REVERSE_RANGE) {
             std::swap(folded->left, folded->right);
             folded->ascending = !folded->ascending;
@@ -256,6 +272,14 @@ std::optional<Folder::Range> Folder::range(tree_t range) const {
 
     default: return std::nullopt;
     }
+}
+
+std::optional<Folder::Range> Folder::boundsOf(tree_t name, unsigned dimension) const {
+    if (dimension == 0 && tree_kind(name) == T_REF && tree_has_ref(name)) {
+        const auto bound = objectBounds.find(tree_ref(name));
+        if (bound != objectBounds.end()) return bound->second;
+    }
+    return tree_has_type(name) ? rangeOf(tree_type(name), dimension) : std::nullopt;
 }
 
 std::optional<Folder::Range> Folder::rangeOf(type_t type, unsigned dimension) const {

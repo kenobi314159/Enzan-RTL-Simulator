@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "frontend/vhdl/ProcessTranslator.h"
+#include "frontend/vhdl/BodyTranslator.h"
 
 #include "frontend/vhdl/Types.h"
 
@@ -34,74 +34,161 @@ bool canSuspend(tree_t process) {
            || tree_visit_only(process, nullptr, nullptr, T_PCALL) > 0;
 }
 
+/// The EIR mode of the subprogram parameter `parameter`.
+eir::ParameterMode modeOf(tree_t parameter) {
+    switch (tree_subkind(parameter)) {
+    case PORT_OUT: return eir::ParameterMode::Out;
+    case PORT_INOUT: return eir::ParameterMode::InOut;
+    default: return eir::ParameterMode::In;
+    }
+}
+
+/// What `shapeParameters` gathers: the parameters of one subprogram, and which of them it has met.
+struct ShapeSearch {
+    tree_t body = nullptr;
+    std::vector<bool> found;
+};
+
+void noteParameter(tree_t reference, void* context) {
+    auto& search = *static_cast<ShapeSearch*>(context);
+    if (!tree_has_ref(reference) || tree_kind(tree_ref(reference)) != T_PARAM_DECL) return;
+    // An array parameter is named in a bound only through an attribute of its bounds, which the
+    // shape holds anyway.
+    if (type_is_array(tree_type(tree_ref(reference)))) return;
+    for (unsigned index = 0; index < tree_ports(search.body); ++index) {
+        if (tree_port(search.body, index) == tree_ref(reference)) search.found[index] = true;
+    }
+}
+
+/// Notes the parameters named in the bounds of `type` and of the subtypes it is declared through.
+void searchType(type_t type, ShapeSearch& search) {
+    for (; type != nullptr && type_kind(type) == T_SUBTYPE; type = type_base(type)) {
+        if (!type_has_constraint(type)) continue;
+        tree_t constraint = type_constraint(type);
+        for (unsigned index = 0; index < tree_ranges(constraint); ++index)
+            tree_visit_only(tree_range(constraint, index), noteParameter, &search, T_REF);
+    }
+}
+
 } // namespace
 
-ProcessTranslator::ProcessTranslator(ArchitectureScope& scope, tree_t statement, std::string name)
-    : owner(scope), source(statement) {
+std::vector<bool> shapeParameters(tree_t body) {
+    ShapeSearch search{.body = body, .found = std::vector<bool>(tree_ports(body), false)};
+    for (unsigned index = 0; index < tree_decls(body); ++index) {
+        tree_t declaration = tree_decl(body, index);
+        switch (tree_kind(declaration)) {
+        case T_CONST_DECL:
+            if (tree_has_value(declaration))
+                tree_visit_only(tree_value(declaration), noteParameter, &search, T_REF);
+            searchType(tree_type(declaration), search);
+            break;
+        case T_VAR_DECL:
+        case T_ALIAS:
+        case T_SUBTYPE_DECL:
+        case T_TYPE_DECL: searchType(tree_type(declaration), search); break;
+        default: break;
+        }
+    }
+    return search.found;
+}
+
+tree_t subprogramBody(tree_t declaration) {
+    const tree_kind_t kind = tree_kind(declaration);
+    if (kind == T_FUNC_BODY || kind == T_PROC_BODY) return declaration;
+
+    // The body has the declaration's mangled name, in the package body when the declaration is in
+    // a package, and beside the declaration otherwise.
+    tree_t unit = tree_container(declaration);
+    tree_t region = tree_kind(unit) == T_PACKAGE ? body_of(unit) : unit;
+    if (region == nullptr) return nullptr;
+    ident_t name = tree_ident2(declaration);
+    for (unsigned index = 0; index < tree_decls(region); ++index) {
+        tree_t candidate = tree_decl(region, index);
+        const tree_kind_t candidateKind = tree_kind(candidate);
+        if ((candidateKind == T_FUNC_BODY || candidateKind == T_PROC_BODY)
+            && tree_ident2(candidate) == name)
+            return candidate;
+    }
+    return nullptr;
+}
+
+BodyTranslator::BodyTranslator(DefinitionScope& scope, tree_t statement, std::string name)
+    : owner(scope), source(statement), folders{scope.folder()} {
     process.name = std::move(name);
     process.kind = eir::ProcessKind::Always;
     process.drivesSignals = true;
     process.location = owner.locate(statement);
 }
 
+BodyTranslator::BodyTranslator(DefinitionScope& scope, tree_t body, std::string name,
+                               SubprogramBindings specialisation)
+    : owner(scope),
+      source(body),
+      isProcess(false),
+      parameterLayouts(std::move(specialisation.parameters)),
+      folders{std::move(specialisation.folder)} {
+    subprogram.name = std::move(name);
+    subprogram.location = owner.locate(body);
+}
+
 // --- emission ---------------------------------------------------------------
 
-std::uint32_t ProcessTranslator::newRegister(eir::Type type) {
-    process.registerTypes.push_back(type);
-    return static_cast<std::uint32_t>(process.registerTypes.size() - 1);
+std::uint32_t BodyTranslator::newRegister(eir::Type type) {
+    body().registerTypes.push_back(type);
+    return static_cast<std::uint32_t>(body().registerTypes.size() - 1);
 }
 
-std::uint32_t ProcessTranslator::newBlock(std::string label) {
+std::uint32_t BodyTranslator::newBlock(std::string label) {
     eir::BasicBlock block;
     block.label = std::move(label);
-    process.blocks.push_back(std::move(block));
-    return static_cast<std::uint32_t>(process.blocks.size() - 1);
+    body().blocks.push_back(std::move(block));
+    return static_cast<std::uint32_t>(body().blocks.size() - 1);
 }
 
-void ProcessTranslator::selectBlock(std::uint32_t block) {
+void BodyTranslator::selectBlock(std::uint32_t block) {
     current = block;
 }
 
-bool ProcessTranslator::terminated() const {
-    const std::vector<eir::Instruction>& instructions = process.blocks[current].instructions;
+bool BodyTranslator::terminated() const {
+    const std::vector<eir::Instruction>& instructions = body().blocks[current].instructions;
     return !instructions.empty() && eir::isTerminator(instructions.back().opcode);
 }
 
-void ProcessTranslator::emit(const eir::Instruction& instruction) {
+void BodyTranslator::emit(const eir::Instruction& instruction) {
     eir::Instruction stamped = instruction;
     stamped.location = statementLocation;
-    process.blocks[current].instructions.push_back(stamped);
+    body().blocks[current].instructions.push_back(stamped);
 }
 
-void ProcessTranslator::jump(std::uint32_t block) {
+void BodyTranslator::jump(std::uint32_t block) {
     if (!terminated())
         emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(block)));
 }
 
-std::uint32_t ProcessTranslator::addConstant(const eir::BitVector& value) {
-    process.constants.push_back(value);
-    return static_cast<std::uint32_t>(process.constants.size() - 1);
+std::uint32_t BodyTranslator::addConstant(const eir::BitVector& value) {
+    body().constants.push_back(value);
+    return static_cast<std::uint32_t>(body().constants.size() - 1);
 }
 
-std::uint32_t ProcessTranslator::addString(std::string text) {
-    process.strings.push_back(std::move(text));
-    return static_cast<std::uint32_t>(process.strings.size() - 1);
+std::uint32_t BodyTranslator::addString(std::string text) {
+    body().strings.push_back(std::move(text));
+    return static_cast<std::uint32_t>(body().strings.size() - 1);
 }
 
-std::uint32_t ProcessTranslator::addSysCall(eir::SysTaskCall call) {
-    process.sysCalls.push_back(std::move(call));
-    return static_cast<std::uint32_t>(process.sysCalls.size() - 1);
+std::uint32_t BodyTranslator::addSysCall(eir::SysTaskCall call) {
+    body().sysCalls.push_back(std::move(call));
+    return static_cast<std::uint32_t>(body().sysCalls.size() - 1);
 }
 
-ProcessTranslator::Value ProcessTranslator::constant(std::int64_t value, eir::Type type,
-                                                     type_t vhdlType) {
+BodyTranslator::Value BodyTranslator::constant(std::int64_t value, eir::Type type,
+                                               type_t vhdlType) {
     const std::uint32_t reg = newRegister(type);
     emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(reg),
                                 eir::Operand::constant(addConstant(encode(value, type)))));
     return Value{.reg = reg, .type = type, .vhdlType = vhdlType};
 }
 
-ProcessTranslator::Value ProcessTranslator::resize(const Value& value, std::uint32_t width) {
+BodyTranslator::Value BodyTranslator::resize(const Value& value, std::uint32_t width) {
     if (value.type.bitWidth() == width) return value;
     const eir::Type type = eir::Type::bits(width, value.type.isSigned(), false);
     const std::uint32_t reg = newRegister(type);
@@ -114,11 +201,11 @@ ProcessTranslator::Value ProcessTranslator::resize(const Value& value, std::uint
     return Value{.reg = reg, .type = type, .vhdlType = value.vhdlType};
 }
 
-void ProcessTranslator::noteRead(std::uint32_t objectIndex) {
+void BodyTranslator::noteRead(std::uint32_t objectIndex) {
     reads.insert(objectIndex);
 }
 
-void ProcessTranslator::noteWrite(const Place& place) {
+void BodyTranslator::noteWrite(const Place& place) {
     const std::uint32_t width = owner.definition().objects[place.objectIndex].type.bitWidth();
     if (place.whole || place.offset) {
         writes.push_back(eir::WriteExtent::whole(place.objectIndex, width));
@@ -129,8 +216,8 @@ void ProcessTranslator::noteWrite(const Place& place) {
                                       .width = place.layout.storage.bitWidth()});
 }
 
-ProcessTranslator::Value ProcessTranslator::constantArray(const eir::BitVector& bits,
-                                                          const Layout& layout, type_t vhdlType) {
+BodyTranslator::Value BodyTranslator::constantArray(const eir::BitVector& bits,
+                                                    const Layout& layout, type_t vhdlType) {
     const std::uint32_t reg = newRegister(layout.storage);
     emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(reg),
                                 eir::Operand::constant(addConstant(bits))));
@@ -139,18 +226,18 @@ ProcessTranslator::Value ProcessTranslator::constantArray(const eir::BitVector& 
     return value;
 }
 
-std::optional<Layout> ProcessTranslator::layoutFor(type_t type) const {
-    return layoutOf(type, owner.folder());
+std::optional<Layout> BodyTranslator::layoutFor(type_t type) const {
+    return layoutOf(type, folder());
 }
 
-bool ProcessTranslator::fail(tree_t where, std::string_view what) {
+bool BodyTranslator::fail(tree_t where, std::string_view what) {
     owner.unsupported(where, what);
     return false;
 }
 
 // --- the process --------------------------------------------------------------
 
-std::optional<eir::Process> ProcessTranslator::translate() {
+std::optional<eir::Process> BodyTranslator::translate() {
     if (!canSuspend(source)) {
         owner.reportNeverWaits(source);
         return std::nullopt;
@@ -171,13 +258,77 @@ std::optional<eir::Process> ProcessTranslator::translate() {
     if (!statements(source)) return std::nullopt;
     jump(loop);
 
-    process.readSet.assign(reads.begin(), reads.end());
-    process.writeSet = writes;
-    eir::normaliseWriteSet(process.writeSet);
+    body().readSet.assign(reads.begin(), reads.end());
+    body().writeSet = writes;
+    eir::normaliseWriteSet(body().writeSet);
     return std::move(process);
 }
 
-bool ProcessTranslator::declare(tree_t declaration) {
+std::optional<BodyTranslator::Translated> BodyTranslator::translateSubprogram() {
+    const std::uint32_t entry = newBlock("entry");
+    selectBlock(entry);
+    statementLocation = owner.locate(source);
+
+    // Each parameter is a register the call fills before the body starts.
+    for (unsigned index = 0; index < tree_ports(source); ++index) {
+        tree_t parameter = tree_port(source, index);
+        const Layout& layout = parameterLayouts.at(index);
+        const Value value{.reg = newRegister(layout.storage),
+                          .type = layout.storage,
+                          .vhdlType = tree_type(parameter),
+                          .layout = layout};
+        subprogram.parameters.push_back(
+            eir::SubprogramParameter{.name = simpleName(tree_ident(parameter)),
+                                     .mode = modeOf(parameter),
+                                     .registerIndex = value.reg});
+        locals[parameter] = value;
+    }
+
+    // A function whose result type has bounds of its own has its result register from the start;
+    // one whose has not takes its first `return`'s.
+    if (tree_kind(source) == T_FUNC_BODY) {
+        if (const std::optional<Layout> declared = layoutFor(type_result(tree_type(source)))) {
+            resultLayout = declared;
+            subprogram.resultRegister = newRegister(declared->storage);
+            subprogram.resultType = declared->storage;
+        }
+    }
+
+    for (unsigned index = 0; index < tree_decls(source); ++index) {
+        if (!declare(tree_decl(source, index))) return std::nullopt;
+    }
+    if (!statements(source)) return std::nullopt;
+
+    // Running off the end of a function is an error (IEEE 1076 section 4.2.1); off a procedure's,
+    // a return.
+    if (!terminated()) {
+        if (tree_kind(source) == T_FUNC_BODY) {
+            eir::SysTaskCall report;
+            report.kind = eir::SysTaskKind::Report;
+            report.location = owner.locate(source);
+            report.arguments.push_back(eir::SysTaskArgument{
+                .value = eir::Operand::reg(
+                    constant(SeverityFailure, eir::Type::bits(8, false, false), nullptr).reg),
+                .type = eir::Type::bits(8, false, false)});
+            report.formatIndex = addString("function " + simpleName(tree_ident(source))
+                                           + " reached its end without a return");
+            emit(eir::Instruction::make(eir::Opcode::SysTask, {},
+                                        eir::Operand::sysCall(addSysCall(std::move(report)))));
+        }
+        emit(eir::Instruction::make(eir::Opcode::Return));
+    }
+    if (tree_kind(source) == T_FUNC_BODY && !resultLayout) {
+        fail(source, "a function that returns no value of a length known here");
+        return std::nullopt;
+    }
+
+    body().readSet.assign(reads.begin(), reads.end());
+    body().writeSet = writes;
+    eir::normaliseWriteSet(body().writeSet);
+    return Translated{.subprogram = std::move(subprogram), .result = resultLayout};
+}
+
+bool BodyTranslator::declare(tree_t declaration) {
     switch (tree_kind(declaration)) {
     case T_VAR_DECL:
     case T_CONST_DECL: {
@@ -194,7 +345,7 @@ bool ProcessTranslator::declare(tree_t declaration) {
             initial = expression(tree_value(declaration), &*layout);
             if (!initial) return false;
         } else {
-            const std::optional<eir::BitVector> bits = defaultBits(type, *layout, owner.folder());
+            const std::optional<eir::BitVector> bits = defaultBits(type, *layout, folder());
             if (!bits)
                 return fail(declaration, std::string("the initial value of a ") + type_pp(type));
             initial = constantArray(*bits, *layout, type);
@@ -210,14 +361,31 @@ bool ProcessTranslator::declare(tree_t declaration) {
         return true;
     }
 
-    // Declarations that make nothing at run time.
+    // An alias designates what it names, through its own bounds when it gives a subtype.
+    case T_ALIAS: {
+        std::optional<Place> aliased = place(tree_value(declaration));
+        if (!aliased) return false;
+        if (tree_has_type(declaration) && type_is_array(tree_type(declaration))) {
+            if (const std::optional<Layout> layout = layoutFor(tree_type(declaration))) {
+                if (layout->storage.bitWidth() != aliased->layout.storage.bitWidth())
+                    return fail(declaration, "an alias of another length than what it names");
+                aliased->layout = *layout;
+            }
+        }
+        aliases[declaration] = *aliased;
+        return true;
+    }
+
+    // Declarations that make nothing at run time; a subprogram is translated when called.
     case T_TYPE_DECL:
     case T_SUBTYPE_DECL:
     case T_ATTR_DECL:
     case T_ATTR_SPEC:
     case T_USE:
     case T_FUNC_DECL:
-    case T_PROC_DECL: return true;
+    case T_PROC_DECL:
+    case T_FUNC_BODY:
+    case T_PROC_BODY: return true;
 
     default:
         return fail(declaration,
@@ -225,7 +393,7 @@ bool ProcessTranslator::declare(tree_t declaration) {
     }
 }
 
-bool ProcessTranslator::statements(tree_t container) {
+bool BodyTranslator::statements(tree_t container) {
     const unsigned count = tree_stmts(container);
     for (unsigned index = 0; index < count; ++index) {
         // What follows an `exit` or a `next` cannot run, but it is still translated, into a block
@@ -236,7 +404,7 @@ bool ProcessTranslator::statements(tree_t container) {
     return true;
 }
 
-bool ProcessTranslator::statement(tree_t statement) {
+bool BodyTranslator::statement(tree_t statement) {
     statementLocation = owner.locate(statement);
     switch (tree_kind(statement)) {
     case T_SIGNAL_ASSIGN: return signalAssignment(statement);
@@ -252,15 +420,18 @@ bool ProcessTranslator::statement(tree_t statement) {
     case T_ASSERT: return assertion(statement);
     case T_REPORT: return report(statement);
     case T_PCALL: return procedureCall(statement);
+    case T_RETURN: return returnStatement(statement);
     case T_NULL: return true;
     default:
         return fail(statement, std::string("the statement ") + tree_kind_str(tree_kind(statement)));
     }
 }
 
-bool ProcessTranslator::signalAssignment(tree_t statement) {
+bool BodyTranslator::signalAssignment(tree_t statement) {
+    if (!isProcess) return fail(statement, "a signal assignment in a function");
     const std::optional<Place> target = place(tree_target(statement));
     if (!target) return false;
+    if (target->empty) return true;
     if (target->isVariable)
         return fail(tree_target(statement), "assigning a signal that is not declared by the "
                                             "architecture");
@@ -294,10 +465,10 @@ bool ProcessTranslator::signalAssignment(tree_t statement) {
         tree_t reject = tree_reject(statement);
         tree_t first = tree_waveform(statement, 0);
         if (!tree_has_delay(first) || reject != tree_delay(first)) {
-            const std::optional<std::int64_t> limit = owner.folder().integer(reject);
-            const std::optional<std::int64_t> firstDelay =
-                tree_has_delay(first) ? owner.folder().integer(tree_delay(first))
-                                      : std::optional<std::int64_t>(0);
+            const std::optional<std::int64_t> limit = folder().integer(reject);
+            const std::optional<std::int64_t> firstDelay = tree_has_delay(first)
+                                                               ? folder().integer(tree_delay(first))
+                                                               : std::optional<std::int64_t>(0);
             if (limit == 0) {
                 inertial = false;
             } else if (!limit || limit != firstDelay) {
@@ -334,10 +505,11 @@ bool ProcessTranslator::signalAssignment(tree_t statement) {
     return true;
 }
 
-bool ProcessTranslator::variableAssignment(tree_t statement) {
+bool BodyTranslator::variableAssignment(tree_t statement) {
     tree_t name = tree_target(statement);
     const std::optional<Place> target = place(name);
     if (!target) return false;
+    if (target->empty) return true;
     if (!target->isVariable)
         return fail(name, "assigning a variable that is not declared by the process");
 
@@ -359,7 +531,7 @@ bool ProcessTranslator::variableAssignment(tree_t statement) {
     return true;
 }
 
-bool ProcessTranslator::ifStatement(tree_t statement) {
+bool BodyTranslator::ifStatement(tree_t statement) {
     const std::uint32_t join = newBlock("if-join");
     const unsigned count = tree_conds(statement);
     for (unsigned index = 0; index < count; ++index) {
@@ -371,6 +543,17 @@ bool ProcessTranslator::ifStatement(tree_t statement) {
         }
 
         statementLocation = owner.locate(branch);
+
+        // A condition known statically chooses its branch here, as a generate statement's does:
+        // in a subprogram specialised for its bounds, that is how a guard for a case that cannot
+        // arise leaves nothing behind.
+        if (const std::optional<std::int64_t> known = folder().integer(tree_value(branch))) {
+            if (*known == 0) continue;
+            if (!statements(branch)) return false;
+            jump(join);
+            break;
+        }
+
         const std::optional<Value> condition = expression(tree_value(branch));
         if (!condition) return false;
         const std::uint32_t taken = newBlock("if-then");
@@ -387,8 +570,8 @@ bool ProcessTranslator::ifStatement(tree_t statement) {
     return true;
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::choiceTest(const Value& selector,
-                                                                      tree_t choice) {
+std::optional<BodyTranslator::Value> BodyTranslator::choiceTest(const Value& selector,
+                                                                tree_t choice) {
     if (tree_has_name(choice)) {
         const std::optional<Value> value =
             expression(tree_name(choice), selector.layout.isArray() ? &selector.layout : nullptr);
@@ -404,7 +587,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::choiceTest(const Valu
     }
 
     if (tree_ranges(choice) == 1 && !selector.layout.isArray()) {
-        const std::optional<Folder::Range> range = owner.folder().range(tree_range(choice, 0));
+        const std::optional<Folder::Range> range = folder().range(tree_range(choice, 0));
         if (!range) {
             fail(choice, "a choice whose range is not static");
             return std::nullopt;
@@ -423,7 +606,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::choiceTest(const Valu
     return std::nullopt;
 }
 
-bool ProcessTranslator::caseStatement(tree_t statement) {
+bool BodyTranslator::caseStatement(tree_t statement) {
     const std::optional<Value> selector = expression(tree_value(statement));
     if (!selector) return false;
     const bool discrete = selector->type.isBits() && !selector->layout.isArray()
@@ -469,7 +652,7 @@ bool ProcessTranslator::caseStatement(tree_t statement) {
     return true;
 }
 
-bool ProcessTranslator::whileLoop(tree_t statement) {
+bool BodyTranslator::whileLoop(tree_t statement) {
     const std::uint32_t head = newBlock("loop-head");
     const std::uint32_t body = newBlock("loop-body");
     const std::uint32_t exit = newBlock("loop-exit");
@@ -498,7 +681,7 @@ bool ProcessTranslator::whileLoop(tree_t statement) {
     return true;
 }
 
-bool ProcessTranslator::forLoop(tree_t statement) {
+bool BodyTranslator::forLoop(tree_t statement) {
     if (tree_decls(statement) != 1 || tree_ranges(statement) != 1)
         return fail(statement, "this form of for loop");
     tree_t parameter = tree_decl(statement, 0);
@@ -506,16 +689,22 @@ bool ProcessTranslator::forLoop(tree_t statement) {
     const std::optional<eir::Type> storage = scalarStorage(type);
     if (!storage) return fail(statement, std::string("a loop over ") + type_pp(type));
 
-    // The bounds are evaluated once, before the first iteration (IEEE 1076 section 10.10).
+    // The bounds are evaluated once, before the first iteration (IEEE 1076 section 10.10). An
+    // attribute's range, `v'range`, has bounds the adapter has folded.
     tree_t range = tree_range(statement, 0);
-    const bool ascending = tree_subkind(range) == RANGE_TO;
-    if (tree_subkind(range) != RANGE_TO && tree_subkind(range) != RANGE_DOWNTO) {
-        const std::optional<Folder::Range> folded = owner.folder().range(range);
+    bool ascending = tree_subkind(range) == RANGE_TO;
+    std::optional<Value> left;
+    std::optional<Value> right;
+    if (tree_subkind(range) == RANGE_TO || tree_subkind(range) == RANGE_DOWNTO) {
+        left = expression(tree_left(range));
+        right = expression(tree_right(range));
+    } else {
+        const std::optional<Folder::Range> folded = folder().range(range);
         if (!folded) return fail(range, "a loop over a range that is not static");
-        return fail(range, "a loop over an attribute's range");
+        ascending = folded->ascending;
+        left = constant(folded->left, *storage, type);
+        right = constant(folded->right, *storage, type);
     }
-    const std::optional<Value> left = expression(tree_left(range));
-    const std::optional<Value> right = expression(tree_right(range));
     if (!left || !right) return false;
     const Value first = resize(*left, storage->bitWidth());
     const Value last = resize(*right, storage->bitWidth());
@@ -565,7 +754,7 @@ bool ProcessTranslator::forLoop(tree_t statement) {
     return true;
 }
 
-bool ProcessTranslator::loopJump(tree_t statement, bool isExit) {
+bool BodyTranslator::loopJump(tree_t statement, bool isExit) {
     // An unlabelled `exit` or `next` leaves the innermost loop; a labelled one the loop of that
     // label, which may be further out.
     auto target = loops.rbegin();
@@ -590,7 +779,8 @@ bool ProcessTranslator::loopJump(tree_t statement, bool isExit) {
     return true;
 }
 
-bool ProcessTranslator::waitStatement(tree_t statement) {
+bool BodyTranslator::waitStatement(tree_t statement) {
+    if (!isProcess) return fail(statement, "a wait in a function");
     const bool hasDelay = tree_has_delay(statement);
     const bool hasCondition = tree_has_value(statement);
     const unsigned triggerCount = tree_triggers(statement);
@@ -651,7 +841,7 @@ bool ProcessTranslator::waitStatement(tree_t statement) {
     return true;
 }
 
-bool ProcessTranslator::assertion(tree_t statement) {
+bool BodyTranslator::assertion(tree_t statement) {
     const std::optional<Value> condition = expression(tree_value(statement));
     if (!condition) return false;
 
@@ -678,7 +868,7 @@ bool ProcessTranslator::assertion(tree_t statement) {
     return true;
 }
 
-bool ProcessTranslator::report(tree_t statement) {
+bool BodyTranslator::report(tree_t statement) {
     std::optional<Value> severity;
     if (tree_has_severity(statement)) {
         severity = expression(tree_severity(statement));
@@ -689,8 +879,8 @@ bool ProcessTranslator::report(tree_t statement) {
     return emitReport(statement, *severity, tree_message(statement), "");
 }
 
-bool ProcessTranslator::emitReport(tree_t where, const Value& severity, tree_t message,
-                                   std::string_view fallback) {
+bool BodyTranslator::emitReport(tree_t where, const Value& severity, tree_t message,
+                                std::string_view fallback) {
     eir::SysTaskCall call;
     call.kind = eir::SysTaskKind::Report;
     call.location = owner.locate(where);
@@ -709,8 +899,8 @@ bool ProcessTranslator::emitReport(tree_t where, const Value& severity, tree_t m
     return true;
 }
 
-bool ProcessTranslator::messageParts(tree_t message, std::string& format,
-                                     std::vector<eir::SysTaskArgument>& arguments) {
+bool BodyTranslator::messageParts(tree_t message, std::string& format,
+                                  std::vector<eir::SysTaskArgument>& arguments) {
     switch (tree_kind(message)) {
     case T_STRING: {
         const unsigned count = tree_chars(message);
@@ -789,7 +979,7 @@ bool ProcessTranslator::messageParts(tree_t message, std::string& format,
                          "'image of integers and times");
 }
 
-bool ProcessTranslator::procedureCall(tree_t statement) {
+bool BodyTranslator::procedureCall(tree_t statement) {
     if (!tree_has_ref(statement)) return fail(statement, "this procedure call");
     tree_t declaration = tree_ref(statement);
     ident_t name = tree_ident2(declaration);
@@ -803,14 +993,288 @@ bool ProcessTranslator::procedureCall(tree_t statement) {
                                     eir::Operand::sysCall(addSysCall(std::move(call)))));
         return true;
     }
-    return fail(statement, std::string("a call of ") + istr(name));
+    return callSubprogram(statement, declaration).has_value();
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::delay(tree_t delay) {
+bool BodyTranslator::returnStatement(tree_t statement) {
+    // In an inlined subprogram, a return leaves its result where the call reads it and goes on
+    // after the call.
+    if (!inlined.empty()) {
+        if (tree_has_value(statement)) {
+            // The value may inline calls of its own, which grow `inlined` while it is translated,
+            // so the frame is looked up again afterwards.
+            std::optional<Layout> context;
+            if (const std::optional<Value>& made = inlined.back().result) context = made->layout;
+            const std::optional<Value> value =
+                expression(tree_value(statement), context ? &*context : nullptr);
+            if (!value) return false;
+            Value result = *value;
+            if (const std::optional<Value>& made = inlined.back().result) {
+                result = *made;
+            } else {
+                result.reg = newRegister(value->type);
+                inlined.back().result = result;
+            }
+            if (result.type.bitWidth() != value->type.bitWidth())
+                return fail(statement, "a return of another length than the function's others");
+            emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(result.reg),
+                                        eir::Operand::reg(value->reg)));
+        }
+        jump(inlined.back().exitBlock);
+        return true;
+    }
+    if (isProcess) return fail(statement, "a return outside a subprogram");
+
+    if (tree_has_value(statement)) {
+        const std::optional<Value> value =
+            expression(tree_value(statement), resultLayout ? &*resultLayout : nullptr);
+        if (!value) return false;
+        if (!resultLayout) {
+            resultLayout = value->layout.isArray() ? value->layout : Layout{.storage = value->type};
+            subprogram.resultRegister = newRegister(value->type);
+            subprogram.resultType = value->type;
+        }
+        if (resultLayout.value_or(Layout{}).storage.bitWidth() != value->type.bitWidth())
+            return fail(statement, "a return of another length than the function's others");
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(subprogram.resultRegister),
+                                    eir::Operand::reg(resize(*value, value->type.bitWidth()).reg)));
+    }
+    emit(eir::Instruction::make(eir::Opcode::Return));
+    return true;
+}
+
+std::optional<std::vector<tree_t>> BodyTranslator::actualsOf(tree_t call, tree_t declaration) {
+    const unsigned formals = tree_ports(declaration);
+    std::vector<tree_t> actuals(formals, nullptr);
+    for (unsigned index = 0; index < tree_params(call); ++index) {
+        tree_t association = tree_param(call, index);
+        std::optional<unsigned> formal;
+        if (tree_subkind(association) == P_POS) {
+            formal = tree_pos(association);
+        } else {
+            tree_t name = tree_name(association);
+            if (tree_kind(name) != T_REF || !tree_has_ref(name)) {
+                fail(association, "associating part of a parameter, or through a conversion");
+                return std::nullopt;
+            }
+            for (unsigned candidate = 0; candidate < formals; ++candidate) {
+                if (tree_port(declaration, candidate) == tree_ref(name)) formal = candidate;
+            }
+        }
+        const unsigned position = formal.value_or(formals);
+        if (position >= formals) {
+            fail(association, "this parameter association");
+            return std::nullopt;
+        }
+        actuals[position] = tree_value(association);
+    }
+    for (unsigned index = 0; index < formals; ++index) {
+        if (actuals[index] != nullptr) continue;
+        tree_t formal = tree_port(declaration, index);
+        if (!tree_has_value(formal)) {
+            fail(call, "a call that leaves out a parameter with no default");
+            return std::nullopt;
+        }
+        actuals[index] = tree_value(formal);
+    }
+    return actuals;
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
+                                                                    tree_t declaration) {
+    tree_t calleeBody = subprogramBody(declaration);
+    if (calleeBody == nullptr) {
+        fail(call, std::string("a call of ") + istr(tree_ident2(declaration))
+                       + ", whose body has not been analysed");
+        return std::nullopt;
+    }
+    const std::optional<std::vector<tree_t>> actuals = actualsOf(call, declaration);
+    if (!actuals) return std::nullopt;
+
+    // A procedure may wait and assign signals, and a subprogram may take a signal and read its
+    // attributes, neither of which a body of its own can do; nor can it reach the variables of
+    // the process that declares it. Those are inlined.
+    bool inlineIt = tree_kind(calleeBody) == T_PROC_BODY;
+    for (unsigned index = 0; index < tree_ports(declaration); ++index)
+        inlineIt = inlineIt || tree_class(tree_port(declaration, index)) == C_SIGNAL;
+    if (isProcess) {
+        for (unsigned index = 0; index < tree_decls(source); ++index)
+            inlineIt = inlineIt || tree_decl(source, index) == calleeBody;
+    }
+    if (inlineIt) return inlineCall(call, declaration, calleeBody, *actuals);
+
+    // Every parameter of a function is `in`, so each actual is a value.
+    Shape shape;
+    std::vector<Value> values;
+    for (unsigned index = 0; index < actuals->size(); ++index) {
+        tree_t formal = tree_port(declaration, index);
+        type_t formalType = tree_type(formal);
+        const std::optional<Layout> constrained = layoutFor(formalType);
+        std::optional<Value> value =
+            expression((*actuals)[index], constrained ? &*constrained : nullptr);
+        if (!value) return std::nullopt;
+        if (type_is_array(formalType) && !constrained && !value->layout.isArray()) {
+            fail((*actuals)[index], "an actual whose bounds are not known here");
+            return std::nullopt;
+        }
+        shape.bounds.push_back(type_is_array(formalType) && !constrained
+                                   ? std::optional(value->layout.index)
+                                   : std::nullopt);
+        shape.values.push_back(type_is_array(formalType) ? std::nullopt
+                                                         : folder().integer((*actuals)[index]));
+        values.push_back(*value);
+    }
+
+    const std::optional<Callee> found = owner.callee(declaration, shape, call);
+    if (!found) return std::nullopt;
+    const Callee& callee = *found;
+
+    eir::CallSite site{.definition = callee.definition,
+                       .subprogram = callee.name,
+                       .arguments = {},
+                       .result = eir::Operand::none(),
+                       .location = owner.locate(call)};
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        const Layout& parameter = callee.parameters.at(index);
+        if (parameter.isArray() && values[index].type.bitWidth() != parameter.storage.bitWidth()) {
+            fail((*actuals)[index], "an actual of another length than its parameter");
+            return std::nullopt;
+        }
+        site.arguments.push_back(
+            eir::Operand::reg(resize(values[index], parameter.storage.bitWidth()).reg));
+    }
+
+    Value result{.reg = 0, .type = eir::Type::voidType(), .vhdlType = nullptr};
+    if (const std::optional<Layout>& returned = callee.result) {
+        const Layout layout = *returned;
+        result = Value{.reg = newRegister(layout.storage),
+                       .type = layout.storage,
+                       .vhdlType = tree_has_type(call) ? tree_type(call) : nullptr,
+                       .layout = layout};
+        site.result = eir::Operand::reg(result.reg);
+    }
+    const auto index = static_cast<std::uint32_t>(body().calls.size());
+    body().calls.push_back(std::move(site));
+    emit(eir::Instruction::make(eir::Opcode::Call, {}, eir::Operand::call(index)));
+    return result;
+}
+
+std::optional<BodyTranslator::Value>
+BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
+                           const std::vector<tree_t>& actuals) {
+    for (const Inlined& frame : inlined) {
+        if (frame.body == calleeBody) {
+            fail(call, "a recursive call of a subprogram that has to be inlined");
+            return std::nullopt;
+        }
+    }
+
+    // The formals are the body's own, which its statements name; the actuals are in the order of
+    // the declaration's, which is the same.
+    Folder bindings = folder();
+    std::vector<std::pair<Value, Place>> copyBack;
+    for (unsigned index = 0; index < tree_ports(calleeBody); ++index) {
+        tree_t formal = tree_port(calleeBody, index);
+        tree_t actual = actuals.at(index);
+        type_t formalType = tree_type(formal);
+        const bool unconstrained = type_is_array(formalType) && !layoutFor(formalType);
+
+        if (tree_class(formal) == C_SIGNAL) {
+            const std::optional<Place> signal = place(actual);
+            if (!signal) return std::nullopt;
+            if (signal->isVariable) {
+                fail(actual, "a signal parameter whose actual is not a signal");
+                return std::nullopt;
+            }
+            if (unconstrained) bindings.bindBounds(formal, signal->layout.index);
+            aliases[formal] = *signal;
+            continue;
+        }
+
+        const eir::ParameterMode mode = modeOf(formal);
+        const std::optional<Layout> constrained = layoutFor(formalType);
+        std::optional<Value> initial;
+        std::optional<Place> target;
+        if (mode == eir::ParameterMode::In) {
+            initial = expression(actual, constrained ? &*constrained : nullptr);
+        } else {
+            target = place(actual);
+            if (!target) return std::nullopt;
+            initial = read(*target, tree_type(actual));
+        }
+        if (!initial) return std::nullopt;
+        if (unconstrained) {
+            if (!initial->layout.isArray()) {
+                fail(actual, "an actual whose bounds are not known here");
+                return std::nullopt;
+            }
+            bindings.bindBounds(formal, initial->layout.index);
+        }
+        if (!type_is_array(formalType)) {
+            if (const std::optional<std::int64_t> known = folder().integer(actual))
+                bindings.bind(formal, *known);
+        }
+
+        // A copy, so that what the subprogram does to its parameter stays its own.
+        Value parameter = *initial;
+        if (constrained) parameter.layout = *constrained;
+        parameter.vhdlType = formalType;
+        parameter.reg = newRegister(initial->type);
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(parameter.reg),
+                                    eir::Operand::reg(initial->reg)));
+        locals[formal] = parameter;
+        if (target) copyBack.emplace_back(parameter, *target);
+    }
+
+    folders.push_back(std::move(bindings));
+    inlined.push_back(Inlined{.body = calleeBody, .exitBlock = newBlock("return"), .result = {}});
+    bool translated = true;
+    for (unsigned index = 0; index < tree_decls(calleeBody) && translated; ++index)
+        translated = declare(tree_decl(calleeBody, index));
+    translated = translated && statements(calleeBody);
+    const Inlined frame = inlined.back();
+    inlined.pop_back();
+    folders.pop_back();
+    if (!translated) return std::nullopt;
+    jump(frame.exitBlock);
+    selectBlock(frame.exitBlock);
+
+    // What an `out` or `inout` parameter holds at the end goes back to its actual.
+    for (const auto& [parameter, target] : copyBack) {
+        if (target.isVariable) {
+            if (target.whole) {
+                emit(eir::Instruction::make(eir::Opcode::Move,
+                                            eir::Operand::reg(target.variable.reg),
+                                            eir::Operand::reg(parameter.reg)));
+            } else {
+                emit(eir::Instruction::make(
+                    eir::Opcode::SplicePart, eir::Operand::reg(target.variable.reg),
+                    eir::Operand::reg(parameter.reg), eir::Operand::reg(offsetRegister(target))));
+            }
+            continue;
+        }
+        fail(call, "an out parameter whose actual is a signal");
+        return std::nullopt;
+    }
+
+    if (tree_kind(calleeBody) == T_FUNC_BODY) {
+        if (!frame.result) {
+            fail(call, std::string("a call of ") + istr(tree_ident2(declaration))
+                           + ", which returns nothing here");
+            return std::nullopt;
+        }
+        Value result = frame.result.value_or(Value{});
+        result.vhdlType = tree_has_type(call) ? tree_type(call) : nullptr;
+        return result;
+    }
+    return Value{.reg = 0, .type = eir::Type::voidType(), .vhdlType = nullptr};
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::delay(tree_t delay) {
     const std::int64_t scale = femtosecondsPerUnit();
     const eir::Type type = eir::Type::bits(64, true, false);
 
-    if (const std::optional<std::int64_t> folded = owner.folder().integer(delay)) {
+    if (const std::optional<std::int64_t> folded = folder().integer(delay)) {
         if (*folded < 0) {
             fail(delay, "a negative delay");
             return std::nullopt;
@@ -818,7 +1282,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::delay(tree_t delay) {
         return constant(*folded / scale, type, tree_type(delay));
     }
 
-    const std::optional<Value> value = expression(delay);
+    std::optional<Value> value = expression(delay);
     if (!value || scale == 1) return value;
     const Value divisor = constant(scale, type, nullptr);
     const std::uint32_t reg = newRegister(type);
@@ -828,7 +1292,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::delay(tree_t delay) {
     return Value{.reg = reg, .type = type, .vhdlType = value->vhdlType};
 }
 
-std::int64_t ProcessTranslator::femtosecondsPerUnit() const {
+std::int64_t BodyTranslator::femtosecondsPerUnit() const {
     std::int64_t scale = 1;
     for (int exponent = -15; exponent < owner.timeUnitExponent(); ++exponent) scale *= 10;
     return scale;
@@ -836,14 +1300,14 @@ std::int64_t ProcessTranslator::femtosecondsPerUnit() const {
 
 // --- expressions ---------------------------------------------------------------
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::expression(tree_t expression,
-                                                                      const Layout* context) {
+std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expression,
+                                                                const Layout* context) {
     type_t type = tree_has_type(expression) ? tree_type(expression) : nullptr;
 
     // Anything static is folded first, so that a generic, a constant or an attribute of a type
     // costs nothing at run time.
     if (type != nullptr && type_is_scalar(type) && !type_is_real(type)) {
-        if (const std::optional<std::int64_t> folded = owner.folder().integer(expression)) {
+        if (const std::optional<std::int64_t> folded = folder().integer(expression)) {
             const std::optional<eir::Type> storage = scalarStorage(type);
             if (storage) return constant(*folded, *storage, type);
         }
@@ -857,7 +1321,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::expression(tree_t exp
         if (!layout && context != nullptr && context->isArray()) layout = *context;
         if (layout) {
             if (const std::optional<eir::BitVector> bits =
-                    constantBits(expression, *layout, owner.folder()))
+                    constantBits(expression, *layout, folder()))
                 return constantArray(*bits, *layout, type);
         }
     }
@@ -876,6 +1340,10 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::expression(tree_t exp
         if (designatesStorage(expression)) {
             const std::optional<Place> part = place(expression);
             if (!part) return std::nullopt;
+            if (part->empty) {
+                fail(expression, "reading a null slice");
+                return std::nullopt;
+            }
             return read(*part, type);
         }
         const std::optional<Value> array = this->expression(prefix);
@@ -885,7 +1353,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::expression(tree_t exp
             return std::nullopt;
         }
         return tree_kind(expression) == T_ARRAY_REF
-                   ? element(*array, tree_value(tree_param(expression, 0)), type)
+                   ? element(*array, expression, type)
                    : slice(*array, tree_range(expression, 0), type);
     }
 
@@ -914,7 +1382,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::expression(tree_t exp
     }
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::reference(tree_t expression) {
+std::optional<BodyTranslator::Value> BodyTranslator::reference(tree_t expression) {
     if (!tree_has_ref(expression)) {
         fail(expression, "a name NVC left unresolved");
         return std::nullopt;
@@ -923,6 +1391,8 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::reference(tree_t expr
     type_t type = tree_type(expression);
 
     if (const auto local = locals.find(declaration); local != locals.end()) return local->second;
+    if (const auto alias = aliases.find(declaration); alias != aliases.end())
+        return read(alias->second, type);
 
     switch (tree_kind(declaration)) {
     case T_SIGNAL_DECL:
@@ -947,7 +1417,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::reference(tree_t expr
     return std::nullopt;
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::conversion(tree_t expression) {
+std::optional<BodyTranslator::Value> BodyTranslator::conversion(tree_t expression) {
     type_t target = tree_type(expression);
     tree_t operand = tree_value(expression);
 
@@ -984,12 +1454,41 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::conversion(tree_t exp
     return converted;
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::attribute(tree_t expression) {
+std::optional<BodyTranslator::Value> BodyTranslator::attribute(tree_t expression) {
     const auto kind = static_cast<attr_kind_t>(tree_subkind(expression));
     type_t resultType = tree_type(expression);
     const std::optional<eir::Type> storage = scalarStorage(resultType);
 
     switch (kind) {
+    // Of a whole signal, which the kernel keeps them of (DESIGN_GUIDE.md section 3.4).
+    case ATTR_EVENT:
+    case ATTR_LAST_VALUE: {
+        const std::optional<Place> signal = place(tree_name(expression));
+        if (!signal) return std::nullopt;
+        if (signal->isVariable) {
+            fail(expression, "an attribute of a signal of something that is not a signal");
+            return std::nullopt;
+        }
+        if (!signal->whole) {
+            fail(expression, "'event or 'last_value of part of a signal");
+            return std::nullopt;
+        }
+        noteRead(signal->objectIndex);
+        if (kind == ATTR_EVENT) {
+            const std::uint32_t bit = newRegister(eir::Type::bits(1, false, false));
+            emit(eir::Instruction::make(eir::Opcode::ReadEvent, eir::Operand::reg(bit),
+                                        eir::Operand::object(signal->objectIndex)));
+            return booleanOf(bit, resultType);
+        }
+        Value value{.reg = newRegister(signal->layout.storage),
+                    .type = signal->layout.storage,
+                    .vhdlType = resultType,
+                    .layout = signal->layout};
+        emit(eir::Instruction::make(eir::Opcode::ReadLastValue, eir::Operand::reg(value.reg),
+                                    eir::Operand::object(signal->objectIndex)));
+        return value;
+    }
+
     // A discrete value is held as its position, so a conversion between a position and a value is
     // one between their storages; a successor or predecessor is one step along.
     case ATTR_POS:
@@ -1019,14 +1518,18 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::attribute(tree_t expr
     return std::nullopt;
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::call(tree_t expression) {
+std::optional<BodyTranslator::Value> BodyTranslator::call(tree_t expression) {
     if (!tree_has_ref(expression)) {
         fail(expression, "a call NVC left unresolved");
         return std::nullopt;
     }
     tree_t declaration = tree_ref(expression);
     const auto kind = static_cast<subprogram_kind_t>(tree_subkind(declaration));
-    if (kind != S_USER) return predefined(expression, kind);
+
+    // The IEEE packages' subprograms are VHDL with bodies, whatever NVC marks them with.
+    const bool hasBody =
+        kind == S_USER || kind == S_IEEE_MISC || (kind >= S_IEEE_AND && kind <= S_IEEE_NOT);
+    if (!hasBody) return predefined(expression, kind);
 
     // `now` counts femtoseconds, which EIR's time counts in its own unit.
     if (names(tree_ident2(declaration), "STD.STANDARD.NOW")) {
@@ -1044,11 +1547,10 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::call(tree_t expressio
         return time;
     }
 
-    fail(expression, std::string("a call of ") + istr(tree_ident2(declaration)));
-    return std::nullopt;
+    return callSubprogram(expression, declaration);
 }
 
-ProcessTranslator::Value ProcessTranslator::booleanOf(std::uint32_t bit, type_t booleanType) {
+BodyTranslator::Value BodyTranslator::booleanOf(std::uint32_t bit, type_t booleanType) {
     const eir::Type type = eir::Type::bits(8, false, false);
     const std::uint32_t reg = newRegister(type);
     emit(eir::Instruction::make(eir::Opcode::Extend, eir::Operand::reg(reg),
@@ -1056,8 +1558,7 @@ ProcessTranslator::Value ProcessTranslator::booleanOf(std::uint32_t bit, type_t 
     return Value{.reg = reg, .type = type, .vhdlType = booleanType};
 }
 
-std::uint32_t ProcessTranslator::compare(eir::Opcode opcode, const Value& left,
-                                         const Value& right) {
+std::uint32_t BodyTranslator::compare(eir::Opcode opcode, const Value& left, const Value& right) {
     const std::uint32_t reg = newRegister(eir::Type::bits(1, false, false));
     const bool isSigned = left.type.isSigned() && right.type.isSigned();
     emit(isSigned
@@ -1069,7 +1570,7 @@ std::uint32_t ProcessTranslator::compare(eir::Opcode opcode, const Value& left,
     return reg;
 }
 
-ProcessTranslator::Value ProcessTranslator::modulo(const Value& dividend, const Value& divisor) {
+BodyTranslator::Value BodyTranslator::modulo(const Value& dividend, const Value& divisor) {
     // `rem`, then the divisor added where the remainder is not zero and its sign differs from the
     // divisor's.
     const eir::Type type = dividend.type;
@@ -1100,8 +1601,8 @@ ProcessTranslator::Value ProcessTranslator::modulo(const Value& dividend, const 
     return Value{.reg = result, .type = type, .vhdlType = dividend.vhdlType};
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::shortCircuit(tree_t expression,
-                                                                        subprogram_kind_t kind) {
+std::optional<BodyTranslator::Value> BodyTranslator::shortCircuit(tree_t expression,
+                                                                  subprogram_kind_t kind) {
     const std::optional<Value> left = this->expression(tree_value(tree_param(expression, 0)));
     if (!left) return std::nullopt;
 
@@ -1110,7 +1611,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::shortCircuit(tree_t e
     const bool decidedByTrue = kind == S_SCALAR_OR || kind == S_SCALAR_NOR;
     const bool inverted = kind == S_SCALAR_NAND || kind == S_SCALAR_NOR;
 
-    const Value result{
+    Value result{
         .reg = newRegister(left->type), .type = left->type, .vhdlType = tree_type(expression)};
     const std::uint32_t decided = newBlock("decided");
     const std::uint32_t evaluate = newBlock("evaluate-right");
@@ -1144,8 +1645,8 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::shortCircuit(tree_t e
     return result;
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::predefined(tree_t expression,
-                                                                      subprogram_kind_t kind) {
+std::optional<BodyTranslator::Value> BodyTranslator::predefined(tree_t expression,
+                                                                subprogram_kind_t kind) {
     type_t resultType = tree_type(expression);
     switch (kind) {
     case S_SCALAR_AND:
@@ -1334,18 +1835,21 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::predefined(tree_t exp
 
 // --- names and arrays -----------------------------------------------------------
 
-bool ProcessTranslator::designatesStorage(tree_t name) const {
+bool BodyTranslator::designatesStorage(tree_t name) const {
     while (tree_kind(name) == T_ARRAY_REF || tree_kind(name) == T_ARRAY_SLICE)
         name = tree_value(name);
     if (tree_kind(name) != T_REF || !tree_has_ref(name)) return false;
-    return owner.objectFor(tree_ref(name)).has_value() || locals.contains(tree_ref(name));
+    return owner.objectFor(tree_ref(name)).has_value() || locals.contains(tree_ref(name))
+           || aliases.contains(tree_ref(name));
 }
 
-std::optional<ProcessTranslator::Place> ProcessTranslator::place(tree_t name) {
+std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
     switch (tree_kind(name)) {
     case T_REF: {
         if (!tree_has_ref(name)) break;
         tree_t declaration = tree_ref(name);
+        if (const auto alias = aliases.find(declaration); alias != aliases.end())
+            return alias->second;
         if (const auto local = locals.find(declaration); local != locals.end()) {
             const Value& variable = local->second;
             return Place{.isVariable = true,
@@ -1369,17 +1873,18 @@ std::optional<ProcessTranslator::Place> ProcessTranslator::place(tree_t name) {
         Layout inner;
         Offset within;
         if (tree_kind(name) == T_ARRAY_REF) {
-            if (tree_params(name) != 1) {
-                fail(name, "indexing an array of more than one dimension");
-                return std::nullopt;
-            }
-            const std::optional<Layout> element = layoutFor(outer->layout.elementType);
-            const std::optional<Offset> offset =
-                elementOffset(outer->layout, tree_value(tree_param(name, 0)));
-            if (!element || !offset) return std::nullopt;
-            inner = *element;
-            within = *offset;
+            std::optional<std::pair<Offset, Layout>> element = indexed(outer->layout, name);
+            if (!element) return std::nullopt;
+            within = element->first;
+            inner = element->second;
         } else {
+            const std::optional<Folder::Range> bounds = folder().range(tree_range(name, 0));
+            if (bounds && bounds->length() == 0) {
+                Place nothing = *outer;
+                nothing.whole = false;
+                nothing.empty = true;
+                return nothing;
+            }
             const std::optional<std::pair<Layout, std::int64_t>> part =
                 sliceOf(outer->layout, tree_range(name, 0));
             if (!part) return std::nullopt;
@@ -1413,7 +1918,7 @@ std::optional<ProcessTranslator::Place> ProcessTranslator::place(tree_t name) {
     return std::nullopt;
 }
 
-ProcessTranslator::Value ProcessTranslator::read(const Place& place, type_t vhdlType) {
+BodyTranslator::Value BodyTranslator::read(const Place& place, type_t vhdlType) {
     const eir::Type type = place.layout.storage;
     Value value{.reg = 0, .type = type, .vhdlType = vhdlType};
     value.layout = place.layout;
@@ -1443,15 +1948,15 @@ ProcessTranslator::Value ProcessTranslator::read(const Place& place, type_t vhdl
     return value;
 }
 
-std::uint32_t ProcessTranslator::offsetRegister(const Place& place) {
+std::uint32_t BodyTranslator::offsetRegister(const Place& place) {
     if (place.offset) return place.offset->reg;
     return constant(place.staticOffset, eir::Type::bits(32, false, false), nullptr).reg;
 }
 
-std::optional<ProcessTranslator::Offset> ProcessTranslator::elementOffset(const Layout& layout,
-                                                                          tree_t index) {
+std::optional<BodyTranslator::Offset> BodyTranslator::elementOffset(const Layout& layout,
+                                                                    tree_t index) {
     const Folder::Range& bounds = layout.index;
-    if (const std::optional<std::int64_t> folded = owner.folder().integer(index)) {
+    if (const std::optional<std::int64_t> folded = folder().integer(index)) {
         if (*folded < bounds.low() || *folded > bounds.high()) {
             fail(index, std::format("the index {} outside the bounds {} {} {}", *folded,
                                     bounds.left, bounds.ascending ? "to" : "downto", bounds.right));
@@ -1511,11 +2016,47 @@ std::optional<ProcessTranslator::Offset> ProcessTranslator::elementOffset(const 
                   .dynamic = Value{.reg = offset, .type = type, .vhdlType = nullptr}};
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::element(const Value& array, tree_t index,
-                                                                   type_t vhdlType) {
-    const std::optional<Layout> layout = layoutFor(array.layout.elementType);
-    const std::optional<Offset> offset = elementOffset(array.layout, index);
-    if (!layout || !offset) return std::nullopt;
+BodyTranslator::Offset BodyTranslator::sum(const Offset& first, const Offset& second) {
+    if (!first.dynamic && !second.dynamic)
+        return Offset{.staticOffset = first.staticOffset + second.staticOffset, .dynamic = {}};
+    const eir::Type type = eir::Type::bits(64, true, false);
+    const Value left = first.dynamic ? *first.dynamic : constant(first.staticOffset, type, nullptr);
+    const Value right =
+        second.dynamic ? *second.dynamic : constant(second.staticOffset, type, nullptr);
+    const std::uint32_t reg = newRegister(type);
+    emit(eir::Instruction::make(eir::Opcode::Add, eir::Operand::reg(reg),
+                                eir::Operand::reg(left.reg), eir::Operand::reg(right.reg)));
+    return Offset{.staticOffset = 0,
+                  .dynamic = Value{.reg = reg, .type = type, .vhdlType = nullptr}};
+}
+
+std::optional<std::pair<BodyTranslator::Offset, Layout>>
+BodyTranslator::indexed(const Layout& layout, tree_t name) {
+    // An array of several dimensions takes one index for each, each into the rows the one
+    // before it selects.
+    if (tree_params(name) != 1 + layout.inner.size()) {
+        fail(name, "indexing an array with another number of indices than its dimensions");
+        return std::nullopt;
+    }
+    Layout within = layout;
+    Offset total;
+    for (unsigned index = 0; index < tree_params(name); ++index) {
+        const std::optional<Layout> element = elementLayout(within, folder());
+        const std::optional<Offset> offset =
+            elementOffset(within, tree_value(tree_param(name, index)));
+        if (!element || !offset) return std::nullopt;
+        total = sum(total, *offset);
+        within = *element;
+    }
+    return std::pair(total, within);
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::element(const Value& array, tree_t name,
+                                                             type_t vhdlType) {
+    const std::optional<std::pair<Offset, Layout>> found = indexed(array.layout, name);
+    if (!found) return std::nullopt;
+    const std::optional<Offset> offset = found->first;
+    const std::optional<Layout> layout = found->second;
     const std::uint32_t at =
         offset->dynamic
             ? offset->dynamic->reg
@@ -1527,9 +2068,9 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::element(const Value& 
     return value;
 }
 
-std::optional<std::pair<Layout, std::int64_t>> ProcessTranslator::sliceOf(const Layout& layout,
-                                                                          tree_t range) {
-    const std::optional<Folder::Range> bounds = owner.folder().range(range);
+std::optional<std::pair<Layout, std::int64_t>> BodyTranslator::sliceOf(const Layout& layout,
+                                                                       tree_t range) {
+    const std::optional<Folder::Range> bounds = folder().range(range);
     if (!bounds) {
         fail(range, "a slice whose bounds are not static");
         return std::nullopt;
@@ -1546,7 +2087,7 @@ std::optional<std::pair<Layout, std::int64_t>> ProcessTranslator::sliceOf(const 
         fail(range, "a slice outside the bounds of its array");
         return std::nullopt;
     }
-    const std::optional<Layout> part = arrayLayout(*bounds, layout.elementType, owner.folder());
+    const std::optional<Layout> part = arrayLayout(*bounds, layout.elementType, folder());
     if (!part) {
         fail(range, "a slice of this array");
         return std::nullopt;
@@ -1554,8 +2095,8 @@ std::optional<std::pair<Layout, std::int64_t>> ProcessTranslator::sliceOf(const 
     return std::pair(*part, layout.bitOffset(bounds->right));
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::slice(const Value& array, tree_t range,
-                                                                 type_t vhdlType) {
+std::optional<BodyTranslator::Value> BodyTranslator::slice(const Value& array, tree_t range,
+                                                           type_t vhdlType) {
     const std::optional<std::pair<Layout, std::int64_t>> part = sliceOf(array.layout, range);
     if (!part) return std::nullopt;
     const Value at = constant(part->second, eir::Type::bits(32, false, false), nullptr);
@@ -1568,9 +2109,9 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::slice(const Value& ar
     return value;
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::aggregate(tree_t expression,
-                                                                     const Layout& layout) {
-    const std::optional<Layout> element = layoutFor(layout.elementType);
+std::optional<BodyTranslator::Value> BodyTranslator::aggregate(tree_t expression,
+                                                               const Layout& layout) {
+    const std::optional<Layout> element = elementLayout(layout, folder());
     if (!element) {
         fail(expression, "an aggregate of these elements");
         return std::nullopt;
@@ -1580,7 +2121,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::aggregate(tree_t expr
 
     // Built in a register that starts as zeros, each element spliced in where it goes; `others`
     // fills what the rest leave.
-    const Value result =
+    Value result =
         constantArray(eir::BitVector::filled(layout.storage.bitWidth(), eir::Logic::Zero), layout,
                       tree_type(expression));
     std::vector<bool> placed(static_cast<std::size_t>(length), false);
@@ -1615,7 +2156,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::aggregate(tree_t expr
             break;
         }
         case A_NAMED: {
-            const std::optional<std::int64_t> at = owner.folder().integer(tree_name(association));
+            const std::optional<std::int64_t> at = folder().integer(tree_name(association));
             if (!at || positionOf(*at) < 0 || positionOf(*at) >= length) {
                 fail(association,
                      "a named element whose index is not static and inside the bounds");
@@ -1627,8 +2168,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::aggregate(tree_t expr
             break;
         }
         case A_RANGE: {
-            const std::optional<Folder::Range> range =
-                owner.folder().range(tree_range(association, 0));
+            const std::optional<Folder::Range> range = folder().range(tree_range(association, 0));
             if (!range) {
                 fail(association, "a choice whose range is not static");
                 return std::nullopt;
@@ -1666,10 +2206,10 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::aggregate(tree_t expr
     return result;
 }
 
-std::optional<Layout> ProcessTranslator::unboundedLayout(type_t type, std::int64_t length,
-                                                         tree_t where) {
+std::optional<Layout> BodyTranslator::unboundedLayout(type_t type, std::int64_t length,
+                                                      tree_t where) {
     const std::optional<Folder::Range> indexRange =
-        owner.folder().rangeOf(type_index(type_base_recur(type), 0));
+        folder().rangeOf(type_index(type_base_recur(type), 0));
     if (!indexRange) {
         fail(where, "an array value whose index type has no static bounds");
         return std::nullopt;
@@ -1678,16 +2218,16 @@ std::optional<Layout> ProcessTranslator::unboundedLayout(type_t type, std::int64
         indexRange->ascending ? indexRange->left + length - 1 : indexRange->left - length + 1;
     std::optional<Layout> layout = arrayLayout(
         Folder::Range{.left = indexRange->left, .right = right, .ascending = indexRange->ascending},
-        type_elem(type), owner.folder());
+        type_elem(type), folder());
     if (!layout) fail(where, "an array value of this length");
     return layout;
 }
 
-std::optional<ProcessTranslator::Value>
-ProcessTranslator::positionalAggregate(tree_t expression, const Layout* layout) {
+std::optional<BodyTranslator::Value> BodyTranslator::positionalAggregate(tree_t expression,
+                                                                         const Layout* layout) {
     type_t type = tree_type(expression);
-    type_t elementType = layout != nullptr ? layout->elementType : type_elem(type);
-    const std::optional<Layout> element = layoutFor(elementType);
+    const std::optional<Layout> element =
+        layout != nullptr ? elementLayout(*layout, folder()) : layoutFor(type_elem(type));
     if (!element) {
         fail(expression, "an aggregate of these elements");
         return std::nullopt;
@@ -1722,7 +2262,7 @@ ProcessTranslator::positionalAggregate(tree_t expression, const Layout* layout) 
     }
 
     // The leftmost piece takes the highest bits, whichever way the bounds run.
-    const Value built = constantArray(
+    Value built = constantArray(
         eir::BitVector::filled(result->storage.bitWidth(), eir::Logic::Zero), *result, type);
     std::uint64_t below = bits;
     for (const Value& piece : pieces) {
@@ -1735,7 +2275,7 @@ ProcessTranslator::positionalAggregate(tree_t expression, const Layout* layout) 
     return built;
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::concatenation(tree_t expression) {
+std::optional<BodyTranslator::Value> BodyTranslator::concatenation(tree_t expression) {
     type_t resultType = tree_type(expression);
     type_t elementType = type_elem(resultType);
     const std::optional<Layout> element = layoutFor(elementType);
@@ -1769,7 +2309,7 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::concatenation(tree_t 
         return std::nullopt;
     }
 
-    const Value result = constantArray(
+    Value result = constantArray(
         eir::BitVector::filled(layout->storage.bitWidth(), eir::Logic::Zero), *layout, resultType);
     const Value low = constant(0, eir::Type::bits(32, false, false), nullptr);
     const Value high = constant(rightBits, eir::Type::bits(32, false, false), nullptr);
@@ -1780,8 +2320,8 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::concatenation(tree_t 
     return result;
 }
 
-std::optional<ProcessTranslator::Value> ProcessTranslator::arrayOperator(tree_t expression,
-                                                                         subprogram_kind_t kind) {
+std::optional<BodyTranslator::Value> BodyTranslator::arrayOperator(tree_t expression,
+                                                                   subprogram_kind_t kind) {
     type_t resultType = tree_type(expression);
     std::vector<Value> operands;
     for (unsigned index = 0; index < tree_params(expression); ++index) {

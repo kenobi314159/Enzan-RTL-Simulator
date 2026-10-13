@@ -925,6 +925,18 @@ What a VHDL unit becomes in EIR:
   adapter has folded. An element or a slice of a variable is spliced into its register;
   an index known only at run time is checked against the bounds, and one outside them
   ends the run with a failure, as VHDL's index check does.
+- A function is a callable subprogram (4.1), translated once for each shape it is called
+  with: the bounds of its unconstrained parameters, and the values of the scalar ones its
+  own bounds are computed from. Inside a shape those bounds are static, so `l'length`
+  folds and a branch on a condition that folds is translated alone, as a generate
+  statement is: a guard for a null array that cannot be one leaves nothing behind. A
+  package's subprograms are a definition `<package>::` of their own, which a call needs no
+  instance of. A procedure, a subprogram taking a signal, and one a process declares are
+  inlined into their caller, since a body of its own could not wait, assign a signal, read
+  a signal's attributes or reach the process's variables.
+- The IEEE packages are translated from their own bodies like any other VHDL. What NVC's
+  versions of them take from its runtime instead, Enzan supplies: numeric_std's warnings
+  are on, as they are in GHDL and in the IEEE's own packages.
 - `report` and a failed `assert` are one system task taking the severity as an
   argument: note, warning and error are reported and the run goes on, and failure ends
   it with a failing status, as GHDL's default does. `wait;` waits on an empty event list,

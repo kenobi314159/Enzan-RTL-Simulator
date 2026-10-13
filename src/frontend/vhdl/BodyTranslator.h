@@ -22,19 +22,45 @@
 
 namespace enzan::frontend::vhdl {
 
-/// What a process translator needs from the architecture it belongs to.
+/// The shape a call gives the subprogram it calls, one entry per formal parameter in order: the
+/// bounds of an array actual, and the value of a scalar one when it is static.
+///
+/// A subprogram is translated once per shape it is called with (DESIGN_GUIDE.md section 4.1), so
+/// that inside it the bounds of its unconstrained parameters are static, as everything an EIR
+/// body holds has to be: `l'length` folds, and a guard for a null array that cannot be one folds
+/// away with it. A scalar's value is part of the shape only when the subprogram's bounds depend on
+/// it, as `to_unsigned(arg, size)`'s result does on `size`; which those are is the callee's to say.
+struct Shape {
+    std::vector<std::optional<Folder::Range>> bounds;
+    std::vector<std::optional<std::int64_t>> values;
+};
+
+/// A subprogram specialised for one shape: where a call finds it, and what its parameters and its
+/// result are.
+struct Callee {
+    std::string definition;
+    std::string name;
+    std::vector<Layout> parameters;
+    std::vector<eir::ParameterMode> modes;
+
+    /// A function's result; a procedure has none.
+    std::optional<Layout> result;
+};
+
+/// What a body translator needs from the definition it is translated into: an architecture's, or
+/// a package's.
 ///
 /// An interface, as the SystemVerilog frontend's `ModuleContext` is, so that statement and
-/// expression translation stays apart from the hierarchy walk: the architecture side owns the
-/// objects and the generics, and the process side asks for them.
-class ArchitectureScope {
+/// expression translation stays apart from the hierarchy walk: the definition's side owns the
+/// objects, the generics and the subprograms, and the body asks for them.
+class DefinitionScope {
 public:
-    ArchitectureScope() = default;
-    ArchitectureScope(const ArchitectureScope&) = delete;
-    ArchitectureScope& operator=(const ArchitectureScope&) = delete;
-    ArchitectureScope(ArchitectureScope&&) = delete;
-    ArchitectureScope& operator=(ArchitectureScope&&) = delete;
-    virtual ~ArchitectureScope() = default;
+    DefinitionScope() = default;
+    DefinitionScope(const DefinitionScope&) = delete;
+    DefinitionScope& operator=(const DefinitionScope&) = delete;
+    DefinitionScope(DefinitionScope&&) = delete;
+    DefinitionScope& operator=(DefinitionScope&&) = delete;
+    virtual ~DefinitionScope() = default;
 
     /// The EIR object holding `declaration`, a signal or a port of this architecture's entity, or
     /// nothing when it has none.
@@ -56,9 +82,32 @@ public:
 
     /// The unit EIR's delays count, as a power of ten of a second.
     [[nodiscard]] virtual std::int8_t timeUnitExponent() const = 0;
+
+    /// The subprogram `declaration` specialised for `shape`, translated into the definition it
+    /// belongs to the first time it is asked for: a package's subprogram into the package's, and
+    /// one of an architecture into this one. Nothing, having reported why, when it cannot be.
+    [[nodiscard]] virtual std::optional<Callee> callee(tree_t declaration, const Shape& shape,
+                                                       tree_t where) = 0;
 };
 
-/// Translates one VHDL process into an EIR process.
+/// What specialising a subprogram for a shape gives it: the bindings that make its bounds
+/// static, and each parameter's layout.
+struct SubprogramBindings {
+    Folder folder;
+    std::vector<Layout> parameters;
+};
+
+/// The parameters of `body`, a subprogram, whose values its bounds depend on: those named in the
+/// constraints of what it declares, or in the values of its constants, which such a constraint
+/// may use.
+[[nodiscard]] std::vector<bool> shapeParameters(tree_t body);
+
+/// The body of the subprogram `declaration` declares: itself when it is one, and otherwise the one
+/// its package body or its declarative region holds. Null when the body has not been analysed.
+[[nodiscard]] tree_t subprogramBody(tree_t declaration);
+
+/// Translates one VHDL process into an EIR process, or one subprogram, specialised for a shape,
+/// into an EIR subprogram.
 ///
 /// Produces EIR-B directly from NVC's tree, as the SystemVerilog frontend does from slang's: names
 /// and types are resolved and every concurrent statement is already a process (NVC rewrites a
@@ -74,12 +123,25 @@ public:
 ///
 /// A construct it cannot translate is reported and the process abandoned, never emitted in part:
 /// a process missing a statement simulates and gives a wrong answer (DESIGN_GUIDE.md section 1.2).
-class ProcessTranslator {
+class BodyTranslator {
 public:
-    ProcessTranslator(ArchitectureScope& scope, tree_t statement, std::string name);
+    /// A translator of the process `statement`.
+    BodyTranslator(DefinitionScope& scope, tree_t statement, std::string name);
+
+    /// A translator of the subprogram `body`, specialised as `specialisation` says.
+    BodyTranslator(DefinitionScope& scope, tree_t body, std::string name,
+                   SubprogramBindings specialisation);
 
     /// The translated process, or nothing having reported why.
     std::optional<eir::Process> translate();
+
+    /// The translated subprogram and its result's layout, or nothing having reported why.
+    struct Translated {
+        eir::Subprogram subprogram;
+        std::optional<Layout> result;
+    };
+
+    std::optional<Translated> translateSubprogram();
 
 private:
     /// A translated value: the register holding it, and its type in EIR and in VHDL.
@@ -106,6 +168,18 @@ private:
         std::int64_t staticOffset = 0;
         std::optional<Value> offset;
         bool whole = true;
+
+        /// True for a null slice, which designates nothing: assigning it does nothing, as VHDL has
+        /// it, and the adapter has no value to read from it.
+        bool empty = false;
+    };
+
+    /// A subprogram translated into this body rather than called: where its `return` goes, and the
+    /// register it leaves a function's result in, made at its first `return`.
+    struct Inlined {
+        tree_t body = nullptr;
+        std::uint32_t exitBlock = 0;
+        std::optional<Value> result;
     };
 
     /// A loop that `exit` and `next` can name.
@@ -139,6 +213,17 @@ private:
     /// How a value of `type` is laid out, with this instance's generics bound.
     [[nodiscard]] std::optional<Layout> layoutFor(type_t type) const;
 
+    /// The body being built: the process's, or the subprogram's.
+    eir::Body& body() { return isProcess ? static_cast<eir::Body&>(process) : subprogram; }
+
+    [[nodiscard]] const eir::Body& body() const {
+        return isProcess ? static_cast<const eir::Body&>(process) : subprogram;
+    }
+
+    /// Static evaluation where translation is: with the generics, and the parameters of every
+    /// subprogram being inlined, bound.
+    [[nodiscard]] const Folder& folder() const { return folders.back(); }
+
     void noteRead(std::uint32_t objectIndex);
 
     /// Records that the process writes `place`: the bits it designates when they are known, and
@@ -163,6 +248,19 @@ private:
     bool assertion(tree_t statement);
     bool report(tree_t statement);
     bool procedureCall(tree_t statement);
+    bool returnStatement(tree_t statement);
+
+    /// The parameters and the actuals of a call of `declaration`, in the order of its formals, a
+    /// default value standing in for an actual the call leaves out. Nothing, having reported
+    /// why, when the call associates one in a way the adapter does not take apart.
+    std::optional<std::vector<tree_t>> actualsOf(tree_t call, tree_t declaration);
+
+    /// A call of a function or a procedure: callable, in a body of its own, or inlined into this
+    /// one when it must be, which is when it waits or assigns a signal or takes one as a
+    /// parameter. Returns a function's result; a procedure's is a placeholder.
+    std::optional<Value> callSubprogram(tree_t call, tree_t declaration);
+    std::optional<Value> inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
+                                    const std::vector<tree_t>& actuals);
 
     /// Emits a `report` system task of `severity`, a position of `severity_level`, with the
     /// message `message` translates to, or `fallback` when there is none.
@@ -198,8 +296,15 @@ private:
 
     std::optional<Offset> elementOffset(const Layout& layout, tree_t index);
 
-    /// The element of `array` that `index` designates.
-    std::optional<Value> element(const Value& array, tree_t index, type_t vhdlType);
+    /// The element of `array` that the indices of `name`, a T_ARRAY_REF, designate.
+    std::optional<Value> element(const Value& array, tree_t name, type_t vhdlType);
+
+    /// The offset of the element the indices of `name` designate, one per dimension, in an array
+    /// laid out as `layout`, and that element's layout.
+    std::optional<std::pair<Offset, Layout>> indexed(const Layout& layout, tree_t name);
+
+    /// The sum of two offsets, in a register when either is.
+    Offset sum(const Offset& first, const Offset& second);
 
     /// The slice of `array` that `range` designates.
     std::optional<Value> slice(const Value& array, tree_t range, type_t vhdlType);
@@ -266,9 +371,19 @@ private:
     /// second.
     [[nodiscard]] std::int64_t femtosecondsPerUnit() const;
 
-    ArchitectureScope& owner;
+    DefinitionScope& owner;
     tree_t source;
+
+    /// What is being built: a process, or a subprogram with the layouts its parameters and its
+    /// result have.
+    bool isProcess = true;
     eir::Process process;
+    eir::Subprogram subprogram;
+    std::vector<Layout> parameterLayouts;
+    std::optional<Layout> resultLayout;
+
+    std::vector<Folder> folders;
+    std::vector<Inlined> inlined;
 
     std::uint32_t current = 0;
     SourceLocation statementLocation;
@@ -276,8 +391,12 @@ private:
     std::set<std::uint32_t> reads;
     std::vector<eir::WriteExtent> writes;
 
-    /// The register of each variable, constant and loop parameter declared in the process.
+    /// The register of each variable, constant and loop parameter declared in the process, and of
+    /// each parameter of a subprogram.
     std::map<tree_t, Value> locals;
+
+    /// What each alias and signal parameter of an inlined subprogram designates.
+    std::map<tree_t, Place> aliases;
 
     std::vector<Loop> loops;
 };

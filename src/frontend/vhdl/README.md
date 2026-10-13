@@ -38,20 +38,22 @@ parent. A design's work library is NVC's in-memory one, written nowhere.
   buffers.
 - `Translator.h/.cpp` — the hierarchy walk: which architecture an entity is bound to, generics
   bound and folded, one definition per architecture and values, ports, signals and instances.
-- `ProcessTranslator.h/.cpp` — a process's statements and expressions, as EIR-B.
+- `BodyTranslator.h/.cpp` — a process's or a subprogram's statements and expressions, as EIR-B,
+  and calls: callable, or inlined.
 - `Folder.h/.cpp` — static evaluation: generics, constants, bounds and delays.
 - `Types.h/.cpp` — how a VHDL type is held in EIR (section 3.6).
 
 ## What is translated
 
 So far: entities, architectures, entity instances, scalar generics; signals and ports of
-enumeration, integer and physical types and of one-dimensional arrays of them with static
-bounds; processes with variables, `if`, `case`, loops, `exit`, `next`, `wait` (but not one with
-both a timeout and a sensitivity or condition), signal assignments with inertial and transport
-delay (to an element or a slice with no delay), `assert`, `report` with messages built from
-literals and `'image`, `std.env.finish` and `stop`; aggregates, strings, elements and slices,
-concatenation, and the predefined operators on scalars and arrays. Anything else is refused
-with ENZ2005 naming it, never left out.
+enumeration, integer and physical types and of arrays of them, of one or more dimensions, with
+static bounds; processes with variables, `if`, `case`, loops, `exit`, `next`, `wait` (but not one
+with both a timeout and a sensitivity or condition), signal assignments with inertial and
+transport delay (to an element or a slice with no delay), `assert`, `report` with messages built
+from literals and `'image`, `std.env.finish` and `stop`; aggregates, strings, elements and
+slices, concatenation, the predefined operators on scalars and arrays, `'event` and
+`'last_value`; functions and procedures of packages and architectures, std_logic_1164's and
+numeric_std's among them. Anything else is refused with ENZ2005 naming it, never left out.
 
 ## Rules
 

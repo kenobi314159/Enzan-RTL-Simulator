@@ -255,7 +255,8 @@ unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources
 }
 
 unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources,
-                      DiagnosticSink& sink, std::string& encoded) {
+                      DiagnosticSink& sink, std::string& encoded,
+                      std::vector<std::string>& libraries) {
     Run run(options.units, sources, sink);
     const unsigned analysisErrors = run.analyse();
     if (analysisErrors != 0) return analysisErrors;
@@ -272,7 +273,11 @@ unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources
         request, [&run](const loc_t* location) { return run.locate(location); }, engine);
 
     const unsigned errors = engine.errorCount() + error_count();
-    if (errors == 0) encoded = eir::encodeModules(modules, sources);
+    if (errors == 0) {
+        encoded = eir::encodeModules(modules, sources);
+        for (const eir::ModuleDefinition& definition : modules)
+            libraries.push_back(definition.library);
+    }
     engine.removeConsumer(consumer);
     return errors;
 }

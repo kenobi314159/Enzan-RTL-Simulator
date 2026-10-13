@@ -221,8 +221,9 @@ arrays, `real`, `string` and structs, which Enzan does not analyse yet.
 | Driver resolution, multiple drivers per signal | not yet — M5 |
 | VPI, and cocotb testbenches through it | yes — modules, generate blocks, nets, variables, bits, parameters; every callback cocotb uses |
 | `` `timescale `` and `timeunit` | not yet — every delay is counted in the `--timescale` unit |
-| VHDL: entities, architectures, processes, scalar types, `wait`, `assert`, `report` | yes — M6 is under way |
-| VHDL: arrays, records, `std_logic`, `numeric_std`, subprograms, packages | not yet — reported by name |
+| VHDL: entities, architectures, processes, scalar types, arrays, `wait`, `assert`, `report` | yes — M6 is under way |
+| VHDL: functions and procedures, `std_logic_1164`, `numeric_std`, `rising_edge` | yes, translated from the IEEE packages' own bodies |
+| VHDL: records, resolved signals with several drivers, `textio`, access types | not yet — reported by name |
 | A design mixing VHDL and SystemVerilog | not yet — M7 |
 | The Processes and Source windows | not yet — M6 |
 

@@ -3,8 +3,8 @@
 #include "frontend/vhdl/Translator.h"
 
 #include "common/Diagnostics.h"
+#include "frontend/vhdl/BodyTranslator.h"
 #include "frontend/vhdl/Folder.h"
-#include "frontend/vhdl/ProcessTranslator.h"
 #include "frontend/vhdl/Types.h"
 
 #include <algorithm>
@@ -12,10 +12,12 @@
 #include <deque>
 #include <format>
 #include <map>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -75,7 +77,7 @@ std::string sanitised(std::string text) {
 class DesignTranslator;
 
 /// Translates one architecture, with its entity and its generics, into an EIR definition.
-class ArchitectureTranslator final : public ArchitectureScope {
+class ArchitectureTranslator final : public DefinitionScope {
 public:
     ArchitectureTranslator(DesignTranslator& owner, const Specialisation& translated);
 
@@ -99,6 +101,14 @@ public:
 
     [[nodiscard]] std::int8_t timeUnitExponent() const override;
 
+    [[nodiscard]] std::optional<Callee> callee(tree_t declaration, const Shape& shape,
+                                               tree_t where) override;
+
+    /// Adds a subprogram specialised for a call from this architecture.
+    void addSubprogram(eir::Subprogram translated) {
+        result.subprograms.push_back(std::move(translated));
+    }
+
 private:
     /// Adds the object holding a port or a signal, and returns false having reported why it
     /// could not.
@@ -118,6 +128,42 @@ private:
     eir::ModuleDefinition result;
     std::map<tree_t, std::uint32_t> objects;
     std::map<type_t, std::uint32_t> enums;
+};
+
+/// The definition a package's subprograms are translated into: one with no objects, which a call
+/// needs no instance of (DESIGN_GUIDE.md section 4.1).
+class PackageScope final : public DefinitionScope {
+public:
+    PackageScope(DesignTranslator& owner, eir::ModuleDefinition& package)
+        : design(owner), module(package) {}
+
+    [[nodiscard]] std::optional<std::uint32_t> objectFor(tree_t /*declaration*/) const override {
+        return std::nullopt;
+    }
+
+    [[nodiscard]] const Folder& folder() const override { return folding; }
+
+    [[nodiscard]] SourceLocation locate(tree_t where) const override;
+
+    void unsupported(tree_t where, std::string_view what) override;
+
+    void reportNeverWaits(tree_t process) override;
+
+    [[nodiscard]] const eir::ModuleDefinition& definition() const override { return module; }
+
+    [[nodiscard]] std::int8_t timeUnitExponent() const override;
+
+    [[nodiscard]] std::optional<Callee> callee(tree_t declaration, const Shape& shape,
+                                               tree_t where) override;
+
+    void addSubprogram(eir::Subprogram translated) {
+        module.subprograms.push_back(std::move(translated));
+    }
+
+private:
+    DesignTranslator& design;
+    eir::ModuleDefinition& module;
+    Folder folding;
 };
 
 /// Walks the hierarchy from the top, translating each architecture and set of generics it reaches
@@ -150,7 +196,106 @@ public:
             ArchitectureTranslator translator(*this, next);
             modules.push_back(translator.translate());
         }
+        for (auto& [name, package] : packages) modules.push_back(std::move(package.module));
         return std::move(modules);
+    }
+
+    /// The subprogram `declaration` specialised for `shape` (DESIGN_GUIDE.md section 4.1): from
+    /// `architecture` when it is one of that architecture's, and translated the first time.
+    std::optional<Callee> callee(tree_t declaration, const Shape& shape, tree_t where,
+                                 ArchitectureTranslator* architecture) {
+        tree_t body = subprogramBody(declaration);
+        if (body == nullptr) {
+            unsupported(where, std::format("a call of {}, whose body has not been analysed",
+                                           istr(tree_ident2(declaration))));
+            return std::nullopt;
+        }
+        tree_t unit = tree_container(body);
+        const bool inPackage = tree_kind(unit) == T_PACK_BODY || tree_kind(unit) == T_PACKAGE;
+        if (!inPackage && architecture == nullptr) {
+            unsupported(where, "a call from a package of a subprogram outside it");
+            return std::nullopt;
+        }
+
+        // The values a specialisation depends on: the bounds of its unconstrained parameters, and
+        // the scalars its own bounds are computed from.
+        const std::vector<bool> needed = shapeParameters(body);
+        SpecialisationKey key{.body = body,
+                              .definition =
+                                  inPackage ? std::string() : architecture->definition().name,
+                              .bounds = {},
+                              .values = {}};
+        for (unsigned index = 0; index < tree_ports(body); ++index) {
+            const std::optional<Folder::Range> bounds =
+                index < shape.bounds.size() ? shape.bounds[index] : std::nullopt;
+            key.bounds.push_back(
+                bounds ? std::optional(std::tuple(bounds->left, bounds->right, bounds->ascending))
+                       : std::nullopt);
+            const std::optional<std::int64_t> value =
+                index < shape.values.size() ? shape.values[index] : std::nullopt;
+            if (needed[index] && !value) {
+                unsupported(where,
+                            std::format("a call of {} whose parameter '{}', which its bounds "
+                                        "depend on, is not static",
+                                        simpleName(tree_ident(body)),
+                                        simpleName(tree_ident(tree_port(body, index)))));
+                return std::nullopt;
+            }
+            key.values.push_back(needed[index] ? value : std::nullopt);
+        }
+        if (const auto known = callees.find(key); known != callees.end()) {
+            if (!known->second) {
+                unsupported(where, std::format("a recursive call of {} whose result's bounds are "
+                                               "not known before it returns",
+                                               simpleName(tree_ident(body))));
+            }
+            return known->second;
+        }
+        callees.emplace(key, std::nullopt);
+
+        // Each parameter's layout, and the bindings that make the body's bounds static.
+        DefinitionScope& scope = inPackage ? static_cast<DefinitionScope&>(packageScope(unit))
+                                           : static_cast<DefinitionScope&>(*architecture);
+        SubprogramBindings bindings{.folder = scope.folder(), .parameters = {}};
+        Callee callee;
+        for (unsigned index = 0; index < tree_ports(body); ++index) {
+            tree_t parameter = tree_port(body, index);
+            type_t type = tree_type(parameter);
+            std::optional<Layout> layout = layoutOf(type, bindings.folder);
+            const auto& given = key.bounds[index];
+            if (!layout && given) {
+                const auto& [left, right, ascending] = *given;
+                const Folder::Range bounds{.left = left, .right = right, .ascending = ascending};
+                bindings.folder.bindBounds(parameter, bounds);
+                layout = arrayLayout(bounds, type_elem(type), bindings.folder);
+            }
+            if (!layout) {
+                unsupported(parameter, std::format("a parameter of type {}", type_pp(type)));
+                return std::nullopt;
+            }
+            if (const std::optional<std::int64_t>& value = key.values[index])
+                bindings.folder.bind(parameter, *value);
+            bindings.parameters.push_back(*layout);
+            callee.parameters.push_back(*layout);
+            eir::ParameterMode mode = eir::ParameterMode::In;
+            if (tree_subkind(parameter) == PORT_OUT) mode = eir::ParameterMode::Out;
+            if (tree_subkind(parameter) == PORT_INOUT) mode = eir::ParameterMode::InOut;
+            callee.modes.push_back(mode);
+        }
+
+        callee.definition = inPackage ? packageName(unit) : architecture->definition().name;
+        callee.name = std::format("{}${}", simpleName(tree_ident(body)), callees.size());
+        BodyTranslator translator(scope, body, callee.name, std::move(bindings));
+        std::optional<BodyTranslator::Translated> translated = translator.translateSubprogram();
+        if (!translated) return std::nullopt;
+        callee.result = translated->result;
+        if (inPackage) {
+            packages.at(packageName(unit)).scope->addSubprogram(std::move(translated->subprogram));
+        } else {
+            architecture->addSubprogram(std::move(translated->subprogram));
+        }
+        callees[key] = callee;
+        return callee;
     }
 
     /// The name of the definition `architecture` of `entity` is with `generics` bound, queueing
@@ -241,7 +386,16 @@ public:
     [[nodiscard]] SourceLocation locate(tree_t where) const { return locator(tree_loc(where)); }
 
     void unsupported(tree_t where, std::string_view what) {
-        engine.report(DiagCode::VhdlUnsupported, locate(where), what);
+        DiagnosticBuilder diagnostic =
+            engine.report(DiagCode::VhdlUnsupported, locate(where), what);
+
+        // A unit of another library, `ieee` say, has no buffer here, so its position is a note,
+        // as NVC's own diagnostics there are.
+        const loc_t* location = tree_loc(where);
+        if (!locate(where).valid() && location != nullptr && !loc_invalid_p(location)) {
+            diagnostic.note({},
+                            std::format("at {}:{}", loc_file_str(location), location->first_line));
+        }
     }
 
     DiagnosticEngine& diagnostics() { return engine; }
@@ -329,9 +483,61 @@ private:
         }
     }
 
+    /// The definition holding the subprograms of the package `unit` declares or defines, named
+    /// as a call names it: `<library>.<package>::`, a package's definition being `<package>::` in
+    /// its library, as a SystemVerilog package's is.
+    static std::string packageName(tree_t unit) {
+        ident_t name = tree_ident(unit);
+        if (tree_kind(unit) == T_PACK_BODY) name = ident_until(name, '-');
+        return std::format("{}.{}::", simpleName(ident_until(name, '.')), simpleName(name));
+    }
+
+    /// The scope of the package `unit` declares or defines, made with its definition the first
+    /// time.
+    PackageScope& packageScope(tree_t unit) {
+        const std::string name = packageName(unit);
+        auto found = packages.find(name);
+        if (found == packages.end()) {
+            found = packages.emplace(name, Package{}).first;
+            eir::ModuleDefinition& module = found->second.module;
+            ident_t identifier = tree_ident(unit);
+            if (tree_kind(unit) == T_PACK_BODY) identifier = ident_until(identifier, '-');
+            module.name = simpleName(identifier) + "::";
+            module.library = simpleName(ident_until(identifier, '.'));
+            module.sourceName = simpleName(identifier);
+            module.isPackage = true;
+            module.location = locate(unit);
+            found->second.scope = std::make_unique<PackageScope>(*this, module);
+        }
+        return *found->second.scope;
+    }
+
+    /// What identifies a subprogram's specialisation: its body, the architecture definition it is
+    /// translated into when it is not a package's, and its shape.
+    struct SpecialisationKey {
+        tree_t body = nullptr;
+        std::string definition;
+        std::vector<std::optional<std::tuple<std::int64_t, std::int64_t, bool>>> bounds;
+        std::vector<std::optional<std::int64_t>> values;
+
+        friend auto operator<=>(const SpecialisationKey&, const SpecialisationKey&) = default;
+    };
+
+    /// A package's definition, and the scope its subprograms are translated in. The definition
+    /// never moves once made, since the scope refers to it.
+    struct Package {
+        eir::ModuleDefinition module;
+        std::unique_ptr<PackageScope> scope;
+    };
+
     const DesignRequest& request;
     const Locate& locator;
     DiagnosticEngine& engine;
+
+    std::map<std::string, Package> packages;
+
+    /// Each specialisation translated, or being translated when it holds nothing yet.
+    std::map<SpecialisationKey, std::optional<Callee>> callees;
 
     std::deque<Specialisation> pending;
     std::vector<eir::ModuleDefinition> modules;
@@ -354,6 +560,31 @@ void ArchitectureTranslator::unsupported(tree_t where, std::string_view what) {
 
 void ArchitectureTranslator::reportNeverWaits(tree_t process) {
     design.diagnostics().report(DiagCode::VhdlProcessNeverWaits, locate(process));
+}
+
+std::optional<Callee> ArchitectureTranslator::callee(tree_t declaration, const Shape& shape,
+                                                     tree_t where) {
+    return design.callee(declaration, shape, where, this);
+}
+
+SourceLocation PackageScope::locate(tree_t where) const {
+    return design.locate(where);
+}
+
+void PackageScope::unsupported(tree_t where, std::string_view what) {
+    design.unsupported(where, what);
+}
+
+void PackageScope::reportNeverWaits(tree_t process) {
+    design.diagnostics().report(DiagCode::VhdlProcessNeverWaits, locate(process));
+}
+
+std::int8_t PackageScope::timeUnitExponent() const {
+    return design.timeUnitExponent();
+}
+
+std::optional<Callee> PackageScope::callee(tree_t declaration, const Shape& shape, tree_t where) {
+    return design.callee(declaration, shape, where, nullptr);
 }
 
 std::int8_t ArchitectureTranslator::timeUnitExponent() const {
@@ -467,7 +698,9 @@ void ArchitectureTranslator::declarations(tree_t container) {
         case T_ATTR_SPEC:
         case T_USE:
         case T_FUNC_DECL:
-        case T_PROC_DECL: break;
+        case T_PROC_DECL:
+        case T_FUNC_BODY:
+        case T_PROC_BODY: break;
 
         default:
             unsupported(declaration,
@@ -483,7 +716,7 @@ void ArchitectureTranslator::statements(tree_t container) {
         tree_t statement = tree_stmt(container, index);
         switch (tree_kind(statement)) {
         case T_PROCESS: {
-            ProcessTranslator translator(*this, statement, simpleName(tree_ident(statement)));
+            BodyTranslator translator(*this, statement, simpleName(tree_ident(statement)));
             if (std::optional<eir::Process> translated = translator.translate())
                 result.processes.push_back(std::move(*translated));
             break;
