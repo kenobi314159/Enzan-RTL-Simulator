@@ -352,6 +352,8 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.boolean(object.isAlias);
         out.u32(object.enumIndex);
         out.u8(static_cast<std::uint8_t>(object.encoding));
+        out.text(object.resolution.function);
+        out.u32(object.resolution.elementBits);
         out.u32(static_cast<std::uint32_t>(object.unpackedDimensions.size()));
         for (const UnpackedDimension& dimension : object.unpackedDimensions) {
             out.u32(static_cast<std::uint32_t>(dimension.left));
@@ -645,6 +647,8 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         object.isAlias = in.boolean();
         object.enumIndex = in.u32();
         object.encoding = static_cast<Encoding>(in.u8());
+        object.resolution.function = in.text();
+        object.resolution.elementBits = in.u32();
         object.unpackedDimensions.resize(in.count());
         for (UnpackedDimension& dimension : object.unpackedDimensions) {
             dimension.left = static_cast<std::int32_t>(in.u32());

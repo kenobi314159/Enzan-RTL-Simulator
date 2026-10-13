@@ -408,6 +408,30 @@ eir::Encoding encodingOf(type_t type) {
     return eir::Encoding::Bits;
 }
 
+std::optional<eir::Resolution> resolutionOf(type_t type) {
+    if (type == nullptr) return std::nullopt;
+    // Only a subtype has a resolution, the nearest of those it is declared through.
+    for (type_t subtype = type; type_kind(subtype) == T_SUBTYPE; subtype = type_base(subtype)) {
+        if (!type_has_resolution(subtype)) continue;
+
+        // `(resolved) std_ulogic_vector` resolves each element; the function is innermost.
+        tree_t name = type_resolution(subtype);
+        type_t element = subtype;
+        while (tree_kind(name) == T_ELEM_RESOLUTION) {
+            if (!type_is_array(element) || tree_assocs(name) != 1) return std::nullopt;
+            name = tree_value(tree_assoc(name, 0));
+            element = type_elem(element);
+        }
+        const std::optional<eir::Type> storage = scalarStorage(element);
+        if (tree_kind(name) != T_REF || !tree_has_ref(name) || !storage) return std::nullopt;
+        return eir::Resolution{.function = std::string(istr(tree_ident2(tree_ref(name)))),
+                               .elementBits = storage->bitWidth()};
+    }
+    // An array of a resolved subtype, `array (...) of std_logic`.
+    if (type_is_array(type)) return resolutionOf(type_elem(type));
+    return std::nullopt;
+}
+
 bool isSignedScalar(type_t type) {
     if (type == nullptr) return false;
     const type_kind_t kind = type_kind(type_base_recur(type));

@@ -778,6 +778,7 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     object.initialValue = std::move(initial);
     object.enumIndex = layout->isArray() ? eir::Object::NoEnum : enumFor(type);
     object.encoding = encodingOf(type);
+    object.resolution = resolutionOf(type).value_or(eir::Resolution{});
     objects.emplace(declaration, result.addObject(std::move(object)));
     return true;
 }

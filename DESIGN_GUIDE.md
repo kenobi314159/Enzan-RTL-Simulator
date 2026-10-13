@@ -453,6 +453,14 @@ Further requirements:
 - VHDL resolution functions are arbitrary user code. They are compiled to EIR like
   any other subprogram and invoked by the runtime. The runtime MUST NOT assume
   resolution is a built-in table.
+- **Elaboration asks for a resolution function by its driver count.** Its one parameter
+  is an array as long as the bit has drivers, which only elaboration knows, while the
+  adapter specialises a subprogram for a static shape (5.2). So an EIR object names
+  its function as the design does, by library, package and signature, with the width of
+  the subelement it resolves, and once elaboration has counted the drivers the session
+  asks the frontend, in a second child over the same sources, for the function
+  specialised to each count, and links what comes back into the design before the image
+  is built.
 - **Single-driver bits MUST bypass resolution entirely** where resolving a lone
   driver is known to return its value unchanged, and a signal all of whose bits
   are such MUST bypass it as a whole rather than bit by bit. This is the common

@@ -139,6 +139,23 @@ struct UnpackedDimension {
     friend bool operator==(UnpackedDimension, UnpackedDimension) noexcept = default;
 };
 
+/// What a VHDL resolved signal's drivers resolve with (IEEE 1076 section 4.6): a resolution
+/// function, applied to each scalar subelement of the signal, `elementBits` wide, over the values
+/// its drivers give it (DESIGN_GUIDE.md section 3.7).
+///
+/// The function is named as the design names it, by its library, package and signature as NVC
+/// mangles them, `IEEE.STD_LOGIC_1164.RESOLVED(Y)U`, rather than as a subprogram of EIR: its one
+/// parameter is an array as long as the subelement has drivers, which only elaboration knows, so
+/// elaboration asks the frontend for it by this name once it does.
+struct Resolution {
+    std::string function;
+    std::uint32_t elementBits = 0;
+
+    [[nodiscard]] bool resolved() const noexcept { return !function.empty(); }
+
+    friend bool operator==(const Resolution&, const Resolution&) = default;
+};
+
 /// A declared signal or variable inside a module.
 struct Object {
     std::string name;
@@ -165,6 +182,9 @@ struct Object {
 
     /// What the bits mean outside the simulation: VHDL's codes, or the value itself.
     Encoding encoding = Encoding::Bits;
+
+    /// For a VHDL resolved signal, the function its drivers resolve with; empty otherwise.
+    Resolution resolution;
 
     /// The enumeration this object's type is, as an index into its definition's table, or
     /// `NoEnum`. It changes nothing about how the object behaves; it is what lets a display

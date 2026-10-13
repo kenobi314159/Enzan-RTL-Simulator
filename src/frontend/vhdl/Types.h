@@ -95,6 +95,12 @@ struct Layout {
 /// bits (DESIGN_GUIDE.md section 3.6).
 [[nodiscard]] eir::Encoding encodingOf(type_t type);
 
+/// What a signal of `type` resolves with: the resolution function of its subtype, or of its
+/// elements' for an array of a resolved subtype, as `std_logic_vector` is, applied to each scalar
+/// subelement (IEEE 1076 section 4.6). Nothing for an unresolved type, and for one whose
+/// resolution is of composite subelements, which is not held yet.
+[[nodiscard]] std::optional<eir::Resolution> resolutionOf(type_t type);
+
 /// True when `type` is an integer or physical type, whose values compare and compute signed.
 [[nodiscard]] bool isSignedScalar(type_t type);
 

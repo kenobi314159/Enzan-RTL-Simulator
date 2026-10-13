@@ -108,14 +108,16 @@ ModuleDefinition richModule(BufferId buffer) {
                                 .elementWidth = 1,
                                 .elementSigned = true,
                                 .subroutineStatic = true});
-    definition.addObject(Object{.name = "count",
-                                .type = Type::bits(8, true, true),
-                                .kind = ObjectKind::Variable,
-                                .location = SourceLocation(buffer, 17),
-                                .initialValue = literal("8'hA5"),
-                                .isAlias = true,
-                                .encoding = Encoding::VhdlLogic,
-                                .enumIndex = 0});
+    definition.addObject(
+        Object{.name = "count",
+               .type = Type::bits(8, true, true),
+               .kind = ObjectKind::Variable,
+               .location = SourceLocation(buffer, 17),
+               .initialValue = literal("8'hA5"),
+               .isAlias = true,
+               .encoding = Encoding::VhdlLogic,
+               .resolution = {.function = "IEEE.STD_LOGIC_1164.RESOLVED(Y)U", .elementBits = 8},
+               .enumIndex = 0});
 
     definition.ports.push_back(Port{.name = "clk",
                                     .direction = PortDirection::Input,
@@ -268,6 +270,9 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     EXPECT_EQ(definition.objects[1].enumIndex, 0U);
     EXPECT_EQ(definition.objects[1].encoding, Encoding::VhdlLogic);
     EXPECT_EQ(definition.objects[0].encoding, Encoding::Bits);
+    EXPECT_EQ(definition.objects[1].resolution.function, "IEEE.STD_LOGIC_1164.RESOLVED(Y)U");
+    EXPECT_EQ(definition.objects[1].resolution.elementBits, 8U);
+    EXPECT_FALSE(definition.objects[0].resolution.resolved());
     ASSERT_TRUE(definition.objects[1].initialValue.has_value());
     // Read through `value_or` rather than dereferenced: the assertion above already returns
     // from the test on an empty optional, but clang-tidy follows an `if` and not a GoogleTest

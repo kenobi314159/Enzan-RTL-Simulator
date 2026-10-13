@@ -846,6 +846,67 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AResolvedSignalNamesItsResolutionFunction) {
+    // std_logic resolves with std_logic_1164's resolved, a vector of it element by element, and
+    // a design's own resolved subtype with its own function; std_ulogic resolves with nothing.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+package wired is
+  type bit_list is array (natural range <>) of bit;
+  function wired_or (drivers : bit_list) return bit;
+  subtype or_bit is wired_or bit;
+end package;
+
+package body wired is
+  function wired_or (drivers : bit_list) return bit is
+  begin
+    for i in drivers'range loop
+      if drivers(i) = '1' then
+        return '1';
+      end if;
+    end loop;
+    return '0';
+  end function;
+end package body;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use work.wired.all;
+
+entity top is
+end entity;
+
+architecture rtl of top is
+  type logic_pair is array (0 to 1) of std_logic;
+  signal single : std_logic;
+  signal vector : std_logic_vector(3 downto 0);
+  signal pair : logic_pair;
+  signal plain : std_ulogic;
+  signal any : or_bit;
+begin
+end architecture;
+)",
+                                                           "top");
+    ASSERT_NE(design, nullptr) << transcript();
+    const enzan::eir::ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+    const auto resolution = [&](std::string_view name) {
+        for (const enzan::eir::Object& object : top->objects) {
+            if (object.name == name) return object.resolution;
+        }
+        return enzan::eir::Resolution{.function = "missing", .elementBits = 0};
+    };
+    EXPECT_EQ(resolution("single").function, "IEEE.STD_LOGIC_1164.RESOLVED(Y)U");
+    EXPECT_EQ(resolution("single").elementBits, 8U);
+    EXPECT_EQ(resolution("vector").function, "IEEE.STD_LOGIC_1164.RESOLVED(Y)U");
+    EXPECT_EQ(resolution("pair").function, "IEEE.STD_LOGIC_1164.RESOLVED(Y)U");
+    EXPECT_FALSE(resolution("plain").resolved());
+    EXPECT_TRUE(resolution("any").function.starts_with("WORK.WIRED.WIRED_OR"))
+        << resolution("any").function;
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.
