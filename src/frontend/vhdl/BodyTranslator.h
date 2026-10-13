@@ -360,6 +360,10 @@ private:
     bool messageParts(tree_t message, std::string& format,
                       std::vector<eir::SysTaskArgument>& arguments);
 
+    /// `to_string(v)` of `expression`, a vector of an enumeration of characters: a string of the
+    /// characters its elements are.
+    std::optional<Value> characterString(tree_t expression);
+
     /// The image of `operand`, a value of an enumeration known only at run time, as a part of a
     /// message.
     bool enumerationImage(tree_t operand, std::string& format,

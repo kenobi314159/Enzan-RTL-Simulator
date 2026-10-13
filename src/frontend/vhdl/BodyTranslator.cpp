@@ -1174,6 +1174,77 @@ bool BodyTranslator::emitReport(tree_t where, const Value& severity, tree_t mess
     return true;
 }
 
+std::optional<BodyTranslator::Value> BodyTranslator::characterString(tree_t expression) {
+    // Each element's literal, the character it is, in a string as long as the vector (IEEE 1076
+    // section 5.7): the literals' characters are a table the element's code picks from.
+    tree_t operand = tree_value(tree_param(expression, 0));
+    const std::optional<Value> array = this->expression(operand);
+    if (!array) return std::nullopt;
+    type_t element = array->layout.elementType;
+    if (!array->layout.isArray() || !array->layout.inner.empty() || element == nullptr
+        || !type_is_enum(element)) {
+        fail(expression, "a to_string of this array");
+        return std::nullopt;
+    }
+    type_t base = type_base_recur(element);
+    const unsigned count = type_enum_literals(base);
+    eir::BitVector table = eir::BitVector::filled(count * 8, eir::Logic::Zero);
+    for (unsigned code = 0; code < count; ++code) {
+        const std::string_view literal = istr(tree_ident(type_enum_literal(base, code)));
+        if (literal.size() != 3 || literal.front() != '\'') {
+            fail(expression, "a to_string of an array whose elements are not characters");
+            return std::nullopt;
+        }
+        eir::bitops::assignPartAt(
+            table.mutableRef(),
+            eir::BitVector::fromUInt64(static_cast<unsigned char>(literal[1]), 8).ref(),
+            static_cast<std::uint64_t>(code) * 8);
+    }
+    const Layout tableLayout{.storage = eir::Type::bits(table.width(), false, false)};
+    const Value characters = constantArray(table, tableLayout, nullptr);
+
+    const Layout& layout = array->layout;
+    const auto length = static_cast<std::uint32_t>(layout.index.length());
+    const std::optional<Layout> string =
+        arrayLayout(Folder::Range{.left = 1, .right = length, .ascending = true},
+                    type_elem(tree_type(expression)), folder());
+    if (!string) {
+        fail(expression, "a to_string of this array");
+        return std::nullopt;
+    }
+    const Layout stringLayout = string.value_or(Layout{});
+    Value result = constantArray(eir::BitVector::filled(length * 8, eir::Logic::Zero), stringLayout,
+                                 tree_type(expression));
+    const eir::Type byte = eir::Type::bits(8, false, false);
+    const eir::Type offsetType = eir::Type::bits(32, false, false);
+    for (std::uint32_t position = 0; position < length; ++position) {
+        // The left element is highest in both, so element and character share their offset.
+        const std::int64_t from =
+            static_cast<std::int64_t>(length - 1 - position) * layout.elementBits;
+        const std::uint32_t code = newRegister(eir::Type::bits(layout.elementBits, false, false));
+        emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(code),
+                                    eir::Operand::reg(array->reg),
+                                    eir::Operand::reg(constant(from, offsetType, nullptr).reg)));
+        const Value at = resize(Value{.reg = code,
+                                      .type = eir::Type::bits(layout.elementBits, false, false),
+                                      .vhdlType = nullptr},
+                                32);
+        const std::uint32_t scaled = newRegister(offsetType);
+        emit(eir::Instruction::make(eir::Opcode::Multiply, eir::Operand::reg(scaled),
+                                    eir::Operand::reg(at.reg),
+                                    eir::Operand::reg(constant(8, offsetType, nullptr).reg)));
+        const std::uint32_t character = newRegister(byte);
+        emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(character),
+                                    eir::Operand::reg(characters.reg), eir::Operand::reg(scaled)));
+        const std::int64_t to = static_cast<std::int64_t>(length - 1 - position) * 8;
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result.reg),
+                                    eir::Operand::reg(character),
+                                    eir::Operand::reg(constant(to, offsetType, nullptr).reg)));
+    }
+    result.layout = stringLayout;
+    return result;
+}
+
 bool BodyTranslator::enumerationImage(tree_t operand, std::string& format,
                                       std::vector<eir::SysTaskArgument>& arguments) {
     // A table of the literals' images, each in as many bytes as the longest and right-aligned
@@ -2145,6 +2216,14 @@ std::optional<BodyTranslator::Value> BodyTranslator::predefined(tree_t expressio
     case S_ARRAY_NOR:
     case S_ARRAY_XNOR:
     case S_ARRAY_NOT: return arrayOperator(expression, kind);
+
+    // `to_string` of a vector of characters' enumeration, `bit_vector` or `std_logic_vector`.
+    case S_TO_STRING:
+        if (tree_params(expression) == 1
+            && type_is_array(tree_type(tree_value(tree_param(expression, 0))))) {
+            return characterString(expression);
+        }
+        break;
 
     // Records are equal when every field is, and a field's bits are its value.
     case S_RECORD_EQ:
