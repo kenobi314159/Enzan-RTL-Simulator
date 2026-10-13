@@ -1361,7 +1361,16 @@ bool BodyTranslator::procedureCall(tree_t statement) {
 
 bool BodyTranslator::returnStatement(tree_t statement) {
     // In an inlined subprogram, a return leaves its result where the call reads it and goes on
-    // after the call.
+    // after the call; or, for a string written to a line, writes its parts into the line.
+    const std::optional<std::uint32_t> lineSink =
+        inlined.empty() ? std::nullopt : inlined.back().lineSink;
+    if (lineSink && tree_has_value(statement)) {
+        const std::uint32_t sink = *lineSink;
+        const std::uint32_t exit = inlined.back().exitBlock;
+        if (!appendToLine(tree_value(statement), sink)) return false;
+        jump(exit);
+        return true;
+    }
     if (!inlined.empty()) {
         if (tree_has_value(statement)) {
             // The value may inline calls of its own, which grow `inlined` while it is translated,
@@ -1609,7 +1618,10 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
     }
 
     folders.push_back(std::move(bindings));
-    inlined.push_back(Inlined{.body = calleeBody, .exitBlock = newBlock("return"), .result = {}});
+    inlined.push_back(Inlined{.body = calleeBody,
+                              .exitBlock = newBlock("return"),
+                              .result = {},
+                              .lineSink = std::exchange(nextLineSink, std::nullopt)});
     bool translated = true;
     for (unsigned index = 0; index < tree_decls(calleeBody) && translated; ++index)
         translated = declare(tree_decl(calleeBody, index));
@@ -1639,6 +1651,10 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
         return std::nullopt;
     }
 
+    if (const std::optional<std::uint32_t> sink = frame.lineSink) {
+        const eir::Type handle = eir::Type::bits(64, false, false);
+        return Value{.reg = *sink, .type = handle, .vhdlType = nullptr};
+    }
     if (tree_kind(calleeBody) == T_FUNC_BODY) {
         if (!frame.result) {
             fail(call, std::string("a call of ") + istr(tree_ident2(declaration))

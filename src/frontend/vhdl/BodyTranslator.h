@@ -196,6 +196,10 @@ private:
         tree_t body = nullptr;
         std::uint32_t exitBlock = 0;
         std::optional<Value> result;
+
+        /// For a function whose string result has a length only the run shows, the register of
+        /// the line its `return`s write into instead (DESIGN_GUIDE.md section 4.3).
+        std::optional<std::uint32_t> lineSink;
     };
 
     /// A loop that `exit` and `next` can name.
@@ -301,6 +305,21 @@ private:
 
     /// Emits a system function and returns its result, of `type`.
     Value systemFunction(eir::SysTaskCall call, eir::Type type);
+
+    /// `write(l, f(...), justified, field)` of a function whose string result has a length only
+    /// the run shows: the function inlined with its `return`s writing into a line of their own,
+    /// which is then appended to `l`.
+    std::optional<Value> writeBuiltString(tree_t built, const Value& line, const Value& justified,
+                                          const Value& field, SourceLocation location);
+
+    /// True when `expression` is a call of a function whose string result has a length only the
+    /// run shows.
+    bool isBuiltString(tree_t expression);
+
+    /// Appends the string `expression` makes to the line in the register `sink`: its pieces as a
+    /// message's are, and a call among them of a function whose result has a length only the run
+    /// shows inlined writing into the same line.
+    bool appendToLine(tree_t expression, std::uint32_t sink);
 
     /// Writes `value` into the whole variable `name` designates, an inout parameter's actual.
     bool assignWhole(tree_t name, const Value& value);
@@ -463,6 +482,9 @@ private:
     std::optional<Layout> resultLayout;
 
     std::vector<Folder> folders;
+
+    /// The line the next inlined function's `return`s write into, which its frame takes.
+    std::optional<std::uint32_t> nextLineSink;
     std::vector<Inlined> inlined;
 
     std::uint32_t current = 0;

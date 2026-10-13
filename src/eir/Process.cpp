@@ -51,7 +51,8 @@ bool isSystemFunction(SysTaskKind kind) noexcept {
     case SysTaskKind::LineWriteLine:
     case SysTaskKind::LineReadLine:
     case SysTaskKind::LineReadCharacter:
-    case SysTaskKind::FileEnd: return true;
+    case SysTaskKind::FileEnd:
+    case SysTaskKind::LineAppend: return true;
     default: return false;
     }
 }
@@ -84,6 +85,7 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::LineReadLine: return "readline";
     case SysTaskKind::LineReadCharacter: return "read";
     case SysTaskKind::FileEnd: return "endfile";
+    case SysTaskKind::LineAppend: return "write";
     }
     return "$unknown";
 }

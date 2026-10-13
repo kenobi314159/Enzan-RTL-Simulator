@@ -1296,6 +1296,7 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::LineReadLine:
     case eir::SysTaskKind::LineReadCharacter:
     case eir::SysTaskKind::FileEnd:
+    case eir::SysTaskKind::LineAppend:
         ENZAN_ASSERT(false, "a system function run as a system task; run the EIR verifier");
         return;
     }
@@ -1340,7 +1341,8 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
     std::uint64_t value = 0;
     switch (descriptor.kind) {
     // std.textio over the heap: the line `write` appends to, justified in its field.
-    case eir::SysTaskKind::LineWrite: {
+    case eir::SysTaskKind::LineWrite:
+    case eir::SysTaskKind::LineAppend: {
         std::vector<FormatArgument> rest;
         for (std::size_t index = 3; index < descriptor.arguments.size(); ++index) {
             const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[index];
@@ -1354,10 +1356,15 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
             designImage->elaboratedDesign().instances()[state.instanceIndex];
         const FormatContext context{
             .time = currentTime, .timeScale = options.timeScale, .scopeName = instance.path};
-        std::string text =
-            descriptor.hasFormat()
-                ? formatSystemTask(body.strings[descriptor.formatIndex], rest, context)
-                : formatDefault(rest);
+        std::string text;
+        if (descriptor.kind == eir::SysTaskKind::LineAppend) {
+            if (const std::string* source = lineAt(argument(3))) text = *source;
+            freeLine(argument(3));
+        } else {
+            text = descriptor.hasFormat()
+                       ? formatSystemTask(body.strings[descriptor.formatIndex], rest, context)
+                       : formatDefault(rest);
+        }
         const std::size_t field = argument(2);
         if (text.size() < field) {
             const std::string padding(field - text.size(), ' ');

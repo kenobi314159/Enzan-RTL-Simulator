@@ -94,6 +94,10 @@ enum class SysTaskKind : std::uint8_t {
     LineReadCharacter,
     /// `endfile`: whether the file the argument names has nothing left to read.
     FileEnd,
+    /// `write` of a string whose length only the run shows, built in a line of its own: appends
+    /// the line the fourth argument designates, and frees it, to the one the first designates,
+    /// justified and in a field as for LineWrite. The result is the first line's handle.
+    LineAppend,
 };
 
 std::string_view toString(SysTaskKind kind) noexcept;

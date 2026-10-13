@@ -103,6 +103,112 @@ bool BodyTranslator::declareFile(tree_t declaration) {
     return true;
 }
 
+std::optional<BodyTranslator::Value>
+BodyTranslator::writeBuiltString(tree_t built, const Value& line, const Value& justified,
+                                 const Value& field, SourceLocation location) {
+    const eir::Type handle = eir::Type::bits(64, false, false);
+    const Value empty = constant(0, handle, nullptr);
+    const std::uint32_t sink = newRegister(handle);
+    emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(sink),
+                                eir::Operand::reg(empty.reg)));
+    if (!appendToLine(built, sink)) return std::nullopt;
+
+    eir::SysTaskCall append;
+    append.kind = eir::SysTaskKind::LineAppend;
+    append.location = location;
+    const auto argument = [](const Value& from) {
+        return eir::SysTaskArgument{.value = eir::Operand::reg(from.reg), .type = from.type};
+    };
+    append.arguments = {argument(line), argument(justified), argument(field),
+                        eir::SysTaskArgument{.value = eir::Operand::reg(sink), .type = handle}};
+    return systemFunction(std::move(append), handle);
+}
+
+bool BodyTranslator::isBuiltString(tree_t expression) {
+    while (tree_kind(expression) == T_QUALIFIED || tree_kind(expression) == T_TYPE_CONV)
+        expression = tree_value(expression);
+    type_t type = tree_type(expression);
+    return tree_kind(expression) == T_FCALL && tree_has_ref(expression)
+           && hasVhdlBody(static_cast<subprogram_kind_t>(tree_subkind(tree_ref(expression))))
+           && type_is_array(type) && isCharacters(type) && !layoutFor(type)
+           && !folder().boundsOf(expression);
+}
+
+bool BodyTranslator::appendToLine(tree_t expression, std::uint32_t sink) {
+    // The pieces of a concatenation in order, as NVC's simplification leaves a chain of `&`.
+    std::vector<tree_t> pieces;
+    const auto flatten = [&](const auto& self, tree_t piece) -> void {
+        while (tree_kind(piece) == T_QUALIFIED || tree_kind(piece) == T_TYPE_CONV)
+            piece = tree_value(piece);
+        if (tree_kind(piece) == T_AGGREGATE) {
+            bool concatenation = true;
+            for (unsigned index = 0; index < tree_assocs(piece); ++index) {
+                const unsigned kind = tree_subkind(tree_assoc(piece, index));
+                concatenation = concatenation && (kind == A_CONCAT || kind == A_POS);
+            }
+            if (concatenation && !isCharacters(tree_type(piece))) concatenation = false;
+            if (concatenation) {
+                for (unsigned index = 0; index < tree_assocs(piece); ++index)
+                    self(self, tree_value(tree_assoc(piece, index)));
+                return;
+            }
+        }
+        if (tree_kind(piece) == T_FCALL && tree_has_ref(piece)
+            && tree_subkind(tree_ref(piece)) == S_CONCAT && tree_params(piece) == 2) {
+            self(self, tree_value(tree_param(piece, 0)));
+            self(self, tree_value(tree_param(piece, 1)));
+            return;
+        }
+        pieces.push_back(piece);
+    };
+    flatten(flatten, expression);
+
+    // What a message would make of them, written as one; a string whose length only the run
+    // shows is written by its function, inlined into the same line, between them.
+    const eir::Type handle = eir::Type::bits(64, false, false);
+    std::string format;
+    std::vector<eir::SysTaskArgument> arguments;
+    const auto flush = [&] {
+        if (format.empty()) return;
+        eir::SysTaskCall write;
+        write.kind = eir::SysTaskKind::LineWrite;
+        write.location = statementLocation;
+        const Value right = constant(0, eir::Type::bits(8, false, false), nullptr);
+        const Value width = constant(0, eir::Type::bits(32, false, false), nullptr);
+        write.arguments = {
+            eir::SysTaskArgument{.value = eir::Operand::reg(sink), .type = handle},
+            eir::SysTaskArgument{.value = eir::Operand::reg(right.reg), .type = right.type},
+            eir::SysTaskArgument{.value = eir::Operand::reg(width.reg), .type = width.type}};
+        write.arguments.insert(write.arguments.end(), arguments.begin(), arguments.end());
+        write.formatIndex = addString(std::exchange(format, {}));
+        arguments.clear();
+        const Value written = systemFunction(std::move(write), handle);
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(sink),
+                                    eir::Operand::reg(written.reg)));
+    };
+    for (tree_t piece : pieces) {
+        if (!isBuiltString(piece)) {
+            if (!messageParts(piece, format, arguments)) return false;
+            continue;
+        }
+        flush();
+        tree_t made = piece;
+        while (tree_kind(made) == T_QUALIFIED || tree_kind(made) == T_TYPE_CONV)
+            made = tree_value(made);
+        tree_t declaration = tree_ref(made);
+        tree_t body = subprogramBody(declaration);
+        const std::optional<std::vector<tree_t>> actuals =
+            body == nullptr ? std::nullopt : actualsOf(made, declaration);
+        if (!actuals) return fail(made, "a call of a function whose body has not been analysed");
+        nextLineSink = sink;
+        const std::optional<Value> inlinedCall = inlineCall(made, declaration, body, *actuals);
+        nextLineSink.reset();
+        if (!inlinedCall) return false;
+    }
+    flush();
+    return true;
+}
+
 bool BodyTranslator::assignWhole(tree_t name, const Value& value) {
     const std::optional<Place> target = place(name);
     if (!target) return false;
@@ -196,8 +302,17 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
         const std::optional<Value> line = value(0);
         const std::optional<Value> justified = value(2);
         const std::optional<Value> field = value(3);
+        if (!line || !justified || !field) return false;
+
+        // A string whose length only the run shows, a function's result built from images, is
+        // built in a line of its own.
+        if (isBuiltString(written)) {
+            const std::optional<Value> appended =
+                writeBuiltString(written, *line, *justified, *field, native.location);
+            return appended && assignWhole((*actuals)[0], *appended);
+        }
         const std::optional<Value> shown = value(1);
-        if (!line || !justified || !field || !shown) return false;
+        if (!shown) return false;
         native.kind = eir::SysTaskKind::LineWrite;
         native.formatIndex = addString(characters ? "%s" : "%0d");
         native.arguments = {argument(*line), argument(*justified), argument(*field),
