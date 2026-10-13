@@ -102,10 +102,6 @@ struct SubprogramBindings {
 /// may use.
 [[nodiscard]] std::vector<bool> shapeParameters(tree_t body);
 
-/// The body of the subprogram `declaration` declares: itself when it is one, and otherwise the one
-/// its package body or its declarative region holds. Null when the body has not been analysed.
-[[nodiscard]] tree_t subprogramBody(tree_t declaration);
-
 /// Translates one VHDL process into an EIR process, or one subprogram, specialised for a shape,
 /// into an EIR subprogram.
 ///

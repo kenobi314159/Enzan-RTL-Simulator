@@ -94,26 +94,6 @@ std::vector<bool> shapeParameters(tree_t body) {
     return search.found;
 }
 
-tree_t subprogramBody(tree_t declaration) {
-    const tree_kind_t kind = tree_kind(declaration);
-    if (kind == T_FUNC_BODY || kind == T_PROC_BODY) return declaration;
-
-    // The body has the declaration's mangled name, in the package body when the declaration is in
-    // a package, and beside the declaration otherwise.
-    tree_t unit = tree_container(declaration);
-    tree_t region = tree_kind(unit) == T_PACKAGE ? body_of(unit) : unit;
-    if (region == nullptr) return nullptr;
-    ident_t name = tree_ident2(declaration);
-    for (unsigned index = 0; index < tree_decls(region); ++index) {
-        tree_t candidate = tree_decl(region, index);
-        const tree_kind_t candidateKind = tree_kind(candidate);
-        if ((candidateKind == T_FUNC_BODY || candidateKind == T_PROC_BODY)
-            && tree_ident2(candidate) == name)
-            return candidate;
-    }
-    return nullptr;
-}
-
 BodyTranslator::BodyTranslator(DefinitionScope& scope, tree_t statement, std::string name)
     : owner(scope), source(statement), folders{scope.folder()} {
     process.name = std::move(name);

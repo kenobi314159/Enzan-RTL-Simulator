@@ -364,6 +364,92 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, ConstantFunctionsRunOnTheGenericsValues) {
+    // Bounds computed by the design's own functions from a generic, as NEORV32 sizes its
+    // memories: a loop that returns early, an if that returns either way, and a loop over a
+    // constant array given as a parameter.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package util is
+  function clog2 (n : natural) return natural;
+  function pick (c : boolean; t, f : natural) return natural;
+  function widest (list : integer_vector) return natural;
+end package;
+
+package body util is
+  function clog2 (n : natural) return natural is
+  begin
+    for i in 0 to 31 loop
+      if 2**i >= n then
+        return i;
+      end if;
+    end loop;
+    return 32;
+  end function;
+
+  function pick (c : boolean; t, f : natural) return natural is
+  begin
+    if c then
+      return t;
+    else
+      return f;
+    end if;
+  end function;
+
+  function widest (list : integer_vector) return natural is
+    variable best : natural := 0;
+  begin
+    for i in list'range loop
+      if list(i) > best then
+        best := list(i);
+      end if;
+    end loop;
+    return best;
+  end function;
+end package body;
+
+use work.util.all;
+
+entity unit is
+  generic (depth : natural := 16);
+  port (q : out natural);
+end entity;
+
+architecture rtl of unit is
+  constant awidth_c : natural := clog2(depth);
+  constant list_c : integer_vector(0 to 2) := (3, 9, 4);
+  signal mem : bit_vector(2**awidth_c - 1 downto 0);
+  signal wide : bit_vector(widest(list_c) - 1 downto 0);
+  signal chosen : bit_vector(pick(depth > 8, 5, 2) - 1 downto 0);
+begin
+  q <= mem'length + wide'length * 100 + chosen'length * 1000;
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal q : natural;
+begin
+  uut : entity work.unit generic map (depth => 20) port map (q);
+
+  process
+  begin
+    wait for 1 ns;
+    assert q = 5932 report "q is " & integer'image(q) severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.

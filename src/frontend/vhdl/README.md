@@ -48,14 +48,14 @@ parent. A design's work library is NVC's in-memory one, written nowhere.
 So far: entities, architectures, entity instances, generics of scalar and array types, null strings
 among them; signals and ports of enumeration, integer and physical types, of arrays of them, of one
 or more dimensions, with static bounds, and of records; ports associated with signals, parts of them
-and expressions, whole or in parts; `if` and `for` generate statements and blocks; processes with
-variables, `if`, `case`, loops, `exit`, `next`, `wait` (but not one with both a timeout and a
-sensitivity or condition), signal assignments with inertial and transport delay (to an element or a
-slice with no delay), `assert`, `report` with messages built from literals and `'image`,
-`std.env.finish` and `stop`; aggregates, strings, elements and slices, concatenation, the predefined
-operators on scalars and arrays, `'event` and `'last_value`; functions and procedures of packages
-and architectures, std_logic_1164's and numeric_std's among them. Anything else is refused with
-ENZ2005 naming it, never left out.
+and expressions, whole or in parts; `if` and `for` generate statements and blocks; constant
+functions of scalar results; processes with variables, `if`, `case`, loops, `exit`, `next`, `wait`
+(but not one with both a timeout and a sensitivity or condition), signal assignments with inertial
+and transport delay (to an element or a slice with no delay), `assert`, `report` with messages built
+from literals and `'image`, `std.env.finish` and `stop`; aggregates, strings, elements and slices,
+concatenation, the predefined operators on scalars and arrays, `'event` and `'last_value`; functions
+and procedures of packages and architectures, std_logic_1164's and numeric_std's among them.
+Anything else is refused with ENZ2005 naming it, never left out.
 
 ## Rules
 

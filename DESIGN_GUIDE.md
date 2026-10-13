@@ -949,6 +949,12 @@ What a VHDL unit becomes in EIR:
   equal to its actual: into it for an input, out of it for an output. That costs the
   delta a collapsed port does not, so a clock through such an association lags its data
   by one; a clock is rarely one.
+- A constant function is run as the adapter folds: a call of a pure function of the
+  design with a scalar result, whose arguments fold, runs its body's variables, `if`,
+  `case`, loops and `return` over their values, with an architecture's generics in
+  view, as `index_size_f(MEM_SIZE/4)` sizing a memory needs. A call that does anything
+  else, or runs a million statements, does not fold, and its use is refused where a
+  static value is needed.
 - A null array, a generic left at `""` most often, has no bits to hold, so it is its bounds:
   a comparison or an attribute of it folds, and a call given one is inlined, where its
   uses can fold too. A testbench that reads a file only when a name is given needs no

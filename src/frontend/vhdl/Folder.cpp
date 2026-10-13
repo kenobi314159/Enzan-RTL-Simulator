@@ -2,10 +2,36 @@
 
 #include "frontend/vhdl/Folder.h"
 
+#include "eir/BitOps.h"
+#include "frontend/vhdl/Types.h"
+
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace enzan::frontend::vhdl {
+
+tree_t subprogramBody(tree_t declaration) {
+    const tree_kind_t kind = tree_kind(declaration);
+    if (kind == T_FUNC_BODY || kind == T_PROC_BODY) return declaration;
+
+    // The body has the declaration's mangled name, in the package body when the declaration is in
+    // a package, and beside the declaration otherwise.
+    tree_t unit = tree_container(declaration);
+    tree_t region = tree_kind(unit) == T_PACKAGE ? body_of(unit) : unit;
+    if (region == nullptr) return nullptr;
+    ident_t name = tree_ident2(declaration);
+    for (unsigned index = 0; index < tree_decls(region); ++index) {
+        tree_t candidate = tree_decl(region, index);
+        const tree_kind_t candidateKind = tree_kind(candidate);
+        if ((candidateKind == T_FUNC_BODY || candidateKind == T_PROC_BODY)
+            && tree_ident2(candidate) == name)
+            return candidate;
+    }
+    return nullptr;
+}
 
 namespace {
 
@@ -71,6 +97,7 @@ std::optional<std::int64_t> Folder::integer(tree_t expression) const {
     case T_REF: return reference(expression);
     case T_FCALL: return call(expression);
     case T_ATTR_REF: return attribute(expression);
+    case T_ARRAY_REF: return element(expression);
     default: return std::nullopt;
     }
 }
@@ -87,8 +114,10 @@ std::optional<std::int64_t> Folder::reference(tree_t expression) const {
         if (!tree_has_value(declaration)) return foreignConstant(declaration);
         return integer(tree_value(declaration));
 
+    // A constant function's parameters and variables are bound while it runs.
     case T_GENERIC_DECL:
-    case T_PARAM_DECL: {
+    case T_PARAM_DECL:
+    case T_VAR_DECL: {
         const auto bound = generics.find(declaration);
         if (bound != generics.end()) return bound->second;
         return std::nullopt;
@@ -105,7 +134,7 @@ std::optional<std::int64_t> Folder::call(tree_t expression) const {
     if (!tree_has_ref(expression)) return std::nullopt;
     tree_t declaration = tree_ref(expression);
     const auto kind = static_cast<subprogram_kind_t>(tree_subkind(declaration));
-    if (kind == S_USER) return std::nullopt;
+    if (kind == S_USER) return constantCall(expression, declaration);
 
     // Two arrays of different lengths are never equal, and two null arrays always are, whatever
     // their elements would be: the bounds decide, without the values.
@@ -316,6 +345,296 @@ std::optional<std::int64_t> Folder::left(type_t type) const {
     // An enumeration with no explicit range starts at its first literal.
     if (type_is_enum(type)) return 0;
     return std::nullopt;
+}
+
+// --- constant functions -----------------------------------------------------
+
+namespace {
+
+/// How a statement of a constant function ended.
+enum class Flow : std::uint8_t { Continue, Return, Exit, Next, Failed };
+
+/// How many statements one constant call may run, and how deep calls may nest, before it is
+/// taken not to fold: a loop that never ends, or a recursion that never does.
+constexpr std::uint64_t MaxSteps = 1'000'000;
+constexpr int MaxDepth = 64;
+
+/// How deep constant calls are nested now.
+thread_local int depth = 0;
+
+/// Runs the body of a function whose value folds: its statements over its parameters' and its
+/// variables' values, held as a Folder's bindings, which is how its expressions fold too.
+class ConstantRun {
+public:
+    explicit ConstantRun(Folder bound) : frame(std::move(bound)) {}
+
+    /// Runs the statements of `container` in order.
+    Flow statements(tree_t container) {
+        for (unsigned index = 0; index < tree_stmts(container); ++index) {
+            const Flow flow = statement(tree_stmt(container, index));
+            if (flow != Flow::Continue) return flow;
+        }
+        return Flow::Continue;
+    }
+
+    /// Declares what a body declares: its variables, with their initial values. Constants and
+    /// types fold where they are used, and anything else is not run.
+    bool declare(tree_t container) {
+        for (unsigned index = 0; index < tree_decls(container); ++index) {
+            tree_t declaration = tree_decl(container, index);
+            switch (tree_kind(declaration)) {
+            case T_VAR_DECL: {
+                type_t type = tree_type(declaration);
+                if (!type_is_scalar(type) || type_is_real(type)) return false;
+                const std::optional<std::int64_t> initial =
+                    tree_has_value(declaration) ? frame.integer(tree_value(declaration))
+                                                : frame.left(type);
+                if (!initial) return false;
+                frame.bind(declaration, *initial);
+                break;
+            }
+            case T_CONST_DECL:
+            case T_TYPE_DECL:
+            case T_SUBTYPE_DECL:
+            case T_USE:
+            case T_ATTR_SPEC:
+            case T_FUNC_DECL:
+            case T_FUNC_BODY: break;
+            default: return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] std::optional<std::int64_t> returned() const noexcept { return result; }
+
+private:
+    Flow statement(tree_t statement) {
+        if (++steps > MaxSteps) return Flow::Failed;
+        switch (tree_kind(statement)) {
+        case T_NULL: return Flow::Continue;
+
+        case T_VAR_ASSIGN: {
+            tree_t target = tree_target(statement);
+            if (tree_kind(target) != T_REF || !tree_has_ref(target)
+                || tree_kind(tree_ref(target)) != T_VAR_DECL)
+                return Flow::Failed;
+            const std::optional<std::int64_t> value = frame.integer(tree_value(statement));
+            if (!value) return Flow::Failed;
+            frame.bind(tree_ref(target), *value);
+            return Flow::Continue;
+        }
+
+        case T_RETURN: {
+            if (!tree_has_value(statement)) return Flow::Failed;
+            result = frame.integer(tree_value(statement));
+            return result ? Flow::Return : Flow::Failed;
+        }
+
+        case T_IF:
+            for (unsigned index = 0; index < tree_conds(statement); ++index) {
+                tree_t alternative = tree_cond(statement, index);
+                if (tree_has_value(alternative)) {
+                    const std::optional<std::int64_t> holds =
+                        frame.integer(tree_value(alternative));
+                    if (!holds) return Flow::Failed;
+                    if (*holds == 0) continue;
+                }
+                return statements(alternative);
+            }
+            return Flow::Continue;
+
+        case T_CASE: return caseStatement(statement);
+
+        case T_FOR: {
+            const std::optional<Folder::Range> range = frame.range(tree_range(statement, 0));
+            if (!range || tree_decls(statement) != 1) return Flow::Failed;
+            for (std::int64_t offset = 0; offset < range->length(); ++offset) {
+                frame.bind(tree_decl(statement, 0),
+                           range->ascending ? range->left + offset : range->left - offset);
+                const Flow flow = statements(statement);
+                if (flow == Flow::Continue) continue;
+                if (!leaves(flow, statement)) return flow;
+                if (flow == Flow::Exit) break;
+            }
+            return Flow::Continue;
+        }
+
+        case T_WHILE:
+            for (;;) {
+                if (++steps > MaxSteps) return Flow::Failed;
+                if (tree_has_value(statement)) {
+                    const std::optional<std::int64_t> holds = frame.integer(tree_value(statement));
+                    if (!holds) return Flow::Failed;
+                    if (*holds == 0) return Flow::Continue;
+                }
+                const Flow flow = statements(statement);
+                if (flow == Flow::Continue) continue;
+                if (!leaves(flow, statement)) return flow;
+                if (flow == Flow::Exit) return Flow::Continue;
+            }
+
+        case T_EXIT:
+        case T_NEXT: {
+            if (tree_has_value(statement)) {
+                const std::optional<std::int64_t> holds = frame.integer(tree_value(statement));
+                if (!holds) return Flow::Failed;
+                if (*holds == 0) return Flow::Continue;
+            }
+            label = tree_has_ident2(statement) ? tree_ident2(statement) : nullptr;
+            return tree_kind(statement) == T_EXIT ? Flow::Exit : Flow::Next;
+        }
+
+        // An assertion that holds does nothing; one that fails would report, which folding
+        // cannot.
+        case T_ASSERT: {
+            const std::optional<std::int64_t> holds = frame.integer(tree_value(statement));
+            return holds && *holds != 0 ? Flow::Continue : Flow::Failed;
+        }
+
+        default: return Flow::Failed;
+        }
+    }
+
+    Flow caseStatement(tree_t statement) {
+        const std::optional<std::int64_t> selector = frame.integer(tree_value(statement));
+        if (!selector) return Flow::Failed;
+        for (unsigned index = 0; index < tree_stmts(statement); ++index) {
+            tree_t alternative = tree_stmt(statement, index);
+            for (unsigned choiceIndex = 0; choiceIndex < tree_choices(alternative); ++choiceIndex) {
+                tree_t choice = tree_choice(alternative, choiceIndex);
+                bool chosen = false;
+                if (tree_has_name(choice)) {
+                    const std::optional<std::int64_t> value = frame.integer(tree_name(choice));
+                    if (!value) return Flow::Failed;
+                    chosen = *value == *selector;
+                } else if (tree_ranges(choice) > 0) {
+                    const std::optional<Folder::Range> range = frame.range(tree_range(choice, 0));
+                    if (!range) return Flow::Failed;
+                    chosen = *selector >= range->low() && *selector <= range->high();
+                } else {
+                    chosen = true;
+                }
+                if (chosen) return statements(alternative);
+            }
+        }
+        return Flow::Failed;
+    }
+
+    /// True when `flow`, an exit or a next, is one of `loop`'s: an unlabelled one, or one naming
+    /// it. A labelled one naming a loop further out goes on out.
+    bool leaves(Flow flow, tree_t loop) {
+        if (flow != Flow::Exit && flow != Flow::Next) return false;
+        if (label != nullptr && (!tree_has_ident(loop) || tree_ident(loop) != label)) return false;
+        label = nullptr;
+        return true;
+    }
+
+    Folder frame;
+    std::optional<std::int64_t> result;
+    ident_t label = nullptr;
+    std::uint64_t steps = 0;
+};
+
+/// Keeps count of how deep constant calls are nested while one runs.
+class Nested {
+public:
+    Nested() noexcept { ++depth; }
+
+    Nested(const Nested&) = delete;
+    Nested& operator=(const Nested&) = delete;
+    Nested(Nested&&) = delete;
+    Nested& operator=(Nested&&) = delete;
+
+    ~Nested() { --depth; }
+};
+
+} // namespace
+
+std::optional<std::int64_t> Folder::constantCall(tree_t expression, tree_t declaration) const {
+    const tree_kind_t kind = tree_kind(declaration);
+    if (kind != T_FUNC_DECL && kind != T_FUNC_BODY) return std::nullopt;
+    if ((tree_flags(declaration) & TREE_F_IMPURE) != 0 || depth >= MaxDepth) return std::nullopt;
+    type_t result = type_result(tree_type(declaration));
+    if (!type_is_scalar(result) || type_is_real(result)) return std::nullopt;
+    tree_t body = subprogramBody(declaration);
+    if (body == nullptr || tree_ports(body) != tree_ports(declaration)) return std::nullopt;
+
+    // The body sees what the caller sees, an architecture's generics among it, and its own
+    // parameters, each its actual's value or its default. The declaration's parameters are what
+    // a named association names, and the body's are in the same order.
+    Folder frame = *this;
+    for (unsigned index = 0; index < tree_ports(declaration); ++index) {
+        tree_t formal = tree_port(declaration, index);
+        tree_t actual = tree_has_value(formal) ? tree_value(formal) : nullptr;
+        for (unsigned param = 0; param < tree_params(expression); ++param) {
+            tree_t association = tree_param(expression, param);
+            const bool positional =
+                tree_subkind(association) == P_POS && tree_pos(association) == index;
+            const bool named = tree_subkind(association) == P_NAMED
+                               && tree_kind(tree_name(association)) == T_REF
+                               && tree_has_ref(tree_name(association))
+                               && tree_ref(tree_name(association)) == formal;
+            if (positional || named) actual = tree_value(association);
+        }
+        if (actual == nullptr) return std::nullopt;
+
+        tree_t parameter = tree_port(body, index);
+        type_t type = tree_type(parameter);
+        if (type_is_scalar(type) && !type_is_real(type)) {
+            const std::optional<std::int64_t> value = integer(actual);
+            if (!value) return std::nullopt;
+            frame.bind(parameter, *value);
+        } else if (type_is_array(type)) {
+            const std::optional<Range> bounds = boundsOf(actual);
+            if (!bounds) return std::nullopt;
+            frame.bindBounds(parameter, *bounds);
+            const std::optional<Layout> layout =
+                bounds->length() == 0 ? std::nullopt : arrayLayout(*bounds, type_elem(type), *this);
+            if (layout) {
+                std::optional<eir::BitVector> bits = constantBits(actual, *layout, *this);
+                if (!bits) return std::nullopt;
+                frame.bindComposite(parameter, std::move(*bits));
+            }
+        } else {
+            return std::nullopt;
+        }
+    }
+
+    const Nested nested;
+    ConstantRun run(std::move(frame));
+    if (!run.declare(body)) return std::nullopt;
+    if (run.statements(body) != Flow::Return) return std::nullopt;
+    return run.returned();
+}
+
+std::optional<std::int64_t> Folder::element(tree_t expression) const {
+    tree_t prefix = tree_value(expression);
+    if (tree_kind(prefix) != T_REF || !tree_has_ref(prefix) || tree_params(expression) != 1)
+        return std::nullopt;
+    const eir::BitVector* bits = compositeOf(tree_ref(prefix));
+    const std::optional<Range> folded = boundsOf(prefix);
+    const std::optional<std::int64_t> index = integer(tree_value(tree_param(expression, 0)));
+    if (bits == nullptr || !folded || !index) return std::nullopt;
+    const Range bounds = *folded;
+    const std::int64_t position = *index;
+    if (position < bounds.low() || position > bounds.high()) return std::nullopt;
+
+    // The left element is in the highest bits (DESIGN_GUIDE.md section 3.6).
+    const auto length = static_cast<std::uint64_t>(bounds.length());
+    if (length == 0 || bits->width() % length != 0) return std::nullopt;
+    const std::uint64_t elementBits = bits->width() / length;
+    if (elementBits == 0 || elementBits > 64) return std::nullopt;
+    const auto fromRight = static_cast<std::uint64_t>(bounds.ascending ? bounds.right - position
+                                                                       : position - bounds.right);
+    eir::BitVector one(static_cast<std::uint32_t>(elementBits));
+    eir::bitops::partSelectAt(one.mutableRef(), bits->ref(),
+                              static_cast<std::uint32_t>(fromRight * elementBits));
+    const std::uint64_t raw = one.ref().toUInt64();
+    if (!isSignedScalar(tree_type(expression)) || elementBits == 64)
+        return static_cast<std::int64_t>(raw);
+    const std::uint64_t sign = std::uint64_t{1} << (elementBits - 1);
+    return static_cast<std::int64_t>((raw ^ sign) - sign);
 }
 
 } // namespace enzan::frontend::vhdl

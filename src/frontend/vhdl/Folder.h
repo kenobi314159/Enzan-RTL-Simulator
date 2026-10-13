@@ -12,6 +12,10 @@
 
 namespace enzan::frontend::vhdl {
 
+/// The body of the subprogram `declaration` declares: itself when it is one, and otherwise the one
+/// its package body or its declarative region holds. Null when the body has not been analysed.
+[[nodiscard]] tree_t subprogramBody(tree_t declaration);
+
 /// Evaluates VHDL's static expressions: the values of generics, constants, bounds and delays that
 /// the adapter has to know rather than compute at run time.
 ///
@@ -98,6 +102,16 @@ public:
 
 private:
     [[nodiscard]] std::optional<std::int64_t> call(tree_t expression) const;
+
+    /// A call of a pure function of the design with a scalar result, run on its arguments'
+    /// values: a constant function, which the adapter runs as it goes (DESIGN_GUIDE.md section
+    /// 5.2).
+    [[nodiscard]] std::optional<std::int64_t> constantCall(tree_t expression,
+                                                           tree_t declaration) const;
+
+    /// An element of an array bound here, a parameter of a constant function given a static
+    /// array.
+    [[nodiscard]] std::optional<std::int64_t> element(tree_t expression) const;
     [[nodiscard]] std::optional<std::int64_t> attribute(tree_t expression) const;
     [[nodiscard]] std::optional<std::int64_t> reference(tree_t expression) const;
 
