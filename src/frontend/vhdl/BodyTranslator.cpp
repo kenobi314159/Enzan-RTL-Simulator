@@ -535,12 +535,12 @@ bool BodyTranslator::signalAssignment(tree_t statement) {
     const unsigned count = tree_waveforms(statement);
     if (count == 0) return fail(statement, "an assignment with no waveform");
 
-    // An element or a slice: one transaction in the next delta cycle, which is the same whether
-    // the assignment is inertial or transport.
-    if (!target->whole) {
+    // An element or a slice with no delay: one transaction in the next delta cycle, which is the
+    // same whether the assignment is inertial or transport. With a delay, or several elements, it
+    // is a waveform as the whole signal's is below.
+    if (!target->whole && count == 1 && !tree_has_delay(tree_waveform(statement, 0))
+        && tree_has_value(tree_waveform(statement, 0))) {
         tree_t waveform = tree_waveform(statement, 0);
-        if (count != 1 || tree_has_delay(waveform) || !tree_has_value(waveform))
-            return fail(statement, "a delayed assignment to part of a signal");
         const std::optional<Value> value = expression(tree_value(waveform), &target->layout);
         if (!value) return false;
         if (value->type.bitWidth() != width)
@@ -592,9 +592,32 @@ bool BodyTranslator::signalAssignment(tree_t statement) {
         if (!after) return false;
 
         const bool rejects = inertial && index == 0;
-        emit(eir::Instruction::make(rejects ? eir::Opcode::Drive : eir::Opcode::DriveTransport, {},
-                                    eir::Operand::object(object), eir::Operand::reg(stored.reg),
-                                    eir::Operand::reg(after->reg)));
+        if (target->whole) {
+            emit(eir::Instruction::make(rejects ? eir::Opcode::Drive : eir::Opcode::DriveTransport,
+                                        {}, eir::Operand::object(object),
+                                        eir::Operand::reg(stored.reg),
+                                        eir::Operand::reg(after->reg)));
+            continue;
+        }
+
+        // A part's offset and delay travel in one register: the offset low, the delay above it.
+        const eir::Type pair = eir::Type::bits(128, false, false);
+        const Value offset = resize(
+            Value{.reg = offsetRegister(*target),
+                  .type = target->offset ? target->offset->type : eir::Type::bits(32, false, false),
+                  .vhdlType = nullptr},
+            128);
+        const Value later = resize(*after, 128);
+        const std::uint32_t shifted = newRegister(pair);
+        emit(eir::Instruction::make(
+            eir::Opcode::ShiftLeft, eir::Operand::reg(shifted), eir::Operand::reg(later.reg),
+            eir::Operand::reg(constant(64, eir::Type::bits(32, false, false), nullptr).reg)));
+        const std::uint32_t both = newRegister(pair);
+        emit(eir::Instruction::make(eir::Opcode::Or, eir::Operand::reg(both),
+                                    eir::Operand::reg(offset.reg), eir::Operand::reg(shifted)));
+        emit(eir::Instruction::make(
+            rejects ? eir::Opcode::DrivePartAfter : eir::Opcode::DriveTransportPart, {},
+            eir::Operand::object(object), eir::Operand::reg(stored.reg), eir::Operand::reg(both)));
     }
     noteWrite(*target);
     return true;

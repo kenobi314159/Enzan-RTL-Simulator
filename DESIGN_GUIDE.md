@@ -952,7 +952,9 @@ What a VHDL unit becomes in EIR:
   would never let time advance.
 - A signal assignment is `Drive`, or `DriveTransport` for a transport assignment and
   for each element of a waveform after the first: the transactions of 3.4. One to an
-  element or a slice is `DrivePart`, at the offset of its bits.
+  element or a slice is `DrivePart`, at the offset of its bits, or after a delay
+  `DrivePartAfter` and `DriveTransportPart`, whose one operand holds the offset and the
+  delay together.
 - An array is its elements end to end, the left element highest (3.6), with bounds the
   adapter has folded; a record is its fields end to end, the first highest. A field is
   at an offset its type fixes, so a field of a signal is a part of it like a slice. An

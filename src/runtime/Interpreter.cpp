@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <optional>
+#include <span>
 #include <utility>
 
 namespace enzan::runtime {
@@ -241,6 +242,21 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             kernel.drive(processIndex, instruction.dst, current.objectSignals[instruction.a],
                          reg(instruction.b, instruction.bWidth),
                          static_cast<std::uint32_t>(offset.toUInt64()), 0, true);
+            if (kernel.errorRequested) return ExecutionResult::Stopped;
+            break;
+        }
+
+        case eir::Opcode::DrivePartAfter:
+        case eir::Opcode::DriveTransportPart: {
+            // The offset in the low 64 bits, the delay in the 64 above; either unknown assigns
+            // nothing, as an unknown offset does.
+            const eir::ConstBitRef both = reg(instruction.c, instruction.cWidth);
+            if (both.hasUnknown()) break;
+            const std::span<const eir::Word> words = both.avalWords();
+            kernel.drive(processIndex, instruction.dst, current.objectSignals[instruction.a],
+                         reg(instruction.b, instruction.bWidth),
+                         static_cast<std::uint32_t>(words[0]), words[1],
+                         instruction.opcode == eir::Opcode::DrivePartAfter);
             if (kernel.errorRequested) return ExecutionResult::Stopped;
             break;
         }

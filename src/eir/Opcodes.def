@@ -108,6 +108,14 @@ ENZAN_OPCODE(DrivePart, "pdrive", false, 3,
              "as Drive with no delay, of the bits from the offset the third operand gives up, as "
              "wide as the value: an assignment to an element or a slice of a signal, which "
              "deletes only what is pending for those bits")
+ENZAN_OPCODE(DrivePartAfter, "pdrivea", false, 3,
+             "as DrivePart after a delay, inertially: the third operand holds the offset in its "
+             "low 64 bits and the delay in the 64 above, two values one operand carries since "
+             "the instruction's other operands are the object and the value; an extract of each "
+             "half, then the call Drive makes")
+ENZAN_OPCODE(DriveTransportPart, "pdrivet", false, 3,
+             "as DrivePartAfter with transport delay, rejecting nothing before the new "
+             "transaction")
 
 // --- Bitwise, element by element -------------------------------------------
 

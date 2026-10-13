@@ -117,3 +117,6 @@ enzan_add_vhdl_golden_test(conversions)
 
 # Files of types other than text, written and read back.
 enzan_add_vhdl_golden_test(files)
+
+# Waveforms to parts of signals, delayed and inertial.
+enzan_add_vhdl_golden_test(parts)

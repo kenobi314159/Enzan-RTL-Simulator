@@ -1025,28 +1025,6 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
 }
 
-TEST_F(VhdlDesignTest, ADelayedAssignmentToPartOfASignalIsRefused) {
-    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
-entity tb is
-end entity;
-
-architecture test of tb is
-  signal v : bit_vector(3 downto 0);
-begin
-  process
-  begin
-    v(1) <= '1' after 2 ns;
-    wait;
-  end process;
-end architecture;
-)");
-    EXPECT_EQ(design, nullptr);
-    const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
-    ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message, "a delayed assignment to part of a signal is not supported by "
-                                    "the VHDL frontend yet");
-}
-
 TEST_F(VhdlDesignTest, WhatTheAdapterCannotTranslateIsReportedNotDropped) {
     const std::unique_ptr<enzan::eir::Design> design = translate(R"(
 entity uses_access is

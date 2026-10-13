@@ -611,6 +611,8 @@ private:
             case Opcode::Drive:
             case Opcode::DriveTransport:
             case Opcode::DrivePart:
+            case Opcode::DrivePartAfter:
+            case Opcode::DriveTransportPart:
                 reportBody(definition, body,
                            std::format("{} schedules a write, which a subprogram may not; its "
                                        "stores are immediate",
@@ -662,6 +664,18 @@ private:
         case Opcode::StorePartNonBlocking:
         case Opcode::DrivePart:
             checkObjectAccess(definition, body, instruction.a, true, where);
+            break;
+
+        // The offset and the delay together, in one register of 128 bits.
+        case Opcode::DrivePartAfter:
+        case Opcode::DriveTransportPart:
+            checkObjectAccess(definition, body, instruction.a, true, where);
+            if (registerWidth(definition, body, instruction.c, where) != 128) {
+                reportBody(definition, body,
+                           std::format("{} takes its offset and its delay in one register of "
+                                       "128 bits",
+                                       where));
+            }
             break;
 
         // A system task has no result and a system function has one, so each opcode runs only

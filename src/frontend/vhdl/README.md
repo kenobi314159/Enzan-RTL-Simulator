@@ -52,7 +52,7 @@ dimensions, with static bounds, and of records; ports associated with signals, p
 expressions and conversion functions, whole or in parts; `if` and `for` generate statements and
 blocks; constant functions; processes with variables, `if`, `case`, loops, `exit`, `next`, `wait`
 (but not one with both a timeout and a sensitivity or condition), signal assignments with inertial
-and transport delay (to an element or a slice with no delay), `assert`, `report` with messages built
+and transport delay, to whole signals and to their parts, `assert`, `report` with messages built
 from any strings and characters and the `'image` of integers and times, `std.env.finish` and `stop`;
 aggregates, strings, elements and slices, with loops unrolled for slices that move with their
 parameter and variable slices of run-time lengths, concatenation, the predefined operators on
