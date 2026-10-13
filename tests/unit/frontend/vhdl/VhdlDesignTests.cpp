@@ -694,6 +694,68 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, StaticStringsFoldIntoGenericsAndMessages) {
+    // As NEORV32 names its trace log and announces its configuration: a string generic built
+    // from an image, and a message of functions choosing strings, one of them null.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package util is
+  function choose (c : boolean; t, f : string) return string;
+end package;
+
+package body util is
+  function choose (c : boolean; t, f : string) return string is
+  begin
+    if c then
+      return t;
+    else
+      return f;
+    end if;
+  end function;
+end package body;
+
+entity leaf is
+  generic (name : string);
+end entity;
+
+architecture rtl of leaf is
+begin
+  process
+  begin
+    report "log " & name & " is " & integer'image(name'length) & " long";
+    wait;
+  end process;
+end architecture;
+
+use work.util.all;
+
+entity tb is
+  generic (id : natural := 3; dual : boolean := false);
+end entity;
+
+architecture test of tb is
+  constant log_c : string := "trace" & natural'image(id) & ".log";
+begin
+  leaf_i : entity work.leaf generic map (name => log_c);
+
+  process
+  begin
+    wait for 1 ns;
+    report "core " & choose(dual, "(dual) ", "") & choose(not dual, "(single) ", "") & "100%";
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), (std::vector<std::string>{"log trace3.log is 10 long",
+                                                               "core (single) 100%", "PASS"}));
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.

@@ -113,6 +113,11 @@ struct Layout {
 [[nodiscard]] std::optional<eir::BitVector> constantBits(tree_t expression, const Layout& layout,
                                                          const Folder& folder);
 
+/// The bounds of `expression`, a static array of `type`: its own, or for one that has none, a
+/// concatenation say, as many elements as it folds to from the left of the index subtype.
+[[nodiscard]] std::optional<Folder::Range> constantBounds(tree_t expression, type_t type,
+                                                          const Folder& folder);
+
 /// The value a `layout` object starts with when its declaration gives none: each scalar its
 /// type's left bound (IEEE 1076 section 14.4.2.5).
 [[nodiscard]] std::optional<eir::BitVector> defaultBits(type_t type, const Layout& layout,

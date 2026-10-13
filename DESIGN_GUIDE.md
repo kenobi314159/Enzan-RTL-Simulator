@@ -965,7 +965,9 @@ What a VHDL unit becomes in EIR:
   returned, a scalar or an array, so a function choosing between two vectors folds too.
   A call that does anything else, or runs a million statements, does not fold, and its
   use is refused where a static value is needed. Elements and slices of static arrays
-  fold as well, so a generate statement can be conditioned on a constant list.
+  fold as well, so a generate statement can be conditioned on a constant list, and so do
+  strings built from them and from the `'image` of static scalars: a string generic
+  naming a log file, or a report announcing a configuration, which is its text then.
 - A null array, a generic left at `""` most often, has no bits to hold, so it is its bounds:
   a comparison or an attribute of it folds, and a call given one is inlined, where its
   uses can fold too. A testbench that reads a file only when a name is given needs no

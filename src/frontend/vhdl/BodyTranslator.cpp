@@ -1173,6 +1173,30 @@ bool BodyTranslator::emitReport(tree_t where, const Value& severity, tree_t mess
 
 bool BodyTranslator::messageParts(tree_t message, std::string& format,
                                   std::vector<eir::SysTaskArgument>& arguments) {
+    // A message that is static, a design's banner of its configuration say, is its text, whatever
+    // functions of generics built it.
+    type_t messageType = tree_type(message);
+    if (tree_kind(message) != T_STRING && type_is_array(messageType)) {
+        if (const std::optional<Folder::Range> bounds =
+                constantBounds(message, messageType, folder())) {
+            if (bounds->length() == 0) return true;
+            const std::optional<Layout> layout =
+                arrayLayout(*bounds, type_elem(messageType), folder());
+            const std::optional<eir::BitVector> bits =
+                layout ? constantBits(message, *layout, folder()) : std::nullopt;
+            if (bits && layout->elementBits == 8) {
+                for (std::uint32_t at = bits->width(); at >= 8; at -= 8) {
+                    eir::BitVector one(8);
+                    eir::bitops::partSelectAt(one.mutableRef(), bits->ref(), at - 8);
+                    const auto character = static_cast<char>(one.ref().toUInt64());
+                    if (character == '%') format += '%';
+                    format += character;
+                }
+                return true;
+            }
+        }
+    }
+
     switch (tree_kind(message)) {
     case T_STRING: {
         const unsigned count = tree_chars(message);
@@ -1623,6 +1647,13 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
     std::optional<Layout> layout;
     if (type != nullptr && (type_is_array(type) || type_is_record(type))) {
         layout = layoutFor(type);
+
+        // An object of an unconstrained type has the bounds bound to it, a string generic's say.
+        if (!layout && type_is_array(type) && dimension_of(type) == 1) {
+            if (const std::optional<Folder::Range> bounds = folder().boundsOf(expression);
+                bounds && bounds->length() > 0)
+                layout = arrayLayout(*bounds, type_elem(type), folder());
+        }
         if (!layout && context != nullptr && context->isComposite()) layout = *context;
         if (layout) {
             if (const std::optional<eir::BitVector> bits =

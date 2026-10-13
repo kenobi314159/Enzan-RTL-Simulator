@@ -496,7 +496,8 @@ public:
             // `""` most often, has no bits to hold, and its bounds are all a design can ask of it.
             std::optional<Layout> layout = layoutOf(type, bound);
             if (!layout) {
-                if (const std::optional<Folder::Range> bounds = scope.boundsOf(actual)) {
+                if (const std::optional<Folder::Range> bounds =
+                        constantBounds(actual, type, scope)) {
                     bound.bindBounds(generic, *bounds);
                     if (bounds->length() == 0) return true;
                     layout = arrayLayout(*bounds, type_elem(type), bound);

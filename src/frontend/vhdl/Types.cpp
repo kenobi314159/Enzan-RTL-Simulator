@@ -181,6 +181,11 @@ std::optional<std::vector<eir::BitVector>> elementsOf(tree_t expression, const E
             && tree_has_value(declaration))
             return elementsOf(tree_value(declaration), element, length, folder);
 
+        // A null array, a parameter given `""` say, is bound to its bounds alone.
+        if (const std::optional<Folder::Range> bounds = folder.boundsOf(expression);
+            bounds && bounds->length() == 0 && folder.compositeOf(declaration) == nullptr)
+            return std::vector<eir::BitVector>{};
+
         // An array generic's value is bound as its bits, left element highest.
         if (const eir::BitVector* bits = folder.compositeOf(declaration)) {
             const std::uint32_t width = element.layout.storage.bitWidth();
@@ -196,6 +201,39 @@ std::optional<std::vector<eir::BitVector>> elementsOf(tree_t expression, const E
             return elements;
         }
         return std::nullopt;
+    }
+
+    // The image of a static scalar: an integer in decimal, an enumeration value as its literal,
+    // and a physical value in its primary unit (IEEE 1076 section 16.2.2).
+    case T_ATTR_REF: {
+        if (tree_subkind(expression) != ATTR_IMAGE || tree_params(expression) != 1)
+            return std::nullopt;
+        tree_t operand = tree_value(tree_param(expression, 0));
+        type_t type = tree_type(operand);
+        const std::optional<std::int64_t> value = folder.integer(operand);
+        if (!value) return std::nullopt;
+        std::string text;
+        type_t base = type_base_recur(type);
+        if (type_is_enum(base)) {
+            if (*value < 0 || std::cmp_greater_equal(*value, type_enum_literals(base)))
+                return std::nullopt;
+            tree_t literal = type_enum_literal(base, static_cast<unsigned>(*value));
+            const std::string_view name = istr(tree_ident(literal));
+            text = name.starts_with('\'') ? std::string(name) : simpleName(tree_ident(literal));
+        } else if (type_is_integer(base)) {
+            text = std::to_string(*value);
+        } else if (type_is_physical(base) && type_units(base) > 0) {
+            text = std::to_string(*value) + " " + simpleName(tree_ident(type_unit(base, 0)));
+        } else {
+            return std::nullopt;
+        }
+        std::vector<eir::BitVector> elements;
+        elements.reserve(text.size());
+        for (const char character : text) {
+            elements.push_back(
+                encode(static_cast<unsigned char>(character), element.layout.storage));
+        }
+        return elements;
     }
 
     // A slice of a static array: its elements in the slice's range.
@@ -463,6 +501,28 @@ std::optional<eir::BitVector> constantBits(tree_t expression, const Layout& layo
         layout.index.length(), folder);
     if (!elements) return std::nullopt;
     return pack(*elements, layout);
+}
+
+std::optional<Folder::Range> constantBounds(tree_t expression, type_t type, const Folder& folder) {
+    if (std::optional<Folder::Range> bounds = folder.boundsOf(expression)) return bounds;
+    if (!type_is_array(type) || dimension_of(type) != 1) return std::nullopt;
+    type_t elementType = type_elem(type);
+    const std::optional<eir::Type> storage = scalarStorage(elementType);
+    if (!storage) return std::nullopt;
+    const std::optional<std::vector<eir::BitVector>> elements =
+        elementsOf(expression, Elements{.type = elementType, .layout = Layout{.storage = *storage}},
+                   std::nullopt, folder);
+    if (!elements) return std::nullopt;
+
+    // From the left of the index subtype, the way it runs, as a concatenation's result is when
+    // its left operand gives it none (IEEE 1076 section 9.2.5).
+    const std::optional<Folder::Range> index = folder.rangeOf(index_type_of(type, 0));
+    if (!index) return std::nullopt;
+    const auto count = static_cast<std::int64_t>(elements->size());
+    return Folder::Range{.left = index->left,
+                         .right =
+                             index->ascending ? index->left + count - 1 : index->left - count + 1,
+                         .ascending = index->ascending};
 }
 
 std::optional<eir::BitVector> defaultBits(type_t type, const Layout& layout, const Folder& folder) {
