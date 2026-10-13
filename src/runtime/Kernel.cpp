@@ -1346,6 +1346,26 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
         if (!arguments.empty()) freeLine(arguments.front().value.toUInt64());
         return;
 
+    case eir::SysTaskKind::FileWriteValue: {
+        if (arguments.size() != 2) return;
+        const auto file = static_cast<std::uint32_t>(arguments[0].value.toUInt64());
+        OpenFile* open = fileFor(file);
+        if (open == nullptr || !open->stream) {
+            diagnostics.report(DiagCode::FileNotOpen, descriptor.location, "write", file);
+            return;
+        }
+        // Whole bytes of the value's bits, the lowest first: Enzan's own format for a file of a
+        // type, which a run reads back as it wrote it.
+        const eir::ConstBitRef value = arguments[1].value;
+        std::string bytes((value.width() + 7) / 8, '\0');
+        for (std::uint32_t bit = 0; bit < value.width(); ++bit) {
+            if (value.get(bit) == eir::Logic::One)
+                bytes[bit / 8] = static_cast<char>(bytes[bit / 8] | (1 << (bit % 8)));
+        }
+        open->stream->write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        return;
+    }
+
     case eir::SysTaskKind::Random:
     case eir::SysTaskKind::URandom:
     case eir::SysTaskKind::URandomRange:
@@ -1356,6 +1376,7 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::LineReadCharacter:
     case eir::SysTaskKind::FileEnd:
     case eir::SysTaskKind::LineAppend:
+    case eir::SysTaskKind::FileReadValue:
         ENZAN_ASSERT(false, "a system function run as a system task; run the EIR verifier");
         return;
     }
@@ -1477,6 +1498,25 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
                 ? 1
                 : 0;
         break;
+    }
+
+    // The next value of a file of a type, as FileWriteValue wrote it; past the end, zero.
+    case eir::SysTaskKind::FileReadValue: {
+        OpenFile* file = fileFor(static_cast<std::uint32_t>(argument(0)));
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        if (file == nullptr || !file->input) {
+            diagnostics.report(DiagCode::FileNotOpen, descriptor.location, "read",
+                               static_cast<std::uint32_t>(argument(0)));
+            return;
+        }
+        std::string bytes((result.width() + 7) / 8, '\0');
+        file->input->read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        for (std::uint32_t bit = 0; bit < result.width(); ++bit) {
+            if ((static_cast<unsigned char>(bytes[bit / 8]) >> (bit % 8) & 1U) != 0)
+                result.set(bit, eir::Logic::One);
+        }
+        return;
     }
 
     case eir::SysTaskKind::Random:

@@ -57,6 +57,9 @@ enum class SysTaskKind : std::uint8_t {
     /// std.textio's `deallocate` of a line: frees what the argument's handle designates, a
     /// handle into the heap of DESIGN_GUIDE.md section 4.3.
     LineDeallocate,
+    /// VHDL's `write` to a file of a type other than text: writes the second argument's bits to
+    /// the file the first names, in whole bytes, the lowest first.
+    FileWriteValue,
 
     // System functions, run by SysFunction, which have a result.
 
@@ -98,6 +101,9 @@ enum class SysTaskKind : std::uint8_t {
     /// the line the fourth argument designates, and frees it, to the one the first designates,
     /// justified and in a field as for LineWrite. The result is the first line's handle.
     LineAppend,
+    /// VHDL's `read` from a file of a type other than text: the next value of the file the
+    /// argument names, as FileWriteValue wrote it, as wide as the result.
+    FileReadValue,
 };
 
 std::string_view toString(SysTaskKind kind) noexcept;

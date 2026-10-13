@@ -664,7 +664,9 @@ every time without the heap growing with every line written.
 of run-time lengths, which registers of fixed width cannot hold, so it is not translated:
 `write`, `writeline`, `readline`, `read` and `endfile` are system functions the runtime
 runs over its heap and its files, as NVC's runtime runs its foreign subprograms, and the
-adapter calls them for textio's subprograms and VHDL's predefined file operations. A
+adapter calls them for textio's subprograms and VHDL's predefined file operations. A file
+of a type other than text holds its values' bits in whole bytes, the lowest first: Enzan's
+own format, as each simulator has its own, which a run reads back as it wrote it. A
 string whose length only the run shows, which a function builds from images and writes,
 is built in a line of its own: the function is inlined with its `return`s appending
 their pieces to that line, and the line is appended to the one written.

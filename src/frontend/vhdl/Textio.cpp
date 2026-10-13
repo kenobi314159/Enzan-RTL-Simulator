@@ -239,7 +239,8 @@ std::optional<BodyTranslator::Value> BodyTranslator::endOfFile(tree_t call) {
 std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declaration) {
     const auto kind = static_cast<subprogram_kind_t>(tree_subkind(declaration));
     const bool predefinedFile = kind == S_FILE_OPEN1 || kind == S_FILE_OPEN2 || kind == S_FILE_CLOSE
-                                || kind == S_DEALLOCATE;
+                                || kind == S_DEALLOCATE || kind == S_FILE_READ
+                                || kind == S_FILE_WRITE;
     if (!predefinedFile && !inTextio(declaration)) return std::nullopt;
 
     const std::optional<std::vector<tree_t>> actuals = actualsOf(call, declaration);
@@ -276,6 +277,31 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
         return assignWhole((*actuals)[0], openFile(*name, *mode, call));
     }
     case S_FILE_OPEN2: return fail(call, "a file_open with a status");
+
+    // `write(f, value)` and `read(f, value)` of a file of a type: its values' bits, in Enzan's own
+    // format, which a run reads back as it wrote it.
+    case S_FILE_WRITE: {
+        const std::optional<Value> file = fileDescriptor((*actuals)[0]);
+        const std::optional<Value> written = value(1);
+        if (!file || !written) return false;
+        native.kind = eir::SysTaskKind::FileWriteValue;
+        native.arguments = {argument(*file), argument(*written)};
+        emit(eir::Instruction::make(eir::Opcode::SysTask, {},
+                                    eir::Operand::sysCall(addSysCall(std::move(native)))));
+        return true;
+    }
+    case S_FILE_READ: {
+        if (actuals->size() != 2)
+            return fail(call, "a read of an array whose length the file gives");
+        const std::optional<Value> file = fileDescriptor((*actuals)[0]);
+        const std::optional<Place> target = place((*actuals)[1]);
+        if (!file || !target) return false;
+        native.kind = eir::SysTaskKind::FileReadValue;
+        native.arguments = {argument(*file)};
+        const Value read = systemFunction(
+            std::move(native), eir::Type::bits(target->layout.storage.bitWidth(), false, false));
+        return assignWhole((*actuals)[1], read);
+    }
 
     case S_FILE_CLOSE: {
         const std::optional<Value> file = fileDescriptor((*actuals)[0]);

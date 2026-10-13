@@ -52,7 +52,8 @@ bool isSystemFunction(SysTaskKind kind) noexcept {
     case SysTaskKind::LineReadLine:
     case SysTaskKind::LineReadCharacter:
     case SysTaskKind::FileEnd:
-    case SysTaskKind::LineAppend: return true;
+    case SysTaskKind::LineAppend:
+    case SysTaskKind::FileReadValue: return true;
     default: return false;
     }
 }
@@ -80,12 +81,15 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::Report: return "report";
     case SysTaskKind::FileOpen: return "$fopen";
     case SysTaskKind::LineDeallocate: return "deallocate";
-    case SysTaskKind::LineWrite: return "write";
+    // VHDL names each by the subprogram the design calls, which several share.
+    case SysTaskKind::LineWrite:
+    case SysTaskKind::LineAppend:
+    case SysTaskKind::FileWriteValue: return "write";
+    case SysTaskKind::LineReadCharacter:
+    case SysTaskKind::FileReadValue: return "read";
     case SysTaskKind::LineWriteLine: return "writeline";
     case SysTaskKind::LineReadLine: return "readline";
-    case SysTaskKind::LineReadCharacter: return "read";
     case SysTaskKind::FileEnd: return "endfile";
-    case SysTaskKind::LineAppend: return "write";
     }
     return "$unknown";
 }

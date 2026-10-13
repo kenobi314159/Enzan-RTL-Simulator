@@ -114,3 +114,6 @@ enzan_add_vhdl_golden_test(configurations)
 
 # Conversion functions in port maps.
 enzan_add_vhdl_golden_test(conversions)
+
+# Files of types other than text, written and read back.
+enzan_add_vhdl_golden_test(files)
