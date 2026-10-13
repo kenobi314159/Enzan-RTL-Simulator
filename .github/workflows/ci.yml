@@ -133,6 +133,19 @@ jobs:
             >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 
+      # GHDL's own regression tests (section 14.4), from the GHDL VESTs is run from, held to
+      # their pass list. About a minute against this build, so on every branch.
+      - name: GHDL regression tests
+        if: matrix.preset == 'gcc-release'
+        run: |
+          status=0
+          tests/conformance/ghdl/run-suite.sh build/gcc-release/bin/enzan build/ghdl \
+            > build/ghdl.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/ghdl.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/ghdl.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
       # M6's exit design (section 14.5): NEORV32 through its own testbench's on-chip debugger
       # sequence, held to GHDL's reports and to its CPU trace and UART logs. A few minutes, so
       # on the main branch only, and with the one build that is optimised for GCC.
