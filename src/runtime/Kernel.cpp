@@ -207,6 +207,8 @@ void Kernel::initialize() {
     pendingInertial.clear();
     deltaTransactions.clear();
     nextCycleResumes.clear();
+    timeouts.clear();
+    timeoutOf.assign(designImage->processes().size(), NoTime);
     connectionsDue.clear();
     for (std::vector<Transaction>& waveform : projectedWaveforms) waveform.clear();
     cycle = 0;
@@ -361,8 +363,8 @@ bool Kernel::runTimeSlot() {
             if (halted()) return false;
             runConnections();
             if (halted()) return false;
-            for (const std::uint32_t processIndex : std::exchange(nextCycleResumes, {}))
-                scheduler.schedule(Region::Active, processIndex);
+            for (const Timeout& timeout : std::exchange(nextCycleResumes, {}))
+                resumeTimedOut(timeout);
             if (!countDelta()) return false;
             continue;
         }
@@ -482,7 +484,8 @@ void Kernel::applyNonBlockingUpdates() {
 bool Kernel::advanceTime(SimTime until) {
     const SimTime next = std::min({scheduler.nextEventTime(),
                                    pliHooks != nullptr ? pliHooks->nextTimedEvent() : NoTime,
-                                   delayedWrites.empty() ? NoTime : delayedWrites.begin()->first});
+                                   delayedWrites.empty() ? NoTime : delayedWrites.begin()->first,
+                                   timeouts.empty() ? NoTime : timeouts.begin()->first});
 
     // Something the application scheduled with no delay after the slot had settled — from a
     // read-only callback — is due now. It runs in a further slot at this time, and time has
@@ -514,6 +517,14 @@ bool Kernel::advanceTime(SimTime until) {
     if (pliHooks != nullptr) pliHooks->timeAdvanced(currentTime);
 
     scheduler.releaseTime(next);
+    if (const auto due = timeouts.find(next); due != timeouts.end()) {
+        const std::vector<Timeout> fallen = std::move(due->second);
+        timeouts.erase(due);
+        for (const Timeout& timeout : fallen) {
+            timeoutOf[timeout.processIndex] = NoTime;
+            resumeTimedOut(timeout);
+        }
+    }
     ++cycle;
     applyDelayedWrites();
     return true;
@@ -931,6 +942,7 @@ void Kernel::notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Log
         if (waiter.generation != state.waitGeneration) continue;
         if (matches(waiter.edge, waiter.lowBit, waiter.width)) {
             ++state.waitGeneration;
+            cancelTimeout(waiter.processIndex);
             resume(waiter.processIndex, waiter.resumePc);
         } else {
             waiters[kept++] = waiter;
@@ -944,14 +956,16 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
     state.resumePc = resumePc;
 
     if (delay == 0) {
-        state.queued = true;
         // VHDL's resumes in the next delta cycle, after its transactions are applied.
         if (designImage->compiledDesign().body(state.bodyIndex).resumesNextCycle) {
-            nextCycleResumes.push_back(processIndex);
+            nextCycleResumes.push_back(Timeout{.processIndex = processIndex,
+                                               .generation = state.waitGeneration,
+                                               .resumePc = resumePc});
             return;
         }
         // `#0` resumes in this timestamp but after everything currently Active, which is
         // exactly what the Inactive region is for (section 3.3).
+        state.queued = true;
         scheduler.schedule(Region::Inactive, processIndex);
         return;
     }
@@ -1221,6 +1235,45 @@ void Kernel::suspendForEvents(std::uint32_t processIndex, std::uint32_t listInde
                              .lowBit = entry.lowBit,
                              .width = entry.width});
     }
+}
+
+void Kernel::suspendForEventsFor(std::uint32_t processIndex, std::uint32_t listIndex,
+                                 std::uint32_t resumePc, SimTime delay) {
+    suspendForEvents(processIndex, listIndex, resumePc);
+    const Timeout timeout{.processIndex = processIndex,
+                          .generation = processes[processIndex].waitGeneration,
+                          .resumePc = resumePc};
+    if (delay == 0) {
+        nextCycleResumes.push_back(timeout);
+        return;
+    }
+    if (delay > NoTime - currentTime) {
+        diagnostics.report(DiagCode::TimeOverflow, SourceLocation(), currentTime,
+                           options.timeScale.unitName());
+        errorRequested = true;
+        return;
+    }
+    timeouts[currentTime + delay].push_back(timeout);
+    timeoutOf[processIndex] = currentTime + delay;
+}
+
+void Kernel::resumeTimedOut(const Timeout& timeout) {
+    ProcessState& state = processes[timeout.processIndex];
+    if (timeout.generation != state.waitGeneration) return;
+    ++state.waitGeneration;
+    resume(timeout.processIndex, timeout.resumePc);
+}
+
+void Kernel::cancelTimeout(std::uint32_t processIndex) {
+    const SimTime time = std::exchange(timeoutOf[processIndex], NoTime);
+    if (time == NoTime) return;
+    const auto due = timeouts.find(time);
+    if (due == timeouts.end()) return;
+    const auto ofProcess = [processIndex](const Timeout& each) {
+        return each.processIndex == processIndex;
+    };
+    std::erase_if(due->second, ofProcess);
+    if (due->second.empty()) timeouts.erase(due);
 }
 
 void Kernel::armWaiter(std::uint32_t signalIndex, const EdgeWaiter& waiter) {

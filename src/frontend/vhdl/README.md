@@ -51,7 +51,7 @@ and ports of enumeration, integer, physical and real types, of arrays of them, o
 dimensions, with static bounds, and of records; ports associated with signals, parts of them,
 expressions and conversion functions, whole or in parts; `if` and `for` generate statements and
 blocks, with generics and ports; constant functions; processes with variables, `if`, `case`, loops,
-`exit`, `next`, `wait` (but not one with both a timeout and a sensitivity or condition), signal
+`exit`, `next`, `wait` with a sensitivity, a condition, a timeout or any of them together, signal
 assignments with inertial and transport delay, to whole signals, to their parts and to aggregates of
 them, as variable assignments may be too, `assert`, `report` with messages built from any strings
 and characters and the `'image` of integers and times, `std.env.finish` and `stop`; aggregates,

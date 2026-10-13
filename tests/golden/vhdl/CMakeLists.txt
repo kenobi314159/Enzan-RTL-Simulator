@@ -135,3 +135,6 @@ enzan_add_vhdl_golden_test(blocks)
 
 # Aggregates as the targets of variable and signal assignments.
 enzan_add_vhdl_golden_test(aggregates)
+
+# Waits with a timeout and a sensitivity or a condition.
+enzan_add_vhdl_golden_test(timeouts)

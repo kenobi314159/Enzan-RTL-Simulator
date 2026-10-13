@@ -706,11 +706,14 @@ private:
             break;
 
         case Opcode::WaitEvents:
+        case Opcode::WaitEventsFor:
             if (currentProcess == nullptr || instruction.a.kind() != Operand::Kind::Immediate
                 || instruction.a.index() >= currentProcess->eventLists.size()) {
                 reportBody(definition, body,
                            std::format("{} names an event list the process does not have", where));
             }
+            if (instruction.opcode == Opcode::WaitEventsFor)
+                registerWidth(definition, body, instruction.c, where);
             break;
 
         // Equal-width binary operations. The frontend inserts the extensions

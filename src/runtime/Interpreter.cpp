@@ -552,6 +552,14 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             kernel.suspendForEvents(processIndex, instruction.a, instruction.b);
             return ExecutionResult::Suspended;
 
+        case eir::Opcode::WaitEventsFor: {
+            // An unknown timeout is none, as an unknown delay is for WaitTime.
+            const eir::ConstBitRef delay = reg(instruction.c, instruction.cWidth);
+            kernel.suspendForEventsFor(processIndex, instruction.a, instruction.b,
+                                       delay.hasUnknown() ? 0 : delay.toUInt64());
+            return kernel.errorRequested ? ExecutionResult::Stopped : ExecutionResult::Suspended;
+        }
+
         case eir::Opcode::WaitEdge:
             kernel.suspendForEdge(processIndex, current.objectSignals[instruction.a],
                                   static_cast<eir::EdgeKind>(instruction.b), instruction.c);

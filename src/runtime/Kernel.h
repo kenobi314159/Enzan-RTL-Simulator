@@ -434,6 +434,11 @@ public:
     void suspendForEvents(std::uint32_t processIndex, std::uint32_t listIndex,
                           std::uint32_t resumePc);
 
+    /// Suspends `processIndex` until any entry of its event list `listIndex` happens or `delay`
+    /// passes, whichever comes first.
+    void suspendForEventsFor(std::uint32_t processIndex, std::uint32_t listIndex,
+                             std::uint32_t resumePc, SimTime delay);
+
     /// Performs a system task call of `activation`'s body, for process `processIndex`.
     void runSystemTask(std::uint32_t processIndex, const Activation& activation,
                        std::uint32_t sysCallIndex);
@@ -726,9 +731,29 @@ private:
 
     std::vector<DeltaTransaction> deltaTransactions;
 
-    /// The VHDL processes whose wait of no time resumes them in the next delta cycle, run with
-    /// those its transactions wake (codegen::CompiledBody::resumesNextCycle).
-    std::vector<std::uint32_t> nextCycleResumes;
+    /// A VHDL process's timeout: when it falls, the process resumes at `resumePc` unless what
+    /// else it waits on resumed it first, which advanced its wait generation past `generation`.
+    struct Timeout {
+        std::uint32_t processIndex = 0;
+        std::uint32_t generation = 0;
+        std::uint32_t resumePc = 0;
+    };
+
+    /// Resumes the process of `timeout` unless it has already resumed.
+    void resumeTimedOut(const Timeout& timeout);
+
+    /// Takes back the timeout of `processIndex`, which what else it waited on resumed first, so
+    /// that its time is not a step the run stops at.
+    void cancelTimeout(std::uint32_t processIndex);
+
+    /// The VHDL processes whose wait of no time, or timeout of none, resumes them in the next
+    /// delta cycle, run with those its transactions wake (codegen::CompiledBody::resumesNextCycle).
+    std::vector<Timeout> nextCycleResumes;
+
+    /// The later timeouts of VHDL waits on events too, by the time each falls, and the time of
+    /// each process's, or NoTime.
+    std::map<SimTime, std::vector<Timeout>> timeouts;
+    std::vector<SimTime> timeoutOf;
 
     /// The ports' connections whose sources changed, to run before the cycle's processes.
     std::vector<std::uint32_t> connectionsDue;

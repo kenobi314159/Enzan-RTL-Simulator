@@ -290,3 +290,7 @@ ENZAN_OPCODE(WaitEvents, "waitevents", false, 2,
 ENZAN_OPCODE(WaitEdge, "waitedge", false, 3,
              "a call to the scheduler to subscribe to the given edge on the given "
              "object, a store of the resume index, then ret void")
+ENZAN_OPCODE(WaitEventsFor, "waitfor", false, 3,
+             "as WaitEvents, and a call to the scheduler to resume the process after the delay "
+             "the third operand holds should none of the events come first, under the same wait "
+             "generation: VHDL's wait with a timeout and a sensitivity or a condition")

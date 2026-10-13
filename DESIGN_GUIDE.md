@@ -346,6 +346,11 @@ commercial tools on real designs, this section is what gets updated.
   before the NBA updates. The kernel holds such a process until the delta
   cycle's transactions are applied and then schedules it in Active with the
   processes those updates wake.
+- A VHDL wait with a timeout and a sensitivity or a condition arms both under one
+  wait generation (`WaitEventsFor`): whichever comes first resumes the process and
+  makes the other stale, and an event that comes first takes the timeout back, so
+  its time is not a step the run stops at. The process waits again for what is left
+  of the timeout while its condition is false.
 - A VHDL postponed process resumes in the **Postponed** region, so it runs
   once the time step has settled and sees the values the step ends with. At
   initialization it runs in Inactive, after the other processes and before the

@@ -1241,10 +1241,7 @@ bool BodyTranslator::waitStatement(tree_t statement) {
     const bool hasCondition = tree_has_value(statement);
     const unsigned triggerCount = tree_triggers(statement);
 
-    if (hasDelay && (triggerCount > 0 || hasCondition))
-        return fail(statement, "a wait with both a timeout and a sensitivity or a condition");
-
-    if (hasDelay) {
+    if (hasDelay && triggerCount == 0 && !hasCondition) {
         const std::optional<Value> amount = delay(tree_delay(statement));
         if (!amount) return false;
         const std::uint32_t resume = newBlock("after-wait");
@@ -1274,18 +1271,54 @@ bool BodyTranslator::waitStatement(tree_t statement) {
         }
         entries.push_back(entry);
     }
-    if (hasCondition && entries.empty())
+    if (hasCondition && entries.empty() && !hasDelay)
         return fail(statement, "a wait until whose condition reads no signal");
+
+    // With a timeout too, each suspension waits for what is left of it, and a resumption at its
+    // end is the timeout, which ends the wait whatever the condition (IEEE 1076 section 10.2).
+    const eir::Type timeType = eir::Type::bits(64, true, false);
+    const auto readTime = [&] {
+        const Value now{.reg = newRegister(timeType), .type = timeType, .vhdlType = nullptr};
+        emit(eir::Instruction::make(eir::Opcode::ReadTime, eir::Operand::reg(now.reg)));
+        return now;
+    };
+    std::optional<Value> deadline;
+    if (hasDelay) {
+        const std::optional<Value> amount = delay(tree_delay(statement));
+        if (!amount) return false;
+        const Value start = readTime();
+        deadline = Value{.reg = newRegister(timeType), .type = timeType, .vhdlType = nullptr};
+        emit(eir::Instruction::make(eir::Opcode::Add, eir::Operand::reg(deadline->reg),
+                                    eir::Operand::reg(start.reg),
+                                    eir::Operand::reg(resize(*amount, 64).reg)));
+    }
 
     const auto list = static_cast<std::uint32_t>(process.eventLists.size());
     process.eventLists.push_back(std::move(entries));
     const std::uint32_t suspend = newBlock("wait");
+    const std::uint32_t timed = hasDelay ? newBlock("wait-timed") : 0;
     const std::uint32_t test = hasCondition ? newBlock("wait-test") : 0;
     const std::uint32_t resume = newBlock("after-wait");
+    std::uint32_t woken = hasCondition ? test : resume;
+    if (hasDelay) woken = timed;
     jump(suspend);
     selectBlock(suspend);
-    emit(eir::Instruction::make(eir::Opcode::WaitEvents, {}, eir::Operand::immediate(list),
-                                eir::Operand::block(hasCondition ? test : resume)));
+    if (deadline) {
+        const Value now = readTime();
+        const std::uint32_t left = newRegister(timeType);
+        emit(eir::Instruction::make(eir::Opcode::Subtract, eir::Operand::reg(left),
+                                    eir::Operand::reg(deadline->reg), eir::Operand::reg(now.reg)));
+        emit(eir::Instruction::make(eir::Opcode::WaitEventsFor, {}, eir::Operand::immediate(list),
+                                    eir::Operand::block(woken), eir::Operand::reg(left)));
+        selectBlock(timed);
+        const std::uint32_t early = compare(eir::Opcode::LessThan, readTime(), *deadline);
+        emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(early),
+                                    eir::Operand::block(hasCondition ? test : resume),
+                                    eir::Operand::block(resume)));
+    } else {
+        emit(eir::Instruction::make(eir::Opcode::WaitEvents, {}, eir::Operand::immediate(list),
+                                    eir::Operand::block(woken)));
+    }
     if (hasCondition) {
         selectBlock(test);
         const std::optional<Value> condition = expression(tree_value(statement));
