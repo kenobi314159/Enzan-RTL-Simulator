@@ -319,7 +319,26 @@ std::optional<Folder::Range> Folder::boundsOf(tree_t name, unsigned dimension) c
         const auto bound = objectBounds.find(tree_ref(name));
         if (bound != objectBounds.end()) return bound->second;
     }
-    return tree_has_type(name) ? rangeOf(tree_type(name), dimension) : std::nullopt;
+    if (std::optional<Range> own =
+            tree_has_type(name) ? rangeOf(tree_type(name), dimension) : std::nullopt)
+        return own;
+
+    // A constant of an unconstrained type has its value's bounds, and a function's result those
+    // of what it returns.
+    if (tree_kind(name) == T_REF && tree_has_ref(name)) {
+        tree_t declaration = tree_ref(name);
+        if (tree_kind(declaration) == T_CONST_DECL && tree_has_value(declaration))
+            return boundsOf(tree_value(declaration), dimension);
+        return std::nullopt;
+    }
+    std::optional<Range> result;
+    if (tree_kind(name) == T_FCALL) {
+        returned(name, [&result, dimension](tree_t value, const Folder& frame) {
+            result = frame.boundsOf(value, dimension);
+            return result.has_value();
+        });
+    }
+    return result;
 }
 
 std::optional<Folder::Range> Folder::rangeOf(type_t type, unsigned dimension) const {
@@ -406,7 +425,10 @@ public:
         return true;
     }
 
-    [[nodiscard]] std::optional<std::int64_t> returned() const noexcept { return result; }
+    /// The expression the `return` that ended the run names, and the bindings it folds in.
+    [[nodiscard]] tree_t value() const noexcept { return result; }
+
+    [[nodiscard]] const Folder& bindings() const noexcept { return frame; }
 
 private:
     Flow statement(tree_t statement) {
@@ -425,11 +447,10 @@ private:
             return Flow::Continue;
         }
 
-        case T_RETURN: {
+        case T_RETURN:
             if (!tree_has_value(statement)) return Flow::Failed;
-            result = frame.integer(tree_value(statement));
-            return result ? Flow::Return : Flow::Failed;
-        }
+            result = tree_value(statement);
+            return Flow::Return;
 
         case T_IF:
             for (unsigned index = 0; index < tree_conds(statement); ++index) {
@@ -531,7 +552,7 @@ private:
     }
 
     Folder frame;
-    std::optional<std::int64_t> result;
+    tree_t result = nullptr;
     ident_t label = nullptr;
     std::uint64_t steps = 0;
 };
@@ -552,13 +573,26 @@ public:
 } // namespace
 
 std::optional<std::int64_t> Folder::constantCall(tree_t expression, tree_t declaration) const {
-    const tree_kind_t kind = tree_kind(declaration);
-    if (kind != T_FUNC_DECL && kind != T_FUNC_BODY) return std::nullopt;
-    if ((tree_flags(declaration) & TREE_F_IMPURE) != 0 || depth >= MaxDepth) return std::nullopt;
     type_t result = type_result(tree_type(declaration));
     if (!type_is_scalar(result) || type_is_real(result)) return std::nullopt;
+    std::optional<std::int64_t> value;
+    returned(expression, [&value](tree_t returned, const Folder& frame) {
+        value = frame.integer(returned);
+        return value.has_value();
+    });
+    return value;
+}
+
+bool Folder::returned(tree_t call,
+                      const std::function<bool(tree_t value, const Folder& frame)>& use) const {
+    if (tree_kind(call) != T_FCALL || !tree_has_ref(call)) return false;
+    tree_t declaration = tree_ref(call);
+    const tree_kind_t kind = tree_kind(declaration);
+    if (kind != T_FUNC_DECL && kind != T_FUNC_BODY) return false;
+    if (tree_subkind(declaration) != S_USER) return false;
+    if ((tree_flags(declaration) & TREE_F_IMPURE) != 0 || depth >= MaxDepth) return false;
     tree_t body = subprogramBody(declaration);
-    if (body == nullptr || tree_ports(body) != tree_ports(declaration)) return std::nullopt;
+    if (body == nullptr || tree_ports(body) != tree_ports(declaration)) return false;
 
     // The body sees what the caller sees, an architecture's generics among it, and its own
     // parameters, each its actual's value or its default. The declaration's parameters are what
@@ -567,53 +601,65 @@ std::optional<std::int64_t> Folder::constantCall(tree_t expression, tree_t decla
     for (unsigned index = 0; index < tree_ports(declaration); ++index) {
         tree_t formal = tree_port(declaration, index);
         tree_t actual = tree_has_value(formal) ? tree_value(formal) : nullptr;
-        for (unsigned param = 0; param < tree_params(expression); ++param) {
-            tree_t association = tree_param(expression, param);
+        for (unsigned param = 0; param < tree_params(call); ++param) {
+            tree_t association = tree_param(call, param);
             const bool positional =
                 tree_subkind(association) == P_POS && tree_pos(association) == index;
             const bool named = tree_subkind(association) == P_NAMED
                                && tree_kind(tree_name(association)) == T_REF
                                && tree_has_ref(tree_name(association))
                                && tree_ref(tree_name(association)) == formal;
-            if (positional || named) actual = tree_value(association);
+            if ((positional || named) && tree_kind(tree_value(association)) != T_OPEN)
+                actual = tree_value(association);
         }
-        if (actual == nullptr) return std::nullopt;
+        if (actual == nullptr) return false;
 
         tree_t parameter = tree_port(body, index);
         type_t type = tree_type(parameter);
         if (type_is_scalar(type) && !type_is_real(type)) {
             const std::optional<std::int64_t> value = integer(actual);
-            if (!value) return std::nullopt;
+            if (!value) return false;
             frame.bind(parameter, *value);
         } else if (type_is_array(type)) {
             const std::optional<Range> bounds = boundsOf(actual);
-            if (!bounds) return std::nullopt;
+            if (!bounds) return false;
             frame.bindBounds(parameter, *bounds);
             const std::optional<Layout> layout =
                 bounds->length() == 0 ? std::nullopt : arrayLayout(*bounds, type_elem(type), *this);
             if (layout) {
                 std::optional<eir::BitVector> bits = constantBits(actual, *layout, *this);
-                if (!bits) return std::nullopt;
+                if (!bits) return false;
                 frame.bindComposite(parameter, std::move(*bits));
             }
         } else {
-            return std::nullopt;
+            return false;
         }
     }
 
     const Nested nested;
     ConstantRun run(std::move(frame));
-    if (!run.declare(body)) return std::nullopt;
-    if (run.statements(body) != Flow::Return) return std::nullopt;
-    return run.returned();
+    if (!run.declare(body) || run.statements(body) != Flow::Return) return false;
+    return use(run.value(), run.bindings());
 }
 
 std::optional<std::int64_t> Folder::element(tree_t expression) const {
     tree_t prefix = tree_value(expression);
     if (tree_kind(prefix) != T_REF || !tree_has_ref(prefix) || tree_params(expression) != 1)
         return std::nullopt;
-    const eir::BitVector* bits = compositeOf(tree_ref(prefix));
+    // An array bound here, or a constant's value, the array of a generate statement's conditions
+    // say.
+    tree_t declaration = tree_ref(prefix);
+    const eir::BitVector* bits = compositeOf(declaration);
     const std::optional<Range> folded = boundsOf(prefix);
+    std::optional<eir::BitVector> value;
+    if (bits == nullptr && folded && folded->length() > 0
+        && (tree_kind(declaration) == T_CONST_DECL || tree_kind(declaration) == T_ALIAS)
+        && tree_has_value(declaration)) {
+        type_t type = tree_type(declaration);
+        if (const std::optional<Layout> layout = arrayLayout(*folded, type_elem(type), *this))
+            value = constantBits(tree_value(declaration), *layout, *this);
+        if (value) bits = &*value;
+    }
     const std::optional<std::int64_t> index = integer(tree_value(tree_param(expression, 0)));
     if (bits == nullptr || !folded || !index) return std::nullopt;
     const Range bounds = *folded;

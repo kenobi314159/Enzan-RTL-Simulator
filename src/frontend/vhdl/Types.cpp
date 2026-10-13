@@ -198,7 +198,36 @@ std::optional<std::vector<eir::BitVector>> elementsOf(tree_t expression, const E
         return std::nullopt;
     }
 
+    // A slice of a static array: its elements in the slice's range.
+    case T_ARRAY_SLICE: {
+        tree_t prefix = tree_value(expression);
+        const std::optional<Folder::Range> whole = folder.boundsOf(prefix);
+        const std::optional<Folder::Range> slice = folder.range(tree_range(expression, 0));
+        if (!whole || !slice) return std::nullopt;
+        if (slice->length() == 0) return std::vector<eir::BitVector>{};
+        if (slice->ascending != whole->ascending || slice->low() < whole->low()
+            || slice->high() > whole->high())
+            return std::nullopt;
+        std::optional<std::vector<eir::BitVector>> all =
+            elementsOf(prefix, element, whole->length(), folder);
+        if (!all || static_cast<std::int64_t>(all->size()) != whole->length()) return std::nullopt;
+        const std::int64_t first =
+            whole->ascending ? slice->left - whole->left : whole->left - slice->left;
+        const auto begin = all->begin() + first;
+        return std::vector<eir::BitVector>(begin, begin + slice->length());
+    }
+
     case T_FCALL: {
+        // A constant function's result, folded from what it returns.
+        if (tree_has_ref(expression) && tree_subkind(tree_ref(expression)) == S_USER) {
+            std::optional<std::vector<eir::BitVector>> result;
+            folder.returned(expression, [&](tree_t value, const Folder& frame) {
+                result = elementsOf(value, element, length, frame);
+                return result.has_value();
+            });
+            return result;
+        }
+
         // A concatenation of static pieces: arrays, and single elements.
         if (!tree_has_ref(expression) || tree_subkind(tree_ref(expression)) != S_CONCAT)
             return std::nullopt;

@@ -6,6 +6,7 @@
 #include "frontend/vhdl/NvcApi.h"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <utility>
@@ -112,6 +113,15 @@ public:
 
     [[nodiscard]] const Generics& bindings() const noexcept { return generics; }
 
+    /// Runs `call`, a call of a pure function of the design whose arguments fold, as the adapter
+    /// runs a constant function (DESIGN_GUIDE.md section 5.2), and gives `use` the expression its
+    /// `return` names with the bindings to fold it in, its parameters' and variables' values: a
+    /// scalar's value or an array's elements are folded from those. The call still counts as
+    /// running while `use` folds, so a recursion through the value is bounded too. False when the
+    /// call does not fold, or `use` returns false.
+    bool returned(tree_t call,
+                  const std::function<bool(tree_t value, const Folder& frame)>& use) const;
+
     /// Gives `declaration`, an object of an unconstrained array type, the bounds it takes from its
     /// context: a parameter's from the actual of the call, so that `l'length` folds.
     void bindBounds(tree_t declaration, const Range& bounds) { objectBounds[declaration] = bounds; }
@@ -124,8 +134,7 @@ private:
     [[nodiscard]] std::optional<std::int64_t> call(tree_t expression) const;
 
     /// A call of a pure function of the design with a scalar result, run on its arguments'
-    /// values: a constant function, which the adapter runs as it goes (DESIGN_GUIDE.md section
-    /// 5.2).
+    /// values.
     [[nodiscard]] std::optional<std::int64_t> constantCall(tree_t expression,
                                                            tree_t declaration) const;
 

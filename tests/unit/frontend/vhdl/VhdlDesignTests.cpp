@@ -536,6 +536,93 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, ConstantFunctionsAndArraysFoldIntoGenericsAndGenerates) {
+    // As NEORV32 chooses its boot address and its bus devices: a function returning one of two
+    // vectors, nested; a slice of an array generic passed down; and generate statements on the
+    // elements of a constant array.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package util is
+  function choose (c : boolean; t, f : bit_vector) return bit_vector;
+end package;
+
+package body util is
+  function choose (c : boolean; t, f : bit_vector) return bit_vector is
+  begin
+    if c then
+      return t;
+    else
+      return f;
+    end if;
+  end function;
+end package body;
+
+entity leaf is
+  generic (nibble : bit_vector(3 downto 0));
+  port (q : out bit_vector(3 downto 0));
+end entity;
+
+architecture rtl of leaf is
+begin
+  q <= nibble;
+end architecture;
+
+use work.util.all;
+
+entity top is
+  generic (mode : natural := 1; base : bit_vector(7 downto 0) := x"c3");
+  port (addr : out bit_vector(7 downto 0); hi : out bit_vector(3 downto 0);
+        count : out natural);
+end entity;
+
+architecture rtl of top is
+  constant addr_c : bit_vector(7 downto 0) :=
+    choose(mode = 0, x"11", choose(mode = 1, base, x"00"));
+  type en_list_t is array (0 to 3) of boolean;
+  constant en_list_c : en_list_t := (true, false, true, true);
+  signal hits : bit_vector(0 to 3) := (others => '0');
+begin
+  addr <= addr_c;
+  leaf_i : entity work.leaf generic map (nibble => base(7 downto 4)) port map (hi);
+
+  g_dev : for i in 0 to 3 generate
+    g_on : if en_list_c(i) generate
+      hits(i) <= '1';
+    end generate;
+  end generate;
+
+  count <= 1 when hits = "1011" else 0;
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal addr : bit_vector(7 downto 0);
+  signal hi : bit_vector(3 downto 0);
+  signal count : natural;
+begin
+  uut : entity work.top generic map (base => x"a5") port map (addr, hi, count);
+
+  process
+  begin
+    wait for 1 ns;
+    assert addr = x"a5" report "addr" severity failure;
+    assert hi = x"a" report "hi" severity failure;
+    assert count = 1 report "count" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.
