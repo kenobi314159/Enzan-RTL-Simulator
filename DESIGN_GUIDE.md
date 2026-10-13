@@ -315,6 +315,12 @@ The drivers are of scalar subelements, so a transaction is of the bits it assign
 assignment to an element or a slice deletes what is pending for those bits and leaves the
 rest of a pending transaction to happen, cut down to what it still assigns.
 
+**A cycle begins with each batch of updates**, a delta cycle's or a time step's, and the
+kernel numbers them. A signal's `'event` is whether it last changed in the cycle now
+running, and its `'last_value` is what it held before that change, which the kernel copies
+aside only for the signals some body reads it of: a shadow of every signal would double the
+state of a design that never asks.
+
 A transaction for the current time takes effect in the next delta cycle, after every
 process of this one has run. A later one takes effect when its time step begins, before
 any process resumes in it, which is step 2 coming before step 3: a process woken by a

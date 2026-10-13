@@ -414,6 +414,19 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
                 reg(instruction.b, instruction.bWidth), reg(instruction.c, instruction.cWidth));
             break;
 
+        case eir::Opcode::ReadEvent: {
+            const eir::BitRef destination = reg(instruction.dst, instruction.dstWidth);
+            destination.set(0, kernel.changedThisCycle(current.objectSignals[instruction.a])
+                                   ? eir::Logic::One
+                                   : eir::Logic::Zero);
+            break;
+        }
+
+        case eir::Opcode::ReadLastValue:
+            bitops::copy(reg(instruction.dst, instruction.dstWidth),
+                         kernel.lastValue(current.objectSignals[instruction.a]));
+            break;
+
         case eir::Opcode::ReadTime: {
             const eir::BitRef destination = reg(instruction.dst, instruction.dstWidth);
             const eir::BitVector value =

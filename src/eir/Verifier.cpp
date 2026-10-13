@@ -595,8 +595,18 @@ private:
 
         switch (instruction.opcode) {
         case Opcode::ReadObject:
+        case Opcode::ReadLastValue:
             checkObjectAccess(definition, body, instruction.a, false, where);
             checkObjectWidth(definition, body, instruction.a, instruction.dst, where);
+            break;
+
+        case Opcode::ReadEvent:
+            checkObjectAccess(definition, body, instruction.a, false, where);
+            if (registerWidth(definition, body, instruction.dst, where) != 1)
+                reportBody(definition, body,
+                           std::format("{} writes the event of an object into a register of "
+                                       "more than one bit",
+                                       where));
             break;
 
         // A window of an object, which may be narrower than it, so only the object is checked.

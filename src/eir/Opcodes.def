@@ -222,6 +222,13 @@ ENZAN_OPCODE(Conditional, "sel", true, 3,
 
 // --- Time and system tasks -------------------------------------------------
 
+ENZAN_OPCODE(ReadEvent, "event", true, 1,
+             "a compare of the signal's last-change cycle, an array of the kernel's indexed by "
+             "the signal, against the kernel's current cycle: VHDL's 'event, true when the "
+             "signal changed in the update this cycle began with")
+ENZAN_OPCODE(ReadLastValue, "lastvalue", true, 1,
+             "a load from the shadow copy the kernel keeps of the signal's value before its last "
+             "change, for the signals a body reads it of: VHDL's 'last_value")
 ENZAN_OPCODE(ReadTime, "time", true, 0,
              "a load of the kernel's current-time field; the JIT keeps the arena "
              "base and the time field in the same structure so this is one load")

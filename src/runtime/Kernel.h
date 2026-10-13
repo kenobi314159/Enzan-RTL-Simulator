@@ -393,6 +393,16 @@ public:
                               std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
                               bool nonBlocking);
 
+    /// True when `signalIndex` changed in the update the current simulation cycle began with:
+    /// VHDL's 'event.
+    [[nodiscard]] bool changedThisCycle(std::uint32_t signalIndex) const noexcept {
+        return lastChange[signalIndex] == cycle;
+    }
+
+    /// The value `signalIndex` had before its last change, or its value when it has never changed:
+    /// VHDL's 'last_value. Kept only for the signals some body reads it of.
+    [[nodiscard]] eir::ConstBitRef lastValue(std::uint32_t signalIndex) const;
+
     /// Adds a transaction of `value` to the projected waveform of the driver a VHDL process has
     /// through its write position `position`, `delay` from now (IEEE 1076 section 10.5.2.2).
     ///
@@ -489,6 +499,22 @@ private:
     /// Copies a windowed signal's value before a write changes it, and returns the copy; returns
     /// an empty view for a signal nothing watches by window.
     eir::ConstBitRef keepPrevious(const Signal& signal, eir::ConstBitRef target);
+
+    /// Records that `signalIndex` is about to change from `current`: the cycle it changes in, and,
+    /// the first time in that cycle, the value it had, for a signal whose 'last_value is read.
+    void recordEvent(std::uint32_t signalIndex, eir::ConstBitRef current);
+
+    /// The cycle each signal last changed in, or `NeverChanged`, for VHDL's 'event; and the cycle
+    /// now, which begins with each batch of updates: a delta cycle's, or a time step's.
+    std::vector<std::uint64_t> lastChange;
+    std::uint64_t cycle = 0;
+    static constexpr std::uint64_t NeverChanged = ~std::uint64_t{0};
+
+    /// The value each signal had before its last change, for those signals some body reads
+    /// 'last_value of: the Word offset of its copy in `lastValues`, or `NoLastValue`.
+    std::vector<std::uint32_t> lastValueOffset;
+    std::vector<eir::Word> lastValues;
+    static constexpr std::uint32_t NoLastValue = 0xFFFF'FFFFU;
 
     /// Resolves every segment `driverIndex` covers and writes the result into its signal.
     void resolveDriver(std::uint32_t driverIndex);

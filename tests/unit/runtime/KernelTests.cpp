@@ -964,6 +964,69 @@ TEST(Kernel, InertialRejectionOverAPartlyPendingSignalIsRefused) {
     EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::NotYetImplemented));
 }
 
+/// A process that waits for `s` (object 0) to change, then records whether `s` and `other`
+/// (object 2) had an event, in objects 1 and 3, and what `s` was before, in object 4.
+Process makeWatcher() {
+    ProcessBuilder builder(ProcessKind::Always, "watcher");
+    const std::uint32_t event = builder.reg(Type::bits(1, false, false));
+    const std::uint32_t widened = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t otherEvent = builder.reg(Type::bits(1, false, false));
+    const std::uint32_t otherWidened = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t before = builder.reg(Type::bits(8, false, false));
+    builder.block("entry");
+    builder.waitEvents({SensitivityEntry{.objectIndex = 0}}, builder.nextBlock());
+    builder.block("woken");
+    builder.readObject(before, 0);
+    builder.readObject(otherWidened, 2);
+    builder.emit(Instruction::make(Opcode::ReadEvent, Operand::reg(event), Operand::object(0)));
+    builder.emit(
+        Instruction::make(Opcode::ReadEvent, Operand::reg(otherEvent), Operand::object(2)));
+    builder.emit(
+        Instruction::make(Opcode::ReadLastValue, Operand::reg(before), Operand::object(0)));
+    builder.emit(Instruction::make(Opcode::Extend, Operand::reg(widened), Operand::reg(event)));
+    builder.emit(
+        Instruction::make(Opcode::Extend, Operand::reg(otherWidened), Operand::reg(otherEvent)));
+    builder.store(1, widened);
+    builder.store(3, otherWidened);
+    builder.store(4, before);
+    builder.emit(Instruction::make(Opcode::Jump, {}, Operand::block(0)));
+    return builder.finish();
+}
+
+ModuleDefinition watched(std::vector<Process> processes) {
+    return makeTop(std::move(processes),
+                   {Object{.name = "s", .type = Type::bits(8, false, false)},
+                    Object{.name = "event", .type = Type::bits(8, false, false)},
+                    Object{.name = "other", .type = Type::bits(8, false, false)},
+                    Object{.name = "other_event", .type = Type::bits(8, false, false)},
+                    Object{.name = "last", .type = Type::bits(8, false, false)}});
+}
+
+TEST(Kernel, AnEventIsAChangeInTheUpdateThisCycleBeganWith) {
+    // VHDL's 'event: true of the signal that changed, false of one that did not.
+    Simulation simulation(designOf(watched({makeDriver({{.value = 5}}), makeWatcher()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/event", Radix::Decimal), "1");
+    EXPECT_EQ(simulation.value("/tb/other_event", Radix::Decimal), "0");
+}
+
+TEST(Kernel, ALastValueIsTheValueBeforeTheLastChange) {
+    // s goes to 5, then at 10 to 7: when it does, its 'last_value is 5.
+    Simulation simulation(
+        designOf(
+            watched({makeDriver({{.value = 5}, {.waitBefore = 10, .value = 7}}), makeWatcher()})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/last", Radix::Decimal), "0");
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "7");
+    EXPECT_EQ(simulation.value("/tb/last", Radix::Decimal), "5");
+}
+
 TEST(Kernel, ATransactionTakesEffectBeforeProcessesResumeAtItsTime) {
     // A process waking from `wait for 5` at 5 sees what a transaction for 5 set, since VHDL
     // updates signals before it resumes processes (IEEE 1076 section 14.7.5).

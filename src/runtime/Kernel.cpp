@@ -162,6 +162,27 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
         drivers += static_cast<std::uint32_t>(state.writeRoutes.size());
     }
     projectedWaveforms.resize(drivers);
+
+    // A shadow of each signal whose 'last_value a body reads, found where it is read.
+    const std::span<const Signal> signals = designImageToRun.signals();
+    lastChange.assign(signals.size(), NeverChanged);
+    lastValueOffset.assign(signals.size(), NoLastValue);
+    const auto keepLastValues = [&](std::uint32_t bodyIndex,
+                                    std::span<const std::uint32_t> objectSignals) {
+        for (const codegen::Instruction& instruction :
+             designImageToRun.compiledDesign().body(bodyIndex).code) {
+            if (instruction.opcode != eir::Opcode::ReadLastValue) continue;
+            const std::uint32_t signalIndex = objectSignals[instruction.a];
+            if (lastValueOffset[signalIndex] != NoLastValue) continue;
+            lastValueOffset[signalIndex] = static_cast<std::uint32_t>(lastValues.size());
+            const std::size_t words = eir::storageWordsFor(signals[signalIndex].bitWidth);
+            lastValues.resize(lastValues.size() + (2 * words));
+        }
+    };
+    for (const ProcessState& state : processes)
+        keepLastValues(state.bodyIndex, state.objectSignals);
+    for (const BoundSubprogram& bound : designImageToRun.subprograms())
+        keepLastValues(bound.bodyIndex, bound.objectSignals);
 }
 
 Kernel::~Kernel() = default;
@@ -185,6 +206,16 @@ void Kernel::initialize() {
     pendingInertial.clear();
     deltaTransactions.clear();
     for (std::vector<Transaction>& waveform : projectedWaveforms) waveform.clear();
+
+    // Before its first change, a signal's 'last_value is its value.
+    cycle = 0;
+    std::ranges::fill(lastChange, NeverChanged);
+    for (std::uint32_t signalIndex = 0; signalIndex < lastValueOffset.size(); ++signalIndex) {
+        if (lastValueOffset[signalIndex] == NoLastValue) continue;
+        const Signal& signal = designImage->signals()[signalIndex];
+        bitops::copy(eir::BitRef(lastValues.data() + lastValueOffset[signalIndex], signal.bitWidth),
+                     stateArena.at(signal.wordOffset, signal.bitWidth));
+    }
     processes.assign(designImage->processes().begin(), designImage->processes().end());
     for (ProcessState& state : processes)
         state.randomState = processRandomState(options.seed, state.name);
@@ -292,6 +323,7 @@ bool Kernel::runTimeSlot() {
         // VHDL's transactions for the next delta cycle are applied with SystemVerilog's NBA
         // updates: either way, after every process of this iteration has run (section 3.5).
         if (scheduler.hasNonBlockingUpdates() || !deltaTransactions.empty()) {
+            ++cycle;
             applyNonBlockingUpdates();
             if (halted()) return false;
             applyDeltaTransactions();
@@ -447,6 +479,7 @@ bool Kernel::advanceTime(SimTime until) {
     if (pliHooks != nullptr) pliHooks->timeAdvanced(currentTime);
 
     scheduler.releaseTime(next);
+    ++cycle;
     applyDelayedWrites();
     return true;
 }
@@ -518,6 +551,7 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     // assigned.
     if (value.width() == target.width() && eir::ConstBitRef(target).identicalTo(value)) return;
 
+    recordEvent(signalIndex, target);
     const eir::ConstBitRef previous = keepPrevious(signal, target);
     const eir::Logic before = target.get(0);
     bitops::extend(target, value, false);
@@ -532,6 +566,20 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     // before that can happen, so a second write is a second change rather than one that
     // rewrites the first behind its back.
     if (pliHooks != nullptr) pliHooks->valueChanged(signalIndex);
+}
+
+void Kernel::recordEvent(std::uint32_t signalIndex, eir::ConstBitRef current) {
+    if (lastChange[signalIndex] == cycle) return;
+    lastChange[signalIndex] = cycle;
+    if (const std::uint32_t offset = lastValueOffset[signalIndex]; offset != NoLastValue)
+        bitops::copy(eir::BitRef(lastValues.data() + offset, current.width()), current);
+}
+
+eir::ConstBitRef Kernel::lastValue(std::uint32_t signalIndex) const {
+    const Signal& signal = designImage->signals()[signalIndex];
+    const std::uint32_t offset = lastValueOffset[signalIndex];
+    if (offset == NoLastValue) return stateArena.at(signal.wordOffset, signal.bitWidth);
+    return {lastValues.data() + offset, signal.bitWidth};
 }
 
 void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
@@ -555,6 +603,7 @@ void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
     }
     if (!changed) return;
 
+    recordEvent(signalIndex, target);
     const eir::ConstBitRef previous = keepPrevious(signal, target);
     const eir::Logic before = target.get(0);
     bitops::assignPartAt(target, value, lowBit);
