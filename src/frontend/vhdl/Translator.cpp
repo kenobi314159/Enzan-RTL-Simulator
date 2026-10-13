@@ -360,7 +360,7 @@ public:
         }
 
         callee.definition = inPackage ? packageName(unit) : architecture->definition().name;
-        callee.name = std::format("{}${}", simpleName(tree_ident(body)), callees.size());
+        callee.name = specialisationName(body, key);
         BodyTranslator translator(scope, body, callee.name, std::move(bindings));
         std::optional<BodyTranslator::Translated> translated = translator.translateSubprogram();
         if (!translated) return std::nullopt;
@@ -716,6 +716,31 @@ private:
 
         friend auto operator<=>(const SpecialisationKey&, const SpecialisationKey&) = default;
     };
+
+    /// The name of `body` specialised for `key`: its own name and signature, as NVC mangles the
+    /// signature to tell overloads apart, then each parameter's bounds or value, `_` for one the
+    /// shape leaves free: `resolved(Y)U$0to1`. Made of what the specialisation is, so that two
+    /// translations of one name one subprogram, as the second that elaboration asks for
+    /// resolution functions does (DESIGN_GUIDE.md section 3.7).
+    [[nodiscard]] static std::string specialisationName(tree_t body, const SpecialisationKey& key) {
+        std::string name = simpleName(tree_ident(body));
+        const std::string_view mangled = istr(tree_ident2(body));
+        if (const std::size_t signature = mangled.find('('); signature != std::string_view::npos)
+            name += mangled.substr(signature);
+        name += '$';
+        for (std::size_t index = 0; index < key.bounds.size(); ++index) {
+            if (index != 0) name += ',';
+            if (const auto& bounds = key.bounds[index]) {
+                const auto& [left, right, ascending] = *bounds;
+                name += std::format("{}{}{}", left, ascending ? "to" : "downto", right);
+            } else if (const std::optional<std::int64_t>& value = key.values[index]) {
+                name += std::format("={}", *value);
+            } else {
+                name += '_';
+            }
+        }
+        return name;
+    }
 
     /// A package's definition, and the scope its subprograms are translated in. The definition
     /// never moves once made, since the scope refers to it.
