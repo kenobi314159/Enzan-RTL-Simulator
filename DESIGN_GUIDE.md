@@ -943,6 +943,11 @@ What a VHDL unit becomes in EIR:
   are (5.1): the alternative whose condition folds true, or each iteration of a loop with
   its parameter bound, and what each declares is named inside it, `g(0).u`. A block is the
   same, named by its label.
+- A component instance is an instance of the entity the component is bound to by
+  default: the one of its name in the library of the unit instantiating it, or else in
+  the work library. The entity's generics take the values of the component's of the
+  same names, or their own defaults, and its ports match the component's by name. A
+  configuration is not translated yet.
 - A port associated with a whole signal is that signal's storage. One associated with
   part of a signal, with an expression, or in parts is connected through an object of
   the instantiating definition, `u$port`, which a process for each association keeps

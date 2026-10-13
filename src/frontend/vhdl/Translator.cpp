@@ -122,8 +122,9 @@ private:
     /// Connects `port` of `created` through an object of this definition standing for it, kept
     /// equal to its actuals by a process for each of `associations`: for a port associated in
     /// parts, or with part of a signal or an expression. The extra process costs a delta that a
-    /// port collapsed onto its actual does not (DESIGN_GUIDE.md section 5.2).
-    void connectThrough(eir::Instance& created, unsigned portNumber, tree_t port,
+    /// port collapsed onto its actual does not (DESIGN_GUIDE.md section 5.2). The associations'
+    /// formals name `formalPort`, the port itself or a component's of its name.
+    void connectThrough(eir::Instance& created, unsigned portNumber, tree_t port, tree_t formalPort,
                         const std::vector<tree_t>& associations, const Folder& childGenerics);
 
     /// The statements of a generate statement's chosen alternative, or of each of its loop's
@@ -404,10 +405,6 @@ public:
         const unsigned count = tree_generics(entity);
         for (unsigned index = 0; index < count; ++index) {
             tree_t generic = tree_generic(entity, index);
-            if (tree_class(generic) != C_CONSTANT) {
-                unsupported(generic, "a generic that is not a constant");
-                return std::nullopt;
-            }
 
             // The actual the instance maps, folded where the instance is; or the default, folded
             // where the generics before it are bound.
@@ -427,40 +424,100 @@ public:
                 }
             }
             if (actual == nullptr && tree_has_value(generic)) actual = tree_value(generic);
-            const Folder& scope = fromParent ? parent : bound;
-
-            type_t type = tree_type(generic);
-            if (actual != nullptr && type_is_array(type)) {
-                // An array generic of an unconstrained type takes its actual's bounds. A null one,
-                // `""` most often, has no bits to hold, and its bounds are all a design can ask
-                // of it.
-                std::optional<Layout> layout = layoutOf(type, bound);
-                if (!layout) {
-                    if (const std::optional<Folder::Range> bounds = scope.boundsOf(actual)) {
-                        bound.bindBounds(generic, *bounds);
-                        if (bounds->length() == 0) continue;
-                        layout = arrayLayout(*bounds, type_elem(type), bound);
-                    }
-                }
-                if (layout) {
-                    if (std::optional<eir::BitVector> bits = constantBits(actual, *layout, scope)) {
-                        bound.bindComposite(generic, std::move(*bits));
-                        continue;
-                    }
-                }
-            } else if (actual != nullptr) {
-                if (const std::optional<std::int64_t> value = scope.integer(actual)) {
-                    bound.bind(generic, *value);
-                    continue;
-                }
-            }
-            unsupported(generic,
-                        std::format("the value of the generic '{}', which is not a static value "
-                                    "of a scalar type or an array of one",
-                                    simpleName(tree_ident(generic))));
-            return std::nullopt;
+            if (!bindGeneric(bound, generic, actual, fromParent ? parent : bound))
+                return std::nullopt;
         }
         return bound;
+    }
+
+    /// The values of `entity`'s generics where it is bound to `component` by default, the
+    /// component's own being `local`: each the value of the component's generic of its name, or
+    /// its default when the component has none (IEEE 1076 section 7.3.3).
+    std::optional<Folder> bindThrough(tree_t entity, tree_t component, const Folder& local) {
+        Folder bound;
+        for (unsigned index = 0; index < tree_generics(entity); ++index) {
+            tree_t generic = tree_generic(entity, index);
+            tree_t same = nullptr;
+            for (unsigned other = 0; other < tree_generics(component); ++other) {
+                if (tree_ident(tree_generic(component, other)) == tree_ident(generic))
+                    same = tree_generic(component, other);
+            }
+            if (same != nullptr) {
+                // A null array's bounds are all it holds, so it binds as well as anything does.
+                if (!bound.bindAs(generic, local, same)) {
+                    unsupported(generic, std::format("the value of the generic '{}'",
+                                                     simpleName(tree_ident(generic))));
+                    return std::nullopt;
+                }
+                continue;
+            }
+            tree_t actual = tree_has_value(generic) ? tree_value(generic) : nullptr;
+            if (!bindGeneric(bound, generic, actual, bound)) return std::nullopt;
+        }
+        return bound;
+    }
+
+    /// The entity a component is bound to by default: the one of its name in the library of
+    /// `unit`, where it is instantiated, or else in the work library (IEEE 1076 section 7.3.3).
+    /// Null when there is none.
+    tree_t boundEntity(tree_t component, tree_t unit) {
+        ident_t simple = ident_rfrom(tree_ident(component), '.');
+        std::vector<lib_t> libraries;
+        if (unit != nullptr) {
+            ident_t libraryName = ident_until(tree_ident(unit), '.');
+            if (lib_t own =
+                    libraryName == lib_name(request.work) ? request.work : lib_require(libraryName))
+                libraries.push_back(own);
+        }
+        libraries.push_back(request.work);
+        for (lib_t library : libraries) {
+            ident_t name = ident_prefix(lib_name(library), simple, '.');
+            for (tree_t analysed : std::views::reverse(request.analysed)) {
+                if (tree_kind(analysed) == T_ENTITY && tree_ident(analysed) == name)
+                    return analysed;
+            }
+            if (tree_t found = lib_get(library, name);
+                found != nullptr && tree_kind(found) == T_ENTITY)
+                return found;
+        }
+        return nullptr;
+    }
+
+    /// Binds `generic` to the value of `actual`, folded in `scope`, and returns false having
+    /// reported why when it is not one the adapter can fold.
+    bool bindGeneric(Folder& bound, tree_t generic, tree_t actual, const Folder& scope) {
+        if (tree_class(generic) != C_CONSTANT) {
+            unsupported(generic, "a generic that is not a constant");
+            return false;
+        }
+        type_t type = tree_type(generic);
+        if (actual != nullptr && type_is_array(type)) {
+            // An array generic of an unconstrained type takes its actual's bounds. A null one,
+            // `""` most often, has no bits to hold, and its bounds are all a design can ask of it.
+            std::optional<Layout> layout = layoutOf(type, bound);
+            if (!layout) {
+                if (const std::optional<Folder::Range> bounds = scope.boundsOf(actual)) {
+                    bound.bindBounds(generic, *bounds);
+                    if (bounds->length() == 0) return true;
+                    layout = arrayLayout(*bounds, type_elem(type), bound);
+                }
+            }
+            if (layout) {
+                if (std::optional<eir::BitVector> bits = constantBits(actual, *layout, scope)) {
+                    bound.bindComposite(generic, std::move(*bits));
+                    return true;
+                }
+            }
+        } else if (actual != nullptr) {
+            if (const std::optional<std::int64_t> value = scope.integer(actual)) {
+                bound.bind(generic, *value);
+                return true;
+            }
+        }
+        unsupported(generic, std::format("the value of the generic '{}', which is not a static "
+                                         "value of a scalar type or an array of one",
+                                         simpleName(tree_ident(generic))));
+        return false;
     }
 
     [[nodiscard]] SourceLocation locate(tree_t where) const { return locator(tree_loc(where)); }
@@ -514,6 +571,11 @@ private:
                     static_cast<std::set<tree_t>*>(context)->insert(target);
                 },
                 &instantiated, T_INSTANCE);
+        }
+        // A component stands for the entity it is bound to.
+        for (tree_t target : std::vector<tree_t>(instantiated.begin(), instantiated.end())) {
+            if (tree_kind(target) != T_COMPONENT) continue;
+            if (tree_t entity = boundEntity(target, nullptr)) instantiated.insert(entity);
         }
         std::vector<tree_t> roots;
         for (tree_t unit : request.analysed) {
@@ -889,6 +951,7 @@ void ArchitectureTranslator::instance(tree_t statement) {
     tree_t target = tree_ref(statement);
     tree_t entity = nullptr;
     tree_t architecture = nullptr;
+    tree_t component = nullptr;
     switch (tree_kind(target)) {
     case T_ENTITY:
         entity = target;
@@ -898,7 +961,23 @@ void ArchitectureTranslator::instance(tree_t statement) {
         architecture = target;
         entity = tree_primary(target);
         break;
-    default: unsupported(statement, "an instance of a component or a configuration"); return;
+    case T_COMPONENT:
+        if (tree_has_spec(statement)) {
+            unsupported(statement, "an instance bound by a configuration specification");
+            return;
+        }
+        component = target;
+        entity = design.boundEntity(component, specialisation.architecture);
+        if (entity == nullptr) {
+            design.diagnostics().report(
+                DiagCode::VhdlError, locate(statement),
+                std::format("component '{}' has no entity of its name to be bound to",
+                            simpleName(tree_ident(component))));
+            return;
+        }
+        architecture = design.architectureOf(entity);
+        break;
+    default: unsupported(statement, "an instance of a configuration"); return;
     }
     if (architecture == nullptr) {
         design.diagnostics().report(
@@ -907,9 +986,24 @@ void ArchitectureTranslator::instance(tree_t statement) {
         return;
     }
 
-    std::optional<Folder> generics = design.bindGenerics(entity, statement, folding);
-    if (!generics) return;
-    const Folder childGenerics = *generics;
+    // A component's generics are bound by the instance, and the entity's by the component's
+    // (IEEE 1076 section 7.3.3). A formal names one of the component's ports then, whose bounds
+    // fold with the component's generics.
+    std::optional<Folder> generics;
+    Folder childGenerics;
+    if (component != nullptr) {
+        const std::optional<Folder> local = design.bindGenerics(component, statement, folding);
+        if (!local) return;
+        generics = design.bindThrough(entity, component, *local);
+        if (!generics) return;
+        childGenerics = *generics;
+        childGenerics.absorb(*local);
+    } else {
+        generics = design.bindGenerics(entity, statement, folding);
+        if (!generics) return;
+        childGenerics = *generics;
+    }
+    tree_t formals = component != nullptr ? component : entity;
 
     eir::Instance created;
     created.name = prefix + simpleName(tree_ident(statement));
@@ -917,30 +1011,46 @@ void ArchitectureTranslator::instance(tree_t statement) {
     created.location = locate(statement);
 
     // Each port's associations, in order: one, or one for each part of a port associated in
-    // parts (IEEE 1076 section 6.5.7.1).
+    // parts (IEEE 1076 section 6.5.7.1). A component's port is the entity's of its name.
     std::vector<std::vector<tree_t>> byPort(tree_ports(entity));
+    std::vector<tree_t> formalPorts(tree_ports(entity), nullptr);
     for (unsigned index = 0; index < tree_params(statement); ++index) {
         tree_t association = tree_param(statement, index);
-        std::optional<unsigned> portIndex;
+        std::optional<unsigned> formalIndex;
         if (tree_subkind(association) == P_POS) {
-            portIndex = tree_pos(association);
+            formalIndex = tree_pos(association);
         } else {
             tree_t formal = tree_name(association);
             while (tree_kind(formal) == T_ARRAY_REF || tree_kind(formal) == T_ARRAY_SLICE
                    || tree_kind(formal) == T_RECORD_REF)
                 formal = tree_value(formal);
-            for (unsigned port = 0; port < tree_ports(entity); ++port) {
+            for (unsigned port = 0; port < tree_ports(formals); ++port) {
                 if (tree_kind(formal) == T_REF && tree_has_ref(formal)
-                    && tree_port(entity, port) == tree_ref(formal))
-                    portIndex = port;
+                    && tree_port(formals, port) == tree_ref(formal))
+                    formalIndex = port;
             }
         }
-        const unsigned portNumber = portIndex.value_or(tree_ports(entity));
-        if (portNumber >= tree_ports(entity)) {
+        const unsigned formalNumber = formalIndex.value_or(tree_ports(formals));
+        if (formalNumber >= tree_ports(formals)) {
             unsupported(association, "this port association");
             continue;
         }
+        tree_t formalPort = tree_port(formals, formalNumber);
+        std::optional<unsigned> portIndex;
+        for (unsigned port = 0; port < tree_ports(entity); ++port) {
+            if (tree_ident(tree_port(entity, port)) == tree_ident(formalPort)) portIndex = port;
+        }
+        const unsigned portNumber = portIndex.value_or(tree_ports(entity));
+        if (portNumber >= tree_ports(entity)) {
+            design.diagnostics().report(
+                DiagCode::VhdlError, locate(association),
+                std::format("entity '{}' has no port '{}' for component '{}' to be bound to",
+                            simpleName(tree_ident(entity)), simpleName(tree_ident(formalPort)),
+                            simpleName(tree_ident(formals))));
+            continue;
+        }
         byPort[portNumber].push_back(association);
+        formalPorts[portNumber] = formalPort;
     }
 
     for (unsigned portNumber = 0; portNumber < tree_ports(entity); ++portNumber) {
@@ -965,13 +1075,15 @@ void ArchitectureTranslator::instance(tree_t statement) {
                 }
             }
         }
-        connectThrough(created, portNumber, port, associations, childGenerics);
+        connectThrough(created, portNumber, port, formalPorts[portNumber], associations,
+                       childGenerics);
     }
     result.instances.push_back(std::move(created));
 }
 
 void ArchitectureTranslator::connectThrough(eir::Instance& created, unsigned portNumber,
-                                            tree_t port, const std::vector<tree_t>& associations,
+                                            tree_t port, tree_t formalPort,
+                                            const std::vector<tree_t>& associations,
                                             const Folder& childGenerics) {
     const std::optional<Layout> layout = layoutOf(tree_type(port), childGenerics);
     if (!layout) {
@@ -1004,7 +1116,7 @@ void ArchitectureTranslator::connectThrough(eir::Instance& created, unsigned por
     // generics.
     const Folder outer = folding;
     folding.absorb(childGenerics);
-    objects.insert_or_assign(port, throughIndex);
+    objects.insert_or_assign(formalPort, throughIndex);
     std::optional<eir::BitVector> start = result.objects[throughIndex].initialValue;
     for (std::size_t index = 0; index < associations.size(); ++index) {
         tree_t association = associations[index];
@@ -1031,7 +1143,7 @@ void ArchitectureTranslator::connectThrough(eir::Instance& created, unsigned por
         if (process) result.processes.push_back(std::move(*process));
     }
     result.objects[throughIndex].initialValue = std::move(start);
-    objects.erase(port);
+    objects.erase(formalPort);
     folding = outer;
 }
 

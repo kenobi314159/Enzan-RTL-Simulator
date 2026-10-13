@@ -487,6 +487,55 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AComponentIsBoundToTheEntityOfItsName) {
+    // Default binding: the component's generics come from the instance or its own defaults, and
+    // the entity's from the component's of the same name, or the entity's defaults for one the
+    // component does not declare. Ports match by name whatever order each declares them in.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity adder is
+  generic (width : positive := 8; offset : integer := 0; bias : integer := 100);
+  port (a : in integer; y : out integer; w : out integer);
+end entity;
+
+architecture rtl of adder is
+begin
+  y <= a + offset + bias;
+  w <= width;
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  component adder is
+    generic (offset : integer := 5; width : positive := 4);
+    port (y : out integer; a : in integer; w : out integer);
+  end component;
+
+  signal y1, y2, w1, w2 : integer;
+begin
+  u1 : adder generic map (offset => 1) port map (y => y1, a => 10, w => w1);
+  u2 : component adder port map (y2, 20, w2);
+
+  process
+  begin
+    wait for 1 ns;
+    assert y1 = 111 and w1 = 4 report "u1" severity failure;
+    assert y2 = 125 and w2 = 4 report "u2" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.

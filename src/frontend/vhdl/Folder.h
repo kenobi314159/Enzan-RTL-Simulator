@@ -55,6 +55,26 @@ public:
             objectBounds.insert_or_assign(declaration, bounds);
     }
 
+    /// Binds `declaration` to whatever `source` binds `bound` to: its value, its bits or its
+    /// bounds, as an entity's generic takes its component's. False when `source` binds none.
+    bool bindAs(tree_t declaration, const Folder& source, tree_t bound) {
+        bool any = false;
+        if (const auto value = source.generics.find(bound); value != source.generics.end()) {
+            generics.insert_or_assign(declaration, value->second);
+            any = true;
+        }
+        if (const auto bits = source.composites.find(bound); bits != source.composites.end()) {
+            composites.insert_or_assign(declaration, bits->second);
+            any = true;
+        }
+        if (const auto range = source.objectBounds.find(bound);
+            range != source.objectBounds.end()) {
+            objectBounds.insert_or_assign(declaration, range->second);
+            any = true;
+        }
+        return any;
+    }
+
     /// The bits an array generic is bound to, or null when it is not one bound here.
     [[nodiscard]] const eir::BitVector* compositeOf(tree_t declaration) const {
         const auto found = composites.find(declaration);
