@@ -978,7 +978,9 @@ What a VHDL unit becomes in EIR:
   default: the one of its name in the library of the unit instantiating it, or else in
   the work library. The entity's generics take the values of the component's of the
   same names, or their own defaults, and its ports match the component's by name. A
-  configuration is not translated yet.
+  configuration specification, `for u : c use entity work.e(a);`, names the entity and
+  the architecture instead, and its binding maps the entity's generics and ports to
+  the component's. A configuration declaration is not translated yet.
 - A port associated with a whole signal is that signal's storage. One associated with
   part of a signal, with an expression, or in parts is connected through an object of
   the instantiating definition, `u$port`, which a process for each association keeps

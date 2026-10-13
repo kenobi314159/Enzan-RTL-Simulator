@@ -108,3 +108,6 @@ add_test(NAME golden.vhdl.options.assert_level_error
 set_tests_properties(golden.vhdl.options.assert_level_error
                      PROPERTIES PASS_REGULAR_EXPRESSION "an error" FAIL_REGULAR_EXPRESSION
                                 "PASS options")
+
+# Components bound by configuration specifications.
+enzan_add_vhdl_golden_test(configurations)

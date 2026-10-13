@@ -119,6 +119,10 @@ private:
     void statements(tree_t container);
     void instance(tree_t statement);
 
+    /// The index among `entity`'s ports of the one `formalPort`, a port of the entity or of the
+    /// component instantiated, is: as `binding`'s port map associates them, or else by name.
+    static std::optional<unsigned> entityPortFor(tree_t entity, tree_t binding, tree_t formalPort);
+
     /// Connects `port` of `created` through an object of this definition standing for it, kept
     /// equal to its actuals by a process for each of `associations`: for a port associated in
     /// parts, or with part of a signal or an expression. The extra process costs a delta that a
@@ -916,7 +920,9 @@ void ArchitectureTranslator::declarations(tree_t container) {
         case T_SIGNAL_DECL: static_cast<void>(addObject(declaration)); break;
 
         // Folded where they are used, so they need nothing of their own; a generate loop's
-        // parameter among them, bound to each iteration's value.
+        // parameter among them, bound to each iteration's value. A configuration specification
+        // is read at the instances it binds.
+        case T_SPEC:
         case T_GENERIC_DECL:
         case T_CONST_DECL:
         case T_TYPE_DECL:
@@ -1031,6 +1037,7 @@ void ArchitectureTranslator::instance(tree_t statement) {
     tree_t entity = nullptr;
     tree_t architecture = nullptr;
     tree_t component = nullptr;
+    tree_t binding = nullptr;
     switch (tree_kind(target)) {
     case T_ENTITY:
         entity = target;
@@ -1041,11 +1048,29 @@ void ArchitectureTranslator::instance(tree_t statement) {
         entity = tree_primary(target);
         break;
     case T_COMPONENT:
-        if (tree_has_spec(statement)) {
-            unsupported(statement, "an instance bound by a configuration specification");
-            return;
-        }
         component = target;
+        if (tree_has_spec(statement)) {
+            // A configuration specification, `for u : c use entity work.e(a);`, names the entity
+            // and maybe the architecture, and maps the entity's generics and ports to the
+            // component's, by name where it does not say otherwise (IEEE 1076 section 7.3.2).
+            binding = tree_value(tree_spec(statement));
+            if (binding == nullptr || tree_kind(binding) != T_BINDING || !tree_has_ref(binding)) {
+                unsupported(statement, "an instance its configuration specification leaves open");
+                return;
+            }
+            tree_t bound = tree_ref(binding);
+            if (tree_kind(bound) == T_ARCH) {
+                architecture = bound;
+                entity = tree_primary(bound);
+            } else if (tree_kind(bound) == T_ENTITY) {
+                entity = bound;
+                architecture = design.architectureOf(entity);
+            } else {
+                unsupported(statement, "a binding to a configuration");
+                return;
+            }
+            break;
+        }
         entity = design.boundEntity(component, specialisation.architecture);
         if (entity == nullptr) {
             design.diagnostics().report(
@@ -1073,7 +1098,8 @@ void ArchitectureTranslator::instance(tree_t statement) {
     if (component != nullptr) {
         const std::optional<Folder> local = design.bindGenerics(component, statement, folding);
         if (!local) return;
-        generics = design.bindThrough(entity, component, *local);
+        generics = binding != nullptr ? design.bindGenerics(entity, binding, *local)
+                                      : design.bindThrough(entity, component, *local);
         if (!generics) return;
         childGenerics = *generics;
         childGenerics.absorb(*local);
@@ -1115,10 +1141,7 @@ void ArchitectureTranslator::instance(tree_t statement) {
             continue;
         }
         tree_t formalPort = tree_port(formals, formalNumber);
-        std::optional<unsigned> portIndex;
-        for (unsigned port = 0; port < tree_ports(entity); ++port) {
-            if (tree_ident(tree_port(entity, port)) == tree_ident(formalPort)) portIndex = port;
-        }
+        const std::optional<unsigned> portIndex = entityPortFor(entity, binding, formalPort);
         const unsigned portNumber = portIndex.value_or(tree_ports(entity));
         if (portNumber >= tree_ports(entity)) {
             design.diagnostics().report(
@@ -1158,6 +1181,36 @@ void ArchitectureTranslator::instance(tree_t statement) {
                        childGenerics);
     }
     result.instances.push_back(std::move(created));
+}
+
+std::optional<unsigned> ArchitectureTranslator::entityPortFor(tree_t entity, tree_t binding,
+                                                              tree_t formalPort) {
+    // The port a binding's port map associates with this one of the component's.
+    if (binding != nullptr) {
+        for (unsigned index = 0; index < tree_params(binding); ++index) {
+            tree_t association = tree_param(binding, index);
+            tree_t actual = tree_value(association);
+            if (tree_kind(actual) != T_REF || !tree_has_ref(actual)
+                || tree_ref(actual) != formalPort)
+                continue;
+            if (tree_subkind(association) == P_POS) return tree_pos(association);
+            tree_t formal = tree_name(association);
+            for (unsigned port = 0; port < tree_ports(entity); ++port) {
+                if (tree_kind(formal) == T_REF && tree_has_ref(formal)
+                    && tree_ref(formal) == tree_port(entity, port))
+                    return port;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // An entity's own port, or under default binding the entity's of the component's name.
+    for (unsigned port = 0; port < tree_ports(entity); ++port) {
+        if (tree_port(entity, port) == formalPort
+            || tree_ident(tree_port(entity, port)) == tree_ident(formalPort))
+            return port;
+    }
+    return std::nullopt;
 }
 
 void ArchitectureTranslator::connectThrough(eir::Instance& created, unsigned portNumber,
