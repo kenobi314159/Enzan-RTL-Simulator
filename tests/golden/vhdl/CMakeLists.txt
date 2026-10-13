@@ -62,3 +62,7 @@ enzan_add_vhdl_golden_test(subprograms)
 
 # A counter on std_logic and numeric_std, which are translated from the IEEE packages' own bodies.
 enzan_add_vhdl_golden_test(ieee_counter)
+
+# A FIFO on std_logic and numeric_std: with the counter, the designs of DESIGN_GUIDE.md section 18's
+# checkpoint 6b.
+enzan_add_vhdl_golden_test(fifo)
