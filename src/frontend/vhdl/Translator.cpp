@@ -123,13 +123,19 @@ private:
     /// component instantiated, is: as `binding`'s port map associates them, or else by name.
     static std::optional<unsigned> entityPortFor(tree_t entity, tree_t binding, tree_t formalPort);
 
-    /// Connects `port` of `created` through an object of this definition standing for it, kept
-    /// equal to its actuals by a process for each of `associations`: for a port associated in
-    /// parts, or with part of a signal or an expression. The extra process costs a delta that a
-    /// port collapsed onto its actual does not (DESIGN_GUIDE.md section 5.2). The associations'
-    /// formals name `formalPort`, the port itself or a component's of its name.
-    void connectThrough(eir::Instance& created, unsigned portNumber, tree_t port, tree_t formalPort,
-                        const std::vector<tree_t>& associations, const Folder& childGenerics);
+    /// Connects `port` through an object of this definition named `objectName` standing for it,
+    /// kept equal to its actuals by a process for each of `associations`: for a port associated in
+    /// parts, or with part of a signal, a conversion or an expression (DESIGN_GUIDE.md section
+    /// 5.2). The associations' formals name `formalPort`, the port itself or a component's of its
+    /// name. The object, or nothing, having reported why, when the port cannot be connected.
+    std::optional<std::uint32_t> connectThrough(std::string objectName, tree_t port,
+                                                tree_t formalPort,
+                                                const std::vector<tree_t>& associations,
+                                                const Folder& childGenerics);
+
+    /// The index among `formals`' ports of the one `association` associates, whole, in part or
+    /// converted; nothing when it names none of them.
+    static std::optional<unsigned> formalIndex(tree_t association, tree_t formals);
 
     /// The statements of a generate statement's chosen alternative, or of each of its loop's
     /// iterations, or of a block, flattened into this definition.
@@ -1025,11 +1031,87 @@ void ArchitectureTranslator::forGenerate(tree_t statement) {
 }
 
 void ArchitectureTranslator::block(tree_t statement) {
-    if (tree_ports(statement) != 0 || tree_generics(statement) != 0) {
-        unsupported(statement, "a block with ports or generics");
-        return;
+    // A block's generics are constants its statements fold with, bound by its generic map as an
+    // instance's are; each of its ports is a signal of its own, connected to its actuals as an
+    // instance's port is (IEEE 1076 section 11.2), which a waveform shows inside the block as
+    // GHDL's does. An inout port, which a connection does not yet carry both ways, is the signal
+    // associated with it as a whole instead.
+    const Folder outer = folding;
+    if (tree_generics(statement) != 0) {
+        const std::optional<Folder> bound = design.bindGenerics(statement, statement, folding);
+        if (!bound) return;
+        folding.absorb(*bound);
     }
-    nested(statement, simpleName(tree_ident(statement)));
+
+    const std::string name = simpleName(tree_ident(statement));
+    const std::string outerPrefix = prefix;
+    prefix += name + '.';
+    std::vector<std::vector<tree_t>> byPort(tree_ports(statement));
+    for (unsigned index = 0; index < tree_params(statement); ++index) {
+        tree_t association = tree_param(statement, index);
+        const std::optional<unsigned> port = formalIndex(association, statement);
+        if (!port) {
+            unsupported(association, "this port association");
+            continue;
+        }
+        byPort[*port].push_back(association);
+    }
+    for (unsigned portNumber = 0; portNumber < tree_ports(statement); ++portNumber) {
+        tree_t port = tree_port(statement, portNumber);
+        const std::vector<tree_t>& associations = byPort[portNumber];
+        tree_t first = associations.empty() ? nullptr : associations.front();
+        tree_t actual = first == nullptr ? nullptr : tree_value(first);
+        const bool whole =
+            associations.size() == 1
+            && (tree_subkind(first) == P_POS || tree_kind(tree_name(first)) == T_REF);
+        if (whole && tree_subkind(port) == PORT_INOUT && tree_kind(actual) == T_REF
+            && tree_has_ref(actual)) {
+            if (const std::optional<std::uint32_t> object = objectFor(tree_ref(actual))) {
+                objects.insert_or_assign(port, *object);
+                continue;
+            }
+        }
+        if (associations.empty() || (whole && tree_kind(actual) == T_OPEN)) {
+            addObject(port);
+            continue;
+        }
+        if (const std::optional<std::uint32_t> through = connectThrough(
+                prefix + simpleName(tree_ident(port)), port, port, associations, folding))
+            objects.insert_or_assign(port, *through);
+    }
+
+    declarations(statement);
+    statements(statement);
+    for (unsigned index = 0; index < tree_decls(statement); ++index)
+        objects.erase(tree_decl(statement, index));
+    for (unsigned index = 0; index < tree_ports(statement); ++index)
+        objects.erase(tree_port(statement, index));
+    prefix = outerPrefix;
+    folding = outer;
+}
+
+std::optional<unsigned> ArchitectureTranslator::formalIndex(tree_t association, tree_t formals) {
+    if (tree_subkind(association) == P_POS) return tree_pos(association);
+    // A part of the port, or a conversion of an output's value, `f(port) => s` (IEEE 1076 section
+    // 6.5.7.1), names the port inside it.
+    tree_t formal = tree_name(association);
+    for (;;) {
+        const tree_kind_t kind = tree_kind(formal);
+        if (kind == T_ARRAY_REF || kind == T_ARRAY_SLICE || kind == T_RECORD_REF
+            || kind == T_TYPE_CONV || kind == T_CONV_FUNC) {
+            formal = tree_value(formal);
+        } else if (kind == T_FCALL && tree_params(formal) == 1) {
+            formal = tree_value(tree_param(formal, 0));
+        } else {
+            break;
+        }
+    }
+    for (unsigned port = 0; port < tree_ports(formals); ++port) {
+        if (tree_kind(formal) == T_REF && tree_has_ref(formal)
+            && tree_port(formals, port) == tree_ref(formal))
+            return port;
+    }
+    return std::nullopt;
 }
 
 void ArchitectureTranslator::instance(tree_t statement) {
@@ -1121,31 +1203,8 @@ void ArchitectureTranslator::instance(tree_t statement) {
     std::vector<tree_t> formalPorts(tree_ports(entity), nullptr);
     for (unsigned index = 0; index < tree_params(statement); ++index) {
         tree_t association = tree_param(statement, index);
-        std::optional<unsigned> formalIndex;
-        if (tree_subkind(association) == P_POS) {
-            formalIndex = tree_pos(association);
-        } else {
-            // A part of the port, or a conversion of an output's value, `f(port) => s` (IEEE 1076
-            // section 6.5.7.1), names the port inside it.
-            tree_t formal = tree_name(association);
-            for (;;) {
-                const tree_kind_t kind = tree_kind(formal);
-                if (kind == T_ARRAY_REF || kind == T_ARRAY_SLICE || kind == T_RECORD_REF
-                    || kind == T_TYPE_CONV || kind == T_CONV_FUNC) {
-                    formal = tree_value(formal);
-                } else if (kind == T_FCALL && tree_params(formal) == 1) {
-                    formal = tree_value(tree_param(formal, 0));
-                } else {
-                    break;
-                }
-            }
-            for (unsigned port = 0; port < tree_ports(formals); ++port) {
-                if (tree_kind(formal) == T_REF && tree_has_ref(formal)
-                    && tree_port(formals, port) == tree_ref(formal))
-                    formalIndex = port;
-            }
-        }
-        const unsigned formalNumber = formalIndex.value_or(tree_ports(formals));
+        const unsigned formalNumber =
+            formalIndex(association, formals).value_or(tree_ports(formals));
         if (formalNumber >= tree_ports(formals)) {
             unsupported(association, "this port association");
             continue;
@@ -1187,8 +1246,12 @@ void ArchitectureTranslator::instance(tree_t statement) {
                 }
             }
         }
-        connectThrough(created, portNumber, port, formalPorts[portNumber], associations,
-                       childGenerics);
+        if (const std::optional<std::uint32_t> through =
+                connectThrough(std::format("{}${}", created.name, simpleName(tree_ident(port))),
+                               port, formalPorts[portNumber], associations, childGenerics)) {
+            created.connections.push_back(
+                eir::PortConnection{.portIndex = portNumber, .objectIndex = *through});
+        }
     }
     result.instances.push_back(std::move(created));
 }
@@ -1223,26 +1286,26 @@ std::optional<unsigned> ArchitectureTranslator::entityPortFor(tree_t entity, tre
     return std::nullopt;
 }
 
-void ArchitectureTranslator::connectThrough(eir::Instance& created, unsigned portNumber,
-                                            tree_t port, tree_t formalPort,
-                                            const std::vector<tree_t>& associations,
-                                            const Folder& childGenerics) {
+std::optional<std::uint32_t>
+ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree_t formalPort,
+                                       const std::vector<tree_t>& associations,
+                                       const Folder& childGenerics) {
     const std::optional<Layout> layout = layoutOf(tree_type(port), childGenerics);
     if (!layout) {
         unsupported(associations.front(),
                     "associating a port whose bounds come from its actual with this");
-        return;
+        return std::nullopt;
     }
     const bool input = tree_subkind(port) == PORT_IN;
     if (!input && tree_subkind(port) != PORT_OUT && tree_subkind(port) != PORT_BUFFER) {
         unsupported(associations.front(), "associating an inout port with this");
-        return;
+        return std::nullopt;
     }
 
     // An object standing for the port in this definition: its default to start with, which an
     // input's actuals overwrite where their initial values are known.
     eir::Object through;
-    through.name = std::format("{}${}", created.name, simpleName(tree_ident(port)));
+    through.name = std::move(objectName);
     through.type = layout->storage;
     through.location = locate(associations.front());
     through.initialValue = tree_has_value(port)
@@ -1251,8 +1314,6 @@ void ArchitectureTranslator::connectThrough(eir::Instance& created, unsigned por
     through.enumIndex = layout->isComposite() ? eir::Object::NoEnum : enumFor(tree_type(port));
     through.encoding = encodingOf(tree_type(port));
     const std::uint32_t throughIndex = result.addObject(std::move(through));
-    created.connections.push_back(
-        eir::PortConnection{.portIndex = portNumber, .objectIndex = throughIndex});
 
     // A formal names the port, which is that object here, and its bounds fold with the instance's
     // generics.
@@ -1287,6 +1348,7 @@ void ArchitectureTranslator::connectThrough(eir::Instance& created, unsigned por
     result.objects[throughIndex].initialValue = std::move(start);
     objects.erase(formalPort);
     folding = outer;
+    return throughIndex;
 }
 
 } // namespace

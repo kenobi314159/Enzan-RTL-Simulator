@@ -988,7 +988,10 @@ What a VHDL unit becomes in EIR:
 - A generate statement is flattened into the architecture it is in, as SystemVerilog's
   are (5.1): the alternative whose condition folds true, or each iteration of a loop with
   its parameter bound, and what each declares is named inside it, `g(0).u`. A block is the
-  same, named by its label.
+  same, named by its label: its generics are bound by its generic map, as an instance's
+  are, and fold where it is; each of its ports is the signal associated with it as a
+  whole, or else a signal of its own, `b.p`, connected to its actuals as an instance's
+  port is, and one left unassociated keeps its default.
 - A component instance is an instance of the entity the component is bound to by
   default: the one of its name in the library of the unit instantiating it, or else in
   the work library. The entity's generics take the values of the component's of the

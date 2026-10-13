@@ -129,3 +129,6 @@ enzan_add_vhdl_golden_test(postponed)
 
 # Out ports' defaults and ports connected by parts and through conversions.
 enzan_add_vhdl_golden_test(ports)
+
+# Blocks with generics and ports.
+enzan_add_vhdl_golden_test(blocks)
