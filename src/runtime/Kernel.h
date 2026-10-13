@@ -527,6 +527,10 @@ private:
     /// Resolves every segment `driverIndex` covers and writes the result into its signal.
     void resolveDriver(std::uint32_t driverIndex);
 
+    /// Gives each VHDL resolved signal the value its drivers' initial values resolve to, before
+    /// the run begins.
+    void resolveInitialValues();
+
     /// Resolves `segment`, of a VHDL resolved signal, into `acc` with its resolution function,
     /// called for each subelement with its drivers' values, the first driver's left (IEEE 1076
     /// section 14.7.3.2). False when a call stopped the run.

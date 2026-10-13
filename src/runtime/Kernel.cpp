@@ -193,6 +193,7 @@ std::ostream& Kernel::transcriptStream() const {
 
 void Kernel::initialize() {
     designImage->initializeState(stateArena);
+    resolveInitialValues();
 
     // Everything a previous run left behind goes with it, because a restart is this method
     // called a second time and a design put back to time zero must behave exactly
@@ -728,6 +729,28 @@ void Kernel::resolveDriver(std::uint32_t driverIndex) {
     }
 
     writeSignalPart(written.slot, resolved, written.lowBit);
+}
+
+void Kernel::resolveInitialValues() {
+    // A VHDL resolved signal starts at what its drivers' initial values resolve to (IEEE 1076
+    // section 14.7.5.2), written as the value it has rather than as a change of it.
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    for (const elab::Segment& segment : elaborated.segments()) {
+        const elab::Slot& slot = elaborated.slots()[segment.slot];
+        if (!slot.resolution.resolved() || segment.driverCount == 0) continue;
+        const elab::Driver& first =
+            elaborated.drivers()[elaborated.segmentDrivers()[segment.firstDriver]];
+        const eir::BitRef acc(segmentScratch.data(), segment.width);
+        // A lone driver whose function is proven to give back what it is given is its value.
+        if (segment.resolution == elab::Segment::NoResolution) {
+            bitops::partSelectAt(acc, stateArena.at(first.wordOffset, first.width),
+                                 segment.lowBit - first.lowBit);
+        } else if (!resolveByFunction(first.process, segment, acc)) {
+            return;
+        }
+        bitops::assignPartAt(stateArena.at(slot.wordOffset, slot.type.bitWidth()), acc,
+                             segment.lowBit);
+    }
 }
 
 bool Kernel::resolveByFunction(std::uint32_t processIndex, const elab::Segment& segment,

@@ -471,8 +471,10 @@ Further requirements:
   specialised to each count, links what comes back into the design, and elaborates
   again with it, which binds each segment to its function. The kernel calls it for each
   subelement with its drivers' values, the first driver's left; a VHDL driver starts at
-  its signal's initial value, which is what the function sees of it until it first
-  runs.
+  the initial value of the signal its process names, which for an out port is the port's
+  default rather than that of the signal connected to it, and is what the function sees
+  of it until it first runs. Before the run begins the kernel resolves each such signal
+  from its drivers' starting values, which is where the signal starts.
 - **Single-driver bits MUST bypass resolution entirely** where resolving a lone
   driver is known to return its value unchanged, and a signal all of whose bits
   are such MUST bypass it as a whole rather than bit by bit. This is the common

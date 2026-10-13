@@ -293,18 +293,52 @@ void Image::initializeState(Arena& arena) const {
     visit(true);
     visit(false);
 
-    // A driver that has not run yet has no value the design gave it, so it starts at X, as the
-    // net's driven bits do. A VHDL driver starts at its signal's initial value instead (IEEE 1076
-    // section 14.7.2), which its resolution function is given until the driver first runs.
+    // A VHDL driver starts at the initial value of the signal its process names (IEEE 1076
+    // section 14.7.2), which for a port is the port's default and not the value of the signal it
+    // is connected to; a signal takes what its drivers start at (section 14.7.5.2), so a connected
+    // out port's default is where the signal it drives begins. The process writing a bit gives
+    // it that value here; where a resolved signal has drivers, they are given it, and the kernel
+    // resolves them before the run begins.
+    const auto startOf = [&](const elab::ProcessInstance& processInstance,
+                             std::uint32_t objectIndex) -> const eir::BitVector* {
+        const elab::Instance& instance = elaborated->instances()[processInstance.instanceIndex];
+        const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
+        if (!definition.processes[processInstance.processIndex].drivesSignals) return nullptr;
+        const eir::Object& object = definition.objects[objectIndex];
+        const elab::Slot& slot = elaborated->slots()[instance.objectSlots[objectIndex]];
+        // A port collapsed onto all of its signal; one reaching only part of it is not.
+        if (!object.initialValue || object.type.bitWidth() != slot.type.bitWidth()) return nullptr;
+        return &*object.initialValue;
+    };
+    for (const elab::ProcessInstance& processInstance : elaborated->processes()) {
+        const elab::Instance& instance = elaborated->instances()[processInstance.instanceIndex];
+        const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
+        for (const eir::WriteExtent& extent :
+             definition.processes[processInstance.processIndex].writeSet) {
+            const elab::Slot& slot = elaborated->slots()[instance.objectSlots[extent.objectIndex]];
+            const eir::BitVector* start = startOf(processInstance, extent.objectIndex);
+            if (start == nullptr) continue;
+            eir::BitVector part(extent.width);
+            eir::bitops::partSelectAt(part.mutableRef(), start->ref(), extent.lowBit);
+            eir::bitops::assignPartAt(arena.at(slot.wordOffset, slot.type.bitWidth()), part.ref(),
+                                      extent.lowBit);
+        }
+    }
+
+    // Any other driver that has not run yet has no value the design gave it, so it starts at X,
+    // as the net's driven bits do.
     for (const elab::Driver& driver : elaborated->drivers()) {
         const elab::Slot& slot = elaborated->slots()[driver.slot];
         const eir::BitRef value = arena.at(driver.wordOffset, driver.width);
-        if (slot.resolution.resolved()) {
-            eir::bitops::partSelectAt(value, arena.at(slot.wordOffset, slot.type.bitWidth()),
-                                      driver.lowBit);
-        } else {
+        if (!slot.resolution.resolved()) {
             value.fill(eir::Logic::Unknown);
+            continue;
         }
+        const eir::BitVector* start =
+            startOf(elaborated->processes()[driver.process], driver.objectIndex);
+        const eir::ConstBitRef from =
+            start != nullptr ? start->ref() : arena.at(slot.wordOffset, slot.type.bitWidth());
+        eir::bitops::partSelectAt(value, from, driver.lowBit);
     }
 }
 
