@@ -833,8 +833,12 @@ bool BodyTranslator::forLoop(tree_t statement) {
         right = constant(folded->right, *storage, type);
     }
     if (!left || !right) return false;
+    // Copied, since a bound naming a variable is that variable's register, which the body may
+    // assign without moving the range.
     const Value first = resize(*left, storage->bitWidth());
-    const Value last = resize(*right, storage->bitWidth());
+    const Value last{.reg = newRegister(*storage), .type = *storage, .vhdlType = type};
+    emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(last.reg),
+                                eir::Operand::reg(resize(*right, storage->bitWidth()).reg)));
 
     const Value index{.reg = newRegister(*storage), .type = *storage, .vhdlType = type};
     emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(index.reg),

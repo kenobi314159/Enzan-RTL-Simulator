@@ -51,6 +51,15 @@ begin
     end loop;
     assert total = 10 report "downto" severity failure;
 
+    -- The range is evaluated once: assigning its bound's variable leaves the iterations as many.
+    count := 4;
+    total := 0;
+    for i in 1 to count loop
+      count := 1;
+      total := total + 1;
+    end loop;
+    assert total = 4 report "range evaluated once: " & integer'image(total) severity failure;
+
     assert (-7) mod 3 = 2 and (-7) rem 3 = -1 report "static mod" severity failure;
     count := -7;
     assert count mod 3 = 2 and count rem 3 = -1 report "mod" severity failure;
