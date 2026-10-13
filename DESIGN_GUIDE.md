@@ -2576,6 +2576,12 @@ VHDL differential reference and MUST be part of the suite**, with NVC kept as a
 secondary reference that is still meaningful for everything downstream of EIR.
 The same reasoning will apply to any future frontend dependency.
 
+A VHDL golden case is compared with GHDL on two things: what the design reported, as each
+report's severity and message in order, and every signal GHDL records, as the value it
+settled on at each time step. GHDL writes `std_logic` as its nine values, which are mapped
+as 3.6 maps them before comparing; and the time step a run finishes in is left out, since
+GHDL stops before it writes that step and Enzan writes it.
+
 ### 14.4 Conformance suites
 
 Run against public suites and **track the pass rate as a number over time**:

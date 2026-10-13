@@ -10,7 +10,8 @@
 # enzan_add_vhdl_golden_test(<name>)
 # ---------------------------------------------------------------------------
 #
-# Registers `golden.vhdl.<name>`, which runs <name>.vhd and requires the PASS line.
+# Registers `golden.vhdl.<name>`, which runs <name>.vhd and requires the PASS line, and
+# `golden.vhdl.<name>.differential`, which compares the run against GHDL's (section 14.3).
 function(enzan_add_vhdl_golden_test name)
   set(source "${CMAKE_CURRENT_SOURCE_DIR}/${name}.vhd")
   if(NOT EXISTS "${source}")
@@ -23,7 +24,27 @@ function(enzan_add_vhdl_golden_test name)
     PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}"
                FAIL_REGULAR_EXPRESSION ": (error|fatal): "
                TIMEOUT 60)
+
+  if(NOT ENZAN_VHDL_REFERENCE_SIMULATOR)
+    return()
+  endif()
+  add_test(
+    NAME golden.vhdl.${name}.differential
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-ghdl-differential.sh" $<TARGET_FILE:enzan>
+            "${ENZAN_VHDL_REFERENCE_SIMULATOR}" "${CMAKE_CURRENT_SOURCE_DIR}/compare-ghdl.py"
+            "${source}" tb)
+  set_tests_properties(golden.vhdl.${name}.differential PROPERTIES TIMEOUT 120)
 endfunction()
+
+# GHDL is M6's reference for VHDL. Skipped rather than failed when it is not installed, as Icarus
+# Verilog is for SystemVerilog, so that a contributor without it can still run the suite; CI
+# installs it.
+find_program(ENZAN_VHDL_REFERENCE_SIMULATOR ghdl)
+if(ENZAN_VHDL_REFERENCE_SIMULATOR)
+  message(STATUS "VHDL differential tests will compare against ${ENZAN_VHDL_REFERENCE_SIMULATOR}")
+else()
+  message(STATUS "ghdl not found; VHDL differential tests are skipped")
+endif()
 
 # A counter on `bit` and `integer` alone, below a testbench that clocks and resets it.
 enzan_add_vhdl_golden_test(counter)
