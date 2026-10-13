@@ -487,9 +487,12 @@ private:
 
     std::filesystem::path vhdlLibraries;
 
+#ifdef ENZAN_WITH_VHDL
     /// What the design was analysed from when it was VHDL, which the frontend analyses again to
-    /// translate the resolution functions elaboration asks for; null otherwise.
+    /// translate the resolution functions elaboration asks for; null otherwise. Only a build
+    /// with the VHDL frontend has its options to hold.
     std::unique_ptr<frontend::vhdl::DesignOptions> vhdlOptions;
+#endif
 
     /// Where each VHDL resolution function translated for this design is, by its name and its
     /// number of drivers, which elaboration binds segments to.

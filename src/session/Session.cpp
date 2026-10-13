@@ -187,7 +187,9 @@ bool Session::analyse(const AnalysisRequest& request) {
         if (library.load(stored, sources, *reused)) {
             design = std::move(reused);
             loadedFromLibrary = true;
+#ifdef ENZAN_WITH_VHDL
             vhdlOptions.reset();
+#endif
             resolutionAnswers.clear();
 
             // Left empty on purpose. A hit does not run the frontend, so nothing knows which
@@ -214,7 +216,9 @@ bool Session::analyse(const AnalysisRequest& request) {
     if (analysed == nullptr) return false;
 
     design = std::move(analysed);
+#ifdef ENZAN_WITH_VHDL
     vhdlOptions.reset();
+#endif
     resolutionAnswers.clear();
 
     // A failed store is reported and otherwise ignored: the design is in hand either way, and
@@ -376,7 +380,9 @@ void Session::setDesign(std::unique_ptr<eir::Design> analysed) {
     discardElaboration();
     design = std::move(analysed);
     loadedFromLibrary = false;
+#ifdef ENZAN_WITH_VHDL
     vhdlOptions.reset();
+#endif
     resolutionAnswers.clear();
 }
 
