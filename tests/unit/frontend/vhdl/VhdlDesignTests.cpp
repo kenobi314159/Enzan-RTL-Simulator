@@ -623,6 +623,41 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AParameterLeftOpenTakesItsDefault) {
+    // NVC leaves to_bit's xmap open when a call gives none, and that is its default, '0'.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal h : std_ulogic := 'H';
+  signal x : std_ulogic := 'X';
+  signal bh, bx : bit;
+begin
+  bh <= to_bit(h);
+  bx <= to_bit(x);
+
+  process
+  begin
+    wait for 1 ns;
+    assert bh = '1' and bx = '0' report "to_bit" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.

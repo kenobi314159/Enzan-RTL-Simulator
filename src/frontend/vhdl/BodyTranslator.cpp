@@ -1142,7 +1142,10 @@ std::optional<std::vector<tree_t>> BodyTranslator::actualsOf(tree_t call, tree_t
             fail(association, "this parameter association");
             return std::nullopt;
         }
-        actuals[position] = tree_value(association);
+        // An `open` actual, which NVC also leaves for a parameter it gives no actual, takes the
+        // default as a missing one does.
+        if (tree_kind(tree_value(association)) != T_OPEN)
+            actuals[position] = tree_value(association);
     }
     for (unsigned index = 0; index < formals; ++index) {
         if (actuals[index] != nullptr) continue;
