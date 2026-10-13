@@ -260,6 +260,11 @@ BodyTranslator::translateAssociation(tree_t target, tree_t value, std::uint32_t 
                                      const Layout& portLayout,
                                      std::optional<eir::BitVector>* seed) {
     const Place port{.objectIndex = portObject, .layout = portLayout};
+    // A port or a part of one, or either converted, connects the two sides directly; an
+    // expression is a signal of its own, which a concurrent assignment drives a delta cycle later
+    // (IEEE 1076 section 6.5.6.3).
+    process.connectsPort = value == nullptr || designatesStorage(value)
+                           || tree_kind(value) == T_TYPE_CONV || tree_kind(value) == T_CONV_FUNC;
     const std::uint32_t entry = newBlock("entry");
     selectBlock(entry);
     statementLocation = owner.locate(source);
@@ -1574,7 +1579,8 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     bool inlineIt = tree_kind(calleeBody) == T_PROC_BODY;
     for (unsigned index = 0; index < tree_ports(declaration); ++index)
         inlineIt = inlineIt || tree_class(tree_port(declaration, index)) == C_SIGNAL;
-    if (isProcess) {
+    // An association's copy, the other kind of process, declares nothing.
+    if (isProcess && tree_kind(source) == T_PROCESS) {
         for (unsigned index = 0; index < tree_decls(source); ++index)
             inlineIt = inlineIt || tree_decl(source, index) == calleeBody;
     }

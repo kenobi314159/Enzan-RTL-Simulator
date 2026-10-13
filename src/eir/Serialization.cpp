@@ -305,6 +305,7 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     out.u8(static_cast<std::uint8_t>(process.kind));
     out.boolean(process.drivesSignals);
     out.boolean(process.postponed);
+    out.boolean(process.connectsPort);
     writeBody(out, names, process);
 
     out.u32(static_cast<std::uint32_t>(process.sensitivity.size()));
@@ -598,6 +599,7 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     process.kind = static_cast<ProcessKind>(in.u8());
     process.drivesSignals = in.boolean();
     process.postponed = in.boolean();
+    process.connectsPort = in.boolean();
     readBody(in, buffers, process);
 
     const auto readEntry = [&in](SensitivityEntry& entry) {

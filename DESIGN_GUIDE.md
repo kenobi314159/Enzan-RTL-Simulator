@@ -999,9 +999,13 @@ What a VHDL unit becomes in EIR:
 - A port associated with a whole signal is that signal's storage. One associated with
   part of a signal, with an expression, or in parts is connected through an object of
   the instantiating definition, `u$port`, which a process for each association keeps
-  equal to its actual: into it for an input, out of it for an output. That costs the
-  delta a collapsed port does not, so a clock through such an association lags its data
-  by one; a clock is rarely one.
+  equal to its actual: into it for an input, out of it for an output. Where the
+  association is a name or a conversion of one, the process is the connection itself
+  (`eir::Process::connectsPort`): the kernel runs it as part of the signal update,
+  applying what it drives in the same delta cycle as what it copies, and once at
+  initialization, so neither side lags the other, as a collapsed port does not. An
+  expression actual is a signal of its own, assigned a delta later (IEEE 1076 section
+  6.5.6.3), and its process is an ordinary one.
 - A constant function is run as the adapter folds: a call of a pure function of the
   design or of the IEEE packages whose arguments fold runs its body's variables, scalar
   or composite, `if`, `case`, loops and `return` over their values, with an

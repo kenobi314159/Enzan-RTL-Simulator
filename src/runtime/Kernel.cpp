@@ -207,17 +207,9 @@ void Kernel::initialize() {
     pendingInertial.clear();
     deltaTransactions.clear();
     nextCycleResumes.clear();
+    connectionsDue.clear();
     for (std::vector<Transaction>& waveform : projectedWaveforms) waveform.clear();
-
-    // Before its first change, a signal's 'last_value is its value.
     cycle = 0;
-    std::ranges::fill(lastChange, NeverChanged);
-    for (std::uint32_t signalIndex = 0; signalIndex < lastValueOffset.size(); ++signalIndex) {
-        if (lastValueOffset[signalIndex] == NoLastValue) continue;
-        const Signal& signal = designImage->signals()[signalIndex];
-        bitops::copy(eir::BitRef(lastValues.data() + lastValueOffset[signalIndex], signal.bitWidth),
-                     stateArena.at(signal.wordOffset, signal.bitWidth));
-    }
     processes.assign(designImage->processes().begin(), designImage->processes().end());
     for (ProcessState& state : processes)
         state.randomState = processRandomState(options.seed, state.name);
@@ -247,10 +239,30 @@ void Kernel::initialize() {
 
     currentTime = 0;
 
+    // The ports' connections run first, and what they copy is where the signals they drive
+    // start (IEEE 1076 section 14.7.5.2) rather than a change of them: what the copies woke is
+    // forgotten, as nothing has run yet, and they wait on their sources as they do after.
+    for (std::uint32_t processIndex = 0; processIndex < processes.size(); ++processIndex) {
+        if (designImage->compiledDesign().body(processes[processIndex].bodyIndex).connectsPort)
+            wake(processIndex);
+    }
+    runConnections();
+    scheduler.clear();
+    for (ProcessState& state : processes) state.queued = false;
+
+    // Before its first change, a signal's 'last_value is its value.
+    std::ranges::fill(lastChange, NeverChanged);
+    for (std::uint32_t signalIndex = 0; signalIndex < lastValueOffset.size(); ++signalIndex) {
+        if (lastValueOffset[signalIndex] == NoLastValue) continue;
+        const Signal& signal = designImage->signals()[signalIndex];
+        bitops::copy(eir::BitRef(lastValues.data() + lastValueOffset[signalIndex], signal.bitWidth),
+                     stateArena.at(signal.wordOffset, signal.bitWidth));
+    }
+
     for (std::uint32_t processIndex = 0; processIndex < processes.size(); ++processIndex) {
         const codegen::CompiledBody& body =
             designImage->compiledDesign().body(processes[processIndex].bodyIndex);
-        if (!body.startsAtTimeZero) continue;
+        if (!body.startsAtTimeZero || body.connectsPort) continue;
         // A postponed process runs at initialization after the others and before the first
         // delta cycle (IEEE 1076 section 14.7.5.2), which Inactive is.
         if (body.postponed) {
@@ -284,7 +296,8 @@ RunStatus Kernel::run(SimTime until) {
         }
 
         if (!scheduler.allRegionsEmpty() || scheduler.hasNonBlockingUpdates()
-            || !deltaTransactions.empty() || !nextCycleResumes.empty() || pliWorkDue()) {
+            || !deltaTransactions.empty() || !nextCycleResumes.empty() || !connectionsDue.empty()
+            || pliWorkDue()) {
             if (!runTimeSlot()) {
                 lastStatus = errorRequested ? RunStatus::Error : RunStatus::Finished;
                 runFinalProcesses();
@@ -321,8 +334,14 @@ bool Kernel::runTimeSlot() {
         }
         firstPass = false;
 
+        // Connections whose sources changed, as the step began or by what ran last, carry the
+        // change on before anything reads it.
+        runConnections();
+        if (halted()) return false;
+
         drain(Region::Active);
         if (halted()) return false;
+        if (!connectionsDue.empty()) continue;
 
         if (!scheduler.empty(Region::Inactive)) {
             scheduler.promote(Region::Inactive, Region::Active);
@@ -339,6 +358,8 @@ bool Kernel::runTimeSlot() {
             applyNonBlockingUpdates();
             if (halted()) return false;
             applyDeltaTransactions();
+            if (halted()) return false;
+            runConnections();
             if (halted()) return false;
             for (const std::uint32_t processIndex : std::exchange(nextCycleResumes, {}))
                 scheduler.schedule(Region::Active, processIndex);
@@ -540,7 +561,7 @@ void Kernel::wake(std::uint32_t processIndex) {
 
     state.resumePc = 0;
     state.queued = true;
-    scheduler.schedule(resumeRegion(processIndex), processIndex);
+    enqueue(processIndex);
 }
 
 void Kernel::resume(std::uint32_t processIndex, std::uint32_t resumePc) {
@@ -550,7 +571,33 @@ void Kernel::resume(std::uint32_t processIndex, std::uint32_t resumePc) {
     if (state.queued) return;
 
     state.queued = true;
+    enqueue(processIndex);
+}
+
+void Kernel::enqueue(std::uint32_t processIndex) {
+    if (designImage->compiledDesign().body(processes[processIndex].bodyIndex).connectsPort) {
+        connectionsDue.push_back(processIndex);
+        return;
+    }
     scheduler.schedule(resumeRegion(processIndex), processIndex);
+}
+
+void Kernel::runConnections() {
+    Interpreter interpreter(*this);
+    while (!connectionsDue.empty()) {
+        // Only what the connections drive is applied now; what the cycle's processes have
+        // assigned so far stays for the next cycle.
+        const std::size_t first = deltaTransactions.size();
+        for (const std::uint32_t processIndex : std::exchange(connectionsDue, {})) {
+            processes[processIndex].queued = false;
+            runningProcess = processIndex;
+            const ExecutionResult result = interpreter.run(processIndex);
+            runningProcess = NoProcess;
+            if (result == ExecutionResult::Stopped || stopping()) return;
+        }
+        applyDeltaTransactions(first);
+        if (stopping()) return;
+    }
 }
 
 Region Kernel::resumeRegion(std::uint32_t processIndex) const {
@@ -1124,10 +1171,12 @@ void Kernel::applyTransaction(std::uint32_t processIndex, std::uint32_t position
     }
 }
 
-void Kernel::applyDeltaTransactions() {
+void Kernel::applyDeltaTransactions(std::size_t first) {
     // Taken as a batch, as non-blocking updates are: a value-change callback may assign, and
     // what it assigns belongs to the delta cycle after this one.
-    const std::vector<DeltaTransaction> due = std::exchange(deltaTransactions, {});
+    const auto from = deltaTransactions.begin() + static_cast<std::ptrdiff_t>(first);
+    const std::vector<DeltaTransaction> due(from, deltaTransactions.end());
+    deltaTransactions.erase(from, deltaTransactions.end());
     for (const DeltaTransaction& transaction : due) {
         const std::optional<Transaction> taken =
             takeTransaction(transaction.processIndex, transaction.position, transaction.serial);

@@ -375,6 +375,13 @@ struct Process : Body {
     /// sees the values the step ends with.
     bool postponed = false;
 
+    /// True for what the VHDL adapter makes of a port associated by parts or through a conversion
+    /// (IEEE 1076 section 6.5.6.3): a copy from one side of the association to the other, which is
+    /// the connection itself rather than a process of the design. The kernel runs it as part of
+    /// the signal update, so what it copies changes in the same delta cycle as what it copies
+    /// from, and once at initialization, so the signal it drives starts at what it copies.
+    bool connectsPort = false;
+
     /// Explicit sensitivity. Empty for `initial`, `final` and `always_comb`, whose
     /// triggering is derived from the kind and the read set instead.
     std::vector<SensitivityEntry> sensitivity;

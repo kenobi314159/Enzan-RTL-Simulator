@@ -197,6 +197,9 @@ struct CompiledBody {
     /// rather than in Active.
     bool postponed = false;
 
+    /// eir::Process::connectsPort: the kernel runs it as part of the signal update.
+    bool connectsPort = false;
+
     std::string name;
     SourceLocation location;
     std::vector<eir::SensitivityEntry> sensitivity;

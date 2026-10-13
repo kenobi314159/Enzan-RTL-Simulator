@@ -483,6 +483,14 @@ private:
     /// Where a process goes when it resumes: Active, or Postponed for a VHDL postponed process.
     [[nodiscard]] Region resumeRegion(std::uint32_t processIndex) const;
 
+    /// Queues `processIndex`, which is not queued, to run: a port's connection with the others
+    /// due in this update, any other process in its region.
+    void enqueue(std::uint32_t processIndex);
+
+    /// Runs the ports' connections due and applies what they drive, again until none is due, all
+    /// in the delta cycle under way (eir::Process::connectsPort).
+    void runConnections();
+
     /// Counts one delta cycle and enforces the limit. Returns false when the limit was
     /// exceeded and the run must stop.
     bool countDelta();
@@ -722,6 +730,9 @@ private:
     /// those its transactions wake (codegen::CompiledBody::resumesNextCycle).
     std::vector<std::uint32_t> nextCycleResumes;
 
+    /// The ports' connections whose sources changed, to run before the cycle's processes.
+    std::vector<std::uint32_t> connectionsDue;
+
     /// Deletes `transaction`, a later one, from `delayedWrites`, taking its time step with it
     /// when nothing else is due then: a deleted transaction leaves no step behind.
     void unscheduleTransaction(const Transaction& transaction);
@@ -751,8 +762,8 @@ private:
     Transaction remainder(const DriverOf& driver, const Transaction& transaction,
                           std::uint32_t lowBit, std::uint32_t endBit);
 
-    /// Applies the transactions due in this delta cycle.
-    void applyDeltaTransactions();
+    /// Applies the transactions due in this delta cycle, from the `first` made on.
+    void applyDeltaTransactions(std::size_t first = 0);
 
     /// A write as a Store makes it: through the process's drivers when its route has any.
     void writeRouted(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,

@@ -127,5 +127,5 @@ enzan_add_vhdl_golden_test(delta)
 # Postponed processes, which see only what a time step ends with.
 enzan_add_vhdl_golden_test(postponed)
 
-# Out ports' defaults, which the signals they drive start at.
+# Out ports' defaults and ports connected by parts and through conversions.
 enzan_add_vhdl_golden_test(ports)
