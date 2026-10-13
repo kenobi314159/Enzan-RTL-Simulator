@@ -99,6 +99,9 @@ BodyTranslator::BodyTranslator(DefinitionScope& scope, tree_t statement, std::st
     process.name = std::move(name);
     process.kind = eir::ProcessKind::Always;
     process.drivesSignals = true;
+    // An association's copy of a converted port, the other kind of statement, is never postponed.
+    process.postponed =
+        tree_kind(statement) == T_PROCESS && (tree_flags(statement) & TREE_F_POSTPONED) != 0;
     process.location = owner.locate(statement);
 }
 

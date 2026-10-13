@@ -95,13 +95,14 @@ public:
     /// True when no region holds anything.
     [[nodiscard]] bool allRegionsEmpty() const noexcept;
 
-    /// Schedules `processIndex` to be made Active at `time`.
-    void scheduleAt(SimTime time, std::uint32_t processIndex);
+    /// Schedules `processIndex` to be put in `region` at `time`: Active, or Postponed for a VHDL
+    /// postponed process.
+    void scheduleAt(SimTime time, std::uint32_t processIndex, Region region = Region::Active);
 
     /// The earliest time anything is scheduled for, or `NoTime`.
     [[nodiscard]] SimTime nextEventTime() const noexcept;
 
-    /// Moves everything scheduled for `time` into the Active region.
+    /// Moves everything scheduled for `time` into the region each was scheduled for.
     void releaseTime(SimTime time);
 
     [[nodiscard]] bool hasFutureEvents() const noexcept { return !timeWheel.empty(); }
@@ -204,7 +205,12 @@ private:
     /// the insertion order within a timestamp, which together make the schedule
     /// reproducible. Section 6.2 calls for a hierarchical or calendar queue once there
     /// is a benchmark to justify it; this is the honest starting point.
-    std::map<SimTime, std::vector<std::uint32_t>> timeWheel;
+    struct Timed {
+        std::uint32_t processIndex = 0;
+        Region region = Region::Active;
+    };
+
+    std::map<SimTime, std::vector<Timed>> timeWheel;
 
     std::vector<NonBlockingUpdate> pendingUpdates;
     std::vector<eir::Word> updatePool;

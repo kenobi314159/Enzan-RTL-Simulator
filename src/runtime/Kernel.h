@@ -480,6 +480,9 @@ private:
     /// Schedules `processIndex` into Active to continue at `resumePc`.
     void resume(std::uint32_t processIndex, std::uint32_t resumePc);
 
+    /// Where a process goes when it resumes: Active, or Postponed for a VHDL postponed process.
+    [[nodiscard]] Region resumeRegion(std::uint32_t processIndex) const;
+
     /// Counts one delta cycle and enforces the limit. Returns false when the limit was
     /// exceeded and the run must stop.
     bool countDelta();

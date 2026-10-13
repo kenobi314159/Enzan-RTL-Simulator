@@ -370,6 +370,11 @@ struct Process : Body {
     /// assignment's (DESIGN_GUIDE.md section 3.7).
     bool drivesSignals = false;
 
+    /// True for a VHDL postponed process (IEEE 1076 section 11.3): past initialization, it
+    /// resumes only in the last delta cycle of a time step, once nothing else is due then, and so
+    /// sees the values the step ends with.
+    bool postponed = false;
+
     /// Explicit sensitivity. Empty for `initial`, `final` and `always_comb`, whose
     /// triggering is derived from the kind and the read set instead.
     std::vector<SensitivityEntry> sensitivity;

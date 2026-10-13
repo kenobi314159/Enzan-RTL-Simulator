@@ -249,7 +249,15 @@ void Kernel::initialize() {
     for (std::uint32_t processIndex = 0; processIndex < processes.size(); ++processIndex) {
         const codegen::CompiledBody& body =
             designImage->compiledDesign().body(processes[processIndex].bodyIndex);
-        if (body.startsAtTimeZero) wake(processIndex);
+        if (!body.startsAtTimeZero) continue;
+        // A postponed process runs at initialization after the others and before the first
+        // delta cycle (IEEE 1076 section 14.7.5.2), which Inactive is.
+        if (body.postponed) {
+            processes[processIndex].queued = true;
+            scheduler.schedule(Region::Inactive, processIndex);
+            continue;
+        }
+        wake(processIndex);
     }
 }
 
@@ -383,8 +391,8 @@ bool Kernel::runTimeSlot() {
         if (halted()) return false;
     }
 
-    // Postponed is last and, in the M1 subset, cannot schedule anything: `$monitor` is
-    // read-only by definition.
+    // Postponed is last: `$monitor` is read-only by definition, and a VHDL postponed process
+    // may assign only after a delay (IEEE 1076 section 11.3).
     drain(Region::Postponed);
     return !halted();
 }
@@ -531,7 +539,7 @@ void Kernel::wake(std::uint32_t processIndex) {
 
     state.resumePc = 0;
     state.queued = true;
-    scheduler.schedule(Region::Active, processIndex);
+    scheduler.schedule(resumeRegion(processIndex), processIndex);
 }
 
 void Kernel::resume(std::uint32_t processIndex, std::uint32_t resumePc) {
@@ -541,7 +549,13 @@ void Kernel::resume(std::uint32_t processIndex, std::uint32_t resumePc) {
     if (state.queued) return;
 
     state.queued = true;
-    scheduler.schedule(Region::Active, processIndex);
+    scheduler.schedule(resumeRegion(processIndex), processIndex);
+}
+
+Region Kernel::resumeRegion(std::uint32_t processIndex) const {
+    return designImage->compiledDesign().body(processes[processIndex].bodyIndex).postponed
+               ? Region::Postponed
+               : Region::Active;
 }
 
 void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
@@ -880,7 +894,7 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
     }
 
     state.queued = true;
-    scheduler.scheduleAt(currentTime + delay, processIndex);
+    scheduler.scheduleAt(currentTime + delay, processIndex, resumeRegion(processIndex));
 }
 
 void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,

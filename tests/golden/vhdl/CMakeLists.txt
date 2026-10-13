@@ -123,3 +123,6 @@ enzan_add_vhdl_golden_test(parts)
 
 # A wait of no time resumes in the next delta cycle, after the signals update.
 enzan_add_vhdl_golden_test(delta)
+
+# Postponed processes, which see only what a time step ends with.
+enzan_add_vhdl_golden_test(postponed)

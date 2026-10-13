@@ -128,6 +128,7 @@ bool Compiler::compileProcess(const eir::ModuleDefinition& definition, const eir
                               CompiledBody& out) {
     out.kind = process.kind;
     out.resumesNextCycle = process.drivesSignals;
+    out.postponed = process.postponed;
     out.sensitivity = process.sensitivity;
     out.eventLists = process.eventLists;
     out.startsAtTimeZero = eir::startsAtTimeZero(process);

@@ -193,6 +193,10 @@ struct CompiledBody {
     /// (IEEE 1076 section 14.7.5.3), where `#0` resumes in the Inactive region before them.
     bool resumesNextCycle = false;
 
+    /// eir::Process::postponed: past initialization, the kernel resumes it in the Postponed region
+    /// rather than in Active.
+    bool postponed = false;
+
     std::string name;
     SourceLocation location;
     std::vector<eir::SensitivityEntry> sensitivity;

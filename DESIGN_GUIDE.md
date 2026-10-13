@@ -346,6 +346,10 @@ commercial tools on real designs, this section is what gets updated.
   before the NBA updates. The kernel holds such a process until the delta
   cycle's transactions are applied and then schedules it in Active with the
   processes those updates wake.
+- A VHDL postponed process resumes in the **Postponed** region, so it runs
+  once the time step has settled and sees the values the step ends with. At
+  initialization it runs in Inactive, after the other processes and before the
+  first delta cycle (IEEE 1076 section 14.7.5.2).
 - A port connection crossing a language boundary is modelled as a zero-delay
   continuous assignment and **consumes one delta cycle**. This MUST be
   documented in the user manual, because it is observable and will surprise

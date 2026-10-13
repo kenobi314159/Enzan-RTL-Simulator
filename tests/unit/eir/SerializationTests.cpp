@@ -140,6 +140,7 @@ ModuleDefinition richModule(BufferId buffer) {
     Process process;
     process.kind = ProcessKind::AlwaysFf;
     process.drivesSignals = true;
+    process.postponed = true;
     process.name = "always_ff@counter.sv:14";
     process.location = SourceLocation(buffer, 14);
     process.registerTypes = {Type::logic(), Type::bits(8, false, false), Type::real(),
@@ -304,6 +305,7 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
 
     EXPECT_EQ(process.kind, ProcessKind::AlwaysFf);
     EXPECT_TRUE(process.drivesSignals);
+    EXPECT_TRUE(process.postponed);
     EXPECT_EQ(process.name, "always_ff@counter.sv:14");
     EXPECT_EQ(process.location, SourceLocation(buffer, 14));
 
