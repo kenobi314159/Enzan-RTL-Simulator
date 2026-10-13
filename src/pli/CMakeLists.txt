@@ -9,8 +9,8 @@ target_include_directories(enzan_vpi_headers INTERFACE "${PROJECT_SOURCE_DIR}/in
 
 enzan_add_component(
   pli
-  SOURCES VpiContext.cpp VpiRoutines.cpp VpiValue.cpp
-  HEADERS VpiContext.h VpiValue.h
+  SOURCES PliContext.cpp VpiRoutines.cpp VpiValue.cpp
+  HEADERS PliContext.h VpiValue.h
   DEPENDS enzan::common enzan::eir enzan::runtime enzan::vpi_headers
   PRIVATE_DEPENDS enzan::elab ${CMAKE_DL_LIBS})
 

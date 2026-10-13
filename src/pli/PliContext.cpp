@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "pli/VpiContext.h"
+#include "pli/PliContext.h"
 
 #include "common/Assert.h"
 #include "common/Diagnostics.h"
@@ -28,7 +28,7 @@ namespace {
 
 /// The one context the routines act on. There is at most one per process, for the reason there
 /// is one session per process; see the class comment.
-VpiContext* currentContext = nullptr;
+PliContext* currentContext = nullptr;
 
 constexpr std::uint32_t NoScope = 0xFFFF'FFFFU;
 
@@ -137,7 +137,7 @@ std::optional<runtime::SimTime> ticksOf(const s_vpi_time& time) {
 // ---------------------------------------------------------------------------
 
 /// Anything an application holds a handle to. The handle is this object's address.
-struct VpiContext::Object {
+struct PliContext::Object {
     enum class Kind : std::uint8_t { Scope, Signal, Parameter, Constant, Iterator, Callback };
 
     Object() = default;
@@ -191,7 +191,7 @@ struct VpiContext::Object {
 };
 
 /// A registered callback. Its handle is what `vpi_register_cb` returned.
-struct VpiContext::Callback final : Object {
+struct PliContext::Callback final : Object {
     s_cb_data data{};
 
     /// How the application asked for time and value to be reported to it.
@@ -209,7 +209,7 @@ struct VpiContext::Callback final : Object {
 };
 
 /// A module instance or a generate block.
-struct VpiContext::Scope {
+struct PliContext::Scope {
     bool isModule = true;
 
     /// The instance holding a package's variables, which is at the root but is no top-level
@@ -235,7 +235,7 @@ struct VpiContext::Scope {
     std::vector<std::uint32_t> parameters;
 };
 
-VpiContext::VpiContext(DiagnosticEngine& engine, std::vector<std::string> commandLine)
+PliContext::PliContext(DiagnosticEngine& engine, std::vector<std::string> commandLine)
     : diagnostics(engine), arguments(std::move(commandLine)), versionText(enzan::version()) {
     ENZAN_ALWAYS_ASSERT(currentContext == nullptr, "there is one VPI context per process");
     currentContext = this;
@@ -247,12 +247,12 @@ VpiContext::VpiContext(DiagnosticEngine& engine, std::vector<std::string> comman
     keepRoutinesLinked();
 }
 
-VpiContext::~VpiContext() {
+PliContext::~PliContext() {
     detach();
     currentContext = nullptr;
 }
 
-VpiContext* VpiContext::current() noexcept {
+PliContext* PliContext::current() noexcept {
     return currentContext;
 }
 
@@ -260,7 +260,7 @@ VpiContext* VpiContext::current() noexcept {
 // Loading
 // ---------------------------------------------------------------------------
 
-bool VpiContext::load(std::string_view specification) {
+bool PliContext::load(std::string_view specification) {
     // `library:entry`, where the entry is an identifier. A colon followed by a path is part of
     // the path, so a library in a directory whose name has a colon in it still loads.
     std::string library(specification);
@@ -322,7 +322,7 @@ bool VpiContext::load(std::string_view specification) {
 // Binding a design
 // ---------------------------------------------------------------------------
 
-void VpiContext::attach(const runtime::Image& designImage, runtime::Kernel& simulationKernel,
+void PliContext::attach(const runtime::Image& designImage, runtime::Kernel& simulationKernel,
                         const SourceManager* sourceManager) {
     detach();
 
@@ -342,7 +342,7 @@ void VpiContext::attach(const runtime::Image& designImage, runtime::Kernel& simu
     }
 }
 
-void VpiContext::detach() {
+void PliContext::detach() {
     if (kernel != nullptr) kernel->setPliHooks(nullptr);
 
     // Every callback that belongs to this simulation goes with it, and every handle to its
@@ -378,7 +378,7 @@ void VpiContext::detach() {
     sources = nullptr;
 }
 
-void VpiContext::buildScopes() {
+void PliContext::buildScopes() {
     const elab::ElaboratedDesign& elaborated = image->elaboratedDesign();
     const eir::Design& design = image->analysedDesign();
 
@@ -450,7 +450,7 @@ void VpiContext::buildScopes() {
     }
 }
 
-std::uint32_t VpiContext::scopeFor(std::uint32_t moduleScope, std::string_view objectName) {
+std::uint32_t PliContext::scopeFor(std::uint32_t moduleScope, std::string_view objectName) {
     const std::vector<std::string_view> parts = splitName(objectName);
 
     std::uint32_t current = moduleScope;
@@ -483,7 +483,7 @@ std::uint32_t VpiContext::scopeFor(std::uint32_t moduleScope, std::string_view o
     return current;
 }
 
-vpiHandle VpiContext::intern(const Target& target) {
+vpiHandle PliContext::intern(const Target& target) {
     const auto found = interned.find(target);
     if (found != interned.end()) return reinterpret_cast<vpiHandle>(found->second);
 
@@ -665,7 +665,7 @@ vpiHandle VpiContext::intern(const Target& target) {
     return reinterpret_cast<vpiHandle>(raw);
 }
 
-VpiContext::Object* VpiContext::resolve(vpiHandle handle, std::string_view routine) {
+PliContext::Object* PliContext::resolve(vpiHandle handle, std::string_view routine) {
     const auto found = objects.find(handle);
     if (found != objects.end()) return found->second.get();
 
@@ -674,7 +674,7 @@ VpiContext::Object* VpiContext::resolve(vpiHandle handle, std::string_view routi
     return nullptr;
 }
 
-eir::BitVector VpiContext::readSignal(const Object& object) const {
+eir::BitVector PliContext::readSignal(const Object& object) const {
     const runtime::Signal& signal = image->signals()[object.signal];
     const eir::ConstBitRef whole = kernel->arena().at(signal.wordOffset, signal.bitWidth);
     if (!object.isWindow) return eir::BitVector::from(whole);
@@ -687,16 +687,16 @@ eir::BitVector VpiContext::readSignal(const Object& object) const {
 // Errors
 // ---------------------------------------------------------------------------
 
-void VpiContext::fail(PLI_INT32 level, std::string message) {
+void PliContext::fail(PLI_INT32 level, std::string message) {
     errorLevel = level;
     errorMessage = std::move(message);
 }
 
-void VpiContext::unsupported(std::string_view routine) {
+void PliContext::unsupported(std::string_view routine) {
     fail(vpiError, std::format("{} is not supported by Enzan", routine));
 }
 
-PLI_INT32 VpiContext::checkError(s_vpi_error_info* info) {
+PLI_INT32 PliContext::checkError(s_vpi_error_info* info) {
     if (errorLevel == 0) return 0;
     if (info != nullptr) {
         info->state = vpiRun;
@@ -714,7 +714,7 @@ PLI_INT32 VpiContext::checkError(s_vpi_error_info* info) {
 // Navigation
 // ---------------------------------------------------------------------------
 
-vpiHandle VpiContext::handleByName(const char* name, vpiHandle scope) {
+vpiHandle PliContext::handleByName(const char* name, vpiHandle scope) {
     if (name == nullptr) {
         fail(vpiError, "vpi_handle_by_name: the name is a null pointer");
         return nullptr;
@@ -737,7 +737,7 @@ vpiHandle VpiContext::handleByName(const char* name, vpiHandle scope) {
     return intern(found->second);
 }
 
-vpiHandle VpiContext::handleByIndex(vpiHandle object, PLI_INT32 index) {
+vpiHandle PliContext::handleByIndex(vpiHandle object, PLI_INT32 index) {
     const Object* found = resolve(object, "vpi_handle_by_index");
     if (found == nullptr) return nullptr;
 
@@ -776,7 +776,7 @@ vpiHandle VpiContext::handleByIndex(vpiHandle object, PLI_INT32 index) {
                    .bit = static_cast<std::uint32_t>(index)});
 }
 
-vpiHandle VpiContext::handle(PLI_INT32 type, vpiHandle reference) {
+vpiHandle PliContext::handle(PLI_INT32 type, vpiHandle reference) {
     if (reference == nullptr) return nullptr;
     const Object* object = resolve(reference, "vpi_handle");
     if (object == nullptr) return nullptr;
@@ -852,7 +852,7 @@ vpiHandle VpiContext::handle(PLI_INT32 type, vpiHandle reference) {
     }
 }
 
-vpiHandle VpiContext::iterate(PLI_INT32 type, vpiHandle reference) {
+vpiHandle PliContext::iterate(PLI_INT32 type, vpiHandle reference) {
     std::vector<vpiHandle> items;
 
     const Object* object = nullptr;
@@ -967,7 +967,7 @@ vpiHandle VpiContext::iterate(PLI_INT32 type, vpiHandle reference) {
     return reinterpret_cast<vpiHandle>(raw);
 }
 
-vpiHandle VpiContext::scan(vpiHandle iterator) {
+vpiHandle PliContext::scan(vpiHandle iterator) {
     Object* object = resolve(iterator, "vpi_scan");
     if (object == nullptr) return nullptr;
     if (object->kind != Object::Kind::Iterator) {
@@ -983,14 +983,14 @@ vpiHandle VpiContext::scan(vpiHandle iterator) {
     return nullptr;
 }
 
-PLI_INT32 VpiContext::compareObjects(vpiHandle first, vpiHandle second) {
+PLI_INT32 PliContext::compareObjects(vpiHandle first, vpiHandle second) {
     if (resolve(first, "vpi_compare_objects") == nullptr) return 0;
     if (resolve(second, "vpi_compare_objects") == nullptr) return 0;
     // Design handles are interned, so one object has one handle.
     return first == second ? 1 : 0;
 }
 
-PLI_INT32 VpiContext::freeObject(vpiHandle object) {
+PLI_INT32 PliContext::freeObject(vpiHandle object) {
     const Object* found = resolve(object, "vpi_free_object");
     if (found == nullptr) return 0;
 
@@ -1005,7 +1005,7 @@ PLI_INT32 VpiContext::freeObject(vpiHandle object) {
 // Properties
 // ---------------------------------------------------------------------------
 
-PLI_INT32 VpiContext::get(PLI_INT32 property, vpiHandle object) {
+PLI_INT32 PliContext::get(PLI_INT32 property, vpiHandle object) {
     const PLI_INT32 precision = kernel != nullptr ? kernel->timeScale().precisionExponent()
                                                   : runtime::TimeScale().precisionExponent();
 
@@ -1108,7 +1108,7 @@ PLI_INT32 VpiContext::get(PLI_INT32 property, vpiHandle object) {
     return vpiUndefined;
 }
 
-PLI_BYTE8* VpiContext::getString(PLI_INT32 property, vpiHandle object) {
+PLI_BYTE8* PliContext::getString(PLI_INT32 property, vpiHandle object) {
     const Object* found = resolve(object, "vpi_get_str");
     if (found == nullptr) return nullptr;
 
@@ -1148,7 +1148,7 @@ PLI_BYTE8* VpiContext::getString(PLI_INT32 property, vpiHandle object) {
 // Values and time
 // ---------------------------------------------------------------------------
 
-void VpiContext::getValue(vpiHandle object, s_vpi_value* value) {
+void PliContext::getValue(vpiHandle object, s_vpi_value* value) {
     if (value == nullptr) {
         fail(vpiError, "vpi_get_value: the value is a null pointer");
         return;
@@ -1189,7 +1189,7 @@ void VpiContext::getValue(vpiHandle object, s_vpi_value* value) {
     if (!ok) fail(vpiError, "vpi_get_value: " + error);
 }
 
-vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi_time* time,
+vpiHandle PliContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi_time* time,
                                PLI_INT32 flags) {
     const Object* found = resolve(object, "vpi_put_value");
     if (found == nullptr) return nullptr;
@@ -1288,7 +1288,7 @@ vpiHandle VpiContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
     }
 }
 
-void VpiContext::getTime(vpiHandle object, s_vpi_time* time) {
+void PliContext::getTime(vpiHandle object, s_vpi_time* time) {
     if (time == nullptr) {
         fail(vpiError, "vpi_get_time: the time is a null pointer");
         return;
@@ -1301,7 +1301,7 @@ void VpiContext::getTime(vpiHandle object, s_vpi_time* time) {
 // The simulator
 // ---------------------------------------------------------------------------
 
-PLI_INT32 VpiContext::getVlogInfo(s_vpi_vlog_info* info) {
+PLI_INT32 PliContext::getVlogInfo(s_vpi_vlog_info* info) {
     if (info == nullptr) {
         fail(vpiError, "vpi_get_vlog_info: the information is a null pointer");
         return 0;
@@ -1313,7 +1313,7 @@ PLI_INT32 VpiContext::getVlogInfo(s_vpi_vlog_info* info) {
     return 1;
 }
 
-PLI_INT32 VpiContext::control(PLI_INT32 operation) {
+PLI_INT32 PliContext::control(PLI_INT32 operation) {
     switch (operation) {
     case vpiFinish:
         if (kernel != nullptr)
@@ -1332,16 +1332,16 @@ PLI_INT32 VpiContext::control(PLI_INT32 operation) {
     }
 }
 
-std::ostream& VpiContext::transcriptStream() const {
+std::ostream& PliContext::transcriptStream() const {
     return transcript != nullptr ? *transcript : std::cout;
 }
 
-PLI_INT32 VpiContext::print(std::string_view text) {
+PLI_INT32 PliContext::print(std::string_view text) {
     transcriptStream() << text;
     return static_cast<PLI_INT32>(text.size());
 }
 
-PLI_INT32 VpiContext::flush() {
+PLI_INT32 PliContext::flush() {
     transcriptStream().flush();
     return 0;
 }
@@ -1350,7 +1350,7 @@ PLI_INT32 VpiContext::flush() {
 // Callbacks
 // ---------------------------------------------------------------------------
 
-vpiHandle VpiContext::registerCallback(const s_cb_data* data) {
+vpiHandle PliContext::registerCallback(const s_cb_data* data) {
     if (data == nullptr || data->cb_rtn == nullptr) {
         fail(vpiError, "vpi_register_cb: the callback data or its routine is a null pointer");
         return nullptr;
@@ -1426,7 +1426,7 @@ vpiHandle VpiContext::registerCallback(const s_cb_data* data) {
     return reinterpret_cast<vpiHandle>(raw);
 }
 
-PLI_INT32 VpiContext::removeCallback(vpiHandle handle) {
+PLI_INT32 PliContext::removeCallback(vpiHandle handle) {
     Object* found = resolve(handle, "vpi_remove_cb");
     if (found == nullptr) return 0;
     auto* callback = dynamic_cast<Callback*>(found);
@@ -1440,7 +1440,7 @@ PLI_INT32 VpiContext::removeCallback(vpiHandle handle) {
     return 1;
 }
 
-void VpiContext::getCallbackInfo(vpiHandle handle, s_cb_data* data) {
+void PliContext::getCallbackInfo(vpiHandle handle, s_cb_data* data) {
     if (data == nullptr) {
         fail(vpiError, "vpi_get_cb_info: the callback data is a null pointer");
         return;
@@ -1455,7 +1455,7 @@ void VpiContext::getCallbackInfo(vpiHandle handle, s_cb_data* data) {
     *data = callback->data;
 }
 
-void VpiContext::fire(Callback& callback) {
+void PliContext::fire(Callback& callback) {
     s_cb_data data = callback.data;
 
     s_vpi_time time{};
@@ -1481,7 +1481,7 @@ void VpiContext::fire(Callback& callback) {
     --dispatchDepth;
 }
 
-void VpiContext::retire(Callback& callback) {
+void PliContext::retire(Callback& callback) {
     if (callback.removed) return;
     callback.removed = true;
 
@@ -1495,7 +1495,7 @@ void VpiContext::retire(Callback& callback) {
     sweepNeeded = true;
 }
 
-void VpiContext::runOnce(std::vector<Callback*>& pending) {
+void PliContext::runOnce(std::vector<Callback*>& pending) {
     // Taken as a batch, so that a callback registering another of the same reason gets the
     // next occurrence rather than this one (section 9.3).
     std::vector<Callback*> batch;
@@ -1512,7 +1512,7 @@ void VpiContext::runOnce(std::vector<Callback*>& pending) {
     if (dispatchDepth == 0) sweepNow();
 }
 
-void VpiContext::sweepNow() {
+void PliContext::sweepNow() {
     if (!sweepNeeded) return;
     sweepNeeded = false;
 
@@ -1530,13 +1530,13 @@ void VpiContext::sweepNow() {
     retired.clear();
 }
 
-void VpiContext::startOfSimulation() {
+void PliContext::startOfSimulation() {
     if (started) return;
     started = true;
     runOnce(startCallbacks);
 }
 
-void VpiContext::endOfSimulation() {
+void PliContext::endOfSimulation() {
     if (ended) return;
     ended = true;
     runOnce(endCallbacks);
@@ -1546,7 +1546,7 @@ void VpiContext::endOfSimulation() {
 // runtime::PliHooks
 // ---------------------------------------------------------------------------
 
-void VpiContext::valueChanged(std::uint32_t signalIndex) {
+void PliContext::valueChanged(std::uint32_t signalIndex) {
     if (signalIndex >= valueChangeWatchers.size()) return;
     if (valueChangeWatchers[signalIndex].empty()) return;
 
@@ -1571,7 +1571,7 @@ void VpiContext::valueChanged(std::uint32_t signalIndex) {
     if (dispatchDepth == 0) sweepNow();
 }
 
-runtime::SimTime VpiContext::nextTimedEvent() const {
+runtime::SimTime PliContext::nextTimedEvent() const {
     runtime::SimTime next = runtime::NoTime;
     if (!delayedWrites.empty()) next = delayedWrites.begin()->first;
     for (const auto& [time, callback] : timedCallbacks) {
@@ -1582,7 +1582,7 @@ runtime::SimTime VpiContext::nextTimedEvent() const {
     return next;
 }
 
-void VpiContext::timeAdvanced(runtime::SimTime /*time*/) {
+void PliContext::timeAdvanced(runtime::SimTime /*time*/) {
     // What was registered during the last slot's read-only phase has waited for this.
     readWrite.insert(readWrite.end(), deferredReadWrite.begin(), deferredReadWrite.end());
     deferredReadWrite.clear();
@@ -1592,7 +1592,7 @@ void VpiContext::timeAdvanced(runtime::SimTime /*time*/) {
     runOnce(nextSimTime);
 }
 
-void VpiContext::runTimedEvents(runtime::SimTime time) {
+void PliContext::runTimedEvents(runtime::SimTime time) {
     ++dispatchDepth;
 
     // Delayed writes first, so that a callback at the same time sees them (section 9.4).
@@ -1616,13 +1616,13 @@ void VpiContext::runTimedEvents(runtime::SimTime time) {
     if (dispatchDepth == 0) sweepNow();
 }
 
-void VpiContext::runReadWrite() {
+void PliContext::runReadWrite() {
     phase = Phase::ReadWrite;
     runOnce(readWrite);
     phase = Phase::None;
 }
 
-void VpiContext::runReadOnly() {
+void PliContext::runReadOnly() {
     phase = Phase::ReadOnly;
     runOnce(readOnly);
     phase = Phase::None;

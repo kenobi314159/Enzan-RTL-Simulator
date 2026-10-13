@@ -11,7 +11,7 @@
 #include "eir/Verifier.h"
 #include "elab/ElaboratedDesign.h"
 #include "elab/Elaborator.h"
-#include "pli/VpiContext.h"
+#include "pli/PliContext.h"
 #include "runtime/Image.h"
 #include "wavedb/FstWriter.h"
 #include "wavedb/VcdWriter.h"
@@ -570,7 +570,7 @@ bool Session::elaborate(std::string_view topModule) {
 bool Session::loadVpiApplication(std::string_view specification,
                                  std::span<const std::string> commandLine) {
     if (vpi == nullptr) {
-        vpi = std::make_unique<pli::VpiContext>(
+        vpi = std::make_unique<pli::PliContext>(
             diagnostics, std::vector<std::string>(commandLine.begin(), commandLine.end()));
         vpi->setTranscript(transcript);
     }

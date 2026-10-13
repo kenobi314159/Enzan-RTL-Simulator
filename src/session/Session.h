@@ -40,7 +40,7 @@ struct DesignOptions;
 }
 
 namespace enzan::pli {
-class VpiContext;
+class PliContext;
 }
 
 namespace enzan::runtime {
@@ -471,7 +471,7 @@ private:
     ///
     /// Declared after the kernel so that it is destroyed first: it holds the kernel's hooks
     /// and must let go of them before the kernel goes.
-    std::unique_ptr<pli::VpiContext> vpi;
+    std::unique_ptr<pli::PliContext> vpi;
 
     /// Open waveform files. Owned here so that `quit` and the destructor both finish them.
     std::vector<std::unique_ptr<wavedb::WaveformWriter>> writers;

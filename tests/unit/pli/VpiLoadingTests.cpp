@@ -4,7 +4,7 @@
 // this test. The test executable exports the `vpi_*` routines the same way `enzan` does, so
 // these also check that a library can resolve against a host that exports only those.
 
-#include "pli/VpiContext.h"
+#include "pli/PliContext.h"
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
@@ -20,7 +20,7 @@
 namespace {
 
 using enzan::DiagCode;
-using enzan::pli::VpiContext;
+using enzan::pli::PliContext;
 
 class VpiLoading : public ::testing::Test {
 protected:
@@ -37,7 +37,7 @@ protected:
     enzan::DiagnosticEngine engine;
     enzan::test::CollectingConsumer consumer;
     std::ostringstream transcript;
-    VpiContext context;
+    PliContext context;
 };
 
 TEST_F(VpiLoading, TheStartupRoutinesRunInOrder) {

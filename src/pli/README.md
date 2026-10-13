@@ -5,7 +5,7 @@ What a VPI application loaded with `--vpi` sees of a simulation, and how it driv
 
 ## Responsibility
 
-- **Loading** (`VpiContext::load`) — opening a library and running its startup routines.
+- **Loading** (`PliContext::load`) — opening a library and running its startup routines.
 - **The object model** — modules, generate blocks, nets, variables and parameters of the
   elaborated design, named and typed as section 9.2 says.
 - **Values** (`VpiValue.h`) — converting between Enzan's two-plane vectors and the formats of

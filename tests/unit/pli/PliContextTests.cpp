@@ -4,7 +4,7 @@
 // and run by a real kernel. The test is the application here, calling the routines exactly as
 // a loaded library would; DESIGN_GUIDE.md section 9 is what is being pinned.
 
-#include "pli/VpiContext.h"
+#include "pli/PliContext.h"
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
@@ -37,7 +37,7 @@ using enzan::eir::Opcode;
 using enzan::eir::Operand;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
-using enzan::pli::VpiContext;
+using enzan::pli::PliContext;
 using enzan::runtime::RunStatus;
 using enzan::test::literal;
 using enzan::test::ProcessBuilder;
@@ -183,7 +183,7 @@ protected:
     Simulation simulation;
     enzan::SourceManager sources;
     enzan::DiagnosticEngine engine;
-    VpiContext context;
+    PliContext context;
 };
 
 // ---------------------------------------------------------------------------
@@ -885,7 +885,7 @@ TEST_F(Vpi, DetachingMakesEveryDesignHandleStale) {
 
 TEST(VpiWithoutAContext, EveryRoutineFailsQuietly) {
     // What an application's own clean-up meets when it runs after the session has gone.
-    EXPECT_EQ(VpiContext::current(), nullptr);
+    EXPECT_EQ(PliContext::current(), nullptr);
     EXPECT_EQ(vpi_handle_by_name(const_cast<PLI_BYTE8*>("tb"), nullptr), nullptr);
     EXPECT_EQ(vpi_get(vpiType, nullptr), vpiUndefined);
     EXPECT_EQ(vpi_chk_error(nullptr), 0);

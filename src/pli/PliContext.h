@@ -28,7 +28,10 @@ class Image;
 
 namespace enzan::pli {
 
-/// The Verilog Procedural Interface of one `enzan` process (DESIGN_GUIDE.md section 9).
+/// The procedural interfaces of one `enzan` process: the Verilog Procedural Interface
+/// (DESIGN_GUIDE.md section 9), and the VHDL one beside it (section 9.7), which share one model
+/// of the design and one set of callbacks, so that an application using both, as cocotb does
+/// with a design of both languages, sees one simulation.
 ///
 /// Holds everything an application can reach: the libraries it was loaded from, the handles
 /// it has been given, the callbacks it has registered and the last error. The `vpi_*` routines
@@ -41,20 +44,20 @@ namespace enzan::pli {
 ///
 /// Loading comes first and needs no design; `attach` binds one when elaboration has produced
 /// it, and from then until `detach` the application can see and drive it.
-class VpiContext final : public runtime::PliHooks {
+class PliContext final : public runtime::PliHooks {
 public:
     /// `diagnostics` must outlive the context. `commandLine` is what `vpi_get_vlog_info`
     /// reports: the whole command line, so that an application finds its plusargs there.
-    VpiContext(DiagnosticEngine& engine, std::vector<std::string> commandLine);
+    PliContext(DiagnosticEngine& engine, std::vector<std::string> commandLine);
 
-    VpiContext(const VpiContext&) = delete;
-    VpiContext& operator=(const VpiContext&) = delete;
-    VpiContext(VpiContext&&) = delete;
-    VpiContext& operator=(VpiContext&&) = delete;
-    ~VpiContext() override;
+    PliContext(const PliContext&) = delete;
+    PliContext& operator=(const PliContext&) = delete;
+    PliContext(PliContext&&) = delete;
+    PliContext& operator=(PliContext&&) = delete;
+    ~PliContext() override;
 
     /// The context the `vpi_*` routines act on, or null when none exists.
-    static VpiContext* current() noexcept;
+    static PliContext* current() noexcept;
 
     /// Loads `library[:entry]` and runs its startup routines (section 9.1).
     ///
