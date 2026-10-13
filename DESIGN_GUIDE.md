@@ -2676,6 +2676,13 @@ case is skipped, as sv-tests skips a case of a kind a tool does not run, and is 
 count. A case that expects the tool to fail passes whenever Enzan fails, an unsupported construct
 included; those passes count, being sv-tests' definition, and are reported as a second number.
 
+`tests/conformance/vests/run-suite.sh` runs VESTs from GHDL's test suite, fetched at the
+revision its `revision.txt` names: every compliant VHDL-93 case the suite's own `.exp` files
+run, by their rules as GHDL's `testsuite.sh` reads them — the units an `.exp` builds before a
+case analysed with it, the top its `ENTITY=` names or else the last entity named as a top, its
+`STOP=` time, `--assert-level error`. A case passes when Enzan runs it to its end and it reports
+no `FAILED TEST`.
+
 The ratchet is a list for each suite, as 14.6 describes, and one script,
 `tests/conformance/ratchet.sh`, holds every suite to its list.
 

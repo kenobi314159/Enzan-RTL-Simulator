@@ -1,0 +1,4 @@
+# The GHDL revision whose test suite the VESTs conformance suite is run from (DESIGN_GUIDE.md
+# section 14.4): v4.1.0, the GHDL the VHDL golden cases are compared against. The one place it
+# is named.
+7188e92cf3cc60f5d97cfe83bc2c85f0250373ab

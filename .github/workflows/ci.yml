@@ -107,6 +107,19 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
+      # The VESTs conformance suite (section 14.4), held to its pass list as sv-tests is. Seconds
+      # against this build, so on every branch.
+      - name: VESTs conformance suite
+        if: matrix.preset == 'gcc-release'
+        run: |
+          status=0
+          tests/conformance/vests/run-suite.sh build/gcc-release/bin/enzan build/vests \
+            > build/vests.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/vests.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/vests.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
       # M6's exit design (section 14.5): NEORV32 through its own testbench's on-chip debugger
       # sequence, held to GHDL's reports and to its CPU trace and UART logs. A few minutes, so
       # on the main branch only, and with the one build that is optimised for GCC.
