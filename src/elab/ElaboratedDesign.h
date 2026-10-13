@@ -64,6 +64,9 @@ struct Slot {
     /// display is told the names once however many signals share them.
     std::uint32_t enumIndex = NoEnum;
 
+    /// What the bits mean outside the simulation (DESIGN_GUIDE.md section 3.6).
+    eir::Encoding encoding = eir::Encoding::Bits;
+
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
 };
 

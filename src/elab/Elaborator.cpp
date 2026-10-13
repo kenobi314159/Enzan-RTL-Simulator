@@ -183,6 +183,7 @@ private:
         slot.wordOffset = result->arenaSize;
         slot.path = instance.path + '/' + object.name;
         slot.enumIndex = internEnum(definition, object.enumIndex);
+        slot.encoding = object.encoding;
         result->arenaSize += object.type.storageWords();
 
         result->slotList.push_back(std::move(slot));

@@ -2,10 +2,43 @@
 
 #include "eir/Module.h"
 
+#include "eir/BitOps.h"
+
 #include <algorithm>
+#include <iterator>
 #include <utility>
 
 namespace enzan::eir {
+
+std::uint32_t presentedWidth(Encoding encoding, std::uint32_t width) noexcept {
+    return encoding == Encoding::Bits ? width : width / 8;
+}
+
+void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept {
+    if (encoding == Encoding::Bits) {
+        bitops::copy(shown, stored);
+        return;
+    }
+    // The positions of std_ulogic's literals: U X 0 1 Z W L H -.
+    static constexpr Logic Logic9[] = {Logic::Unknown, Logic::Unknown, Logic::Zero,
+                                       Logic::One,     Logic::HighZ,   Logic::Unknown,
+                                       Logic::Zero,    Logic::One,     Logic::Unknown};
+    for (std::uint32_t element = 0; element < shown.width(); ++element) {
+        std::uint32_t code = 0;
+        bool known = true;
+        for (std::uint32_t bit = 0; bit < 8; ++bit) {
+            const Logic value = stored.get((element * 8) + bit);
+            if (value == Logic::One) code |= 1U << bit;
+            known = known && (value == Logic::Zero || value == Logic::One);
+        }
+        Logic shownBit = Logic::Unknown;
+        if (known && encoding == Encoding::VhdlLogic && code < std::size(Logic9))
+            shownBit = Logic9[code];
+        if (known && encoding == Encoding::VhdlBit && code < 2)
+            shownBit = code == 0 ? Logic::Zero : Logic::One;
+        shown.set(element, shownBit);
+    }
+}
 
 std::string_view toString(ObjectKind kind) noexcept {
     switch (kind) {

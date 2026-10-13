@@ -395,7 +395,10 @@ than one until two-state values are packed into one plane, an optimisation
 `Type::storageWords` already anticipates.
 
 Conversion to the four-state form happens at language boundaries, in the
-waveform database and in the PLI, with `L`→`0`, `H`→`1`, `W`/`U`/`-`→`X`.
+waveform database and in the PLI, with `L`→`0`, `H`→`1`, `W`/`U`/`-`→`X`. An EIR
+object carries what its bits mean as its encoding, `std_ulogic` codes, `bit` or `boolean`
+codes, or the value itself, so that what converts needs nothing of VHDL but that: a
+`std_logic_vector(7 downto 0)` shows in a waveform as eight four-state bits.
 
 A new kind of storage for VHDL was rejected because each of the mechanisms above
 would have needed a second path kept in step with the first, which is the

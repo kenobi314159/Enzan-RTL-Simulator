@@ -30,6 +30,7 @@ void Image::buildSignals() {
         signalList.push_back(Signal{.wordOffset = slot.wordOffset,
                                     .bitWidth = slot.type.bitWidth(),
                                     .path = slot.path,
+                                    .encoding = slot.encoding,
                                     .subscribers = {}});
     }
 }

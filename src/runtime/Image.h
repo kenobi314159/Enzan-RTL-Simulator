@@ -23,6 +23,9 @@ struct Signal {
     /// Hierarchical path, for diagnostics, the waveform database and `examine`.
     std::string path;
 
+    /// What the bits mean to what shows them: VHDL's codes, or the value itself.
+    eir::Encoding encoding = eir::Encoding::Bits;
+
     /// Processes whose static sensitivity includes this signal, with the edge each one
     /// wants.
     ///

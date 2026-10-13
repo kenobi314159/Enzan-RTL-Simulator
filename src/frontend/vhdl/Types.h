@@ -78,6 +78,11 @@ struct Layout {
 /// The storage of a scalar `type`, which needs no folding; nothing for anything else.
 [[nodiscard]] std::optional<eir::Type> scalarStorage(type_t type);
 
+/// What an object of `type` shows as outside the simulation: `std_ulogic`'s codes, and arrays of
+/// them, as four-state bits; `bit`'s and `boolean`'s as two-state ones; anything else as its own
+/// bits (DESIGN_GUIDE.md section 3.6).
+[[nodiscard]] eir::Encoding encodingOf(type_t type);
+
 /// True when `type` is an integer or physical type, whose values compare and compute signed.
 [[nodiscard]] bool isSignedScalar(type_t type);
 

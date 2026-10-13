@@ -635,6 +635,7 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     object.location = locate(declaration);
     object.initialValue = std::move(initial);
     object.enumIndex = layout->isArray() ? eir::Object::NoEnum : enumFor(type);
+    object.encoding = encodingOf(type);
     objects.emplace(declaration, result.addObject(std::move(object)));
     return true;
 }
@@ -810,6 +811,7 @@ void ArchitectureTranslator::instance(tree_t statement) {
             tied.location = locate(actual);
             tied.initialValue = std::move(value);
             tied.enumIndex = layout->isArray() ? eir::Object::NoEnum : enumFor(tree_type(port));
+            tied.encoding = encodingOf(tree_type(port));
             objectIndex = result.addObject(std::move(tied));
         }
 

@@ -278,6 +278,17 @@ std::optional<Layout> layoutOf(type_t type, const Folder& folder) {
     return Layout{.storage = *storage};
 }
 
+eir::Encoding encodingOf(type_t type) {
+    while (type != nullptr && type_is_array(type)) type = type_elem(type);
+    if (type == nullptr) return eir::Encoding::Bits;
+    type_t base = type_base_recur(type);
+    if (!type_has_ident(base)) return eir::Encoding::Bits;
+    const std::string_view name = istr(type_ident(base));
+    if (name == "IEEE.STD_LOGIC_1164.STD_ULOGIC") return eir::Encoding::VhdlLogic;
+    if (name == "STD.STANDARD.BIT" || name == "STD.STANDARD.BOOLEAN") return eir::Encoding::VhdlBit;
+    return eir::Encoding::Bits;
+}
+
 bool isSignedScalar(type_t type) {
     if (type == nullptr) return false;
     const type_kind_t kind = type_kind(type_base_recur(type));

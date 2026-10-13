@@ -103,14 +103,18 @@ protected:
     /// Position of `signalIndex` among the recorded signals, or `NotRecorded`.
     [[nodiscard]] std::uint32_t recordIndexOf(std::uint32_t signalIndex) const noexcept;
 
-    /// Reads a signal's current value out of the state arena.
+    /// Reads a signal's current value out of the state arena, as it is shown: a VHDL signal's
+    /// codes converted to the bits they stand for (DESIGN_GUIDE.md section 3.6), and anything else
+    /// as it is.
     ///
     /// Read at flush time rather than copied when the change was reported, which is what section
-    /// 7.2 describes and what makes coalescing free.
-    [[nodiscard]] eir::ConstBitRef valueOf(std::uint32_t signalIndex) const noexcept;
+    /// 7.2 describes and what makes coalescing free. A converted value lives until the next call.
+    [[nodiscard]] eir::ConstBitRef valueOf(std::uint32_t signalIndex) const;
 
+    /// A signal's width as it is shown, which for VHDL's codes is one bit for each.
     [[nodiscard]] std::uint32_t widthOf(std::uint32_t signalIndex) const noexcept {
-        return designImage->signals()[signalIndex].bitWidth;
+        const runtime::Signal& signal = designImage->signals()[signalIndex];
+        return eir::presentedWidth(signal.encoding, signal.bitWidth);
     }
 
     static constexpr std::uint32_t NotRecorded = 0xFFFF'FFFFU;
@@ -164,6 +168,9 @@ private:
 
     const runtime::Image* designImage;
     const runtime::Arena* stateArena;
+
+    /// Where `valueOf` converts a VHDL signal's codes.
+    mutable eir::BitVector shown{1};
     runtime::TimeScale scale;
 
     /// What to record, or empty to record everything. Ordered, not a set: the declaration

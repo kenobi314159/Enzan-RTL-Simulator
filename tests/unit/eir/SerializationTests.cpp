@@ -31,6 +31,7 @@ using enzan::eir::BasicBlock;
 using enzan::eir::BitVector;
 using enzan::eir::CallSite;
 using enzan::eir::EdgeKind;
+using enzan::eir::Encoding;
 using enzan::eir::EnumDefinition;
 using enzan::eir::EnumMember;
 using enzan::eir::Instance;
@@ -113,6 +114,7 @@ ModuleDefinition richModule(BufferId buffer) {
                                 .location = SourceLocation(buffer, 17),
                                 .initialValue = literal("8'hA5"),
                                 .isAlias = true,
+                                .encoding = Encoding::VhdlLogic,
                                 .enumIndex = 0});
 
     definition.ports.push_back(Port{.name = "clk",
@@ -264,6 +266,8 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     EXPECT_TRUE(definition.objects[1].type.isFourState());
     EXPECT_TRUE(definition.objects[1].isAlias);
     EXPECT_EQ(definition.objects[1].enumIndex, 0U);
+    EXPECT_EQ(definition.objects[1].encoding, Encoding::VhdlLogic);
+    EXPECT_EQ(definition.objects[0].encoding, Encoding::Bits);
     ASSERT_TRUE(definition.objects[1].initialValue.has_value());
     // Read through `value_or` rather than dereferenced: the assertion above already returns
     // from the test on an empty optional, but clang-tidy follows an `if` and not a GoogleTest

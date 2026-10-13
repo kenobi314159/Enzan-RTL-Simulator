@@ -25,6 +25,30 @@ enum class ObjectKind : std::uint8_t { Net, Variable };
 
 std::string_view toString(ObjectKind kind) noexcept;
 
+/// What an object's bits mean outside the simulation: in a waveform, to a display, across a
+/// language boundary (DESIGN_GUIDE.md section 3.6).
+///
+/// The kernel never looks: a VHDL value is a code, and every operation on it is an operation on
+/// bits. Only what shows a value to someone converts it, each element of one byte to the bit it
+/// stands for.
+enum class Encoding : std::uint8_t {
+    /// The bits are the value, as every SystemVerilog object's are.
+    Bits,
+
+    /// `std_ulogic` codes, a byte each, in the order of its literals: U X 0 1 Z W L H -. Each is
+    /// one four-state bit, L and H their strengths' values, and U, W and - unknown.
+    VhdlLogic,
+
+    /// `bit` or `boolean` codes, a byte each: 0 or 1.
+    VhdlBit,
+};
+
+/// How many bits an object of `width` bits stored as `encoding` shows as.
+[[nodiscard]] std::uint32_t presentedWidth(Encoding encoding, std::uint32_t width) noexcept;
+
+/// Writes into `shown`, `presentedWidth` bits wide, the value `stored` shows as.
+void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept;
+
 /// Which kind of net a net is, which decides how a bit with several drivers resolves and what
 /// a bit with none holds (DESIGN_GUIDE.md section 3.7).
 ///
@@ -134,6 +158,9 @@ struct Object {
     /// what a collapsed port connection produces. Elaboration sets this; frontends
     /// never do.
     bool isAlias = false;
+
+    /// What the bits mean outside the simulation: VHDL's codes, or the value itself.
+    Encoding encoding = Encoding::Bits;
 
     /// The enumeration this object's type is, as an index into its definition's table, or
     /// `NoEnum`. It changes nothing about how the object behaves; it is what lets a display
