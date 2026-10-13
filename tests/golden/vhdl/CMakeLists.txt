@@ -66,3 +66,6 @@ enzan_add_vhdl_golden_test(ieee_counter)
 # A FIFO on std_logic and numeric_std: with the counter, the designs of DESIGN_GUIDE.md section 18's
 # checkpoint 6b.
 enzan_add_vhdl_golden_test(fifo)
+
+# Records: as signals, variables and ports, with fields assigned and aggregates of every kind.
+enzan_add_vhdl_golden_test(records)

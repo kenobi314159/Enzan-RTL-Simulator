@@ -925,7 +925,8 @@ What a VHDL unit becomes in EIR:
   for each element of a waveform after the first: the transactions of 3.4. One to an
   element or a slice is `DrivePart`, at the offset of its bits.
 - An array is its elements end to end, the left element highest (3.6), with bounds the
-  adapter has folded. An element or a slice of a variable is spliced into its register;
+  adapter has folded; a record is its fields end to end, the first highest. A field is
+  at an offset its type fixes, so a field of a signal is a part of it like a slice. An element or a slice of a variable is spliced into its register;
   an index known only at run time is checked against the bounds, and one outside them
   ends the run with a failure, as VHDL's index check does.
 - A function is a callable subprogram (4.1), translated once for each shape it is called

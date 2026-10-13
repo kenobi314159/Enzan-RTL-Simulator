@@ -36,7 +36,8 @@ namespace enzan::frontend::vhdl {
 /// An array is its elements end to end, the left element in the highest bits, as a packed array
 /// is (section 4.3): `std_logic_vector(7 downto 0)` is 64 bits, element 7 in bits 56 to 63, and
 /// `bit_vector(0 to 3)` is 32, element 0 in the top byte. Its bounds are static, since the adapter
-/// folds what they depend on (section 5.2).
+/// folds what they depend on (section 5.2). A record is its fields end to end in the order they
+/// are declared, the first in the highest bits, as a packed struct is.
 struct Layout {
     eir::Type storage;
 
@@ -51,7 +52,18 @@ struct Layout {
     /// then a row, an array over these of `elementType`, `elementBits` wide.
     std::vector<Folder::Range> inner;
 
+    /// For a record, its type, and each field's layout and the offset of its bits, in the order
+    /// the fields are declared.
+    type_t recordType = nullptr;
+    std::vector<Layout> fields;
+    std::vector<std::uint32_t> fieldOffsets;
+
     [[nodiscard]] bool isArray() const noexcept { return array; }
+
+    [[nodiscard]] bool isRecord() const noexcept { return recordType != nullptr; }
+
+    /// True for an array or a record, whose value is laid out from parts.
+    [[nodiscard]] bool isComposite() const noexcept { return isArray() || isRecord(); }
 
     /// The offset of the bits of the element at `position` of the index range, which must lie
     /// inside it.
@@ -61,8 +73,8 @@ struct Layout {
     }
 };
 
-/// How `type` is laid out, or nothing when it is a type the adapter cannot hold yet: a real, a
-/// record, an access or a file type, or an array whose bounds are not static or hold nothing.
+/// How `type` is laid out, or nothing when it is a type the adapter cannot hold yet: a real, an
+/// access or a file type, or an array whose bounds are not static or hold nothing.
 [[nodiscard]] std::optional<Layout> layoutOf(type_t type, const Folder& folder);
 
 /// The layout of an array with `index` as its bounds and elements of `elementType`, and with the

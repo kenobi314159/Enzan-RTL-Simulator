@@ -47,8 +47,8 @@ parent. A design's work library is NVC's in-memory one, written nowhere.
 
 So far: entities, architectures, entity instances, generics of scalar and array types, null
 strings among them; signals and ports of
-enumeration, integer and physical types and of arrays of them, of one or more dimensions, with
-static bounds; processes with variables, `if`, `case`, loops, `exit`, `next`, `wait` (but not one
+enumeration, integer and physical types, of arrays of them, of one or more dimensions, with
+static bounds, and of records; processes with variables, `if`, `case`, loops, `exit`, `next`, `wait` (but not one
 with both a timeout and a sensitivity or condition), signal assignments with inertial and
 transport delay (to an element or a slice with no delay), `assert`, `report` with messages built
 from literals and `'image`, `std.env.finish` and `stop`; aggregates, strings, elements and

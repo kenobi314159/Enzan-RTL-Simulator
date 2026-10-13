@@ -276,6 +276,26 @@ std::optional<Layout> elementLayout(const Layout& layout, const Folder& folder) 
 
 std::optional<Layout> layoutOf(type_t type, const Folder& folder) {
     if (type == nullptr) return std::nullopt;
+    if (type_is_record(type)) {
+        type_t base = type_base_recur(type);
+        Layout layout{.storage = {}, .recordType = base};
+        std::uint64_t total = 0;
+        for (unsigned index = 0; index < type_fields(base); ++index) {
+            std::optional<Layout> field = layoutOf(tree_type(type_field(base, index)), folder);
+            if (!field) return std::nullopt;
+            total += field->storage.bitWidth();
+            layout.fields.push_back(std::move(*field));
+        }
+        if (total == 0 || total > std::numeric_limits<std::uint32_t>::max()) return std::nullopt;
+        // The first field takes the highest bits, so each sits above every field after it.
+        std::uint64_t below = total;
+        for (const Layout& field : layout.fields) {
+            below -= field.storage.bitWidth();
+            layout.fieldOffsets.push_back(static_cast<std::uint32_t>(below));
+        }
+        layout.storage = eir::Type::bits(static_cast<std::uint32_t>(total), false, false);
+        return layout;
+    }
     if (type_is_array(type)) {
         const unsigned dimensions = dimension_of(type);
         std::vector<Folder::Range> ranges;
@@ -338,8 +358,69 @@ eir::BitVector encode(std::int64_t value, eir::Type type) {
                : eir::BitVector::fromUInt64(static_cast<std::uint64_t>(value), type.bitWidth());
 }
 
+namespace {
+
+/// The bits of a static record value laid out as `layout`: an aggregate of its fields, by position
+/// or by name, or a constant or a generic holding one.
+std::optional<eir::BitVector> recordBits(tree_t expression, const Layout& layout,
+                                         const Folder& folder) {
+    switch (tree_kind(expression)) {
+    case T_QUALIFIED:
+    case T_TYPE_CONV: return recordBits(tree_value(expression), layout, folder);
+    case T_REF: {
+        if (!tree_has_ref(expression)) return std::nullopt;
+        tree_t declaration = tree_ref(expression);
+        if ((tree_kind(declaration) == T_CONST_DECL || tree_kind(declaration) == T_ALIAS)
+            && tree_has_value(declaration))
+            return recordBits(tree_value(declaration), layout, folder);
+        if (const eir::BitVector* bits = folder.compositeOf(declaration)) return *bits;
+        return std::nullopt;
+    }
+    case T_AGGREGATE: break;
+    default: return std::nullopt;
+    }
+
+    const std::size_t count = layout.fields.size();
+    std::vector<std::optional<eir::BitVector>> values(count);
+    tree_t others = nullptr;
+    std::size_t next = 0;
+    for (unsigned index = 0; index < tree_assocs(expression); ++index) {
+        tree_t association = tree_assoc(expression, index);
+        std::optional<std::size_t> field;
+        switch (tree_subkind(association)) {
+        case A_POS: field = next++; break;
+        case A_NAMED: {
+            tree_t name = tree_name(association);
+            if (tree_kind(name) != T_REF || !tree_has_ref(name)
+                || tree_kind(tree_ref(name)) != T_FIELD_DECL)
+                return std::nullopt;
+            field = tree_pos(tree_ref(name));
+            break;
+        }
+        case A_OTHERS: others = tree_value(association); break;
+        default: return std::nullopt;
+        }
+        if (!field) continue;
+        if (*field >= count) return std::nullopt;
+        values[*field] = constantBits(tree_value(association), layout.fields[*field], folder);
+        if (!values[*field]) return std::nullopt;
+    }
+
+    eir::BitVector bits = eir::BitVector::filled(layout.storage.bitWidth(), eir::Logic::Zero);
+    for (std::size_t field = 0; field < count; ++field) {
+        std::optional<eir::BitVector> value = values[field];
+        if (!value && others != nullptr) value = constantBits(others, layout.fields[field], folder);
+        if (!value) return std::nullopt;
+        eir::bitops::assignPartAt(bits.mutableRef(), value->ref(), layout.fieldOffsets[field]);
+    }
+    return bits;
+}
+
+} // namespace
+
 std::optional<eir::BitVector> constantBits(tree_t expression, const Layout& layout,
                                            const Folder& folder) {
+    if (layout.isRecord()) return recordBits(expression, layout, folder);
     if (!layout.isArray()) {
         const std::optional<std::int64_t> value = folder.integer(expression);
         if (!value) return std::nullopt;
@@ -356,6 +437,18 @@ std::optional<eir::BitVector> constantBits(tree_t expression, const Layout& layo
 }
 
 std::optional<eir::BitVector> defaultBits(type_t type, const Layout& layout, const Folder& folder) {
+    if (layout.isRecord()) {
+        eir::BitVector bits = eir::BitVector::filled(layout.storage.bitWidth(), eir::Logic::Zero);
+        for (std::size_t field = 0; field < layout.fields.size(); ++field) {
+            type_t fieldType =
+                tree_type(type_field(layout.recordType, static_cast<unsigned>(field)));
+            const std::optional<eir::BitVector> value =
+                defaultBits(fieldType, layout.fields[field], folder);
+            if (!value) return std::nullopt;
+            eir::bitops::assignPartAt(bits.mutableRef(), value->ref(), layout.fieldOffsets[field]);
+        }
+        return bits;
+    }
     if (!layout.isArray()) {
         const std::optional<std::int64_t> left = folder.left(type);
         if (!left) return std::nullopt;

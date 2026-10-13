@@ -350,7 +350,7 @@ bool BodyTranslator::declare(tree_t declaration) {
                 return fail(declaration, std::string("the initial value of a ") + type_pp(type));
             initial = constantArray(*bits, *layout, type);
         }
-        if (initial->type.bitWidth() != storage.bitWidth() && layout->isArray())
+        if (initial->type.bitWidth() != storage.bitWidth() && layout->isComposite())
             return fail(declaration, "an initial value of another length than the variable");
 
         Value variable{.reg = newRegister(storage), .type = storage, .vhdlType = type};
@@ -494,7 +494,7 @@ bool BodyTranslator::signalAssignment(tree_t statement) {
 
         const std::optional<Value> value = expression(tree_value(waveform), &target->layout);
         if (!value) return false;
-        if (target->layout.isArray() && value->type.bitWidth() != width)
+        if (target->layout.isComposite() && value->type.bitWidth() != width)
             return fail(waveform, "a value of another length than the signal it is assigned to");
         const Value stored = resize(*value, width);
 
@@ -523,7 +523,7 @@ bool BodyTranslator::variableAssignment(tree_t statement) {
     const std::optional<Value> value = expression(tree_value(statement), &target->layout);
     if (!value) return false;
     const std::uint32_t width = target->layout.storage.bitWidth();
-    if (target->layout.isArray() && value->type.bitWidth() != width)
+    if (target->layout.isComposite() && value->type.bitWidth() != width)
         return fail(name, "a value of another length than the variable it is assigned to");
     const Value stored = resize(*value, width);
 
@@ -1037,7 +1037,8 @@ bool BodyTranslator::returnStatement(tree_t statement) {
             expression(tree_value(statement), resultLayout ? &*resultLayout : nullptr);
         if (!value) return false;
         if (!resultLayout) {
-            resultLayout = value->layout.isArray() ? value->layout : Layout{.storage = value->type};
+            resultLayout =
+                value->layout.isComposite() ? value->layout : Layout{.storage = value->type};
             subprogram.resultRegister = newRegister(value->type);
             subprogram.resultType = value->type;
         }
@@ -1150,7 +1151,8 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
                        .location = owner.locate(call)};
     for (std::size_t index = 0; index < values.size(); ++index) {
         const Layout& parameter = callee.parameters.at(index);
-        if (parameter.isArray() && values[index].type.bitWidth() != parameter.storage.bitWidth()) {
+        if (parameter.isComposite()
+            && values[index].type.bitWidth() != parameter.storage.bitWidth()) {
             fail((*actuals)[index], "an actual of another length than its parameter");
             return std::nullopt;
         }
@@ -1337,9 +1339,9 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
     // An array takes its bounds from its own subtype when that has them, and from where it goes
     // when it does not: `(others => '0')` has no bounds of its own.
     std::optional<Layout> layout;
-    if (type != nullptr && type_is_array(type)) {
+    if (type != nullptr && (type_is_array(type) || type_is_record(type))) {
         layout = layoutFor(type);
-        if (!layout && context != nullptr && context->isArray()) layout = *context;
+        if (!layout && context != nullptr && context->isComposite()) layout = *context;
         if (layout) {
             if (const std::optional<eir::BitVector> bits =
                     constantBits(expression, *layout, folder()))
@@ -1353,6 +1355,18 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
     case T_QUALIFIED: return this->expression(tree_value(expression), layout ? &*layout : context);
     case T_TYPE_CONV: return conversion(expression);
     case T_ATTR_REF: return attribute(expression);
+
+    case T_RECORD_REF: {
+        // A field of a signal or a variable is read without reading the rest of it.
+        if (designatesStorage(expression)) {
+            const std::optional<Place> part = place(expression);
+            if (!part) return std::nullopt;
+            return read(*part, type);
+        }
+        const std::optional<Value> whole = this->expression(tree_value(expression));
+        if (!whole) return std::nullopt;
+        return field(*whole, expression, type);
+    }
 
     case T_ARRAY_REF:
     case T_ARRAY_SLICE: {
@@ -1379,6 +1393,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
     }
 
     case T_AGGREGATE: {
+        if (layout && layout->isRecord()) return recordAggregate(expression, *layout);
         bool positional = true;
         for (unsigned index = 0; index < tree_assocs(expression); ++index) {
             const unsigned kind = tree_subkind(tree_assoc(expression, index));
@@ -1688,6 +1703,17 @@ std::optional<BodyTranslator::Value> BodyTranslator::predefined(tree_t expressio
     case S_ARRAY_NOR:
     case S_ARRAY_XNOR:
     case S_ARRAY_NOT: return arrayOperator(expression, kind);
+
+    // Records are equal when every field is, and a field's bits are its value.
+    case S_RECORD_EQ:
+    case S_RECORD_NEQ: {
+        const std::optional<Value> left = this->expression(tree_value(tree_param(expression, 0)));
+        const std::optional<Value> right = this->expression(tree_value(tree_param(expression, 1)));
+        if (!left || !right) return std::nullopt;
+        return booleanOf(compare(kind == S_RECORD_EQ ? eir::Opcode::Equal : eir::Opcode::NotEqual,
+                                 *left, *right),
+                         resultType);
+    }
     default: break;
     }
 
@@ -1857,7 +1883,8 @@ std::optional<BodyTranslator::Value> BodyTranslator::predefined(tree_t expressio
 // --- names and arrays -----------------------------------------------------------
 
 bool BodyTranslator::designatesStorage(tree_t name) const {
-    while (tree_kind(name) == T_ARRAY_REF || tree_kind(name) == T_ARRAY_SLICE)
+    while (tree_kind(name) == T_ARRAY_REF || tree_kind(name) == T_ARRAY_SLICE
+           || tree_kind(name) == T_RECORD_REF)
         name = tree_value(name);
     if (tree_kind(name) != T_REF || !tree_has_ref(name)) return false;
     return owner.objectFor(tree_ref(name)).has_value() || locals.contains(tree_ref(name))
@@ -1875,14 +1902,35 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
             const Value& variable = local->second;
             return Place{.isVariable = true,
                          .variable = variable,
-                         .layout = variable.layout.isArray() ? variable.layout
-                                                             : Layout{.storage = variable.type}};
+                         .layout = variable.layout.isComposite()
+                                       ? variable.layout
+                                       : Layout{.storage = variable.type}};
         }
         const std::optional<std::uint32_t> object = owner.objectFor(declaration);
         if (!object) break;
         const std::optional<Layout> layout = layoutFor(tree_type(declaration));
         if (!layout) break;
         return Place{.objectIndex = *object, .layout = *layout};
+    }
+
+    case T_RECORD_REF: {
+        std::optional<Place> outer = place(tree_value(name));
+        if (!outer) return std::nullopt;
+        if (!outer->layout.isRecord() || !tree_has_ref(name)) break;
+        const unsigned position = tree_pos(tree_ref(name));
+        if (position >= outer->layout.fields.size()) break;
+
+        // A field is at an offset fixed by the record's type, added to wherever the record is.
+        Place result = *outer;
+        result.layout = outer->layout.fields[position];
+        result.whole = false;
+        const Offset offset =
+            sum(Offset{.staticOffset = outer->offset ? 0 : outer->staticOffset,
+                       .dynamic = outer->offset},
+                Offset{.staticOffset = outer->layout.fieldOffsets[position], .dynamic = {}});
+        result.staticOffset = offset.staticOffset;
+        result.offset = offset.dynamic;
+        return result;
     }
 
     case T_ARRAY_REF:
@@ -2427,6 +2475,85 @@ std::optional<BodyTranslator::Value> BodyTranslator::arrayOperator(tree_t expres
     fail(expression, std::string("the operator ") + istr(tree_ident(expression)) + " on "
                          + type_pp(operands.empty() ? resultType : operands[0].vhdlType));
     return std::nullopt;
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::field(const Value& record, tree_t name,
+                                                           type_t vhdlType) {
+    if (!record.layout.isRecord() || !tree_has_ref(name)) {
+        fail(name, "selecting a field of something that is not a record");
+        return std::nullopt;
+    }
+    const unsigned position = tree_pos(tree_ref(name));
+    const Layout& layout = record.layout.fields.at(position);
+    const Value at = constant(record.layout.fieldOffsets.at(position),
+                              eir::Type::bits(32, false, false), nullptr);
+    Value value{.reg = newRegister(layout.storage),
+                .type = layout.storage,
+                .vhdlType = vhdlType,
+                .layout = layout};
+    emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(value.reg),
+                                eir::Operand::reg(record.reg), eir::Operand::reg(at.reg)));
+    return value;
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::recordAggregate(tree_t expression,
+                                                                     const Layout& layout) {
+    // Each field spliced in at its offset, by position or by name; `others` fills what is left.
+    Value result =
+        constantArray(eir::BitVector::filled(layout.storage.bitWidth(), eir::Logic::Zero), layout,
+                      tree_type(expression));
+    result.layout = layout;
+    std::vector<bool> placed(layout.fields.size(), false);
+    const auto splice = [&](std::size_t position, tree_t valueTree) {
+        const Layout& field = layout.fields[position];
+        const std::optional<Value> value = this->expression(valueTree, &field);
+        if (!value) return false;
+        if (value->type.bitWidth() != field.storage.bitWidth() && field.isComposite())
+            return fail(valueTree, "a field value of another length than its field");
+        const Value at =
+            constant(layout.fieldOffsets[position], eir::Type::bits(32, false, false), nullptr);
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result.reg),
+                                    eir::Operand::reg(resize(*value, field.storage.bitWidth()).reg),
+                                    eir::Operand::reg(at.reg)));
+        placed[position] = true;
+        return true;
+    };
+
+    std::size_t next = 0;
+    tree_t others = nullptr;
+    for (unsigned index = 0; index < tree_assocs(expression); ++index) {
+        tree_t association = tree_assoc(expression, index);
+        std::size_t position = 0;
+        switch (tree_subkind(association)) {
+        case A_POS: position = next++; break;
+        case A_NAMED: {
+            tree_t name = tree_name(association);
+            if (tree_kind(name) != T_REF || !tree_has_ref(name)
+                || tree_kind(tree_ref(name)) != T_FIELD_DECL) {
+                fail(association, "a record aggregate naming something other than a field");
+                return std::nullopt;
+            }
+            position = tree_pos(tree_ref(name));
+            break;
+        }
+        case A_OTHERS: others = tree_value(association); continue;
+        default: fail(association, "this kind of record aggregate element"); return std::nullopt;
+        }
+        if (position >= layout.fields.size()) {
+            fail(association, "a record aggregate with more elements than fields");
+            return std::nullopt;
+        }
+        if (!splice(position, tree_value(association))) return std::nullopt;
+    }
+    for (std::size_t position = 0; position < layout.fields.size(); ++position) {
+        if (placed[position]) continue;
+        if (others == nullptr) {
+            fail(expression, "a record aggregate that leaves a field without a value");
+            return std::nullopt;
+        }
+        if (!splice(position, others)) return std::nullopt;
+    }
+    return result;
 }
 
 } // namespace enzan::frontend::vhdl

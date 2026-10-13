@@ -341,6 +341,12 @@ private:
     /// A concatenation of arrays and elements, the left operand in the highest bits.
     std::optional<Value> concatenation(tree_t expression);
 
+    /// The field of `record` that `name`, a T_RECORD_REF, selects.
+    std::optional<Value> field(const Value& record, tree_t name, type_t vhdlType);
+
+    /// A record aggregate of values not all static, built field by field into a register.
+    std::optional<Value> recordAggregate(tree_t expression, const Layout& layout);
+
     /// The predefined operators on arrays: equality, ordering, and the logical operators on
     /// arrays of `bit` and `boolean`.
     std::optional<Value> arrayOperator(tree_t expression, subprogram_kind_t kind);
