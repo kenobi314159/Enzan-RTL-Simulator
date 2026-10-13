@@ -73,3 +73,6 @@ enzan_add_vhdl_golden_test(records)
 # Generate statements and blocks, flattened into the architecture they are in, and ports
 # associated with parts of signals or in parts.
 enzan_add_vhdl_golden_test(generate)
+
+# Report messages built from strings a design computes.
+enzan_add_vhdl_golden_test(messages)

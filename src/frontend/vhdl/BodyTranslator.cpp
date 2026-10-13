@@ -1067,8 +1067,22 @@ bool BodyTranslator::messageParts(tree_t message, std::string& format,
 
     default: break;
     }
-    return fail(message, "a message built other than from string literals, characters and the "
-                         "'image of integers and times");
+
+    // Any other string, a function's result say, or character is its characters' codes, which
+    // `%s` shows as they are, the left one first (DESIGN_GUIDE.md section 3.6).
+    type_t type = tree_type(message);
+    type_t character = type_is_array(type) ? type_elem(type) : type;
+    if (type_is_enum(character)
+        && type_ident(type_base_recur(character)) == ident_new("STD.STANDARD.CHARACTER")) {
+        const std::optional<Value> value = expression(message);
+        if (!value) return false;
+        format += "%s";
+        arguments.push_back(
+            eir::SysTaskArgument{.value = eir::Operand::reg(value->reg), .type = value->type});
+        return true;
+    }
+    return fail(message, "a message built other than from strings, characters and the 'image of "
+                         "integers and times");
 }
 
 bool BodyTranslator::procedureCall(tree_t statement) {
