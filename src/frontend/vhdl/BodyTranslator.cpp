@@ -2228,6 +2228,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::attribute(tree_t expression
     switch (kind) {
     // Of a whole signal, which the kernel keeps them of (DESIGN_GUIDE.md section 3.4).
     case ATTR_EVENT:
+    case ATTR_ACTIVE:
     case ATTR_LAST_VALUE: {
         const std::optional<Place> signal = place(tree_name(expression));
         if (!signal) return std::nullopt;
@@ -2236,14 +2237,15 @@ std::optional<BodyTranslator::Value> BodyTranslator::attribute(tree_t expression
             return std::nullopt;
         }
         if (!signal->whole) {
-            fail(expression, "'event or 'last_value of part of a signal");
+            fail(expression, "'event, 'active or 'last_value of part of a signal");
             return std::nullopt;
         }
         noteRead(signal->objectIndex);
-        if (kind == ATTR_EVENT) {
+        if (kind == ATTR_EVENT || kind == ATTR_ACTIVE) {
             const std::uint32_t bit = newRegister(eir::Type::bits(1, false, false));
-            emit(eir::Instruction::make(eir::Opcode::ReadEvent, eir::Operand::reg(bit),
-                                        eir::Operand::object(signal->objectIndex)));
+            emit(eir::Instruction::make(
+                kind == ATTR_EVENT ? eir::Opcode::ReadEvent : eir::Opcode::ReadActive,
+                eir::Operand::reg(bit), eir::Operand::object(signal->objectIndex)));
             return booleanOf(bit, resultType);
         }
         Value value{.reg = newRegister(signal->layout.storage),

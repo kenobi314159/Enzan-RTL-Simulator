@@ -243,6 +243,10 @@ ENZAN_OPCODE(ReadEvent, "event", true, 1,
              "a compare of the signal's last-change cycle, an array of the kernel's indexed by "
              "the signal, against the kernel's current cycle: VHDL's 'event, true when the "
              "signal changed in the update this cycle began with")
+ENZAN_OPCODE(ReadActive, "active", true, 1,
+             "as ReadEvent, of the cycle the signal last had a transaction or a change in: "
+             "VHDL's 'active, true when the signal was active in the update this cycle began "
+             "with, whether or not its value changed")
 ENZAN_OPCODE(ReadLastValue, "lastvalue", true, 1,
              "a load from the shadow copy the kernel keeps of the signal's value before its last "
              "change, for the signals a body reads it of: VHDL's 'last_value")

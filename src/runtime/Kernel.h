@@ -404,6 +404,12 @@ public:
         return lastChange[signalIndex] == cycle;
     }
 
+    /// True when `signalIndex` had a transaction or changed in the update the current simulation
+    /// cycle began with: VHDL's 'active.
+    [[nodiscard]] bool activeThisCycle(std::uint32_t signalIndex) const noexcept {
+        return lastActive[signalIndex] == cycle;
+    }
+
     /// The value `signalIndex` had before its last change, or its value when it has never changed:
     /// VHDL's 'last_value. Kept only for the signals some body reads it of.
     [[nodiscard]] eir::ConstBitRef lastValue(std::uint32_t signalIndex) const;
@@ -528,6 +534,9 @@ private:
     /// The cycle each signal last changed in, or `NeverChanged`, for VHDL's 'event; and the cycle
     /// now, which begins with each batch of updates: a delta cycle's, or a time step's.
     std::vector<std::uint64_t> lastChange;
+
+    /// The cycle each signal last had a transaction or a change in, for 'active.
+    std::vector<std::uint64_t> lastActive;
     std::uint64_t cycle = 0;
     static constexpr std::uint64_t NeverChanged = ~std::uint64_t{0};
 

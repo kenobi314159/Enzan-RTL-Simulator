@@ -166,6 +166,7 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
     // A shadow of each signal whose 'last_value a body reads, found where it is read.
     const std::span<const Signal> signals = designImageToRun.signals();
     lastChange.assign(signals.size(), NeverChanged);
+    lastActive.assign(signals.size(), NeverChanged);
     lastValueOffset.assign(signals.size(), NoLastValue);
     const auto keepLastValues = [&](std::uint32_t bodyIndex,
                                     std::span<const std::uint32_t> objectSignals) {
@@ -254,6 +255,7 @@ void Kernel::initialize() {
 
     // Before its first change, a signal's 'last_value is its value.
     std::ranges::fill(lastChange, NeverChanged);
+    std::ranges::fill(lastActive, NeverChanged);
     for (std::uint32_t signalIndex = 0; signalIndex < lastValueOffset.size(); ++signalIndex) {
         if (lastValueOffset[signalIndex] == NoLastValue) continue;
         const Signal& signal = designImage->signals()[signalIndex];
@@ -649,6 +651,7 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
 void Kernel::recordEvent(std::uint32_t signalIndex, eir::ConstBitRef current) {
     if (lastChange[signalIndex] == cycle) return;
     lastChange[signalIndex] = cycle;
+    lastActive[signalIndex] = cycle;
     if (const std::uint32_t offset = lastValueOffset[signalIndex]; offset != NoLastValue)
         bitops::copy(eir::BitRef(lastValues.data() + offset, current.width()), current);
 }
@@ -1174,6 +1177,9 @@ Kernel::takeTransaction(std::uint32_t processIndex, std::uint32_t position, std:
 
 void Kernel::applyTransaction(std::uint32_t processIndex, std::uint32_t position,
                               std::uint32_t signalIndex, const Transaction& transaction) {
+    // A transaction makes its signal active, whether or not it changes it (IEEE 1076 section
+    // 14.7.3.1).
+    lastActive[signalIndex] = cycle;
     const WriteRoute& route = processes[processIndex].writeRoutes[position];
     if (!route.direct()) {
         writeThroughDrivers(route, transaction.value.ref(), transaction.lowBit);

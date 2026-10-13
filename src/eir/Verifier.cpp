@@ -630,6 +630,7 @@ private:
             break;
 
         case Opcode::ReadEvent:
+        case Opcode::ReadActive:
             checkObjectAccess(definition, body, instruction.a, false, where);
             if (registerWidth(definition, body, instruction.dst, where) != 1)
                 reportBody(definition, body,

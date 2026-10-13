@@ -138,3 +138,6 @@ enzan_add_vhdl_golden_test(aggregates)
 
 # Waits with a timeout and a sensitivity or a condition.
 enzan_add_vhdl_golden_test(timeouts)
+
+# 'active, which a transaction makes true without a change.
+enzan_add_vhdl_golden_test(active)

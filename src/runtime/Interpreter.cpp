@@ -501,6 +501,14 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             break;
         }
 
+        case eir::Opcode::ReadActive: {
+            const eir::BitRef destination = reg(instruction.dst, instruction.dstWidth);
+            destination.set(0, kernel.activeThisCycle(current.objectSignals[instruction.a])
+                                   ? eir::Logic::One
+                                   : eir::Logic::Zero);
+            break;
+        }
+
         case eir::Opcode::ReadLastValue:
             bitops::copy(reg(instruction.dst, instruction.dstWidth),
                          kernel.lastValue(current.objectSignals[instruction.a]));

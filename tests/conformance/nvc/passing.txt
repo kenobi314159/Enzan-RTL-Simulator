@@ -81,12 +81,14 @@ counter
 default1
 delay2
 driver10
+driver11
 driver16
 driver17
 driver2
 driver20
 driver3
 driver4
+driver8
 elab1
 elab11
 elab12
@@ -99,6 +101,7 @@ elab19
 elab2
 elab21
 elab22
+elab23
 elab24
 elab25
 elab27
@@ -302,10 +305,13 @@ signal12
 signal13
 signal17
 signal18
+signal2
 signal20
 signal22
 signal24
 signal26
+signal3
+signal33
 signal37
 signal4
 signal5
