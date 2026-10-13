@@ -117,6 +117,14 @@ protected:
         return eir::presentedWidth(signal.encoding, signal.bitWidth);
     }
 
+    /// True when a signal is a real, which a waveform holds as a number rather than as bits.
+    [[nodiscard]] bool isReal(std::uint32_t signalIndex) const noexcept {
+        return designImage->signals()[signalIndex].encoding == eir::Encoding::Real;
+    }
+
+    /// A real signal's current value.
+    [[nodiscard]] double realValueOf(std::uint32_t signalIndex) const;
+
     static constexpr std::uint32_t NotRecorded = 0xFFFF'FFFFU;
 
     // --- format hooks ------------------------------------------------------

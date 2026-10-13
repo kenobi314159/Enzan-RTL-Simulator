@@ -82,3 +82,6 @@ enzan_add_vhdl_golden_test(unrolled)
 
 # numeric_std's shifts by run-time amounts, which assign slices of run-time lengths.
 enzan_add_vhdl_golden_test(shifts)
+
+# Reals: generics, signals, arithmetic, comparisons and conversions.
+enzan_add_vhdl_golden_test(reals)

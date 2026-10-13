@@ -41,6 +41,10 @@ enum class Encoding : std::uint8_t {
 
     /// `bit` or `boolean` codes, a byte each: 0 or 1.
     VhdlBit,
+
+    /// An IEEE 754 double's 64 bits, a real's (section 3.6), which a waveform shows as the
+    /// number rather than as bits.
+    Real,
 };
 
 /// How many bits an object of `width` bits stored as `encoding` shows as.

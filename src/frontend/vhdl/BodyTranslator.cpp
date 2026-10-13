@@ -1641,7 +1641,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
 
     // Anything static is folded first, so that a generic, a constant or an attribute of a type
     // costs nothing at run time.
-    if (type != nullptr && type_is_scalar(type) && !type_is_real(type)) {
+    if (type != nullptr && type_is_scalar(type)) {
         if (const std::optional<std::int64_t> folded = folder().integer(expression)) {
             const std::optional<eir::Type> storage = scalarStorage(type);
             if (storage) return constant(*folded, *storage, type);
@@ -1806,6 +1806,38 @@ std::optional<BodyTranslator::Value> BodyTranslator::conversion(tree_t expressio
         if (!value) return std::nullopt;
         value->vhdlType = target;
         return value;
+    }
+
+    // Between a real and an integer, Convert: into the real the nearest double, and out of it the
+    // integer nearest, halfway away from zero (IEEE 1076 section 9.3.6).
+    const bool fromReal = type_is_real(tree_type(operand));
+    const bool toReal = type_is_real(target);
+    if (fromReal || toReal) {
+        const std::optional<eir::Type> storage = scalarStorage(target);
+        const std::optional<Value> value = this->expression(operand);
+        if (!value || !storage) {
+            if (value) fail(expression, std::string("a conversion to ") + type_pp(target));
+            return std::nullopt;
+        }
+        if (fromReal && toReal) {
+            Value same = *value;
+            same.vhdlType = target;
+            return same;
+        }
+        if (!fromReal && !isSignedScalar(tree_type(operand))) {
+            fail(expression, std::string("a conversion to ") + type_pp(target));
+            return std::nullopt;
+        }
+        const eir::Type through = toReal ? eir::Type::real() : eir::Type::bits(64, true, false);
+        const std::uint32_t converted = newRegister(through);
+        eir::Instruction convert = eir::Instruction::make(
+            eir::Opcode::Convert, eir::Operand::reg(converted), eir::Operand::reg(value->reg));
+        convert.isSigned = value->type.isSigned();
+        emit(convert);
+        Value result = resize(Value{.reg = converted, .type = through, .vhdlType = nullptr},
+                              storage->bitWidth());
+        result.vhdlType = target;
+        return result;
     }
 
     const std::optional<eir::Type> storage = scalarStorage(target);

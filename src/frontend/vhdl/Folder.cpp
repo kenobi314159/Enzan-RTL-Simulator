@@ -5,6 +5,8 @@
 #include "eir/BitOps.h"
 #include "frontend/vhdl/Types.h"
 
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -12,6 +14,28 @@
 #include <vector>
 
 namespace enzan::frontend::vhdl {
+
+namespace {
+
+/// A real's code is its IEEE 754 double's bits (DESIGN_GUIDE.md section 3.6), which is how the
+/// Folder carries one where it carries every other scalar.
+std::int64_t realCode(double value) {
+    return std::bit_cast<std::int64_t>(value);
+}
+
+double realOf(std::int64_t code) {
+    return std::bit_cast<double>(code);
+}
+
+/// `value` rounded to the nearest integer, halfway away from zero, or nothing when no 64-bit
+/// integer is it.
+std::optional<std::int64_t> roundedReal(double value) {
+    const double rounded = std::round(value);
+    if (std::isnan(rounded) || rounded < -0x1p63 || rounded >= 0x1p63) return std::nullopt;
+    return static_cast<std::int64_t>(rounded);
+}
+
+} // namespace
 
 tree_t subprogramBody(tree_t declaration) {
     const tree_kind_t kind = tree_kind(declaration);
@@ -72,6 +96,7 @@ std::optional<std::int64_t> Folder::integer(tree_t expression) const {
     case T_LITERAL:
         switch (tree_subkind(expression)) {
         case L_INT: return tree_ival(expression);
+        case L_REAL: return realCode(tree_dval(expression));
         case L_PHYSICAL: {
             // A literal NVC has not reduced to the primary unit still names the unit it counts.
             if (!tree_has_ref(expression)) return tree_ival(expression);
@@ -88,16 +113,62 @@ std::optional<std::int64_t> Folder::integer(tree_t expression) const {
 
     case T_QUALIFIED: return integer(tree_value(expression));
 
-    // Between discrete and physical types a conversion keeps the value; from a real it rounds,
-    // which this does not fold.
-    case T_TYPE_CONV:
-        if (type_is_real(tree_type(tree_value(expression)))) return std::nullopt;
-        return integer(tree_value(expression));
+    // Between discrete and physical types a conversion keeps the value; into a real it is the
+    // nearest double, and out of one it rounds halfway away from zero (IEEE 1076 section
+    // 9.3.6).
+    case T_TYPE_CONV: {
+        const std::optional<std::int64_t> value = integer(tree_value(expression));
+        if (!value) return std::nullopt;
+        const bool fromReal = type_is_real(tree_type(tree_value(expression)));
+        const bool toReal = type_is_real(tree_type(expression));
+        if (fromReal == toReal) return value;
+        if (toReal) return realCode(static_cast<double>(*value));
+        return roundedReal(realOf(*value));
+    }
 
     case T_REF: return reference(expression);
     case T_FCALL: return call(expression);
     case T_ATTR_REF: return attribute(expression);
     case T_ARRAY_REF: return element(expression);
+    default: return std::nullopt;
+    }
+}
+
+std::optional<std::int64_t> Folder::realCall(subprogram_kind_t kind,
+                                             const std::vector<std::int64_t>& operands) {
+    // The predefined operators of a real type, on the doubles the codes are; a mixed one, a time
+    // scaled by a real, does not fold.
+    const auto real = [](double value) -> std::optional<std::int64_t> { return realCode(value); };
+    const auto truth = [](bool value) -> std::optional<std::int64_t> { return value ? 1 : 0; };
+    if (operands.size() == 1) {
+        const double a = realOf(operands[0]);
+        switch (kind) {
+        case S_IDENTITY: return real(a);
+        case S_NEGATE: return real(-a);
+        case S_ABS: return real(std::fabs(a));
+        default: return std::nullopt;
+        }
+    }
+    if (operands.size() != 2) return std::nullopt;
+    const double a = realOf(operands[0]);
+    const double b = realOf(operands[1]);
+    switch (kind) {
+    case S_ADD: return real(a + b);
+    case S_SUB: return real(a - b);
+    case S_MUL: return real(a * b);
+    case S_DIV:
+        if (b == 0.0) return std::nullopt;
+        return real(a / b);
+    // A real raised to an integer power, whose operand is an integer's code.
+    case S_EXP: return real(std::pow(a, static_cast<double>(operands[1])));
+    case S_MINIMUM: return real(std::fmin(a, b));
+    case S_MAXIMUM: return real(std::fmax(a, b));
+    case S_SCALAR_EQ: return truth(a == b);
+    case S_SCALAR_NEQ: return truth(a != b);
+    case S_SCALAR_LT: return truth(a < b);
+    case S_SCALAR_LE: return truth(a <= b);
+    case S_SCALAR_GT: return truth(a > b);
+    case S_SCALAR_GE: return truth(a >= b);
     default: return std::nullopt;
     }
 }
@@ -155,6 +226,8 @@ std::optional<std::int64_t> Folder::call(tree_t expression) const {
         if (!operand) return std::nullopt;
         operands.push_back(*operand);
     }
+    if (count > 0 && type_is_real(tree_type(tree_value(tree_param(expression, 0)))))
+        return realCall(kind, operands);
 
     std::int64_t result = 0;
     const auto unary = [&operands] { return operands.size() == 1; };
@@ -416,7 +489,7 @@ public:
                     frame.bindComposite(declaration, std::move(*initial));
                     break;
                 }
-                if (!type_is_scalar(type) || type_is_real(type)) return false;
+                if (!type_is_scalar(type)) return false;
                 const std::optional<std::int64_t> initial =
                     tree_has_value(declaration) ? frame.integer(tree_value(declaration))
                                                 : frame.left(type);
@@ -625,7 +698,7 @@ public:
 
 std::optional<std::int64_t> Folder::constantCall(tree_t expression, tree_t declaration) const {
     type_t result = type_result(tree_type(declaration));
-    if (!type_is_scalar(result) || type_is_real(result)) return std::nullopt;
+    if (!type_is_scalar(result)) return std::nullopt;
     std::optional<std::int64_t> value;
     returned(expression, [&value](tree_t returned, const Folder& frame) {
         value = frame.integer(returned);
@@ -670,7 +743,7 @@ bool Folder::returned(tree_t call,
 
         tree_t parameter = tree_port(body, index);
         type_t type = tree_type(parameter);
-        if (type_is_scalar(type) && !type_is_real(type)) {
+        if (type_is_scalar(type)) {
             const std::optional<std::int64_t> value = integer(actual);
             if (!value) return false;
             frame.bind(parameter, *value);

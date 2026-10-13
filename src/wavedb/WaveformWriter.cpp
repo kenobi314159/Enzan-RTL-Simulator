@@ -2,6 +2,8 @@
 
 #include "wavedb/WaveformWriter.h"
 
+#include "eir/BitOps.h"
+
 #include "elab/ElaboratedDesign.h"
 
 #include <algorithm>
@@ -80,6 +82,11 @@ eir::ConstBitRef WaveformWriter::valueOf(std::uint32_t signalIndex) const {
     if (shown.width() != width) shown = eir::BitVector(width);
     eir::present(signal.encoding, stored, shown.mutableRef());
     return shown.ref();
+}
+
+double WaveformWriter::realValueOf(std::uint32_t signalIndex) const {
+    const runtime::Signal& signal = designImage->signals()[signalIndex];
+    return eir::bitops::realOf(stateArena->at(signal.wordOffset, signal.bitWidth));
 }
 
 void WaveformWriter::selectSignals() {

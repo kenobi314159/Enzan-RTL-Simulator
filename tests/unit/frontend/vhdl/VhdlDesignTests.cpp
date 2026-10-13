@@ -899,15 +899,16 @@ end architecture;
 
 TEST_F(VhdlDesignTest, WhatTheAdapterCannotTranslateIsReportedNotDropped) {
     const std::unique_ptr<enzan::eir::Design> design = translate(R"(
-entity uses_real is
+entity uses_access is
 end entity;
 
-architecture a of uses_real is
+architecture a of uses_access is
+  type count_ptr is access integer;
 begin
   process
-    variable ratio : real := 0.5;
+    variable count : count_ptr;
   begin
-    ratio := ratio * 2.0;
+    count := new integer'(1);
     wait for 1 ns;
   end process;
 end architecture;
@@ -916,8 +917,8 @@ end architecture;
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
     EXPECT_EQ(unsupported->message,
-              "a variable of type REAL is not supported by the VHDL frontend yet");
-    EXPECT_EQ(sources.lineNumber(unsupported->location), 8U);
+              "a variable of type COUNT_PTR is not supported by the VHDL frontend yet");
+    EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
 }
 
 TEST_F(VhdlDesignTest, AProcessThatNeverWaitsIsRefused) {

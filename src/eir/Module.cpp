@@ -11,11 +11,11 @@
 namespace enzan::eir {
 
 std::uint32_t presentedWidth(Encoding encoding, std::uint32_t width) noexcept {
-    return encoding == Encoding::Bits ? width : width / 8;
+    return encoding == Encoding::Bits || encoding == Encoding::Real ? width : width / 8;
 }
 
 void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept {
-    if (encoding == Encoding::Bits) {
+    if (encoding == Encoding::Bits || encoding == Encoding::Real) {
         bitops::copy(shown, stored);
         return;
     }

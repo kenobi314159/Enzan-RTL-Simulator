@@ -5,6 +5,7 @@
 #include "common/Version.h"
 #include "eir/BitVector.h"
 
+#include <format>
 #include <fstream>
 #include <ostream>
 
@@ -70,8 +71,10 @@ void VcdWriter::declareSignal(std::uint32_t signalIndex, std::string_view leafNa
     // distinction that does matter belongs to driver resolution (M5) rather than the waveform.
     //
     // Two names for one signal share an identifier, which VCD supports precisely for this.
-    stream->file << "$var wire " << widthOf(signalIndex) << ' '
-                 << identifiers[recordIndexOf(signalIndex)] << ' ' << leafName << " $end\n";
+    //
+    // A real is VCD's own `real`, written as a number (IEEE 1364 section 18.2.3.8).
+    stream->file << (isReal(signalIndex) ? "$var real " : "$var wire ") << widthOf(signalIndex)
+                 << ' ' << identifiers[recordIndexOf(signalIndex)] << ' ' << leafName << " $end\n";
 }
 
 void VcdWriter::endDeclarations() {
@@ -91,8 +94,13 @@ void VcdWriter::writeTimestamp(runtime::SimTime time) {
 }
 
 void VcdWriter::writeChange(std::uint32_t signalIndex) {
-    const eir::ConstBitRef value = valueOf(signalIndex);
     const std::string& identifier = identifiers[recordIndexOf(signalIndex)];
+    if (isReal(signalIndex)) {
+        // The shortest form that reads back as the same double.
+        stream->file << std::format("r{} {}\n", realValueOf(signalIndex), identifier);
+        return;
+    }
+    const eir::ConstBitRef value = valueOf(signalIndex);
 
     if (value.width() == 1) {
         stream->file << eir::toChar(value.get(0)) << identifier << '\n';

@@ -46,8 +46,8 @@ parent. A design's work library is NVC's in-memory one, written nowhere.
 ## What is translated
 
 So far: entities, architectures, entity instances, component instances bound by default, generics of
-scalar and array types, null strings among them; signals and ports of enumeration, integer and
-physical types, of arrays of them, of one or more dimensions, with static bounds, and of records;
+scalar and array types, null strings among them; signals and ports of enumeration, integer, physical
+and real types, of arrays of them, of one or more dimensions, with static bounds, and of records;
 ports associated with signals, parts of them and expressions, whole or in parts; `if` and `for`
 generate statements and blocks; constant functions; processes with variables, `if`, `case`, loops,
 `exit`, `next`, `wait` (but not one with both a timeout and a sensitivity or condition), signal

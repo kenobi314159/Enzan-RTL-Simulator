@@ -10,6 +10,7 @@
 #include <map>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace enzan::frontend::vhdl {
 
@@ -147,6 +148,11 @@ public:
 
 private:
     [[nodiscard]] std::optional<std::int64_t> call(tree_t expression) const;
+
+    /// A predefined operator of a real type applied to `operands`, real codes, or an integer's
+    /// for an exponent.
+    [[nodiscard]] static std::optional<std::int64_t>
+    realCall(subprogram_kind_t kind, const std::vector<std::int64_t>& operands);
 
     /// A call of a pure function of the design with a scalar result, run on its arguments'
     /// values.

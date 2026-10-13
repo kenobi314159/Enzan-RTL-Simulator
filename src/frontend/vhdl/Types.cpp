@@ -311,6 +311,9 @@ std::optional<eir::Type> scalarStorage(type_t type) {
 
     case T_PHYSICAL: return eir::Type::bits(64, true, false);
 
+    // An IEEE 754 double, as a real's code is its bits (DESIGN_GUIDE.md section 3.6).
+    case T_REAL: return eir::Type::real();
+
     default: return std::nullopt;
     }
 }
@@ -389,6 +392,7 @@ eir::Encoding encodingOf(type_t type) {
     const std::string_view name = istr(type_ident(base));
     if (name == "IEEE.STD_LOGIC_1164.STD_ULOGIC") return eir::Encoding::VhdlLogic;
     if (name == "STD.STANDARD.BIT" || name == "STD.STANDARD.BOOLEAN") return eir::Encoding::VhdlBit;
+    if (type_is_real(base)) return eir::Encoding::Real;
     return eir::Encoding::Bits;
 }
 
