@@ -277,6 +277,34 @@ private:
     /// and merged under a mask of the slice's bits.
     bool movingSliceAssignment(tree_t statement);
 
+    // --- std.textio and files, run natively (Textio.cpp) -----------------------------------------
+
+    /// std.textio's procedures and the predefined file operations, which the runtime runs over
+    /// the heap of DESIGN_GUIDE.md section 4.3 rather than the adapter translating textio's body.
+    /// Nothing when `declaration` is not one of them, so that the call is translated as any other.
+    std::optional<bool> nativeProcedure(tree_t call, tree_t declaration);
+
+    /// `endfile(f)`.
+    std::optional<Value> endOfFile(tree_t call);
+
+    /// A file the process declares: a register holding its descriptor, opened where it is
+    /// declared when the declaration says so.
+    bool declareFile(tree_t declaration);
+
+    /// The descriptor of the file `name` designates: one the process declares, or std.textio's
+    /// `output` or `input`.
+    std::optional<Value> fileDescriptor(tree_t name);
+
+    /// Opens the file `name` holds in `mode`, a position of `file_open_kind`, and returns its
+    /// descriptor.
+    Value openFile(const Value& name, std::int64_t mode, tree_t where);
+
+    /// Emits a system function and returns its result, of `type`.
+    Value systemFunction(eir::SysTaskCall call, eir::Type type);
+
+    /// Writes `value` into the whole variable `name` designates, an inout parameter's actual.
+    bool assignWhole(tree_t name, const Value& value);
+
     /// True when a slice in `loop` has bounds naming `parameter`, the loop's.
     static bool slicesMoveWith(tree_t loop, tree_t parameter);
 
@@ -312,6 +340,11 @@ private:
     /// way almost always, and it needs no string values at run time.
     bool messageParts(tree_t message, std::string& format,
                       std::vector<eir::SysTaskArgument>& arguments);
+
+    /// The image of `operand`, a value of an enumeration known only at run time, as a part of a
+    /// message.
+    bool enumerationImage(tree_t operand, std::string& format,
+                          std::vector<eir::SysTaskArgument>& arguments);
 
     /// What `name` designates: a signal, a port or a variable of the process, or an element or a
     /// slice of one. Nothing having reported why for anything else.

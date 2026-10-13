@@ -97,6 +97,7 @@ std::optional<std::int64_t> Folder::integer(tree_t expression) const {
         switch (tree_subkind(expression)) {
         case L_INT: return tree_ival(expression);
         case L_REAL: return realCode(tree_dval(expression));
+        case L_NULL: return 0;
         case L_PHYSICAL: {
             // A literal NVC has not reduced to the primary unit still names the unit it counts.
             if (!tree_has_ref(expression)) return tree_ival(expression);

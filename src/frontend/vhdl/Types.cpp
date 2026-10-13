@@ -314,6 +314,18 @@ std::optional<eir::Type> scalarStorage(type_t type) {
     // An IEEE 754 double, as a real's code is its bits (DESIGN_GUIDE.md section 3.6).
     case T_REAL: return eir::Type::real();
 
+    // An access to a string, std.textio's line, is a handle into the runtime's heap, and 0 is
+    // `null` (section 4.3). Accesses to anything else are not held yet.
+    case T_ACCESS: {
+        type_t designated = type_designated(base);
+        if (!type_is_array(designated)) return std::nullopt;
+        type_t element = type_base_recur(type_elem(designated));
+        if (!type_is_enum(element)
+            || std::string_view(istr(type_ident(element))) != "STD.STANDARD.CHARACTER")
+            return std::nullopt;
+        return eir::Type::bits(64, false, false);
+    }
+
     default: return std::nullopt;
     }
 }
@@ -544,6 +556,8 @@ std::optional<eir::BitVector> defaultBits(type_t type, const Layout& layout, con
         return bits;
     }
     if (!layout.isArray()) {
+        // An access starts `null`.
+        if (type != nullptr && type_is_access(type)) return encode(0, layout.storage);
         const std::optional<std::int64_t> left = folder.left(type);
         if (!left) return std::nullopt;
         return encode(*left, layout.storage);

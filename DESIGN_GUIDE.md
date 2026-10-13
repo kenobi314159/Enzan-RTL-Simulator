@@ -3101,8 +3101,8 @@ simulated without `line`: its UART prints what the program sends through `write`
 logs both UARTs to files and can load a memory from one. So M6 builds the heap of 4.3 —
 access values are handles in the arena into a heap the kernel owns, since 4.3 lays out every
 piece of state at elaboration and 13.4 forbids allocating on the write path — and makes it
-work for an access to an array, as `std.textio` uses one. M6.1 uses the same heap for
-everything else.
+work for an access to an array, as `std.textio` uses one, with textio's subprograms run
+natively over it (4.3). M6.1 uses the same heap for everything else.
 
 The exit designs need no program compiled for them, for the reason M5 gives:
 

@@ -3,11 +3,14 @@
 """Compare a run of a VHDL design under Enzan against the same under GHDL.
 
 Differential testing against a reference simulator is what section 14.3 of DESIGN_GUIDE.md asks of
-every golden case, and GHDL is M6's reference for VHDL. Two things are compared:
+every golden case, and GHDL is M6's reference for VHDL. Three things are compared:
 
 * **What the design reported**, in order: each `report` and failed `assert`, as its severity and
   its message. Where each simulator prints it, and how, is its own business; what the design said
   is not.
+* **What the design wrote to its output**, line by line: what std.textio's `writeline` put on
+  `output`. Enzan's standard output holds nothing else, and GHDL's is the rest of its transcript
+  once its reports and its own `ghdl:` lines are taken out.
 * **What every signal GHDL records did**, as a waveform: the value it settled on at each time step.
   A VCD records settled values, so two correct simulators agree on it whatever order they ran their
   processes in within a step (section 14.3). A generate block is a scope of GHDL's, `g(0)`, and part
@@ -135,12 +138,19 @@ def enzan_reports(text: str) -> list[tuple[str, str]]:
             if (match := ENZAN_REPORT.search(line))]
 
 
+def ghdl_output(text: str) -> list[str]:
+    return [line for line in text.splitlines()
+            if not GHDL_REPORT.search(line) and not line.startswith("ghdl:")
+            and not GHDL_FINISHED.search(line)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--enzan-vcd", type=Path, required=True)
     parser.add_argument("--ghdl-vcd", type=Path, required=True)
     parser.add_argument("--enzan-transcript", type=Path, required=True)
     parser.add_argument("--ghdl-transcript", type=Path, required=True)
+    parser.add_argument("--enzan-output", type=Path, required=True)
     arguments = parser.parse_args()
 
     differences: list[str] = []
@@ -151,6 +161,13 @@ def main() -> int:
         differences.append("the reports differ:")
         differences.extend(f"  GHDL:  {severity}: {message}" for severity, message in expected)
         differences.extend(f"  Enzan: {severity}: {message}" for severity, message in actual)
+
+    written = ghdl_output(arguments.ghdl_transcript.read_text())
+    printed = arguments.enzan_output.read_text().splitlines()
+    if written != printed:
+        differences.append("the output differs:")
+        differences.extend(f"  GHDL:  {line}" for line in written)
+        differences.extend(f"  Enzan: {line}" for line in printed)
 
     reference = read_vcd(arguments.ghdl_vcd)
     candidate = read_vcd(arguments.enzan_vcd)

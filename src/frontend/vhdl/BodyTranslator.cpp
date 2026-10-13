@@ -452,10 +452,7 @@ bool BodyTranslator::declare(tree_t declaration) {
 
     // A file not opened where it is declared makes nothing until something opens it, which is
     // what fails when it is not translated yet; a branch that folds away may never use it.
-    case T_FILE_DECL:
-        if (tree_has_value(declaration))
-            return fail(declaration, "a file opened where it is declared");
-        return true;
+    case T_FILE_DECL: return declareFile(declaration);
 
     // Declarations that make nothing at run time; a subprogram is translated when called.
     case T_TYPE_DECL:
@@ -1177,6 +1174,53 @@ bool BodyTranslator::emitReport(tree_t where, const Value& severity, tree_t mess
     return true;
 }
 
+bool BodyTranslator::enumerationImage(tree_t operand, std::string& format,
+                                      std::vector<eir::SysTaskArgument>& arguments) {
+    // A table of the literals' images, each in as many bytes as the longest and right-aligned
+    // behind NULs, which `%s` passes over; the value picks its entry (IEEE 1076 section 16.2.2:
+    // an identifier's image is in lower case, a character literal's has its quotes).
+    type_t base = type_base_recur(tree_type(operand));
+    const unsigned count = type_enum_literals(base);
+    std::vector<std::string> images;
+    std::size_t longest = 1;
+    for (unsigned index = 0; index < count; ++index) {
+        tree_t literal = type_enum_literal(base, index);
+        const std::string_view name = istr(tree_ident(literal));
+        images.emplace_back(name.starts_with('\'') ? std::string(name)
+                                                   : simpleName(tree_ident(literal)));
+        longest = std::max(longest, images.back().size());
+    }
+    const auto entryBits = static_cast<std::uint32_t>(longest * 8);
+    eir::BitVector table = eir::BitVector::filled(entryBits * count, eir::Logic::Zero);
+    for (unsigned index = 0; index < count; ++index) {
+        const std::string& image = images[index];
+        for (std::size_t at = 0; at < image.size(); ++at) {
+            const std::size_t fromRight = image.size() - 1 - at;
+            eir::bitops::assignPartAt(
+                table.mutableRef(),
+                eir::BitVector::fromUInt64(static_cast<unsigned char>(image[at]), 8).ref(),
+                (static_cast<std::uint64_t>(index) * entryBits) + (fromRight * 8));
+        }
+    }
+    const std::optional<Value> value = expression(operand);
+    if (!value) return false;
+    const eir::Type offsetType = eir::Type::bits(64, false, false);
+    const Value position = resize(*value, 64);
+    const std::uint32_t offset = newRegister(offsetType);
+    emit(eir::Instruction::make(eir::Opcode::Multiply, eir::Operand::reg(offset),
+                                eir::Operand::reg(position.reg),
+                                eir::Operand::reg(constant(entryBits, offsetType, nullptr).reg)));
+    const Layout tableLayout{.storage = eir::Type::bits(table.width(), false, false)};
+    const Value all = constantArray(table, tableLayout, nullptr);
+    const eir::Type entry = eir::Type::bits(entryBits, false, false);
+    const std::uint32_t image = newRegister(entry);
+    emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(image),
+                                eir::Operand::reg(all.reg), eir::Operand::reg(offset)));
+    format += "%s";
+    arguments.push_back(eir::SysTaskArgument{.value = eir::Operand::reg(image), .type = entry});
+    return true;
+}
+
 bool BodyTranslator::messageParts(tree_t message, std::string& format,
                                   std::vector<eir::SysTaskArgument>& arguments) {
     // A message that is static, a design's banner of its configuration say, is its text, whatever
@@ -1265,6 +1309,7 @@ bool BodyTranslator::messageParts(tree_t message, std::string& format,
     case T_ATTR_REF: {
         if (tree_subkind(message) != ATTR_IMAGE || tree_params(message) != 1) break;
         tree_t operand = tree_value(tree_param(message, 0));
+        if (type_is_enum(tree_type(operand))) return enumerationImage(operand, format, arguments);
         if (!isSignedScalar(tree_type(operand))) break;
         const std::optional<Value> value = expression(operand);
         if (!value) return false;
@@ -1298,6 +1343,8 @@ bool BodyTranslator::messageParts(tree_t message, std::string& format,
 bool BodyTranslator::procedureCall(tree_t statement) {
     if (!tree_has_ref(statement)) return fail(statement, "this procedure call");
     tree_t declaration = tree_ref(statement);
+    if (const std::optional<bool> native = nativeProcedure(statement, declaration)) return *native;
+    if (!tree_has_ident2(declaration)) return fail(statement, "this predefined procedure");
     ident_t name = tree_ident2(declaration);
 
     // `std.env.stop` and `std.env.finish` end the simulation; a status is not acted on yet.
@@ -1730,7 +1777,12 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
         fail(expression, "a string literal of another length than where it is used");
         return std::nullopt;
 
-    case T_LITERAL: fail(expression, "a real literal"); return std::nullopt;
+    // `null`, the handle no line has (DESIGN_GUIDE.md section 4.3); every other literal folds.
+    case T_LITERAL:
+        if (tree_subkind(expression) == L_NULL)
+            return constant(0, eir::Type::bits(64, false, false), type);
+        fail(expression, "this literal");
+        return std::nullopt;
     default:
         fail(expression, std::string("the expression ") + tree_kind_str(tree_kind(expression)));
         return std::nullopt;
@@ -1925,6 +1977,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::call(tree_t expression) {
     tree_t declaration = tree_ref(expression);
     const auto kind = static_cast<subprogram_kind_t>(tree_subkind(declaration));
 
+    if (kind == S_ENDFILE) return endOfFile(expression);
     if (!hasVhdlBody(kind)) return predefined(expression, kind);
 
     // `now` counts femtoseconds, which EIR's time counts in its own unit.

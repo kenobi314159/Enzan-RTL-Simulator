@@ -23,8 +23,12 @@ workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
 # Either simulator's run ending in a failure is part of what is compared, not a reason to stop.
-"$enzan" --top "$top" --vcd "$workdir/enzan.vcd" "$source_file" >"$workdir/enzan.out" \
-    2>"$workdir/enzan.err" || true
+# Each runs in the scratch directory, where a file the design writes lands.
+(
+    cd "$workdir"
+    "$enzan" --top "$top" --vcd "$workdir/enzan.vcd" "$source_file" >"$workdir/enzan.out" \
+        2>"$workdir/enzan.err"
+) || true
 
 (
     cd "$workdir"
@@ -40,9 +44,10 @@ trap 'rm -rf "$workdir"' EXIT
 ) >"$workdir/ghdl.out" 2>&1 || true
 
 "$compare" --enzan-vcd "$workdir/enzan.vcd" --ghdl-vcd "$workdir/ghdl.vcd" \
-    --enzan-transcript "$workdir/enzan.err" --ghdl-transcript "$workdir/ghdl.out" || {
+    --enzan-transcript "$workdir/enzan.err" --ghdl-transcript "$workdir/ghdl.out" \
+    --enzan-output "$workdir/enzan.out" || {
     printf '\nEnzan said:\n' >&2
-    cat "$workdir/enzan.err" >&2
+    cat "$workdir/enzan.out" "$workdir/enzan.err" >&2
     printf '\nGHDL said:\n' >&2
     cat "$workdir/ghdl.out" >&2
     exit 1
