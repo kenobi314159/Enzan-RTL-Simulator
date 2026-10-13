@@ -450,6 +450,43 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AConversionWithinABaseTypeKeepsTheValue) {
+    // std_logic is a subtype of std_ulogic, so converting between them, or between vectors of
+    // them, changes nothing.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal u : std_ulogic := 'H';
+  signal l : std_logic;
+  signal uv : std_ulogic_vector(3 downto 0);
+  signal lv : std_logic_vector(3 downto 0) := "01ZX";
+begin
+  l <= std_logic(u);
+  uv <= std_ulogic_vector(lv);
+
+  process
+  begin
+    wait for 1 ns;
+    assert l = 'H' and uv = "01ZX" report "converted" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.

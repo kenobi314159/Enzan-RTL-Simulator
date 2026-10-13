@@ -1527,10 +1527,13 @@ std::optional<BodyTranslator::Value> BodyTranslator::conversion(tree_t expressio
 
     // Between closely related arrays, which have one element type, a conversion changes nothing
     // but the type: the bounds are the target's when it has them, and the operand's otherwise.
+    // `std_logic` is a subtype of `std_ulogic`, so their vectors' elements are one type.
     if (type_is_array(target)) {
         std::optional<Value> value = this->expression(operand);
         if (!value) return std::nullopt;
-        if (!value->layout.isArray() || !type_eq(type_elem(target), value->layout.elementType)) {
+        if (!value->layout.isArray()
+            || !type_eq(type_base_recur(type_elem(target)),
+                        type_base_recur(value->layout.elementType))) {
             fail(expression, std::string("a conversion to ") + type_pp(target));
             return std::nullopt;
         }
@@ -1541,6 +1544,15 @@ std::optional<BodyTranslator::Value> BodyTranslator::conversion(tree_t expressio
             }
             value->layout = *layout;
         }
+        value->vhdlType = target;
+        return value;
+    }
+
+    // To a type's own base or another subtype of it, a value stays what it is: `std_logic(x)` of
+    // a `std_ulogic`, or a record of its own type.
+    if (type_eq(type_base_recur(target), type_base_recur(tree_type(operand)))) {
+        std::optional<Value> value = this->expression(operand);
+        if (!value) return std::nullopt;
         value->vhdlType = target;
         return value;
     }
