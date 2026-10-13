@@ -2703,7 +2703,8 @@ revision its `revision.txt` names: every compliant VHDL-93 case the suite's own 
 run, by their rules as GHDL's `testsuite.sh` reads them — the units an `.exp` builds before a
 case analysed with it, the top its `ENTITY=` names or else the last entity named as a top, its
 `STOP=` time, `--assert-level error`. A case passes when Enzan runs it to its end and it reports
-no `FAILED TEST`.
+no `FAILED TEST`. The cases run in parallel, those writing a file first, since the suite reads
+back in a later case what a simulator wrote in its own format in an earlier one.
 
 The ratchet is a list for each suite, as 14.6 describes, and one script,
 `tests/conformance/ratchet.sh`, holds every suite to its list.

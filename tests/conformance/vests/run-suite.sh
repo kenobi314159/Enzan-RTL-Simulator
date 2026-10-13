@@ -16,9 +16,10 @@
 # units belong to a library other than work, LIBRARY=, is run as the rest are and fails until
 # Enzan analyses several libraries in one run.
 #
-# A case that writes a file another reads, OUTPUT=, runs before every case that reads one, INPUT=,
-# as GHDL's suite runs them in order: each simulator reads back the files it wrote, in its own
-# format, and the files the suite commits are another tool's.
+# A case that writes a file another reads runs before every other case, as GHDL's suite runs a
+# writer before its reader: each simulator reads back the files it wrote, in its own format, and the
+# files the suite commits are another tool's. A writer is one the suite marks OUTPUT=, or one that
+# opens a file to write it, as clifton-labs' do unmarked.
 #
 # Prints PASS or FAIL for each case, then the counts, and writes the cases that passed to
 # <work-directory>/passed.txt, for ratchet.sh to hold to passing.txt.
@@ -66,6 +67,9 @@ while read -r exp; do
                 OUTPUT=*) list="$writers" ;;
                 esac
             done
+            if grep -qiE '(write|append)_mode' "$directory/$file"; then
+                list="$writers"
+            fi
             if [[ -z "$entity" ]]; then
                 entity="$(sed -n -E -e '/^ENTITY .*(ent|entw) IS$/s/ENTITY (.*) IS/\1/p' \
                     "$directory/$file" | tail -1)"
