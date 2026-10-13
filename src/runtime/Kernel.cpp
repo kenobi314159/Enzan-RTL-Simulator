@@ -819,10 +819,10 @@ void Kernel::applyDelayedWrites() {
 
     for (const DelayedWrite& write : writes) {
         if (write.transaction) {
-            const std::optional<eir::BitVector> value =
+            const std::optional<Transaction> taken =
                 takeTransaction(write.processIndex, write.position, write.serial);
-            if (value)
-                writeRouted(write.processIndex, write.position, write.signalIndex, value->ref());
+            if (taken)
+                applyTransaction(write.processIndex, write.position, write.signalIndex, *taken);
             continue;
         }
         if (write.nonBlocking) {
@@ -835,7 +835,7 @@ void Kernel::applyDelayedWrites() {
 }
 
 void Kernel::drive(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,
-                   eir::ConstBitRef value, SimTime delay, bool inertial) {
+                   eir::ConstBitRef value, std::uint32_t lowBit, SimTime delay, bool inertial) {
     if (delay > NoTime - currentTime) {
         diagnostics.report(DiagCode::TimeOverflow, SourceLocation(), currentTime,
                            options.timeScale.unitName());
@@ -844,42 +844,96 @@ void Kernel::drive(std::uint32_t processIndex, std::uint32_t position, std::uint
     }
     const SimTime time = currentTime + delay;
     std::vector<Transaction>& waveform = projectedWaveforms[driverBase[processIndex] + position];
+    const std::uint32_t end = lowBit + value.width();
+    const auto overlaps = [lowBit, end](const Transaction& transaction) {
+        return transaction.lowBit < end && lowBit < transaction.endBit();
+    };
+
+    // The bits it assigns lose every transaction at or after its time (IEEE 1076 section
+    // 10.5.2.2), so of a process's assignments to a signal in one run, the last is what happens.
+    // Each scalar subelement has a driver of its own, so a transaction reaching over bits this
+    // one does not assign keeps them, cut down to what remains.
+    std::vector<Transaction> kept;
+    kept.reserve(waveform.size() + 1);
+    for (Transaction& old : waveform) {
+        if (old.time < time || !overlaps(old)) {
+            kept.push_back(std::move(old));
+            continue;
+        }
+        unscheduleTransaction(old);
+        const DriverOf driver{
+            .processIndex = processIndex, .position = position, .signalIndex = signalIndex};
+        if (old.lowBit < lowBit) kept.push_back(remainder(driver, old, old.lowBit, lowBit));
+        if (end < old.endBit()) kept.push_back(remainder(driver, old, end, old.endBit()));
+    }
+    waveform = std::move(kept);
+
     eir::BitVector stored = eir::BitVector::from(value);
 
-    // Every transaction at or after the new one's time is deleted (IEEE 1076 section
-    // 10.5.2.2), so of a process's assignments to a signal in one run, the last is what happens.
-    while (!waveform.empty() && waveform.back().time >= time) {
-        unscheduleTransaction(waveform.back());
-        waveform.pop_back();
-    }
-
-    // Inertially, so are those within the rejection limit before it — which is the delay, so
-    // every one still pending — except for a run of transactions of the new value immediately
-    // before it, which the new one only prolongs.
+    // Inertially, so do those within the rejection limit before it, which is the delay, so every
+    // one still pending; but for a run of transactions of the new value immediately before it,
+    // which the new one only prolongs.
     if (inertial && delay > 0) {
-        std::size_t kept = waveform.size();
-        while (kept > 0 && waveform[kept - 1].value == stored) --kept;
-        for (std::size_t index = 0; index < kept; ++index) unscheduleTransaction(waveform[index]);
-        waveform.erase(waveform.begin(), waveform.begin() + static_cast<std::ptrdiff_t>(kept));
+        std::vector<bool> deleted(waveform.size(), false);
+        bool run = true;
+        for (std::size_t index = waveform.size(); index-- > 0;) {
+            const Transaction& old = waveform[index];
+            if (!overlaps(old)) continue;
+            if (old.lowBit != lowBit || old.value.width() != value.width()) {
+                // Rejection is decided for each subelement, and this transaction covers some of
+                // the new one's and not others; deciding it for the whole would be wrong.
+                diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                                   "an inertial assignment to a signal whose driver has a "
+                                   "transaction pending for only part of what it assigns");
+                errorRequested = true;
+                return;
+            }
+            if (run && old.value == stored) continue;
+            run = false;
+            deleted[index] = true;
+            unscheduleTransaction(old);
+        }
+        std::size_t next = 0;
+        std::erase_if(waveform, [&deleted, &next](const Transaction&) { return deleted[next++]; });
     }
 
+    // After every transaction of its time or earlier, so the waveform stays in time order.
     const std::uint64_t serial = ++nextWriteSerial;
-    if (delay == 0) {
-        deltaTransactions.push_back(DeltaTransaction{.processIndex = processIndex,
-                                                     .position = position,
-                                                     .signalIndex = signalIndex,
+    schedule({.processIndex = processIndex, .position = position, .signalIndex = signalIndex}, time,
+             serial);
+    const auto place = std::ranges::upper_bound(waveform, time, {}, &Transaction::time);
+    waveform.insert(
+        place,
+        Transaction{.time = time, .serial = serial, .lowBit = lowBit, .value = std::move(stored)});
+}
+
+void Kernel::schedule(const DriverOf& driver, SimTime time, std::uint64_t serial) {
+    if (time == currentTime) {
+        deltaTransactions.push_back(DeltaTransaction{.processIndex = driver.processIndex,
+                                                     .position = driver.position,
+                                                     .signalIndex = driver.signalIndex,
                                                      .serial = serial});
-    } else {
-        // The value stays on the waveform, where a later assignment compares against it.
-        delayedWrites[time].push_back(DelayedWrite{.processIndex = processIndex,
-                                                   .position = position,
-                                                   .signalIndex = signalIndex,
-                                                   .nonBlocking = false,
-                                                   .transaction = true,
-                                                   .serial = serial,
-                                                   .value = eir::BitVector(1)});
+        return;
     }
-    waveform.push_back(Transaction{.time = time, .serial = serial, .value = std::move(stored)});
+    // The value stays on the waveform, where a later assignment compares against it.
+    delayedWrites[time].push_back(DelayedWrite{.processIndex = driver.processIndex,
+                                               .position = driver.position,
+                                               .signalIndex = driver.signalIndex,
+                                               .nonBlocking = false,
+                                               .transaction = true,
+                                               .serial = serial,
+                                               .value = eir::BitVector(1)});
+}
+
+Kernel::Transaction Kernel::remainder(const DriverOf& driver, const Transaction& transaction,
+                                      std::uint32_t lowBit, std::uint32_t endBit) {
+    eir::BitVector part(endBit - lowBit);
+    eir::bitops::partSelectAt(part.mutableRef(), transaction.value.ref(),
+                              lowBit - transaction.lowBit);
+    const std::uint64_t serial = ++nextWriteSerial;
+    schedule(driver, transaction.time, serial);
+    return Transaction{
+        .time = transaction.time, .serial = serial, .lowBit = lowBit, .value = std::move(part)};
 }
 
 void Kernel::unscheduleTransaction(const Transaction& transaction) {
@@ -893,14 +947,27 @@ void Kernel::unscheduleTransaction(const Transaction& transaction) {
     if (slot->second.empty()) delayedWrites.erase(slot);
 }
 
-std::optional<eir::BitVector>
+std::optional<Kernel::Transaction>
 Kernel::takeTransaction(std::uint32_t processIndex, std::uint32_t position, std::uint64_t serial) {
     std::vector<Transaction>& waveform = projectedWaveforms[driverBase[processIndex] + position];
     const auto found = std::ranges::find(waveform, serial, &Transaction::serial);
     if (found == waveform.end()) return std::nullopt;
-    eir::BitVector value = std::move(found->value);
+    Transaction taken = std::move(*found);
     waveform.erase(found);
-    return value;
+    return taken;
+}
+
+void Kernel::applyTransaction(std::uint32_t processIndex, std::uint32_t position,
+                              std::uint32_t signalIndex, const Transaction& transaction) {
+    const WriteRoute& route = processes[processIndex].writeRoutes[position];
+    if (!route.direct()) {
+        writeThroughDrivers(route, transaction.value.ref(), transaction.lowBit);
+    } else if (transaction.lowBit == 0
+               && transaction.value.width() == designImage->signals()[signalIndex].bitWidth) {
+        writeSignal(signalIndex, transaction.value.ref());
+    } else {
+        writeSignalPart(signalIndex, transaction.value.ref(), transaction.lowBit);
+    }
 }
 
 void Kernel::applyDeltaTransactions() {
@@ -908,11 +975,11 @@ void Kernel::applyDeltaTransactions() {
     // what it assigns belongs to the delta cycle after this one.
     const std::vector<DeltaTransaction> due = std::exchange(deltaTransactions, {});
     for (const DeltaTransaction& transaction : due) {
-        const std::optional<eir::BitVector> value =
+        const std::optional<Transaction> taken =
             takeTransaction(transaction.processIndex, transaction.position, transaction.serial);
-        if (!value) continue;
-        writeRouted(transaction.processIndex, transaction.position, transaction.signalIndex,
-                    value->ref());
+        if (!taken) continue;
+        applyTransaction(transaction.processIndex, transaction.position, transaction.signalIndex,
+                         *taken);
         if (stopping()) break;
     }
 }

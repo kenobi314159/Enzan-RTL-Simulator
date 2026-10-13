@@ -38,7 +38,8 @@ bool isStore(eir::Opcode opcode) noexcept {
     return opcode == eir::Opcode::Store || opcode == eir::Opcode::StorePart
            || opcode == eir::Opcode::StoreNonBlocking || opcode == eir::Opcode::StorePartNonBlocking
            || opcode == eir::Opcode::StoreDelayed || opcode == eir::Opcode::StoreNonBlockingDelayed
-           || opcode == eir::Opcode::Drive || opcode == eir::Opcode::DriveTransport;
+           || opcode == eir::Opcode::Drive || opcode == eir::Opcode::DriveTransport
+           || opcode == eir::Opcode::DrivePart;
 }
 
 /// Assigns each virtual register a Word offset in the frame and records its width.

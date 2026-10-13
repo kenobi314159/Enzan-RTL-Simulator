@@ -877,6 +877,93 @@ TEST(Kernel, ATransportDriveRejectsNothing) {
     EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "1");
 }
 
+/// A process driving a 16-bit `s` as `steps` say: a whole drive when `offset` is absent, and a
+/// part drive of the low or the high byte otherwise.
+struct PartStep {
+    std::uint16_t value = 0;
+    std::optional<std::uint32_t> offset;
+    std::uint64_t delay = 0;
+    bool inertial = true;
+};
+
+Process makePartDriver(const std::vector<PartStep>& steps) {
+    ProcessBuilder builder(ProcessKind::Always, "driver");
+    const std::uint32_t whole = builder.reg(Type::bits(16, false, false));
+    const std::uint32_t byte = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t delay = builder.reg(Type::bits(64, true, false));
+    const std::uint32_t offset = builder.reg(Type::bits(32, false, false));
+    builder.block("entry");
+    for (const PartStep& step : steps) {
+        if (step.offset) {
+            builder.emit(Instruction::make(
+                Opcode::LoadConstant, Operand::reg(byte),
+                Operand::constant(builder.constant("8'd" + std::to_string(step.value)))));
+            builder.emit(Instruction::make(
+                Opcode::LoadConstant, Operand::reg(offset),
+                Operand::constant(builder.constant("32'd" + std::to_string(*step.offset)))));
+            builder.drivePart(0, byte, offset, 16);
+            continue;
+        }
+        builder.emit(Instruction::make(
+            Opcode::LoadConstant, Operand::reg(whole),
+            Operand::constant(builder.constant("16'd" + std::to_string(step.value)))));
+        builder.emit(Instruction::make(
+            Opcode::LoadConstant, Operand::reg(delay),
+            Operand::constant(builder.constant("64'd" + std::to_string(step.delay)))));
+        builder.drive(0, whole, delay, step.inertial);
+    }
+    builder.waitEvents({}, builder.nextBlock());
+    builder.block("end");
+    builder.emit(Instruction::make(Opcode::Return));
+    Process process = builder.finish();
+    process.drivesSignals = true;
+    return process;
+}
+
+ModuleDefinition partDriven(std::vector<Process> processes) {
+    return makeTop(std::move(processes),
+                   {Object{.name = "s", .type = Type::bits(16, false, false)}});
+}
+
+TEST(Kernel, AssignmentsToSeparatePartsOfASignalAreSeparateTransactions) {
+    // s(0) <= ...; s(1) <= ...; in one run: neither deletes the other.
+    Simulation simulation(designOf(partDriven({makePartDriver(
+                              {{.value = 0x34, .offset = 0}, {.value = 0x12, .offset = 8}})})),
+                          "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Hexadecimal), "1234");
+}
+
+TEST(Kernel, APartAssignmentDeletesOnlyThePendingBitsItAssigns) {
+    // s <= transport x"1111" after 10; s(low byte) <= x"22": what was pending for the low byte is
+    // gone, and the high byte's part of it still happens at 10.
+    Simulation simulation(
+        designOf(partDriven({makePartDriver(
+            {{.value = 0x1111, .delay = 10, .inertial = false}, {.value = 0x22, .offset = 0}})})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Hexadecimal), "0022");
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Hexadecimal), "1122");
+    EXPECT_EQ(simulation.time(), 10U);
+}
+
+TEST(Kernel, InertialRejectionOverAPartlyPendingSignalIsRefused) {
+    // Rejection is decided for each subelement, and a pending transaction for part of what an
+    // inertial assignment assigns would need it decided for some of them and not others.
+    Simulation simulation(designOf(partDriven({makePartDriver(
+                              {{.value = 0x22, .offset = 0}, {.value = 0x1111, .delay = 10}})})),
+                          "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::NotYetImplemented));
+}
+
 TEST(Kernel, ATransactionTakesEffectBeforeProcessesResumeAtItsTime) {
     // A process waking from `wait for 5` at 5 sees what a transaction for 5 set, since VHDL
     // updates signals before it resumes processes (IEEE 1076 section 14.7.5).

@@ -583,6 +583,7 @@ private:
             case Opcode::StoreNonBlockingDelayed:
             case Opcode::Drive:
             case Opcode::DriveTransport:
+            case Opcode::DrivePart:
                 reportBody(definition, body,
                            std::format("{} schedules a write, which a subprogram may not; its "
                                        "stores are immediate",
@@ -622,6 +623,7 @@ private:
         // so only the object itself is checked.
         case Opcode::StorePart:
         case Opcode::StorePartNonBlocking:
+        case Opcode::DrivePart:
             checkObjectAccess(definition, body, instruction.a, true, where);
             break;
 

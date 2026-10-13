@@ -404,8 +404,12 @@ public:
     /// one has run, which is when a non-blocking update does. A later one takes effect when its
     /// time step begins, before any process runs in it, which is VHDL's signal update phase
     /// mapped onto the start of the Active region (DESIGN_GUIDE.md section 3.5).
+    ///
+    /// `value` is the bits from `lowBit` up that the assignment gives a value, all of the signal
+    /// or part of it: each scalar subelement has a driver of its own, so a transaction deletes
+    /// only what is pending for the bits it assigns.
     void drive(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,
-               eir::ConstBitRef value, SimTime delay, bool inertial);
+               eir::ConstBitRef value, std::uint32_t lowBit, SimTime delay, bool inertial);
 
     /// Suspends a process until `edge` occurs on `signalIndex`.
     void suspendForEdge(std::uint32_t processIndex, std::uint32_t signalIndex, eir::EdgeKind edge,
@@ -621,7 +625,12 @@ private:
     struct Transaction {
         SimTime time = 0;
         std::uint64_t serial = 0;
+
+        /// The bits of the signal it assigns: from `lowBit`, as wide as `value`.
+        std::uint32_t lowBit = 0;
         eir::BitVector value;
+
+        [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + value.width(); }
     };
 
     /// Each VHDL driver's projected waveform, in time order, indexed by `driverBase` of its
@@ -643,10 +652,30 @@ private:
     /// when nothing else is due then: a deleted transaction leaves no step behind.
     void unscheduleTransaction(const Transaction& transaction);
 
-    /// Takes the transaction `serial` off its driver's projected waveform, returning its value,
-    /// or nothing when a later assignment has already deleted it.
-    std::optional<eir::BitVector> takeTransaction(std::uint32_t processIndex,
-                                                  std::uint32_t position, std::uint64_t serial);
+    /// Takes the transaction `serial` off its driver's projected waveform, or nothing when a later
+    /// assignment has already deleted it.
+    std::optional<Transaction> takeTransaction(std::uint32_t processIndex, std::uint32_t position,
+                                               std::uint64_t serial);
+
+    /// Writes what `transaction` assigns, through the process's route as a store does.
+    void applyTransaction(std::uint32_t processIndex, std::uint32_t position,
+                          std::uint32_t signalIndex, const Transaction& transaction);
+
+    /// Whose a transaction is: the driver a process has through a write position, of a signal.
+    struct DriverOf {
+        std::uint32_t processIndex = 0;
+        std::uint32_t position = 0;
+        std::uint32_t signalIndex = 0;
+    };
+
+    /// Queues the transaction `serial` of `driver` for `time`: for the next delta cycle when that
+    /// is now, and in the time wheel otherwise.
+    void schedule(const DriverOf& driver, SimTime time, std::uint64_t serial);
+
+    /// What remains of `transaction` on bits `lowBit` to `endBit` when an assignment deletes the
+    /// rest, queued afresh as a transaction of its own.
+    Transaction remainder(const DriverOf& driver, const Transaction& transaction,
+                          std::uint32_t lowBit, std::uint32_t endBit);
 
     /// Applies the transactions due in this delta cycle.
     void applyDeltaTransactions();

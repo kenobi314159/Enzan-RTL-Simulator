@@ -164,9 +164,20 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
         case eir::Opcode::DriveTransport: {
             const eir::ConstBitRef delay = reg(instruction.c, instruction.cWidth);
             kernel.drive(processIndex, instruction.dst, current.objectSignals[instruction.a],
-                         reg(instruction.b, instruction.bWidth),
+                         reg(instruction.b, instruction.bWidth), 0,
                          delay.hasUnknown() ? 0 : delay.toUInt64(),
                          instruction.opcode == eir::Opcode::Drive);
+            if (kernel.errorRequested) return ExecutionResult::Stopped;
+            break;
+        }
+
+        case eir::Opcode::DrivePart: {
+            // An unknown offset names no subelement, so nothing is assigned.
+            const eir::ConstBitRef offset = reg(instruction.c, instruction.cWidth);
+            if (offset.hasUnknown()) break;
+            kernel.drive(processIndex, instruction.dst, current.objectSignals[instruction.a],
+                         reg(instruction.b, instruction.bWidth),
+                         static_cast<std::uint32_t>(offset.toUInt64()), 0, true);
             if (kernel.errorRequested) return ExecutionResult::Stopped;
             break;
         }
