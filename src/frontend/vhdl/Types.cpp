@@ -257,7 +257,8 @@ std::optional<std::vector<eir::BitVector>> elementsOf(tree_t expression, const E
 
     case T_FCALL: {
         // A constant function's result, folded from what it returns.
-        if (tree_has_ref(expression) && tree_subkind(tree_ref(expression)) == S_USER) {
+        if (tree_has_ref(expression)
+            && hasVhdlBody(static_cast<subprogram_kind_t>(tree_subkind(tree_ref(expression))))) {
             std::optional<std::vector<eir::BitVector>> result;
             folder.returned(expression, [&](tree_t value, const Folder& frame) {
                 result = elementsOf(value, element, length, frame);

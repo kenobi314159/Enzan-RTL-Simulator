@@ -797,6 +797,55 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AnImpureFunctionGivenNoFileInitialisesAMemory) {
+    // As NEORV32's testbench memory starts: an impure function that would read a file only when
+    // given its name, building the memory in an array variable. Given none, it is static.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.numeric_bit.all;
+use std.textio.all;
+
+entity tb is
+  generic (mem_file : string := ""; words : natural := 8);
+end entity;
+
+architecture test of tb is
+  type ram_t is array (natural range <>) of bit_vector(7 downto 0);
+
+  impure function init (file_name : string; num_words : natural) return ram_t is
+    file hex_file : text;
+    variable mem_v : ram_t(0 to num_words - 1);
+  begin
+    mem_v := (others => (others => '0'));
+    if file_name /= "" then
+      file_open(hex_file, file_name, read_mode);
+    end if;
+    for i in 0 to num_words - 1 loop
+      mem_v(i) := bit_vector(to_unsigned(i * 3, 8));
+    end loop;
+    return mem_v;
+  end function;
+
+  signal mem : ram_t(0 to words - 1) := init(mem_file, words);
+begin
+  process
+  begin
+    wait for 1 ns;
+    assert mem(0) = x"00" and mem(5) = x"0f" and mem(7) = x"15" report "mem" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.

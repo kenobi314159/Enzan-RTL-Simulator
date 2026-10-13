@@ -757,7 +757,7 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     // unconnected port reads; a connected one is the signal it connects.
     std::optional<eir::BitVector> initial;
     if (tree_has_value(declaration)) {
-        initial = constantBits(tree_value(declaration), *layout, folding);
+        initial = constantBits(tree_value(declaration), *layout, folding.elaborating());
         if (!initial) {
             unsupported(tree_value(declaration), "an initial value that is not static");
             return false;

@@ -1893,10 +1893,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::call(tree_t expression) {
     tree_t declaration = tree_ref(expression);
     const auto kind = static_cast<subprogram_kind_t>(tree_subkind(declaration));
 
-    // The IEEE packages' subprograms are VHDL with bodies, whatever NVC marks them with.
-    const bool hasBody =
-        kind == S_USER || kind == S_IEEE_MISC || (kind >= S_IEEE_AND && kind <= S_IEEE_NOT);
-    if (!hasBody) return predefined(expression, kind);
+    if (!hasVhdlBody(kind)) return predefined(expression, kind);
 
     // `now` counts femtoseconds, which EIR's time counts in its own unit.
     if (names(tree_ident2(declaration), "STD.STANDARD.NOW")) {

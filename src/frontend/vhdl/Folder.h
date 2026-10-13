@@ -13,6 +13,12 @@
 
 namespace enzan::frontend::vhdl {
 
+/// True when a subprogram of `kind` is VHDL with a body, rather than one the language predefines:
+/// a design's own, and the IEEE packages', whatever NVC marks them with.
+[[nodiscard]] constexpr bool hasVhdlBody(subprogram_kind_t kind) noexcept {
+    return kind == S_USER || kind == S_IEEE_MISC || (kind >= S_IEEE_AND && kind <= S_IEEE_NOT);
+}
+
 /// The body of the subprogram `declaration` declares: itself when it is one, and otherwise the one
 /// its package body or its declarative region holds. Null when the body has not been analysed.
 [[nodiscard]] tree_t subprogramBody(tree_t declaration);
@@ -43,6 +49,15 @@ public:
     /// Binds `declaration`, a generic of an array type, to the bits of its value.
     void bindComposite(tree_t declaration, eir::BitVector bits) {
         composites.insert_or_assign(declaration, std::move(bits));
+    }
+
+    /// The same bindings, folding at elaboration: a signal's initial value, which is computed once
+    /// before the run, may call an impure function, as a memory read from a file is. Elsewhere one
+    /// does not fold, since what it returns may depend on the run: `now` above all.
+    [[nodiscard]] Folder elaborating() const {
+        Folder copy = *this;
+        copy.impureAllowed = true;
+        return copy;
     }
 
     /// Binds everything `other` binds as well, replacing what both bind: an instance's generics
@@ -147,6 +162,7 @@ private:
     Generics generics;
     std::map<tree_t, eir::BitVector> composites;
     std::map<tree_t, Range> objectBounds;
+    bool impureAllowed = false;
 };
 
 } // namespace enzan::frontend::vhdl

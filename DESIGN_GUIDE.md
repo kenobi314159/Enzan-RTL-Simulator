@@ -959,9 +959,13 @@ What a VHDL unit becomes in EIR:
   delta a collapsed port does not, so a clock through such an association lags its data
   by one; a clock is rarely one.
 - A constant function is run as the adapter folds: a call of a pure function of the
-  design whose arguments fold runs its body's variables, `if`, `case`, loops and
-  `return` over their values, with an architecture's generics in view, as
-  `index_size_f(MEM_SIZE/4)` sizing a memory needs. What it returns is folded where it
+  design or of the IEEE packages whose arguments fold runs its body's variables, scalar
+  or composite, `if`, `case`, loops and `return` over their values, with an
+  architecture's generics in view, as `index_size_f(MEM_SIZE/4)` sizing a memory needs.
+  A signal's initial value is computed once at elaboration, so an impure function folds
+  there too when what it runs is static, as a memory that reads a file only when given
+  its name does when given none; elsewhere an impure function never folds, `now` least
+  of all. What it returns is folded where it
   returned, a scalar or an array, so a function choosing between two vectors folds too.
   A call that does anything else, or runs a million statements, does not fold, and its
   use is refused where a static value is needed. Elements and slices of static arrays

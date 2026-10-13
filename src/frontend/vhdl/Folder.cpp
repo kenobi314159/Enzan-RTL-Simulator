@@ -134,7 +134,7 @@ std::optional<std::int64_t> Folder::call(tree_t expression) const {
     if (!tree_has_ref(expression)) return std::nullopt;
     tree_t declaration = tree_ref(expression);
     const auto kind = static_cast<subprogram_kind_t>(tree_subkind(declaration));
-    if (kind == S_USER) return constantCall(expression, declaration);
+    if (hasVhdlBody(kind)) return constantCall(expression, declaration);
 
     // Two arrays of different lengths are never equal, and two null arrays always are, whatever
     // their elements would be: the bounds decide, without the values.
@@ -404,6 +404,18 @@ public:
             switch (tree_kind(declaration)) {
             case T_VAR_DECL: {
                 type_t type = tree_type(declaration);
+                if (type_is_array(type) || type_is_record(type)) {
+                    // A composite variable is its bits, bound as an array generic's are.
+                    const std::optional<Layout> layout = layoutOf(type, frame);
+                    if (!layout) return false;
+                    std::optional<eir::BitVector> initial =
+                        tree_has_value(declaration)
+                            ? constantBits(tree_value(declaration), *layout, frame)
+                            : defaultBits(type, *layout, frame);
+                    if (!initial) return false;
+                    frame.bindComposite(declaration, std::move(*initial));
+                    break;
+                }
                 if (!type_is_scalar(type) || type_is_real(type)) return false;
                 const std::optional<std::int64_t> initial =
                     tree_has_value(declaration) ? frame.integer(tree_value(declaration))
@@ -412,6 +424,12 @@ public:
                 frame.bind(declaration, *initial);
                 break;
             }
+
+            // A file not opened where it is declared does nothing until something opens it, which
+            // does not fold.
+            case T_FILE_DECL:
+                if (tree_has_value(declaration)) return false;
+                break;
             case T_CONST_DECL:
             case T_TYPE_DECL:
             case T_SUBTYPE_DECL:
@@ -436,16 +454,7 @@ private:
         switch (tree_kind(statement)) {
         case T_NULL: return Flow::Continue;
 
-        case T_VAR_ASSIGN: {
-            tree_t target = tree_target(statement);
-            if (tree_kind(target) != T_REF || !tree_has_ref(target)
-                || tree_kind(tree_ref(target)) != T_VAR_DECL)
-                return Flow::Failed;
-            const std::optional<std::int64_t> value = frame.integer(tree_value(statement));
-            if (!value) return Flow::Failed;
-            frame.bind(tree_ref(target), *value);
-            return Flow::Continue;
-        }
+        case T_VAR_ASSIGN: return assignment(tree_target(statement), tree_value(statement));
 
         case T_RETURN:
             if (!tree_has_value(statement)) return Flow::Failed;
@@ -515,6 +524,48 @@ private:
 
         default: return Flow::Failed;
         }
+    }
+
+    /// `target := value`, of a scalar variable, a composite one, or an element of an array one.
+    Flow assignment(tree_t target, tree_t value) {
+        tree_t name = tree_kind(target) == T_ARRAY_REF ? tree_value(target) : target;
+        if (tree_kind(name) != T_REF || !tree_has_ref(name)
+            || tree_kind(tree_ref(name)) != T_VAR_DECL)
+            return Flow::Failed;
+        tree_t variable = tree_ref(name);
+        type_t type = tree_type(variable);
+
+        if (!type_is_array(type) && !type_is_record(type)) {
+            const std::optional<std::int64_t> scalar = frame.integer(value);
+            if (!scalar) return Flow::Failed;
+            frame.bind(variable, *scalar);
+            return Flow::Continue;
+        }
+        const std::optional<Layout> layout = layoutOf(type, frame);
+        const eir::BitVector* current = frame.compositeOf(variable);
+        if (!layout || current == nullptr) return Flow::Failed;
+
+        if (target == name) {
+            std::optional<eir::BitVector> bits = constantBits(value, *layout, frame);
+            if (!bits) return Flow::Failed;
+            frame.bindComposite(variable, std::move(*bits));
+            return Flow::Continue;
+        }
+
+        // One element, at the offset its index has in the whole.
+        if (!layout->isArray() || !layout->inner.empty() || tree_params(target) != 1)
+            return Flow::Failed;
+        const std::optional<std::int64_t> index = frame.integer(tree_value(tree_param(target, 0)));
+        const std::optional<Layout> element = elementLayout(*layout, frame);
+        if (!index || !element || *index < layout->index.low() || *index > layout->index.high())
+            return Flow::Failed;
+        const std::optional<eir::BitVector> bits = constantBits(value, *element, frame);
+        if (!bits) return Flow::Failed;
+        eir::BitVector updated = *current;
+        eir::bitops::assignPartAt(updated.mutableRef(), bits->ref(),
+                                  static_cast<std::uint64_t>(layout->bitOffset(*index)));
+        frame.bindComposite(variable, std::move(updated));
+        return Flow::Continue;
     }
 
     Flow caseStatement(tree_t statement) {
@@ -589,8 +640,11 @@ bool Folder::returned(tree_t call,
     tree_t declaration = tree_ref(call);
     const tree_kind_t kind = tree_kind(declaration);
     if (kind != T_FUNC_DECL && kind != T_FUNC_BODY) return false;
-    if (tree_subkind(declaration) != S_USER) return false;
-    if ((tree_flags(declaration) & TREE_F_IMPURE) != 0 || depth >= MaxDepth) return false;
+    if (!hasVhdlBody(static_cast<subprogram_kind_t>(tree_subkind(declaration)))) return false;
+    // At elaboration an impure function folds too when what it runs is static: one that would read
+    // a file only when given a name, and is given none. Opening the file does not fold.
+    if (((tree_flags(declaration) & TREE_F_IMPURE) != 0 && !impureAllowed) || depth >= MaxDepth)
+        return false;
     tree_t body = subprogramBody(declaration);
     if (body == nullptr || tree_ports(body) != tree_ports(declaration)) return false;
 
