@@ -174,6 +174,10 @@ public:
 
         /// Whether the IEEE packages' own warnings are reported, as GHDL's `--ieee-asserts`.
         bool ieeeWarnings = true;
+
+        /// The revision of IEEE 1076 VHDL sources are analysed against: its year, or the
+        /// year's last two digits.
+        std::string vhdlStandard = "2008";
     };
 
     /// Analyses `request` together with everything analysed before it.

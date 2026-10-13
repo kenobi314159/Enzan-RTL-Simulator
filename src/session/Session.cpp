@@ -285,6 +285,12 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     options.top = request.top;
     options.timeUnitExponent = scale.precisionExponent();
     options.ieeeWarnings = request.ieeeWarnings;
+    const std::string_view year = request.vhdlStandard;
+    if (year.ends_with("93")) options.units.standard = frontend::vhdl::Standard::Vhdl1993;
+    if (year.ends_with("00")) options.units.standard = frontend::vhdl::Standard::Vhdl2000;
+    if (year.ends_with("02")) options.units.standard = frontend::vhdl::Standard::Vhdl2002;
+    if (year.ends_with("08")) options.units.standard = frontend::vhdl::Standard::Vhdl2008;
+    if (year.ends_with("19")) options.units.standard = frontend::vhdl::Standard::Vhdl2019;
 
     std::unique_ptr<eir::Design> analysed = frontend::vhdl::analyse(options, sources, diagnostics);
     if (analysed == nullptr) return false;

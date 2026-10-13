@@ -130,6 +130,9 @@ Libraries:
       --name <n>          The name `lib create` gives a library.
       --work <name>       The library VHDL sources are analysed into, which they
                           name it by: `library neorv32;`. Default `work`.
+      --std <1993|2000|2002|2008|2019>
+                          The revision of IEEE 1076 VHDL sources are analysed
+                          against, or its last two digits. Default 2008.
       --ieee-asserts <enable|disable>
                           Whether the IEEE packages' own warnings, numeric_std's
                           of metavalues and truncation, are reported. As GHDL's
@@ -215,6 +218,7 @@ struct Invocation {
 
     /// The library VHDL sources are analysed into, by the name they refer to it by.
     std::string workLibrary = "work";
+    std::string vhdlStandard = "2008";
     bool ieeeWarnings = true;
 
     /// The severity, as a position of `severity_level`, at which a VHDL report ends the run; 4
@@ -346,6 +350,20 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             invocation.workLibrary = value;
+            continue;
+        }
+
+        if (argument == "--std") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            static constexpr std::array<std::string_view, 10> Revisions{
+                "1993", "93", "2000", "00", "2002", "02", "2008", "08", "2019", "19"};
+            if (std::ranges::find(Revisions, std::string_view(value)) == Revisions.end()) {
+                std::cerr << "enzan: '" << value
+                          << "' is not a revision of VHDL: 1993, 2000, 2002, 2008 or 2019\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.vhdlStandard = value;
             continue;
         }
 
@@ -797,6 +815,7 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
     request.top = invocation.topModule;
     request.vhdlWork = invocation.workLibrary;
     request.ieeeWarnings = invocation.ieeeWarnings;
+    request.vhdlStandard = invocation.vhdlStandard;
     return true;
 }
 
