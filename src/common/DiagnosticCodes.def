@@ -65,6 +65,9 @@ ENZAN_DIAG(VhdlUnsupported, 2005, Error, "{} is not supported by the VHDL fronte
 ENZAN_DIAG(VhdlProcessNeverWaits, 2006, Error,
            "this process has no sensitivity list and no wait statement, so once started it would "
            "run for ever without letting simulated time advance")
+ENZAN_DIAG(VhdlUnboundComponent, 2007, Warning,
+           "component '{}' has no entity of its name to be bound to, so this instance is left "
+           "unbound and does nothing (IEEE 1076 section 7.3.3)")
 
 // --- 3000-3999: elaboration -------------------------------------------------
 

@@ -537,6 +537,43 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AComponentWithNoEntityToBindIsLeftUnbound) {
+    // An unbound instance is legal (IEEE 1076 section 7.3.3): it does nothing, so what it would
+    // drive keeps its initial value, and a warning says why.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  component missing is
+    port (o : out bit);
+  end component;
+
+  signal s : bit := '1';
+begin
+  u : missing port map (o => s);
+
+  process
+  begin
+    wait for 1 ns;
+    assert s = '1' report "driven" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+    const Diagnostic* unbound = first(DiagCode::VhdlUnboundComponent);
+    ASSERT_NE(unbound, nullptr) << transcript();
+    EXPECT_EQ(unbound->severity, enzan::DiagnosticSeverity::Warning);
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, ConstantFunctionsAndArraysFoldIntoGenericsAndGenerates) {
     // As NEORV32 chooses its boot address and its bus devices: a function returning one of two
     // vectors, nested; a slice of an array generic passed down; and generate statements on the

@@ -1153,12 +1153,12 @@ void ArchitectureTranslator::instance(tree_t statement) {
             }
             break;
         }
+        // With no entity to bind by default, the instance is unbound, which is legal: it has no
+        // behaviour, and its actuals are driven by nothing in it.
         entity = design.boundEntity(component, specialisation.architecture);
         if (entity == nullptr) {
-            design.diagnostics().report(
-                DiagCode::VhdlError, locate(statement),
-                std::format("component '{}' has no entity of its name to be bound to",
-                            simpleName(tree_ident(component))));
+            design.diagnostics().report(DiagCode::VhdlUnboundComponent, locate(statement),
+                                        simpleName(tree_ident(component)));
             return;
         }
         architecture = design.architectureOf(entity);
