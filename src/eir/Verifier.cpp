@@ -42,6 +42,8 @@ public:
             }
         }
 
+        checkVhdlTypes(definition);
+
         for (const Instance& instance : definition.instances) checkInstance(definition, instance);
 
         for (const Process& process : definition.processes) checkProcess(definition, process);
@@ -62,6 +64,44 @@ public:
     }
 
 private:
+    /// The VHDL type table only says what objects are, but whatever reads it follows its
+    /// indices, so each must name an entry of the table it is into.
+    void checkVhdlTypes(const ModuleDefinition& definition) {
+        const std::size_t count = definition.vhdlTypes.size();
+        for (const Object& object : definition.objects) {
+            if (object.vhdlType != VhdlType::None && object.vhdlType >= count) {
+                report(definition, std::format("object '{}' is of VHDL type {}, but the module has "
+                                               "{}",
+                                               object.name, object.vhdlType, count));
+            }
+        }
+        for (const Parameter& parameter : definition.parameters) {
+            if (parameter.vhdlType != VhdlType::None && parameter.vhdlType >= count) {
+                report(definition, std::format("generic '{}' is of VHDL type {}, but the module "
+                                               "has {}",
+                                               parameter.name, parameter.vhdlType, count));
+            }
+        }
+        for (std::size_t index = 0; index < count; ++index) {
+            const VhdlType& type = definition.vhdlTypes[index];
+            const bool badElement = type.kind == VhdlType::Kind::Array
+                                        ? type.element >= count || type.element == index
+                                        : type.element != VhdlType::None;
+            const bool badEnumeration = type.kind == VhdlType::Kind::Enumeration
+                                            ? type.enumIndex >= definition.enums.size()
+                                            : type.enumIndex != VhdlType::None;
+            const bool badField =
+                std::ranges::any_of(type.fields, [&](const VhdlType::Field& field) {
+                    return field.type >= count || field.type == index;
+                });
+            if (badElement || badEnumeration || badField) {
+                report(definition, std::format("VHDL type {} ('{}') names an element, a field or "
+                                               "an enumeration the module does not have",
+                                               index, type.name));
+            }
+        }
+    }
+
     void report(const ModuleDefinition& definition, const std::string& message) {
         ++problems;
         diagnostics.report(DiagCode::InvalidEir, definition.location,

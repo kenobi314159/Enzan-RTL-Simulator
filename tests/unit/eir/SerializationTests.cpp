@@ -57,6 +57,7 @@ using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
 using enzan::eir::Type;
 using enzan::eir::UnpackedDimension;
+using enzan::eir::VhdlType;
 using enzan::eir::WriteExtent;
 using enzan::test::literal;
 
@@ -97,6 +98,23 @@ ModuleDefinition richModule(BufferId buffer) {
     states.members.push_back(EnumMember{.name = "S_IDLE", .value = literal("2'b00")});
     states.members.push_back(EnumMember{.name = "S_RUN", .value = literal("2'b01")});
     definition.enums.push_back(std::move(states));
+
+    // A record of a bit and a vector of them, `7 downto 0`.
+    definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Enumeration,
+                                            .name = "BIT",
+                                            .width = 1,
+                                            .ranges = {{.left = 0, .right = 1, .ascending = true}},
+                                            .enumIndex = 0});
+    definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Array,
+                                            .name = "BIT_VECTOR",
+                                            .width = 8,
+                                            .ranges = {{.left = 7, .right = 0, .ascending = false}},
+                                            .element = 0});
+    definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Record,
+                                            .name = "PAIR",
+                                            .width = 9,
+                                            .fields = {{.name = "FLAG", .type = 0, .offset = 8},
+                                                       {.name = "DATA", .type = 1, .offset = 0}}});
 
     definition.addObject(Object{.name = "clk",
                                 .type = Type::logic(),
@@ -429,7 +447,7 @@ TEST_F(SerializationTest, AnInstructionWithNoLocationStaysWithoutOne) {
     EXPECT_FALSE(decoded.front().processes[0].blocks[0].instructions[0].location.valid());
 }
 
-TEST_F(SerializationTest, EnumerationsAndParametersRoundTrip) {
+TEST_F(SerializationTest, EnumerationsVhdlTypesAndParametersRoundTrip) {
     const std::vector<ModuleDefinition> decoded = roundTrip({richModule(buffer)});
     const ModuleDefinition& definition = decoded.front();
 
@@ -438,6 +456,9 @@ TEST_F(SerializationTest, EnumerationsAndParametersRoundTrip) {
     ASSERT_EQ(definition.enums[0].members.size(), 2U);
     EXPECT_EQ(definition.enums[0].members[1].name, "S_RUN");
     EXPECT_EQ(definition.enums[0].members[1].value, literal("2'b01"));
+
+    ASSERT_EQ(definition.vhdlTypes.size(), 3U);
+    EXPECT_EQ(definition.vhdlTypes, richModule(buffer).vhdlTypes);
 
     ASSERT_EQ(definition.parameters.size(), 2U);
     EXPECT_EQ(definition.parameters[0].name, "WIDTH");

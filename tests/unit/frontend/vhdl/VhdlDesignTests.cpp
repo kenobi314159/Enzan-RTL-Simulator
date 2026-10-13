@@ -4,6 +4,7 @@
 // kernel. Each design checks itself, so a passing run is one whose assertions held; what each
 // expects was checked against GHDL when the test was written.
 
+#include "eir/Verifier.h"
 #include "frontend/vhdl/VhdlFrontend.h"
 
 #include "common/Diagnostics.h"
@@ -33,6 +34,7 @@ using enzan::DiagnosticEngine;
 using enzan::SourceManager;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::PortDirection;
+using enzan::eir::VhdlType;
 using enzan::frontend::vhdl::DesignOptions;
 using enzan::runtime::RunStatus;
 using enzan::test::Simulation;
@@ -535,6 +537,74 @@ end architecture;
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     simulation.run();
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, ObjectsNameTheirVhdlTypes) {
+    // What VHPI reads an object as: its type's kind, name, bounds and direction, an array's
+    // element and a record's fields, which the bits alone do not say.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity typed is
+  generic (depth : natural := 3);
+  port (data : in std_ulogic_vector(7 downto 0);
+        count : out natural);
+end entity;
+
+architecture rtl of typed is
+  type pair is record
+    flag : boolean;
+    level : real;
+  end record;
+  type grid is array (0 to 1, 2 downto 0) of bit;
+  signal p : pair;
+  signal g : grid;
+begin
+  count <= depth;
+end architecture;
+)",
+                                                                 "typed");
+    ASSERT_NE(design, nullptr) << transcript();
+    const ModuleDefinition* typed = design->findModule("typed$depth_3");
+    ASSERT_NE(typed, nullptr);
+    const auto typeOf = [&](std::string_view name) -> const VhdlType& {
+        const std::optional<std::uint32_t> object = typed->findObject(name);
+        EXPECT_TRUE(object.has_value()) << name;
+        return typed->vhdlTypes.at(typed->objects.at(object.value_or(0)).vhdlType);
+    };
+
+    const VhdlType& data = typeOf("data");
+    EXPECT_EQ(data.kind, VhdlType::Kind::Array);
+    EXPECT_EQ(data.name, "STD_ULOGIC_VECTOR");
+    ASSERT_EQ(data.ranges.size(), 1U);
+    EXPECT_EQ(data.ranges[0], (VhdlType::Range{.left = 7, .right = 0, .ascending = false}));
+    const VhdlType& element = typed->vhdlTypes.at(data.element);
+    EXPECT_EQ(element.kind, VhdlType::Kind::Enumeration);
+    EXPECT_EQ(element.name, "STD_ULOGIC");
+    EXPECT_EQ(typed->enums.at(element.enumIndex).members.size(), 9U);
+
+    const VhdlType& count = typeOf("count");
+    EXPECT_EQ(count.kind, VhdlType::Kind::Integer);
+    EXPECT_EQ(count.name, "NATURAL");
+    ASSERT_EQ(count.ranges.size(), 1U);
+    EXPECT_EQ(count.ranges[0].left, 0);
+
+    const VhdlType& pair = typeOf("p");
+    EXPECT_EQ(pair.kind, VhdlType::Kind::Record);
+    ASSERT_EQ(pair.fields.size(), 2U);
+    EXPECT_EQ(pair.fields[0].name, "FLAG");
+    EXPECT_EQ(pair.fields[0].offset, 64U);
+    EXPECT_EQ(typed->vhdlTypes.at(pair.fields[1].type).kind, VhdlType::Kind::Floating);
+
+    const VhdlType& grid = typeOf("g");
+    ASSERT_EQ(grid.ranges.size(), 2U);
+    EXPECT_EQ(grid.ranges[1], (VhdlType::Range{.left = 2, .right = 0, .ascending = false}));
+    EXPECT_EQ(grid.width, 6 * typed->vhdlTypes.at(grid.element).width);
+
+    ASSERT_EQ(typed->parameters.size(), 1U);
+    EXPECT_EQ(typed->vhdlTypes.at(typed->parameters[0].vhdlType).name, "NATURAL");
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << transcript();
 }
 
 TEST_F(VhdlDesignTest, AComponentWithNoEntityToBindIsLeftUnbound) {

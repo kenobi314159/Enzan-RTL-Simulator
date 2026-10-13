@@ -26,6 +26,7 @@ using enzan::SourceManager;
 using enzan::eir::BasicBlock;
 using enzan::eir::CallSite;
 using enzan::eir::Design;
+using enzan::eir::EnumDefinition;
 using enzan::eir::Instruction;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
@@ -38,6 +39,7 @@ using enzan::eir::SensitivityEntry;
 using enzan::eir::Subprogram;
 using enzan::eir::SubprogramParameter;
 using enzan::eir::Type;
+using enzan::eir::VhdlType;
 using enzan::eir::WriteExtent;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
@@ -149,6 +151,33 @@ TEST_F(VerifierTest, AcceptsAWholeDesign) {
     Design design;
     design.addModule(makeValidModule());
     EXPECT_TRUE(enzan::eir::verify(design, engine));
+}
+
+TEST_F(VerifierTest, AcceptsVhdlTypesThatNameWhatTheModuleHas) {
+    ModuleDefinition definition = makeValidModule();
+    definition.enums.push_back(EnumDefinition{.name = "BIT", .members = {}});
+    definition.vhdlTypes.push_back(
+        VhdlType{.kind = VhdlType::Kind::Enumeration, .name = "BIT", .width = 1, .enumIndex = 0});
+    definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Array,
+                                            .name = "BIT_VECTOR",
+                                            .width = 8,
+                                            .ranges = {{.left = 7, .right = 0, .ascending = false}},
+                                            .element = 0});
+    definition.objects[0].vhdlType = 1;
+    EXPECT_TRUE(check(definition)) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, RejectsAVhdlTypeIndexOutsideTheTable) {
+    // VHPI follows these indices to answer what an object is; one past the table would be read
+    // as whatever memory follows it.
+    ModuleDefinition definition = makeValidModule();
+    definition.vhdlTypes.push_back(
+        VhdlType{.kind = VhdlType::Kind::Array, .name = "BIT_VECTOR", .width = 8, .element = 5});
+    definition.objects[0].vhdlType = 3;
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("is of VHDL type 3")) << consumer.messages.front();
+    EXPECT_TRUE(reported("names an element, a field or an enumeration"));
 }
 
 // ---------------------------------------------------------------------------

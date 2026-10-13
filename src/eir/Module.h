@@ -122,6 +122,57 @@ struct EnumDefinition {
     [[nodiscard]] std::string_view nameOf(const BitVector& value) const;
 };
 
+/// A VHDL type as the design declares it, for what reads a VHDL object from outside the
+/// simulation: VHPI's types, bounds and subelements (DESIGN_GUIDE.md section 9.7). Like an
+/// enumeration's table, it changes nothing about how the object behaves; its bits are laid out as
+/// the VHDL adapter lays them out, an array's left element and a record's first field highest.
+struct VhdlType {
+    enum class Kind : std::uint8_t { Enumeration, Integer, Physical, Floating, Array, Record };
+
+    /// A range of a scalar type, or of one dimension of an array, as declared: `7 downto 0`
+    /// is a left of 7, a right of 0 and not ascending. An enumeration's is of positions.
+    struct Range {
+        std::int64_t left = 0;
+        std::int64_t right = 0;
+        bool ascending = true;
+
+        friend bool operator==(const Range&, const Range&) noexcept = default;
+    };
+
+    /// A field of a record: its name, its type in the same table, and the offset of its bits.
+    struct Field {
+        std::string name;
+        std::uint32_t type = 0;
+        std::uint32_t offset = 0;
+
+        friend bool operator==(const Field&, const Field&) noexcept = default;
+    };
+
+    static constexpr std::uint32_t None = 0xFFFFFFFFU;
+
+    Kind kind = Kind::Integer;
+
+    /// The name of the type, or of its base type when it is an anonymous subtype, as VHDL
+    /// writes it in upper case: `STD_ULOGIC_VECTOR`, `INTEGER`.
+    std::string name;
+
+    std::uint32_t width = 0;
+
+    /// A scalar's range, or each dimension of an array, the first first.
+    std::vector<Range> ranges;
+
+    /// An enumeration's literals, an index into its definition's table of enumerations.
+    std::uint32_t enumIndex = None;
+
+    /// An array's element type, an index into the same table.
+    std::uint32_t element = None;
+
+    /// A record's fields, in the order they are declared.
+    std::vector<Field> fields;
+
+    friend bool operator==(const VhdlType&, const VhdlType&) noexcept = default;
+};
+
 /// One unpacked dimension of an array, as declared: `[0:15]` is a left of 0 and a right of 15.
 ///
 /// Kept for what reads the array as an array — VPI's `vpiRegArray`, the waveform database's
@@ -200,6 +251,10 @@ struct Object {
     /// otherwise. Its type is then the flat vector of all its elements.
     std::vector<UnpackedDimension> unpackedDimensions;
 
+    /// For a VHDL object, its type, an index into its definition's `vhdlTypes`, or
+    /// VhdlType::None.
+    std::uint32_t vhdlType = VhdlType::None;
+
     /// The width of one element, when `unpackedDimensions` is not empty.
     std::uint32_t elementWidth = 0;
 
@@ -246,6 +301,10 @@ struct Parameter {
     bool isLocal = false;
 
     SourceLocation location;
+
+    /// For a VHDL generic, its type, an index into its definition's `vhdlTypes`, or
+    /// VhdlType::None.
+    std::uint32_t vhdlType = VhdlType::None;
 };
 
 /// Direction of a module port.
@@ -366,6 +425,9 @@ struct ModuleDefinition {
 
     /// The enumerations objects here refer to by index.
     std::vector<EnumDefinition> enums;
+
+    /// The VHDL types this definition's objects are of, which they and each other index.
+    std::vector<VhdlType> vhdlTypes;
 
     /// What this parameterisation's parameters were resolved to, in declaration order.
     std::vector<Parameter> parameters;

@@ -152,6 +152,11 @@ private:
     /// time, or `NoEnum`.
     std::uint32_t enumFor(type_t type);
 
+    /// The index of `type`, laid out as `layout`, in this definition's table of VHDL types,
+    /// adding it and the types it is made of the first time; VhdlType::None for one the table
+    /// cannot describe.
+    std::uint32_t vhdlTypeFor(type_t type, const Layout& layout);
+
     DesignTranslator& design;
     const Specialisation& specialisation;
     Folder folding;
@@ -831,6 +836,70 @@ std::uint32_t ArchitectureTranslator::enumFor(type_t type) {
     return index;
 }
 
+std::uint32_t ArchitectureTranslator::vhdlTypeFor(type_t type, const Layout& layout) {
+    if (type == nullptr) return eir::VhdlType::None;
+    type_t base = type_base_recur(type);
+    // Names as VHPI gives a basic identifier's, in upper case.
+    const auto upperName = [](ident_t identifier) {
+        std::string name = simpleName(identifier);
+        std::ranges::transform(name, name.begin(), [](unsigned char letter) {
+            return static_cast<char>(std::toupper(letter));
+        });
+        return name;
+    };
+    eir::VhdlType described;
+    // A named subtype is known by its own name, `NATURAL`; an anonymous one by its base type's.
+    described.name = upperName(type_has_ident(type) ? type_ident(type) : type_ident(base));
+    described.width = layout.storage.bitWidth();
+    const auto rangeOf = [](const Folder::Range& range) {
+        return eir::VhdlType::Range{
+            .left = range.left, .right = range.right, .ascending = range.ascending};
+    };
+
+    if (layout.isRecord()) {
+        described.kind = eir::VhdlType::Kind::Record;
+        for (std::size_t index = 0; index < layout.fields.size(); ++index) {
+            tree_t field = type_field(layout.recordType, static_cast<unsigned>(index));
+            const std::uint32_t fieldType = vhdlTypeFor(tree_type(field), layout.fields[index]);
+            if (fieldType == eir::VhdlType::None) return eir::VhdlType::None;
+            described.fields.push_back(eir::VhdlType::Field{.name = upperName(tree_ident(field)),
+                                                            .type = fieldType,
+                                                            .offset = layout.fieldOffsets[index]});
+        }
+    } else if (layout.isArray()) {
+        described.kind = eir::VhdlType::Kind::Array;
+        described.ranges.push_back(rangeOf(layout.index));
+        for (const Folder::Range& inner : layout.inner) described.ranges.push_back(rangeOf(inner));
+        const std::optional<Layout> element = layoutOf(layout.elementType, folding);
+        if (!element) return eir::VhdlType::None;
+        described.element = vhdlTypeFor(layout.elementType, *element);
+        if (described.element == eir::VhdlType::None) return eir::VhdlType::None;
+    } else {
+        switch (type_kind(base)) {
+        case T_ENUM:
+            described.kind = eir::VhdlType::Kind::Enumeration;
+            described.enumIndex = enumFor(type);
+            if (described.enumIndex == eir::Object::NoEnum) return eir::VhdlType::None;
+            break;
+        case T_INTEGER: described.kind = eir::VhdlType::Kind::Integer; break;
+        case T_PHYSICAL: described.kind = eir::VhdlType::Kind::Physical; break;
+        case T_REAL: described.kind = eir::VhdlType::Kind::Floating; break;
+        default: return eir::VhdlType::None;
+        }
+        if (described.kind != eir::VhdlType::Kind::Floating) {
+            if (const std::optional<Folder::Range> range = folding.rangeOf(type))
+                described.ranges.push_back(rangeOf(*range));
+        }
+    }
+
+    // One entry for each type there is, however many objects are of it.
+    const auto found = std::ranges::find(result.vhdlTypes, described);
+    if (found != result.vhdlTypes.end())
+        return static_cast<std::uint32_t>(found - result.vhdlTypes.begin());
+    result.vhdlTypes.push_back(std::move(described));
+    return static_cast<std::uint32_t>(result.vhdlTypes.size() - 1);
+}
+
 bool ArchitectureTranslator::addObject(tree_t declaration) {
     type_t type = tree_type(declaration);
     const std::optional<Layout> layout = layoutOf(type, folding);
@@ -864,6 +933,7 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     object.location = locate(declaration);
     object.initialValue = std::move(initial);
     object.enumIndex = layout->isArray() ? eir::Object::NoEnum : enumFor(type);
+    object.vhdlType = vhdlTypeFor(type, *layout);
     object.encoding = encodingOf(type);
     object.resolution = resolutionOf(type).value_or(eir::Resolution{});
     objects.emplace(declaration, result.addObject(std::move(object)));
@@ -886,10 +956,13 @@ eir::ModuleDefinition ArchitectureTranslator::translate() {
             if (scalar != folding.bindings().end()) value = encode(scalar->second, *storage);
         }
         if (!value) continue;
-        result.parameters.push_back(eir::Parameter{.name = simpleName(tree_ident(generic)),
-                                                   .value = std::move(*value),
-                                                   .isLocal = false,
-                                                   .location = locate(generic)});
+        const std::optional<Layout> layout = layoutOf(tree_type(generic), folding);
+        result.parameters.push_back(eir::Parameter{
+            .name = simpleName(tree_ident(generic)),
+            .value = std::move(*value),
+            .isLocal = false,
+            .location = locate(generic),
+            .vhdlType = layout ? vhdlTypeFor(tree_type(generic), *layout) : eir::VhdlType::None});
     }
 
     for (unsigned index = 0; index < tree_ports(entity); ++index) {
@@ -1312,6 +1385,7 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
                                ? constantBits(tree_value(port), *layout, childGenerics)
                                : defaultBits(tree_type(port), *layout, childGenerics);
     through.enumIndex = layout->isComposite() ? eir::Object::NoEnum : enumFor(tree_type(port));
+    through.vhdlType = vhdlTypeFor(tree_type(port), *layout);
     through.encoding = encodingOf(tree_type(port));
     const std::uint32_t throughIndex = result.addObject(std::move(through));
 

@@ -1851,6 +1851,21 @@ precision runs a thousand times fast. A testbench in cocotb that drives every ev
 most do, is unaffected; a design with delays of its own needs `COCOTB_HDL_TIMEPRECISION` set to
 the unit it was written in until the frontend converts delays as 3.1 says it must.
 
+### 9.7 VHPI
+
+VHPI is how cocotb reaches a VHDL toplevel (M6), as VPI is how it reaches a SystemVerilog one.
+What VHPI names that VPI does not is the VHDL type of everything: a signal's type and its base
+type, an array's bounds, direction and element type, a record's fields, an enumeration's
+literals, a scalar's range. cocotb reads them to decide what a handle is, `std_logic` or a
+vector of it, an integer, a record whose fields it can name, before it reads a value.
+
+**The types live in EIR**, as `eir::VhdlType` in a table of each definition's that its objects
+and generics index, filled by the VHDL adapter from the layouts it gives them (5.2). They change
+nothing about how a design behaves, as an enumeration's table changes nothing; they say what
+the bits mean to something outside the simulation, and are serialized with the definition, so a
+library holds them. The analysis that knows them runs in a child process (5.2) and is gone by
+the time an application asks, so EIR is the only place they can be kept.
+
 ---
 
 ## 10. GUI

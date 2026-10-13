@@ -365,6 +365,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.u32(object.elementWidth);
         out.boolean(object.elementSigned);
         out.boolean(object.subroutineStatic);
+        out.u32(object.vhdlType);
         out.text(object.hierarchicalPath);
     }
 
@@ -410,12 +411,34 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         }
     }
 
+    out.u32(static_cast<std::uint32_t>(definition.vhdlTypes.size()));
+    for (const VhdlType& type : definition.vhdlTypes) {
+        out.u8(static_cast<std::uint8_t>(type.kind));
+        out.text(type.name);
+        out.u32(type.width);
+        out.u32(static_cast<std::uint32_t>(type.ranges.size()));
+        for (const VhdlType::Range& range : type.ranges) {
+            out.u64(static_cast<std::uint64_t>(range.left));
+            out.u64(static_cast<std::uint64_t>(range.right));
+            out.boolean(range.ascending);
+        }
+        out.u32(type.enumIndex);
+        out.u32(type.element);
+        out.u32(static_cast<std::uint32_t>(type.fields.size()));
+        for (const VhdlType::Field& field : type.fields) {
+            out.text(field.name);
+            out.u32(field.type);
+            out.u32(field.offset);
+        }
+    }
+
     out.u32(static_cast<std::uint32_t>(definition.parameters.size()));
     for (const Parameter& parameter : definition.parameters) {
         out.text(parameter.name);
         writeVector(out, parameter.value);
         out.boolean(parameter.isLocal);
         writeLocation(out, names, parameter.location);
+        out.u32(parameter.vhdlType);
     }
 }
 
@@ -663,6 +686,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         object.elementWidth = in.u32();
         object.elementSigned = in.boolean();
         object.subroutineStatic = in.boolean();
+        object.vhdlType = in.u32();
         object.hierarchicalPath = in.text();
     }
 
@@ -714,6 +738,27 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         }
     }
 
+    definition.vhdlTypes.resize(in.count());
+    for (VhdlType& type : definition.vhdlTypes) {
+        type.kind = static_cast<VhdlType::Kind>(in.u8());
+        type.name = in.text();
+        type.width = in.u32();
+        type.ranges.resize(in.count());
+        for (VhdlType::Range& range : type.ranges) {
+            range.left = static_cast<std::int64_t>(in.u64());
+            range.right = static_cast<std::int64_t>(in.u64());
+            range.ascending = in.boolean();
+        }
+        type.enumIndex = in.u32();
+        type.element = in.u32();
+        type.fields.resize(in.count());
+        for (VhdlType::Field& field : type.fields) {
+            field.name = in.text();
+            field.type = in.u32();
+            field.offset = in.u32();
+        }
+    }
+
     const std::uint32_t parameterCount = in.count();
     definition.parameters.reserve(parameterCount);
     for (std::uint32_t index = 0; index < parameterCount && in.ok(); ++index) {
@@ -725,10 +770,12 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         BitVector value = readVector(in);
         const bool isLocal = in.boolean();
         const SourceLocation location = readLocation(in, buffers);
+        const std::uint32_t vhdlType = in.u32();
         definition.parameters.push_back(Parameter{.name = std::move(name),
                                                   .value = std::move(value),
                                                   .isLocal = isLocal,
-                                                  .location = location});
+                                                  .location = location,
+                                                  .vhdlType = vhdlType});
     }
 
     return definition;
