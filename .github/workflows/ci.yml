@@ -107,6 +107,25 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
+      # M6's exit design (section 14.5): NEORV32 through its own testbench's on-chip debugger
+      # sequence, held to GHDL's reports and to its CPU trace and UART logs. A few minutes, so
+      # on the main branch only, and with the one build that is optimised for GCC.
+      - name: Design regression - NEORV32
+        if: matrix.preset == 'gcc-release' && github.ref == 'refs/heads/main'
+        run: >
+          tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)"
+          build/designs/neorv32
+
+      - name: Keep the NEORV32 logs
+        if: failure() && matrix.preset == 'gcc-release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: neorv32-logs
+          path: |
+            build/designs/neorv32/differences.txt
+            build/designs/neorv32/enzan/*.txt
+            build/designs/neorv32/ghdl/transcript.txt
+
       - name: Report cache statistics
         if: always()
         run: ccache --show-stats

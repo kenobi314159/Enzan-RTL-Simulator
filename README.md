@@ -224,9 +224,12 @@ arrays, `real`, `string` and structs, which Enzan does not analyse yet.
 | Driver resolution, multiple drivers per signal | not yet — M5 |
 | VPI, and cocotb testbenches through it | yes — modules, generate blocks, nets, variables, bits, parameters; every callback cocotb uses |
 | `` `timescale `` and `timeunit` | not yet — every delay is counted in the `--timescale` unit |
-| VHDL: entities, architectures, processes, scalar types, arrays, `wait`, `assert`, `report` | yes — M6 is under way |
-| VHDL: functions and procedures, `std_logic_1164`, `numeric_std`, `rising_edge` | yes, translated from the IEEE packages' own bodies |
-| VHDL: records, resolved signals with several drivers, `textio`, access types | not yet — reported by name |
+| VHDL: entities, architectures, processes, scalar and real types, arrays, records, `wait`, `assert`, `report` | yes — M6 is under way |
+| VHDL: generics, generate statements, components bound by default, ports associated in parts | yes |
+| VHDL: functions and procedures, `std_logic_1164`, `numeric_std`, `math_real`, `rising_edge` | yes, translated from the IEEE packages' own bodies |
+| VHDL: resolved signals with several drivers, `std.textio` and its files | yes; textio runs natively over a heap of lines |
+| NEORV32, through its own testbench's on-chip debugger sequence | yes — its reports, CPU traces and UART logs are GHDL's |
+| VHDL: access types beyond `line`, protected types, configurations | not yet — reported by name |
 | A design mixing VHDL and SystemVerilog | not yet — M7 |
 | The Processes and Source windows | not yet — M6 |
 

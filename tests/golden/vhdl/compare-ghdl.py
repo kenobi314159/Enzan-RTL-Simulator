@@ -146,8 +146,9 @@ def ghdl_output(text: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--enzan-vcd", type=Path, required=True)
-    parser.add_argument("--ghdl-vcd", type=Path, required=True)
+    # A design too large to dump, as an exit design is, is compared without its waveforms.
+    parser.add_argument("--enzan-vcd", type=Path)
+    parser.add_argument("--ghdl-vcd", type=Path)
     parser.add_argument("--enzan-transcript", type=Path, required=True)
     parser.add_argument("--ghdl-transcript", type=Path, required=True)
     parser.add_argument("--enzan-output", type=Path, required=True)
@@ -168,6 +169,13 @@ def main() -> int:
         differences.append("the output differs:")
         differences.extend(f"  GHDL:  {line}" for line in written)
         differences.extend(f"  Enzan: {line}" for line in printed)
+
+    if (arguments.enzan_vcd is None) != (arguments.ghdl_vcd is None):
+        parser.error("--enzan-vcd and --ghdl-vcd go together")
+    if arguments.enzan_vcd is None:
+        for line in differences:
+            print(line, file=sys.stderr)
+        return 1 if differences else 0
 
     reference = read_vcd(arguments.ghdl_vcd)
     candidate = read_vcd(arguments.enzan_vcd)

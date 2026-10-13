@@ -2690,6 +2690,10 @@ Real designs, fetched at pinned revisions:
 
 Start with the small ones and add larger designs as capability grows.
 
+NEORV32's is held to GHDL's reports and to the CPU trace and UART logs its testbench writes, for
+the 160 us its on-chip debugger sequence takes, since those hold every instruction each core
+retired; on the main branch only, as it takes minutes.
+
 Each design is a directory under `tests/designs/` holding the revision it is pinned at and a
 `run.sh` that fetches it there (`tests/fetch-revision.sh`, which every suite shares), runs its
 own testbenches and says PASS or FAIL for each. A testbench passes when it reports success
