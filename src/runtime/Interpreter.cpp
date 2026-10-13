@@ -66,12 +66,22 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
     // The body running and what it is bound to: the process's own, until it calls a subprogram
     // and while it is in one. Everything below reaches registers, objects and routes through
     // this, so a subprogram's body runs as a process's does.
-    Activation current{.body = &kernel.designImage->compiledDesign().body(state.bodyIndex),
-                       .frameOffset = state.frameOffset,
-                       .objectSignals = state.objectSignals,
-                       .writeRoutes = state.writeRoutes,
-                       .calls = state.calls};
+    const Activation own{.body = &kernel.designImage->compiledDesign().body(state.bodyIndex),
+                         .frameOffset = state.frameOffset,
+                         .objectSignals = state.objectSignals,
+                         .writeRoutes = state.writeRoutes,
+                         .calls = state.calls};
+    const std::uint32_t pc = state.resumePc;
+    state.resumePc = 0;
+    return execute(processIndex, own, pc, 0);
+}
 
+ExecutionResult Interpreter::call(std::uint32_t processIndex, const Activation& callee) {
+    return execute(processIndex, callee, 0, kernel.callsInProgress.size());
+}
+
+ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation current,
+                                     std::uint32_t pc, std::size_t baseDepth) {
     // Register and object access are the two innermost operations, so each is a single
     // helper that the compiler can inline into every case below.
     const auto reg = [&](std::uint32_t offset, std::uint32_t width) {
@@ -82,9 +92,6 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
         const Signal& signal = kernel.designImage->signals()[signalIndex];
         return kernel.stateArena.at(signal.wordOffset, signal.bitWidth);
     };
-
-    std::uint32_t pc = state.resumePc;
-    state.resumePc = 0;
 
     while (pc < current.body->code.size()) {
         const codegen::Instruction& instruction = current.body->code[pc];
@@ -110,7 +117,9 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
         }
 
         case eir::Opcode::Return: {
-            // The process's own return completes it; a subprogram's goes back to its caller.
+            // The process's own return completes it, as does that of a subprogram the kernel
+            // called; any other subprogram's goes back to its caller.
+            if (kernel.callsInProgress.size() == baseDepth) return ExecutionResult::Completed;
             const std::optional<std::pair<Activation, std::uint32_t>> caller =
                 kernel.leaveCall(current);
             if (!caller.has_value()) return ExecutionResult::Completed;

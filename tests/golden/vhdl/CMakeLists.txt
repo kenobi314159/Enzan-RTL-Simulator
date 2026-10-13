@@ -88,3 +88,6 @@ enzan_add_vhdl_golden_test(reals)
 
 # std.textio, run natively: lines to output and to a file, and read back.
 enzan_add_vhdl_golden_test(textio)
+
+# Resolved signals: std_logic's resolution and a design's own, with several drivers.
+enzan_add_vhdl_golden_test(resolution)

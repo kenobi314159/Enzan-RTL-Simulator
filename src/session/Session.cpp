@@ -8,6 +8,7 @@
 #include "eir/BitOps.h"
 #include "eir/Design.h"
 #include "eir/Serialization.h"
+#include "eir/Verifier.h"
 #include "elab/ElaboratedDesign.h"
 #include "elab/Elaborator.h"
 #include "pli/VpiContext.h"
@@ -186,6 +187,8 @@ bool Session::analyse(const AnalysisRequest& request) {
         if (library.load(stored, sources, *reused)) {
             design = std::move(reused);
             loadedFromLibrary = true;
+            vhdlOptions.reset();
+            resolutionAnswers.clear();
 
             // Left empty on purpose. A hit does not run the frontend, so nothing knows which
             // files were included, and a dependency file listing only the sources would drop
@@ -211,6 +214,8 @@ bool Session::analyse(const AnalysisRequest& request) {
     if (analysed == nullptr) return false;
 
     design = std::move(analysed);
+    vhdlOptions.reset();
+    resolutionAnswers.clear();
 
     // A failed store is reported and otherwise ignored: the design is in hand either way, and
     // refusing to simulate because a cache could not be written would be the cache making
@@ -285,6 +290,8 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
 
     design = std::move(analysed);
     loadedFromLibrary = false;
+    vhdlOptions = std::make_unique<frontend::vhdl::DesignOptions>(std::move(options));
+    resolutionAnswers.clear();
     lastFilesRead.assign(files.begin(), files.end());
     std::ranges::sort(lastFilesRead);
     lastFilesRead.erase(std::ranges::unique(lastFilesRead).begin(), lastFilesRead.end());
@@ -362,6 +369,65 @@ void Session::setDesign(std::unique_ptr<eir::Design> analysed) {
     discardElaboration();
     design = std::move(analysed);
     loadedFromLibrary = false;
+    vhdlOptions.reset();
+    resolutionAnswers.clear();
+}
+
+bool Session::answerResolutions(const elab::ElaboratedDesign& tree) {
+    std::vector<std::uint32_t> asked;
+    for (std::uint32_t index = 0; index < tree.resolutionCalls().size(); ++index) {
+        if (!tree.resolutionCalls()[index].answered()) asked.push_back(index);
+    }
+    if (asked.empty()) return true;
+#ifdef ENZAN_WITH_VHDL
+    if (vhdlOptions == nullptr) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "a VHDL resolved signal in a design not analysed from its sources here");
+        return false;
+    }
+    std::vector<frontend::vhdl::ResolutionRequest> requests;
+    requests.reserve(asked.size());
+    for (const std::uint32_t index : asked) {
+        const elab::ResolutionCall& call = tree.resolutionCalls()[index];
+        requests.push_back(
+            frontend::vhdl::ResolutionRequest{.function = call.function, .drivers = call.drivers});
+    }
+    std::optional<frontend::vhdl::ResolvedFunctions> found =
+        frontend::vhdl::resolutions(*vhdlOptions, sources, requests, diagnostics);
+    if (!found) return false;
+
+    // A package the design already has gains the functions it lacks; a specialisation is named
+    // for what it is, so one it has is the same one (section 3.7).
+    for (eir::ModuleDefinition& definition : found->definitions) {
+        const std::string qualified = definition.library.empty()
+                                          ? definition.name
+                                          : definition.library + "." + definition.name;
+        if (const eir::ModuleDefinition* existing = design->findModule(qualified)) {
+            eir::ModuleDefinition merged = *existing;
+            for (eir::Subprogram& subprogram : definition.subprograms) {
+                const bool known = std::ranges::any_of(merged.subprograms,
+                                                       [&subprogram](const eir::Subprogram& held) {
+                                                           return held.name == subprogram.name;
+                                                       });
+                if (!known) merged.subprograms.push_back(std::move(subprogram));
+            }
+            design->addModule(std::move(merged));
+        } else {
+            design->addModule(std::move(definition));
+        }
+    }
+    if (!eir::verify(*design, diagnostics)) return false;
+    for (std::size_t index = 0; index < asked.size(); ++index) {
+        resolutionAnswers.insert_or_assign(
+            std::pair(requests[index].function, requests[index].drivers),
+            std::pair(found->answers[index].definition, found->answers[index].subprogram));
+    }
+    return true;
+#else
+    diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                       "a VHDL resolved signal in a build without the VHDL frontend");
+    return false;
+#endif
 }
 
 void Session::discardElaboration() {
@@ -453,8 +519,19 @@ bool Session::elaborate(std::string_view topModule) {
     discardElaboration();
 
     elab::Elaborator elaborator(*design, diagnostics);
-    std::unique_ptr<elab::ElaboratedDesign> tree = elaborator.elaborate(topModule);
+    std::unique_ptr<elab::ElaboratedDesign> tree =
+        elaborator.elaborate(topModule, resolutionAnswers);
     if (tree == nullptr) return false;
+
+    // A resolved signal's function for a driver count no translation has given yet is asked for,
+    // and the design elaborated again with it (DESIGN_GUIDE.md section 3.7).
+    const bool unanswered = std::ranges::any_of(
+        tree->resolutionCalls(), [](const elab::ResolutionCall& call) { return !call.answered(); });
+    if (unanswered) {
+        if (!answerResolutions(*tree)) return false;
+        tree = elab::Elaborator(*design, diagnostics).elaborate(topModule, resolutionAnswers);
+        if (tree == nullptr) return false;
+    }
 
     codegen::Compiler compiler(diagnostics);
     std::unique_ptr<codegen::CompiledDesign> bodies = compiler.compile(*design);

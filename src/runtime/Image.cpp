@@ -222,6 +222,14 @@ void Image::measureCallStack() {
             stackShape.words = std::max(stackShape.words, words[callee]);
         }
     }
+
+    // The kernel calls a VHDL resolution function itself, while no process's call is in progress
+    // (DESIGN_GUIDE.md section 3.7), so each is a chain of its own.
+    for (const elab::ResolutionCall& call : elaborated->resolutionCalls()) {
+        if (call.subprogramInstance >= subprogramList.size()) continue;
+        stackShape.depth = std::max(stackShape.depth, depth[call.subprogramInstance]);
+        stackShape.words = std::max(stackShape.words, words[call.subprogramInstance]);
+    }
 }
 
 void Image::initializeState(Arena& arena) const {
@@ -286,9 +294,18 @@ void Image::initializeState(Arena& arena) const {
     visit(false);
 
     // A driver that has not run yet has no value the design gave it, so it starts at X, as the
-    // net's driven bits do.
-    for (const elab::Driver& driver : elaborated->drivers())
-        arena.at(driver.wordOffset, driver.width).fill(eir::Logic::Unknown);
+    // net's driven bits do. A VHDL driver starts at its signal's initial value instead (IEEE 1076
+    // section 14.7.2), which its resolution function is given until the driver first runs.
+    for (const elab::Driver& driver : elaborated->drivers()) {
+        const elab::Slot& slot = elaborated->slots()[driver.slot];
+        const eir::BitRef value = arena.at(driver.wordOffset, driver.width);
+        if (slot.resolution.resolved()) {
+            eir::bitops::partSelectAt(value, arena.at(slot.wordOffset, slot.type.bitWidth()),
+                                      driver.lowBit);
+        } else {
+            value.fill(eir::Logic::Unknown);
+        }
+    }
 }
 
 std::uint32_t Image::findSignal(std::string_view path) const {

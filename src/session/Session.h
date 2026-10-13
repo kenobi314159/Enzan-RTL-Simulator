@@ -4,6 +4,7 @@
 
 #include "eir/BitVector.h"
 #include "eir/Library.h"
+#include "elab/Elaborator.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
 
@@ -32,6 +33,10 @@ class Design;
 
 namespace enzan::elab {
 class ElaboratedDesign;
+}
+
+namespace enzan::frontend::vhdl {
+struct DesignOptions;
 }
 
 namespace enzan::pli {
@@ -179,6 +184,11 @@ public:
 private:
     /// `analyse` for a design whose sources are VHDL.
     bool analyseVhdl(const AnalysisRequest& request);
+
+    /// Asks the VHDL frontend for each resolution function `tree` needs and no translation has
+    /// given yet, each for the number of drivers elaboration counted, links what comes back into
+    /// the design, and records where each is (DESIGN_GUIDE.md section 3.7).
+    bool answerResolutions(const elab::ElaboratedDesign& tree);
 
 public:
     [[nodiscard]] bool hasDesign() const noexcept { return design != nullptr; }
@@ -465,6 +475,14 @@ private:
     bool scaleChosen = false;
 
     std::filesystem::path vhdlLibraries;
+
+    /// What the design was analysed from when it was VHDL, which the frontend analyses again to
+    /// translate the resolution functions elaboration asks for; null otherwise.
+    std::unique_ptr<frontend::vhdl::DesignOptions> vhdlOptions;
+
+    /// Where each VHDL resolution function translated for this design is, by its name and its
+    /// number of drivers, which elaboration binds segments to.
+    elab::ResolutionAnswers resolutionAnswers;
     runtime::RunStatus status = runtime::RunStatus::Quiescent;
     std::uint32_t deltaLimit = 10'000;
     std::uint32_t seed = 0;

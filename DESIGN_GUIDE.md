@@ -459,16 +459,21 @@ Further requirements:
   its function as the design does, by library, package and signature, with the width of
   the subelement it resolves, and once elaboration has counted the drivers the session
   asks the frontend, in a second child over the same sources, for the function
-  specialised to each count, and links what comes back into the design before the image
-  is built.
+  specialised to each count, links what comes back into the design, and elaborates
+  again with it, which binds each segment to its function. The kernel calls it for each
+  subelement with its drivers' values, the first driver's left; a VHDL driver starts at
+  its signal's initial value, which is what the function sees of it until it first
+  runs.
 - **Single-driver bits MUST bypass resolution entirely** where resolving a lone
   driver is known to return its value unchanged, and a signal all of whose bits
   are such MUST bypass it as a whole rather than bit by bit. This is the common
   case and it is on the hot path (13.4). It is known of the built-in tables of
   every net kind but the pulled and supply ones, and of a VHDL resolution
-  function that elaboration proves to be the identity on a lone driver by calling
-  it once with each value of its element type, where that is an enumeration of
-  sixteen values or fewer, as NVC does; `ieee.std_logic_1164.resolved` is one.
+  function proven to be the identity on a lone driver by calling it once with each
+  value of its element type, where that is an enumeration of sixteen values or fewer,
+  as NVC does; `ieee.std_logic_1164.resolved` is one. The adapter proves it as it
+  translates, running the function on each as a constant function (5.2), and an EIR
+  object's resolution records it.
 - **Any other resolution function is called for a lone driver too.** VHDL defines a
   resolved signal's value as its resolution function applied to its sources,
   however many there are (IEEE 1076 section 14.7.3.2), and a user's function need

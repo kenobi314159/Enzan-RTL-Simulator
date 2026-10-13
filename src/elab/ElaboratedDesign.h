@@ -67,7 +67,26 @@ struct Slot {
     /// What the bits mean outside the simulation (DESIGN_GUIDE.md section 3.6).
     eir::Encoding encoding = eir::Encoding::Bits;
 
+    /// For a VHDL resolved signal, the function its drivers resolve with; empty otherwise.
+    eir::Resolution resolution;
+
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
+};
+
+/// A VHDL resolution function for a number of drivers, which segments resolve with
+/// (DESIGN_GUIDE.md section 3.7). Elaboration counts the drivers and leaves `definition` and
+/// `subprogram` empty for whoever asks the frontend for the function to fill in.
+struct ResolutionCall {
+    std::string function;
+    std::uint32_t drivers = 0;
+    std::uint32_t elementBits = 0;
+    std::string definition;
+    std::string subprogram;
+
+    /// The binding of the function once answered, as an index into `subprograms()`.
+    std::uint32_t subprogramInstance = 0xFFFF'FFFFU;
+
+    [[nodiscard]] bool answered() const noexcept { return !subprogram.empty(); }
 };
 
 /// Some bits of one slot.
@@ -203,8 +222,12 @@ struct Segment {
     std::uint32_t firstDriver = 0;
     std::uint32_t driverCount = 0;
 
-    /// How the drivers combine: the slot's net kind.
+    /// How the drivers combine: the slot's net kind, or for a VHDL resolved signal the index of
+    /// its resolution call in the elaborated design's list.
     eir::NetKind netKind = eir::NetKind::Wire;
+    std::uint32_t resolution = NoResolution;
+
+    static constexpr std::uint32_t NoResolution = 0xFFFF'FFFFU;
 };
 
 /// The result of elaborating one top level.
@@ -241,6 +264,11 @@ public:
     /// Driver indices, referred to in runs by `Segment`.
     [[nodiscard]] std::span<const std::uint32_t> segmentDrivers() const noexcept {
         return segmentDriverList;
+    }
+
+    /// The resolution functions segments call, each for one number of drivers.
+    [[nodiscard]] std::span<const ResolutionCall> resolutionCalls() const noexcept {
+        return resolutionList;
     }
 
     /// The widest driver, which bounds the scratch space resolution needs and lets the
@@ -291,6 +319,7 @@ private:
     std::vector<Driver> driverList;
     std::vector<Segment> segmentList;
     std::vector<std::uint32_t> segmentDriverList;
+    std::vector<ResolutionCall> resolutionList;
     std::uint32_t widestDriverBits = 0;
     std::uint32_t arenaSize = 0;
     std::string topName;

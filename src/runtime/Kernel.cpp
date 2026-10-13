@@ -663,6 +663,13 @@ void Kernel::resolveDriver(std::uint32_t driverIndex) {
                                  segment.lowBit - driver.lowBit);
         };
 
+        // A VHDL resolved signal's function, called for each subelement; a net's table.
+        if (segment.resolution != elab::Segment::NoResolution) {
+            if (!resolveByFunction(written.process, segment, acc)) return;
+            bitops::assignPartAt(resolved, acc, segment.lowBit - written.lowBit);
+            continue;
+        }
+
         sliceOf(segment.firstDriver, acc);
         for (std::uint32_t other = segment.firstDriver + 1;
              other < segment.firstDriver + segment.driverCount; ++other) {
@@ -702,6 +709,57 @@ void Kernel::resolveDriver(std::uint32_t driverIndex) {
     }
 
     writeSignalPart(written.slot, resolved, written.lowBit);
+}
+
+bool Kernel::resolveByFunction(std::uint32_t processIndex, const elab::Segment& segment,
+                               eir::BitRef acc) {
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    const elab::ResolutionCall& call = elaborated.resolutionCalls()[segment.resolution];
+    const std::uint32_t elementBits = call.elementBits;
+    const std::uint32_t count = segment.driverCount;
+    eir::BitVector drivers = eir::BitVector::filled(elementBits * count, eir::Logic::Zero);
+    eir::BitVector one(elementBits);
+    for (std::uint32_t offset = 0; offset + elementBits <= segment.width; offset += elementBits) {
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const elab::Driver& driver =
+                elaborated.drivers()[elaborated.segmentDrivers()[segment.firstDriver + index]];
+            bitops::partSelectAt(one.mutableRef(), stateArena.at(driver.wordOffset, driver.width),
+                                 segment.lowBit + offset - driver.lowBit);
+            bitops::assignPartAt(drivers.mutableRef(), one.ref(),
+                                 static_cast<std::uint64_t>(count - 1 - index) * elementBits);
+        }
+        if (!callResolution(processIndex, call.subprogramInstance, drivers.ref(), one.mutableRef()))
+            return false;
+        bitops::assignPartAt(acc, one.ref(), offset);
+    }
+    return true;
+}
+
+bool Kernel::callResolution(std::uint32_t processIndex, std::uint32_t subprogram,
+                            eir::ConstBitRef drivers, eir::BitRef resolved) {
+    const BoundSubprogram& callee = designImage->subprograms()[subprogram];
+    const codegen::CompiledBody& body = designImage->compiledDesign().body(callee.bodyIndex);
+
+    // A frame above whatever the call stack holds, its registers zero as any call's start.
+    const std::uint32_t frame = callStackTop;
+    callStackTop += body.frameWords;
+    ENZAN_ASSERT(callStackTop <= frameStorage.size(),
+                 "the image sizes the call stack for every resolution function's chain");
+    std::fill(frameStorage.begin() + frame, frameStorage.begin() + callStackTop, eir::Word{});
+    const codegen::CompiledBody::Parameter& parameter = body.parameters.front();
+    bitops::copy(frameAt(frame + parameter.offset, parameter.bitWidth), drivers);
+
+    Interpreter interpreter(*this);
+    const ExecutionResult outcome =
+        interpreter.call(processIndex, Activation{.body = &body,
+                                                  .frameOffset = frame,
+                                                  .objectSignals = callee.objectSignals,
+                                                  .writeRoutes = callee.writeRoutes,
+                                                  .calls = callee.calls});
+    const bool returned = outcome == ExecutionResult::Completed;
+    if (returned) bitops::copy(resolved, frameAt(frame + body.resultOffset, body.resultWidth));
+    callStackTop = frame;
+    return returned;
 }
 
 void Kernel::scheduleNonBlocking(std::uint32_t signalIndex, eir::ConstBitRef value) {

@@ -67,8 +67,9 @@ std::string describeBits(std::uint32_t lowBit, std::uint32_t endBit, std::uint32
 /// all the mutable bookkeeping has a scope that ends.
 class Elaborator::Builder {
 public:
-    Builder(const eir::Design& analysedDesign, DiagnosticEngine& engine)
-        : design(analysedDesign), diagnostics(engine) {}
+    Builder(const eir::Design& analysedDesign, DiagnosticEngine& engine,
+            const ResolutionAnswers& resolutions)
+        : design(analysedDesign), diagnostics(engine), knownResolutions(resolutions) {}
 
     std::unique_ptr<ElaboratedDesign> run(std::string_view topModuleName) {
         const std::optional<std::uint32_t> topIndex = resolveTop(topModuleName);
@@ -95,6 +96,7 @@ public:
         collectProcesses();
         if (!bindCalls()) return nullptr;
         if (!checkDrivers()) return nullptr;
+        if (!bindResolutions()) return nullptr;
 
         return std::move(result);
     }
@@ -184,6 +186,7 @@ private:
         slot.path = instance.path + '/' + object.name;
         slot.enumIndex = internEnum(definition, object.enumIndex);
         slot.encoding = object.encoding;
+        slot.resolution = object.resolution;
         result->arenaSize += object.type.storageWords();
 
         result->slotList.push_back(std::move(slot));
@@ -529,60 +532,6 @@ private:
     /// holds no objects. One binding is made once however many calls reach it, which is also
     /// what makes a recursive call terminate here: it reaches a binding that already exists.
     bool bindCalls() {
-        std::map<std::array<std::uint32_t, 3>, std::uint32_t> bound;
-        std::vector<std::uint32_t> pending;
-        bool ok = true;
-
-        const auto bind = [&](std::uint32_t callerDefinition, std::uint32_t callerInstance,
-                              const eir::CallSite& call,
-                              const std::string& caller) -> std::uint32_t {
-            std::uint32_t calleeDefinition = callerDefinition;
-            if (!call.definition.empty()) {
-                std::vector<std::string_view> ambiguity;
-                const std::optional<std::uint32_t> found =
-                    design.findModuleIndex(call.definition, &ambiguity);
-                if (!found.has_value()) {
-                    if (ambiguity.empty()) {
-                        diagnostics.report(DiagCode::UnresolvedSubprogram, call.location, caller,
-                                           call.subprogram, call.definition);
-                    } else {
-                        diagnostics.report(DiagCode::AmbiguousModule, call.location,
-                                           call.definition, joinNames(ambiguity), call.definition);
-                    }
-                    ok = false;
-                    return SubprogramInstance::NoInstance;
-                }
-                calleeDefinition = *found;
-            }
-
-            const eir::ModuleDefinition& definition = design.module(calleeDefinition);
-            const std::optional<std::uint32_t> subprogramIndex =
-                definition.findSubprogram(call.subprogram);
-            if (!subprogramIndex.has_value()) {
-                diagnostics.report(DiagCode::UnresolvedSubprogram, call.location, caller,
-                                   call.subprogram, definition.name);
-                ok = false;
-                return SubprogramInstance::NoInstance;
-            }
-
-            const std::uint32_t instance =
-                calleeDefinition == callerDefinition
-                    ? callerInstance
-                    : rootInstanceOf(calleeDefinition).value_or(SubprogramInstance::NoInstance);
-            const std::array<std::uint32_t, 3> key{calleeDefinition, *subprogramIndex, instance};
-            if (const auto existing = bound.find(key); existing != bound.end())
-                return existing->second;
-
-            const auto index = static_cast<std::uint32_t>(result->subprogramList.size());
-            result->subprogramList.push_back(SubprogramInstance{.definitionIndex = calleeDefinition,
-                                                                .subprogramIndex = *subprogramIndex,
-                                                                .instanceIndex = instance,
-                                                                .calls = {}});
-            bound.emplace(key, index);
-            pending.push_back(index);
-            return index;
-        };
-
         for (std::uint32_t processIndex = 0; processIndex < result->processList.size();
              ++processIndex) {
             const ProcessInstance& processInstance = result->processList[processIndex];
@@ -592,15 +541,72 @@ private:
             std::vector<std::uint32_t> calls;
             for (const eir::CallSite& call : processOf(processInstance).calls)
                 calls.push_back(
-                    bind(definitionIndex, instanceIndex, call, describeProcess(processIndex)));
+                    bindCall(definitionIndex, instanceIndex, call, describeProcess(processIndex)));
             result->processList[processIndex].calls = std::move(calls);
         }
+        bindPendingCalls();
 
-        // Each binding's own calls, as bindings are found; `pending` and `subprogramList` grow
-        // meanwhile, so they are indexed rather than iterated.
-        // NOLINTNEXTLINE(modernize-loop-convert)
-        for (std::size_t next = 0; next < pending.size(); ++next) {
-            const std::uint32_t index = pending[next];
+        if (bindingsResolved) collectCalleeSets();
+        return bindingsResolved;
+    }
+
+    /// Binds what `call` calls from the definition `callerDefinition`, bound to `callerInstance`,
+    /// and returns the binding's index, or `NoInstance` having reported why there is none.
+    std::uint32_t bindCall(std::uint32_t callerDefinition, std::uint32_t callerInstance,
+                           const eir::CallSite& call, const std::string& caller) {
+        std::uint32_t calleeDefinition = callerDefinition;
+        if (!call.definition.empty()) {
+            std::vector<std::string_view> ambiguity;
+            const std::optional<std::uint32_t> found =
+                design.findModuleIndex(call.definition, &ambiguity);
+            if (!found.has_value()) {
+                if (ambiguity.empty()) {
+                    diagnostics.report(DiagCode::UnresolvedSubprogram, call.location, caller,
+                                       call.subprogram, call.definition);
+                } else {
+                    diagnostics.report(DiagCode::AmbiguousModule, call.location, call.definition,
+                                       joinNames(ambiguity), call.definition);
+                }
+                bindingsResolved = false;
+                return SubprogramInstance::NoInstance;
+            }
+            calleeDefinition = *found;
+        }
+
+        const eir::ModuleDefinition& definition = design.module(calleeDefinition);
+        const std::optional<std::uint32_t> subprogramIndex =
+            definition.findSubprogram(call.subprogram);
+        if (!subprogramIndex.has_value()) {
+            diagnostics.report(DiagCode::UnresolvedSubprogram, call.location, caller,
+                               call.subprogram, definition.name);
+            bindingsResolved = false;
+            return SubprogramInstance::NoInstance;
+        }
+
+        const std::uint32_t instance =
+            calleeDefinition == callerDefinition
+                ? callerInstance
+                : rootInstanceOf(calleeDefinition).value_or(SubprogramInstance::NoInstance);
+        const std::array<std::uint32_t, 3> key{calleeDefinition, *subprogramIndex, instance};
+        if (const auto existing = boundSubprograms.find(key); existing != boundSubprograms.end())
+            return existing->second;
+
+        const auto index = static_cast<std::uint32_t>(result->subprogramList.size());
+        result->subprogramList.push_back(SubprogramInstance{.definitionIndex = calleeDefinition,
+                                                            .subprogramIndex = *subprogramIndex,
+                                                            .instanceIndex = instance,
+                                                            .calls = {}});
+        boundSubprograms.emplace(key, index);
+        pendingBindings.push_back(index);
+        return index;
+    }
+
+    /// Binds the calls of each binding made since this last ran, and of each those make.
+    void bindPendingCalls() {
+        // `pendingBindings` and `subprogramList` grow meanwhile, so they are indexed rather
+        // than iterated.
+        for (; nextPending < pendingBindings.size(); ++nextPending) {
+            const std::uint32_t index = pendingBindings[nextPending];
             const SubprogramInstance subprogramInstance = result->subprogramList[index];
             const eir::ModuleDefinition& definition =
                 design.module(subprogramInstance.definitionIndex);
@@ -612,13 +618,28 @@ private:
             std::vector<std::uint32_t> calls;
             calls.reserve(subprogram.calls.size());
             for (const eir::CallSite& call : subprogram.calls)
-                calls.push_back(bind(subprogramInstance.definitionIndex,
-                                     subprogramInstance.instanceIndex, call, caller));
+                calls.push_back(bindCall(subprogramInstance.definitionIndex,
+                                         subprogramInstance.instanceIndex, call, caller));
             result->subprogramList[index].calls = std::move(calls);
         }
+    }
 
-        if (ok) collectCalleeSets();
-        return ok;
+    /// Binds each VHDL resolution function whose translation is known, as a call from nowhere
+    /// is: the kernel calls it, not a process (DESIGN_GUIDE.md section 3.7).
+    bool bindResolutions() {
+        for (ResolutionCall& call : result->resolutionList) {
+            if (!call.answered()) continue;
+            const eir::CallSite site{.definition = call.definition,
+                                     .subprogram = call.subprogram,
+                                     .arguments = {},
+                                     .result = {},
+                                     .location = {}};
+            call.subprogramInstance =
+                bindCall(NoDefinition, SubprogramInstance::NoInstance, site,
+                         std::format("the resolution function {}", call.function));
+        }
+        bindPendingCalls();
+        return bindingsResolved;
     }
 
     /// Records, for each process, the slots its callees read and the bits they write, through
@@ -788,7 +809,8 @@ private:
     bool checkSlotDrivers(std::uint32_t slotIndex, const std::vector<DriverRange>& ranges) {
         const Slot& slot = result->slotList[slotIndex];
         const bool singleDriver =
-            slot.kind == eir::ObjectKind::Variable || slot.netKind == eir::NetKind::UWire;
+            (slot.kind == eir::ObjectKind::Variable && !slot.resolution.resolved())
+            || slot.netKind == eir::NetKind::UWire;
 
         for (std::size_t later = 1; later < ranges.size(); ++later) {
             for (std::size_t earlier = 0; earlier < later; ++earlier) {
@@ -839,7 +861,13 @@ private:
     [[nodiscard]] bool resolves(std::uint32_t slotIndex,
                                 const std::vector<DriverRange>& ranges) const {
         const Slot& slot = result->slotList[slotIndex];
-        if (slot.kind != eir::ObjectKind::Net) return false;
+
+        // A VHDL resolved signal resolves its drivers' values with its function however many
+        // there are, since a user's function need not return a lone driver's value; one proven
+        // to return it is bypassed where no bit has two drivers (section 3.7).
+        if (slot.resolution.resolved() && !slot.resolution.loneDriverIdentity)
+            return std::ranges::any_of(ranges, &DriverRange::continuous);
+        if (slot.kind != eir::ObjectKind::Net && !slot.resolution.resolved()) return false;
 
         std::uint32_t reached = 0;
         bool anyDriver = false;
@@ -865,7 +893,8 @@ private:
              ++processIndex) {
             const ProcessInstance& processInstance = result->processList[processIndex];
             const eir::Process& process = processOf(processInstance);
-            if (process.kind != eir::ProcessKind::ContinuousAssign) continue;
+            if (process.kind != eir::ProcessKind::ContinuousAssign && !process.drivesSignals)
+                continue;
 
             const Instance& instance = result->instanceList[processInstance.instanceIndex];
             for (const eir::WriteExtent& extent : process.writeSet) {
@@ -889,6 +918,30 @@ private:
             if (!driversBySlot[slotIndex].empty())
                 buildSegments(slotIndex, driversBySlot[slotIndex]);
         }
+    }
+
+    /// The index of the resolution call for `resolution`'s function with `drivers` drivers, made
+    /// the first time it is needed; `NoResolution` for a net, which resolves with its table.
+    std::uint32_t resolutionFor(const eir::Resolution& resolution, std::uint32_t drivers) {
+        // A lone driver of a function proven to return its value is copied, as a net's is.
+        if (!resolution.resolved() || (drivers == 1 && resolution.loneDriverIdentity))
+            return Segment::NoResolution;
+        const auto key = std::pair(resolution.function, drivers);
+        if (const auto known = resolutionIndex.find(key); known != resolutionIndex.end())
+            return known->second;
+        const auto index = static_cast<std::uint32_t>(result->resolutionList.size());
+        ResolutionCall call{.function = resolution.function,
+                            .drivers = drivers,
+                            .elementBits = resolution.elementBits,
+                            .definition = {},
+                            .subprogram = {}};
+        if (const auto answer = knownResolutions.find(key); answer != knownResolutions.end()) {
+            call.definition = answer->second.first;
+            call.subprogram = answer->second.second;
+        }
+        result->resolutionList.push_back(std::move(call));
+        resolutionIndex.emplace(key, index);
+        return index;
     }
 
     /// Splits a resolved slot into maximal runs of bits with one set of drivers, and tells each
@@ -932,7 +985,9 @@ private:
                         .width = end - low,
                         .firstDriver = static_cast<std::uint32_t>(result->segmentDriverList.size()),
                         .driverCount = static_cast<std::uint32_t>(covering.size()),
-                        .netKind = result->slotList[slotIndex].netKind});
+                        .netKind = result->slotList[slotIndex].netKind,
+                        .resolution = resolutionFor(result->slotList[slotIndex].resolution,
+                                                    static_cast<std::uint32_t>(covering.size()))});
             result->segmentDriverList.insert(result->segmentDriverList.end(), covering.begin(),
                                              covering.end());
             previousSet = std::move(covering);
@@ -969,6 +1024,21 @@ private:
     DiagnosticEngine& diagnostics;
     std::unique_ptr<ElaboratedDesign> result;
 
+    /// Each resolution call made so far, by its function and its number of drivers, and where
+    /// the functions already translated are.
+    std::map<std::pair<std::string, std::uint32_t>, std::uint32_t> resolutionIndex;
+    const ResolutionAnswers& knownResolutions;
+
+    /// The bindings made so far, by definition, subprogram and instance; those whose own calls
+    /// are still to be bound, from `nextPending` on; and whether every call found its callee.
+    std::map<std::array<std::uint32_t, 3>, std::uint32_t> boundSubprograms;
+    std::vector<std::uint32_t> pendingBindings;
+    std::size_t nextPending = 0;
+    bool bindingsResolved = true;
+
+    /// A caller in no definition, as the kernel is when it calls a resolution function.
+    static constexpr std::uint32_t NoDefinition = 0xFFFF'FFFFU;
+
     /// Definitions on the current path from the top, for recursion detection. An
     /// ordered set, so that the diagnostic it feeds is reproducible.
     std::set<std::uint32_t> activeDefinitions;
@@ -981,8 +1051,9 @@ private:
 Elaborator::Elaborator(const eir::Design& analysedDesign, DiagnosticEngine& engine) noexcept
     : design(analysedDesign), diagnostics(engine) {}
 
-std::unique_ptr<ElaboratedDesign> Elaborator::elaborate(std::string_view topModuleName) {
-    Builder builder(design, diagnostics);
+std::unique_ptr<ElaboratedDesign> Elaborator::elaborate(std::string_view topModuleName,
+                                                        const ResolutionAnswers& resolutions) {
+    Builder builder(design, diagnostics, resolutions);
     return builder.run(topModuleName);
 }
 

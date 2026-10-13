@@ -2,11 +2,13 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace enzan::runtime {
 
 class Kernel;
+struct Activation;
 
 /// How executing a process body ended.
 enum class ExecutionResult : std::uint8_t {
@@ -39,7 +41,17 @@ public:
     /// stops the simulation.
     ExecutionResult run(std::uint32_t processIndex);
 
+    /// Runs `callee`, a subprogram the kernel calls rather than a body, as it does a VHDL
+    /// resolution function (DESIGN_GUIDE.md section 3.7), to its return, on behalf of process
+    /// `processIndex`, whose name a diagnostic gives.
+    ExecutionResult call(std::uint32_t processIndex, const Activation& callee);
+
 private:
+    /// Runs `current` from `pc` until it returns at `baseDepth` calls in progress, suspends or
+    /// stops the simulation.
+    ExecutionResult execute(std::uint32_t processIndex, Activation current, std::uint32_t pc,
+                            std::size_t baseDepth);
+
     Kernel& kernel;
 };
 

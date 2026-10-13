@@ -519,6 +519,18 @@ private:
     /// Resolves every segment `driverIndex` covers and writes the result into its signal.
     void resolveDriver(std::uint32_t driverIndex);
 
+    /// Resolves `segment`, of a VHDL resolved signal, into `acc` with its resolution function,
+    /// called for each subelement with its drivers' values, the first driver's left (IEEE 1076
+    /// section 14.7.3.2). False when a call stopped the run.
+    bool resolveByFunction(std::uint32_t processIndex, const elab::Segment& segment,
+                           eir::BitRef acc);
+
+    /// Calls the resolution function bound as `subprogram` with `drivers` as its array and
+    /// leaves its result in `resolved`, on behalf of process `processIndex`. False when the call
+    /// stopped the run.
+    bool callResolution(std::uint32_t processIndex, std::uint32_t subprogram,
+                        eir::ConstBitRef drivers, eir::BitRef resolved);
+
     /// Reports the delta limit being exceeded, naming what is still active.
     void reportDeltaLimit();
 

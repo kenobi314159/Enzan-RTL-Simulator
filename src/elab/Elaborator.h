@@ -5,14 +5,23 @@
 #include "eir/Design.h"
 #include "elab/ElaboratedDesign.h"
 
+#include <cstdint>
+#include <map>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace enzan {
 class DiagnosticEngine;
 }
 
 namespace enzan::elab {
+
+/// Where each translated VHDL resolution function is, by its name and its number of drivers: the
+/// definition and the subprogram.
+using ResolutionAnswers =
+    std::map<std::pair<std::string, std::uint32_t>, std::pair<std::string, std::string>>;
 
 /// Builds an executable image's structure from analysed design units.
 ///
@@ -37,7 +46,13 @@ public:
     /// design has exactly one module nothing else instantiates, and otherwise reports
     /// the candidates rather than picking one. Guessing a top level is the kind of
     /// convenience that costs an hour of confusion the first time it guesses wrong.
-    std::unique_ptr<ElaboratedDesign> elaborate(std::string_view topModuleName);
+    ///
+    /// `resolutions` says where each VHDL resolution function already translated is, by its name
+    /// and its number of drivers; a segment resolving with one it does not have is left with an
+    /// unanswered call for the caller to have translated and to elaborate again with
+    /// (DESIGN_GUIDE.md section 3.7).
+    std::unique_ptr<ElaboratedDesign> elaborate(std::string_view topModuleName,
+                                                const ResolutionAnswers& resolutions = {});
 
 private:
     class Builder;
