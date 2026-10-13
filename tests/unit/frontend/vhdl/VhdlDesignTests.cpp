@@ -658,6 +658,42 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AConditionalAssignmentWithAFoldedConditionStillAssigns) {
+    // NVC folds a static condition and leaves the assignment it chose in a sequence block, as
+    // NEORV32's `is_simulation_c` has it.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package config is
+  constant is_simulation_c : boolean := false or true;
+end package;
+
+use work.config.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal flag : bit;
+begin
+  flag <= '1' when is_simulation_c else '0';
+
+  process
+  begin
+    wait for 1 ns;
+    assert flag = '1' report "flag" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.

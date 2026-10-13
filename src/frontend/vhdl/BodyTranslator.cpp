@@ -497,6 +497,23 @@ bool BodyTranslator::statement(tree_t statement) {
     case T_PCALL: return procedureCall(statement);
     case T_RETURN: return returnStatement(statement);
     case T_NULL: return true;
+
+    // What NVC leaves of an assignment it folded away, so that the process is still a driver of
+    // the signal (IEEE 1076 section 14.7.2): a write it owns, with nothing to run.
+    case T_DUMMY_DRIVER: {
+        const std::optional<Place> target = place(tree_target(statement));
+        if (!target) return false;
+        if (!target->empty && !target->isVariable) noteWrite(*target);
+        return true;
+    }
+
+    // A block of statements, VHDL-2019's sequential block, and what NVC leaves of a conditional
+    // assignment whose condition it folded.
+    case T_SEQUENCE:
+        for (unsigned index = 0; index < tree_decls(statement); ++index) {
+            if (!declare(tree_decl(statement, index))) return false;
+        }
+        return statements(statement);
     default:
         return fail(statement, std::string("the statement ") + tree_kind_str(tree_kind(statement)));
     }
