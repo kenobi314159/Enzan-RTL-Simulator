@@ -2708,8 +2708,9 @@ revision its `revision.txt` names: every compliant VHDL-93 case the suite's own 
 run, by their rules as GHDL's `testsuite.sh` reads them — the units an `.exp` builds before a
 case analysed with it, the top its `ENTITY=` names or else the last entity named as a top, its
 `STOP=` time, `--assert-level error`. A case passes when Enzan runs it to its end and it reports
-no `FAILED TEST`. The cases run in parallel, those writing a file first, since the suite reads
-back in a later case what a simulator wrote in its own format in an earlier one.
+no `FAILED TEST`. The cases run in parallel but for those using files, which run one after
+another in the suite's order, since the suite reads back in a later case what a simulator wrote
+in its own format in an earlier one, and gives several pairs of cases one file name.
 
 `tests/conformance/nvc/run-suite.sh` runs NVC's own regression tests, from the NVC vendored
 under `third_party/nvc` and so at its revision: every test `test/regress/testlist.txt` lists,

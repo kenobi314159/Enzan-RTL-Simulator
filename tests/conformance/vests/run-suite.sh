@@ -16,10 +16,11 @@
 # units belong to a library other than work, LIBRARY=, is run as the rest are and fails until
 # Enzan analyses several libraries in one run.
 #
-# A case that writes a file another reads runs before every other case, as GHDL's suite runs a
-# writer before its reader: each simulator reads back the files it wrote, in its own format, and the
-# files the suite commits are another tool's. A writer is one the suite marks OUTPUT=, or one that
-# opens a file to write it, as clifton-labs' do unmarked.
+# The cases that use files run one after another in the suite's own order, beside the others run
+# in parallel: each simulator reads back the files it wrote, in its own format, and the files the
+# suite commits are another tool's, so a reader needs the writer the suite runs before it to have
+# run, and not a later writer of the same file. A case uses files when the suite gives it one,
+# INPUT= or OUTPUT=, or when it declares one, as clifton-labs' do unmarked.
 #
 # Prints PASS or FAIL for each case, then the counts, and writes the cases that passed to
 # <work-directory>/passed.txt, for ratchet.sh to hold to passing.txt.
@@ -45,11 +46,11 @@ git -C "$source" clean -fdxq testsuite
 
 # One line per case: its name, its directory, its top, its stop time, then its sources, the
 # units built before it first. Names are the case's path under vhdl-93, which the pass list holds.
-# The cases that write files are listed apart, to run first.
+# The cases that use files are listed apart, to run in order.
 cases="$work/cases.txt"
-writers="$work/writers.txt"
+serial="$work/serial.txt"
 : >"$cases"
-: >"$writers"
+: >"$serial"
 while read -r exp; do
     directory="$(dirname "$exp")"
     built=()
@@ -64,11 +65,11 @@ while read -r exp; do
                 case "$option" in
                 ENTITY=*) entity="${option#ENTITY=}" ;;
                 STOP=*) stop="${option#STOP=}" ;;
-                OUTPUT=*) list="$writers" ;;
+                INPUT=* | OUTPUT=*) list="$serial" ;;
                 esac
             done
-            if grep -qiE '(write|append)_mode' "$directory/$file"; then
-                list="$writers"
+            if grep -qiE '^[[:space:]]*file[[:space:]]' "$directory/$file"; then
+                list="$serial"
             fi
             if [[ -z "$entity" ]]; then
                 entity="$(sed -n -E -e '/^ENTITY .*(ent|entw) IS$/s/ENTITY (.*) IS/\1/p' \
@@ -120,9 +121,9 @@ export -f run_case
 mkdir -p "$work/logs"
 export ENZAN="$enzan" WORK="$work"
 {
-    for list in "$writers" "$cases"; do
-        tr '\n' '\0' <"$list" | xargs -0 -P "$(nproc)" -I{} bash -c 'run_case "$1"' _ {}
-    done
+    tr '\n' '\0' <"$serial" | xargs -0 -P 1 -I{} bash -c 'run_case "$1"' _ {} &
+    tr '\n' '\0' <"$cases" | xargs -0 -P "$(nproc)" -I{} bash -c 'run_case "$1"' _ {}
+    wait
 } | sort -k2 >"$work/results.txt"
 cat "$work/results.txt"
 
