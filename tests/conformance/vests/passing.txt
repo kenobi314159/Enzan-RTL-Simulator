@@ -116,7 +116,12 @@ billowitch/compliant/tc1294.vhd
 billowitch/compliant/tc1299.vhd
 billowitch/compliant/tc1306.vhd
 billowitch/compliant/tc1307.vhd
+billowitch/compliant/tc1309.vhd
 billowitch/compliant/tc131.vhd
+billowitch/compliant/tc1310.vhd
+billowitch/compliant/tc1316.vhd
+billowitch/compliant/tc1317.vhd
+billowitch/compliant/tc1318.vhd
 billowitch/compliant/tc1321.vhd
 billowitch/compliant/tc1322.vhd
 billowitch/compliant/tc1323.vhd
@@ -152,11 +157,17 @@ billowitch/compliant/tc1371.vhd
 billowitch/compliant/tc1372.vhd
 billowitch/compliant/tc1373.vhd
 billowitch/compliant/tc1374.vhd
+billowitch/compliant/tc1375.vhd
 billowitch/compliant/tc138.vhd
 billowitch/compliant/tc1386.vhd
 billowitch/compliant/tc1387.vhd
+billowitch/compliant/tc1389.vhd
+billowitch/compliant/tc1390.vhd
+billowitch/compliant/tc1392.vhd
+billowitch/compliant/tc1393.vhd
 billowitch/compliant/tc1394.vhd
 billowitch/compliant/tc14.vhd
+billowitch/compliant/tc1405.vhd
 billowitch/compliant/tc1409.vhd
 billowitch/compliant/tc141.vhd
 billowitch/compliant/tc1410.vhd
@@ -610,6 +621,7 @@ billowitch/compliant/tc2404.vhd
 billowitch/compliant/tc2408.vhd
 billowitch/compliant/tc241.vhd
 billowitch/compliant/tc2412.vhd
+billowitch/compliant/tc2415.vhd
 billowitch/compliant/tc2417.vhd
 billowitch/compliant/tc2421.vhd
 billowitch/compliant/tc2425.vhd
@@ -630,7 +642,9 @@ billowitch/compliant/tc2456.vhd
 billowitch/compliant/tc2457.vhd
 billowitch/compliant/tc2458.vhd
 billowitch/compliant/tc2459.vhd
+billowitch/compliant/tc2460.vhd
 billowitch/compliant/tc2461.vhd
+billowitch/compliant/tc2462.vhd
 billowitch/compliant/tc2463.vhd
 billowitch/compliant/tc2464.vhd
 billowitch/compliant/tc2465.vhd
@@ -1230,6 +1244,7 @@ billowitch/compliant/tc99.vhd
 billowitch/compliant/tc992.vhd
 billowitch/compliant/tc993.vhd
 billowitch/compliant/tc995.vhd
+clifton-labs/compliant/functional/aggregates/simple-aggregate-lvalue.vhdl
 clifton-labs/compliant/functional/aggregates/simple-integer-aggregate.vhdl
 clifton-labs/compliant/functional/aliases/objects/simple-string-alias.vhdl
 clifton-labs/compliant/functional/attributes/array/simple-high-attribute.vhdl

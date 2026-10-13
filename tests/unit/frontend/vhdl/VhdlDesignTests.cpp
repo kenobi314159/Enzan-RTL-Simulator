@@ -574,6 +574,43 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, ANestedAggregateTargetTakesEachNamesPart) {
+    // A record's field of a record type named by an aggregate of its own, which GHDL 4.1 fails on
+    // and the aggregates golden case therefore leaves out.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  type pair is record
+    first : integer;
+    second : bit;
+  end record;
+  type nest is record
+    inner : pair;
+    last : bit;
+  end record;
+begin
+  process
+    variable b : integer;
+    variable y, z : bit;
+  begin
+    ((b, y), z) := nest'(inner => (-5, '1'), last => '0');
+    assert b = -5 and y = '1' and z = '0' report "nested" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, ConstantFunctionsAndArraysFoldIntoGenericsAndGenerates) {
     // As NEORV32 chooses its boot address and its bus devices: a function returning one of two
     // vectors, nested; a slice of an array generic passed down; and generate statements on the

@@ -259,6 +259,34 @@ private:
     bool statement(tree_t statement);
     bool signalAssignment(tree_t statement);
     bool variableAssignment(tree_t statement);
+
+    /// One name of an aggregate target, and where its value lies in what the aggregate is
+    /// assigned (IEEE 1076 sections 10.5.2.1 and 10.6.2.1).
+    struct AggregatePart {
+        Place place;
+        std::uint32_t offset = 0;
+    };
+
+    /// The names `aggregate`, a target, assigns, nested aggregates flattened, and how wide a value
+    /// it takes: an array's elements by position from its left, the highest bits, and a record's
+    /// fields by position or name. Nothing, having failed, when it is not such a target.
+    struct AggregateTarget {
+        std::vector<AggregatePart> parts;
+        std::uint32_t width = 0;
+    };
+
+    std::optional<AggregateTarget> aggregateTarget(tree_t aggregate);
+
+    /// The `width` bits of `value` from `offset` up.
+    Value bitsOf(const Value& value, std::uint32_t offset, std::uint32_t width);
+
+    /// Stores `value`, as wide as it, in `target`, a variable or part of one.
+    void assignVariable(const Place& target, const Value& value);
+
+    /// Drives `value` onto `target`, a whole signal or part of one: in the next delta cycle when
+    /// `after` is nothing, else after it, inertially when `rejects`.
+    void driveTarget(const Place& target, const Value& value, const std::optional<Value>& after,
+                     bool rejects);
     bool ifStatement(tree_t statement);
     bool caseStatement(tree_t statement);
     bool whileLoop(tree_t statement);

@@ -532,33 +532,34 @@ bool BodyTranslator::statement(tree_t statement) {
 
 bool BodyTranslator::signalAssignment(tree_t statement) {
     if (!isProcess) return fail(statement, "a signal assignment in a function");
-    const std::optional<Place> target = place(tree_target(statement));
-    if (!target) return false;
-    if (target->empty) return true;
-    if (target->isVariable)
-        return fail(tree_target(statement), "assigning a signal that is not declared by the "
-                                            "architecture");
-    const std::uint32_t object = target->objectIndex;
-    const std::uint32_t width = target->layout.storage.bitWidth();
+    tree_t name = tree_target(statement);
+
+    // What is assigned: the one name, or each name of an aggregate with where its value lies in
+    // what the aggregate is assigned.
+    const bool aggregate = tree_kind(name) == T_AGGREGATE;
+    std::vector<AggregatePart> parts;
+    std::uint32_t width = 0;
+    std::optional<Layout> expected;
+    if (aggregate) {
+        std::optional<AggregateTarget> target = aggregateTarget(name);
+        if (!target) return false;
+        parts = std::move(target->parts);
+        width = target->width;
+        expected = layoutFor(tree_type(name));
+    } else {
+        std::optional<Place> target = place(name);
+        if (!target) return false;
+        if (target->empty) return true;
+        width = target->layout.storage.bitWidth();
+        expected = target->layout;
+        parts.push_back(AggregatePart{.place = std::move(*target), .offset = 0});
+    }
+    for (const AggregatePart& part : parts) {
+        if (part.place.isVariable)
+            return fail(name, "assigning a signal that is not declared by the architecture");
+    }
     const unsigned count = tree_waveforms(statement);
     if (count == 0) return fail(statement, "an assignment with no waveform");
-
-    // An element or a slice with no delay: one transaction in the next delta cycle, which is the
-    // same whether the assignment is inertial or transport. With a delay, or several elements, it
-    // is a waveform as the whole signal's is below.
-    if (!target->whole && count == 1 && !tree_has_delay(tree_waveform(statement, 0))
-        && tree_has_value(tree_waveform(statement, 0))) {
-        tree_t waveform = tree_waveform(statement, 0);
-        const std::optional<Value> value = expression(tree_value(waveform), &target->layout);
-        if (!value) return false;
-        if (value->type.bitWidth() != width)
-            return fail(waveform, "a value of another length than the part it is assigned to");
-        emit(eir::Instruction::make(eir::Opcode::DrivePart, {}, eir::Operand::object(object),
-                                    eir::Operand::reg(value->reg),
-                                    eir::Operand::reg(offsetRegister(*target))));
-        noteWrite(*target);
-        return true;
-    }
 
     // NVC records the delay mechanism as the rejection limit: none, or the first element's own
     // delay, for the default inertial delay; zero for `transport`; anything else for an explicit
@@ -583,56 +584,199 @@ bool BodyTranslator::signalAssignment(tree_t statement) {
     // Each element of the waveform is a transaction of this process's driver of the signal. The
     // first replaces what the driver had pending from its time on; the rest are appended after
     // it, which is a transport assignment of each (IEEE 1076 section 10.5.2.2).
-    const eir::Type timeType = eir::Type::bits(64, true, false);
+    const Place& single = parts.front().place;
     for (unsigned index = 0; index < count; ++index) {
         tree_t waveform = tree_waveform(statement, index);
         if (!tree_has_value(waveform)) return fail(waveform, "a null transaction");
 
-        const std::optional<Value> value = expression(tree_value(waveform), &target->layout);
+        const std::optional<Value> value =
+            expression(tree_value(waveform), expected ? &*expected : nullptr);
         if (!value) return false;
-        if (target->layout.isComposite() && value->type.bitWidth() != width)
-            return fail(waveform, "a value of another length than the signal it is assigned to");
+        if ((aggregate || single.layout.isComposite()) && value->type.bitWidth() != width) {
+            std::string_view what = "the part";
+            if (aggregate) {
+                what = "the aggregate";
+            } else if (single.whole) {
+                what = "the signal";
+            }
+            return fail(waveform,
+                        std::format("a value of another length than {} it is assigned to", what));
+        }
         const Value stored = resize(*value, width);
 
-        const std::optional<Value> after = tree_has_delay(waveform)
-                                               ? delay(tree_delay(waveform))
-                                               : std::optional(constant(0, timeType, nullptr));
-        if (!after) return false;
-
-        const bool rejects = inertial && index == 0;
-        if (target->whole) {
-            emit(eir::Instruction::make(rejects ? eir::Opcode::Drive : eir::Opcode::DriveTransport,
-                                        {}, eir::Operand::object(object),
-                                        eir::Operand::reg(stored.reg),
-                                        eir::Operand::reg(after->reg)));
-            continue;
+        std::optional<Value> after;
+        if (tree_has_delay(waveform)) {
+            after = delay(tree_delay(waveform));
+            if (!after) return false;
         }
-
-        // A part's offset and delay travel in one register: the offset low, the delay above it.
-        const eir::Type pair = eir::Type::bits(128, false, false);
-        const Value offset = resize(
-            Value{.reg = offsetRegister(*target),
-                  .type = target->offset ? target->offset->type : eir::Type::bits(32, false, false),
-                  .vhdlType = nullptr},
-            128);
-        const Value later = resize(*after, 128);
-        const std::uint32_t shifted = newRegister(pair);
-        emit(eir::Instruction::make(
-            eir::Opcode::ShiftLeft, eir::Operand::reg(shifted), eir::Operand::reg(later.reg),
-            eir::Operand::reg(constant(64, eir::Type::bits(32, false, false), nullptr).reg)));
-        const std::uint32_t both = newRegister(pair);
-        emit(eir::Instruction::make(eir::Opcode::Or, eir::Operand::reg(both),
-                                    eir::Operand::reg(offset.reg), eir::Operand::reg(shifted)));
-        emit(eir::Instruction::make(
-            rejects ? eir::Opcode::DrivePartAfter : eir::Opcode::DriveTransportPart, {},
-            eir::Operand::object(object), eir::Operand::reg(stored.reg), eir::Operand::reg(both)));
+        for (const AggregatePart& part : parts) {
+            if (part.place.empty) continue;
+            const Value piece =
+                aggregate ? bitsOf(stored, part.offset, part.place.layout.storage.bitWidth())
+                          : stored;
+            driveTarget(part.place, piece, after, inertial && index == 0);
+        }
     }
-    noteWrite(*target);
+    for (const AggregatePart& part : parts) {
+        if (!part.place.empty) noteWrite(part.place);
+    }
     return true;
+}
+
+void BodyTranslator::driveTarget(const Place& target, const Value& value,
+                                 const std::optional<Value>& after, bool rejects) {
+    const eir::Type timeType = eir::Type::bits(64, true, false);
+    if (target.whole) {
+        const Value later = after.value_or(constant(0, timeType, nullptr));
+        emit(eir::Instruction::make(rejects ? eir::Opcode::Drive : eir::Opcode::DriveTransport, {},
+                                    eir::Operand::object(target.objectIndex),
+                                    eir::Operand::reg(value.reg), eir::Operand::reg(later.reg)));
+        return;
+    }
+
+    // An element or a slice with no delay: one transaction in the next delta cycle, which is the
+    // same whether the assignment is inertial or transport.
+    if (!after) {
+        emit(eir::Instruction::make(
+            eir::Opcode::DrivePart, {}, eir::Operand::object(target.objectIndex),
+            eir::Operand::reg(value.reg), eir::Operand::reg(offsetRegister(target))));
+        return;
+    }
+
+    // A part's offset and delay travel in one register: the offset low, the delay above it.
+    const eir::Type pair = eir::Type::bits(128, false, false);
+    const Value offset = resize(
+        Value{.reg = offsetRegister(target),
+              .type = target.offset ? target.offset->type : eir::Type::bits(32, false, false),
+              .vhdlType = nullptr},
+        128);
+    const Value later = resize(*after, 128);
+    const std::uint32_t shifted = newRegister(pair);
+    emit(eir::Instruction::make(
+        eir::Opcode::ShiftLeft, eir::Operand::reg(shifted), eir::Operand::reg(later.reg),
+        eir::Operand::reg(constant(64, eir::Type::bits(32, false, false), nullptr).reg)));
+    const std::uint32_t both = newRegister(pair);
+    emit(eir::Instruction::make(eir::Opcode::Or, eir::Operand::reg(both),
+                                eir::Operand::reg(offset.reg), eir::Operand::reg(shifted)));
+    emit(eir::Instruction::make(rejects ? eir::Opcode::DrivePartAfter
+                                        : eir::Opcode::DriveTransportPart,
+                                {}, eir::Operand::object(target.objectIndex),
+                                eir::Operand::reg(value.reg), eir::Operand::reg(both)));
+}
+
+std::optional<BodyTranslator::AggregateTarget> BodyTranslator::aggregateTarget(tree_t aggregate) {
+    AggregateTarget result;
+    const auto partOf = [this](tree_t name) -> std::optional<AggregateTarget> {
+        if (tree_kind(name) == T_AGGREGATE) return aggregateTarget(name);
+        std::optional<Place> named = place(name);
+        if (!named) return std::nullopt;
+        const std::uint32_t width = named->empty ? 0 : named->layout.storage.bitWidth();
+        AggregateTarget one;
+        one.parts.push_back(AggregatePart{.place = std::move(*named), .offset = 0});
+        one.width = width;
+        return one;
+    };
+    const auto append = [&result](AggregateTarget&& part, std::uint32_t offset) {
+        for (AggregatePart& each : part.parts) {
+            each.offset += offset;
+            result.parts.push_back(std::move(each));
+        }
+    };
+
+    if (type_is_record(tree_type(aggregate))) {
+        const std::optional<Layout> layout = layoutFor(tree_type(aggregate));
+        if (!layout) {
+            fail(aggregate, "an aggregate target of this record");
+            return std::nullopt;
+        }
+        std::size_t next = 0;
+        for (unsigned index = 0; index < tree_assocs(aggregate); ++index) {
+            tree_t association = tree_assoc(aggregate, index);
+            std::size_t position = 0;
+            if (tree_subkind(association) == A_POS) {
+                position = next++;
+            } else if (tree_subkind(association) == A_NAMED
+                       && tree_kind(tree_name(association)) == T_REF
+                       && tree_has_ref(tree_name(association))
+                       && tree_kind(tree_ref(tree_name(association))) == T_FIELD_DECL) {
+                position = tree_pos(tree_ref(tree_name(association)));
+            } else {
+                fail(association, "this element of an aggregate target");
+                return std::nullopt;
+            }
+            if (position >= layout->fields.size()) {
+                fail(association, "an aggregate target with more elements than fields");
+                return std::nullopt;
+            }
+            std::optional<AggregateTarget> part = partOf(tree_value(association));
+            if (!part) return std::nullopt;
+            append(std::move(*part), static_cast<std::uint32_t>(layout->fieldOffsets[position]));
+        }
+        result.width = layout->storage.bitWidth();
+        return result;
+    }
+
+    // An array's names in order from its left, which is its highest bits; each an element, or in
+    // VHDL-2008 a slice of the aggregate's own type.
+    std::vector<AggregateTarget> elements;
+    for (unsigned index = 0; index < tree_assocs(aggregate); ++index) {
+        tree_t association = tree_assoc(aggregate, index);
+        if (tree_subkind(association) != A_POS && tree_subkind(association) != A_CONCAT) {
+            fail(association, "an aggregate target naming its elements' indices");
+            return std::nullopt;
+        }
+        std::optional<AggregateTarget> part = partOf(tree_value(association));
+        if (!part) return std::nullopt;
+        result.width += part->width;
+        elements.push_back(std::move(*part));
+    }
+    std::uint32_t top = result.width;
+    for (AggregateTarget& element : elements) {
+        top -= element.width;
+        append(std::move(element), top);
+    }
+    return result;
+}
+
+BodyTranslator::Value BodyTranslator::bitsOf(const Value& value, std::uint32_t offset,
+                                             std::uint32_t width) {
+    const eir::Type type = eir::Type::bits(width, false, false);
+    const std::uint32_t bits = newRegister(type);
+    emit(eir::Instruction::make(
+        eir::Opcode::PartSelect, eir::Operand::reg(bits), eir::Operand::reg(value.reg),
+        eir::Operand::reg(constant(offset, eir::Type::bits(32, false, false), nullptr).reg)));
+    return Value{.reg = bits, .type = type, .vhdlType = nullptr};
 }
 
 bool BodyTranslator::variableAssignment(tree_t statement) {
     tree_t name = tree_target(statement);
+    if (tree_kind(name) == T_AGGREGATE) {
+        // Every part is taken from the value before any is assigned, so `(a, b) := (b, a)` swaps.
+        const std::optional<AggregateTarget> target = aggregateTarget(name);
+        if (!target) return false;
+        const std::optional<Layout> expected = layoutFor(tree_type(name));
+        const std::optional<Value> value =
+            expression(tree_value(statement), expected ? &*expected : nullptr);
+        if (!value) return false;
+        if (value->type.bitWidth() != target->width)
+            return fail(name, "a value of another length than the aggregate it is assigned to");
+        std::vector<Value> pieces;
+        pieces.reserve(target->parts.size());
+        for (const AggregatePart& part : target->parts) {
+            pieces.push_back(part.place.empty ? *value
+                                              : bitsOf(*value, part.offset,
+                                                       part.place.layout.storage.bitWidth()));
+        }
+        for (std::size_t index = 0; index < target->parts.size(); ++index) {
+            const Place& part = target->parts[index].place;
+            if (part.empty) continue;
+            if (!part.isVariable)
+                return fail(name, "assigning a variable that is not declared by the process");
+            assignVariable(part, pieces[index]);
+        }
+        return true;
+    }
+
     if (tree_kind(name) == T_ARRAY_SLICE && !folder().range(tree_range(name, 0)))
         return movingSliceAssignment(statement);
     const std::optional<Place> target = place(name);
@@ -646,17 +790,19 @@ bool BodyTranslator::variableAssignment(tree_t statement) {
     const std::uint32_t width = target->layout.storage.bitWidth();
     if (target->layout.isComposite() && value->type.bitWidth() != width)
         return fail(name, "a value of another length than the variable it is assigned to");
-    const Value stored = resize(*value, width);
-
-    if (target->whole) {
-        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(target->variable.reg),
-                                    eir::Operand::reg(stored.reg)));
-    } else {
-        emit(eir::Instruction::make(
-            eir::Opcode::SplicePart, eir::Operand::reg(target->variable.reg),
-            eir::Operand::reg(stored.reg), eir::Operand::reg(offsetRegister(*target))));
-    }
+    assignVariable(*target, resize(*value, width));
     return true;
+}
+
+void BodyTranslator::assignVariable(const Place& target, const Value& value) {
+    if (target.whole) {
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(target.variable.reg),
+                                    eir::Operand::reg(value.reg)));
+    } else {
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(target.variable.reg),
+                                    eir::Operand::reg(value.reg),
+                                    eir::Operand::reg(offsetRegister(target))));
+    }
 }
 
 bool BodyTranslator::ifStatement(tree_t statement) {

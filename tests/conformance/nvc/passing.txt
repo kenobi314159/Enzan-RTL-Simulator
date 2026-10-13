@@ -32,6 +32,9 @@ assert7
 assign1
 assign2
 assign3
+assign4
+assign5
+assign7
 attr11
 attr16
 attr3
@@ -91,6 +94,7 @@ elab14
 elab15
 elab16
 elab17
+elab18
 elab19
 elab2
 elab21
@@ -292,9 +296,12 @@ record9
 seqblock1
 seqblock2
 signal1
+signal10
 signal12
 signal13
+signal17
 signal18
+signal20
 signal22
 signal24
 signal26
@@ -323,12 +330,14 @@ vests26
 vests27
 vests34
 vests35
+vests36
 vests37
 vests39
 vests4
 vests41
 vests42
 vests5
+vests8
 vests9
 view6
 wait1

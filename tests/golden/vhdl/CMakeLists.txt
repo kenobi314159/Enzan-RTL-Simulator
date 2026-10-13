@@ -132,3 +132,6 @@ enzan_add_vhdl_golden_test(ports)
 
 # Blocks with generics and ports.
 enzan_add_vhdl_golden_test(blocks)
+
+# Aggregates as the targets of variable and signal assignments.
+enzan_add_vhdl_golden_test(aggregates)

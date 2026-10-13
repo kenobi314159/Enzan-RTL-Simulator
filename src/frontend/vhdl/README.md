@@ -52,15 +52,15 @@ dimensions, with static bounds, and of records; ports associated with signals, p
 expressions and conversion functions, whole or in parts; `if` and `for` generate statements and
 blocks, with generics and ports; constant functions; processes with variables, `if`, `case`, loops,
 `exit`, `next`, `wait` (but not one with both a timeout and a sensitivity or condition), signal
-assignments with inertial and transport delay, to whole signals and to their parts, `assert`,
-`report` with messages built from any strings and characters and the `'image` of integers and times,
-`std.env.finish` and `stop`; aggregates, strings, elements and slices, with loops unrolled for
-slices that move with their parameter and variable slices of run-time lengths, concatenation, the
-predefined operators on scalars and arrays, `'event` and `'last_value`; functions and procedures of
-packages and architectures, std_logic_1164's and numeric_std's among them. std.textio's `write`,
-`writeline`, `readline` and `read` of lines of strings, characters and integers, files of text and
-of other types and `endfile`, run natively by the runtime. Anything else is refused with ENZ2005
-naming it, never left out.
+assignments with inertial and transport delay, to whole signals, to their parts and to aggregates of
+them, as variable assignments may be too, `assert`, `report` with messages built from any strings
+and characters and the `'image` of integers and times, `std.env.finish` and `stop`; aggregates,
+strings, elements and slices, with loops unrolled for slices that move with their parameter and
+variable slices of run-time lengths, concatenation, the predefined operators on scalars and arrays,
+`'event` and `'last_value`; functions and procedures of packages and architectures, std_logic_1164's
+and numeric_std's among them. std.textio's `write`, `writeline`, `readline` and `read` of lines of
+strings, characters and integers, files of text and of other types and `endfile`, run natively by
+the runtime. Anything else is refused with ENZ2005 naming it, never left out.
 
 ## Rules
 
