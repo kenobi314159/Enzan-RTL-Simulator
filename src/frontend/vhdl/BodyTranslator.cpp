@@ -189,6 +189,12 @@ void BodyTranslator::noteRead(std::uint32_t objectIndex) {
 
 void BodyTranslator::noteWrite(const Place& place) {
     const std::uint32_t width = owner.definition().objects[place.objectIndex].type.bitWidth();
+    if (place.offset && place.withinWidth != 0) {
+        writes.push_back(eir::WriteExtent{.objectIndex = place.objectIndex,
+                                          .lowBit = static_cast<std::uint32_t>(place.withinLow),
+                                          .width = place.withinWidth});
+        return;
+    }
     if (place.whole || place.offset) {
         writes.push_back(eir::WriteExtent::whole(place.objectIndex, width));
         return;
@@ -2290,6 +2296,11 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
         result.layout = inner;
         result.whole = false;
         result.staticOffset = outer->staticOffset + within.staticOffset;
+        if (!outer->offset && within.dynamic && !outer->whole) {
+            // A part chosen at run time lies within the static part it is chosen from.
+            result.withinLow = outer->staticOffset;
+            result.withinWidth = outer->layout.storage.bitWidth();
+        }
         if (outer->offset || within.dynamic) {
             // Where either offset is known only at run time, the sum is too.
             const eir::Type type = eir::Type::bits(64, true, false);

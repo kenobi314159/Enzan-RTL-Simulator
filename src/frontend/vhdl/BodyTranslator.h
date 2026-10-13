@@ -179,6 +179,12 @@ private:
         std::optional<Value> offset;
         bool whole = true;
 
+        /// Where `offset` is known only at run time, the bits the part lies within whatever it is:
+        /// the static part around it, a field say, from `withinLow`, `withinWidth` wide. A width
+        /// of zero is the whole object.
+        std::int64_t withinLow = 0;
+        std::uint32_t withinWidth = 0;
+
         /// True for a null slice, which designates nothing: assigning it does nothing, as VHDL has
         /// it, and the adapter has no value to read from it.
         bool empty = false;

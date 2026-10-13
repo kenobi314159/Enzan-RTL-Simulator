@@ -756,6 +756,47 @@ end architecture;
                                                                "core (single) 100%", "PASS"}));
 }
 
+TEST_F(VhdlDesignTest, AnElementChosenAtRunTimeIsDrivenWithinItsField) {
+    // As NEORV32's debug module drives its record: one process a field by an index known only at
+    // run time, another a different field. The first drives no more than its field, so they do
+    // not overlap.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  type pair_t is record
+    flags : bit_vector(3 downto 0);
+    data : bit_vector(7 downto 0);
+  end record;
+  signal pair : pair_t := (flags => "0000", data => x"00");
+  signal which : natural := 2;
+begin
+  process (which)
+  begin
+    pair.flags(which) <= '1';
+  end process;
+
+  pair.data <= x"5a";
+
+  process
+  begin
+    wait for 1 ns;
+    assert pair.flags = "0100" and pair.data = x"5a" report "pair" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.
