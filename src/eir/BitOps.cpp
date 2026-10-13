@@ -1027,9 +1027,11 @@ void assignReal(BitRef dst, double value) noexcept {
 }
 
 void integerToReal(BitRef dst, ConstBitRef source, bool isSigned) {
+    // An unknown bit converts as zero.
     BitVector known(source.width());
-    copy(known.mutableRef(), source);
-    for (Word& word : known.mutableRef().bvalWords()) word = 0;
+    const BitRef bits = known.mutableRef();
+    copy(bits, source);
+    std::ranges::fill(bits.bvalWords(), Word{0});
     const double value = isSigned ? static_cast<double>(known.ref().toInt64())
                                   : static_cast<double>(known.ref().toUInt64());
     assignReal(dst, value);
