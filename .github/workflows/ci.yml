@@ -120,6 +120,19 @@ jobs:
             >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 
+      # NVC's own regression tests, from the NVC the VHDL frontend is built on (section 14.4), held
+      # to their pass list. About a minute against this build, so on every branch.
+      - name: NVC regression tests
+        if: matrix.preset == 'gcc-release'
+        run: |
+          status=0
+          tests/conformance/nvc/run-suite.sh build/gcc-release/bin/enzan build/nvc \
+            > build/nvc.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/nvc.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/nvc.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
       # M6's exit design (section 14.5): NEORV32 through its own testbench's on-chip debugger
       # sequence, held to GHDL's reports and to its CPU trace and UART logs. A few minutes, so
       # on the main branch only, and with the one build that is optimised for GCC.

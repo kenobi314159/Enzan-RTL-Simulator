@@ -2706,6 +2706,15 @@ case analysed with it, the top its `ENTITY=` names or else the last entity named
 no `FAILED TEST`. The cases run in parallel, those writing a file first, since the suite reads
 back in a later case what a simulator wrote in its own format in an earlier one.
 
+`tests/conformance/nvc/run-suite.sh` runs NVC's own regression tests, from the NVC vendored
+under `third_party/nvc` and so at its revision: every test `test/regress/testlist.txt` lists,
+by its options as NVC's `run_regr.c` reads them — the revision of the language, `stop=`, `fail`
+for a test that must fail, `gold` for one whose transcript must hold each line of its gold file
+in order. NVC writes a message's time and delta before it, which Enzan does not, so a gold line
+is matched without them. A test of what only NVC has, VHPI, its shell, PSL, coverage, waveform
+dumps, Verilog or its relaxed rules, or one setting generics on the command line, is in neither
+count.
+
 The ratchet is a list for each suite, as 14.6 describes, and one script,
 `tests/conformance/ratchet.sh`, holds every suite to its list.
 
