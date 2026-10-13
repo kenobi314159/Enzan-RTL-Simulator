@@ -274,7 +274,7 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
         }
         options.units.sources.push_back(result.buffer);
     }
-    options.units.work = frontend::vhdl::UnitLibrary{.name = "work", .directory = {}};
+    options.units.work = frontend::vhdl::UnitLibrary{.name = request.vhdlWork, .directory = {}};
     options.units.searchDirectories.push_back(
         vhdlLibraries.empty() ? frontend::vhdl::standardLibraryDirectory() : vhdlLibraries);
     options.top = request.top;

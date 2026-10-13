@@ -92,10 +92,12 @@ gtkwave wave.fst
 diff the file yourself: it is far smaller on a real design and a viewer can seek in it.
 
 A VHDL design runs the same way, from `.vhd` or `.vhdl` files given in the order VHDL analyses
-them; it counts time in femtoseconds unless `--timescale` says otherwise:
+them; it counts time in femtoseconds unless `--timescale` says otherwise. Sources that name the
+library they belong to, `library neorv32;`, are analysed into it with `--work`:
 
 ```sh
 enzan --top tb counter.vhd counter_tb.vhd
+enzan --work neorv32 --top neorv32_tb -f neorv32_files.f
 ```
 
 `enzan --help` lists the options.

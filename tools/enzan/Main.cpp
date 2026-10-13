@@ -128,6 +128,8 @@ Libraries:
       --in-lib <name>=<dir>
                           The same, overriding the name the library carries.
       --name <n>          The name `lib create` gives a library.
+      --work <name>       The library VHDL sources are analysed into, which they
+                          name it by: `library neorv32;`. Default `work`.
 
 Simulation:
   -t, --top <module>      Module to elaborate as the top level. `elaborate` and
@@ -202,6 +204,9 @@ struct Invocation {
 
     /// Top-level parameter overrides, each `NAME=VALUE`.
     std::vector<std::string> parameters;
+
+    /// The library VHDL sources are analysed into, by the name they refer to it by.
+    std::string workLibrary = "work";
     std::string topModule;
     std::optional<std::uint64_t> runUntil;
     std::filesystem::path vcdPath;
@@ -321,6 +326,13 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             invocation.topModule = value;
+            continue;
+        }
+
+        if (argument == "--work") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.workLibrary = value;
             continue;
         }
 
@@ -743,6 +755,7 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
 
     request.contextFiles = invocation.contextFiles;
     request.top = invocation.topModule;
+    request.vhdlWork = invocation.workLibrary;
     return true;
 }
 

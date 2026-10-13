@@ -158,6 +158,10 @@ public:
         /// adapter lacks (DESIGN_GUIDE.md section 5.2); without one it translates every entity
         /// that nothing instantiates. SystemVerilog's analysis does not use it.
         std::string top;
+
+        /// The library VHDL sources are analysed into, by the name they refer to it by
+        /// (`library neorv32;`). SystemVerilog's analysis does not use it.
+        std::string vhdlWork = "work";
     };
 
     /// Analyses `request` together with everything analysed before it.
