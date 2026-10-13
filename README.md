@@ -191,13 +191,14 @@ tools/cocotb/makefiles.sh build/cocotb-makefiles
 make SIM=enzan COCOTB_MAKEFILES_DIR=$PWD/build/cocotb-makefiles
 ```
 
-run in the directory of an ordinary cocotb testbench. `ENZAN_BIN_DIR` names the directory holding
-`enzan` when it is not on your `PATH`. Delays inside the design are counted in the unit
+run in the directory of an ordinary cocotb testbench, with `TOPLEVEL_LANG=vhdl` for a VHDL
+toplevel, which cocotb reaches through VHPI (`--vhpi`, in a build with the VHDL frontend).
+`ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`. Delays inside the design are counted in the unit
 `COCOTB_HDL_TIMEPRECISION` names, because Enzan does not read `` `timescale `` yet; a testbench
 that drives every event from Python, as most do, does not notice.
 
 cocotb's own regression suite runs in CI, and `tests/conformance/cocotb/run-suite.sh` runs it
-locally. Its pass rate is low until M5: most of its cases share one design that uses unpacked
+locally, `run-suite.sh <enzan> <work> vhdl` with VHDL toplevels. Its pass rate is low until M5: most of its cases share one design that uses unpacked
 arrays, `real`, `string` and structs, which Enzan does not analyse yet.
 
 ## What works today
@@ -223,6 +224,7 @@ arrays, `real`, `string` and structs, which Enzan does not analyse yet.
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
 | VPI, and cocotb testbenches through it | yes — modules, generate blocks, nets, variables, bits, parameters; every callback cocotb uses |
+| VHPI, and cocotb testbenches of a VHDL toplevel through it | yes — regions, signals, ports, generics, their elements and fields, their VHDL types; every callback cocotb uses |
 | `` `timescale `` and `timeunit` | not yet — every delay is counted in the `--timescale` unit |
 | VHDL: entities, architectures, processes, scalar and real types, arrays, records, `wait`, `assert`, `report` | yes — M6 is under way |
 | VHDL: generics, generate statements, components bound by default, ports associated in parts | yes |

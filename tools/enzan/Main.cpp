@@ -158,6 +158,10 @@ Simulation:
       --dump-stats        Print instruction and delta counts when the run ends.
       --vpi <lib[:entry]> Load a VPI application, such as cocotb's; repeatable.
                           Without an entry, its vlog_startup_routines are run.
+      --vhpi <lib[:entry]>
+                          Load a VHPI application, such as cocotb's for a VHDL
+                          toplevel; repeatable. Without an entry, its
+                          vhpi_startup_routines are run.
   +<plusarg>              Passed to the design and to VPI applications.
 
 Graphical front end:
@@ -236,8 +240,10 @@ struct Invocation {
     std::uint32_t seed = 0;
     bool dumpStatistics = false;
 
-    /// VPI applications to load, in the order given (DESIGN_GUIDE.md section 9.1).
+    /// VPI and VHPI applications to load, each in the order given (DESIGN_GUIDE.md sections 9.1
+    /// and 9.7).
     std::vector<std::string> vpiApplications;
+    std::vector<std::string> vhpiApplications;
 
     /// The command line as it was given, which is what `vpi_get_vlog_info` reports.
     std::vector<std::string> commandLine;
@@ -510,6 +516,18 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             if (value == nullptr) return ParseOutcome::BadUsage;
             invocation.vpiApplications.emplace_back(value);
             continue;
+        }
+
+        if (argument == "--vhpi") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+#ifdef ENZAN_WITH_VHDL
+            invocation.vhpiApplications.emplace_back(value);
+            continue;
+#else
+            std::cerr << "enzan: '--vhpi' needs the VHDL frontend, which this build leaves out\n";
+            return ParseOutcome::BadUsage;
+#endif
         }
 
         if (argument == "--out-lib") {
@@ -973,6 +991,10 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
         if (!session.loadVpiApplication(application, invocation.commandLine))
             return ExitStatus::AnalysisFailed;
     }
+    for (const std::string& application : invocation.vhpiApplications) {
+        if (!session.loadVhpiApplication(application, invocation.commandLine))
+            return ExitStatus::AnalysisFailed;
+    }
 
     if (!prepare(invocation, session, sources, diagnostics)) return ExitStatus::AnalysisFailed;
 
@@ -1164,10 +1186,10 @@ int main(int argc, char** argv) {
     if (!invocation.writeThemePath.empty()) becomeFrontEnd(frontEndOptions(invocation));
 
     // An application observes a simulation, and these commands run none (section 9.1).
-    if (!invocation.vpiApplications.empty() && invocation.command != Command::Run
-        && invocation.command != Command::OneShot) {
-        std::cerr << "enzan: '--vpi' needs a simulation to load into; give it to `run` or to "
-                     "the one-shot form\n";
+    if ((!invocation.vpiApplications.empty() || !invocation.vhpiApplications.empty())
+        && invocation.command != Command::Run && invocation.command != Command::OneShot) {
+        std::cerr << "enzan: '--vpi' and '--vhpi' need a simulation to load into; give them to "
+                     "`run` or to the one-shot form\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 

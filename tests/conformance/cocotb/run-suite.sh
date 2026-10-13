@@ -3,7 +3,12 @@
 #
 # Runs cocotb's own regression suite against Enzan (DESIGN_GUIDE.md section 14.6).
 #
-#   run-suite.sh <enzan> <work-directory>
+#   run-suite.sh <enzan> <work-directory> [verilog|vhdl]
+#
+# The last is the toplevel's language, TOPLEVEL_LANG, `verilog` unless given: most cases have a
+# design in each, and cocotb reaches a VHDL one through VHPI (section 9.7), so the suite runs once
+# for each language, each with its own pass list, passing.txt and passing-vhdl.txt: a case
+# passing in one says nothing about the other.
 #
 # The cocotb used is the one installed for $COCOTB_PYTHON, or for python3; `pip install -r
 # requirements.txt` beside this script installs the pinned one. Its source is fetched at the
@@ -17,8 +22,8 @@
 
 set -uo pipefail
 
-if [[ $# -ne 2 ]]; then
-    printf 'usage: %s <enzan> <work-directory>\n' "$0" >&2
+if [[ $# -lt 2 || $# -gt 3 || ! "${3:-verilog}" =~ ^(verilog|vhdl)$ ]]; then
+    printf 'usage: %s <enzan> <work-directory> [verilog|vhdl]\n' "$0" >&2
     exit 1
 fi
 
@@ -27,6 +32,12 @@ readonly enzan="$(realpath "$1")"
 mkdir -p "$2"
 readonly work="$(realpath "$2")"
 readonly python="${COCOTB_PYTHON:-python3}"
+readonly language="${3:-verilog}"
+if [[ "$language" == vhdl ]]; then
+    readonly passing="$here/passing-vhdl.txt"
+else
+    readonly passing="$here/passing.txt"
+fi
 readonly timeout_seconds=600
 
 if ! version="$("$python" -c 'import cocotb; print(cocotb.__version__)' 2>/dev/null)"; then
@@ -65,13 +76,13 @@ for directory in "$run"/tests/test_cases/*/; do
     # Entered rather than named with `make -C`, as cocotb's own tests/Makefile does: the cases
     # read $(PWD), which only the shell keeps up to date. SIM and TOPLEVEL_LANG are in the
     # environment because cocotb's CI puts them there, and some cases read them from it.
-    if (cd "$directory" && SIM=enzan TOPLEVEL_LANG=verilog timeout "$timeout_seconds" make \
+    if (cd "$directory" && SIM=enzan TOPLEVEL_LANG="$language" timeout "$timeout_seconds" make \
         COCOTB_MAKEFILES_DIR="$work/makefiles") >"$work/$name.log" 2>&1; then
         passed+=("$name")
         # A case passes by cocotb's definition when its make succeeds, and many succeed without
         # cocotb ever running a test under Enzan: they skip themselves for anything that is not
         # a VHDL simulator or Verilator, or expect the run to fail and see it fail at analysis.
-        # Those are counted but said so, because such a pass says nothing about VPI.
+        # Those are counted but said so, because such a pass says nothing about VPI or VHPI.
         if grep -q "Running on Enzan" "$work/$name.log"; then
             simulated=$((simulated + 1))
             printf 'PASS %s\n' "$name"
@@ -85,9 +96,9 @@ for directory in "$run"/tests/test_cases/*/; do
 done
 
 total=$((${#passed[@]} + ${#failed[@]}))
-printf '\ncocotb %s regression: %d of %d cases pass (%d%%), %d of them with cocotb running\n' \
-    "$version" "${#passed[@]}" "$total" $((100 * ${#passed[@]} / total)) "$simulated"
+printf '\ncocotb %s regression, %s toplevel: %d of %d cases pass (%d%%), %d of them with cocotb running\n' \
+    "$version" "$language" "${#passed[@]}" "$total" $((100 * ${#passed[@]} / total)) "$simulated"
 
 # The ratchet, shared with the other suites.
 printf '%s\n' "${passed[@]}" >"$work/passed.txt"
-exec "$here/../ratchet.sh" "$here/passing.txt" "$work/passed.txt"
+exec "$here/../ratchet.sh" "$passing" "$work/passed.txt"

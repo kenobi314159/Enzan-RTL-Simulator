@@ -144,3 +144,14 @@ enzan_add_vhdl_golden_test(active)
 
 # Signals of null ranges, declared but holding nothing.
 enzan_add_vhdl_golden_test(nulls)
+
+# cocotb driving a VHDL toplevel through VHPI (DESIGN_GUIDE.md section 9.7), as the golden test
+# beside the SystemVerilog cases drives one through VPI, when a Python has cocotb.
+if(ENZAN_HAVE_COCOTB)
+  add_test(NAME golden.cocotb.vhdl
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../run-cocotb-check.sh" $<TARGET_FILE:enzan>
+                   "${ENZAN_COCOTB_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/cocotb" vhdl)
+  set_tests_properties(
+    golden.cocotb.vhdl PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb" FAIL_REGULAR_EXPRESSION
+                                  "FAIL=[1-9]" TIMEOUT 300)
+endif()

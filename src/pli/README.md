@@ -1,4 +1,4 @@
-# `src/pli` — the Verilog Procedural Interface
+# `src/pli` — the Verilog and VHDL Procedural Interfaces
 
 What a VPI application loaded with `--vpi` sees of a simulation, and how it drives one
 (DESIGN_GUIDE.md section 9). cocotb is the application this exists for.
@@ -13,6 +13,10 @@ What a VPI application loaded with `--vpi` sees of a simulation, and how it driv
   copying.
 - **Callbacks** — the registry, and the `runtime::PliHooks` that put each callback at its point
   in the region ordering (section 9.3).
+- **VHPI** (`Vhpi.cpp`, `VhpiRoutines.cpp`), built with the VHDL frontend — the same context's
+  regions and objects as VHPI names them, their VHDL types from the definitions' tables,
+  values in VHPI's formats, and VHPI's callbacks on VPI's dispatch (section 9.7). The private
+  model both files share is in `PliModel.h`.
 - **The routines** (`VpiRoutines.cpp`) — every routine of `include/enzan/vpi_user.h`, with C
   linkage, forwarding to the context.
 
@@ -49,3 +53,7 @@ implements, so that a kernel with nothing loaded pays one null test per hook.
 - **User system tasks.** `vpi_register_systf` fails: a call to one has to be compiled by the
   frontend, and it cannot be.
 - **The three delay modes behave alike** (section 9.4).
+- **VHPI's subset is cocotb's.** No drivers, loads, processes or statements, no
+  `vhpi_schedule_transaction`, `vhpi_format_value` or foreign subprograms; a record is read and
+  written by its fields; a VHPI handle stands for a region, a declared object or part of one, a
+  type, a range, a literal or the tool.

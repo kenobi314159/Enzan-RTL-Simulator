@@ -575,12 +575,23 @@ bool Session::elaborate(std::string_view topModule) {
 
 bool Session::loadVpiApplication(std::string_view specification,
                                  std::span<const std::string> commandLine) {
+    return loadApplication(specification, commandLine, false);
+}
+
+bool Session::loadVhpiApplication(std::string_view specification,
+                                  std::span<const std::string> commandLine) {
+    return loadApplication(specification, commandLine, true);
+}
+
+bool Session::loadApplication(std::string_view specification,
+                              std::span<const std::string> commandLine, bool vhpi) {
     if (vpi == nullptr) {
         vpi = std::make_unique<pli::PliContext>(
             diagnostics, std::vector<std::string>(commandLine.begin(), commandLine.end()));
         vpi->setTranscript(transcript);
     }
-    return vpi->load(specification);
+    return vpi->load(specification,
+                     vhpi ? pli::PliContext::Interface::Vhpi : pli::PliContext::Interface::Vpi);
 }
 
 bool Session::hasVpiApplication() const noexcept {

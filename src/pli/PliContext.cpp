@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "pli/PliContext.h"
+#include "pli/PliModel.h"
 
 #include "common/Assert.h"
 #include "common/Diagnostics.h"
@@ -29,8 +30,6 @@ namespace {
 /// The one context the routines act on. There is at most one per process, for the reason there
 /// is one session per process; see the class comment.
 PliContext* currentContext = nullptr;
-
-constexpr std::uint32_t NoScope = 0xFFFF'FFFFU;
 
 /// `/tb/u_dut` as VPI names it: `tb.u_dut`.
 std::string dottedPath(std::string_view path) {
@@ -136,105 +135,6 @@ std::optional<runtime::SimTime> ticksOf(const s_vpi_time& time) {
 // The object model
 // ---------------------------------------------------------------------------
 
-/// Anything an application holds a handle to. The handle is this object's address.
-struct PliContext::Object {
-    enum class Kind : std::uint8_t { Scope, Signal, Parameter, Constant, Iterator, Callback };
-
-    Object() = default;
-    Object(const Object&) = delete;
-    Object& operator=(const Object&) = delete;
-    Object(Object&&) = delete;
-    Object& operator=(Object&&) = delete;
-    virtual ~Object() = default;
-
-    Kind kind = Kind::Scope;
-    PLI_INT32 type = vpiUndefined;
-    Target target;
-
-    /// The scope a signal or parameter is in, or the scope itself.
-    std::uint32_t scope = NoScope;
-
-    /// The slot a signal is, which is also its signal index in the image.
-    std::uint32_t signal = 0;
-
-    std::uint32_t width = 0;
-    bool isSigned = false;
-
-    /// For a bit-select or an element of an array, the window of the signal it is: `width`
-    /// bits from `lowBit`.
-    bool isWindow = false;
-    bool isElement = false;
-    std::uint32_t lowBit = 0;
-
-    /// For an array, the unpacked dimensions not yet indexed, outermost first; its own bounds
-    /// are the first one's. An array has elements and no value of its own: arrays themselves
-    /// while dimensions remain below them, vectors `elementWidth` wide at the last.
-    bool isArray = false;
-    std::vector<eir::UnpackedDimension> dimensions;
-    std::int64_t left = 0;
-    std::int64_t right = 0;
-    std::uint32_t elementWidth = 0;
-
-    /// An element's index in the dimension it was selected from, as declared.
-    std::int64_t index = 0;
-
-    std::string name;
-    std::string fullName;
-    std::string definitionName;
-    std::string file;
-    std::uint32_t line = 0;
-
-    /// What an iterator returns, and how far it has got.
-    std::vector<vpiHandle> items;
-    std::size_t position = 0;
-    PLI_INT32 iteratorType = 0;
-};
-
-/// A registered callback. Its handle is what `vpi_register_cb` returned.
-struct PliContext::Callback final : Object {
-    s_cb_data data{};
-
-    /// How the application asked for time and value to be reported to it.
-    PLI_INT32 timeType = vpiSuppressTime;
-    PLI_INT32 valueFormat = vpiSuppressVal;
-
-    /// Set when the callback has fired for the last time or been removed. It is not freed
-    /// until no dispatch can still be holding it.
-    bool removed = false;
-
-    /// What the window a value-change callback on a bit-select or an element watches held when
-    /// it last fired. The kernel reports changes of whole signals, and a change elsewhere in
-    /// the signal is not a change of this window.
-    eir::BitVector lastValue{1};
-};
-
-/// A module instance or a generate block.
-struct PliContext::Scope {
-    bool isModule = true;
-
-    /// The instance holding a package's variables, which is at the root but is no top-level
-    /// module: iterating the root's modules skips it, so a tool looking for the design's top
-    /// does not find a package instead.
-    bool isPackage = false;
-    std::uint32_t instance = 0;
-    std::uint32_t parent = NoScope;
-
-    /// What the names of this scope's objects begin with inside their instance: empty for the
-    /// instance itself, `gen[0].` for a generate block, since the frontend flattens generate
-    /// blocks into the names it gives their objects.
-    std::string prefix;
-
-    std::string name;
-    std::string fullName;
-
-    /// Generate blocks first, then instances, each in the order they were met.
-    std::vector<std::uint32_t> children;
-
-    /// Indices into the instance's definition.
-    std::vector<std::uint32_t> signals;
-    std::vector<std::uint32_t> parameters;
-};
-
 PliContext::PliContext(DiagnosticEngine& engine, std::vector<std::string> commandLine)
     : diagnostics(engine), arguments(std::move(commandLine)), versionText(enzan::version()) {
     ENZAN_ALWAYS_ASSERT(currentContext == nullptr, "there is one VPI context per process");
@@ -245,6 +145,9 @@ PliContext::PliContext(DiagnosticEngine& engine, std::vector<std::string> comman
     argumentPointers.push_back(nullptr);
 
     keepRoutinesLinked();
+#ifdef ENZAN_WITH_VHDL
+    keepVhpiRoutinesLinked();
+#endif
 }
 
 PliContext::~PliContext() {
@@ -260,7 +163,8 @@ PliContext* PliContext::current() noexcept {
 // Loading
 // ---------------------------------------------------------------------------
 
-bool PliContext::load(std::string_view specification) {
+bool PliContext::load(std::string_view specification, Interface which) {
+    const std::string_view interfaceName = which == Interface::Vpi ? "VPI" : "VHPI";
     // `library:entry`, where the entry is an identifier. A colon followed by a path is part of
     // the path, so a library in a directory whose name has a colon in it still loads.
     std::string library(specification);
@@ -288,7 +192,7 @@ bool PliContext::load(std::string_view specification) {
     void* opened = ::dlopen(library.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (opened == nullptr) {
         const char* reason = ::dlerror();
-        diagnostics.report(DiagCode::VpiLibraryUnloadable, SourceLocation(), library,
+        diagnostics.report(DiagCode::VpiLibraryUnloadable, SourceLocation(), interfaceName, library,
                            reason != nullptr ? reason : "the reason was not reported");
         return false;
     }
@@ -298,7 +202,8 @@ bool PliContext::load(std::string_view specification) {
     if (!entry.empty()) {
         void* symbol = ::dlsym(opened, entry.c_str());
         if (symbol == nullptr) {
-            diagnostics.report(DiagCode::VpiEntryNotFound, SourceLocation(), library, entry);
+            diagnostics.report(DiagCode::VpiEntryNotFound, SourceLocation(), interfaceName, library,
+                               entry);
             return false;
         }
         ++loadedLibraries;
@@ -306,15 +211,17 @@ bool PliContext::load(std::string_view specification) {
         return true;
     }
 
-    const void* routines = ::dlsym(opened, "vlog_startup_routines");
+    const char* table = which == Interface::Vpi ? "vlog_startup_routines" : "vhpi_startup_routines";
+    const void* routines = ::dlsym(opened, table);
     if (routines == nullptr) {
-        diagnostics.report(DiagCode::VpiNoStartupRoutines, SourceLocation(), library);
+        diagnostics.report(DiagCode::VpiNoStartupRoutines, SourceLocation(), interfaceName, library,
+                           table, which == Interface::Vpi ? "vpi" : "vhpi");
         return false;
     }
 
     ++loadedLibraries;
-    auto* const* table = reinterpret_cast<void (*const*)()>(routines);
-    for (std::size_t index = 0; table[index] != nullptr; ++index) table[index]();
+    auto* const* startup = reinterpret_cast<void (*const*)()>(routines);
+    for (std::size_t index = 0; startup[index] != nullptr; ++index) startup[index]();
     return true;
 }
 
@@ -420,13 +327,14 @@ void PliContext::buildScopes() {
         for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
              ++objectIndex) {
             const eir::Object& object = definition.objects[objectIndex];
+            if (object.name.find('$') != std::string::npos) continue;
+            if (object.vhdlType != eir::VhdlType::None)
+                scopes[scopeFor(scopeIndex, object.name)].vhdlObjects.push_back(objectIndex);
 
             // Only what holds a packed value has a slot, and a name with a `$` in it is one a
             // frontend made up and kept out of the user's namespace on purpose (section 9.2). A
             // VHDL signal of a null range holds no value VPI could give.
-            if (!object.type.isBits() || object.holdsNothing
-                || object.name.find('$') != std::string::npos)
-                continue;
+            if (!object.type.isBits() || object.holdsNothing) continue;
 
             const std::uint32_t owner = scopeFor(scopeIndex, object.name);
             objectScope[objectIndex] = owner;
@@ -1459,6 +1367,12 @@ void PliContext::getCallbackInfo(vpiHandle handle, s_cb_data* data) {
 }
 
 void PliContext::fire(Callback& callback) {
+#ifdef ENZAN_WITH_VHDL
+    if (callback.vhpiData.cb_rtn != nullptr) {
+        vhpiFire(callback);
+        return;
+    }
+#endif
     s_cb_data data = callback.data;
 
     s_vpi_time time{};
@@ -1498,7 +1412,8 @@ void PliContext::retire(Callback& callback) {
     sweepNeeded = true;
 }
 
-void PliContext::runOnce(std::vector<Callback*>& pending) {
+void PliContext::runOnce(std::vector<Callback*>& pending,
+                         [[maybe_unused]] std::vector<Callback*>* rearm) {
     // Taken as a batch, so that a callback registering another of the same reason gets the
     // next occurrence rather than this one (section 9.3).
     std::vector<Callback*> batch;
@@ -1508,6 +1423,14 @@ void PliContext::runOnce(std::vector<Callback*>& pending) {
     for (Callback* callback : batch) {
         if (callback->removed) continue;
         fire(*callback);
+#ifdef ENZAN_WITH_VHDL
+        // A repetitive VHPI callback waits for the next occurrence, which `rearm` holds, unless
+        // it removed itself as it ran.
+        if (callback->repeats && rearm != nullptr && !callback->removed) {
+            rearm->push_back(callback);
+            continue;
+        }
+#endif
         retire(*callback);
     }
     --dispatchDepth;
@@ -1592,7 +1515,7 @@ void PliContext::timeAdvanced(runtime::SimTime /*time*/) {
     readOnly.insert(readOnly.end(), deferredReadOnly.begin(), deferredReadOnly.end());
     deferredReadOnly.clear();
 
-    runOnce(nextSimTime);
+    runOnce(nextSimTime, &nextSimTime);
 }
 
 void PliContext::runTimedEvents(runtime::SimTime time) {
@@ -1621,13 +1544,13 @@ void PliContext::runTimedEvents(runtime::SimTime time) {
 
 void PliContext::runReadWrite() {
     phase = Phase::ReadWrite;
-    runOnce(readWrite);
+    runOnce(readWrite, &deferredReadWrite);
     phase = Phase::None;
 }
 
 void PliContext::runReadOnly() {
     phase = Phase::ReadOnly;
-    runOnce(readOnly);
+    runOnce(readOnly, &deferredReadOnly);
     phase = Phase::None;
 }
 

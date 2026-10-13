@@ -72,13 +72,20 @@ jobs:
           submodules: true
 
       # flex and zstd build NVC's analysis (DESIGN_GUIDE.md section 11.3), and GHDL is the
-      # reference the VHDL golden cases are compared against (section 14.3).
+      # reference the VHDL golden cases are compared against (section 14.3). Python and cocotb
+      # are for the cocotb golden test of a VHDL toplevel, through VHPI (section 9.7), and for
+      # cocotb's suite run with VHDL toplevels.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ccache clang libgtest-dev zlib1g-dev flex libzstd-dev \
-            ghdl ghdl-mcode
+            ghdl ghdl-mcode python3 python3-venv libpython3-dev
+
+      - name: Install cocotb
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -r tests/conformance/cocotb/requirements.txt
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -100,6 +107,7 @@ jobs:
           -DENZAN_WERROR=ON
           -DENZAN_ENABLE_SYSTEMVERILOG=OFF
           -DENZAN_ENABLE_VHDL=ON
+          -DENZAN_COCOTB_PYTHON="$PWD/.venv/bin/python"
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
@@ -143,6 +151,21 @@ jobs:
             > build/ghdl.txt 2>&1 || status=$?
           grep -v -e '^FAIL ' -e '^PASS ' build/ghdl.txt
           { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/ghdl.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # cocotb's own regression suite with VHDL toplevels, through VHPI (section 14.6), held to
+      # its own pass list; the run with Verilog ones is in the SystemVerilog job.
+      - name: cocotb regression suite, VHDL toplevels
+        if: matrix.preset == 'gcc-release'
+        env:
+          COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          status=0
+          tests/conformance/cocotb/run-suite.sh build/gcc-release/bin/enzan build/cocotb-vhdl \
+            vhdl > build/cocotb-vhdl.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/cocotb-vhdl.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/cocotb-vhdl.txt; echo '```'; } \
             >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 

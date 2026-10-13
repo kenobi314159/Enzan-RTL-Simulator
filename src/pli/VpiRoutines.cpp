@@ -11,6 +11,7 @@
 // session has gone — every routine fails quietly rather than dereferencing nothing.
 
 #include "pli/PliContext.h"
+#include "pli/PliModel.h"
 
 #include "vpi_user.h"
 
@@ -35,14 +36,22 @@ PliContext* context() {
     return current;
 }
 
-// `vpi_printf` and its relatives are printf: the format is the application's, and it is a
-// variable because that is the routine's whole contract. -Wformat-nonliteral exists to catch a
-// format that should have been a literal, which this one never could be.
+/// The one multichannel descriptor there is: the transcript.
+constexpr PLI_UINT32 TranscriptChannel = VPI_MCD_STDOUT;
+
+} // namespace
+
+namespace enzan::pli {
+
+void keepRoutinesLinked() noexcept {}
+
+// `vpi_printf`, `vhpi_printf` and their relatives are printf: the format is the application's, and
+// it is a variable because that is the routine's whole contract. -Wformat-nonliteral exists to
+// catch a format that should have been a literal, which this one never could be.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 
-/// Formats as `vprintf` would, into a string.
-std::string format(const char* text, va_list arguments) {
+std::string formatted(const char* text, va_list arguments) {
     if (text == nullptr) return {};
 
     va_list measuring;
@@ -58,15 +67,6 @@ std::string format(const char* text, va_list arguments) {
 }
 
 #pragma GCC diagnostic pop
-
-/// The one multichannel descriptor there is: the transcript.
-constexpr PLI_UINT32 TranscriptChannel = VPI_MCD_STDOUT;
-
-} // namespace
-
-namespace enzan::pli {
-
-void keepRoutinesLinked() noexcept {}
 
 } // namespace enzan::pli
 
@@ -210,7 +210,7 @@ PLI_BYTE8* vpi_mcd_name(PLI_UINT32 cd) {
 PLI_INT32 vpi_mcd_vprintf(PLI_UINT32 mcd, PLI_BYTE8* format, va_list ap) {
     PliContext* current = context();
     if (current == nullptr || (mcd & TranscriptChannel) == 0) return 0;
-    return current->print(::format(format, ap));
+    return current->print(enzan::pli::formatted(format, ap));
 }
 
 PLI_INT32 vpi_mcd_printf(PLI_UINT32 mcd, PLI_BYTE8* format, ...) {
@@ -229,7 +229,7 @@ PLI_INT32 vpi_mcd_flush(PLI_UINT32 mcd) {
 
 PLI_INT32 vpi_vprintf(PLI_BYTE8* format, va_list ap) {
     PliContext* current = context();
-    return current != nullptr ? current->print(::format(format, ap)) : 0;
+    return current != nullptr ? current->print(enzan::pli::formatted(format, ap)) : 0;
 }
 
 PLI_INT32 vpi_printf(PLI_BYTE8* format, ...) {

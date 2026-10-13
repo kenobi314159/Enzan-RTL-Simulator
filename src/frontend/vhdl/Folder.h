@@ -165,6 +165,14 @@ public:
     /// object it names, or its subtype's.
     [[nodiscard]] std::optional<Range> boundsOf(tree_t name, unsigned dimension = 0) const;
 
+    /// The bounds `declaration`, of an unconstrained array type, was given by `bindBounds`, if it
+    /// was given any: a generic's, from its value.
+    [[nodiscard]] std::optional<Range> boundOf(tree_t declaration) const {
+        const auto found = objectBounds.find(declaration);
+        if (found == objectBounds.end()) return std::nullopt;
+        return found->second;
+    }
+
 private:
     [[nodiscard]] std::optional<std::int64_t> call(tree_t expression) const;
 

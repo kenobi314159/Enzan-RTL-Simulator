@@ -1866,6 +1866,49 @@ the bits mean to something outside the simulation, and are serialized with the d
 library holds them. The analysis that knows them runs in a child process (5.2) and is gone by
 the time an application asks, so EIR is the only place they can be kept.
 
+**VHPI is VPI's context with a second set of routines.** `--vhpi <library>[:<entry>]` loads an
+application as `--vpi` does, running its `vhpi_startup_routines`, into the one `PliContext`: the
+kernel calls one set of hooks, and cocotb loads both its layers for a design of both languages,
+which must see one simulation. Its header is the IEEE P1076 working group's `vhpi_user.h`, which
+the NVC the VHDL frontend is built on carries, so VHPI is built only with that frontend.
+
+- **Regions** are VPI's scopes: the root instance, named for its entity; component instances;
+  and the blocks and generate iterations the frontend flattens into names, an indexed one
+  (`g(0)`) a for-generate iteration and any other a block.
+- **Objects** are a region's signals and ports, every one with a VHDL type, a real's included,
+  and its generics. An element of an array is an indexed name and a field of a record a
+  selected one, each a window of its object's bits; an array's elements are numbered row by
+  row from the left, which is its highest bits.
+- **Types** come from the table: `vhpiBaseType` a type declaration of the type's kind, with an
+  array's base type unconstrained, `vhpiType` the object's subtype with its bounds,
+  `vhpiElemType` an array's element, `vhpiConstraints` its ranges, `vhpiEnumLiterals` an
+  enumeration's literals. Names are basic identifiers in upper case, `vhpiCaseNameP`'s as well
+  as `vhpiNameP`'s: neither NVC's analysis nor Enzan keeps the case a name was declared in, and
+  NVC gives the same.
+- **Values** are read from and written to the bits in VHPI's formats by the type: a
+  std_logic or a bit and arrays of them in the Logic formats, other enumerations' positions,
+  integers, reals, strings of characters, binary strings. A record is read and written field by
+  field.
+- **A deposit is an update of the time step**, applied after the callback that made it returns,
+  as VPI's write with no delay is: a deposit applied inside the call would wake what watches the
+  signal inside the application's own call, which cocotb, writing a batch of values, does not
+  expect. A force and a release are of the whole signal.
+- **Callbacks** share VPI's dispatch: the last known delta cycle of a time step is VPI's
+  read-write synchronisation, its end the read-only one, and the next time step VPI's next
+  simulation time. A repetitive callback, `vhpiCbRep...`, fires at each occurrence until it is
+  removed, waiting for the next time step after each.
+
+**cocotb's VHPI library is `libcocotbvhpi_nvc`**, whose one workaround, to compare names
+without their case, answers the one way Enzan differs from the standard, the declared case it
+does not keep (section 9.6 chose the VPI library by the same rule). The toplevel's language
+decides which is loaded, `--vpi` or `--vhpi`. A design of both languages is not simulated yet,
+and the makefile skips it as cocotb's makefiles skip a language a simulator lacks; when it is,
+cocotb loads the other language's library itself, named in `GPI_EXTRA`, as it does elsewhere.
+
+A VHDL signal of a null range holds nothing, and a bit vector has at least one bit, so its
+object has a placeholder bit that nothing reads, writes or records (`eir::Object::holdsNothing`);
+VHPI shows it as the empty array its type says it is.
+
 ---
 
 ## 10. GUI
@@ -2820,10 +2863,12 @@ and a design that does not analyse fails every test in it. The cases that do ana
 exercise VPI, and the golden cocotb test of `tests/golden/` pins the VPI behaviour cocotb
 relies on whatever the rate is.
 
-**A VHDL toplevel is a second run of the same suite**, once VHPI lands (M6). Most of cocotb's
-cases have a VHDL design beside the Verilog one, chosen by `TOPLEVEL_LANG=vhdl`, so the suite
-runs twice and each run has its own pass list: a case passing in one language says nothing
-about the other.
+**A VHDL toplevel is a second run of the same suite**, through VHPI (M6, section 9.7). Most of
+cocotb's cases have a VHDL design beside the Verilog one, chosen by `TOPLEVEL_LANG=vhdl`, so the
+suite runs twice, `run-suite.sh <enzan> <work> vhdl` the second time, and each run has its own
+pass list, `passing.txt` and `passing-vhdl.txt`: a case passing in one language says nothing
+about the other. The golden cocotb test has a VHDL twin, `tests/golden/vhdl/cocotb`, which pins
+the VHPI behaviour cocotb relies on as the other pins VPI's.
 
 ### 14.7 Sanitisers and fuzzing
 

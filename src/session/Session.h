@@ -280,6 +280,12 @@ public:
     bool loadVpiApplication(std::string_view specification,
                             std::span<const std::string> commandLine);
 
+    /// Loads a VHPI application into the same context (section 9.7), which a design of both
+    /// languages shows to both interfaces as one simulation. Only a build with the VHDL frontend
+    /// has VHPI.
+    bool loadVhpiApplication(std::string_view specification,
+                             std::span<const std::string> commandLine);
+
     [[nodiscard]] bool hasVpiApplication() const noexcept;
 
     /// True when the last `analyse` came out of the library rather than the frontend.
@@ -419,6 +425,11 @@ public:
 private:
     /// Drops the kernel, the image and everything they were built from.
     void discardElaboration();
+
+    /// Loads a VPI application, or a VHPI one when `vhpi` is set, creating the context the first
+    /// time.
+    bool loadApplication(std::string_view specification, std::span<const std::string> commandLine,
+                         bool vhpi);
 
     /// Tells a loaded application the simulation is over, once (section 9.5).
     void endVpiSimulation();

@@ -981,7 +981,12 @@ eir::ModuleDefinition ArchitectureTranslator::translate() {
             if (scalar != folding.bindings().end()) value = encode(scalar->second, *storage);
         }
         if (!value) continue;
-        const std::optional<Layout> layout = layoutOf(tree_type(generic), folding);
+        // A generic of an unconstrained array type, `string`, has its value's bounds.
+        std::optional<Layout> layout = layoutOf(tree_type(generic), folding);
+        if (!layout && type_is_array(tree_type(generic))) {
+            if (const std::optional<Folder::Range> bounds = folding.boundOf(generic))
+                layout = arrayLayout(*bounds, type_elem(tree_type(generic)), folding);
+        }
         result.parameters.push_back(eir::Parameter{
             .name = simpleName(tree_ident(generic)),
             .value = std::move(*value),

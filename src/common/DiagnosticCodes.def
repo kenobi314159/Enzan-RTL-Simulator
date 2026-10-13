@@ -188,12 +188,12 @@ ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
            "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
            "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "
            "library again in {} (after `enzan lib clean` for a library being written to)")
-ENZAN_DIAG(VpiLibraryUnloadable, 8001, Error, "the VPI library '{}' could not be loaded: {}")
+ENZAN_DIAG(VpiLibraryUnloadable, 8001, Error, "the {} library '{}' could not be loaded: {}")
 ENZAN_DIAG(VpiEntryNotFound, 8002, Error,
-           "the VPI library '{}' has no function called '{}' to start it with")
+           "the {} library '{}' has no function called '{}' to start it with")
 ENZAN_DIAG(VpiNoStartupRoutines, 8003, Error,
-           "the VPI library '{}' defines no vlog_startup_routines; if it is started some other "
-           "way, name the function as --vpi <library>:<function>")
+           "the {} library '{}' defines no {}; if it is started some other way, name the "
+           "function as --{} <library>:<function>")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 
