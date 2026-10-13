@@ -107,6 +107,17 @@ std::optional<std::int64_t> Folder::call(tree_t expression) const {
     const auto kind = static_cast<subprogram_kind_t>(tree_subkind(declaration));
     if (kind == S_USER) return std::nullopt;
 
+    // Two arrays of different lengths are never equal, and two null arrays always are, whatever
+    // their elements would be: the bounds decide, without the values.
+    if ((kind == S_ARRAY_EQ || kind == S_ARRAY_NEQ) && tree_params(expression) == 2) {
+        const std::optional<Range> left = boundsOf(tree_value(tree_param(expression, 0)));
+        const std::optional<Range> right = boundsOf(tree_value(tree_param(expression, 1)));
+        if (!left || !right) return std::nullopt;
+        if (left->length() != right->length()) return kind == S_ARRAY_NEQ ? 1 : 0;
+        if (left->length() == 0) return kind == S_ARRAY_EQ ? 1 : 0;
+        return std::nullopt;
+    }
+
     std::vector<std::int64_t> operands;
     const unsigned count = tree_params(expression);
     for (unsigned index = 0; index < count; ++index) {

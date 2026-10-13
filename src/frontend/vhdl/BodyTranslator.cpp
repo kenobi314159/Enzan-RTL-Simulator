@@ -376,6 +376,13 @@ bool BodyTranslator::declare(tree_t declaration) {
         return true;
     }
 
+    // A file not opened where it is declared makes nothing until something opens it, which is
+    // what fails when it is not translated yet; a branch that folds away may never use it.
+    case T_FILE_DECL:
+        if (tree_has_value(declaration))
+            return fail(declaration, "a file opened where it is declared");
+        return true;
+
     // Declarations that make nothing at run time; a subprogram is translated when called.
     case T_TYPE_DECL:
     case T_SUBTYPE_DECL:
@@ -1101,6 +1108,13 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
         for (unsigned index = 0; index < tree_decls(source); ++index)
             inlineIt = inlineIt || tree_decl(source, index) == calleeBody;
     }
+
+    // Nor can a body of its own take a null array, which has no bits to pass; inlined, it is its
+    // bounds, which is all its uses can fold to.
+    for (tree_t actual : *actuals) {
+        const std::optional<Folder::Range> bounds = folder().boundsOf(actual);
+        inlineIt = inlineIt || (bounds && bounds->length() == 0);
+    }
     if (inlineIt) return inlineCall(call, declaration, calleeBody, *actuals);
 
     // Every parameter of a function is `in`, so each actual is a value.
@@ -1192,6 +1206,13 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
         }
 
         const eir::ParameterMode mode = modeOf(formal);
+        if (mode == eir::ParameterMode::In) {
+            const std::optional<Folder::Range> bounds = folder().boundsOf(actual);
+            if (bounds && bounds->length() == 0 && type_is_array(formalType)) {
+                bindings.bindBounds(formal, *bounds);
+                continue;
+            }
+        }
         const std::optional<Layout> constrained = layoutFor(formalType);
         std::optional<Value> initial;
         std::optional<Place> target;

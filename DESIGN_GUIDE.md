@@ -937,6 +937,10 @@ What a VHDL unit becomes in EIR:
   instance of. A procedure, a subprogram taking a signal, and one a process declares are
   inlined into their caller, since a body of its own could not wait, assign a signal, read
   a signal's attributes or reach the process's variables.
+- A null array, a generic left at `""` most often, has no bits to hold, so it is its bounds:
+  a comparison or an attribute of it folds, and a call given one is inlined, where its
+  uses can fold too. A testbench that reads a file only when a name is given needs no
+  files when none is.
 - The IEEE packages are translated from their own bodies like any other VHDL. What NVC's
   versions of them take from its runtime instead, Enzan supplies: numeric_std's warnings
   are on, as they are in GHDL and in the IEEE's own packages.

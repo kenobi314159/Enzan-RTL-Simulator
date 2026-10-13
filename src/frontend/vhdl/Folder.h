@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "eir/BitVector.h"
 #include "frontend/vhdl/NvcApi.h"
 
 #include <cstdint>
@@ -33,6 +34,17 @@ public:
 
     /// Binds `declaration`, a generic or a parameter, to `value`.
     void bind(tree_t declaration, std::int64_t value) { generics[declaration] = value; }
+
+    /// Binds `declaration`, a generic of an array type, to the bits of its value.
+    void bindComposite(tree_t declaration, eir::BitVector bits) {
+        composites.insert_or_assign(declaration, std::move(bits));
+    }
+
+    /// The bits an array generic is bound to, or null when it is not one bound here.
+    [[nodiscard]] const eir::BitVector* compositeOf(tree_t declaration) const {
+        const auto found = composites.find(declaration);
+        return found == composites.end() ? nullptr : &found->second;
+    }
 
     /// The value of `expression`, or nothing when it is not one this can fold.
     [[nodiscard]] std::optional<std::int64_t> integer(tree_t expression) const;
@@ -79,6 +91,7 @@ private:
     [[nodiscard]] std::optional<std::int64_t> reference(tree_t expression) const;
 
     Generics generics;
+    std::map<tree_t, eir::BitVector> composites;
     std::map<tree_t, Range> objectBounds;
 };
 

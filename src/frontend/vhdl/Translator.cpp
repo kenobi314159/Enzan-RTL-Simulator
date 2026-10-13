@@ -3,6 +3,7 @@
 #include "frontend/vhdl/Translator.h"
 
 #include "common/Diagnostics.h"
+#include "eir/BitOps.h"
 #include "frontend/vhdl/BodyTranslator.h"
 #include "frontend/vhdl/Folder.h"
 #include "frontend/vhdl/Types.h"
@@ -29,7 +30,7 @@ namespace {
 struct Specialisation {
     tree_t entity = nullptr;
     tree_t architecture = nullptr;
-    Folder::Generics generics;
+    Folder generics;
     std::string name;
 };
 
@@ -183,7 +184,7 @@ public:
                                           simpleName(tree_ident(top))));
                 continue;
             }
-            std::optional<Folder::Generics> generics = bindGenerics(top, nullptr, Folder());
+            std::optional<Folder> generics = bindGenerics(top, nullptr, Folder());
             if (!generics) continue;
             static_cast<void>(definitionFor(top, architecture, std::move(*generics)));
         }
@@ -298,19 +299,53 @@ public:
         return callee;
     }
 
+    /// The value `generics` binds the generic `generic` to, as a name and a key show it: a
+    /// scalar's in decimal, and an array's bits in binary.
+    static std::string rendered(const Folder& generics, tree_t generic) {
+        if (const eir::BitVector* bits = generics.compositeOf(generic))
+            return renderedArray(*bits, tree_type(generic));
+        const auto scalar = generics.bindings().find(generic);
+        if (scalar != generics.bindings().end()) return std::to_string(scalar->second);
+        return "null";
+    }
+
+    /// An array generic's value as its elements' literals, left to right: `1010` for a vector of
+    /// bits, `U01` for one of std_logic. Elements of any other type show as their bits.
+    static std::string renderedArray(const eir::BitVector& bits, type_t type) {
+        type_t element = type;
+        while (type_is_array(element)) element = type_elem(element);
+        const std::optional<eir::Type> storage = scalarStorage(element);
+        if (!type_is_enum(element) || !storage || bits.width() % storage->bitWidth() != 0)
+            return eir::toString(bits.ref(), eir::Radix::Binary);
+
+        type_t base = type_base_recur(element);
+        const std::uint32_t width = storage->bitWidth();
+        std::string text;
+        for (std::uint32_t at = bits.width(); at >= width; at -= width) {
+            eir::BitVector one(width);
+            eir::bitops::partSelectAt(one.mutableRef(), bits.ref(), at - width);
+            const std::uint64_t code = one.ref().toUInt64();
+            if (code >= type_enum_literals(base))
+                return eir::toString(bits.ref(), eir::Radix::Binary);
+            tree_t literal = type_enum_literal(base, static_cast<unsigned>(code));
+            const std::string_view name = istr(tree_ident(literal));
+            text += name.starts_with('\'') ? std::string(name.substr(1, 1))
+                                           : simpleName(tree_ident(literal));
+        }
+        return text;
+    }
+
     /// The name of the definition `architecture` of `entity` is with `generics` bound, queueing
     /// it for translation the first time it is asked for.
-    std::string definitionFor(tree_t entity, tree_t architecture, Folder::Generics generics) {
-        std::vector<std::int64_t> values;
-        values.reserve(generics.size());
-        for (unsigned index = 0; index < tree_generics(entity); ++index) {
-            const auto bound = generics.find(tree_generic(entity, index));
-            values.push_back(bound == generics.end() ? 0 : bound->second);
-        }
+    std::string definitionFor(tree_t entity, tree_t architecture, Folder generics) {
+        std::vector<std::string> values;
+        values.reserve(tree_generics(entity));
+        for (unsigned index = 0; index < tree_generics(entity); ++index)
+            values.push_back(rendered(generics, tree_generic(entity, index)));
         auto key = std::pair(architecture, values);
         if (const auto known = names.find(key); known != names.end()) return known->second;
 
-        std::string name = nameFor(entity, architecture, generics);
+        std::string name = nameFor(entity, architecture, values);
         names.emplace(std::move(key), name);
         pending.push_back(Specialisation{.entity = entity,
                                          .architecture = architecture,
@@ -342,9 +377,8 @@ public:
     /// The values of `entity`'s generics for an instance: what `instance` maps, folded in its
     /// parent's scope, and each default for the rest, folded in the scope of the generics bound
     /// before it. Nothing, having reported why, when one is not a value the adapter can fold.
-    std::optional<Folder::Generics> bindGenerics(tree_t entity, tree_t instance,
-                                                 const Folder& parent) {
-        Folder::Generics bound;
+    std::optional<Folder> bindGenerics(tree_t entity, tree_t instance, const Folder& parent) {
+        Folder bound;
         const unsigned count = tree_generics(entity);
         for (unsigned index = 0; index < count; ++index) {
             tree_t generic = tree_generic(entity, index);
@@ -353,32 +387,56 @@ public:
                 return std::nullopt;
             }
 
-            std::optional<std::int64_t> value;
-            bool mapped = false;
+            // The actual the instance maps, folded where the instance is; or the default, folded
+            // where the generics before it are bound.
+            tree_t actual = nullptr;
+            bool fromParent = false;
             const unsigned maps = instance == nullptr ? 0 : tree_genmaps(instance);
-            for (unsigned map = 0; map < maps && !mapped; ++map) {
+            for (unsigned map = 0; map < maps && actual == nullptr; ++map) {
                 tree_t association = tree_genmap(instance, map);
                 const bool positional = tree_subkind(association) == P_POS;
                 const bool byName = !positional && tree_kind(tree_name(association)) == T_REF
                                     && tree_has_ref(tree_name(association))
                                     && tree_ref(tree_name(association)) == generic;
                 if (positional ? tree_pos(association) != index : !byName) continue;
-                mapped = true;
-                if (tree_kind(tree_value(association)) != T_OPEN)
-                    value = parent.integer(tree_value(association));
-                else if (tree_has_value(generic))
-                    value = Folder(bound).integer(tree_value(generic));
+                if (tree_kind(tree_value(association)) != T_OPEN) {
+                    actual = tree_value(association);
+                    fromParent = true;
+                }
             }
-            if (!mapped && tree_has_value(generic))
-                value = Folder(bound).integer(tree_value(generic));
+            if (actual == nullptr && tree_has_value(generic)) actual = tree_value(generic);
+            const Folder& scope = fromParent ? parent : bound;
 
-            if (!value) {
-                unsupported(generic, std::format("the value of the generic '{}', which is not a "
-                                                 "static integer, enumeration or time",
-                                                 simpleName(tree_ident(generic))));
-                return std::nullopt;
+            type_t type = tree_type(generic);
+            if (actual != nullptr && type_is_array(type)) {
+                // An array generic of an unconstrained type takes its actual's bounds. A null one,
+                // `""` most often, has no bits to hold, and its bounds are all a design can ask
+                // of it.
+                std::optional<Layout> layout = layoutOf(type, bound);
+                if (!layout) {
+                    if (const std::optional<Folder::Range> bounds = scope.boundsOf(actual)) {
+                        bound.bindBounds(generic, *bounds);
+                        if (bounds->length() == 0) continue;
+                        layout = arrayLayout(*bounds, type_elem(type), bound);
+                    }
+                }
+                if (layout) {
+                    if (std::optional<eir::BitVector> bits = constantBits(actual, *layout, scope)) {
+                        bound.bindComposite(generic, std::move(*bits));
+                        continue;
+                    }
+                }
+            } else if (actual != nullptr) {
+                if (const std::optional<std::int64_t> value = scope.integer(actual)) {
+                    bound.bind(generic, *value);
+                    continue;
+                }
             }
-            bound.emplace(generic, *value);
+            unsupported(generic,
+                        std::format("the value of the generic '{}', which is not a static value "
+                                    "of a scalar type or an array of one",
+                                    simpleName(tree_ident(generic))));
+            return std::nullopt;
         }
         return bound;
     }
@@ -445,18 +503,17 @@ private:
     /// The entity's name, with the architecture when another of the entity's architectures has
     /// the plain name, and the generics' values when it has any, as the SystemVerilog frontend
     /// names a parameterisation.
-    std::string nameFor(tree_t entity, tree_t architecture, const Folder::Generics& generics) {
+    std::string nameFor(tree_t entity, tree_t architecture, const std::vector<std::string>& bound) {
         std::string base = simpleName(tree_ident(entity));
         const auto owner = baseOwners.try_emplace(base, architecture).first;
         if (owner->second != architecture) base += "$" + simpleName(tree_ident(architecture));
 
         std::string values;
         for (unsigned index = 0; index < tree_generics(entity); ++index) {
-            tree_t generic = tree_generic(entity, index);
             if (!values.empty()) values += ',';
-            values += simpleName(tree_ident(generic));
+            values += simpleName(tree_ident(tree_generic(entity, index)));
             values += '=';
-            values += std::to_string(generics.at(generic));
+            values += bound[index];
         }
         if (values.empty()) return uniqueName(base);
 
@@ -541,7 +598,7 @@ private:
 
     std::deque<Specialisation> pending;
     std::vector<eir::ModuleDefinition> modules;
-    std::map<std::pair<tree_t, std::vector<std::int64_t>>, std::string> names;
+    std::map<std::pair<tree_t, std::vector<std::string>>, std::string> names;
     std::map<std::string, tree_t> baseOwners;
     std::set<std::string> taken;
 };
@@ -648,13 +705,18 @@ eir::ModuleDefinition ArchitectureTranslator::translate() {
 
     for (unsigned index = 0; index < tree_generics(entity); ++index) {
         tree_t generic = tree_generic(entity, index);
-        const std::optional<eir::Type> storage = scalarStorage(tree_type(generic));
-        if (!storage) continue;
-        result.parameters.push_back(
-            eir::Parameter{.name = simpleName(tree_ident(generic)),
-                           .value = encode(specialisation.generics.at(generic), *storage),
-                           .isLocal = false,
-                           .location = locate(generic)});
+        std::optional<eir::BitVector> value;
+        if (const eir::BitVector* bits = folding.compositeOf(generic)) {
+            value = *bits;
+        } else if (const std::optional<eir::Type> storage = scalarStorage(tree_type(generic))) {
+            const auto scalar = folding.bindings().find(generic);
+            if (scalar != folding.bindings().end()) value = encode(scalar->second, *storage);
+        }
+        if (!value) continue;
+        result.parameters.push_back(eir::Parameter{.name = simpleName(tree_ident(generic)),
+                                                   .value = std::move(*value),
+                                                   .isLocal = false,
+                                                   .location = locate(generic)});
     }
 
     for (unsigned index = 0; index < tree_ports(entity); ++index) {
@@ -755,7 +817,7 @@ void ArchitectureTranslator::instance(tree_t statement) {
         return;
     }
 
-    std::optional<Folder::Generics> generics = design.bindGenerics(entity, statement, folding);
+    std::optional<Folder> generics = design.bindGenerics(entity, statement, folding);
     if (!generics) return;
 
     eir::Instance created;

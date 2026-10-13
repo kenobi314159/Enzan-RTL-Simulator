@@ -180,6 +180,21 @@ std::optional<std::vector<eir::BitVector>> elementsOf(tree_t expression, const E
         if ((tree_kind(declaration) == T_CONST_DECL || tree_kind(declaration) == T_ALIAS)
             && tree_has_value(declaration))
             return elementsOf(tree_value(declaration), element, length, folder);
+
+        // An array generic's value is bound as its bits, left element highest.
+        if (const eir::BitVector* bits = folder.compositeOf(declaration)) {
+            const std::uint32_t width = element.layout.storage.bitWidth();
+            if (width == 0 || bits->width() % width != 0) return std::nullopt;
+            std::vector<eir::BitVector> elements;
+            const std::uint32_t count = bits->width() / width;
+            for (std::uint32_t position = 0; position < count; ++position) {
+                eir::BitVector one(width);
+                eir::bitops::partSelectAt(one.mutableRef(), bits->ref(),
+                                          static_cast<std::uint64_t>(count - 1 - position) * width);
+                elements.push_back(std::move(one));
+            }
+            return elements;
+        }
         return std::nullopt;
     }
 

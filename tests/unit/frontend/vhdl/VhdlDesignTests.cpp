@@ -99,10 +99,11 @@ class VhdlDesignTest : public ::testing::Test {
 protected:
     VhdlDesignTest() : engine(sources) { engine.addConsumer(consumer); }
 
-    std::unique_ptr<enzan::eir::Design> translate(std::string_view text, std::string top = {}) {
+    std::unique_ptr<enzan::eir::Design> translate(std::string_view text, std::string top = {},
+                                                  std::string work = "work") {
         DesignOptions options;
         options.units.sources = {sources.addBuffer("design.vhd", std::string(text))};
-        options.units.work = {.name = "work", .directory = {}};
+        options.units.work = {.name = std::move(work), .directory = {}};
         options.units.searchDirectories = {libraries()};
         options.top = std::move(top);
         return enzan::frontend::vhdl::analyse(options, sources, engine);
@@ -295,6 +296,72 @@ end architecture;
     EXPECT_EQ(stages.has_value() ? stages->ref().toUInt64() : 0U, 4U);
     ASSERT_EQ(deep->parameters.size(), 2U);
     EXPECT_EQ(deep->parameters[0].name, "depth");
+}
+
+TEST_F(VhdlDesignTest, ArrayGenericsAreFoldedAndANullOneLeavesItsGuardsBehind) {
+    // An array generic is part of the definition's name and reads as a constant; a null string
+    // is its bounds, so the comparison guarding its use folds and what it guards, which would
+    // need files, is never translated. The work library has a name of its own.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package util is
+  impure function describe (name : string) return integer;
+end package;
+
+use std.textio.all;
+
+package body util is
+  impure function describe (name : string) return integer is
+    file f : text;
+  begin
+    if name /= "" then
+      return name'length;
+    end if;
+    return 0;
+  end function;
+end package body;
+
+library mine;
+use mine.util.all;
+
+entity unit is
+  generic (init : bit_vector(3 downto 0) := "0000"; path : string := "");
+  port (q : out bit_vector(3 downto 0); size : out integer);
+end entity;
+
+architecture rtl of unit is
+begin
+  q <= init;
+  size <= describe(path);
+end architecture;
+
+library mine;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal q : bit_vector(3 downto 0);
+  signal size : integer;
+begin
+  uut : entity mine.unit generic map (init => "1010") port map (q, size);
+
+  process
+  begin
+    wait for 1 ns;
+    assert q = "1010" and size = 0 report "generics" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb", "mine");
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_NE(design->findModule("unit$init_1010_path_null"), nullptr);
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
