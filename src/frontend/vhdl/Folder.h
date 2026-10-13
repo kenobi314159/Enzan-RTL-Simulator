@@ -21,6 +21,11 @@ namespace enzan::frontend::vhdl {
     return kind == S_USER || kind == S_IEEE_MISC || (kind >= S_IEEE_AND && kind <= S_IEEE_NOT);
 }
 
+/// Sets whether the IEEE packages' own warnings are reported, which `nvc.sim_pkg.ieee_no_warning`
+/// folds to the opposite of, for the translation this process runs: one design's, in a child of
+/// its own (DESIGN_GUIDE.md section 5.2).
+void setIeeeWarnings(bool reported) noexcept;
+
 /// The body of the subprogram `declaration` declares: itself when it is one, and otherwise the one
 /// its package body or its declarative region holds. Null when the body has not been analysed.
 [[nodiscard]] tree_t subprogramBody(tree_t declaration);

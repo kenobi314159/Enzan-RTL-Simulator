@@ -284,6 +284,7 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
         vhdlLibraries.empty() ? frontend::vhdl::standardLibraryDirectory() : vhdlLibraries);
     options.top = request.top;
     options.timeUnitExponent = scale.precisionExponent();
+    options.ieeeWarnings = request.ieeeWarnings;
 
     std::unique_ptr<eir::Design> analysed = frontend::vhdl::analyse(options, sources, diagnostics);
     if (analysed == nullptr) return false;
@@ -546,6 +547,7 @@ bool Session::elaborate(std::string_view topModule) {
     options.deltaLimit = deltaLimit;
     options.transcript = transcript;
     options.seed = seed;
+    options.stopSeverity = stopSeverity;
 
     kernel = std::make_unique<runtime::Kernel>(*image, diagnostics, options);
     kernel->initialize();

@@ -91,3 +91,20 @@ enzan_add_vhdl_golden_test(textio)
 
 # Resolved signals: std_logic's resolution and a design's own, with several drivers.
 enzan_add_vhdl_golden_test(resolution)
+
+# GHDL's run options: the IEEE packages' warnings reported, or not, and the severity that ends a
+# run. Each runs the same design and is told apart by what it prints.
+set(options_source "${CMAKE_CURRENT_SOURCE_DIR}/options.vhd")
+add_test(NAME golden.vhdl.options.ieee_asserts_enabled COMMAND enzan --top tb "${options_source}")
+set_tests_properties(golden.vhdl.options.ieee_asserts_enabled
+                     PROPERTIES PASS_REGULAR_EXPRESSION "metavalue detected.*PASS options")
+add_test(NAME golden.vhdl.options.ieee_asserts_disabled
+         COMMAND enzan --top tb --ieee-asserts disable "${options_source}")
+set_tests_properties(golden.vhdl.options.ieee_asserts_disabled
+                     PROPERTIES PASS_REGULAR_EXPRESSION "converted 0" FAIL_REGULAR_EXPRESSION
+                                "metavalue")
+add_test(NAME golden.vhdl.options.assert_level_error
+         COMMAND enzan --top tb --assert-level error "${options_source}")
+set_tests_properties(golden.vhdl.options.assert_level_error
+                     PROPERTIES PASS_REGULAR_EXPRESSION "an error" FAIL_REGULAR_EXPRESSION
+                                "PASS options")

@@ -173,6 +173,11 @@ struct KernelOptions {
     /// subprogram, as the delta limit stops a design that does not settle. A design that cannot
     /// recurse is given exactly the stack its deepest chain of calls needs, and no limit.
     std::uint32_t callDepthLimit = 10'000;
+
+    /// The severity, as a position of VHDL's `severity_level`, at which a report or a failed
+    /// assertion ends the run with a failing status: failure, as GHDL's default has it, unless
+    /// `--assert-level` says otherwise; 4 never ends it.
+    std::uint8_t stopSeverity = 3;
 };
 
 /// The body the interpreter is running and what it is bound to: a process's own, or that of a

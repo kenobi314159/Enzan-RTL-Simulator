@@ -37,6 +37,9 @@ struct DesignRequest {
     /// whatever their timestamps, since it is the one the user just wrote.
     lib_t work = nullptr;
     std::vector<tree_t> analysed;
+
+    /// Whether the IEEE packages' own warnings are reported (`DesignOptions::ieeeWarnings`).
+    bool ieeeWarnings = true;
 };
 
 /// Translates the design under `request.top` from NVC's analysed units into EIR (DESIGN_GUIDE.md

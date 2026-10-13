@@ -1285,16 +1285,17 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     // The positions of std.standard.severity_level: note, warning, error, failure.
     case eir::SysTaskKind::Report:
         switch (severity) {
-        case 0: diagnostics.report(DiagCode::UserInfo, descriptor.location, text); return;
-        case 1: diagnostics.report(DiagCode::UserWarning, descriptor.location, text); return;
-        case 2: diagnostics.report(DiagCode::UserError, descriptor.location, text); return;
-        default:
-            diagnostics.report(DiagCode::AssertionFailure, descriptor.location, text);
+        case 0: diagnostics.report(DiagCode::UserInfo, descriptor.location, text); break;
+        case 1: diagnostics.report(DiagCode::UserWarning, descriptor.location, text); break;
+        case 2: diagnostics.report(DiagCode::UserError, descriptor.location, text); break;
+        default: diagnostics.report(DiagCode::AssertionFailure, descriptor.location, text); break;
+        }
+        if (severity >= options.stopSeverity) {
             finishRequested = true;
             errorRequested = true;
             finishStatus = 1;
-            return;
         }
+        return;
 
     case eir::SysTaskKind::DumpFile:
         for (ValueChangeListener* listener : listeners) listener->onDumpFile(text);

@@ -130,11 +130,19 @@ Libraries:
       --name <n>          The name `lib create` gives a library.
       --work <name>       The library VHDL sources are analysed into, which they
                           name it by: `library neorv32;`. Default `work`.
+      --ieee-asserts <enable|disable>
+                          Whether the IEEE packages' own warnings, numeric_std's
+                          of metavalues and truncation, are reported. As GHDL's
+                          option of the name; enabled by default.
 
 Simulation:
   -t, --top <module>      Module to elaborate as the top level. `elaborate` and
                           `run` take it as their one positional word instead.
   -r, --run <time>        Stop after this many time units.
+      --assert-level <note|warning|error|failure|none>
+                          The severity at which a VHDL report or failed assertion
+                          ends the run, as GHDL's option of the name. Default
+                          `failure`; `none` never ends it.
       --vcd <file>        Write a VCD waveform to this file.
       --fst <file>        Write an FST waveform to this file. Far smaller on a
                           real design, and seekable. Both may be given at once.
@@ -207,6 +215,11 @@ struct Invocation {
 
     /// The library VHDL sources are analysed into, by the name they refer to it by.
     std::string workLibrary = "work";
+    bool ieeeWarnings = true;
+
+    /// The severity, as a position of `severity_level`, at which a VHDL report ends the run; 4
+    /// never does.
+    std::uint8_t stopSeverity = 3;
     std::string topModule;
     std::optional<std::uint64_t> runUntil;
     std::filesystem::path vcdPath;
@@ -333,6 +346,33 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             invocation.workLibrary = value;
+            continue;
+        }
+
+        if (argument == "--ieee-asserts") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            const std::string_view chosen = value;
+            if (chosen != "enable" && chosen != "disable") {
+                std::cerr << "enzan: '" << chosen << "' is not `enable` or `disable`\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.ieeeWarnings = chosen == "enable";
+            continue;
+        }
+
+        if (argument == "--assert-level") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            static constexpr std::array<std::string_view, 5> Severities{"note", "warning", "error",
+                                                                        "failure", "none"};
+            const auto* const found = std::ranges::find(Severities, std::string_view(value));
+            if (found == Severities.end()) {
+                std::cerr << "enzan: '" << value
+                          << "' is not a severity: note, warning, error, failure or none\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.stopSeverity = static_cast<std::uint8_t>(found - Severities.begin());
             continue;
         }
 
@@ -756,6 +796,7 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
     request.contextFiles = invocation.contextFiles;
     request.top = invocation.topModule;
     request.vhdlWork = invocation.workLibrary;
+    request.ieeeWarnings = invocation.ieeeWarnings;
     return true;
 }
 
@@ -815,6 +856,7 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
     // libraries alone skips analysis, and a seed or a delta limit given to it would otherwise be
     // dropped without a word.
     session.setDeltaLimit(invocation.deltaLimit);
+    session.setStopSeverity(invocation.stopSeverity);
     session.setSeed(invocation.seed);
 
     // A run given nothing but libraries has no sources of its own to analyse, and elaboration

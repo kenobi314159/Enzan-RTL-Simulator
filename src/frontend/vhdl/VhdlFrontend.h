@@ -96,6 +96,11 @@ struct DesignOptions {
 
     /// The unit EIR's delays count, as a power of ten of a second.
     std::int8_t timeUnitExponent = -15;
+
+    /// Whether the IEEE packages' own warnings, numeric_std's of metavalues and truncation, are
+    /// reported, as GHDL's `--ieee-asserts`: they are guarded by a constant NVC's runtime would
+    /// give, which the adapter folds to this.
+    bool ieeeWarnings = true;
 };
 
 /// Analyses `options.units` and translates the design under the top into EIR (section 5.2).

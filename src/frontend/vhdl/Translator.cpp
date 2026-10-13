@@ -1230,6 +1230,7 @@ void ArchitectureTranslator::connectThrough(eir::Instance& created, unsigned por
 
 std::vector<eir::ModuleDefinition>
 translateDesign(const DesignRequest& request, const Locate& locate, DiagnosticEngine& diagnostics) {
+    setIeeeWarnings(request.ieeeWarnings);
     DesignTranslator translator(request, locate, diagnostics);
     return translator.run();
 }
@@ -1238,6 +1239,7 @@ std::vector<eir::ModuleDefinition>
 translateResolutions(const DesignRequest& request, const std::vector<ResolutionRequest>& requests,
                      std::vector<ResolutionAnswer>& answers, const Locate& locate,
                      DiagnosticEngine& diagnostics) {
+    setIeeeWarnings(request.ieeeWarnings);
     DesignTranslator translator(request, locate, diagnostics);
     return translator.resolve(requests, answers);
 }

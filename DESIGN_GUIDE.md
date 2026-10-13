@@ -1005,10 +1005,12 @@ What a VHDL unit becomes in EIR:
   files when none is.
 - The IEEE packages are translated from their own bodies like any other VHDL. What NVC's
   versions of them take from its runtime instead, Enzan supplies: numeric_std's warnings
-  are on, as they are in GHDL and in the IEEE's own packages.
+  are on, as they are in GHDL and in the IEEE's own packages, unless `--ieee-asserts
+  disable` turns them off as GHDL's option of the name does.
 - `report` and a failed `assert` are one system task taking the severity as an
   argument: note, warning and error are reported and the run goes on, and failure ends
-  it with a failing status, as GHDL's default does. `wait;` waits on an empty event list,
+  it with a failing status, as GHDL's default does; `--assert-level` names another
+  severity to end it at, as GHDL's option of the name does. `wait;` waits on an empty event list,
   which nothing ever wakes.
 - Time is a count of femtoseconds, VHDL's resolution limit, and a design with VHDL in it
   is simulated in femtoseconds unless `--timescale` names another unit (3.1).

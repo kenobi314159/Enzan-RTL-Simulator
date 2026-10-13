@@ -66,6 +66,9 @@ std::int64_t modulo(std::int64_t left, std::int64_t right) {
     return remainder != 0 && ((remainder < 0) != (right < 0)) ? remainder + right : remainder;
 }
 
+/// Whether the IEEE packages' warnings are reported, for the one translation this process runs.
+bool ieeeWarningsReported = true;
+
 /// The value of a deferred constant whose full declaration computes it with one of NVC's foreign
 /// functions, which Enzan supplies (DESIGN_GUIDE.md section 5.2), or nothing for any other.
 std::optional<std::int64_t> foreignConstant(tree_t declaration) {
@@ -75,8 +78,8 @@ std::optional<std::int64_t> foreignConstant(tree_t declaration) {
         std::string(istr(tree_ident(unit))) + "." + istr(tree_ident(declaration));
 
     // Whether numeric_std's warnings of metavalues and truncation are silenced: they are not, as
-    // they are not by default in GHDL or in the IEEE packages themselves.
-    if (name == "NVC.SIM_PKG.IEEE_NO_WARNING") return 0;
+    // they are not by default in GHDL or in the IEEE packages themselves, unless asked.
+    if (name == "NVC.SIM_PKG.IEEE_NO_WARNING") return ieeeWarningsReported ? 0 : 1;
     return std::nullopt;
 }
 
@@ -90,6 +93,10 @@ std::optional<std::int64_t> power(std::int64_t base, std::int64_t exponent) {
 }
 
 } // namespace
+
+void setIeeeWarnings(bool reported) noexcept {
+    ieeeWarningsReported = reported;
+}
 
 std::optional<std::int64_t> Folder::integer(tree_t expression) const {
     switch (tree_kind(expression)) {

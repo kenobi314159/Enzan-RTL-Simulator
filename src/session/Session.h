@@ -124,6 +124,10 @@ public:
     /// Sets the delta cycles allowed at one timestamp. Takes effect at the next elaboration.
     void setDeltaLimit(std::uint32_t limit) noexcept { deltaLimit = limit; }
 
+    /// Sets the severity, as a position of VHDL's `severity_level`, at which a report ends the
+    /// run; 4 never does. Takes effect at the next elaboration.
+    void setStopSeverity(std::uint8_t severity) noexcept { stopSeverity = severity; }
+
     /// The seed random draws start from (DESIGN_GUIDE.md section 3.8).
     void setSeed(std::uint32_t value) noexcept { seed = value; }
 
@@ -167,6 +171,9 @@ public:
         /// The library VHDL sources are analysed into, by the name they refer to it by
         /// (`library neorv32;`). SystemVerilog's analysis does not use it.
         std::string vhdlWork = "work";
+
+        /// Whether the IEEE packages' own warnings are reported, as GHDL's `--ieee-asserts`.
+        bool ieeeWarnings = true;
     };
 
     /// Analyses `request` together with everything analysed before it.
@@ -485,6 +492,7 @@ private:
     elab::ResolutionAnswers resolutionAnswers;
     runtime::RunStatus status = runtime::RunStatus::Quiescent;
     std::uint32_t deltaLimit = 10'000;
+    std::uint8_t stopSeverity = 3;
     std::uint32_t seed = 0;
 
     /// Bumped by `discardElaboration`, which every path that replaces the simulation goes

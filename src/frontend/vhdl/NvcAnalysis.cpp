@@ -268,7 +268,8 @@ unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources
     const DesignRequest request{.top = options.top,
                                 .timeUnitExponent = options.timeUnitExponent,
                                 .work = run.workLibrary(),
-                                .analysed = run.analysed()};
+                                .analysed = run.analysed(),
+                                .ieeeWarnings = options.ieeeWarnings};
     const std::vector<eir::ModuleDefinition> modules = translateDesign(
         request, [&run](const loc_t* location) { return run.locate(location); }, engine);
 
@@ -297,7 +298,8 @@ unsigned runNvcResolutions(const DesignOptions& options, const SourceManager& so
     const DesignRequest request{.top = options.top,
                                 .timeUnitExponent = options.timeUnitExponent,
                                 .work = run.workLibrary(),
-                                .analysed = run.analysed()};
+                                .analysed = run.analysed(),
+                                .ieeeWarnings = options.ieeeWarnings};
     const std::vector<eir::ModuleDefinition> modules = translateResolutions(
         request, requests, answers, [&run](const loc_t* location) { return run.locate(location); },
         engine);
