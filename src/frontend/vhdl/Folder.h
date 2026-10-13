@@ -145,6 +145,13 @@ public:
     bool returned(tree_t call,
                   const std::function<bool(tree_t value, const Folder& frame)>& use) const;
 
+    /// The scalar result of `declaration`, a function of one array parameter, run as a constant
+    /// function on `elements`, laid out as an array of `bounds` is; nothing when it does not fold.
+    /// How a resolution function is proven to return a lone driver's value (DESIGN_GUIDE.md
+    /// section 3.7).
+    [[nodiscard]] std::optional<std::int64_t>
+    applyToArray(tree_t declaration, const eir::BitVector& elements, const Range& bounds) const;
+
     /// Gives `declaration`, an object of an unconstrained array type, the bounds it takes from its
     /// context: a parameter's from the actual of the call, so that `l'length` folds.
     void bindBounds(tree_t declaration, const Range& bounds) { objectBounds[declaration] = bounds; }

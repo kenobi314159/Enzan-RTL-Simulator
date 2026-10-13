@@ -151,6 +151,11 @@ struct Resolution {
     std::string function;
     std::uint32_t elementBits = 0;
 
+    /// True when the function is proven to return a lone driver's value unchanged, having been
+    /// run on each value of its subelement, an enumeration of sixteen values or fewer, as
+    /// `ieee.std_logic_1164.resolved` is. Bits with one driver then bypass it (section 3.7).
+    bool loneDriverIdentity = false;
+
     [[nodiscard]] bool resolved() const noexcept { return !function.empty(); }
 
     friend bool operator==(const Resolution&, const Resolution&) = default;

@@ -850,6 +850,7 @@ end architecture;
 TEST_F(VhdlDesignTest, AResolvedSignalNamesItsResolutionFunction) {
     // std_logic resolves with std_logic_1164's resolved, a vector of it element by element, and
     // a design's own resolved subtype with its own function; std_ulogic resolves with nothing.
+    // Run on each value alone, resolved and wired_or return it, and stuck does not.
     std::unique_ptr<enzan::eir::Design> design = translate(R"(
 library ieee;
 use ieee.std_logic_1164.all;
@@ -858,6 +859,8 @@ package wired is
   type bit_list is array (natural range <>) of bit;
   function wired_or (drivers : bit_list) return bit;
   subtype or_bit is wired_or bit;
+  function stuck (drivers : bit_list) return bit;
+  subtype stuck_bit is stuck bit;
 end package;
 
 package body wired is
@@ -869,6 +872,11 @@ package body wired is
       end if;
     end loop;
     return '0';
+  end function;
+
+  function stuck (drivers : bit_list) return bit is
+  begin
+    return '1';
   end function;
 end package body;
 
@@ -886,6 +894,7 @@ architecture rtl of top is
   signal pair : logic_pair;
   signal plain : std_ulogic;
   signal any : or_bit;
+  signal high : stuck_bit;
 begin
 end architecture;
 )",
@@ -906,6 +915,9 @@ end architecture;
     EXPECT_FALSE(resolution("plain").resolved());
     EXPECT_TRUE(resolution("any").function.starts_with("WORK.WIRED.WIRED_OR"))
         << resolution("any").function;
+    EXPECT_TRUE(resolution("single").loneDriverIdentity);
+    EXPECT_TRUE(resolution("any").loneDriverIdentity);
+    EXPECT_FALSE(resolution("high").loneDriverIdentity);
 }
 
 TEST_F(VhdlDesignTest, AResolutionFunctionIsTranslatedForTheDriversElaborationCounted) {

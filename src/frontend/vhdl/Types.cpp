@@ -424,8 +424,26 @@ std::optional<eir::Resolution> resolutionOf(type_t type) {
         }
         const std::optional<eir::Type> storage = scalarStorage(element);
         if (tree_kind(name) != T_REF || !tree_has_ref(name) || !storage) return std::nullopt;
-        return eir::Resolution{.function = std::string(istr(tree_ident2(tree_ref(name)))),
-                               .elementBits = storage->bitWidth()};
+
+        // Proven to return a lone driver's value by running it on each value of an
+        // enumeration of sixteen or fewer (DESIGN_GUIDE.md section 3.7).
+        tree_t function = tree_ref(name);
+        bool identity = false;
+        type_t base = type_base_recur(element);
+        if (type_is_enum(base) && type_enum_literals(base) <= 16) {
+            identity = true;
+            const Folder folder;
+            for (std::int64_t code = 0; identity && std::cmp_less(code, type_enum_literals(base));
+                 ++code) {
+                const std::optional<std::int64_t> resolved =
+                    folder.applyToArray(function, encode(code, *storage),
+                                        Folder::Range{.left = 0, .right = 0, .ascending = true});
+                identity = resolved == code;
+            }
+        }
+        return eir::Resolution{.function = std::string(istr(tree_ident2(function))),
+                               .elementBits = storage->bitWidth(),
+                               .loneDriverIdentity = identity};
     }
     // An array of a resolved subtype, `array (...) of std_logic`.
     if (type_is_array(type)) return resolutionOf(type_elem(type));

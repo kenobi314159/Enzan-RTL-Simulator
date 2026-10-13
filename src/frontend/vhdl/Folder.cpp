@@ -770,6 +770,23 @@ bool Folder::returned(tree_t call,
     return use(run.value(), run.bindings());
 }
 
+std::optional<std::int64_t> Folder::applyToArray(tree_t declaration, const eir::BitVector& elements,
+                                                 const Range& bounds) const {
+    tree_t body = subprogramBody(declaration);
+    if (body == nullptr || tree_kind(body) != T_FUNC_BODY || tree_ports(body) != 1
+        || depth >= MaxDepth)
+        return std::nullopt;
+    Folder frame = *this;
+    tree_t parameter = tree_port(body, 0);
+    frame.bindBounds(parameter, bounds);
+    frame.bindComposite(parameter, elements);
+
+    const Nested nested;
+    ConstantRun run(std::move(frame));
+    if (!run.declare(body) || run.statements(body) != Flow::Return) return std::nullopt;
+    return run.bindings().integer(run.value());
+}
+
 std::optional<std::int64_t> Folder::element(tree_t expression) const {
     tree_t prefix = tree_value(expression);
     if (tree_kind(prefix) != T_REF || !tree_has_ref(prefix) || tree_params(expression) != 1)
