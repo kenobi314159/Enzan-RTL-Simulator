@@ -850,7 +850,9 @@ std::uint32_t ArchitectureTranslator::vhdlTypeFor(type_t type, const Layout& lay
     eir::VhdlType described;
     // A named subtype is known by its own name, `NATURAL`; an anonymous one by its base type's.
     described.name = upperName(type_has_ident(type) ? type_ident(type) : type_ident(base));
-    described.width = layout.storage.bitWidth();
+    // A null array's placeholder bit is no part of it.
+    described.width =
+        layout.isArray() && layout.index.length() == 0 ? 0 : layout.storage.bitWidth();
     const auto rangeOf = [](const Folder::Range& range) {
         return eir::VhdlType::Range{
             .left = range.left, .right = range.right, .ascending = range.ascending};
@@ -902,7 +904,27 @@ std::uint32_t ArchitectureTranslator::vhdlTypeFor(type_t type, const Layout& lay
 
 bool ArchitectureTranslator::addObject(tree_t declaration) {
     type_t type = tree_type(declaration);
-    const std::optional<Layout> layout = layoutOf(type, folding);
+    std::optional<Layout> layout = layoutOf(type, folding);
+
+    // A signal of a null range holds nothing, and is declared all the same, with a placeholder
+    // bit, since a bit vector has at least one: what names its bounds reads them from its type,
+    // and VHPI shows it as the empty array it is (DESIGN_GUIDE.md section 9.7). Nothing else of it
+    // is translated.
+    const std::optional<Folder::Range> bounds =
+        !layout && type_is_array(type) && dimension_of(type) == 1 ? folding.rangeOf(type)
+                                                                  : std::nullopt;
+    const Folder::Range index = bounds.value_or(Folder::Range{});
+    const bool null = bounds.has_value() && index.length() == 0;
+    if (null) {
+        const std::optional<Layout> element = layoutOf(type_elem(type), folding);
+        if (element) {
+            layout = Layout{.storage = eir::Type::bits(1, false, false),
+                            .array = true,
+                            .index = index,
+                            .elementBits = element->storage.bitWidth(),
+                            .elementType = type_elem(type)};
+        }
+    }
     if (!layout) {
         unsupported(declaration, std::format("a signal of type {}", type_pp(type)));
         return false;
@@ -912,7 +934,9 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     // bound (IEEE 1076 section 14.4.2.5). A port's is the default it declares, which is what an
     // unconnected port reads; a connected one is the signal it connects.
     std::optional<eir::BitVector> initial;
-    if (tree_has_value(declaration)) {
+    if (null) {
+        initial = eir::BitVector::filled(1, eir::Logic::Zero);
+    } else if (tree_has_value(declaration)) {
         initial = constantBits(tree_value(declaration), *layout, folding.elaborating());
         if (!initial) {
             unsupported(tree_value(declaration), "an initial value that is not static");
@@ -934,8 +958,9 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     object.initialValue = std::move(initial);
     object.enumIndex = layout->isArray() ? eir::Object::NoEnum : enumFor(type);
     object.vhdlType = vhdlTypeFor(type, *layout);
+    object.holdsNothing = null;
     object.encoding = encodingOf(type);
-    object.resolution = resolutionOf(type).value_or(eir::Resolution{});
+    object.resolution = null ? eir::Resolution{} : resolutionOf(type).value_or(eir::Resolution{});
     objects.emplace(declaration, result.addObject(std::move(object)));
     return true;
 }

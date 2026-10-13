@@ -99,8 +99,11 @@ void WaveformWriter::selectSignals() {
         // A memory is not recorded, as IEEE 1364 section 18 leaves memories out of a VCD: one
         // of any size would dominate the file and the database with a value nobody reads as a
         // waveform.
-        if (!designImage->elaboratedDesign().slots()[signalIndex].unpackedDimensions.empty())
-            continue;
+        const elab::Slot& slot = designImage->elaboratedDesign().slots()[signalIndex];
+        if (!slot.unpackedDimensions.empty()) continue;
+
+        // Nor is a VHDL signal of a null range, whose one bit is no value of it.
+        if (slot.holdsNothing) continue;
 
         recordIndex[signalIndex] = static_cast<std::uint32_t>(recorded.size());
         recorded.push_back(signalIndex);

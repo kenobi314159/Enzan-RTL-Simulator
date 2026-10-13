@@ -255,6 +255,11 @@ struct Object {
     /// VhdlType::None.
     std::uint32_t vhdlType = VhdlType::None;
 
+    /// True for a VHDL signal of a null range, which holds nothing: its one bit is a placeholder,
+    /// a bit vector having at least one, that nothing reads, writes or records. VHPI shows it as
+    /// the empty array its type says it is.
+    bool holdsNothing = false;
+
     /// The width of one element, when `unpackedDimensions` is not empty.
     std::uint32_t elementWidth = 0;
 

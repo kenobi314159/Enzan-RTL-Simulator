@@ -182,6 +182,7 @@ private:
         slot.netKind = object.netKind;
         slot.unpackedDimensions = object.unpackedDimensions;
         slot.elementWidth = object.elementWidth;
+        slot.holdsNothing = object.holdsNothing;
         slot.wordOffset = result->arenaSize;
         slot.path = instance.path + '/' + object.name;
         slot.enumIndex = internEnum(definition, object.enumIndex);

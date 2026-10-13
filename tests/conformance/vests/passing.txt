@@ -451,6 +451,7 @@ billowitch/compliant/tc2001.vhd
 billowitch/compliant/tc2004.vhd
 billowitch/compliant/tc2005.vhd
 billowitch/compliant/tc2006.vhd
+billowitch/compliant/tc2007.vhd
 billowitch/compliant/tc201.vhd
 billowitch/compliant/tc2017.vhd
 billowitch/compliant/tc2021.vhd

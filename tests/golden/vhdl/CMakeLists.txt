@@ -141,3 +141,6 @@ enzan_add_vhdl_golden_test(timeouts)
 
 # 'active, which a transaction makes true without a change.
 enzan_add_vhdl_golden_test(active)
+
+# Signals of null ranges, declared but holding nothing.
+enzan_add_vhdl_golden_test(nulls)

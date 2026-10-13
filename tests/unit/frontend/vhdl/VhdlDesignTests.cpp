@@ -607,6 +607,44 @@ end architecture;
     EXPECT_TRUE(enzan::eir::verify(*design, engine)) << transcript();
 }
 
+TEST_F(VhdlDesignTest, ASignalOfANullRangeHoldsNothing) {
+    // Declared all the same, as cocotb's sample design declares two it never touches: its bounds
+    // are its type's, and its one bit a placeholder nothing reads or records.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+  port (null_port : in std_logic_vector(10 to 4) := (others => '0'));
+end entity;
+
+architecture test of tb is
+  signal null_signal : std_logic_vector(-1 downto 0);
+begin
+  process
+  begin
+    assert null_signal'length = 0 and null_port'length = 0 report "length" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+    const ModuleDefinition* tb = design->findModule("tb");
+    ASSERT_NE(tb, nullptr);
+    const std::optional<std::uint32_t> held = tb->findObject("null_signal");
+    ASSERT_TRUE(held.has_value());
+    const enzan::eir::Object& object = tb->objects.at(held.value_or(0));
+    EXPECT_TRUE(object.holdsNothing);
+    EXPECT_EQ(tb->vhdlTypes.at(object.vhdlType).width, 0U);
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AComponentWithNoEntityToBindIsLeftUnbound) {
     // An unbound instance is legal (IEEE 1076 section 7.3.3): it does nothing, so what it would
     // drive keeps its initial value, and a warning says why.

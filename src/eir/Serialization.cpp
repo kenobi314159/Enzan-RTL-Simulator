@@ -365,6 +365,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.u32(object.elementWidth);
         out.boolean(object.elementSigned);
         out.boolean(object.subroutineStatic);
+        out.boolean(object.holdsNothing);
         out.u32(object.vhdlType);
         out.text(object.hierarchicalPath);
     }
@@ -686,6 +687,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         object.elementWidth = in.u32();
         object.elementSigned = in.boolean();
         object.subroutineStatic = in.boolean();
+        object.holdsNothing = in.boolean();
         object.vhdlType = in.u32();
         object.hierarchicalPath = in.text();
     }

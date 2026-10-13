@@ -52,6 +52,10 @@ struct Slot {
     std::vector<eir::UnpackedDimension> unpackedDimensions;
     std::uint32_t elementWidth = 0;
 
+    /// True when the object that declared this slot holds nothing (eir::Object::holdsNothing),
+    /// which a waveform does not record.
+    bool holdsNothing = false;
+
     /// The hierarchical path of the object that declared this slot, for diagnostics
     /// and for the waveform database's default name.
     std::string path;

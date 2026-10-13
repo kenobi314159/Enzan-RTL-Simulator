@@ -422,8 +422,11 @@ void PliContext::buildScopes() {
             const eir::Object& object = definition.objects[objectIndex];
 
             // Only what holds a packed value has a slot, and a name with a `$` in it is one a
-            // frontend made up and kept out of the user's namespace on purpose (section 9.2).
-            if (!object.type.isBits() || object.name.find('$') != std::string::npos) continue;
+            // frontend made up and kept out of the user's namespace on purpose (section 9.2). A
+            // VHDL signal of a null range holds no value VPI could give.
+            if (!object.type.isBits() || object.holdsNothing
+                || object.name.find('$') != std::string::npos)
+                continue;
 
             const std::uint32_t owner = scopeFor(scopeIndex, object.name);
             objectScope[objectIndex] = owner;
