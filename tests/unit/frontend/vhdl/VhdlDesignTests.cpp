@@ -1261,6 +1261,56 @@ end architecture;
     }
 }
 
+TEST_F(VhdlDesignTest, AnIndexThatCannotLeaveTheBoundsIsNotChecked) {
+    // A loop's parameter takes only its range's values, and an enumeration only its literals'
+    // positions, so an index of either within the bounds needs no check. An integer variable may
+    // hold anything, and a loop may run past the bounds, so those indices are still checked.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  type table_t is array (std_ulogic) of bit;
+  constant table : table_t := "010101010";
+begin
+  process
+    variable v : bit_vector(3 downto 0) := "0101";
+    variable s : std_ulogic := 'Z';
+    variable i : integer := 2;
+  begin
+    for k in v'range loop
+      v(k) := table(s);
+    end loop;
+    v(i) := '1';
+    for k in 1 to 4 loop
+      v(k) := '0';
+    end loop;
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* bench = design->findModule("tb");
+    ASSERT_NE(bench, nullptr);
+    ASSERT_EQ(bench->processes.size(), 1U);
+    const auto& process = bench->processes[0];
+    const auto checks = std::ranges::count_if(process.sysCalls, [&](const auto& call) {
+        return call.kind == enzan::eir::SysTaskKind::Report && call.hasFormat()
+               && process.strings[call.formatIndex].starts_with("index");
+    });
+    EXPECT_EQ(checks, 2) << "v(i), and v(k) in the loop past the bounds";
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
+}
+
 TEST_F(VhdlDesignTest, WhatTheAdapterCannotTranslateIsReportedNotDropped) {
     const std::unique_ptr<enzan::eir::Design> design = translate(R"(
 entity uses_access is

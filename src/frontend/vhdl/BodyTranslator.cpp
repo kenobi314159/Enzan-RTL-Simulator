@@ -1012,11 +1012,16 @@ bool BodyTranslator::forLoop(tree_t statement) {
 
     selectBlock(body);
     locals[parameter] = index;
+    if (const std::optional<Folder::Range> folded = folder().range(range))
+        loopRanges[parameter] = *folded;
+    else
+        loopRanges.erase(parameter);
     loops.push_back(Loop{.label = tree_has_ident(statement) ? tree_ident(statement) : nullptr,
                          .exitBlock = exit,
                          .nextBlock = step});
     const bool translated = statements(statement);
     loops.pop_back();
+    loopRanges.erase(parameter);
     if (!translated) return false;
     jump(step);
 
@@ -2844,10 +2849,20 @@ std::optional<BodyTranslator::Offset> BodyTranslator::elementOffset(const Layout
     position.type = type;
 
     // An index outside the bounds is an error that ends the run (IEEE 1076 section 9.3.3); the
-    // offset it would give is not used.
-    checkWithin(position, bounds, index,
-                std::format("index %0d is outside the bounds {} {} {}", bounds.left,
-                            bounds.ascending ? "to" : "downto", bounds.right));
+    // offset it would give is not used. The check is left out where it cannot fail: a loop's
+    // parameter takes only its range's values, and an enumeration only its literals' positions,
+    // since 'val, 'succ, 'pred and VHPI make no others.
+    std::optional<Folder::Range> certain;
+    if (tree_kind(index) == T_REF) {
+        if (const auto found = loopRanges.find(tree_ref(index)); found != loopRanges.end())
+            certain = found->second;
+    }
+    if (type_t base = type_base_recur(tree_type(index)); !certain && type_is_enum(base))
+        certain = discreteRange(base);
+    if (!certain || certain->low() < bounds.low() || certain->high() > bounds.high())
+        checkWithin(position, bounds, index,
+                    std::format("index %0d is outside the bounds {} {} {}", bounds.left,
+                                bounds.ascending ? "to" : "downto", bounds.right));
 
     // Descending, an element's offset counts up from the right bound; ascending, down to it.
     const Value right = constant(bounds.right, type, nullptr);

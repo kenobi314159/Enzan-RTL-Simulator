@@ -541,6 +541,10 @@ private:
     /// What each alias and signal parameter of an inlined subprogram designates.
     std::map<tree_t, Place> aliases;
 
+    /// The range of each loop parameter whose loop has static bounds, while the loop is
+    /// translated. The parameter takes no other value, so an index of it needs no check there.
+    std::map<tree_t, Folder::Range> loopRanges;
+
     std::vector<Loop> loops;
 };
 

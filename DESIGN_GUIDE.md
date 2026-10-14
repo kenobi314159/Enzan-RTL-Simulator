@@ -982,7 +982,11 @@ What a VHDL unit becomes in EIR:
   at an offset its type fixes, so a field of a signal is a part of it like a slice. An
   element or a slice of a variable is spliced into its register;
   an index known only at run time is checked against the bounds, and one outside them
-  ends the run with a failure, as VHDL's index check does. A slice is a part of a fixed
+  ends the run with a failure, as VHDL's index check does. An index that cannot leave
+  the bounds is not checked: a loop's parameter over a static range within them, or
+  an enumeration whose literals the bounds span, since its value is always one of
+  its literals' positions (`'val`, `'succ` and `'pred` check theirs, and VHPI
+  refuses any other). A slice is a part of a fixed
   width, so one whose bounds move with a loop's parameter, `d(4*i+3 downto 4*i)`, unrolls
   that loop, each copy with its value bound. A variable's slice whose length is known only
   at run time, as numeric_std's shifts by a count assign, is its value shifted into place
