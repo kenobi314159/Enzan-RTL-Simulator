@@ -10,6 +10,7 @@
 #include "runtime/Scheduler.h"
 #include "runtime/Time.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <iosfwd>
 #include <map>
@@ -452,6 +453,12 @@ public:
     /// Performs a system function call, writing its result to `result`.
     void runSystemFunction(std::uint32_t processIndex, const Activation& activation,
                            std::uint32_t sysCallIndex, eir::BitRef result);
+
+    /// Fills the frame at `frame` with what `body`'s registers start as, which is its frame image:
+    /// zero, but for the constants codegen placed there.
+    void startFrame(std::uint32_t frame, const codegen::CompiledBody& body) noexcept {
+        std::ranges::copy(body.frameImage, frameStorage.begin() + frame);
+    }
 
     /// Starts the call `callIndex` of `caller`'s body: lays the callee's registers out on the
     /// call stack, copies the arguments in, and returns the callee's activation, the caller's

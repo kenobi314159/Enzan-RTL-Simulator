@@ -228,6 +228,8 @@ void Kernel::initialize() {
         list.sweepAt = MinimumWaiterSweep;
     }
     std::ranges::fill(frameStorage, eir::Word{});
+    for (const ProcessState& state : processes)
+        startFrame(state.frameOffset, designImage->compiledDesign().body(state.bodyIndex));
     unwindCalls();
 
     // A force does not survive a restart either: a signal still pinned from the last run would
@@ -827,12 +829,12 @@ bool Kernel::callResolution(std::uint32_t processIndex, std::uint32_t subprogram
     const BoundSubprogram& callee = designImage->subprograms()[subprogram];
     const codegen::CompiledBody& body = designImage->compiledDesign().body(callee.bodyIndex);
 
-    // A frame above whatever the call stack holds, its registers zero as any call's start.
+    // A frame above whatever the call stack holds, its registers as any call's start.
     const std::uint32_t frame = callStackTop;
     callStackTop += body.frameWords;
     ENZAN_ASSERT(callStackTop <= frameStorage.size(),
                  "the image sizes the call stack for every resolution function's chain");
-    std::fill(frameStorage.begin() + frame, frameStorage.begin() + callStackTop, eir::Word{});
+    startFrame(frame, body);
     const codegen::CompiledBody::Parameter& parameter = body.parameters.front();
     bitops::copy(frameAt(frame + parameter.offset, parameter.bitWidth), drivers);
 
@@ -1296,7 +1298,7 @@ std::optional<Activation> Kernel::enterCall(std::uint32_t processIndex, const Ac
     // can be read by this one (section 3.8).
     const std::uint32_t frame = callStackTop;
     callStackTop += body.frameWords;
-    std::fill(frameStorage.begin() + frame, frameStorage.begin() + callStackTop, eir::Word{});
+    startFrame(frame, body);
 
     for (std::size_t index = 0; index < call.arguments.size(); ++index) {
         const codegen::CallDescriptor::Argument& argument = call.arguments[index];

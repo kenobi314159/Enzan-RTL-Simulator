@@ -159,6 +159,11 @@ struct CompiledBody {
     /// is only one place values live, so nothing has to decide when to spill.
     std::uint32_t frameWords = 0;
 
+    /// What the frame holds as the body starts, `frameWords` long: zero, but for the registers
+    /// that hold one constant throughout, which hold it from the start. Their loads are not
+    /// emitted, so a frame starts as a copy of this rather than as zeros.
+    std::vector<eir::Word> frameImage;
+
     /// Constant values, laid out end to end in two-plane form.
     std::vector<eir::Word> constantPool;
     std::vector<Constant> constants;

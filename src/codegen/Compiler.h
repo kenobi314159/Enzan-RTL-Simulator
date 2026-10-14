@@ -50,7 +50,7 @@ private:
     /// Compiles one body, a process's or a subprogram's, into `out`. Returns false having
     /// reported why, on failure.
     bool compileBody(const eir::ModuleDefinition& definition, const eir::Body& body,
-                     CompiledBody& out);
+                     CompiledBody& out, const std::vector<std::uint32_t>& parameters = {});
 
     /// Compiles a process: its body, and what the scheduler needs to know of it.
     bool compileProcess(const eir::ModuleDefinition& definition, const eir::Process& process,

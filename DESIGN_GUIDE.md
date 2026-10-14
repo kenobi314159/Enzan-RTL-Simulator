@@ -1089,6 +1089,10 @@ Requirements:
   and a return pops it. The lowering is an LLVM function per subprogram body and
   a `call` to it, which is why a subprogram never suspends: an LLVM function
   cannot return to the scheduler half-way and be resumed.
+- A register file starts as its body's image: zero, but for each register whose
+  one writer is a constant load, which holds the constant from the start and
+  whose load is not emitted. A body's bounds, widths and offsets are such
+  constants, and a load left in runs every time it is reached.
 - The dispatch loop SHOULD use computed goto (threaded dispatch) rather than a
   `switch`.
 - **Every opcode MUST have an obvious, documented lowering to LLVM IR.** The JIT

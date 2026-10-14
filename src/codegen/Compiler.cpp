@@ -4,6 +4,7 @@
 
 #include "common/Assert.h"
 #include "common/Diagnostics.h"
+#include "eir/BitOps.h"
 #include "eir/Module.h"
 
 #include <algorithm>
@@ -64,6 +65,40 @@ struct Frame {
         }
     }
 };
+
+/// For each register of `body`, the constant load that is the only thing to write it, or null.
+/// Such a register holds that constant from the moment the load runs, and nothing could have
+/// read it before, so it can hold it from the start. `parameters` are the registers a caller
+/// writes, and the arguments and results of calls are written by the call, so neither is one.
+std::vector<const eir::Instruction*> constantLoads(const eir::Body& body,
+                                                   const std::vector<std::uint32_t>& parameters) {
+    const std::size_t count = body.registerTypes.size();
+    std::vector<const eir::Instruction*> loads(count, nullptr);
+    std::vector<bool> written(count, false);
+    const auto writeOther = [&](eir::Operand operand) {
+        if (operand.kind() != eir::Operand::Kind::Register || operand.index() >= count) return;
+        written[operand.index()] = true;
+        loads[operand.index()] = nullptr;
+    };
+    for (const eir::BasicBlock& block : body.blocks) {
+        for (const eir::Instruction& instruction : block.instructions) {
+            const eir::Operand dst = instruction.dst;
+            if (dst.kind() != eir::Operand::Kind::Register || dst.index() >= count) continue;
+            if (instruction.opcode != eir::Opcode::LoadConstant || written[dst.index()]) {
+                writeOther(dst);
+                continue;
+            }
+            written[dst.index()] = true;
+            loads[dst.index()] = &instruction;
+        }
+    }
+    for (const eir::CallSite& call : body.calls) {
+        for (const eir::Operand argument : call.arguments) writeOther(argument);
+        writeOther(call.result);
+    }
+    for (const std::uint32_t parameter : parameters) writeOther(eir::Operand::reg(parameter));
+    return loads;
+}
 
 /// A branch target that cannot be resolved until every block has been emitted.
 struct Fixup {
@@ -138,7 +173,11 @@ bool Compiler::compileProcess(const eir::ModuleDefinition& definition, const eir
 
 bool Compiler::compileSubprogram(const eir::ModuleDefinition& definition,
                                  const eir::Subprogram& subprogram, CompiledBody& out) {
-    if (!compileBody(definition, subprogram, out)) return false;
+    std::vector<std::uint32_t> parameters;
+    parameters.reserve(subprogram.parameters.size());
+    for (const eir::SubprogramParameter& parameter : subprogram.parameters)
+        parameters.push_back(parameter.registerIndex);
+    if (!compileBody(definition, subprogram, out, parameters)) return false;
 
     Frame frame;
     frame.build(subprogram.registerTypes);
@@ -169,7 +208,7 @@ bool Compiler::compileSubprogram(const eir::ModuleDefinition& definition,
 }
 
 bool Compiler::compileBody(const eir::ModuleDefinition& definition, const eir::Body& body,
-                           CompiledBody& out) {
+                           CompiledBody& out, const std::vector<std::uint32_t>& parameters) {
     out.name = body.name;
     out.location = body.location;
     out.readSet = body.readSet;
@@ -197,6 +236,26 @@ bool Compiler::compileBody(const eir::ModuleDefinition& definition, const eir::B
     if (!compileSysTaskCalls(definition, body, frame.offsets, frame.widths, out)) return false;
     if (!compileCalls(definition, body, frame.offsets, frame.widths, out)) return false;
 
+    // A register that holds one constant throughout holds it in the frame's starting image, and
+    // its load is left out. Most of what a body loads is such a constant, an index's bound or an
+    // element's width, and a load left in runs every time it is reached.
+    const std::vector<const eir::Instruction*> loads = constantLoads(body, parameters);
+    out.frameImage.assign(frame.words, 0);
+    for (std::uint32_t index = 0; index < loads.size(); ++index) {
+        const eir::Instruction* load = loads[index];
+        if (load == nullptr) continue;
+        if (load->a.index() >= body.constants.size()) {
+            reportInvalid(definition, body,
+                          std::format("constant {} is out of range; run the EIR verifier before "
+                                      "compiling",
+                                      load->a.index()));
+            return false;
+        }
+        eir::bitops::extend(
+            eir::BitRef(out.frameImage.data() + frame.offsets[index], frame.widths[index]),
+            body.constants[load->a.index()].ref(), load->isSigned);
+    }
+
     std::vector<Fixup> fixups;
     out.blockStarts.reserve(body.blocks.size());
 
@@ -206,6 +265,11 @@ bool Compiler::compileBody(const eir::ModuleDefinition& definition, const eir::B
         out.blockStarts.push_back(static_cast<std::uint32_t>(out.code.size()));
 
         for (const eir::Instruction& source : block.instructions) {
+            if (source.opcode == eir::Opcode::LoadConstant
+                && source.dst.kind() == eir::Operand::Kind::Register
+                && source.dst.index() < loads.size() && loads[source.dst.index()] == &source)
+                continue;
+
             Instruction emitted;
             emitted.opcode = source.opcode;
             emitted.isSigned = source.isSigned;
