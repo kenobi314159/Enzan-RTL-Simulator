@@ -909,9 +909,7 @@ void Kernel::notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Log
         if (width == 0) return edgeMatches(edge, before, after);
         if (edge != eir::EdgeKind::AnyChange)
             return edgeMatches(edge, previous.get(lowBit), current.get(lowBit));
-        for (std::uint32_t bit = lowBit; bit < lowBit + width; ++bit)
-            if (previous.get(bit) != current.get(bit)) return true;
-        return false;
+        return !bitops::samePartAt(previous, current, lowBit, width);
     };
 
     for (const Signal::Subscriber& subscriber : designImage->signals()[signalIndex].subscribers) {

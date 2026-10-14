@@ -961,6 +961,21 @@ bool holdsPartAt(ConstBitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
     return true;
 }
 
+bool samePartAt(ConstBitRef a, ConstBitRef b, std::uint64_t lowIndex, std::uint64_t width) {
+    ENZAN_ASSERT(a.width() == b.width() && lowIndex + width <= a.width(),
+                 "the part must lie within two vectors of one width");
+    for (std::uint64_t done = 0; done < width; done += BitsPerWord) {
+        const Word mask = width - done >= BitsPerWord ? ~Word{0} : (Word{1} << (width - done)) - 1;
+        const std::uint64_t from = lowIndex + done;
+        const auto differs = [&](const Word* left, const Word* right) {
+            return ((readWord(left, a.words(), from) ^ readWord(right, b.words(), from)) & mask)
+                   != 0;
+        };
+        if (differs(a.aval(), b.aval()) || differs(a.bval(), b.bval())) return false;
+    }
+    return true;
+}
+
 void assignPart(BitRef dst, ConstBitRef source, ConstBitRef lowIndex) {
     std::uint64_t low = 0;
     if (!extractCount(lowIndex, low)) {

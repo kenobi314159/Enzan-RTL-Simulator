@@ -254,6 +254,11 @@ void assignPartAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex);
 /// learns whether it changes anything before it makes it.
 [[nodiscard]] bool holdsPartAt(ConstBitRef dst, ConstBitRef source, std::uint64_t lowIndex);
 
+/// True when `a` and `b`, of one width, hold the same `width` bits from `lowIndex` up, which
+/// lie within them: how a change of a signal is told to those waiting on part of it.
+[[nodiscard]] bool samePartAt(ConstBitRef a, ConstBitRef b, std::uint64_t lowIndex,
+                              std::uint64_t width);
+
 /// `dst` receives `dst.width()` bits of `source` starting at bit `lowIndex`.
 ///
 /// Bits of the window that fall outside `source` read as X, and an unknown

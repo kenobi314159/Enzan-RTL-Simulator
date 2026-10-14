@@ -753,6 +753,16 @@ TEST(BitOpsSelect, PartsAcrossWordsMatchABitAtATime) {
                         << "assign " << width << " into " << sourceWidth << " at " << low;
                 }
                 ASSERT_EQ(assigned, BitVector::from(assigned.ref())) << "kept canonical";
+                if (low + width <= sourceWidth) {
+                    bool same = true;
+                    for (std::uint32_t bit = 0; bit < width; ++bit)
+                        same = same
+                               && assigned.ref().get(static_cast<std::uint32_t>(low + bit))
+                                      == source.ref().get(static_cast<std::uint32_t>(low + bit));
+                    EXPECT_EQ(bitops::samePartAt(source.ref(), assigned.ref(), low, width), same)
+                        << "compare " << width << " of " << sourceWidth << " at " << low;
+                    EXPECT_TRUE(bitops::samePartAt(source.ref(), source.ref(), low, width));
+                }
                 EXPECT_EQ(bitops::holdsPartAt(source.ref(), part.ref(), low), assigned == source)
                     << "assign " << width << " into " << sourceWidth << " at " << low;
             }
