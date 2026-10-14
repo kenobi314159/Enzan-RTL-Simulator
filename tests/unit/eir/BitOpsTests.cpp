@@ -738,6 +738,8 @@ TEST(BitOpsSelect, PartsAcrossWordsMatchABitAtATime) {
                     ASSERT_EQ(selected.ref().get(bit), expected)
                         << "select " << width << " of " << sourceWidth << " from " << low;
                 }
+                EXPECT_TRUE(bitops::holdsPartAt(source.ref(), selected.ref(), low))
+                    << "a part read back holds, what lies past the end included";
 
                 const BitVector part = randomVector(width);
                 BitVector assigned = source;
@@ -751,6 +753,8 @@ TEST(BitOpsSelect, PartsAcrossWordsMatchABitAtATime) {
                         << "assign " << width << " into " << sourceWidth << " at " << low;
                 }
                 ASSERT_EQ(assigned, BitVector::from(assigned.ref())) << "kept canonical";
+                EXPECT_EQ(bitops::holdsPartAt(source.ref(), part.ref(), low), assigned == source)
+                    << "assign " << width << " into " << sourceWidth << " at " << low;
             }
         }
     }

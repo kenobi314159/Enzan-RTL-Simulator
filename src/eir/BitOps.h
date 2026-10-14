@@ -250,6 +250,10 @@ void partSelectAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex);
 /// As `assignPart`, with the index as a plain integer. See `partSelectAt`.
 void assignPartAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex);
 
+/// True when `assignPartAt(dst, source, lowIndex)` would leave `dst` as it is: how a write
+/// learns whether it changes anything before it makes it.
+[[nodiscard]] bool holdsPartAt(ConstBitRef dst, ConstBitRef source, std::uint64_t lowIndex);
+
 /// `dst` receives `dst.width()` bits of `source` starting at bit `lowIndex`.
 ///
 /// Bits of the window that fall outside `source` read as X, and an unknown

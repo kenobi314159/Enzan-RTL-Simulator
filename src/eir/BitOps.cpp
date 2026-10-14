@@ -946,6 +946,21 @@ void assignPartAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
     }
 }
 
+bool holdsPartAt(ConstBitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
+    if (lowIndex >= dst.width()) return true;
+    const std::uint64_t compared = std::min<std::uint64_t>(source.width(), dst.width() - lowIndex);
+    for (std::uint32_t word = 0; std::uint64_t{word} * BitsPerWord < compared; ++word) {
+        const std::uint64_t done = std::uint64_t{word} * BitsPerWord;
+        const Word mask =
+            compared - done >= BitsPerWord ? ~Word{0} : (Word{1} << (compared - done)) - 1;
+        const std::uint64_t from = lowIndex + done;
+        if (((readWord(dst.aval(), dst.words(), from) ^ source.aval()[word]) & mask) != 0
+            || ((readWord(dst.bval(), dst.words(), from) ^ source.bval()[word]) & mask) != 0)
+            return false;
+    }
+    return true;
+}
+
 void assignPart(BitRef dst, ConstBitRef source, ConstBitRef lowIndex) {
     std::uint64_t low = 0;
     if (!extractCount(lowIndex, low)) {

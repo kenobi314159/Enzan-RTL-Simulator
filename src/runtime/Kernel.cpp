@@ -671,19 +671,9 @@ void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
-    // Change detection over the written window only, compared bit by bit against the
-    // incoming value so that no temporary copy of the old value is needed on the hot
-    // path (section 13.4).
-    bool changed = false;
-    for (std::uint32_t index = 0; index < value.width(); ++index) {
-        const std::uint64_t position = lowBit + index;
-        if (position >= target.width()) break;
-        if (target.get(static_cast<std::uint32_t>(position)) != value.get(index)) {
-            changed = true;
-            break;
-        }
-    }
-    if (!changed) return;
+    // Change detection over the written window only, compared against the incoming value in
+    // place so that no temporary copy of the old value is needed on the hot path (section 13.4).
+    if (bitops::holdsPartAt(target, value, lowBit)) return;
 
     recordEvent(signalIndex, target);
     const eir::ConstBitRef previous = keepPrevious(signal, target);
@@ -712,14 +702,7 @@ void Kernel::writeThroughDrivers(const WriteRoute& route, eir::ConstBitRef value
 
         // A driver that did not change changes nothing it resolves into, so the common case
         // of a continuous assignment re-evaluating to the value it already drives stops here.
-        bool changed = false;
-        for (std::uint32_t bit = 0; bit < value.width() && offset + bit < driver.width; ++bit) {
-            if (storage.get(static_cast<std::uint32_t>(offset + bit)) != value.get(bit)) {
-                changed = true;
-                break;
-            }
-        }
-        if (!changed) return;
+        if (bitops::holdsPartAt(storage, value, offset)) return;
 
         bitops::assignPartAt(storage, value, offset);
         resolveDriver(index);
