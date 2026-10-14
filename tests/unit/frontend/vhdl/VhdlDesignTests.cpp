@@ -1208,6 +1208,35 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
 }
 
+TEST_F(VhdlDesignTest, AnInlinedCallInAnActualOfTheSameSubprogramKeepsItsOwnParameters) {
+    // A function declared in a process is inlined, and so are both calls in the actuals of the
+    // outer one: each binds the function's formals, and the outer call's must be its own.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable x : integer := 10;
+    function f(a, b : integer) return integer is
+    begin
+      return a - b;
+    end function;
+  begin
+    report integer'image(f(f(x, 3), f(x - 5, 1)));
+    wait;
+  end process;
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.messages().front(), "3") << "(10 - 3) - (5 - 1)";
+}
+
 TEST_F(VhdlDesignTest, AnAttributeGivingNoValueOfItsTypeEndsTheRun) {
     // T'VAL gives a value of T, and T'SUCC and T'PRED one of its base type; a position outside
     // that is an error rather than a value no literal names (IEEE 1076 section 16.2.2).

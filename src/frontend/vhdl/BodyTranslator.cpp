@@ -1849,6 +1849,10 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
     // the declaration's, which is the same.
     Folder bindings = folder();
     std::vector<std::pair<Value, Place>> copyBack;
+    // Bound once every actual is evaluated, since an actual may call the same subprogram, inlined
+    // too, which binds the same formals while it is.
+    std::vector<std::pair<tree_t, Value>> parameters;
+    std::vector<std::pair<tree_t, Place>> signals;
     for (unsigned index = 0; index < tree_ports(calleeBody); ++index) {
         tree_t formal = tree_port(calleeBody, index);
         tree_t actual = actuals.at(index);
@@ -1863,7 +1867,7 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
                 return std::nullopt;
             }
             if (unconstrained) bindings.bindBounds(formal, signal->layout.index);
-            aliases[formal] = *signal;
+            signals.emplace_back(formal, *signal);
             continue;
         }
 
@@ -1905,9 +1909,11 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
         parameter.reg = newRegister(initial->type);
         emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(parameter.reg),
                                     eir::Operand::reg(initial->reg)));
-        locals[formal] = parameter;
+        parameters.emplace_back(formal, parameter);
         if (target) copyBack.emplace_back(parameter, *target);
     }
+    for (const auto& [formal, parameter] : parameters) locals[formal] = parameter;
+    for (const auto& [formal, signal] : signals) aliases[formal] = signal;
 
     folders.push_back(std::move(bindings));
     inlined.push_back(Inlined{.body = calleeBody,
