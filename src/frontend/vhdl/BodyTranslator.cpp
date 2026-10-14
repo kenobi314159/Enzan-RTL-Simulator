@@ -132,6 +132,7 @@ std::uint32_t BodyTranslator::newBlock(std::string label) {
 
 void BodyTranslator::selectBlock(std::uint32_t block) {
     current = block;
+    elementOffsets.clear();
 }
 
 bool BodyTranslator::terminated() const {
@@ -411,6 +412,7 @@ std::optional<BodyTranslator::Translated> BodyTranslator::translateSubprogram() 
 }
 
 bool BodyTranslator::declare(tree_t declaration) {
+    elementOffsets.clear();
     switch (tree_kind(declaration)) {
     case T_VAR_DECL:
     case T_CONST_DECL: {
@@ -492,6 +494,7 @@ bool BodyTranslator::statements(tree_t container) {
 
 bool BodyTranslator::statement(tree_t statement) {
     statementLocation = owner.locate(statement);
+    elementOffsets.clear();
     switch (tree_kind(statement)) {
     case T_SIGNAL_ASSIGN: return signalAssignment(statement);
     case T_VAR_ASSIGN: return variableAssignment(statement);
@@ -2860,6 +2863,10 @@ std::optional<BodyTranslator::Offset> BodyTranslator::elementOffset(const Layout
 
     const std::optional<Value> value = expression(index);
     if (!value) return std::nullopt;
+    const auto key =
+        std::tuple(value->reg, bounds.left, bounds.right, bounds.ascending, layout.elementBits);
+    if (const auto known = elementOffsets.find(key); known != elementOffsets.end())
+        return known->second;
     const eir::Type type = eir::Type::bits(64, true, false);
     Value position = resize(*value, 64);
     position.type = type;
@@ -2895,8 +2902,10 @@ std::optional<BodyTranslator::Offset> BodyTranslator::elementOffset(const Layout
     const std::uint32_t offset = newRegister(type);
     emit(eir::Instruction::make(eir::Opcode::Multiply, eir::Operand::reg(offset),
                                 eir::Operand::reg(distance), eir::Operand::reg(scale.reg)));
-    return Offset{.staticOffset = 0,
-                  .dynamic = Value{.reg = offset, .type = type, .vhdlType = nullptr}};
+    Offset computed{.staticOffset = 0,
+                    .dynamic = Value{.reg = offset, .type = type, .vhdlType = nullptr}};
+    elementOffsets.emplace(key, computed);
+    return computed;
 }
 
 BodyTranslator::Offset BodyTranslator::sum(const Offset& first, const Offset& second) {

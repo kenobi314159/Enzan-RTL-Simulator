@@ -1208,6 +1208,55 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
 }
 
+TEST_F(VhdlDesignTest, AnIndexUsedAgainInABlockIsScaledOnce) {
+    // `r(i) := a(i) + b(i)`: three arrays of one shape, one index, one offset. An index an
+    // impure function moves within a statement is scaled again after it, since the function's
+    // own statements forget what was computed.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  type arr is array (0 to 3) of integer;
+begin
+  process
+    variable a : arr := (10, 20, 30, 40);
+    variable b : arr := (1, 2, 3, 4);
+    variable r : arr;
+    variable i : integer := 0;
+    impure function bump return integer is
+    begin
+      i := i + 1;
+      return 0;
+    end function;
+  begin
+    for k in 0 to 3 loop
+      r(k) := a(k) + b(k);
+    end loop;
+    report integer'image(r(0)) & " " & integer'image(r(3)) & " "
+      & integer'image(a(i) + bump + a(i));
+    wait;
+  end process;
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* bench = design->findModule("tb");
+    ASSERT_NE(bench, nullptr);
+    ASSERT_EQ(bench->processes.size(), 1U);
+    std::ptrdiff_t multiplies = 0;
+    for (const auto& block : bench->processes[0].blocks)
+        multiplies += std::ranges::count_if(block.instructions, [](const auto& instruction) {
+            return instruction.opcode == enzan::eir::Opcode::Multiply;
+        });
+    EXPECT_EQ(multiplies, 1 + 2) << "r(k), a(k) and b(k) once; a(i) before and after bump";
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.messages().front(), "11 44 30") << "a(0) + 0 + a(1)";
+}
+
 TEST_F(VhdlDesignTest, AFunctionThatIsOneReturnOfAnExpressionIsInlined) {
     // std_logic_1164's operators on a std_ulogic are each a table looked up, which costs less
     // than a call of it; so is a function of the design's own written the same way.

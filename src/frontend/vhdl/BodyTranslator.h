@@ -18,6 +18,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace enzan::frontend::vhdl {
@@ -544,6 +545,13 @@ private:
     /// The range of each loop parameter whose loop has static bounds, while the loop is
     /// translated. The parameter takes no other value, so an index of it needs no check there.
     std::map<tree_t, Folder::Range> loopRanges;
+
+    /// The offsets of elements computed so far in this block of this statement, by the register
+    /// of the index, the bounds and the element's width, so that an index used again,
+    /// `r(i) := a(i) xor b(i)`, is not checked and scaled again. Forgotten at every statement,
+    /// which may assign the index, and every block, which may be reached without this one.
+    std::map<std::tuple<std::uint32_t, std::int64_t, std::int64_t, bool, std::uint32_t>, Offset>
+        elementOffsets;
 
     std::vector<Loop> loops;
 };
