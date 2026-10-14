@@ -234,9 +234,31 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
         return kernel.stateArena.at(signal.wordOffset, signal.bitWidth);
     };
 
-    while (pc < current.body->code.size()) {
-        const codegen::Instruction& instruction = current.body->code[pc];
-        ++kernel.instructionCount;
+    // The running body's code, and how many instructions have run: both kept here rather than
+    // read through `current` and the kernel at every step, the code changing only with a call or
+    // a return and the count reaching the kernel as this returns.
+    std::span<const codegen::Instruction> code = current.body->code;
+
+    class Counted {
+    public:
+        explicit Counted(std::uint64_t& into) noexcept : total(into) {}
+
+        Counted(const Counted&) = delete;
+        Counted(Counted&&) = delete;
+        Counted& operator=(const Counted&) = delete;
+        Counted& operator=(Counted&&) = delete;
+
+        ~Counted() { total += count; }
+
+        std::uint64_t count = 0;
+
+    private:
+        std::uint64_t& total;
+    } executed(kernel.instructionCount);
+
+    while (pc < code.size()) {
+        const codegen::Instruction& instruction = code[pc];
+        ++executed.count;
         ++pc;
 
         // Reals compute as doubles; every other operation on them, a move or a store, is the
@@ -274,6 +296,7 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
                 kernel.leaveCall(current);
             if (!caller.has_value()) return ExecutionResult::Completed;
             current = caller->first;
+            code = current.body->code;
             pc = caller->second;
             break;
         }
@@ -681,6 +704,7 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
                 kernel.enterCall(processIndex, current, instruction.a, pc);
             if (!callee.has_value()) return ExecutionResult::Stopped;
             current = *callee;
+            code = current.body->code;
             pc = 0;
             break;
         }
