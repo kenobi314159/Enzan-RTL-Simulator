@@ -1769,6 +1769,18 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
             inlineIt = inlineIt || tree_decl(source, index) == calleeBody;
     }
 
+    // A pure function that is one `return` of an expression is cheaper inlined than called, which
+    // costs more than the expression: std_logic_1164's operators on a std_ulogic are each a table
+    // looked up, and a design calls them for every element of every vector it computes. One
+    // already being inlined is called instead, which a recursion through it needs.
+    if (tree_kind(calleeBody) == T_FUNC_BODY && (tree_flags(calleeBody) & TREE_F_IMPURE) == 0
+        && tree_decls(calleeBody) == 0 && tree_stmts(calleeBody) == 1
+        && tree_kind(tree_stmt(calleeBody, 0)) == T_RETURN
+        && tree_has_value(tree_stmt(calleeBody, 0))
+        && std::ranges::none_of(inlined,
+                                [&](const Inlined& frame) { return frame.body == calleeBody; }))
+        inlineIt = true;
+
     // Nor can a body of its own take a null array, which has no bits to pass; inlined, it is its
     // bounds, which is all its uses can fold to.
     for (tree_t actual : *actuals) {
@@ -1847,6 +1859,8 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
 
     // The formals are the body's own, which its statements name; the actuals are in the order of
     // the declaration's, which is the same.
+    const bool pure =
+        tree_kind(calleeBody) == T_FUNC_BODY && (tree_flags(calleeBody) & TREE_F_IMPURE) == 0;
     Folder bindings = folder();
     std::vector<std::pair<Value, Place>> copyBack;
     // Bound once every actual is evaluated, since an actual may call the same subprogram, inlined
@@ -1902,13 +1916,17 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
                 bindings.bind(formal, *known);
         }
 
-        // A copy, so that what the subprogram does to its parameter stays its own.
+        // A copy, so that what the subprogram does to its parameter stays its own; but a pure
+        // function can neither assign an `in` parameter nor reach a variable of its caller's, so
+        // the actual's own register serves it.
         Value parameter = *initial;
         if (constrained) parameter.layout = *constrained;
         parameter.vhdlType = formalType;
-        parameter.reg = newRegister(initial->type);
-        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(parameter.reg),
-                                    eir::Operand::reg(initial->reg)));
+        if (!pure || mode != eir::ParameterMode::In) {
+            parameter.reg = newRegister(initial->type);
+            emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(parameter.reg),
+                                        eir::Operand::reg(initial->reg)));
+        }
         parameters.emplace_back(formal, parameter);
         if (target) copyBack.emplace_back(parameter, *target);
     }

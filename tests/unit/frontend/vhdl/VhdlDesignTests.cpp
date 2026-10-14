@@ -1208,6 +1208,45 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
 }
 
+TEST_F(VhdlDesignTest, AFunctionThatIsOneReturnOfAnExpressionIsInlined) {
+    // std_logic_1164's operators on a std_ulogic are each a table looked up, which costs less
+    // than a call of it; so is a function of the design's own written the same way.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  function twice(n : integer) return integer is
+  begin
+    return n + n;
+  end function;
+  signal a : std_ulogic := '1';
+  signal b : std_ulogic := 'X';
+begin
+  process
+  begin
+    report std_ulogic'image(a and b) & std_ulogic'image(a or b) & std_ulogic'image(not b)
+      & integer'image(twice(twice(3)));
+    wait;
+  end process;
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* bench = design->findModule("tb");
+    ASSERT_NE(bench, nullptr);
+    ASSERT_EQ(bench->processes.size(), 1U);
+    EXPECT_TRUE(bench->processes[0].calls.empty());
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.messages().front(), "'X''1''X'12");
+}
+
 TEST_F(VhdlDesignTest, AnInlinedCallInAnActualOfTheSameSubprogramKeepsItsOwnParameters) {
     // A function declared in a process is inlined, and so are both calls in the actuals of the
     // outer one: each binds the function's formals, and the outer call's must be its own.

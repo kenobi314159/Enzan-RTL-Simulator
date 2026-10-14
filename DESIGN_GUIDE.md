@@ -999,7 +999,10 @@ What a VHDL unit becomes in EIR:
   package's subprograms are a definition `<package>::` of their own, which a call needs no
   instance of. A procedure, a subprogram taking a signal, and one a process declares are
   inlined into their caller, since a body of its own could not wait, assign a signal, read
-  a signal's attributes or reach the process's variables.
+  a signal's attributes or reach the process's variables. So is a pure function that is
+  one `return` of an expression, which costs less than a call of it: std_logic_1164's
+  operators on a `std_ulogic` are each a table looked up, and a design calls them for
+  every element of every vector it computes.
 - A generate statement is flattened into the architecture it is in, as SystemVerilog's
   are (5.1): the alternative whose condition folds true, or each iteration of a loop with
   its parameter bound, and what each declares is named inside it, `g(0).u`. A block is the
