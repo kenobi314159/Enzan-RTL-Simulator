@@ -57,6 +57,144 @@ bool runReal(const codegen::Instruction& instruction, const Registers& reg) {
     }
 }
 
+using eir::Word;
+
+/// The bits of a value one word wide that `width` keeps.
+constexpr Word widthMask(std::uint32_t width) noexcept {
+    return width >= eir::BitsPerWord ? ~Word{0} : (Word{1} << width) - 1;
+}
+
+/// A one-word value's bits as the signed number they are at `width`.
+constexpr std::int64_t signedValue(Word value, std::uint32_t width) noexcept {
+    const unsigned shift = eir::BitsPerWord - width;
+    return static_cast<std::int64_t>(value << shift) >> shift;
+}
+
+/// Runs `instruction` on the words themselves when it is one of the commonest operations and
+/// every operand is one word with all its bits known, which is most of what a design computes:
+/// indices, counters, codes and conditions. Returns false for anything else, which the general
+/// routines run; they take any width and unknown bits, and on one word cost several times the
+/// operation itself. A register of one word is followed by its unknown plane, so
+/// `frame[offset + 1]` is zero exactly when every bit of it is known.
+bool runOneWord(const codegen::Instruction& instruction, Word* frame,
+                const codegen::CompiledBody& body) {
+    const auto known = [frame](std::uint32_t offset, std::uint32_t width) {
+        return width != 0 && width <= eir::BitsPerWord && frame[offset + 1] == 0;
+    };
+    const auto write = [&](Word value) {
+        frame[instruction.dst] = value & widthMask(instruction.dstWidth);
+        frame[instruction.dst + 1] = 0;
+        return true;
+    };
+    // Two operands of the destination's width, as an arithmetic or bitwise operation has.
+    const auto binary = [&](auto operation) {
+        if (instruction.aWidth != instruction.dstWidth || instruction.bWidth != instruction.dstWidth
+            || !known(instruction.a, instruction.aWidth)
+            || !known(instruction.b, instruction.bWidth))
+            return false;
+        return write(operation(frame[instruction.a], frame[instruction.b]));
+    };
+    // Two operands of one width compared, into a single bit.
+    const auto compare = [&](auto unsignedHolds, auto signedHolds) {
+        if (instruction.aWidth != instruction.bWidth || !known(instruction.a, instruction.aWidth)
+            || !known(instruction.b, instruction.bWidth))
+            return false;
+        const Word a = frame[instruction.a];
+        const Word b = frame[instruction.b];
+        return write(instruction.isSigned ? signedHolds(signedValue(a, instruction.aWidth),
+                                                        signedValue(b, instruction.bWidth))
+                                          : unsignedHolds(a, b));
+    };
+
+    if (instruction.dstWidth == 0 || instruction.dstWidth > eir::BitsPerWord) return false;
+    switch (instruction.opcode) {
+    case eir::Opcode::LoadConstant: {
+        const eir::ConstBitRef constant = body.constant(instruction.a);
+        if (constant.width() == 0 || constant.width() > eir::BitsPerWord || constant.bval()[0] != 0)
+            return false;
+        const Word value = constant.aval()[0];
+        return write(instruction.isSigned ? static_cast<Word>(signedValue(value, constant.width()))
+                                          : value);
+    }
+    case eir::Opcode::Move:
+        if (instruction.aWidth != instruction.dstWidth) return false;
+        frame[instruction.dst] = frame[instruction.a];
+        frame[instruction.dst + 1] = frame[instruction.a + 1];
+        return true;
+    case eir::Opcode::Extend:
+    case eir::Opcode::Truncate: {
+        if (!known(instruction.a, instruction.aWidth)) return false;
+        const Word value = frame[instruction.a];
+        return write(instruction.isSigned
+                         ? static_cast<Word>(signedValue(value, instruction.aWidth))
+                         : value);
+    }
+    case eir::Opcode::Add: return binary([](Word a, Word b) { return a + b; });
+    case eir::Opcode::Subtract: return binary([](Word a, Word b) { return a - b; });
+    case eir::Opcode::Multiply: return binary([](Word a, Word b) { return a * b; });
+    case eir::Opcode::And: return binary([](Word a, Word b) { return a & b; });
+    case eir::Opcode::Or: return binary([](Word a, Word b) { return a | b; });
+    case eir::Opcode::Xor: return binary([](Word a, Word b) { return a ^ b; });
+    case eir::Opcode::Divide:
+    case eir::Opcode::Modulo: {
+        // As bitops::divide and modulo: the magnitudes divided, the quotient negative when the
+        // signs differ and the remainder taking the dividend's. Division by zero is unknown,
+        // which the general routine makes it.
+        const std::uint32_t width = instruction.dstWidth;
+        if (instruction.aWidth != width || instruction.bWidth != width
+            || !known(instruction.a, width) || !known(instruction.b, width)
+            || frame[instruction.b] == 0)
+            return false;
+        const auto negative = [&](Word value) {
+            return instruction.isSigned && ((value >> (width - 1)) & 1U) != 0;
+        };
+        const auto magnitude = [&](Word value) {
+            return negative(value) ? (Word{0} - value) & widthMask(width) : value;
+        };
+        const Word a = frame[instruction.a];
+        const Word b = frame[instruction.b];
+        if (instruction.opcode == eir::Opcode::Divide) {
+            const Word quotient = magnitude(a) / magnitude(b);
+            return write(negative(a) != negative(b) ? Word{0} - quotient : quotient);
+        }
+        const Word remainder = magnitude(a) % magnitude(b);
+        return write(negative(a) ? Word{0} - remainder : remainder);
+    }
+    case eir::Opcode::Equal:
+        return compare([](Word a, Word b) { return a == b; },
+                       [](std::int64_t a, std::int64_t b) { return a == b; });
+    case eir::Opcode::NotEqual:
+        return compare([](Word a, Word b) { return a != b; },
+                       [](std::int64_t a, std::int64_t b) { return a != b; });
+    case eir::Opcode::LessThan:
+        return compare([](Word a, Word b) { return a < b; },
+                       [](std::int64_t a, std::int64_t b) { return a < b; });
+    case eir::Opcode::LessEqual:
+        return compare([](Word a, Word b) { return a <= b; },
+                       [](std::int64_t a, std::int64_t b) { return a <= b; });
+    case eir::Opcode::PartSelect: {
+        // From a source of any width, at a known offset that keeps the part inside it.
+        if (!known(instruction.b, instruction.bWidth)) return false;
+        const Word low = frame[instruction.b];
+        if (low >= instruction.aWidth || instruction.dstWidth > instruction.aWidth - low)
+            return false;
+        const std::uint32_t words = eir::wordsFor(instruction.aWidth);
+        const auto index = static_cast<std::uint32_t>(low / eir::BitsPerWord);
+        const auto shift = static_cast<unsigned>(low % eir::BitsPerWord);
+        const auto read = [&](const Word* plane) {
+            if (shift == 0) return plane[index];
+            const Word high = index + 1 < words ? plane[index + 1] : Word{0};
+            return (plane[index] >> shift) | (high << (eir::BitsPerWord - shift));
+        };
+        const Word mask = widthMask(instruction.dstWidth);
+        frame[instruction.dst] = read(frame + instruction.a) & mask;
+        frame[instruction.dst + 1] = read(frame + instruction.a + words) & mask;
+        return true;
+    }
+    default: return false;
+    }
+}
+
 } // namespace
 
 Interpreter::Interpreter(Kernel& owner) noexcept : kernel(owner) {}
@@ -88,6 +226,8 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
     const auto reg = [&](std::uint32_t offset, std::uint32_t width) {
         return kernel.frameAt(current.frameOffset + offset, width);
     };
+    // The running body's registers as words, for the operations that work on them directly.
+    const auto frame = [&] { return kernel.frameStorage.data() + current.frameOffset; };
     const auto objectValue = [&](std::uint32_t objectIndex) {
         const std::uint32_t signalIndex = current.objectSignals[objectIndex];
         const Signal& signal = kernel.designImage->signals()[signalIndex];
@@ -101,7 +241,9 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
 
         // Reals compute as doubles; every other operation on them, a move or a store, is the
         // one for their bits.
-        if (instruction.isReal && runReal(instruction, reg)) continue;
+        if (instruction.isReal ? runReal(instruction, reg)
+                               : runOneWord(instruction, frame(), *current.body))
+            continue;
 
         switch (instruction.opcode) {
         case eir::Opcode::Nop: break;
@@ -109,6 +251,13 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
         case eir::Opcode::Jump: pc = instruction.a; break;
 
         case eir::Opcode::BranchIf: {
+            // A known condition is true when any bit of it is set.
+            if (const eir::Word* condition = frame() + instruction.a;
+                instruction.aWidth != 0 && instruction.aWidth <= eir::BitsPerWord
+                && condition[1] == 0) {
+                pc = condition[0] != 0 ? instruction.b : instruction.c;
+                break;
+            }
             // An unknown condition takes the false branch. IEEE 1800 defines an `if`
             // on an unknown expression to take the else path, which is the
             // pessimistic reading and the one every simulator implements.

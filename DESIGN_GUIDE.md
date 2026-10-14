@@ -388,7 +388,10 @@ cocotb's priority (section 9).
 **Two-state fast path:** a vector whose `bval` words are all zero is
 two-state. The runtime SHOULD branch to specialised two-state operations in
 that case. Two-state is an optimisation of the four-state representation, never
-a separate engine.
+a separate engine. The interpreter does so for the commonest operations on
+values of one word (arithmetic, bitwise operations, comparisons, extension,
+part selects and branches), which is nearly everything VHDL computes, its values
+being two-state codes.
 
 **VHDL's values are codes in the same vectors.** `std_logic` has nine values
 (`U X 0 1 Z W L H -`) and does not fit two planes as a value, so it is not stored

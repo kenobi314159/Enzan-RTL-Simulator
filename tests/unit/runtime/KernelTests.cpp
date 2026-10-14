@@ -11,6 +11,7 @@
 #include "runtime/Kernel.h"
 
 #include "common/Diagnostics.h"
+#include "eir/BitOps.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
 #include "eir/Module.h"
@@ -23,11 +24,15 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <format>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -2393,6 +2398,138 @@ TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
     EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "fffffffc") << "-4";
     EXPECT_EQ(simulation.value("/tb/c", Radix::Decimal), "8");
     EXPECT_EQ(simulation.value("/tb/d", Radix::Decimal), "1");
+}
+
+TEST(Kernel, OneWordOperationsMatchTheGeneralRoutines) {
+    // The interpreter computes the commonest operations on values of one word itself and leaves
+    // the rest to eir::bitops, so each must give what the other would. Every operation runs on
+    // operands around the edges of their widths, and each result is held against what bitops
+    // computes from the same operands.
+    namespace bitops = enzan::eir::bitops;
+    ProcessBuilder builder(ProcessKind::Initial, "operations");
+    builder.block("entry");
+    std::vector<Object> results;
+    std::vector<BitVector> expected;
+
+    const auto load = [&builder](const BitVector& value) {
+        const std::uint32_t loaded = builder.reg(Type::bits(value.width(), false, true));
+        const std::string text =
+            std::format("{}'b{}", value.width(), toString(value.ref(), enzan::eir::Radix::Binary));
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(loaded),
+                                       Operand::constant(builder.constant(text))));
+        return loaded;
+    };
+    // Runs `opcode` into a register of `value`'s width and stores it, expecting `value`.
+    const auto check = [&](Opcode opcode, bool isSigned, BitVector value,
+                           std::initializer_list<std::uint32_t> operands) {
+        const std::uint32_t destination = builder.reg(Type::bits(value.width(), false, true));
+        std::vector<Operand> sources;
+        for (const std::uint32_t operand : operands) sources.push_back(Operand::reg(operand));
+        Instruction instruction =
+            sources.size() == 1
+                ? Instruction::make(opcode, Operand::reg(destination), sources[0])
+                : Instruction::make(opcode, Operand::reg(destination), sources[0], sources[1]);
+        instruction.isSigned = isSigned;
+        builder.emit(instruction);
+        const auto index = static_cast<std::uint32_t>(results.size());
+        results.push_back(Object{.name = std::format("r{}", index),
+                                 .type = Type::bits(value.width(), false, true)});
+        builder.store(index, destination);
+        expected.push_back(std::move(value));
+    };
+
+    for (const std::uint32_t width : {1U, 5U, 32U, 63U, 64U}) {
+        const std::uint64_t all = width == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << width) - 1;
+        const std::uint64_t signBit = std::uint64_t{1} << (width - 1);
+        std::vector<BitVector> values;
+        for (const std::uint64_t value : {std::uint64_t{0}, std::uint64_t{1}, all, signBit,
+                                          signBit - 1, std::uint64_t{0x5A3C96E1F00F7B2D}})
+            values.push_back(BitVector::fromUInt64(value & all, width));
+
+        for (const BitVector& a : values) {
+            for (const BitVector& b : values) {
+                const std::uint32_t left = load(a);
+                const std::uint32_t right = load(b);
+                for (const bool isSigned : {false, true}) {
+                    const auto computed = [&](auto operation, std::uint32_t resultWidth) {
+                        BitVector value(resultWidth);
+                        operation(value.mutableRef());
+                        return value;
+                    };
+                    const auto arithmetic = [&](Opcode opcode, auto operation) {
+                        check(opcode, isSigned, computed(operation, width), {left, right});
+                    };
+                    const auto comparison = [&](Opcode opcode, auto operation) {
+                        check(opcode, isSigned, computed(operation, 1), {left, right});
+                    };
+                    arithmetic(Opcode::Add, [&](auto dst) { bitops::add(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Subtract,
+                               [&](auto dst) { bitops::subtract(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Multiply,
+                               [&](auto dst) { bitops::multiply(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::And,
+                               [&](auto dst) { bitops::bitwiseAnd(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Or,
+                               [&](auto dst) { bitops::bitwiseOr(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Xor,
+                               [&](auto dst) { bitops::bitwiseXor(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Divide,
+                               [&](auto dst) { bitops::divide(dst, a.ref(), b.ref(), isSigned); });
+                    arithmetic(Opcode::Modulo,
+                               [&](auto dst) { bitops::modulo(dst, a.ref(), b.ref(), isSigned); });
+                    comparison(Opcode::Equal,
+                               [&](auto dst) { bitops::equal(dst, a.ref(), b.ref()); });
+                    comparison(Opcode::NotEqual,
+                               [&](auto dst) { bitops::notEqual(dst, a.ref(), b.ref()); });
+                    comparison(Opcode::LessThan, [&](auto dst) {
+                        bitops::lessThan(dst, a.ref(), b.ref(), isSigned);
+                    });
+                    comparison(Opcode::LessEqual, [&](auto dst) {
+                        bitops::lessEqual(dst, a.ref(), b.ref(), isSigned);
+                    });
+                }
+            }
+
+            const std::uint32_t source = load(a);
+            check(Opcode::Move, false, a, {source});
+            for (const std::uint32_t to : {1U, 17U, 64U}) {
+                if (to == width) continue;
+                for (const bool isSigned : {false, true}) {
+                    BitVector value(to);
+                    bitops::extend(value.mutableRef(), a.ref(), isSigned);
+                    check(to > width ? Opcode::Extend : Opcode::Truncate, isSigned, value,
+                          {source});
+                }
+            }
+        }
+    }
+
+    // A part of any source, unknown bits and all, at an offset in it or past it.
+    for (const std::string_view text :
+         {"64'h0123456789abcdef", "100'hf_0123_4567_89ab_cdef_x0z1_5a5a",
+          "130'h3_ffff_0000_ffff_0000_1234_xxxx_8765_4321"}) {
+        const BitVector source = literal(text);
+        const std::uint32_t sourceRegister = load(source);
+        for (const std::uint32_t width : {1U, 8U, 64U}) {
+            for (const std::uint64_t low : {0U, 3U, 36U, 60U, 64U, 66U, 99U, 129U, 140U}) {
+                const std::uint32_t offset = load(BitVector::fromUInt64(low, 32));
+                BitVector value(width);
+                bitops::partSelectAt(value.mutableRef(), source.ref(), low);
+                check(Opcode::PartSelect, false, value, {sourceRegister, offset});
+            }
+        }
+    }
+    builder.emit(Instruction::make(Opcode::Return));
+
+    const std::size_t count = results.size();
+    Simulation simulation(designOf(makeTop({builder.finish()}, std::move(results))), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    for (std::size_t index = 0; index < count; ++index) {
+        EXPECT_EQ(simulation.value(std::format("/tb/r{}", index)),
+                  toString(expected[index].ref(), enzan::eir::Radix::Binary))
+            << "result " << index;
+    }
 }
 
 TEST(Kernel, ARecursionWithoutEndStopsAtTheCallDepthLimit) {
