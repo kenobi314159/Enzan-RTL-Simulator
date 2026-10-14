@@ -874,12 +874,56 @@ void bitSelect(BitRef dst, ConstBitRef source, ConstBitRef index) {
     setBit(dst, source.get(static_cast<std::uint32_t>(position)));
 }
 
-void partSelectAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
-    for (std::uint32_t index = 0; index < dst.width(); ++index) {
-        const std::uint64_t position = lowIndex + index;
-        dst.set(index, position < source.width() ? source.get(static_cast<std::uint32_t>(position))
-                                                 : Logic::Unknown);
+namespace {
+
+/// The 64 bits of `plane`, `words` long, from bit `from` up, zero past its end.
+Word readWord(const Word* plane, std::uint32_t words, std::uint64_t from) noexcept {
+    const std::uint64_t index = from / BitsPerWord;
+    const auto shift = static_cast<unsigned>(from % BitsPerWord);
+    const Word low = index < words ? plane[index] : Word{0};
+    if (shift == 0) return low;
+    const Word high = index + 1 < words ? plane[index + 1] : Word{0};
+    return (low >> shift) | (high << (BitsPerWord - shift));
+}
+
+/// Writes the low `count` bits of `value`, at most 64, into `plane` from bit `at` up, leaving
+/// alone what lies past `width`.
+void writeBits(Word* plane, std::uint32_t width, std::uint64_t at, Word value,
+               std::uint32_t count) noexcept {
+    if (at >= width) return;
+    count = static_cast<std::uint32_t>(std::min<std::uint64_t>(count, width - at));
+    if (count == 0) return;
+    const Word mask = count == BitsPerWord ? ~Word{0} : (Word{1} << count) - 1;
+    value &= mask;
+    const std::uint64_t index = at / BitsPerWord;
+    const auto shift = static_cast<unsigned>(at % BitsPerWord);
+    plane[index] = (plane[index] & ~(mask << shift)) | (value << shift);
+    if (shift != 0 && shift + count > BitsPerWord) {
+        const unsigned spill = BitsPerWord - shift;
+        plane[index + 1] = (plane[index + 1] & ~(mask >> spill)) | (value >> spill);
     }
+}
+
+} // namespace
+
+void partSelectAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
+    // A word at a time: this is how every element of an array and every field of a record is
+    // read, and how a table of constants is looked up.
+    for (std::uint32_t word = 0; word < dst.words(); ++word) {
+        const std::uint64_t from = lowIndex + (std::uint64_t{word} * BitsPerWord);
+        dst.aval()[word] = readWord(source.aval(), source.words(), from);
+        dst.bval()[word] = readWord(source.bval(), source.words(), from);
+    }
+    // What lies past the source's end reads as unknown.
+    const std::uint64_t available = lowIndex < source.width() ? source.width() - lowIndex : 0;
+    for (std::uint32_t word = 0; word < dst.words(); ++word) {
+        const std::uint64_t first = std::uint64_t{word} * BitsPerWord;
+        if (first + BitsPerWord <= available) continue;
+        const Word past = first >= available ? ~Word{0} : ~Word{0} << (available - first);
+        dst.aval()[word] |= past;
+        dst.bval()[word] |= past;
+    }
+    dst.canonicalize();
 }
 
 void partSelect(BitRef dst, ConstBitRef source, ConstBitRef lowIndex) {
@@ -892,10 +936,13 @@ void partSelect(BitRef dst, ConstBitRef source, ConstBitRef lowIndex) {
 }
 
 void assignPartAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
-    for (std::uint32_t index = 0; index < source.width(); ++index) {
-        const std::uint64_t position = lowIndex + index;
-        if (position < dst.width())
-            dst.set(static_cast<std::uint32_t>(position), source.get(index));
+    // A word at a time, as partSelectAt reads; what reaches past the destination's end is dropped.
+    for (std::uint32_t word = 0; word < source.words(); ++word) {
+        const std::uint64_t at = lowIndex + (std::uint64_t{word} * BitsPerWord);
+        const auto count = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+            BitsPerWord, source.width() - (std::uint64_t{word} * BitsPerWord)));
+        writeBits(dst.aval(), dst.width(), at, source.aval()[word], count);
+        writeBits(dst.bval(), dst.width(), at, source.bval()[word], count);
     }
 }
 
