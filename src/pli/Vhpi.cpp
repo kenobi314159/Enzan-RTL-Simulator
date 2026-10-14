@@ -943,7 +943,13 @@ int PliContext::vhpiPutValue(vhpiHandleT object, vhpiValueT* value, vhpiPutValue
     eir::BitVector bits(found->width);
     std::ranges::fill(bits.mutableRef().avalWords(), 0);
     std::ranges::fill(bits.mutableRef().bvalWords(), 0);
+    // An enumeration takes only its literals' positions, which the design relies on: an index of
+    // one is not checked against the bounds of the array it indexes.
+    const std::uint64_t literals =
+        scalar.kind == Kind::Enumeration ? definition.enums[scalar.enumIndex].members.size() : 0;
+    bool valid = true;
     const auto put = [&](std::uint64_t position, std::uint64_t code) {
+        if (scalar.kind == Kind::Enumeration && code >= literals) valid = false;
         setField(bits, static_cast<std::uint32_t>((count - 1 - position) * elementWidth),
                  elementWidth, code);
     };
@@ -990,6 +996,11 @@ int PliContext::vhpiPutValue(vhpiHandleT object, vhpiValueT* value, vhpiPutValue
     default:
         fail(vpiError, std::format("vhpi_put_value: format {} is not supported",
                                    static_cast<int>(value->format)));
+        return -1;
+    }
+    if (!valid) {
+        fail(vpiError, std::format("vhpi_put_value: '{}' takes the positions of its {} literals",
+                                   found->fullName, literals));
         return -1;
     }
     return vhpiWrite(*found, bits, mode) ? 0 : -1;
