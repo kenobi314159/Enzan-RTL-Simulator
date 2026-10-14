@@ -2736,16 +2736,8 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
         }
         if (outer->offset || within.dynamic) {
             // Where either offset is known only at run time, the sum is too.
-            const eir::Type type = eir::Type::bits(64, true, false);
-            const Value outerOffset =
-                outer->offset ? *outer->offset : constant(outer->staticOffset, type, nullptr);
-            const Value innerOffset =
-                within.dynamic ? *within.dynamic : constant(within.staticOffset, type, nullptr);
-            const std::uint32_t sum = newRegister(type);
-            emit(eir::Instruction::make(eir::Opcode::Add, eir::Operand::reg(sum),
-                                        eir::Operand::reg(outerOffset.reg),
-                                        eir::Operand::reg(innerOffset.reg)));
-            result.offset = Value{.reg = sum, .type = type, .vhdlType = nullptr};
+            const Offset outerOffset{.staticOffset = outer->staticOffset, .dynamic = outer->offset};
+            result.offset = sum(outerOffset, within).dynamic;
         }
         return result;
     }
@@ -2864,12 +2856,17 @@ std::optional<BodyTranslator::Offset> BodyTranslator::elementOffset(const Layout
                     std::format("index %0d is outside the bounds {} {} {}", bounds.left,
                                 bounds.ascending ? "to" : "downto", bounds.right));
 
-    // Descending, an element's offset counts up from the right bound; ascending, down to it.
-    const Value right = constant(bounds.right, type, nullptr);
-    const std::uint32_t distance = newRegister(type);
-    emit(eir::Instruction::make(eir::Opcode::Subtract, eir::Operand::reg(distance),
-                                eir::Operand::reg(bounds.ascending ? right.reg : position.reg),
-                                eir::Operand::reg(bounds.ascending ? position.reg : right.reg)));
+    // Descending, an element's offset counts up from the right bound, and from 0 is the index
+    // itself; ascending, it counts down to the right bound.
+    std::uint32_t distance = position.reg;
+    if (bounds.ascending || bounds.right != 0) {
+        const Value right = constant(bounds.right, type, nullptr);
+        distance = newRegister(type);
+        emit(
+            eir::Instruction::make(eir::Opcode::Subtract, eir::Operand::reg(distance),
+                                   eir::Operand::reg(bounds.ascending ? right.reg : position.reg),
+                                   eir::Operand::reg(bounds.ascending ? position.reg : right.reg)));
+    }
     const Value scale = constant(layout.elementBits, type, nullptr);
     const std::uint32_t offset = newRegister(type);
     emit(eir::Instruction::make(eir::Opcode::Multiply, eir::Operand::reg(offset),
@@ -2881,6 +2878,9 @@ std::optional<BodyTranslator::Offset> BodyTranslator::elementOffset(const Layout
 BodyTranslator::Offset BodyTranslator::sum(const Offset& first, const Offset& second) {
     if (!first.dynamic && !second.dynamic)
         return Offset{.staticOffset = first.staticOffset + second.staticOffset, .dynamic = {}};
+    // Adding nothing is not an instruction.
+    if (!first.dynamic && first.staticOffset == 0) return second;
+    if (!second.dynamic && second.staticOffset == 0) return first;
     const eir::Type type = eir::Type::bits(64, true, false);
     const Value left = first.dynamic ? *first.dynamic : constant(first.staticOffset, type, nullptr);
     const Value right =
