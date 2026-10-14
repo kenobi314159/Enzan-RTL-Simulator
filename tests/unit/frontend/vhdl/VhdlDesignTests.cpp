@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1205,6 +1206,59 @@ end architecture;
     EXPECT_EQ(simulation.run(), RunStatus::Error);
     EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
+}
+
+TEST_F(VhdlDesignTest, AnAttributeGivingNoValueOfItsTypeEndsTheRun) {
+    // T'VAL gives a value of T, and T'SUCC and T'PRED one of its base type; a position outside
+    // that is an error rather than a value no literal names (IEEE 1076 section 16.2.2).
+    struct Case {
+        std::string_view statement;
+        std::string_view error;
+    };
+
+    for (const auto& [statement, error] :
+         {Case{.statement = "v := t'val(i + 1);",
+               .error = "'VAL gives the position 3, outside the range 0 to 2 of T"},
+          Case{.statement = "v := t'succ(v);",
+               .error = "'SUCC gives the position 3, outside the range 0 to 2 of T"},
+          Case{.statement = "v := t'pred(t'val(i - 2));",
+               .error = "'PRED gives the position -1, outside the range 0 to 2 of T"},
+          Case{.statement = "c := ab'val(i + 97);",
+               .error = "'VAL gives the position 99, outside the range 97 to 98 of AB"},
+          Case{.statement = "c := ab'succ(c);", .error = ""}}) {
+        std::unique_ptr<enzan::eir::Design> design = translate(std::format(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  type t is (first, second, third);
+  subtype ab is character range 'a' to 'b';
+begin
+  process
+    variable v : t := third;
+    variable c : character := 'b';
+    variable i : integer := 2;
+  begin
+    {}
+    report "reached";
+    wait;
+  end process;
+end architecture;
+)",
+                                                                           statement));
+        ASSERT_NE(design, nullptr) << transcript();
+
+        Simulation simulation(std::move(*design), "tb");
+        ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+        if (error.empty()) {
+            EXPECT_EQ(simulation.run(), RunStatus::Quiescent) << statement;
+            EXPECT_EQ(simulation.messages().front(), "reached") << statement;
+            continue;
+        }
+        EXPECT_EQ(simulation.run(), RunStatus::Error) << statement;
+        EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure)) << statement;
+        EXPECT_EQ(simulation.messages().front(), error) << statement;
+    }
 }
 
 TEST_F(VhdlDesignTest, WhatTheAdapterCannotTranslateIsReportedNotDropped) {

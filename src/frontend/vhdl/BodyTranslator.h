@@ -421,6 +421,15 @@ private:
 
     std::optional<Offset> elementOffset(const Layout& layout, tree_t index);
 
+    /// Ends the run with a failure unless `position`, a signed 64-bit register, lies within
+    /// `bounds`. `message` is the report, with `%0d` where the position goes.
+    void checkWithin(const Value& position, const Folder::Range& bounds, tree_t where,
+                     std::string message);
+
+    /// The range of `type`, a discrete type: its constraint's, or without one an enumeration's
+    /// literals.
+    [[nodiscard]] std::optional<Folder::Range> discreteRange(type_t type) const;
+
     /// The element of `array` that the indices of `name`, a T_ARRAY_REF, designate.
     std::optional<Value> element(const Value& array, tree_t name, type_t vhdlType);
 

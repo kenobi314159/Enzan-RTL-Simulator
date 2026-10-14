@@ -2267,16 +2267,37 @@ std::optional<BodyTranslator::Value> BodyTranslator::attribute(tree_t expression
         const std::optional<Value> operand =
             this->expression(tree_value(tree_param(expression, 0)));
         if (!operand) return std::nullopt;
-        Value result = resize(*operand, storage->bitWidth());
-        result.vhdlType = resultType;
-        if (kind == ATTR_SUCC || kind == ATTR_PRED) {
-            const Value one = constant(1, result.type, nullptr);
-            const std::uint32_t reg = newRegister(result.type);
-            emit(eir::Instruction::make(
-                kind == ATTR_SUCC ? eir::Opcode::Add : eir::Opcode::Subtract,
-                eir::Operand::reg(reg), eir::Operand::reg(result.reg), eir::Operand::reg(one.reg)));
-            result.reg = reg;
+        if (kind == ATTR_POS) {
+            Value result = resize(*operand, storage->bitWidth());
+            result.vhdlType = resultType;
+            return result;
         }
+
+        // A value, a successor or a predecessor is computed wide and checked (IEEE 1076 section
+        // 16.2.2): T'VAL's must lie within T, and T'SUCC's and T'PRED's within its base type.
+        const eir::Type wide = eir::Type::bits(64, true, false);
+        Value position = resize(*operand, 64);
+        position.type = wide;
+        if (kind == ATTR_SUCC || kind == ATTR_PRED) {
+            const Value one = constant(1, wide, nullptr);
+            const std::uint32_t reg = newRegister(wide);
+            emit(
+                eir::Instruction::make(kind == ATTR_SUCC ? eir::Opcode::Add : eir::Opcode::Subtract,
+                                       eir::Operand::reg(reg), eir::Operand::reg(position.reg),
+                                       eir::Operand::reg(one.reg)));
+            position.reg = reg;
+        }
+        type_t within = tree_type(tree_name(expression));
+        if (kind != ATTR_VAL) within = type_base_recur(within);
+        if (const std::optional<Folder::Range> range = discreteRange(within))
+            checkWithin(position, *range, expression,
+                        std::format("'{} gives the position %0d, outside the range {} {} {} of {}",
+                                    istr(tree_ident(expression)), range->left,
+                                    range->ascending ? "to" : "downto", range->right,
+                                    type_pp(within)));
+        Value result = resize(position, storage->bitWidth());
+        result.type = *storage;
+        result.vhdlType = resultType;
         return result;
     }
 
@@ -2765,6 +2786,45 @@ std::uint32_t BodyTranslator::offsetRegister(const Place& place) {
     return constant(place.staticOffset, eir::Type::bits(32, false, false), nullptr).reg;
 }
 
+void BodyTranslator::checkWithin(const Value& position, const Folder::Range& bounds, tree_t where,
+                                 std::string message) {
+    const Value low = constant(bounds.low(), position.type, nullptr);
+    const Value high = constant(bounds.high(), position.type, nullptr);
+    const std::uint32_t aboveLow = compare(eir::Opcode::LessEqual, low, position);
+    const std::uint32_t belowHigh = compare(eir::Opcode::LessEqual, position, high);
+    const std::uint32_t inside = newRegister(eir::Type::bits(1, false, false));
+    emit(eir::Instruction::make(eir::Opcode::And, eir::Operand::reg(inside),
+                                eir::Operand::reg(aboveLow), eir::Operand::reg(belowHigh)));
+    const std::uint32_t outside = newBlock("out-of-range");
+    const std::uint32_t within = newBlock("in-range");
+    emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(inside),
+                                eir::Operand::block(within), eir::Operand::block(outside)));
+    selectBlock(outside);
+    eir::SysTaskCall report;
+    report.kind = eir::SysTaskKind::Report;
+    report.location = owner.locate(where);
+    report.arguments.push_back(eir::SysTaskArgument{
+        .value = eir::Operand::reg(
+            constant(SeverityFailure, eir::Type::bits(8, false, false), nullptr).reg),
+        .type = eir::Type::bits(8, false, false)});
+    report.arguments.push_back(
+        eir::SysTaskArgument{.value = eir::Operand::reg(position.reg), .type = position.type});
+    report.formatIndex = addString(std::move(message));
+    emit(eir::Instruction::make(eir::Opcode::SysTask, {},
+                                eir::Operand::sysCall(addSysCall(std::move(report)))));
+    jump(within);
+    selectBlock(within);
+}
+
+std::optional<Folder::Range> BodyTranslator::discreteRange(type_t type) const {
+    if (std::optional<Folder::Range> folded = folder().rangeOf(type)) return folded;
+    type_t base = type_base_recur(type);
+    if (!type_is_enum(base)) return std::nullopt;
+    return Folder::Range{.left = 0,
+                         .right = static_cast<std::int64_t>(type_enum_literals(base)) - 1,
+                         .ascending = true};
+}
+
 std::optional<BodyTranslator::Offset> BodyTranslator::elementOffset(const Layout& layout,
                                                                     tree_t index) {
     const Folder::Range& bounds = layout.index;
@@ -2785,34 +2845,9 @@ std::optional<BodyTranslator::Offset> BodyTranslator::elementOffset(const Layout
 
     // An index outside the bounds is an error that ends the run (IEEE 1076 section 9.3.3); the
     // offset it would give is not used.
-    const Value low = constant(bounds.low(), type, nullptr);
-    const Value high = constant(bounds.high(), type, nullptr);
-    const std::uint32_t aboveLow = compare(eir::Opcode::LessEqual, low, position);
-    const std::uint32_t belowHigh = compare(eir::Opcode::LessEqual, position, high);
-    const std::uint32_t inside = newRegister(eir::Type::bits(1, false, false));
-    emit(eir::Instruction::make(eir::Opcode::And, eir::Operand::reg(inside),
-                                eir::Operand::reg(aboveLow), eir::Operand::reg(belowHigh)));
-    const std::uint32_t outside = newBlock("index-out-of-bounds");
-    const std::uint32_t inBounds = newBlock("index-in-bounds");
-    emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(inside),
-                                eir::Operand::block(inBounds), eir::Operand::block(outside)));
-    selectBlock(outside);
-    eir::SysTaskCall report;
-    report.kind = eir::SysTaskKind::Report;
-    report.location = owner.locate(index);
-    report.arguments.push_back(eir::SysTaskArgument{
-        .value = eir::Operand::reg(
-            constant(SeverityFailure, eir::Type::bits(8, false, false), nullptr).reg),
-        .type = eir::Type::bits(8, false, false)});
-    report.arguments.push_back(
-        eir::SysTaskArgument{.value = eir::Operand::reg(position.reg), .type = type});
-    report.formatIndex =
-        addString(std::format("index %0d is outside the bounds {} {} {}", bounds.left,
-                              bounds.ascending ? "to" : "downto", bounds.right));
-    emit(eir::Instruction::make(eir::Opcode::SysTask, {},
-                                eir::Operand::sysCall(addSysCall(std::move(report)))));
-    jump(inBounds);
-    selectBlock(inBounds);
+    checkWithin(position, bounds, index,
+                std::format("index %0d is outside the bounds {} {} {}", bounds.left,
+                            bounds.ascending ? "to" : "downto", bounds.right));
 
     // Descending, an element's offset counts up from the right bound; ascending, down to it.
     const Value right = constant(bounds.right, type, nullptr);
