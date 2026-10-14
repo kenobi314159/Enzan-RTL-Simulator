@@ -1902,8 +1902,9 @@ the NVC the VHDL frontend is built on carries, so VHPI is built only with that f
 without their case, answers the one way Enzan differs from the standard, the declared case it
 does not keep (section 9.6 chose the VPI library by the same rule). The toplevel's language
 decides which is loaded, `--vpi` or `--vhpi`. A design of both languages is not simulated yet,
-and the makefile skips it as cocotb's makefiles skip a language a simulator lacks; when it is,
-cocotb loads the other language's library itself, named in `GPI_EXTRA`, as it does elsewhere.
+and the makefile skips it as cocotb's makefiles skip a language a simulator lacks; when it is
+(M7), cocotb loads the other language's library itself, named in `GPI_EXTRA`, as it does
+elsewhere.
 
 A VHDL signal of a null range holds nothing, and a bit vector has at least one bit, so its
 object has a placeholder bit that nothing reads, writes or records (`eir::Object::holdsNothing`);
@@ -3276,11 +3277,77 @@ Nothing in M7 depends on it: a mixed-language design is RTL meeting RTL.
 
 ### M7 — Mixed language
 
-Boundary port mapping and value conversion; the cross-language delta semantics
-of 3.5; mixed-language golden tests.
+A design whose hierarchy crosses between SystemVerilog and VHDL, in either direction and at
+any depth, simulated by the one kernel of 3.5. Everything below the frontends already serves
+both: EIR, elaboration, drivers and resolution (3.7), the kernel, the waveform database and
+the PLI context hold one design whatever language each definition came from. What M7 adds is
+the meeting of the two frontends and of the two interfaces.
 
-**Exit:** a SystemVerilog testbench drives a VHDL DUT and vice versa, matching
-a reference simulator.
+**Analysis of both languages in one session.** The session analyses SystemVerilog through
+slang and VHDL through the NVC child into one `eir::Design`; it refuses a mixed source set
+today. VHDL goes into Enzan's libraries as SystemVerilog does, `--out-lib` and `--in-lib`
+(8.2), and a design may draw on several VHDL libraries at once, not only the one `--work`
+names, since a mixed design is usually built as a testbench in one library and its DUT in
+another. Both are also what the GHDL suite's multi-library tests and cocotb's VHDL designs in
+their own libraries need (14.4, 14.6).
+
+**Instances across the boundary.**
+
+- *SystemVerilog instantiating a VHDL entity.* The entities' interfaces, their generics and
+  ports with their types, are given to slang as the modules it would otherwise not find, so
+  that the instance type-checks; its parameter values are the generics' values, and the
+  architecture is the entity's default one or the one a library binding names.
+- *VHDL instantiating a SystemVerilog module.* A component with no VHDL entity to bind is
+  bound to the module of its name (the default binding of IEEE 1076 section 7.3.3 extended
+  to the other language, as commercial tools extend it), and `entity work.m` names a module
+  the same way; the component's generics are the module's parameter overrides.
+- *Specialisation across the boundary.* VHDL generics are folded by the adapter (5.2) and
+  SystemVerilog parameters by slang, so each side's instance asks the other's frontend for
+  the specialisation its values make. The session alternates between the frontends until
+  neither asks for one the other has not given, as elaboration asks the VHDL frontend for
+  resolution functions (3.7), with a bound on the rounds so that a hierarchy recursing
+  through both languages is reported rather than followed for ever.
+
+**Ports across the boundary.** A port whose two sides are of different languages is
+connected by a zero-delay continuous assignment that converts between them and consumes one
+delta cycle (3.5), in each direction its mode needs:
+
+- `std_ulogic` codes to four-state bits with `L`→`0`, `H`→`1` and `W`, `U`, `-`→`X` (3.6),
+  and `0`, `1`, `X`, `Z` back to their codes; `bit` and `boolean` to two-state bits and back;
+- `std_logic_vector` and its kin to packed vectors, left element to the most significant bit;
+  integers to `int` or `longint` by their range; reals to `real`; arrays of these to unpacked
+  arrays and records to packed structs, field by field, where the shapes agree;
+- an `inout` port as two conversions, each a driver on its own side, so that each language's
+  resolution sees the other's contribution as a driver: a `std_logic` signal resolves the
+  SystemVerilog side's value with its own function, and a net resolves the VHDL side's as a
+  driver of its kind. A port no rule covers is refused by name.
+
+**The interfaces across the boundary.** VPI and VHPI share the one PLI context (9.7), and
+each sees the whole hierarchy: VPI shows a VHDL region as a module and its objects as nets of
+their four-state bits; VHPI shows a SystemVerilog region as one of kind `vhpiVerilog`, which
+cocotb leaves to VPI. cocotb runs a mixed design as it does elsewhere: the toplevel's
+language's library is loaded with `--vpi` or `--vhpi`, and the other's is named in
+`GPI_EXTRA`, which `Makefile.enzan` sets in place of the skip it has today (9.7).
+
+**Reference simulation.** No free simulator takes SystemVerilog and VHDL together. NVC
+simulates Verilog with VHDL, and is the reference for the mixed cases its Verilog subset
+covers, its own `mixed` regression tests among them (14.4). The rest are checked by
+splitting: the same design with the boundary moved — the DUT in one language driven by a
+testbench in the other, against the DUT in its own language's testbench under iverilog or
+GHDL — matches transcript for transcript, the boundary's delta aside.
+
+The exit designs need no program compiled for them, for the reason M5 gives:
+
+- **NEORV32** in a SystemVerilog testbench that drives it as its VHDL one does and checks
+  its UART output, against the VHDL testbench's run under GHDL (14.5).
+- **An M5 SystemVerilog design in a VHDL testbench**: secworks' `aes` core, its test vectors
+  driven from VHDL, against its own testbench under iverilog.
+- **cocotb's mixed-language test cases**, and its VHDL cases whose designs sit in libraries
+  of their own (14.6); **NVC's `mixed` regression tests**.
+
+**Exit:** a SystemVerilog testbench drives a VHDL DUT and a VHDL testbench a SystemVerilog
+one, each matching its reference; cocotb's mixed-language cases run with a recorded pass rate;
+NVC's mixed tests run with one.
 
 ### M8 — Performance
 
