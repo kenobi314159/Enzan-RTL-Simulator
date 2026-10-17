@@ -1723,6 +1723,51 @@ end architecture;
     }
 }
 
+TEST_F(VhdlDesignTest, AnArchitecturesResolutionFunctionIsTranslatedOnItsOwn) {
+    // With no architecture translating it, it is a definition of its own, as a package's is.
+    DesignOptions options;
+    options.units.sources = {sources.addBuffer("design.vhd", R"(
+entity top is
+end entity;
+
+architecture rtl of top is
+  type int_list is array (natural range <>) of integer;
+  function lowest (drivers : int_list) return integer is
+  begin
+    return drivers(drivers'low);
+  end function;
+  subtype low_int is lowest integer;
+  signal level : low_int;
+begin
+end architecture;
+)")};
+    options.units.work = {.name = "work", .directory = {}};
+    options.units.searchDirectories = {libraries()};
+    options.top = "top";
+    std::unique_ptr<enzan::eir::Design> design =
+        enzan::frontend::vhdl::analyse(options, sources, engine);
+    ASSERT_NE(design, nullptr) << transcript();
+    std::string lowest;
+    for (const enzan::eir::Object& object : design->findModule("top")->objects)
+        if (object.name == "level") lowest = object.resolution.function;
+    ASSERT_FALSE(lowest.empty());
+
+    const std::vector<enzan::frontend::vhdl::ResolutionRequest> requests{
+        {.function = lowest, .drivers = 2}};
+    const std::optional<enzan::frontend::vhdl::ResolvedFunctions> found =
+        enzan::frontend::vhdl::resolutions(options, sources, requests, engine);
+    ASSERT_TRUE(found.has_value()) << transcript();
+    ASSERT_EQ(found->answers.size(), 1U);
+    EXPECT_EQ(found->answers[0].definition, "work.top-rtl::");
+    const auto definition =
+        std::ranges::find_if(found->definitions, [&](const ModuleDefinition& candidate) {
+            return candidate.library + "." + candidate.name == found->answers[0].definition;
+        });
+    ASSERT_NE(definition, found->definitions.end());
+    ASSERT_EQ(definition->subprograms.size(), 1U);
+    EXPECT_EQ(definition->subprograms[0].name, found->answers[0].subprogram);
+}
+
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {
     // An error, not an element that reads as nothing (IEEE 1076 section 9.3.3), and found only
     // when the index is known.

@@ -93,6 +93,7 @@ conv8
 counter
 default1
 delay2
+driver1
 driver10
 driver11
 driver16
@@ -101,6 +102,7 @@ driver2
 driver20
 driver3
 driver4
+driver5
 driver8
 elab1
 elab11
@@ -277,6 +279,7 @@ issue874
 issue899
 issue9
 issue90
+issue908
 issue95
 issue96
 issue971
@@ -348,6 +351,7 @@ signal1
 signal10
 signal12
 signal13
+signal15
 signal17
 signal18
 signal2
@@ -396,6 +400,7 @@ vests39
 vests4
 vests41
 vests42
+vests46
 vests49
 vests5
 vests6

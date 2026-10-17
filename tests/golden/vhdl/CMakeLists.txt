@@ -92,6 +92,9 @@ enzan_add_vhdl_golden_test(textio)
 # Resolved signals: std_logic's resolution and a design's own, with several drivers.
 enzan_add_vhdl_golden_test(resolution)
 
+# A resolution function an architecture declares.
+enzan_add_vhdl_golden_test(local_resolution)
+
 # GHDL's run options: the IEEE packages' warnings reported, or not, and the severity that ends a
 # run. Each runs the same design and is told apart by what it prints.
 set(options_source "${CMAKE_CURRENT_SOURCE_DIR}/options.vhd")

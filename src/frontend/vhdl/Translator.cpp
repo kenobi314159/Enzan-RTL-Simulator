@@ -305,7 +305,7 @@ public:
     }
 
     /// The function a resolution names, `IEEE.STD_LOGIC_1164.RESOLVED(Y)U`: declared by the
-    /// package its first two parts name, or null.
+    /// package, the entity or the architecture its first two parts name, or null.
     [[nodiscard]] tree_t resolutionFunction(const std::string& function) const {
         const std::size_t library = function.find('.');
         const std::size_t unit =
@@ -315,12 +315,16 @@ public:
         lib_t found =
             libraryName == lib_name(request.work) ? request.work : lib_require(libraryName);
         if (found == nullptr) return nullptr;
-        tree_t package = lib_get(found, ident_new(function.substr(0, unit).c_str()));
-        if (package == nullptr || tree_kind(package) != T_PACKAGE) return nullptr;
+        tree_t declarer = lib_get(found, ident_new(function.substr(0, unit).c_str()));
+        if (declarer == nullptr) return nullptr;
+        const tree_kind_t kind = tree_kind(declarer);
+        if (kind != T_PACKAGE && kind != T_ENTITY && kind != T_ARCH) return nullptr;
         ident_t wanted = ident_new(function.c_str());
-        for (unsigned index = 0; index < tree_decls(package); ++index) {
-            tree_t declaration = tree_decl(package, index);
-            if (tree_kind(declaration) == T_FUNC_DECL && tree_ident2(declaration) == wanted)
+        for (unsigned index = 0; index < tree_decls(declarer); ++index) {
+            tree_t declaration = tree_decl(declarer, index);
+            const tree_kind_t declared = tree_kind(declaration);
+            if ((declared == T_FUNC_DECL || declared == T_FUNC_BODY)
+                && tree_ident2(declaration) == wanted)
                 return declaration;
         }
         return nullptr;
@@ -336,8 +340,14 @@ public:
                                            istr(tree_ident2(declaration))));
             return std::nullopt;
         }
+        // A package's subprograms are a definition of their own, and so are an entity's or an
+        // architecture's when no architecture is translating them: a resolution function's, which
+        // elaboration asks for alone (DESIGN_GUIDE.md section 3.7).
         tree_t unit = tree_container(body);
-        const bool inPackage = tree_kind(unit) == T_PACK_BODY || tree_kind(unit) == T_PACKAGE;
+        const tree_kind_t unitKind = tree_kind(unit);
+        const bool inPackage =
+            unitKind == T_PACK_BODY || unitKind == T_PACKAGE
+            || (architecture == nullptr && (unitKind == T_ENTITY || unitKind == T_ARCH));
         if (!inPackage && architecture == nullptr) {
             unsupported(where, "a call from a package of a subprogram outside it");
             return std::nullopt;

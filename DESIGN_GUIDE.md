@@ -474,10 +474,12 @@ Further requirements:
 - **Elaboration asks for a resolution function by its driver count.** Its one parameter
   is an array as long as the bit has drivers, which only elaboration knows, while the
   adapter specialises a subprogram for a static shape (5.2). So an EIR object names
-  its function as the design does, by library, package and signature, with the width of
-  the subelement it resolves, and once elaboration has counted the drivers the session
+  its function as the design does, by library, the package, entity or architecture declaring
+  it, and signature, with the width of the subelement it resolves, and once elaboration has
+  counted the drivers the session
   asks the frontend, in a second child over the same sources, for the function
-  specialised to each count, links what comes back into the design, and elaborates
+  specialised to each count, a definition of its own even where an architecture declares
+  it, links what comes back into the design, and elaborates
   again with it, which binds each segment to its function. The kernel calls it for each
   subelement with its drivers' values, the first driver's left; a VHDL driver starts at
   the initial value of the signal its process names, which for an out port is the port's

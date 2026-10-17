@@ -336,6 +336,7 @@ billowitch/compliant/tc169.vhd
 billowitch/compliant/tc1690.vhd
 billowitch/compliant/tc1691.vhd
 billowitch/compliant/tc1698.vhd
+billowitch/compliant/tc17.vhd
 billowitch/compliant/tc1703.vhd
 billowitch/compliant/tc1704.vhd
 billowitch/compliant/tc1705.vhd
@@ -841,6 +842,7 @@ billowitch/compliant/tc2977.vhd
 billowitch/compliant/tc2978.vhd
 billowitch/compliant/tc2979.vhd
 billowitch/compliant/tc298.vhd
+billowitch/compliant/tc2980.vhd
 billowitch/compliant/tc2982.vhd
 billowitch/compliant/tc2987.vhd
 billowitch/compliant/tc2988.vhd
@@ -1050,6 +1052,8 @@ billowitch/compliant/tc452.vhd
 billowitch/compliant/tc453.vhd
 billowitch/compliant/tc454.vhd
 billowitch/compliant/tc455.vhd
+billowitch/compliant/tc456.vhd
+billowitch/compliant/tc457.vhd
 billowitch/compliant/tc458.vhd
 billowitch/compliant/tc459.vhd
 billowitch/compliant/tc460.vhd
@@ -1067,6 +1071,14 @@ billowitch/compliant/tc471.vhd
 billowitch/compliant/tc472.vhd
 billowitch/compliant/tc473.vhd
 billowitch/compliant/tc474.vhd
+billowitch/compliant/tc475.vhd
+billowitch/compliant/tc476.vhd
+billowitch/compliant/tc477.vhd
+billowitch/compliant/tc478.vhd
+billowitch/compliant/tc479.vhd
+billowitch/compliant/tc480.vhd
+billowitch/compliant/tc481.vhd
+billowitch/compliant/tc482.vhd
 billowitch/compliant/tc483.vhd
 billowitch/compliant/tc484.vhd
 billowitch/compliant/tc485.vhd
@@ -1278,6 +1290,7 @@ billowitch/compliant/tc755.vhd
 billowitch/compliant/tc756.vhd
 billowitch/compliant/tc757.vhd
 billowitch/compliant/tc759.vhd
+billowitch/compliant/tc76.vhd
 billowitch/compliant/tc762.vhd
 billowitch/compliant/tc765.vhd
 billowitch/compliant/tc768.vhd
@@ -1450,6 +1463,7 @@ clifton-labs/compliant/functional/types/array-types/integer-array-using-tick-ran
 clifton-labs/compliant/functional/types/array-types/simple-integer-array.vhdl
 clifton-labs/compliant/functional/types/array-types/unconstrained_argument.vhdl
 clifton-labs/compliant/functional/types/enumeration-types/std-enums-test.vhdl
+clifton-labs/compliant/functional/types/integer-types/resolved-integer-type.vhdl
 clifton-labs/compliant/functional/types/record-types/date-record.vhdl
 clifton-labs/compliant/functional/types/record-types/integer-record-aggregate-init.vhdl
 clifton-labs/compliant/functional/types/record-types/simple-integer-record.vhdl
