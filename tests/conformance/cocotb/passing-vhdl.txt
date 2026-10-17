@@ -1,7 +1,9 @@
 # Every case of cocotb's tests/test_cases that passes against Enzan with a VHDL toplevel, one per
 # line. run-suite.sh fails when one of these stops passing (DESIGN_GUIDE.md section 14.6).
+test_array
 test_array_simple
 test_async_bridge
+test_cocotb
 test_cocotb_tops
 test_compare
 test_configuration

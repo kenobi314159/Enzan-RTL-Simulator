@@ -19,6 +19,7 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -31,8 +32,8 @@ using enzan::pli::PliContext;
 using enzan::test::literal;
 using enzan::test::Simulation;
 
-/// `tb`, holding `state`, a signal of `type state_t is (idle, busy, done)`, and `limit`, an
-/// integer constant its architecture declares.
+/// `tb`, holding `state` and `\Odd.Name\`, signals of `type state_t is (idle, busy, done)`, and
+/// `limit`, an integer constant its architecture declares.
 Design makeDesign() {
     ModuleDefinition top;
     top.name = "tb";
@@ -51,7 +52,10 @@ Design makeDesign() {
         .name = "state", .type = Type::bits(8, false, false), .initialValue = literal("8'd0")};
     state.enumIndex = 0;
     state.vhdlType = 0;
+    Object odd = state;
+    odd.name = "\\Odd.Name\\";
     top.addObject(std::move(state));
+    top.addObject(std::move(odd));
     top.vhdlTypes.push_back(
         VhdlType{.kind = VhdlType::Kind::Integer,
                  .name = "INTEGER",
@@ -118,6 +122,20 @@ TEST_F(Vhpi, AnArchitecturesConstantIsAConstantWithAValue) {
     value.value.intg = 8;
     EXPECT_EQ(vhpi_put_value(limit, &value, vhpiDepositPropagate), -1);
     EXPECT_EQ(lastError(), "vhpi_put_value: ':tb:limit' cannot be written");
+}
+
+TEST_F(Vhpi, AnExtendedIdentifierIsOneNameAsWritten) {
+    // Its dot names no region, and its case is its own.
+    vhpiHandleT root = vhpi_handle(vhpiRootInst, nullptr);
+    ASSERT_NE(root, nullptr) << lastError();
+    EXPECT_EQ(vhpi_iterator(vhpiInternalRegions, root), nullptr) << "no region `\\Odd`";
+
+    std::vector<std::string> names;
+    vhpiHandleT iterator = vhpi_iterator(vhpiSigDecls, root);
+    ASSERT_NE(iterator, nullptr) << lastError();
+    while (vhpiHandleT signal = vhpi_scan(iterator))
+        names.emplace_back(reinterpret_cast<const char*>(vhpi_get_str(vhpiNameP, signal)));
+    EXPECT_EQ(names, (std::vector<std::string>{"STATE", "\\Odd.Name\\"}));
 }
 
 TEST_F(Vhpi, AStringReturnedStaysValidWhenAnotherIsAskedFor) {

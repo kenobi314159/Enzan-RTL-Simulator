@@ -40,12 +40,32 @@ std::string dottedPath(std::string_view path) {
 }
 
 /// Splits a hierarchical name at the dots that separate scopes, leaving the ones inside an
-/// index alone: `gen[0].inner.q` is three names.
+/// index or an escaped identifier alone: `gen[0].inner.q` is three names, `\weird.name\` one.
 std::vector<std::string_view> splitName(std::string_view name) {
     std::vector<std::string_view> parts;
     std::size_t start = 0;
     unsigned depth = 0;
+    bool escaped = false;
     for (std::size_t index = 0; index < name.size(); ++index) {
+        // An escaped identifier holds dots of its own: SystemVerilog's, `\a.b `, runs to the
+        // space that ends it, and VHDL's extended one, `\a.b\`, to the backslash that closes it,
+        // a doubled one standing for a backslash.
+        if (escaped) {
+            if (name[index] == ' ') {
+                escaped = false;
+            } else if (name[index] == '\\') {
+                if (index + 1 < name.size() && name[index + 1] == '\\') {
+                    ++index;
+                } else {
+                    escaped = false;
+                }
+            }
+            continue;
+        }
+        if (name[index] == '\\' && index == start) {
+            escaped = true;
+            continue;
+        }
         if (name[index] == '[') ++depth;
         if (name[index] == ']' && depth > 0) --depth;
         if (name[index] == '.' && depth == 0) {

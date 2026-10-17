@@ -29,13 +29,16 @@ namespace {
 
 using Kind = eir::VhdlType::Kind;
 
-/// A basic identifier as VHPI's Name properties give it, in upper case (IEEE 1076 section
-/// 19.4.3); Enzan keeps the lower, which its CaseName properties give, as NVC's do.
+/// A name as VHPI's Name properties give it: a basic identifier in upper case (IEEE 1076 section
+/// 19.4.3), and an extended one, `\Name\`, as written, its case being part of it.
 std::string upper(std::string_view text) {
     std::string result(text);
-    std::ranges::transform(result, result.begin(), [](unsigned char letter) {
-        return static_cast<char>(std::toupper(letter));
-    });
+    bool extended = false;
+    for (char& character : result) {
+        if (character == '\\') extended = !extended;
+        if (!extended)
+            character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    }
     return result;
 }
 
