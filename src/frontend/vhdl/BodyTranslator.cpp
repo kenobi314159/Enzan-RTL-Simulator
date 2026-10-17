@@ -2167,11 +2167,17 @@ std::optional<BodyTranslator::Value> BodyTranslator::reference(tree_t expression
     }
 
     // A constant that did not fold is one whose value is computed, so it is computed here.
-    case T_CONST_DECL:
-        if (!tree_has_value(declaration)) break;
-        if (const std::optional<Layout> layout = layoutFor(tree_type(declaration)))
-            return this->expression(tree_value(declaration), &*layout);
+    case T_CONST_DECL: {
+        tree_t value = constantValue(declaration);
+        if (value == nullptr) break;
+        std::optional<Layout> layout = layoutFor(tree_type(declaration));
+        if (!layout && type_is_array(type) && dimension_of(type) == 1) {
+            if (const std::optional<Folder::Range> bounds = folder().boundsOf(expression))
+                layout = arrayLayout(*bounds, type_elem(type), folder());
+        }
+        if (layout) return this->expression(value, &*layout);
         break;
+    }
 
     case T_ALIAS: {
         if (!designatesStorage(expression)) return this->expression(tree_value(declaration));

@@ -57,6 +57,22 @@ tree_t subprogramBody(tree_t declaration) {
     return nullptr;
 }
 
+tree_t constantValue(tree_t declaration) {
+    const tree_kind_t kind = tree_kind(declaration);
+    if (kind != T_CONST_DECL && kind != T_ALIAS) return nullptr;
+    if (tree_has_value(declaration)) return tree_value(declaration);
+    tree_t unit = tree_container(declaration);
+    tree_t body = unit != nullptr && tree_kind(unit) == T_PACKAGE ? body_of(unit) : nullptr;
+    if (kind != T_CONST_DECL || body == nullptr) return nullptr;
+    for (unsigned index = 0; index < tree_decls(body); ++index) {
+        tree_t full = tree_decl(body, index);
+        if (tree_kind(full) == T_CONST_DECL && tree_ident(full) == tree_ident(declaration)
+            && tree_has_value(full))
+            return tree_value(full);
+    }
+    return nullptr;
+}
+
 namespace {
 
 /// VHDL's `mod`, whose result takes the sign of its right operand (IEEE 1076 section 9.2.7),
@@ -138,6 +154,7 @@ std::optional<std::int64_t> Folder::integer(tree_t expression) const {
     case T_FCALL: return call(expression);
     case T_ATTR_REF: return attribute(expression);
     case T_ARRAY_REF: return element(expression);
+
     default: return std::nullopt;
     }
 }
@@ -187,11 +204,15 @@ std::optional<std::int64_t> Folder::reference(tree_t expression) const {
     switch (tree_kind(declaration)) {
     case T_ENUM_LIT: return tree_pos(declaration);
 
-    // A deferred constant has its value in the package body, which a design need not have
-    // analysed; that one is not folded.
-    case T_CONST_DECL:
-        if (!tree_has_value(declaration)) return foreignConstant(declaration);
-        return integer(tree_value(declaration));
+    // A deferred constant has its value in the package body, but for one that NVC's runtime
+    // computes there, whose value Enzan supplies in its stead.
+    case T_CONST_DECL: {
+        if (tree_has_value(declaration)) return integer(tree_value(declaration));
+        if (const std::optional<std::int64_t> foreign = foreignConstant(declaration))
+            return foreign;
+        tree_t value = constantValue(declaration);
+        return value == nullptr ? std::nullopt : integer(value);
+    }
 
     // A constant function's parameters and variables are bound while it runs.
     case T_GENERIC_DECL:
@@ -410,8 +431,8 @@ std::optional<Folder::Range> Folder::boundsOf(tree_t name, unsigned dimension) c
     // of what it returns.
     if (tree_kind(name) == T_REF && tree_has_ref(name)) {
         tree_t declaration = tree_ref(name);
-        if (tree_kind(declaration) == T_CONST_DECL && tree_has_value(declaration))
-            return boundsOf(tree_value(declaration), dimension);
+        if (tree_kind(declaration) != T_CONST_DECL) return std::nullopt;
+        if (tree_t value = constantValue(declaration)) return boundsOf(value, dimension);
         return std::nullopt;
     }
     std::optional<Range> result;
@@ -806,12 +827,11 @@ std::optional<std::int64_t> Folder::element(tree_t expression) const {
     const eir::BitVector* bits = compositeOf(declaration);
     const std::optional<Range> folded = boundsOf(prefix);
     std::optional<eir::BitVector> value;
-    if (bits == nullptr && folded && folded->length() > 0
-        && (tree_kind(declaration) == T_CONST_DECL || tree_kind(declaration) == T_ALIAS)
-        && tree_has_value(declaration)) {
+    tree_t constant = constantValue(declaration);
+    if (bits == nullptr && folded && folded->length() > 0 && constant != nullptr) {
         type_t type = tree_type(declaration);
         if (const std::optional<Layout> layout = arrayLayout(*folded, type_elem(type), *this))
-            value = constantBits(tree_value(declaration), *layout, *this);
+            value = constantBits(constant, *layout, *this);
         if (value) bits = &*value;
     }
     const std::optional<std::int64_t> index = integer(tree_value(tree_param(expression, 0)));

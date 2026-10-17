@@ -20,6 +20,7 @@ alias4
 alias5
 alias6
 alias7
+alias8
 alias9
 arith3
 array1
@@ -242,7 +243,9 @@ issue53
 issue540
 issue542
 issue547
+issue549
 issue56
+issue57
 issue570
 issue59
 issue590
@@ -327,6 +330,9 @@ record22
 record23
 record24
 record25
+record26
+record27
+record28
 record3
 record39
 record4
@@ -370,6 +376,7 @@ vecorder1
 vests12
 vests13
 vests15
+vests18
 vests2
 vests23
 vests25

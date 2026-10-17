@@ -177,9 +177,8 @@ std::optional<std::vector<eir::BitVector>> elementsOf(tree_t expression, const E
     case T_REF: {
         if (!tree_has_ref(expression)) return std::nullopt;
         tree_t declaration = tree_ref(expression);
-        if ((tree_kind(declaration) == T_CONST_DECL || tree_kind(declaration) == T_ALIAS)
-            && tree_has_value(declaration))
-            return elementsOf(tree_value(declaration), element, length, folder);
+        if (tree_t value = constantValue(declaration))
+            return elementsOf(value, element, length, folder);
 
         // A null array, a parameter given `""` say, is bound to its bounds alone.
         if (const std::optional<Folder::Range> bounds = folder.boundsOf(expression);
@@ -505,9 +504,7 @@ std::optional<eir::BitVector> recordBits(tree_t expression, const Layout& layout
     case T_REF: {
         if (!tree_has_ref(expression)) return std::nullopt;
         tree_t declaration = tree_ref(expression);
-        if ((tree_kind(declaration) == T_CONST_DECL || tree_kind(declaration) == T_ALIAS)
-            && tree_has_value(declaration))
-            return recordBits(tree_value(declaration), layout, folder);
+        if (tree_t value = constantValue(declaration)) return recordBits(value, layout, folder);
         if (const eir::BitVector* bits = folder.compositeOf(declaration)) return *bits;
         return std::nullopt;
     }

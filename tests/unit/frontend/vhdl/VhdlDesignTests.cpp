@@ -786,6 +786,76 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
 }
 
+TEST_F(VhdlDesignTest, ADeferredConstantTakesItsValueFromThePackageBody) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package sizes is
+  constant width : natural;
+  constant ones : bit_vector;
+end package;
+
+package body sizes is
+  constant width : natural := 5;
+  constant ones : bit_vector := "111";
+end package body;
+
+use work.sizes.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal v : bit_vector(width - 1 downto 0);
+begin
+  process
+    variable o : bit_vector(0 to 2);
+  begin
+    o := ones;
+    assert o = "111" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* bench = design->findModule("tb");
+    ASSERT_NE(bench, nullptr);
+    ASSERT_FALSE(bench->objects.empty());
+    EXPECT_EQ(bench->objects[0].type.bitWidth(), 5U * 8U) << "five bits of a byte each";
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, ADeferredConstantWithNoPackageBodyIsReported) {
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package sizes is
+  constant width : natural;
+end package;
+
+use work.sizes.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+  begin
+    report integer'image(width);
+    wait;
+  end process;
+end architecture;
+)");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(unsupported, nullptr) << transcript();
+    EXPECT_EQ(unsupported->message,
+              "a reference to a T_CONST_DECL is not supported by the VHDL frontend yet");
+}
+
 TEST_F(VhdlDesignTest, AnExpressionActualIsASignalAssignedADeltaLater) {
     // `a xor b`, which NVC marks inertial, is an implicit signal's value rather than a connection
     // the update applies (IEEE 1076 section 6.5.6.3).

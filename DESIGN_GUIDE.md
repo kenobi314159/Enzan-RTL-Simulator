@@ -1061,6 +1061,9 @@ What a VHDL unit becomes in EIR:
   a comparison or an attribute of it folds, and a call given one is inlined, where its
   uses can fold too. A testbench that reads a file only when a name is given needs no
   files when none is.
+- A deferred constant, which a package declares without a value, has the one its full
+  declaration in the package body gives it (IEEE 1076 section 4.8), folded or computed as any
+  constant's is.
 - The IEEE packages are translated from their own bodies like any other VHDL. What NVC's
   versions of them take from its runtime instead, Enzan supplies: numeric_std's warnings
   are on, as they are in GHDL and in the IEEE's own packages, unless `--ieee-asserts

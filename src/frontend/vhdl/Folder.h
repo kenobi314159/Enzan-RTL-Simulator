@@ -30,6 +30,11 @@ void setIeeeWarnings(bool reported) noexcept;
 /// its package body or its declarative region holds. Null when the body has not been analysed.
 [[nodiscard]] tree_t subprogramBody(tree_t declaration);
 
+/// The expression `declaration`, a constant or an alias, stands for: its own value, or a deferred
+/// constant's in its full declaration in the package body (IEEE 1076 section 6.4.2.2). Null for
+/// anything else, and for a deferred constant whose package body has not been analysed.
+[[nodiscard]] tree_t constantValue(tree_t declaration);
+
 /// Evaluates VHDL's static expressions: the values of generics, constants, bounds and delays that
 /// the adapter has to know rather than compute at run time.
 ///
