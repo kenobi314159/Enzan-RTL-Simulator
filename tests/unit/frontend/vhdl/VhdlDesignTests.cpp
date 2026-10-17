@@ -915,6 +915,92 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AnInoutPortOnPartOfASignalKeepsItsDrivingValueApart) {
+    // Its drivers drive an object of their own, which goes out to the actual, and it reads
+    // another, which the actual resolved comes back into, each way through a connection.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity pad is
+  port (io : inout std_logic; o : in std_logic; i : out std_logic);
+end entity;
+
+architecture rtl of pad is
+begin
+  io <= o;
+  i <= io;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal pins : std_logic_vector(1 downto 0) := "ZZ";
+  signal i : std_logic;
+begin
+  u : entity work.pad port map (io => pins(1), o => '1', i => i);
+
+  process
+  begin
+    wait for 1 ns;
+    assert pins = "1Z" and i = '1' report to_string(pins) severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* bench = design->findModule("tb");
+    ASSERT_NE(bench, nullptr);
+    ASSERT_EQ(bench->instances.size(), 1U);
+    const auto& connection = bench->instances[0].connections.front();
+    EXPECT_EQ(bench->objects[connection.objectIndex].name, "u$io");
+    ASSERT_NE(connection.driveObjectIndex, enzan::eir::PortConnection::Unconnected);
+    EXPECT_EQ(bench->objects[connection.driveObjectIndex].name, "u$io$driving");
+    for (const std::string_view name : {"u$io$in", "u$io$out"}) {
+        const auto process = std::ranges::find(bench->processes, name, &enzan::eir::Process::name);
+        ASSERT_NE(process, bench->processes.end()) << name;
+        EXPECT_TRUE(process->connectsPort) << name;
+    }
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, ABlocksInoutPortOnPartOfASignalIsReported) {
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal pins : std_logic_vector(1 downto 0);
+begin
+  b : block is
+    port (io : inout std_logic);
+    port map (io => pins(0));
+  begin
+    io <= 'Z';
+  end block;
+end architecture;
+)");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(unsupported, nullptr) << transcript();
+    EXPECT_EQ(unsupported->message, "associating a block's inout port with this is not supported "
+                                    "by the VHDL frontend yet");
+}
+
 TEST_F(VhdlDesignTest, AnExpressionActualIsASignalAssignedADeltaLater) {
     // `a xor b`, which NVC marks inertial, is an implicit signal's value rather than a connection
     // the update applies (IEEE 1076 section 6.5.6.3).

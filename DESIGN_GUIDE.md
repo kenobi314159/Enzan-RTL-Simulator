@@ -1049,6 +1049,13 @@ What a VHDL unit becomes in EIR:
   initialization, so neither side lags the other, as a collapsed port does not. An
   expression actual is a signal of its own, assigned a delta later (IEEE 1076 section
   6.5.6.3), and its process is an ordinary one.
+- An inout port so associated has two such objects, since what it drives and what it reads
+  differ (IEEE 1076 section 14.7.3): its driving value, `u$port$driving`, which the instance's
+  drivers of it drive (3.7) and a connection takes out to the actual, converted, as one of the
+  actual's sources; and its effective value, `u$port`, which it reads, and which a connection
+  brings the actual back into once resolved, converted the other way. So a pad cell on one bit
+  of a bus sees the bus as every driver of it makes it, its own included. A block's inout port
+  is associated with a whole signal only, yet.
 - A constant function is run as the adapter folds: a call of a pure function of the
   design or of the IEEE packages whose arguments fold runs its body's variables, scalar
   or composite, `if`, `case`, loops and `return` over their values, with an

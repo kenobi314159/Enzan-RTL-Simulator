@@ -52,6 +52,7 @@ bug16096
 bug16287
 bug17127
 bug17545
+bug17759
 bug18280
 bug18360
 bug18361
@@ -276,6 +277,7 @@ issue2624
 issue2630
 issue2631
 issue264
+issue265
 issue273
 issue278
 issue312

@@ -139,15 +139,22 @@ private:
     std::optional<Folder::Range> actualBounds(tree_t port, const std::vector<tree_t>& associations,
                                               tree_t where, const Folder& portScope);
 
+    /// The objects of this definition a port connected through stands for: the one it reads,
+    /// and for an inout port the one its drivers drive, which is otherwise `Unconnected`.
+    struct Through {
+        std::uint32_t object = 0;
+        std::uint32_t driven = eir::PortConnection::Unconnected;
+    };
+
     /// Connects `port` through an object of this definition named `objectName` standing for it,
     /// kept equal to its actuals by a process for each of `associations`: for a port associated in
     /// parts, or with part of a signal, a conversion or an expression (DESIGN_GUIDE.md section
-    /// 5.2). The associations' formals name `formalPort`, the port itself or a component's of its
-    /// name. The object, or nothing, having reported why, when the port cannot be connected.
-    std::optional<std::uint32_t> connectThrough(std::string objectName, tree_t port,
-                                                tree_t formalPort,
-                                                const std::vector<tree_t>& associations,
-                                                const Folder& childGenerics);
+    /// 5.2). An inout port has a second object for its driving value, and a process for each
+    /// association each way. The associations' formals name `formalPort`, the port itself or a
+    /// component's of its name. Nothing, having reported why, when the port cannot be connected.
+    std::optional<Through> connectThrough(std::string objectName, tree_t port, tree_t formalPort,
+                                          const std::vector<tree_t>& associations,
+                                          const Folder& childGenerics);
 
     /// The index among `formals`' ports of the one `association` associates, whole, in part or
     /// converted; nothing when it names none of them.
@@ -1221,9 +1228,14 @@ void ArchitectureTranslator::block(tree_t statement) {
             addObject(port);
             continue;
         }
-        if (const std::optional<std::uint32_t> through = connectThrough(
+        // The block's own statements, being in this definition, would drive what the port reads.
+        if (tree_subkind(port) == PORT_INOUT) {
+            unsupported(first, "associating a block's inout port with this");
+            continue;
+        }
+        if (const std::optional<Through> through = connectThrough(
                 prefix + simpleName(tree_ident(port)), port, port, associations, folding))
-            objects.insert_or_assign(port, *through);
+            objects.insert_or_assign(port, through->object);
     }
 
     declarations(statement);
@@ -1413,11 +1425,12 @@ void ArchitectureTranslator::instance(tree_t statement) {
                 }
             }
         }
-        if (const std::optional<std::uint32_t> through =
+        if (const std::optional<Through> through =
                 connectThrough(std::format("{}${}", created.name, simpleName(tree_ident(port))),
                                port, formalPorts[portNumber], associations, childGenerics)) {
-            created.connections.push_back(
-                eir::PortConnection{.portIndex = portNumber, .objectIndex = *through});
+            created.connections.push_back(eir::PortConnection{.portIndex = portNumber,
+                                                              .objectIndex = through->object,
+                                                              .driveObjectIndex = through->driven});
         }
     }
     result.instances.push_back(std::move(created));
@@ -1520,7 +1533,7 @@ ArchitectureTranslator::actualBounds(tree_t port, const std::vector<tree_t>& ass
                             : Folder::Range{.left = *high, .right = *low, .ascending = false};
 }
 
-std::optional<std::uint32_t>
+std::optional<ArchitectureTranslator::Through>
 ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree_t formalPort,
                                        const std::vector<tree_t>& associations,
                                        const Folder& childGenerics) {
@@ -1529,9 +1542,11 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
         unsupported(associations.front(), "associating a port of this type with this");
         return std::nullopt;
     }
-    const bool input = tree_subkind(port) == PORT_IN;
-    if (!input && tree_subkind(port) != PORT_OUT && tree_subkind(port) != PORT_BUFFER) {
-        unsupported(associations.front(), "associating an inout port with this");
+    const auto mode = static_cast<port_mode_t>(tree_subkind(port));
+    const bool input = mode == PORT_IN;
+    const bool inout = mode == PORT_INOUT;
+    if (!input && !inout && mode != PORT_OUT && mode != PORT_BUFFER) {
+        unsupported(associations.front(), "associating a port of this mode with this");
         return std::nullopt;
     }
 
@@ -1547,7 +1562,26 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
     through.enumIndex = layout->isComposite() ? eir::Object::NoEnum : enumFor(tree_type(port));
     through.vhdlType = vhdlTypeFor(tree_type(port), *layout);
     through.encoding = encodingOf(tree_type(port));
+
+    // An inout port's drivers drive an object of their own, its driving value, which goes out to
+    // its actuals as one of their sources, while it reads its effective value, its actuals
+    // resolved and brought back in (IEEE 1076 section 14.7.3). Both start at its default.
+    std::uint32_t drivenIndex = eir::PortConnection::Unconnected;
+    if (inout) {
+        eir::Object driving = through;
+        driving.name += "$driving";
+        driving.resolution = resolutionOf(tree_type(port)).value_or(eir::Resolution{});
+        drivenIndex = result.addObject(std::move(driving));
+    }
     const std::uint32_t throughIndex = result.addObject(std::move(through));
+
+    // `name` without the conversion of an association around it, `f(x)` or `t(x)`.
+    const auto unconverted = [](tree_t name) {
+        const tree_kind_t kind = name == nullptr ? T_LAST_TREE_KIND : tree_kind(name);
+        if (kind == T_CONV_FUNC || kind == T_TYPE_CONV) return tree_value(name);
+        if (kind == T_FCALL && tree_params(name) == 1) return tree_value(tree_param(name, 0));
+        return name;
+    };
 
     // A formal names the port, which is that object here, and its bounds fold with the instance's
     // generics.
@@ -1562,6 +1596,28 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
         tree_t formal = tree_subkind(association) == P_POS ? nullptr : tree_name(association);
         if (formal != nullptr && tree_kind(formal) == T_REF) formal = nullptr;
 
+        std::string name = result.objects[throughIndex].name;
+        if (associations.size() > 1) name += std::format("${}", index);
+
+        // Each way through its own process: the actual, converted, into the effective value, and
+        // the driving value, converted, out to the actual.
+        if (inout) {
+            tree_t formalPart = unconverted(formal);
+            if (formalPart != nullptr && tree_kind(formalPart) == T_REF) formalPart = nullptr;
+            BodyTranslator in(*this, association, name + "$in");
+            std::optional<eir::Process> inward =
+                in.translateAssociation(formalPart, actual, throughIndex, *layout, &start);
+            if (inward) result.processes.push_back(std::move(*inward));
+
+            objects.insert_or_assign(formalPort, drivenIndex);
+            BodyTranslator out(*this, association, name + "$out");
+            std::optional<eir::Process> outward = out.translateAssociation(
+                unconverted(actual), formal, drivenIndex, *layout, nullptr);
+            if (outward) result.processes.push_back(std::move(*outward));
+            objects.insert_or_assign(formalPort, throughIndex);
+            continue;
+        }
+
         // A whole input tied to a static value is that value from the start, and nothing drives
         // it after.
         if (input && formal == nullptr) {
@@ -1571,8 +1627,6 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
             }
         }
 
-        std::string name = result.objects[throughIndex].name;
-        if (associations.size() > 1) name += std::format("${}", index);
         BodyTranslator translator(*this, association, std::move(name));
         std::optional<eir::Process> process =
             input ? translator.translateAssociation(formal, actual, throughIndex, *layout, &start)
@@ -1582,7 +1636,7 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
     result.objects[throughIndex].initialValue = std::move(start);
     objects.erase(formalPort);
     folding = outer;
-    return throughIndex;
+    return Through{.object = throughIndex, .driven = drivenIndex};
 }
 
 } // namespace

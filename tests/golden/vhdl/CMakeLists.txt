@@ -133,6 +133,9 @@ enzan_add_vhdl_golden_test(ports)
 # Ports associated with expressions, which follow them a delta cycle later.
 enzan_add_vhdl_golden_test(actuals)
 
+# Inout ports associated with parts of a bus and through conversions.
+enzan_add_vhdl_golden_test(inout)
+
 # Blocks with generics and ports.
 enzan_add_vhdl_golden_test(blocks)
 

@@ -48,23 +48,23 @@ parent. A design's work library is NVC's in-memory one, written nowhere.
 
 So far: entities, architectures, entity instances, component instances bound by default or by
 configuration specifications, generics of scalar, array and record types, null strings among them;
-deferred constants; signals
-and ports of enumeration, integer, physical and real types, of arrays of them, of one or more
-dimensions, with static bounds, and of records; ports of unconstrained array types of one
-dimension, which take their bounds from their actuals; ports associated with signals, parts of them,
-expressions and conversion functions, whole or in parts; `if` and `for` generate statements and
-blocks, with generics and ports; constant functions; processes with variables, `if`, `case`, loops,
-`exit`, `next`, `wait` with a sensitivity, a condition, a timeout or any of them together, signal
-assignments with inertial and transport delay, to whole signals, to their parts and to aggregates of
-them, as variable assignments may be too, `assert`, `report` with messages built from any strings
-and characters and the `'image` of integers and times, `std.env.finish` and `stop`; aggregates,
-strings, elements and slices, aliases of objects and of their parts, of constants, subprograms and
-types, with loops unrolled for slices that move with their parameter and
-variable slices of run-time lengths, concatenation, the predefined operators on scalars and arrays,
-`'event`, `'active` and `'last_value`; functions and procedures of packages and architectures,
-std_logic_1164's and numeric_std's among them. std.textio's `write`, `writeline`, `readline` and
-`read` of lines of strings, characters and integers, files of text and of other types and `endfile`,
-run natively by the runtime. Anything else is refused with ENZ2005 naming it, never left out.
+deferred constants; signals and ports of enumeration, integer, physical and real types, of arrays of
+them, of one or more dimensions, with static bounds, and of records; ports of unconstrained array
+types of one dimension, which take their bounds from their actuals; ports, inout ones among them,
+associated with signals, parts of them, expressions and conversion functions, whole or in parts;
+`if` and `for` generate statements and blocks, with generics and ports; constant functions;
+processes with variables, `if`, `case`, loops, `exit`, `next`, `wait` with a sensitivity, a
+condition, a timeout or any of them together, signal assignments with inertial and transport delay,
+to whole signals, to their parts and to aggregates of them, as variable assignments may be too,
+`assert`, `report` with messages built from any strings and characters and the `'image` of integers
+and times, `std.env.finish` and `stop`; aggregates, strings, elements and slices, with loops
+unrolled for slices that move with their parameter and variable slices of run-time lengths,
+concatenation, the predefined operators on scalars and arrays, `'event`, `'active` and
+`'last_value`; aliases of objects and of their parts, of constants, subprograms and types; functions
+and procedures of packages and architectures, std_logic_1164's and numeric_std's among them.
+std.textio's `write`, `writeline`, `readline` and `read` of lines of strings, characters and
+integers, files of text and of other types and `endfile`, run natively by the runtime. Anything else
+is refused with ENZ2005 naming it, never left out.
 
 ## Rules
 
