@@ -531,6 +531,12 @@ about ownership changes once elaboration is done.
   drivers of it — more than one when it writes separate ranges of the object, in which
   case a part store goes through the one holding its bits. A JIT, which specialises a
   process per instance, burns the answer in as a constant.
+- **What a store writes need not be what a read of the same name reads.** A port connection
+  may name a second object for the instance's drivers of the port, and elaboration binds the
+  port to the slot it reads and the slot its drivers write, a port collapsed onto it taking
+  both. Every driver of the port at any depth then drives that slot, and every read sees the
+  other. It is how a VHDL inout port associated through a conversion or with part of a signal
+  keeps its driving value apart from its effective value (5.2), which no single slot can hold.
 
 A per-bit table of owning drivers was rejected because it holds at run time a fact
 that is fixed at elaboration, and pays a lookup on every write, single-driver ones

@@ -210,6 +210,7 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
     const Activation own{.body = &kernel.designImage->compiledDesign().body(state.bodyIndex),
                          .frameOffset = state.frameOffset,
                          .objectSignals = state.objectSignals,
+                         .writeSignals = state.writeSignals,
                          .writeRoutes = state.writeRoutes,
                          .calls = state.calls};
     const std::uint32_t pc = state.resumePc;
@@ -363,7 +364,7 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             // 3.7). One load and a compare on the common path.
             const WriteRoute& route = current.writeRoutes[instruction.dst];
             if (route.direct()) {
-                kernel.writeSignal(current.objectSignals[instruction.a],
+                kernel.writeSignal(current.writeSignals[instruction.a],
                                    reg(instruction.b, instruction.bWidth));
             } else {
                 kernel.writeThroughDrivers(route, reg(instruction.b, instruction.bWidth), 0);
@@ -379,7 +380,7 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             }
             const WriteRoute& route = current.writeRoutes[instruction.dst];
             if (route.direct()) {
-                kernel.writeSignalPart(current.objectSignals[instruction.a],
+                kernel.writeSignalPart(current.writeSignals[instruction.a],
                                        reg(instruction.b, instruction.bWidth), index.toUInt64());
             } else {
                 kernel.writeThroughDrivers(route, reg(instruction.b, instruction.bWidth),
@@ -393,7 +394,7 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             // An unknown delay is zero, as for `#` (see WaitTime).
             const eir::ConstBitRef delay = reg(instruction.c, instruction.cWidth);
             kernel.scheduleDelayedWrite(
-                processIndex, instruction.dst, current.objectSignals[instruction.a],
+                processIndex, instruction.dst, current.writeSignals[instruction.a],
                 reg(instruction.b, instruction.bWidth), delay.hasUnknown() ? 0 : delay.toUInt64(),
                 instruction.opcode == eir::Opcode::StoreNonBlockingDelayed);
             if (kernel.errorRequested) return ExecutionResult::Stopped;
@@ -403,7 +404,7 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
         case eir::Opcode::Drive:
         case eir::Opcode::DriveTransport: {
             const eir::ConstBitRef delay = reg(instruction.c, instruction.cWidth);
-            kernel.drive(processIndex, instruction.dst, current.objectSignals[instruction.a],
+            kernel.drive(processIndex, instruction.dst, current.writeSignals[instruction.a],
                          reg(instruction.b, instruction.bWidth), 0,
                          delay.hasUnknown() ? 0 : delay.toUInt64(),
                          instruction.opcode == eir::Opcode::Drive);
@@ -415,7 +416,7 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             // An unknown offset names no subelement, so nothing is assigned.
             const eir::ConstBitRef offset = reg(instruction.c, instruction.cWidth);
             if (offset.hasUnknown()) break;
-            kernel.drive(processIndex, instruction.dst, current.objectSignals[instruction.a],
+            kernel.drive(processIndex, instruction.dst, current.writeSignals[instruction.a],
                          reg(instruction.b, instruction.bWidth),
                          static_cast<std::uint32_t>(offset.toUInt64()), 0, true);
             if (kernel.errorRequested) return ExecutionResult::Stopped;
@@ -429,7 +430,7 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             const eir::ConstBitRef both = reg(instruction.c, instruction.cWidth);
             if (both.hasUnknown()) break;
             const std::span<const eir::Word> words = both.avalWords();
-            kernel.drive(processIndex, instruction.dst, current.objectSignals[instruction.a],
+            kernel.drive(processIndex, instruction.dst, current.writeSignals[instruction.a],
                          reg(instruction.b, instruction.bWidth),
                          static_cast<std::uint32_t>(words[0]), words[1],
                          instruction.opcode == eir::Opcode::DrivePartAfter);
@@ -438,14 +439,14 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
         }
 
         case eir::Opcode::StoreNonBlocking:
-            kernel.scheduleNonBlocking(current.objectSignals[instruction.a],
+            kernel.scheduleNonBlocking(current.writeSignals[instruction.a],
                                        reg(instruction.b, instruction.bWidth));
             break;
 
         case eir::Opcode::StorePartNonBlocking: {
             const eir::ConstBitRef index = reg(instruction.c, instruction.cWidth);
             if (index.hasUnknown()) break;
-            kernel.scheduleNonBlockingPart(current.objectSignals[instruction.a],
+            kernel.scheduleNonBlockingPart(current.writeSignals[instruction.a],
                                            reg(instruction.b, instruction.bWidth),
                                            index.toUInt64());
             break;

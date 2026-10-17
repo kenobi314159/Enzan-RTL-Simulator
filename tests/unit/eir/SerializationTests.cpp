@@ -150,7 +150,8 @@ ModuleDefinition richModule(BufferId buffer) {
     instance.name = "u_child";
     instance.definitionName = "child";
     instance.location = SourceLocation(buffer, 21);
-    instance.connections.push_back(PortConnection{.portIndex = 0, .objectIndex = 1});
+    instance.connections.push_back(
+        PortConnection{.portIndex = 0, .objectIndex = 1, .driveObjectIndex = 0});
     instance.connections.push_back(
         PortConnection{.portIndex = 1, .objectIndex = PortConnection::Unconnected});
     definition.instances.push_back(std::move(instance));
@@ -314,7 +315,9 @@ TEST_F(SerializationTest, PortsAndInstancesRoundTrip) {
     EXPECT_EQ(definition.instances[0].definitionName, "child");
     ASSERT_EQ(definition.instances[0].connections.size(), 2U);
     EXPECT_TRUE(definition.instances[0].connections[0].connected());
+    EXPECT_EQ(definition.instances[0].connections[0].driveObjectIndex, 0U);
     EXPECT_FALSE(definition.instances[0].connections[1].connected());
+    EXPECT_EQ(definition.instances[0].connections[1].driveObjectIndex, PortConnection::Unconnected);
 }
 
 TEST_F(SerializationTest, ProcessesRoundTrip) {

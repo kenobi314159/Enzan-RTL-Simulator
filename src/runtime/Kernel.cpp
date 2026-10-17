@@ -843,6 +843,7 @@ bool Kernel::callResolution(std::uint32_t processIndex, std::uint32_t subprogram
         interpreter.call(processIndex, Activation{.body = &body,
                                                   .frameOffset = frame,
                                                   .objectSignals = callee.objectSignals,
+                                                  .writeSignals = callee.writeSignals,
                                                   .writeRoutes = callee.writeRoutes,
                                                   .calls = callee.calls});
     const bool returned = outcome == ExecutionResult::Completed;
@@ -1315,6 +1316,7 @@ std::optional<Activation> Kernel::enterCall(std::uint32_t processIndex, const Ac
     return Activation{.body = &body,
                       .frameOffset = frame,
                       .objectSignals = callee.objectSignals,
+                      .writeSignals = callee.writeSignals,
                       .writeRoutes = callee.writeRoutes,
                       .calls = callee.calls};
 }

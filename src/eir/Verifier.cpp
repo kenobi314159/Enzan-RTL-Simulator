@@ -125,6 +125,16 @@ private:
                                    instance.name, connection.objectIndex,
                                    definition.objects.size()));
             }
+            if (connection.driveObjectIndex != PortConnection::Unconnected
+                && (!connection.connected()
+                    || connection.driveObjectIndex >= definition.objects.size())) {
+                report(definition, std::format("instance '{}' drives a port's object {}, but {}",
+                                               instance.name, connection.driveObjectIndex,
+                                               connection.connected()
+                                                   ? std::format("the module has {} objects",
+                                                                 definition.objects.size())
+                                                   : std::string("the port is unconnected")));
+            }
         }
 
         if (design == nullptr) return;

@@ -504,6 +504,32 @@ TEST_F(VerifierTest, RejectsAnInstanceConnectingToANonexistentObject) {
     EXPECT_TRUE(reported("connects a port to object 42"));
 }
 
+TEST_F(VerifierTest, RejectsAnInstanceDrivingANonexistentObject) {
+    ModuleDefinition definition = makeValidModule();
+    enzan::eir::Instance instance;
+    instance.name = "u_child";
+    instance.definitionName = "child";
+    instance.connections.push_back(
+        enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0, .driveObjectIndex = 42});
+    definition.instances.push_back(std::move(instance));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("drives a port's object 42, but the module has"));
+}
+
+TEST_F(VerifierTest, RejectsAnUnconnectedPortThatDrivesAnObject) {
+    ModuleDefinition definition = makeValidModule();
+    enzan::eir::Instance instance;
+    instance.name = "u_child";
+    instance.definitionName = "child";
+    instance.connections.push_back(
+        enzan::eir::PortConnection{.portIndex = 0, .driveObjectIndex = 0});
+    definition.instances.push_back(std::move(instance));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("but the port is unconnected"));
+}
+
 TEST_F(VerifierTest, RejectsAnInstanceBindingAPortThatDoesNotExist) {
     Design design;
 

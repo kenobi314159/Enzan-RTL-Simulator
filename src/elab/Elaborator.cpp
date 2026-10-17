@@ -159,6 +159,7 @@ private:
         instance.definitionIndex = definitionIndex;
         instance.parent = parent;
         instance.objectSlots.assign(design.module(definitionIndex).objects.size(), NoSlot);
+        instance.objectDriveSlots.assign(design.module(definitionIndex).objects.size(), NoSlot);
 
         result->instancesByPath.emplace(instance.path, index);
         result->instanceList.push_back(std::move(instance));
@@ -250,6 +251,7 @@ private:
 
             const std::uint32_t slotIndex = allocateSlot(instanceIndex, objectIndex);
             result->instanceList[instanceIndex].objectSlots[objectIndex] = slotIndex;
+            result->instanceList[instanceIndex].objectDriveSlots[objectIndex] = slotIndex;
             nameSlot(result->instanceList[instanceIndex].path + '/'
                          + definition.objects[objectIndex].name,
                      slotIndex);
@@ -326,16 +328,22 @@ private:
             ENZAN_ASSERT(parentSlot != NoSlot, "a parent's objects are allocated before its "
                                                "children are expanded");
 
+            // What the child drives through the port goes where the parent drives the object
+            // the connection names for it, so a separate one reaches every level below.
+            const std::uint32_t driveSlot = parent.objectDriveSlots[connection.drivenObject()];
             const eir::Type portType = childDefinition.objects[port.objectIndex].type;
-            const eir::Type parentType = result->slotList[parentSlot].type;
-            if (portType.bitWidth() != parentType.bitWidth()) {
-                diagnostics.report(DiagCode::PortWidthMismatch, port.location, port.name,
-                                   child.definitionName, portType.bitWidth(),
-                                   parentType.bitWidth());
-                return false;
+            for (const std::uint32_t slotIndex : {parentSlot, driveSlot}) {
+                const eir::Type parentType = result->slotList[slotIndex].type;
+                if (portType.bitWidth() != parentType.bitWidth()) {
+                    diagnostics.report(DiagCode::PortWidthMismatch, port.location, port.name,
+                                       child.definitionName, portType.bitWidth(),
+                                       parentType.bitWidth());
+                    return false;
+                }
             }
 
             result->instanceList[childIndex].objectSlots[port.objectIndex] = parentSlot;
+            result->instanceList[childIndex].objectDriveSlots[port.objectIndex] = driveSlot;
             nameSlot(result->instanceList[childIndex].path + '/'
                          + childDefinition.objects[port.objectIndex].name,
                      parentSlot);
@@ -507,6 +515,7 @@ private:
                     continue;
                 }
                 instance.objectSlots[objectIndex] = found->second;
+                instance.objectDriveSlots[objectIndex] = found->second;
             }
         }
         return ok;
@@ -668,13 +677,12 @@ private:
                 const eir::Subprogram& subprogram =
                     design.module(subprogramInstance.definitionIndex)
                         .subprograms[subprogramInstance.subprogramIndex];
-                const std::vector<std::uint32_t>& slots =
-                    result->instanceList[subprogramInstance.instanceIndex].objectSlots;
+                const Instance& owner = result->instanceList[subprogramInstance.instanceIndex];
 
                 for (const std::uint32_t objectIndex : subprogram.readSet)
-                    processInstance.calleeReads.push_back(slots[objectIndex]);
+                    processInstance.calleeReads.push_back(owner.objectSlots[objectIndex]);
                 for (const eir::WriteExtent& extent : subprogram.writeSet) {
-                    const SlotRange range{.slot = slots[extent.objectIndex],
+                    const SlotRange range{.slot = owner.objectDriveSlots[extent.objectIndex],
                                           .lowBit = extent.lowBit,
                                           .width = extent.width};
                     processInstance.calleeWrites.push_back(range);
@@ -776,7 +784,7 @@ private:
             // A subroutine's static variable is written by every call of it, and a call inlined
             // into a continuous assignment no more drives it than one in an `always` does.
             for (const eir::WriteExtent& extent : process.writeSet) {
-                rangesBySlot[instance.objectSlots[extent.objectIndex]].push_back(DriverRange{
+                rangesBySlot[instance.objectDriveSlots[extent.objectIndex]].push_back(DriverRange{
                     .lowBit = extent.lowBit,
                     .width = extent.width,
                     .process = processIndex,
@@ -899,7 +907,7 @@ private:
 
             const Instance& instance = result->instanceList[processInstance.instanceIndex];
             for (const eir::WriteExtent& extent : process.writeSet) {
-                const std::uint32_t slotIndex = instance.objectSlots[extent.objectIndex];
+                const std::uint32_t slotIndex = instance.objectDriveSlots[extent.objectIndex];
                 if (!resolved[slotIndex]) continue;
 
                 driversBySlot[slotIndex].push_back(

@@ -190,6 +190,7 @@ struct Activation {
     std::uint32_t frameOffset = 0;
 
     std::span<const std::uint32_t> objectSignals;
+    std::span<const std::uint32_t> writeSignals;
     std::span<const WriteRoute> writeRoutes;
 
     /// For each of the body's call sites, the bound subprogram it calls.

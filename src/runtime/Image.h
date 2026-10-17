@@ -93,6 +93,10 @@ struct ProcessState {
     /// Object index to signal index, for the same instance.
     std::span<const std::uint32_t> objectSignals;
 
+    /// Object index to the signal a store to it writes: the one it reads, but for a port whose
+    /// drivers drive another object (elab::Instance::objectDriveSlots).
+    std::span<const std::uint32_t> writeSignals;
+
     /// For each of the body's call sites, the index of the bound subprogram it calls.
     std::span<const std::uint32_t> calls;
 
@@ -134,6 +138,7 @@ struct BoundSubprogram {
     /// empty when it is bound to none.
     std::span<const std::uint32_t> objectOffsets;
     std::span<const std::uint32_t> objectSignals;
+    std::span<const std::uint32_t> writeSignals;
 
     /// One route per object the subprogram writes, each straight into the signal: elaboration
     /// refuses a subprogram writing anything a driver resolves.
@@ -236,6 +241,7 @@ private:
     /// that the spans in ProcessState stay valid for the image's lifetime.
     std::vector<std::vector<std::uint32_t>> instanceObjectOffsets;
     std::vector<std::vector<std::uint32_t>> instanceObjectSignals;
+    std::vector<std::vector<std::uint32_t>> instanceWriteSignals;
 
     /// Per-process routes, indexed by process. Owned here for the same reason.
     std::vector<std::vector<WriteRoute>> processWriteRoutes;

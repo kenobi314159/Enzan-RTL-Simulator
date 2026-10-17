@@ -68,6 +68,15 @@ a fixed displacement. The interpreter pays one extra load per state access; a JI
 specialises a process per instance and burns the absolute offsets in as constants,
 which is what section 4.3 anticipates.
 
+**A port may drive another slot than it reads.** A connection that names a separate object
+for the port's drivers (`eir::PortConnection::driveObjectIndex`) binds the child's port to two
+slots: the one it reads, `objectSlots`, and the one its drivers write, `objectDriveSlots`. A
+port collapsed onto it below takes both, so whatever drives it at any depth drives the one
+slot. Everything about drivers — overlap, resolution, segments, a driver's starting value —
+is of the slot written, and everything about reading — values, sensitivity, events — of the
+slot read. A VHDL inout port associated through a conversion or with part of a signal is the
+one case: its driving value and its effective value differ (DESIGN_GUIDE.md section 3.7).
+
 ## Port collapsing across a language boundary
 
 Collapsing does **not** apply across a language boundary. Section 3.5 defines a

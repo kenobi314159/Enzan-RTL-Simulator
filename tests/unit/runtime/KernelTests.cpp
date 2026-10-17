@@ -1442,6 +1442,68 @@ TEST(Kernel, ACollapsedPortIsOnePieceOfStorage) {
     EXPECT_EQ(simulation.value("/tb/u_child/in", Radix::Hexadecimal), "77");
 }
 
+TEST(Kernel, APortsDriversWriteTheObjectItsConnectionDrives) {
+    // A VHDL inout port associated through a conversion reads one object and drives another
+    // (eir::PortConnection::driveObjectIndex), and so does a port collapsed onto it below.
+    ModuleDefinition leaf;
+    leaf.name = "leaf";
+    leaf.sourceName = "leaf";
+    leaf.addObject(Object{.name = "io", .type = Type::bits(8, false, true)});
+    leaf.ports.push_back(enzan::eir::Port{
+        .name = "io", .direction = enzan::eir::PortDirection::InOut, .objectIndex = 0});
+    ProcessBuilder driver(ProcessKind::Initial, "driver");
+    const std::uint32_t value = driver.reg(Type::bits(8, false, true));
+    const std::uint32_t constant = driver.constant("8'h77");
+    driver.block("entry");
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(constant)));
+    driver.store(0, value);
+    driver.emit(Instruction::make(Opcode::Return));
+    leaf.processes.push_back(driver.finish());
+
+    ModuleDefinition middle;
+    middle.name = "middle";
+    middle.sourceName = "middle";
+    middle.addObject(Object{.name = "io", .type = Type::bits(8, false, true)});
+    middle.ports.push_back(enzan::eir::Port{
+        .name = "io", .direction = enzan::eir::PortDirection::InOut, .objectIndex = 0});
+    enzan::eir::Instance inner;
+    inner.name = "u_leaf";
+    inner.definitionName = "leaf";
+    inner.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0});
+    middle.instances.push_back(std::move(inner));
+
+    ModuleDefinition parent;
+    parent.name = "tb";
+    parent.sourceName = "tb";
+    parent.addObject(Object{.name = "effective",
+                            .type = Type::bits(8, false, true),
+                            .initialValue = BitVector::parse("8'h00")});
+    parent.addObject(Object{.name = "driving",
+                            .type = Type::bits(8, false, true),
+                            .initialValue = BitVector::parse("8'h00")});
+    enzan::eir::Instance outer;
+    outer.name = "u_middle";
+    outer.definitionName = "middle";
+    outer.connections.push_back(
+        enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0, .driveObjectIndex = 1});
+    parent.instances.push_back(std::move(outer));
+
+    Design design;
+    design.addModule(std::move(leaf));
+    design.addModule(std::move(middle));
+    design.addModule(std::move(parent));
+
+    Simulation simulation(std::move(design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/driving", Radix::Hexadecimal), "77");
+    EXPECT_EQ(simulation.value("/tb/effective", Radix::Hexadecimal), "00");
+    EXPECT_EQ(simulation.value("/tb/u_middle/u_leaf/io", Radix::Hexadecimal), "00")
+        << "the port reads the object it is connected to";
+}
+
 // ---------------------------------------------------------------------------
 // Interruption
 // ---------------------------------------------------------------------------

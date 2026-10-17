@@ -387,6 +387,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         for (const PortConnection& connection : instance.connections) {
             out.u32(connection.portIndex);
             out.u32(connection.objectIndex);
+            out.u32(connection.driveObjectIndex);
         }
         out.u32(static_cast<std::uint32_t>(instance.interfaceBindings.size()));
         for (const InterfaceBinding& binding : instance.interfaceBindings) {
@@ -709,6 +710,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         for (PortConnection& connection : instance.connections) {
             connection.portIndex = in.u32();
             connection.objectIndex = in.u32();
+            connection.driveObjectIndex = in.u32();
         }
         instance.interfaceBindings.resize(in.count());
         for (InterfaceBinding& binding : instance.interfaceBindings) {

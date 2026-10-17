@@ -132,6 +132,11 @@ struct Instance {
     /// absolute offsets in as constants, which is what section 4.3 anticipates.
     std::vector<std::uint32_t> objectSlots;
 
+    /// Slot index the instance's drivers of each object write, indexed by object index: the
+    /// object's own slot, but for a port whose connection names a separate object to drive
+    /// (`eir::PortConnection::driveObjectIndex`), which a port collapsed onto it inherits.
+    std::vector<std::uint32_t> objectDriveSlots;
+
     /// Each interface port, by name, and the path of the interface instance it reaches, for
     /// the hierarchical references that go through it.
     std::map<std::string, std::string, std::less<>> interfaces;

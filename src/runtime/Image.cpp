@@ -38,6 +38,7 @@ void Image::buildSignals() {
 void Image::buildInstanceTables() {
     instanceObjectOffsets.resize(elaborated->instances().size());
     instanceObjectSignals.resize(elaborated->instances().size());
+    instanceWriteSignals.resize(elaborated->instances().size());
 
     for (std::size_t instanceIndex = 0; instanceIndex < elaborated->instances().size();
          ++instanceIndex) {
@@ -51,6 +52,7 @@ void Image::buildInstanceTables() {
             offsets.push_back(elaborated->slots()[slotIndex].wordOffset);
             signals.push_back(slotIndex);
         }
+        instanceWriteSignals[instanceIndex] = instance.objectDriveSlots;
     }
 }
 
@@ -77,6 +79,7 @@ void Image::buildProcesses() {
         state.frameOffset = frameSize;
         state.objectOffsets = instanceObjectOffsets[processInstance.instanceIndex];
         state.objectSignals = instanceObjectSignals[processInstance.instanceIndex];
+        state.writeSignals = instanceWriteSignals[processInstance.instanceIndex];
         state.calls = processInstance.calls;
         state.name = std::format("{} {}", instance.path, body.name);
         frameSize += body.frameWords;
@@ -156,6 +159,7 @@ void Image::buildSubprograms() {
         if (subprogramInstance.instanceIndex != elab::SubprogramInstance::NoInstance) {
             subprogram.objectOffsets = instanceObjectOffsets[subprogramInstance.instanceIndex];
             subprogram.objectSignals = instanceObjectSignals[subprogramInstance.instanceIndex];
+            subprogram.writeSignals = instanceWriteSignals[subprogramInstance.instanceIndex];
         }
 
         std::vector<WriteRoute>& routes = subprogramWriteRoutes[index];
@@ -305,7 +309,7 @@ void Image::initializeState(Arena& arena) const {
         const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
         if (!definition.processes[processInstance.processIndex].drivesSignals) return nullptr;
         const eir::Object& object = definition.objects[objectIndex];
-        const elab::Slot& slot = elaborated->slots()[instance.objectSlots[objectIndex]];
+        const elab::Slot& slot = elaborated->slots()[instance.objectDriveSlots[objectIndex]];
         // A port collapsed onto all of its signal; one reaching only part of it is not.
         if (!object.initialValue || object.type.bitWidth() != slot.type.bitWidth()) return nullptr;
         return &*object.initialValue;
@@ -315,7 +319,8 @@ void Image::initializeState(Arena& arena) const {
         const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
         for (const eir::WriteExtent& extent :
              definition.processes[processInstance.processIndex].writeSet) {
-            const elab::Slot& slot = elaborated->slots()[instance.objectSlots[extent.objectIndex]];
+            const elab::Slot& slot =
+                elaborated->slots()[instance.objectDriveSlots[extent.objectIndex]];
             const eir::BitVector* start = startOf(processInstance, extent.objectIndex);
             if (start == nullptr) continue;
             eir::BitVector part(extent.width);

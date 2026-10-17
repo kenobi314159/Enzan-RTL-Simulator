@@ -343,9 +343,25 @@ struct PortConnection {
     /// Index into the instantiating module's object table, or `Unconnected`.
     std::uint32_t objectIndex = Unconnected;
 
+    /// The object the instance's drivers of the port drive, when it is not the one the port
+    /// reads; otherwise `Unconnected`, and they drive `objectIndex`.
+    ///
+    /// A VHDL inout port associated with part of a signal or through a conversion reads its
+    /// effective value and drives its driving value, which differ (IEEE 1076 section 14.7.3):
+    /// what the instance drives is one source of the actual, and what it reads is the actual
+    /// resolved, converted back. The frontend connects the two objects to the actual by
+    /// processes of its own (DESIGN_GUIDE.md section 5.2); elaboration only routes the
+    /// instance's stores.
+    std::uint32_t driveObjectIndex = Unconnected;
+
     static constexpr std::uint32_t Unconnected = 0xFFFF'FFFFU;
 
     [[nodiscard]] bool connected() const noexcept { return objectIndex != Unconnected; }
+
+    /// The object the instance's drivers of the port drive.
+    [[nodiscard]] std::uint32_t drivenObject() const noexcept {
+        return driveObjectIndex == Unconnected ? objectIndex : driveObjectIndex;
+    }
 };
 
 /// What an instance's interface port is connected to (IEEE 1800 section 25).
