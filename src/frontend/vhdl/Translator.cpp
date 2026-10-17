@@ -604,6 +604,14 @@ public:
                     return true;
                 }
             }
+        } else if (actual != nullptr && type_is_record(type)) {
+            // A record's value is bound as its bits, the first field highest, as an array's is.
+            if (const std::optional<Layout> layout = layoutOf(type, bound)) {
+                if (std::optional<eir::BitVector> bits = constantBits(actual, *layout, scope)) {
+                    bound.bindComposite(generic, std::move(*bits));
+                    return true;
+                }
+            }
         } else if (actual != nullptr) {
             if (const std::optional<std::int64_t> value = scope.integer(actual)) {
                 bound.bind(generic, *value);
@@ -611,7 +619,7 @@ public:
             }
         }
         unsupported(generic, std::format("the value of the generic '{}', which is not a static "
-                                         "value of a scalar type or an array of one",
+                                         "value of a scalar, array or record type",
                                          simpleName(tree_ident(generic))));
         return false;
     }

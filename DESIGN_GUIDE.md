@@ -1064,6 +1064,9 @@ What a VHDL unit becomes in EIR:
 - A deferred constant, which a package declares without a value, has the one its full
   declaration in the package body gives it (IEEE 1076 section 4.8), folded or computed as any
   constant's is.
+- A generic of a record type is bound to its value's bits, the first field highest, as an array
+  generic is, and a field of it folds as an element of a static array does, so a configuration
+  record can size a port or choose a generate statement's alternative.
 - The IEEE packages are translated from their own bodies like any other VHDL. What NVC's
   versions of them take from its runtime instead, Enzan supplies: numeric_std's warnings
   are on, as they are in GHDL and in the IEEE's own packages, unless `--ieee-asserts

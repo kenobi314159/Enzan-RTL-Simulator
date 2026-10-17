@@ -155,6 +155,18 @@ std::optional<std::int64_t> Folder::integer(tree_t expression) const {
     case T_ATTR_REF: return attribute(expression);
     case T_ARRAY_REF: return element(expression);
 
+    // A field of a static record, a generic's or a constant's.
+    case T_RECORD_REF: {
+        const std::optional<eir::BitVector> bits = fieldBits(expression, *this);
+        if (!bits || bits->width() > 64) return std::nullopt;
+        const std::uint64_t raw = bits->ref().toUInt64();
+        const std::uint32_t width = bits->width();
+        if (!isSignedScalar(tree_type(expression)) || width == 64)
+            return static_cast<std::int64_t>(raw);
+        const std::uint64_t sign = std::uint64_t{1} << (width - 1);
+        return static_cast<std::int64_t>((raw ^ sign) - sign);
+    }
+
     default: return std::nullopt;
     }
 }

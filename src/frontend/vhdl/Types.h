@@ -124,6 +124,10 @@ struct Layout {
 [[nodiscard]] std::optional<eir::BitVector> constantBits(tree_t expression, const Layout& layout,
                                                          const Folder& folder);
 
+/// The bits of `expression`, a field of a static record, `r.x` of a generic or of a constant;
+/// nothing when the record does not fold.
+[[nodiscard]] std::optional<eir::BitVector> fieldBits(tree_t expression, const Folder& folder);
+
 /// The bounds of `expression`, a static array of `type`: its own, or for one that has none, a
 /// concatenation say, as many elements as it folds to from the left of the index subtype.
 [[nodiscard]] std::optional<Folder::Range> constantBounds(tree_t expression, type_t type,

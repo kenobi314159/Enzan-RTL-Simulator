@@ -856,6 +856,65 @@ end architecture;
               "a reference to a T_CONST_DECL is not supported by the VHDL frontend yet");
 }
 
+TEST_F(VhdlDesignTest, AGenericOfARecordTypeIsFoldedIntoOneDefinitionPerValue) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package types is
+  type config_t is record
+    width : positive;
+    invert : boolean;
+  end record;
+end package;
+
+use work.types.all;
+
+entity unit is
+  generic (cfg : config_t := (width => 2, invert => false));
+  port (q : out bit_vector(cfg.width - 1 downto 0));
+end entity;
+
+architecture rtl of unit is
+begin
+  q <= (others => '1') when cfg.invert else (others => '0');
+end architecture;
+
+use work.types.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal a : bit_vector(1 downto 0);
+  signal b : bit_vector(3 downto 0);
+begin
+  u1 : entity work.unit port map (q => a);
+  u2 : entity work.unit generic map (cfg => (width => 4, invert => true)) port map (q => b);
+
+  process
+  begin
+    wait for 1 ns;
+    assert a = "00" and b = "1111" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* bench = design->findModule("tb");
+    ASSERT_NE(bench, nullptr);
+    ASSERT_EQ(bench->instances.size(), 2U);
+    EXPECT_NE(bench->instances[0].definitionName, bench->instances[1].definitionName);
+    const ModuleDefinition* wide = design->findModule(bench->instances[1].definitionName);
+    ASSERT_NE(wide, nullptr);
+    EXPECT_EQ(wide->objects[wide->ports[0].objectIndex].type.bitWidth(), 4U * 8U);
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnExpressionActualIsASignalAssignedADeltaLater) {
     // `a xor b`, which NVC marks inertial, is an implicit signal's value rather than a connection
     // the update applies (IEEE 1076 section 6.5.6.3).

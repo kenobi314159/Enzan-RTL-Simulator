@@ -157,6 +157,9 @@ enzan_add_vhdl_golden_test(aliases)
 # Deferred constants, given their values by their package's body.
 enzan_add_vhdl_golden_test(deferred)
 
+# Generics of record types, and their fields folded.
+enzan_add_vhdl_golden_test(record_generics)
+
 # cocotb driving a VHDL toplevel through VHPI (DESIGN_GUIDE.md section 9.7), as the golden test
 # beside the SystemVerilog cases drives one through VPI, when a Python has cocotb.
 if(ENZAN_HAVE_COCOTB)
