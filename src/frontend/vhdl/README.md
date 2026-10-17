@@ -57,7 +57,8 @@ blocks, with generics and ports; constant functions; processes with variables, `
 assignments with inertial and transport delay, to whole signals, to their parts and to aggregates of
 them, as variable assignments may be too, `assert`, `report` with messages built from any strings
 and characters and the `'image` of integers and times, `std.env.finish` and `stop`; aggregates,
-strings, elements and slices, with loops unrolled for slices that move with their parameter and
+strings, elements and slices, aliases of objects and of their parts, of constants, subprograms and
+types, with loops unrolled for slices that move with their parameter and
 variable slices of run-time lengths, concatenation, the predefined operators on scalars and arrays,
 `'event`, `'active` and `'last_value`; functions and procedures of packages and architectures,
 std_logic_1164's and numeric_std's among them. std.textio's `write`, `writeline`, `readline` and

@@ -12,9 +12,14 @@ agg5
 agg6
 agg9
 alias1
+alias11
+alias13
 alias2
 alias4
 alias5
+alias6
+alias7
+alias9
 arith3
 array1
 array2
@@ -165,6 +170,7 @@ issue110
 issue111
 issue112
 issue115
+issue116
 issue1186
 issue121
 issue126
@@ -202,6 +208,7 @@ issue29
 issue293
 issue327
 issue338
+issue340
 issue348
 issue349
 issue351
@@ -364,6 +371,7 @@ vests41
 vests42
 vests49
 vests5
+vests6
 vests8
 vests9
 view6

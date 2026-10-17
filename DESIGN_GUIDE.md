@@ -992,6 +992,13 @@ What a VHDL unit becomes in EIR:
   that loop, each copy with its value bound. A variable's slice whose length is known only
   at run time, as numeric_std's shifts by a count assign, is its value shifted into place
   and merged under a mask of the slice's bits.
+- An alias of an object is a name of what it names: of a signal or a part of one, a window of
+  its bits like any other, seen through the alias's own subtype when it gives one, so `alias top
+  is x(7)` is read, driven and waited on as `x(7)` is, and a port associated with an alias of a
+  whole signal is that signal. An architecture's alias names a static part, the same wherever it
+  is used; a process's names what its name does as it is declared, an element chosen by a
+  variable's value then among it. An alias of anything else, a constant, a subprogram or a type,
+  is what it names wherever it is used.
 - A function is a callable subprogram (4.1), translated once for each shape it is called
   with: the bounds of its unconstrained parameters, and the values of the scalar ones its
   own bounds are computed from. Inside a shape those bounds are static, so `l'length`

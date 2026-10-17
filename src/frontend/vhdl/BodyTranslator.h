@@ -402,9 +402,14 @@ private:
     /// slice of one. Nothing having reported why for anything else.
     std::optional<Place> place(tree_t name);
 
-    /// True when `name` is a signal, a port or a variable of the process, or a part of one, so that
-    /// `place` can find it.
+    /// True when `name` is a signal, a port or a variable of the process, or a part of one, or an
+    /// alias of one, so that `place` can find it.
     [[nodiscard]] bool designatesStorage(tree_t name) const;
+
+    /// What the alias `declaration` of storage designates: what its name does, seen through the
+    /// alias's own subtype when it gives one, `alias low : bit_vector(0 to 3) is s(3 downto 0)`.
+    /// Nothing having reported why when that is not storage `place` can find.
+    std::optional<Place> aliasPlace(tree_t declaration);
 
     /// The value at `place`.
     Value read(const Place& place, type_t vhdlType);

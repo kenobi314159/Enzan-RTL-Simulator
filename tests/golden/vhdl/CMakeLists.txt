@@ -148,6 +148,9 @@ enzan_add_vhdl_golden_test(nulls)
 # Ports of unconstrained types, which take their bounds from their actuals.
 enzan_add_vhdl_golden_test(unconstrained)
 
+# Aliases of signals and of their parts, types, subprograms and constants.
+enzan_add_vhdl_golden_test(aliases)
+
 # cocotb driving a VHDL toplevel through VHPI (DESIGN_GUIDE.md section 9.7), as the golden test
 # beside the SystemVerilog cases drives one through VPI, when a Python has cocotb.
 if(ENZAN_HAVE_COCOTB)

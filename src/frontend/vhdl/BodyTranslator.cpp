@@ -445,17 +445,14 @@ bool BodyTranslator::declare(tree_t declaration) {
         return true;
     }
 
-    // An alias designates what it names, through its own bounds when it gives a subtype.
+    // An alias of storage designates what it names as the alias is declared, an element chosen
+    // by a variable among it. One of anything else, a constant or a subprogram, is what it names
+    // wherever it is used.
     case T_ALIAS: {
-        std::optional<Place> aliased = place(tree_value(declaration));
+        if (!tree_has_value(declaration) || !designatesStorage(tree_value(declaration)))
+            return true;
+        const std::optional<Place> aliased = aliasPlace(declaration);
         if (!aliased) return false;
-        if (tree_has_type(declaration) && type_is_array(tree_type(declaration))) {
-            if (const std::optional<Layout> layout = layoutFor(tree_type(declaration))) {
-                if (layout->storage.bitWidth() != aliased->layout.storage.bitWidth())
-                    return fail(declaration, "an alias of another length than what it names");
-                aliased->layout = *layout;
-            }
-        }
         aliases[declaration] = *aliased;
         return true;
     }
@@ -2163,7 +2160,12 @@ std::optional<BodyTranslator::Value> BodyTranslator::reference(tree_t expression
             return this->expression(tree_value(declaration), &*layout);
         break;
 
-    case T_ALIAS: return this->expression(tree_value(declaration));
+    case T_ALIAS: {
+        if (!designatesStorage(expression)) return this->expression(tree_value(declaration));
+        const std::optional<Place> aliased = place(expression);
+        if (!aliased) return std::nullopt;
+        return read(*aliased, type);
+    }
 
     default: break;
     }
@@ -2678,8 +2680,26 @@ bool BodyTranslator::designatesStorage(tree_t name) const {
            || tree_kind(name) == T_RECORD_REF)
         name = tree_value(name);
     if (tree_kind(name) != T_REF || !tree_has_ref(name)) return false;
-    return owner.objectFor(tree_ref(name)).has_value() || locals.contains(tree_ref(name))
-           || aliases.contains(tree_ref(name));
+    tree_t declaration = tree_ref(name);
+    if (tree_kind(declaration) == T_ALIAS && !aliases.contains(declaration))
+        return tree_has_value(declaration) && designatesStorage(tree_value(declaration));
+    return owner.objectFor(declaration).has_value() || locals.contains(declaration)
+           || aliases.contains(declaration);
+}
+
+std::optional<BodyTranslator::Place> BodyTranslator::aliasPlace(tree_t declaration) {
+    std::optional<Place> aliased = place(tree_value(declaration));
+    if (!aliased) return std::nullopt;
+    if (tree_has_type(declaration) && type_is_array(tree_type(declaration))) {
+        if (const std::optional<Layout> layout = layoutFor(tree_type(declaration))) {
+            if (layout->storage.bitWidth() != aliased->layout.storage.bitWidth()) {
+                fail(declaration, "an alias of another length than what it names");
+                return std::nullopt;
+            }
+            aliased->layout = *layout;
+        }
+    }
+    return aliased;
 }
 
 std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
@@ -2689,6 +2709,9 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
         tree_t declaration = tree_ref(name);
         if (const auto alias = aliases.find(declaration); alias != aliases.end())
             return alias->second;
+        // One declared outside the body, by an architecture, names a static part of a signal,
+        // which is the same part wherever it is used.
+        if (tree_kind(declaration) == T_ALIAS) return aliasPlace(declaration);
         if (const auto local = locals.find(declaration); local != locals.end()) {
             const Value& variable = local->second;
             return Place{.isVariable = true,

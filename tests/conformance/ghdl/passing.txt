@@ -48,7 +48,9 @@ bug15702
 bug15933
 bug16095
 bug16096
+bug16287
 bug17127
+bug18280
 bug18360
 bug18361
 bug19195
@@ -57,6 +59,7 @@ bug20549
 bug20597
 bug20703
 bug21078
+bug21274
 bug21500
 bug22868
 bug23013
@@ -102,6 +105,7 @@ issue1528
 issue155
 issue156
 issue1589
+issue1593
 issue1602
 issue1612
 issue1623
@@ -213,6 +217,7 @@ issue2462
 issue2463
 issue2466
 issue2470
+issue2473
 issue2476
 issue2486
 issue2494
@@ -230,6 +235,7 @@ issue253
 issue2531
 issue2538
 issue2539
+issue2540
 issue2541
 issue2542
 issue2544
@@ -294,6 +300,7 @@ issue419
 issue42
 issue424
 issue441
+issue447
 issue456
 issue459
 issue461
@@ -327,6 +334,8 @@ issue632
 issue635
 issue636
 issue642
+issue660
+issue663
 issue672
 issue676
 issue689

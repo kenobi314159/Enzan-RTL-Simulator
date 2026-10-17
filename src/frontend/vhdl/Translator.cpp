@@ -85,9 +85,15 @@ public:
     eir::ModuleDefinition translate();
 
     [[nodiscard]] std::optional<std::uint32_t> objectFor(tree_t declaration) const override {
-        const auto found = objects.find(declaration);
-        if (found == objects.end()) return std::nullopt;
-        return found->second;
+        if (const auto found = objects.find(declaration); found != objects.end())
+            return found->second;
+        // An alias of a whole signal is that signal, so a port associated with one is collapsed
+        // onto it as onto the signal.
+        if (tree_kind(declaration) == T_ALIAS && tree_has_value(declaration)) {
+            tree_t value = tree_value(declaration);
+            if (tree_kind(value) == T_REF && tree_has_ref(value)) return objectFor(tree_ref(value));
+        }
+        return std::nullopt;
     }
 
     [[nodiscard]] const Folder& folder() const override { return folding; }
@@ -1052,7 +1058,8 @@ void ArchitectureTranslator::declarations(tree_t container) {
 
         // Folded where they are used, so they need nothing of their own; a generate loop's
         // parameter among them, bound to each iteration's value. A configuration specification
-        // is read at the instances it binds.
+        // is read at the instances it binds, and an alias is what it names where it is used.
+        case T_ALIAS:
         case T_SPEC:
         case T_GENERIC_DECL:
         case T_CONST_DECL:

@@ -318,10 +318,12 @@ billowitch/compliant/tc1651.vhd
 billowitch/compliant/tc1653.vhd
 billowitch/compliant/tc1654.vhd
 billowitch/compliant/tc1655.vhd
+billowitch/compliant/tc1658.vhd
 billowitch/compliant/tc1659.vhd
 billowitch/compliant/tc166.vhd
 billowitch/compliant/tc1662.vhd
 billowitch/compliant/tc1665.vhd
+billowitch/compliant/tc167.vhd
 billowitch/compliant/tc1677.vhd
 billowitch/compliant/tc1678.vhd
 billowitch/compliant/tc1679.vhd
@@ -338,6 +340,7 @@ billowitch/compliant/tc1705.vhd
 billowitch/compliant/tc1717.vhd
 billowitch/compliant/tc1718.vhd
 billowitch/compliant/tc1719.vhd
+billowitch/compliant/tc172.vhd
 billowitch/compliant/tc1720.vhd
 billowitch/compliant/tc1721.vhd
 billowitch/compliant/tc1723.vhd
@@ -345,6 +348,7 @@ billowitch/compliant/tc1724.vhd
 billowitch/compliant/tc1727.vhd
 billowitch/compliant/tc1728.vhd
 billowitch/compliant/tc1729.vhd
+billowitch/compliant/tc173.vhd
 billowitch/compliant/tc1734.vhd
 billowitch/compliant/tc1735.vhd
 billowitch/compliant/tc1736.vhd
@@ -377,6 +381,7 @@ billowitch/compliant/tc1810.vhd
 billowitch/compliant/tc182.vhd
 billowitch/compliant/tc183.vhd
 billowitch/compliant/tc187.vhd
+billowitch/compliant/tc188.vhd
 billowitch/compliant/tc1906.vhd
 billowitch/compliant/tc1907.vhd
 billowitch/compliant/tc1908.vhd
@@ -860,6 +865,7 @@ billowitch/compliant/tc3046.vhd
 billowitch/compliant/tc3047.vhd
 billowitch/compliant/tc3049.vhd
 billowitch/compliant/tc3054.vhd
+billowitch/compliant/tc3059.vhd
 billowitch/compliant/tc3062.vhd
 billowitch/compliant/tc3067.vhd
 billowitch/compliant/tc308.vhd

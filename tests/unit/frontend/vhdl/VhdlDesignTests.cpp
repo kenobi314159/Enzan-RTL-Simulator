@@ -786,6 +786,102 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
 }
 
+TEST_F(VhdlDesignTest, AnArchitecturesAliasIsWhatItNames) {
+    // Two processes driving disjoint parts of one signal through aliases drive those bits alone,
+    // as they would naming the parts; a port associated with an alias of a whole signal is that
+    // signal; and a process's alias of a constant is the constant's value.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity copy is
+  port (d : in bit_vector(7 downto 0); q : out bit_vector(7 downto 0));
+end entity;
+
+architecture rtl of copy is
+begin
+  q <= d;
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal word : bit_vector(7 downto 0);
+  signal q : bit_vector(7 downto 0);
+  alias high : bit_vector(3 downto 0) is word(7 downto 4);
+  alias low : bit_vector(0 to 3) is word(3 downto 0);
+  alias whole is word;
+begin
+  u : entity work.copy port map (d => whole, q => q);
+
+  high <= "1010";
+
+  process
+    constant pattern : bit_vector(0 to 3) := "0011";
+    alias same is pattern;
+  begin
+    low <= same;
+    wait for 1 ns;
+    assert q = "10100011" report "q is " & to_string(q) severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* bench = design->findModule("tb");
+    ASSERT_NE(bench, nullptr);
+    ASSERT_EQ(bench->instances.size(), 1U);
+    ASSERT_FALSE(bench->instances[0].connections.empty());
+    EXPECT_EQ(bench->objects[bench->instances[0].connections[0].objectIndex].name, "word")
+        << "collapsed onto the signal the alias names";
+    ASSERT_EQ(bench->processes.size(), 2U);
+    for (const auto& process : bench->processes) {
+        ASSERT_EQ(process.writeSet.size(), 1U);
+        EXPECT_EQ(process.writeSet[0].width, 32U) << "four bits of a byte each";
+    }
+    EXPECT_NE(bench->processes[0].writeSet[0].lowBit, bench->processes[1].writeSet[0].lowBit);
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AnAliasOfANameTheAdapterCannotPlaceIsReportedWhereItIsUsed) {
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity inner is
+end entity;
+
+architecture rtl of inner is
+  signal s : bit;
+begin
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  alias deep is << signal .tb.u.s : bit >>;
+begin
+  u : entity work.inner;
+
+  process
+  begin
+    wait for 1 ns;
+    report bit'image(deep);
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(unsupported, nullptr) << transcript();
+    EXPECT_EQ(unsupported->message,
+              "the expression T_EXTERNAL_NAME is not supported by the VHDL frontend yet");
+}
+
 TEST_F(VhdlDesignTest, ANestedAggregateTargetTakesEachNamesPart) {
     // A record's field of a record type named by an aggregate of its own, which GHDL 4.1 fails on
     // and the aggregates golden case therefore leaves out.
