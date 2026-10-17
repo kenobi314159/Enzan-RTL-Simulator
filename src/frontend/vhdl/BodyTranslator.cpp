@@ -2040,6 +2040,15 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
                 layout = arrayLayout(*bounds, type_elem(type), folder());
         }
         if (!layout && context != nullptr && context->isComposite()) layout = *context;
+
+        // A static string has the bounds of what it folds to: `integer'image(1)` compared with
+        // a literal, say.
+        if (!layout && type_is_array(type) && dimension_of(type) == 1) {
+            if (const std::optional<Folder::Range> bounds =
+                    constantBounds(expression, type, folder());
+                bounds && bounds->length() > 0)
+                layout = arrayLayout(*bounds, type_elem(type), folder());
+        }
         if (layout) {
             if (const std::optional<eir::BitVector> bits =
                     constantBits(expression, *layout, folder()))

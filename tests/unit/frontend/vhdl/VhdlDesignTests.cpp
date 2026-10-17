@@ -1602,6 +1602,35 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"true false false"});
 }
 
+TEST_F(VhdlDesignTest, AStaticStringTakesTheBoundsItFoldsTo) {
+    // With nothing around it to give it bounds, as an operand of `=` has none.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  type small is range 0 to 9;
+  type colour is (red, green);
+  constant k : integer := 42;
+begin
+  process
+  begin
+    assert small'image(1) = "1" report "small" severity failure;
+    assert colour'image(green) = "green" report "colour" severity failure;
+    assert integer'image(k) & "!" = "42!" report "concatenation" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnAttributeGivingNoValueOfItsTypeEndsTheRun) {
     // T'VAL gives a value of T, and T'SUCC and T'PRED one of its base type; a position outside
     // that is an error rather than a value no literal names (IEEE 1076 section 16.2.2).

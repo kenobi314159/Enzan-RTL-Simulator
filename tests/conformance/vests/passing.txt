@@ -1296,6 +1296,7 @@ clifton-labs/compliant/functional/attributes/type/range/simple-range-attribute.v
 clifton-labs/compliant/functional/attributes/type/right/simple-integer-test.vhdl
 clifton-labs/compliant/functional/attributes/type/simple-integer-test-ascending.vhdl
 clifton-labs/compliant/functional/attributes/type/simple-integer-test-high.vhdl
+clifton-labs/compliant/functional/attributes/type/simple-integer-test-image.vhdl
 clifton-labs/compliant/functional/attributes/type/simple-integer-test-low.vhdl
 clifton-labs/compliant/functional/attributes/type/simple-integer-test-pred.vhdl
 clifton-labs/compliant/functional/attributes/type/simple-integer-test-succ.vhdl
