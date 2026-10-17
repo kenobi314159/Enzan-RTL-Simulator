@@ -1944,10 +1944,12 @@ the NVC the VHDL frontend is built on carries, so VHPI is built only with that f
 - **Types** come from the table: `vhpiBaseType` a type declaration of the type's kind, with an
   array's base type unconstrained, `vhpiType` the object's subtype with its bounds,
   `vhpiElemType` an array's element, `vhpiConstraints` its ranges, `vhpiEnumLiterals` an
-  enumeration's literals. Names are basic identifiers in upper case, `vhpiCaseNameP`'s as well
-  as `vhpiNameP`'s: neither NVC's analysis nor Enzan keeps the case a name was declared in, and
-  NVC gives the same. An extended identifier, `\weird.name\`, is given as it is written, its case
-  being part of it, and is one name however many dots it holds. A string `vhpi_get_str` returns lives with its handle, as VPI's do, so an
+  enumeration's literals. `vhpiNameP` gives a basic identifier in upper case. `vhpiCaseNameP`
+  gives a declared object's name as its declaration spells it, read from the source where the
+  object is declared, since NVC's analysis keeps no case, and a region's in upper case, since
+  EIR keeps no position of a block's or a generate statement's label. An extended identifier,
+  `\weird.name\`, is given as it is written, its case being part of it, and is one name however
+  many dots it holds. A string `vhpi_get_str` returns lives with its handle, as VPI's do, so an
   application may hold several at once.
 - **Values** are read from and written to the bits in VHPI's formats by the type: a
   std_logic or a bit and arrays of them in the Logic formats, other enumerations' positions,
@@ -1963,8 +1965,8 @@ the NVC the VHDL frontend is built on carries, so VHPI is built only with that f
   removed, waiting for the next time step after each.
 
 **cocotb's VHPI library is `libcocotbvhpi_nvc`**, whose one workaround, to compare names
-without their case, answers the one way Enzan differs from the standard, the declared case it
-does not keep (section 9.6 chose the VPI library by the same rule). The toplevel's language
+without their case, answers the one way Enzan differs from the standard, the declared case of a
+region's name, which it does not keep (section 9.6 chose the VPI library by the same rule). The toplevel's language
 decides which is loaded, `--vpi` or `--vhpi`. A design of both languages is not simulated yet,
 and the makefile skips it as cocotb's makefiles skip a language a simulator lacks; when it is
 (M7), cocotb loads the other language's library itself, named in `GPI_EXTRA`, as it does

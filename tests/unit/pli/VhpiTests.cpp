@@ -32,6 +32,9 @@ using enzan::pli::PliContext;
 using enzan::test::literal;
 using enzan::test::Simulation;
 
+/// Where `state` is declared, the first buffer of the fixture's source manager.
+constexpr std::string_view Declarations = "signal State : state_t;\n";
+
 /// `tb`, holding `state` and `\Odd.Name\`, signals of `type state_t is (idle, busy, done)`, and
 /// `limit`, an integer constant its architecture declares.
 Design makeDesign() {
@@ -53,6 +56,7 @@ Design makeDesign() {
     state.enumIndex = 0;
     state.vhdlType = 0;
     Object odd = state;
+    state.location = enzan::SourceLocation(enzan::BufferId::fromIndex(0), 7);
     odd.name = "\\Odd.Name\\";
     top.addObject(std::move(state));
     top.addObject(std::move(odd));
@@ -71,7 +75,9 @@ Design makeDesign() {
 
 class Vhpi : public ::testing::Test {
 protected:
-    Vhpi() : simulation(makeDesign(), "tb"), engine(sources), context(engine, {"enzan"}) {}
+    Vhpi() : simulation(makeDesign(), "tb"), engine(sources), context(engine, {"enzan"}) {
+        sources.addBuffer("design.vhd", std::string(Declarations));
+    }
 
     void SetUp() override {
         ASSERT_TRUE(simulation.ready());
@@ -122,6 +128,22 @@ TEST_F(Vhpi, AnArchitecturesConstantIsAConstantWithAValue) {
     value.value.intg = 8;
     EXPECT_EQ(vhpi_put_value(limit, &value, vhpiDepositPropagate), -1);
     EXPECT_EQ(lastError(), "vhpi_put_value: ':tb:limit' cannot be written");
+}
+
+TEST_F(Vhpi, ADeclaredObjectsCaseNameIsSpelledAsItsDeclarationSpellsIt) {
+    vhpiHandleT state = vhpi_handle_by_name("tb.state", nullptr);
+    ASSERT_NE(state, nullptr) << lastError();
+    const auto string = [](vhpiStrPropertyT property, vhpiHandleT handle) {
+        return std::string(reinterpret_cast<const char*>(vhpi_get_str(property, handle)));
+    };
+    EXPECT_EQ(string(vhpiNameP, state), "STATE");
+    EXPECT_EQ(string(vhpiCaseNameP, state), "State");
+    EXPECT_EQ(string(vhpiFullCaseNameP, state), ":TB:State");
+
+    // Nothing to read the spelling from.
+    vhpiHandleT limit = vhpi_handle_by_name("tb.limit", nullptr);
+    ASSERT_NE(limit, nullptr) << lastError();
+    EXPECT_EQ(string(vhpiCaseNameP, limit), "LIMIT");
 }
 
 TEST_F(Vhpi, AnExtendedIdentifierIsOneNameAsWritten) {

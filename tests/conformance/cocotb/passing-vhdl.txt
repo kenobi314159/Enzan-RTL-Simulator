@@ -10,6 +10,7 @@ test_configuration
 test_custom_entry
 test_deadlock
 test_defaultless_parameter
+test_discovery
 test_dumpfile_verilator
 test_exit_error
 test_failure

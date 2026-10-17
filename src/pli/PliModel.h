@@ -8,6 +8,8 @@
 
 #include "pli/PliContext.h"
 
+#include "common/SourceLocation.h"
+
 #include <cstdarg>
 #include <cstdint>
 #include <memory>
@@ -106,6 +108,12 @@ struct PliContext::Object {
     /// do, would otherwise read freed memory once the second outgrew the first.
     mutable std::string vhpiName;
     mutable std::string vhpiFullName;
+
+    /// Where a declared VHDL object is declared, at its name, whose spelling its CaseName
+    /// properties give, and those names made from it the first time they are asked for.
+    SourceLocation declaredAt;
+    mutable std::string vhpiCaseName;
+    mutable std::string vhpiFullCaseName;
 
     /// What a VHPI iterator has yet to return, made as it is scanned; owned until then.
     std::vector<std::unique_ptr<Object>> pending;

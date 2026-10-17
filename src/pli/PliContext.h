@@ -256,6 +256,9 @@ private:
     bool vhpiWrite(const Object& object, const eir::BitVector& bits, vhpiPutValueModeT mode);
     int vhpiFormat(const Object& object, const eir::BitVector& bits, vhpiValueT& value);
     void vhpiFire(Callback& callback);
+
+    /// `object`'s name as its declaration spells it, or in upper case when there is none to read.
+    [[nodiscard]] std::string declaredCase(const Object& object) const;
 #endif
 
     [[nodiscard]] std::ostream& transcriptStream() const;

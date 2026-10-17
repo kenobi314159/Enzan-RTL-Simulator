@@ -7,6 +7,8 @@
 #include "pli/PliContext.h"
 #include "pli/PliModel.h"
 
+#include "common/Diagnostics.h"
+#include "common/SourceManager.h"
 #include "common/Version.h"
 #include "eir/BitOps.h"
 #include "eir/Design.h"
@@ -265,6 +267,7 @@ std::unique_ptr<PliContext::Object> PliContext::vhpiDeclared(std::uint32_t insta
         const eir::Parameter& parameter = definition.parameters[objectIndex];
         // An architecture's constant is a parameter local to its definition, as a localparam is.
         declared->vhpiClass = parameter.isLocal ? vhpiConstDeclK : vhpiGenericDeclK;
+        declared->declaredAt = parameter.location;
         declared->vhdlType = parameter.vhdlType;
         declared->target =
             Target{.kind = TargetKind::Parameter, .first = instanceIndex, .second = objectIndex};
@@ -283,6 +286,7 @@ std::unique_ptr<PliContext::Object> PliContext::vhpiDeclared(std::uint32_t insta
         declared->signal =
             image->elaboratedDesign().instances()[instanceIndex].objectSlots[objectIndex];
         declared->width = object.type.bitWidth();
+        declared->declaredAt = object.location;
         // The scope of the generate block or block it is in: found as buildScopes found it.
         declared->scope = moduleScopeOfInstance[instanceIndex];
         for (std::size_t depth = 0;; ++depth) {
@@ -720,18 +724,26 @@ const vhpiCharT* PliContext::vhpiGetStr(vhpiStrPropertyT property, vhpiHandleT o
     };
     switch (property) {
     // A VHDL name is a basic identifier, given in upper case; a tool's and an argument's are not.
-    // Neither NVC's analysis nor Enzan keeps the case a name was declared in, so its CaseName is
-    // its Name, as NVC gives it (section 9.7).
+    // A declared object's CaseName is its name as its declaration spells it (section 9.7).
     case vhpiNameP:
     case vhpiCaseNameP:
         if (found->vhpiClass == vhpiToolK || found->vhpiClass == vhpiArgvK)
             return text(found->name);
         if (found->vhpiName.empty()) found->vhpiName = upper(found->name);
-        return text(found->vhpiName);
+        if (property == vhpiNameP) return text(found->vhpiName);
+        if (found->vhpiCaseName.empty()) found->vhpiCaseName = declaredCase(*found);
+        return text(found->vhpiCaseName);
     case vhpiFullNameP:
-    case vhpiFullCaseNameP:
         if (found->vhpiFullName.empty()) found->vhpiFullName = upper(found->fullName);
         return text(found->vhpiFullName);
+    case vhpiFullCaseNameP:
+        if (found->vhpiFullCaseName.empty()) {
+            const std::string_view region =
+                std::string_view(found->fullName)
+                    .substr(0, found->fullName.size() - found->name.size());
+            found->vhpiFullCaseName = upper(region) + declaredCase(*found);
+        }
+        return text(found->vhpiFullCaseName);
     case vhpiKindStrP:
         return reinterpret_cast<const vhpiCharT*>(
             className(found->kind == Object::Kind::Callback ? vhpiCallbackK : found->vhpiClass));
@@ -740,6 +752,23 @@ const vhpiCharT* PliContext::vhpiGetStr(vhpiStrPropertyT property, vhpiHandleT o
     case vhpiFileNameP: return text(found->file);
     default: return nullptr;
     }
+}
+
+std::string PliContext::declaredCase(const Object& object) const {
+    // The name as its declaration spells it, where that is the name: an extended identifier is
+    // as it was written already, and anything with no declaration is a name in upper case.
+    const std::string& name = object.name;
+    if (!object.declaredAt.valid() || name.starts_with('\\')) return upper(name);
+    const std::string_view source =
+        diagnostics.sourceManager().bufferText(object.declaredAt.buffer());
+    const std::size_t offset = object.declaredAt.offset();
+    if (offset > source.size() || source.size() - offset < name.size()) return upper(name);
+    const std::string_view spelled = source.substr(offset, name.size());
+    const bool same = std::ranges::equal(spelled, name, [](char left, char right) {
+        return std::tolower(static_cast<unsigned char>(left))
+               == std::tolower(static_cast<unsigned char>(right));
+    });
+    return same ? std::string(spelled) : upper(name);
 }
 
 vhpiPhysT PliContext::vhpiGetPhys(vhpiPhysPropertyT property, vhpiHandleT /*object*/) {
