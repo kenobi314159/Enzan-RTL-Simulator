@@ -1083,6 +1083,9 @@ What a VHDL unit becomes in EIR:
   a comparison or an attribute of it folds, and a call given one is inlined, where its
   uses can fold too. A testbench that reads a file only when a name is given needs no
   files when none is.
+- An architecture's constant is folded where it is used, and one whose value folds is also
+  recorded beside the generics as a parameter local to the definition, which VHPI shows as a
+  constant (9.7); so is each for-generate iteration's parameter.
 - A deferred constant, which a package declares without a value, has the one its full
   declaration in the package body gives it (IEEE 1076 section 4.8), folded or computed as any
   constant's is.
@@ -1934,7 +1937,8 @@ the NVC the VHDL frontend is built on carries, so VHPI is built only with that f
   and the blocks and generate iterations the frontend flattens into names, an indexed one
   (`g(0)`) a for-generate iteration and any other a block.
 - **Objects** are a region's signals and ports, every one with a VHDL type, a real's included,
-  and its generics. An element of an array is an indexed name and a field of a record a
+  its generics, and its constants whose values fold, a for-generate iteration's parameter among
+  them. An element of an array is an indexed name and a field of a record a
   selected one, each a window of its object's bits; an array's elements are numbered row by
   row from the left, which is its highest bits.
 - **Types** come from the table: `vhpiBaseType` a type declaration of the type's kind, with an

@@ -61,6 +61,7 @@ const char* className(std::int32_t kind) {
     case vhpiSigDeclK: return "vhpiSigDeclK";
     case vhpiPortDeclK: return "vhpiPortDeclK";
     case vhpiGenericDeclK: return "vhpiGenericDeclK";
+    case vhpiConstDeclK: return "vhpiConstDeclK";
     case vhpiIndexedNameK: return "vhpiIndexedNameK";
     case vhpiSelectedNameK: return "vhpiSelectedNameK";
     case vhpiEnumTypeDeclK: return "vhpiEnumTypeDeclK";
@@ -80,10 +81,16 @@ const char* className(std::int32_t kind) {
     }
 }
 
-/// True for a class that has a value: a declared signal, port or generic, or a part of one.
+/// True for a class that has a value: a declared signal, port, generic or constant, or a part
+/// of one.
 bool hasValue(std::int32_t kind) {
     return kind == vhpiSigDeclK || kind == vhpiPortDeclK || kind == vhpiGenericDeclK
-           || kind == vhpiIndexedNameK || kind == vhpiSelectedNameK;
+           || kind == vhpiConstDeclK || kind == vhpiIndexedNameK || kind == vhpiSelectedNameK;
+}
+
+/// True for a class whose value is fixed: a generic or a constant.
+bool isConstant(std::int32_t kind) {
+    return kind == vhpiGenericDeclK || kind == vhpiConstDeclK;
 }
 
 /// True for a region: an instance, a block, or one iteration of a generate statement.
@@ -253,7 +260,8 @@ std::unique_ptr<PliContext::Object> PliContext::vhpiDeclared(std::uint32_t insta
     std::string localName;
     if (isGeneric) {
         const eir::Parameter& parameter = definition.parameters[objectIndex];
-        declared->vhpiClass = vhpiGenericDeclK;
+        // An architecture's constant is a parameter local to its definition, as a localparam is.
+        declared->vhpiClass = parameter.isLocal ? vhpiConstDeclK : vhpiGenericDeclK;
         declared->vhdlType = parameter.vhdlType;
         declared->target =
             Target{.kind = TargetKind::Parameter, .first = instanceIndex, .second = objectIndex};
@@ -394,8 +402,11 @@ std::vector<std::unique_ptr<PliContext::Object>> PliContext::vhpiChildren(vhpiOn
             }
             break;
         case vhpiGenericDecls:
+        case vhpiConstDecls:
             for (const std::uint32_t parameterIndex : scope.parameters) {
-                if (definition.parameters[parameterIndex].vhdlType != eir::VhdlType::None)
+                const eir::Parameter& parameter = definition.parameters[parameterIndex];
+                if (parameter.vhdlType != eir::VhdlType::None
+                    && parameter.isLocal == (type == vhpiConstDecls))
                     children.push_back(vhpiDeclared(scope.instance, parameterIndex, true));
             }
             break;
@@ -620,8 +631,8 @@ vhpiHandleT PliContext::vhpiHandleByName(const char* name, vhpiHandleT scope) {
         const std::string& wanted = parts[next];
         std::unique_ptr<Object> found;
         if (isRegion(current->vhpiClass)) {
-            for (const vhpiOneToManyT relation :
-                 {vhpiInternalRegions, vhpiPortDecls, vhpiSigDecls, vhpiGenericDecls}) {
+            for (const vhpiOneToManyT relation : {vhpiInternalRegions, vhpiPortDecls, vhpiSigDecls,
+                                                  vhpiGenericDecls, vhpiConstDecls}) {
                 for (std::unique_ptr<Object>& child : vhpiChildren(relation, *current)) {
                     if (child != nullptr && child->name == wanted) found = std::move(child);
                     if (found != nullptr) break;
@@ -689,7 +700,8 @@ vhpiIntT PliContext::vhpiGet(vhpiIntPropertyT property, vhpiHandleT object) {
     case vhpiIsUnconstrainedP: return found->baseType ? 1 : 0;
     case vhpiPositionP: return static_cast<vhpiIntT>(found->number);
     case vhpiStaticnessP:
-        return found->vhpiClass == vhpiGenericDeclK ? vhpiGloballyStatic : vhpiDynamic;
+        if (found->vhpiClass == vhpiGenericDeclK) return vhpiGloballyStatic;
+        return found->vhpiClass == vhpiConstDeclK ? vhpiLocallyStatic : vhpiDynamic;
     case vhpiArgcP: return static_cast<vhpiIntT>(arguments.size());
     default: return vhpiUndefined;
     }
@@ -919,7 +931,7 @@ int PliContext::vhpiPutValue(vhpiHandleT object, vhpiValueT* value, vhpiPutValue
     clearError();
     const Object* found = vhpiResolve(object, "vhpi_put_value");
     if (found == nullptr) return -1;
-    if (!hasValue(found->vhpiClass) || found->vhpiClass == vhpiGenericDeclK) {
+    if (!hasValue(found->vhpiClass) || isConstant(found->vhpiClass)) {
         fail(vpiError, std::format("vhpi_put_value: '{}' cannot be written", found->fullName));
         return -1;
     }
@@ -1076,7 +1088,7 @@ vhpiHandleT PliContext::vhpiRegisterCallback(vhpiCbDataT* data, std::int32_t fla
     case vhpiCbValueChange: {
         const Object* subject = vhpiResolve(data->obj, "vhpi_register_cb");
         if (subject == nullptr) return nullptr;
-        if (!hasValue(subject->vhpiClass) || subject->vhpiClass == vhpiGenericDeclK) {
+        if (!hasValue(subject->vhpiClass) || isConstant(subject->vhpiClass)) {
             fail(vpiError, "vhpi_register_cb: the object has no value to change");
             return nullptr;
         }

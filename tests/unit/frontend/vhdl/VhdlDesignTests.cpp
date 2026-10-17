@@ -299,8 +299,13 @@ end architecture;
     EXPECT_EQ(deep->sourceName, "delay_line");
     const std::optional<enzan::eir::BitVector>& stages = deep->objects[1].initialValue;
     EXPECT_EQ(stages.has_value() ? stages->ref().toUInt64() : 0U, 4U);
-    ASSERT_EQ(deep->parameters.size(), 2U);
+    // The generics, then the constant, which VHPI shows as a constant (section 9.7).
+    ASSERT_EQ(deep->parameters.size(), 3U);
     EXPECT_EQ(deep->parameters[0].name, "depth");
+    EXPECT_FALSE(deep->parameters[0].isLocal);
+    EXPECT_EQ(deep->parameters[2].name, "last");
+    EXPECT_TRUE(deep->parameters[2].isLocal);
+    EXPECT_EQ(deep->parameters[2].value.ref().toUInt64(), 4U);
 }
 
 TEST_F(VhdlDesignTest, ArrayGenericsAreFoldedAndANullOneLeavesItsGuardsBehind) {

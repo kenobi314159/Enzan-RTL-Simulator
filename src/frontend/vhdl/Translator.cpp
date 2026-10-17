@@ -121,6 +121,12 @@ private:
     /// could not.
     bool addObject(tree_t declaration);
 
+    /// Records a constant the architecture declares, with its value folded, as a parameter local
+    /// to the definition, which VHPI shows as a constant as it shows a generic (DESIGN_GUIDE.md
+    /// section 9.7). One whose value does not fold is computed where it is used, and shows as
+    /// nothing.
+    void addConstant(tree_t declaration);
+
     void declarations(tree_t container);
     void statements(tree_t container);
     void instance(tree_t statement);
@@ -1030,6 +1036,26 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     return true;
 }
 
+void ArchitectureTranslator::addConstant(tree_t declaration) {
+    tree_t value = constantValue(declaration);
+    if (value == nullptr) return;
+    type_t type = tree_type(declaration);
+    std::optional<Layout> layout = declaredLayout(declaration, folding);
+    if (!layout && type_is_array(type) && dimension_of(type) == 1) {
+        if (const std::optional<Folder::Range> bounds = constantBounds(value, type, folding);
+            bounds && bounds->length() > 0)
+            layout = arrayLayout(*bounds, type_elem(type), folding);
+    }
+    if (!layout) return;
+    std::optional<eir::BitVector> bits = constantBits(value, *layout, folding);
+    if (!bits) return;
+    result.parameters.push_back(eir::Parameter{.name = prefix + simpleName(tree_ident(declaration)),
+                                               .value = std::move(*bits),
+                                               .isLocal = true,
+                                               .location = locate(declaration),
+                                               .vhdlType = vhdlTypeFor(type, *layout)});
+}
+
 eir::ModuleDefinition ArchitectureTranslator::translate() {
     tree_t entity = specialisation.entity;
     result.name = specialisation.name;
@@ -1147,6 +1173,7 @@ void ArchitectureTranslator::declarations(tree_t container) {
         tree_t declaration = tree_decl(container, index);
         switch (tree_kind(declaration)) {
         case T_SIGNAL_DECL: static_cast<void>(addObject(declaration)); break;
+        case T_CONST_DECL: addConstant(declaration); break;
 
         // Folded where they are used, so they need nothing of their own; a generate loop's
         // parameter among them, bound to each iteration's value. A configuration specification
@@ -1154,7 +1181,6 @@ void ArchitectureTranslator::declarations(tree_t container) {
         case T_ALIAS:
         case T_SPEC:
         case T_GENERIC_DECL:
-        case T_CONST_DECL:
         case T_TYPE_DECL:
         case T_SUBTYPE_DECL:
         case T_COMPONENT:
@@ -1250,7 +1276,19 @@ void ArchitectureTranslator::forGenerate(tree_t statement) {
         std::string shown = std::to_string(value);
         if (type_is_enum(base) && value >= 0 && std::cmp_less(value, type_enum_literals(base)))
             shown = simpleName(tree_ident(type_enum_literal(base, static_cast<unsigned>(value))));
-        nested(statement, std::format("{}({})", label, shown));
+        const std::string iteration = std::format("{}({})", label, shown);
+
+        // The parameter is a constant of the iteration, which VHPI shows as one.
+        if (const std::optional<eir::Type> storage = scalarStorage(tree_type(parameter))) {
+            result.parameters.push_back(eir::Parameter{
+                .name =
+                    std::format("{}{}.{}", prefix, iteration, simpleName(tree_ident(parameter))),
+                .value = encode(value, *storage),
+                .isLocal = true,
+                .location = locate(parameter),
+                .vhdlType = vhdlTypeFor(tree_type(parameter), Layout{.storage = *storage})});
+        }
+        nested(statement, iteration);
     }
 }
 

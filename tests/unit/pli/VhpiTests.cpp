@@ -31,7 +31,8 @@ using enzan::pli::PliContext;
 using enzan::test::literal;
 using enzan::test::Simulation;
 
-/// `tb`, holding `state`, a signal of `type state_t is (idle, busy, done)`.
+/// `tb`, holding `state`, a signal of `type state_t is (idle, busy, done)`, and `limit`, an
+/// integer constant its architecture declares.
 Design makeDesign() {
     ModuleDefinition top;
     top.name = "tb";
@@ -51,6 +52,13 @@ Design makeDesign() {
     state.enumIndex = 0;
     state.vhdlType = 0;
     top.addObject(std::move(state));
+    top.vhdlTypes.push_back(
+        VhdlType{.kind = VhdlType::Kind::Integer,
+                 .name = "INTEGER",
+                 .width = 32,
+                 .ranges = {{.left = -2147483647 - 1, .right = 2147483647, .ascending = true}}});
+    top.parameters.push_back(enzan::eir::Parameter{
+        .name = "limit", .value = literal("32'd7"), .isLocal = true, .vhdlType = 1});
 
     Design design;
     design.addModule(std::move(top));
@@ -97,6 +105,19 @@ TEST_F(Vhpi, AnEnumerationTakesOnlyItsLiteralsPositions) {
     EXPECT_EQ(putEnumeration(state, 2), 0) << lastError();
     EXPECT_EQ(putEnumeration(state, 3), -1);
     EXPECT_EQ(lastError(), "vhpi_put_value: ':tb:state' takes the positions of its 3 literals");
+}
+
+TEST_F(Vhpi, AnArchitecturesConstantIsAConstantWithAValue) {
+    vhpiHandleT limit = vhpi_handle_by_name("tb.limit", nullptr);
+    ASSERT_NE(limit, nullptr) << lastError();
+    EXPECT_EQ(vhpi_get(vhpiKindP, limit), vhpiConstDeclK);
+    vhpiValueT value{.format = vhpiIntVal, .bufSize = 0, .numElems = 0, .unit = {}, .value = {}};
+    ASSERT_EQ(vhpi_get_value(limit, &value), 0) << lastError();
+    EXPECT_EQ(value.value.intg, 7);
+
+    value.value.intg = 8;
+    EXPECT_EQ(vhpi_put_value(limit, &value, vhpiDepositPropagate), -1);
+    EXPECT_EQ(lastError(), "vhpi_put_value: ':tb:limit' cannot be written");
 }
 
 TEST_F(Vhpi, AStringReturnedStaysValidWhenAnotherIsAskedFor) {

@@ -300,14 +300,15 @@ struct Parameter {
 
     BitVector value;
 
-    /// True for `localparam`. Worth distinguishing on screen: one is set from outside the
-    /// module and the other is derived inside it, which is the difference between "why is this
-    /// instance configured like that" and "what did that work out to".
+    /// True for `localparam`, and for a VHDL constant the definition declares. Worth
+    /// distinguishing on screen: one is set from outside the module and the other is derived
+    /// inside it, which is the difference between "why is this instance configured like that"
+    /// and "what did that work out to".
     bool isLocal = false;
 
     SourceLocation location;
 
-    /// For a VHDL generic, its type, an index into its definition's `vhdlTypes`, or
+    /// For a VHDL generic or constant, its type, an index into its definition's `vhdlTypes`, or
     /// VhdlType::None.
     std::uint32_t vhdlType = VhdlType::None;
 };

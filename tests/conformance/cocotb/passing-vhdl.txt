@@ -43,6 +43,7 @@ test_random_test_order
 test_seed
 test_select_testcase
 test_select_testcase_error
+test_similar_scope_name
 test_skip
 test_skipped_explicitly_run
 test_struct
