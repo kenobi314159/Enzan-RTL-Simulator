@@ -147,8 +147,9 @@ against slang only at the values slang saw, and trusted at the others; 1.2 ranks
 slower analysis above a result that is trusted rather than checked.
 
 **VHDL generics take the same shape** (5.2). An entity and its architecture become one
-unit per set of generic values, named for them, with the values folded by the VHDL
-adapter rather than by elaboration.
+unit per set of generic values, and of the bounds its ports of unconstrained types take from
+their actuals, named for them, with the values folded by the VHDL adapter rather than by
+elaboration.
 
 **Elaboration** takes a named top level plus the libraries, binds each instance
 to the unit for its values, resolves whatever parameters and generics analysis
@@ -1017,6 +1018,14 @@ What a VHDL unit becomes in EIR:
   configuration specification, `for u : c use entity work.e(a);`, names the entity and
   the architecture instead, and its binding maps the entity's generics and ports to
   the component's. A configuration declaration is not translated yet.
+- A port of an unconstrained array type takes its bounds from its actual (IEEE 1076 section
+  6.5.6.3): a whole actual's own; for a port associated in parts, the lowest to the highest
+  index its formals name, running the way its index subtype does (section 5.3.2.2); for an
+  input left open, its default's; and from a component's port of a constrained type, that
+  port's. The entity is translated once for each set of bounds its ports take, as for its
+  generics' values, and named for them, `reverser$d_7downto0_q_7downto0`, so that what its
+  architecture computes from them folds as a subprogram's does in its shape. A port of more
+  than one dimension takes no bounds from its actual yet.
 - A port associated with a whole signal is that signal's storage. One associated with
   part of a signal, with an expression, or in parts is connected through an object of
   the instantiating definition, `u$port`, which a process for each association keeps

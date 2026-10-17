@@ -683,6 +683,109 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AnUnconstrainedPortTakesItsActualsBounds) {
+    // The entity is translated once for each set of bounds its ports take, as for its generics'
+    // values, and what its architecture computes from them folds there.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity widths is
+  port (d : in bit_vector; q : out bit_vector; n : out integer);
+end entity;
+
+architecture rtl of widths is
+  constant first : integer := d'left;
+begin
+  q <= d;
+  n <= d'length * 100 + first;
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal a : bit_vector(7 downto 0) := x"5a";
+  signal b : bit_vector(1 to 4) := "1001";
+  signal c : bit_vector(15 downto 8) := x"0f";
+  signal qa, qc, qd : bit_vector(7 downto 0);
+  signal qb : bit_vector(1 to 4);
+  signal na, nb, nc, nd : integer;
+begin
+  ua : entity work.widths port map (a, qa, na);
+  ub : entity work.widths port map (b, qb, nb);
+  uc : entity work.widths port map (d => c, q => qc, n => nc);
+  ud : entity work.widths port map (d => a, q => qd, n => nd);
+
+  process
+  begin
+    wait for 1 ns;
+    assert qa = x"5a" and na = 807 report "ua" severity failure;
+    assert qb = "1001" and nb = 401 report "ub" severity failure;
+    assert qc = x"0f" and nc = 815 report "uc" severity failure;
+    assert qd = x"5a" and nd = 807 report "ud" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* bench = design->findModule("tb");
+    ASSERT_NE(bench, nullptr);
+    ASSERT_EQ(bench->instances.size(), 4U);
+    EXPECT_EQ(bench->instances[0].definitionName, "widths$d_7downto0_q_7downto0");
+    EXPECT_EQ(bench->instances[1].definitionName, "widths$d_1to4_q_1to4");
+    EXPECT_EQ(bench->instances[2].definitionName, "widths$d_15downto8_q_7downto0");
+    EXPECT_EQ(bench->instances[3].definitionName, bench->instances[0].definitionName)
+        << "the same bounds are the same definition";
+
+    // A bit is a byte, so four of them are 32 bits.
+    const ModuleDefinition* narrow = design->findModule("widths$d_1to4_q_1to4");
+    ASSERT_NE(narrow, nullptr);
+    EXPECT_EQ(narrow->objects[narrow->ports[0].objectIndex].type.bitWidth(), 32U);
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AnUnconstrainedPortOfTwoDimensionsIsReported) {
+    // Bounds are taken from an actual for one dimension only.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package grids is
+  type grid is array (natural range <>, natural range <>) of bit;
+end package;
+
+use work.grids.all;
+
+entity sink is
+  port (d : in grid);
+end entity;
+
+architecture rtl of sink is
+begin
+end architecture;
+
+use work.grids.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal g : grid(0 to 1, 0 to 2);
+begin
+  u : entity work.sink port map (d => g);
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(unsupported, nullptr) << transcript();
+    EXPECT_EQ(unsupported->message,
+              "a signal of type GRID is not supported by the VHDL frontend yet");
+    EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
+}
+
 TEST_F(VhdlDesignTest, ANestedAggregateTargetTakesEachNamesPart) {
     // A record's field of a record type named by an aggregate of its own, which GHDL 4.1 fails on
     // and the aggregates golden case therefore leaves out.

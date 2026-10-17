@@ -123,6 +123,16 @@ private:
     /// component instantiated, is: as `binding`'s port map associates them, or else by name.
     static std::optional<unsigned> entityPortFor(tree_t entity, tree_t binding, tree_t formalPort);
 
+    /// True when `port` is of an unconstrained array type, whose bounds its actual gives it.
+    static bool unconstrained(tree_t port);
+
+    /// The bounds `port`, of an unconstrained array type, takes from `associations` (IEEE 1076
+    /// section 6.5.6.3): its actual's as a whole, or those its formals' indices span when it is
+    /// associated in parts, or its default's, folded in `portScope`, when it has no actual.
+    /// Nothing, having reported why, when they are not static.
+    std::optional<Folder::Range> actualBounds(tree_t port, const std::vector<tree_t>& associations,
+                                              tree_t where, const Folder& portScope);
+
     /// Connects `port` through an object of this definition named `objectName` standing for it,
     /// kept equal to its actuals by a process for each of `associations`: for a port associated in
     /// parts, or with part of a signal, a conversion or an expression (DESIGN_GUIDE.md section
@@ -425,13 +435,25 @@ public:
         return text;
     }
 
-    /// The name of the definition `architecture` of `entity` is with `generics` bound, queueing
-    /// it for translation the first time it is asked for.
+    /// The name of the definition `architecture` of `entity` is with `generics` bound, and with the
+    /// bounds `generics` binds its ports of unconstrained types to, queueing it for translation the
+    /// first time it is asked for.
     std::string definitionFor(tree_t entity, tree_t architecture, Folder generics) {
         std::vector<std::string> values;
         values.reserve(tree_generics(entity));
-        for (unsigned index = 0; index < tree_generics(entity); ++index)
-            values.push_back(rendered(generics, tree_generic(entity, index)));
+        for (unsigned index = 0; index < tree_generics(entity); ++index) {
+            tree_t generic = tree_generic(entity, index);
+            values.push_back(
+                std::format("{}={}", simpleName(tree_ident(generic)), rendered(generics, generic)));
+        }
+        for (unsigned index = 0; index < tree_ports(entity); ++index) {
+            tree_t port = tree_port(entity, index);
+            if (const std::optional<Folder::Range> bounds = generics.boundOf(port)) {
+                values.push_back(std::format("{}={}{}{}", simpleName(tree_ident(port)),
+                                             bounds->left, bounds->ascending ? "to" : "downto",
+                                             bounds->right));
+            }
+        }
         auto key = std::pair(architecture, values);
         if (const auto known = names.find(key); known != names.end()) return known->second;
 
@@ -653,19 +675,17 @@ private:
     }
 
     /// The entity's name, with the architecture when another of the entity's architectures has
-    /// the plain name, and the generics' values when it has any, as the SystemVerilog frontend
-    /// names a parameterisation.
+    /// the plain name, and the generics' values and its unconstrained ports' bounds, `bound`, when
+    /// it has any, as the SystemVerilog frontend names a parameterisation.
     std::string nameFor(tree_t entity, tree_t architecture, const std::vector<std::string>& bound) {
         std::string base = simpleName(tree_ident(entity));
         const auto owner = baseOwners.try_emplace(base, architecture).first;
         if (owner->second != architecture) base += "$" + simpleName(tree_ident(architecture));
 
         std::string values;
-        for (unsigned index = 0; index < tree_generics(entity); ++index) {
+        for (const std::string& value : bound) {
             if (!values.empty()) values += ',';
-            values += simpleName(tree_ident(tree_generic(entity, index)));
-            values += '=';
-            values += bound[index];
+            values += value;
         }
         if (values.empty()) return uniqueName(base);
 
@@ -904,15 +924,17 @@ std::uint32_t ArchitectureTranslator::vhdlTypeFor(type_t type, const Layout& lay
 
 bool ArchitectureTranslator::addObject(tree_t declaration) {
     type_t type = tree_type(declaration);
-    std::optional<Layout> layout = layoutOf(type, folding);
+    std::optional<Layout> layout = declaredLayout(declaration, folding);
 
     // A signal of a null range holds nothing, and is declared all the same, with a placeholder
     // bit, since a bit vector has at least one: what names its bounds reads them from its type,
-    // and VHPI shows it as the empty array it is (DESIGN_GUIDE.md section 9.7). Nothing else of it
-    // is translated.
-    const std::optional<Folder::Range> bounds =
-        !layout && type_is_array(type) && dimension_of(type) == 1 ? folding.rangeOf(type)
-                                                                  : std::nullopt;
+    // or from its actual for a port of an unconstrained type, and VHPI shows it as the empty array
+    // it is (DESIGN_GUIDE.md section 9.7). Nothing else of it is translated.
+    std::optional<Folder::Range> bounds;
+    if (!layout && type_is_array(type) && dimension_of(type) == 1) {
+        bounds = folding.boundOf(declaration);
+        if (!bounds) bounds = folding.rangeOf(type);
+    }
     const Folder::Range index = bounds.value_or(Folder::Range{});
     const bool null = bounds.has_value() && index.length() == 0;
     if (null) {
@@ -1167,6 +1189,12 @@ void ArchitectureTranslator::block(tree_t statement) {
         const bool whole =
             associations.size() == 1
             && (tree_subkind(first) == P_POS || tree_kind(tree_name(first)) == T_REF);
+        if (unconstrained(port)) {
+            const std::optional<Folder::Range> bounds =
+                actualBounds(port, associations, statement, folding);
+            if (!bounds) continue;
+            folding.bindBounds(port, *bounds);
+        }
         if (whole && tree_subkind(port) == PORT_INOUT && tree_kind(actual) == T_REF
             && tree_has_ref(actual)) {
             if (const std::optional<std::uint32_t> object = objectFor(tree_ref(actual))) {
@@ -1295,11 +1323,6 @@ void ArchitectureTranslator::instance(tree_t statement) {
     }
     tree_t formals = component != nullptr ? component : entity;
 
-    eir::Instance created;
-    created.name = prefix + simpleName(tree_ident(statement));
-    created.definitionName = design.definitionFor(entity, architecture, std::move(*generics));
-    created.location = locate(statement);
-
     // Each port's associations, in order: one, or one for each part of a port associated in
     // parts (IEEE 1076 section 6.5.7.1). A component's port is the entity's of its name.
     std::vector<std::vector<tree_t>> byPort(tree_ports(entity));
@@ -1326,6 +1349,32 @@ void ArchitectureTranslator::instance(tree_t statement) {
         byPort[portNumber].push_back(association);
         formalPorts[portNumber] = formalPort;
     }
+
+    // A port of an unconstrained type takes its bounds from its actual (IEEE 1076 section
+    // 6.5.6.3), and the entity is translated for them as for its generics' values. A component's
+    // port gives the entity's its bounds, its own or, unconstrained too, its actual's.
+    for (unsigned portNumber = 0; portNumber < tree_ports(entity); ++portNumber) {
+        tree_t port = tree_port(entity, portNumber);
+        tree_t formalPort = formalPorts[portNumber];
+        const bool formalTakesBounds =
+            formalPort != nullptr && formalPort != port && unconstrained(formalPort);
+        if (!unconstrained(port) && !formalTakesBounds) continue;
+        std::optional<Folder::Range> bounds = formalPort == nullptr || formalTakesBounds
+                                                  ? std::nullopt
+                                                  : childGenerics.rangeOf(tree_type(formalPort));
+        if (!bounds) bounds = actualBounds(port, byPort[portNumber], statement, *generics);
+        if (!bounds) return;
+        if (unconstrained(port)) {
+            generics->bindBounds(port, *bounds);
+            childGenerics.bindBounds(port, *bounds);
+        }
+        if (formalTakesBounds) childGenerics.bindBounds(formalPort, *bounds);
+    }
+
+    eir::Instance created;
+    created.name = prefix + simpleName(tree_ident(statement));
+    created.definitionName = design.definitionFor(entity, architecture, std::move(*generics));
+    created.location = locate(statement);
 
     for (unsigned portNumber = 0; portNumber < tree_ports(entity); ++portNumber) {
         const std::vector<tree_t>& associations = byPort[portNumber];
@@ -1389,14 +1438,80 @@ std::optional<unsigned> ArchitectureTranslator::entityPortFor(tree_t entity, tre
     return std::nullopt;
 }
 
+bool ArchitectureTranslator::unconstrained(tree_t port) {
+    type_t type = tree_type(port);
+    return type_is_array(type) && dimension_of(type) == 1 && type_is_unconstrained(type);
+}
+
+std::optional<Folder::Range>
+ArchitectureTranslator::actualBounds(tree_t port, const std::vector<tree_t>& associations,
+                                     tree_t where, const Folder& portScope) {
+    tree_t first = associations.empty() ? nullptr : associations.front();
+    const bool whole = associations.size() == 1
+                       && (tree_subkind(first) == P_POS || tree_kind(tree_name(first)) == T_REF);
+
+    // An input left open is its default, which NVC requires it to have.
+    if (first == nullptr || (whole && tree_kind(tree_value(first)) == T_OPEN)) {
+        std::optional<Folder::Range> bounds;
+        if (tree_has_value(port))
+            bounds = constantBounds(tree_value(port), tree_type(port), portScope);
+        if (!bounds) {
+            unsupported(where, std::format("leaving open the port '{}' of an unconstrained type "
+                                           "with no static default",
+                                           simpleName(tree_ident(port))));
+        }
+        return bounds;
+    }
+
+    if (whole) {
+        // A conversion to an unconstrained type has its operand's bounds.
+        tree_t actual = tree_value(first);
+        std::optional<Folder::Range> bounds = folding.boundsOf(actual);
+        while (!bounds && tree_kind(actual) == T_TYPE_CONV) {
+            actual = tree_value(actual);
+            bounds = folding.boundsOf(actual);
+        }
+        if (!bounds) unsupported(first, "taking a port's bounds from this actual");
+        return bounds;
+    }
+
+    // Associated in parts, the port runs the way its index subtype does, from the lowest index
+    // its formals name to the highest (IEEE 1076 section 5.3.2.2).
+    std::optional<std::int64_t> low;
+    std::optional<std::int64_t> high;
+    for (tree_t association : associations) {
+        tree_t formal = tree_subkind(association) == P_POS ? nullptr : tree_name(association);
+        std::optional<Folder::Range> part;
+        if (formal != nullptr && tree_kind(formal) == T_ARRAY_REF && tree_params(formal) == 1) {
+            if (const std::optional<std::int64_t> index =
+                    folding.integer(tree_value(tree_param(formal, 0))))
+                part = Folder::Range{.left = *index, .right = *index, .ascending = true};
+        } else if (formal != nullptr && tree_kind(formal) == T_ARRAY_SLICE) {
+            part = folding.range(tree_range(formal, 0));
+        }
+        if (!part || part->length() == 0 || tree_kind(tree_value(formal)) != T_REF) {
+            unsupported(association, "associating this part of a port of an unconstrained type");
+            return std::nullopt;
+        }
+        low = std::min(low.value_or(part->low()), part->low());
+        high = std::max(high.value_or(part->high()), part->high());
+    }
+    const std::optional<Folder::Range> index = folding.rangeOf(index_type_of(tree_type(port), 0));
+    if (!index || !low || !high) {
+        unsupported(first, "associating in parts a port of an unconstrained type");
+        return std::nullopt;
+    }
+    return index->ascending ? Folder::Range{.left = *low, .right = *high, .ascending = true}
+                            : Folder::Range{.left = *high, .right = *low, .ascending = false};
+}
+
 std::optional<std::uint32_t>
 ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree_t formalPort,
                                        const std::vector<tree_t>& associations,
                                        const Folder& childGenerics) {
-    const std::optional<Layout> layout = layoutOf(tree_type(port), childGenerics);
+    const std::optional<Layout> layout = declaredLayout(port, childGenerics);
     if (!layout) {
-        unsupported(associations.front(),
-                    "associating a port whose bounds come from its actual with this");
+        unsupported(associations.front(), "associating a port of this type with this");
         return std::nullopt;
     }
     const bool input = tree_subkind(port) == PORT_IN;

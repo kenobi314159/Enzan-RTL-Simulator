@@ -362,6 +362,7 @@ billowitch/compliant/tc1775.vhd
 billowitch/compliant/tc1776.vhd
 billowitch/compliant/tc1781.vhd
 billowitch/compliant/tc1782.vhd
+billowitch/compliant/tc1787.vhd
 billowitch/compliant/tc179.vhd
 billowitch/compliant/tc1792.vhd
 billowitch/compliant/tc1793.vhd

@@ -77,6 +77,11 @@ struct Layout {
 /// access or a file type, or an array whose bounds are not static or hold nothing.
 [[nodiscard]] std::optional<Layout> layoutOf(type_t type, const Folder& folder);
 
+/// How the object `declaration` declares is laid out: as its subtype is, or for one of an
+/// unconstrained array type, a port taking its bounds from its actual say, with the bounds
+/// `folder` binds it to. Nothing when neither gives it bounds, or they hold nothing.
+[[nodiscard]] std::optional<Layout> declaredLayout(tree_t declaration, const Folder& folder);
+
 /// The layout of an array with `index` as its bounds and elements of `elementType`, and with the
 /// further dimensions `inner` when it has more than one.
 [[nodiscard]] std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType,

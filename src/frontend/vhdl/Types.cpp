@@ -396,6 +396,15 @@ std::optional<Layout> layoutOf(type_t type, const Folder& folder) {
     return Layout{.storage = *storage};
 }
 
+std::optional<Layout> declaredLayout(tree_t declaration, const Folder& folder) {
+    type_t type = tree_type(declaration);
+    if (std::optional<Layout> layout = layoutOf(type, folder)) return layout;
+    if (!type_is_array(type) || dimension_of(type) != 1) return std::nullopt;
+    const std::optional<Folder::Range> bounds = folder.boundOf(declaration);
+    if (!bounds) return std::nullopt;
+    return arrayLayout(*bounds, type_elem(type), folder);
+}
+
 eir::Encoding encodingOf(type_t type) {
     while (type != nullptr && type_is_array(type)) type = type_elem(type);
     if (type == nullptr) return eir::Encoding::Bits;

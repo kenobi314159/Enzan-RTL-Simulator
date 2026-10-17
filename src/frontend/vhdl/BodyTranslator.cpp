@@ -2699,7 +2699,7 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
         }
         const std::optional<std::uint32_t> object = owner.objectFor(declaration);
         if (!object) break;
-        const std::optional<Layout> layout = layoutFor(tree_type(declaration));
+        const std::optional<Layout> layout = declaredLayout(declaration, folder());
         if (!layout) break;
         return Place{.objectIndex = *object, .layout = *layout};
     }

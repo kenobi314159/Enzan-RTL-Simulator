@@ -8,8 +8,9 @@ analysis (section 5.2). Built only with `-DENZAN_ENABLE_VHDL=ON`.
 - Drive NVC's analysis over the sources — lexing, parsing, semantic checking, simplification
   and bounds checking — into NVC's units in a library, and translate NVC's diagnostics into
   Enzan's diagnostic engine (ENZ2001–ENZ2004).
-- Walk NVC's analysed trees and emit EIR, one unit per entity, architecture and set of generic
-  values, folding generics as it goes (section 5.2), from the top down the hierarchy.
+- Walk NVC's analysed trees and emit EIR, one unit per entity, architecture, set of generic
+  values and set of bounds its unconstrained ports take, folding generics as it goes (section
+  5.2), from the top down the hierarchy.
 
 ## How NVC is run
 
@@ -48,7 +49,8 @@ parent. A design's work library is NVC's in-memory one, written nowhere.
 So far: entities, architectures, entity instances, component instances bound by default or by
 configuration specifications, generics of scalar and array types, null strings among them; signals
 and ports of enumeration, integer, physical and real types, of arrays of them, of one or more
-dimensions, with static bounds, and of records; ports associated with signals, parts of them,
+dimensions, with static bounds, and of records; ports of unconstrained array types of one
+dimension, which take their bounds from their actuals; ports associated with signals, parts of them,
 expressions and conversion functions, whole or in parts; `if` and `for` generate statements and
 blocks, with generics and ports; constant functions; processes with variables, `if`, `case`, loops,
 `exit`, `next`, `wait` with a sensitivity, a condition, a timeout or any of them together, signal
