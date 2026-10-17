@@ -22,6 +22,8 @@ array4
 array5
 array6
 array7
+array8
+array9
 assert1
 assert12
 assert13
@@ -58,6 +60,7 @@ concat2
 concat3
 concat4
 concat5
+concat6
 cond1
 cond2
 cond3
@@ -130,6 +133,7 @@ func14
 func15
 func16
 func17
+func2
 func21
 func25
 func3
@@ -326,6 +330,7 @@ signal9
 slice1
 slice2
 slice3
+slice4
 slice5
 stack1
 synopsys1

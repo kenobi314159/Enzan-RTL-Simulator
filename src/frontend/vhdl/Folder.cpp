@@ -324,7 +324,8 @@ std::optional<std::int64_t> Folder::attribute(tree_t expression) const {
     case ATTR_RIGHT:
     case ATTR_LOW:
     case ATTR_HIGH:
-    case ATTR_LENGTH: {
+    case ATTR_LENGTH:
+    case ATTR_ASCENDING: {
         if (!tree_has_type(prefix)) return std::nullopt;
         // An array's attribute names a dimension, the first unless a parameter says otherwise.
         unsigned dimension = 0;
@@ -340,6 +341,7 @@ std::optional<std::int64_t> Folder::attribute(tree_t expression) const {
         case ATTR_RIGHT: return folded->right;
         case ATTR_LOW: return folded->low();
         case ATTR_HIGH: return folded->high();
+        case ATTR_ASCENDING: return folded->ascending ? 1 : 0;
         default: return folded->length();
         }
     }

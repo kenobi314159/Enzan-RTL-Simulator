@@ -1325,6 +1325,35 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "3") << "(10 - 3) - (5 - 1)";
 }
 
+TEST_F(VhdlDesignTest, AscendingFoldsForTypesAndArrays) {
+    // Static, so it can choose a generate statement's alternative.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  type countdown is range 10 downto 0;
+  signal up : bit_vector(0 to 3);
+  signal down : bit_vector(3 downto 0);
+begin
+  g : if up'ascending and not down'ascending generate
+    process
+    begin
+      report boolean'image(integer'ascending) & " " & boolean'image(countdown'ascending)
+        & " " & boolean'image(down'ascending(1));
+      wait;
+    end process;
+  end generate;
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"true false false"});
+}
+
 TEST_F(VhdlDesignTest, AnAttributeGivingNoValueOfItsTypeEndsTheRun) {
     // T'VAL gives a value of T, and T'SUCC and T'PRED one of its base type; a position outside
     // that is an error rather than a value no literal names (IEEE 1076 section 16.2.2).

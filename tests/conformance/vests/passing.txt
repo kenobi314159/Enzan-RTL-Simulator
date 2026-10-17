@@ -1275,6 +1275,7 @@ billowitch/compliant/tc995.vhd
 clifton-labs/compliant/functional/aggregates/simple-aggregate-lvalue.vhdl
 clifton-labs/compliant/functional/aggregates/simple-integer-aggregate.vhdl
 clifton-labs/compliant/functional/aliases/objects/simple-string-alias.vhdl
+clifton-labs/compliant/functional/attributes/array/simple-ascending-attribute.vhdl
 clifton-labs/compliant/functional/attributes/array/simple-high-attribute.vhdl
 clifton-labs/compliant/functional/attributes/array/simple-left-attribute.vhdl
 clifton-labs/compliant/functional/attributes/array/simple-length-attribute.vhdl
