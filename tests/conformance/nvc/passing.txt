@@ -80,6 +80,7 @@ conv1
 conv12
 conv15
 conv17
+conv19
 conv3
 conv4
 conv5
@@ -114,10 +115,12 @@ elab23
 elab24
 elab25
 elab27
+elab29
 elab30
 elab32
 elab4
 elab40
+elab41
 elab42
 elab5
 elab6
@@ -159,6 +162,7 @@ ieee17
 ieee2
 ieee6
 image1
+inertial1
 issue10
 issue1036
 issue104
@@ -169,6 +173,7 @@ issue1094
 issue110
 issue111
 issue112
+issue1143
 issue115
 issue116
 issue1186
@@ -181,6 +186,7 @@ issue1277
 issue13
 issue1332
 issue1348
+issue1361
 issue1396
 issue146
 issue148
@@ -236,6 +242,7 @@ issue547
 issue56
 issue570
 issue59
+issue595
 issue60
 issue609
 issue613
@@ -263,6 +270,7 @@ issue9
 issue90
 issue95
 issue96
+issue971
 issue98
 jcore1
 jcore2
@@ -337,6 +345,8 @@ signal24
 signal26
 signal3
 signal33
+signal35
+signal36
 signal37
 signal4
 signal5

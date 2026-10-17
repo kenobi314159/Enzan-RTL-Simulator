@@ -2051,6 +2051,10 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
     case T_REF: return reference(expression);
     case T_FCALL: return call(expression);
     case T_QUALIFIED: return this->expression(tree_value(expression), layout ? &*layout : context);
+
+    // An actual of a port that is an expression, or `inertial` and one, which an association's
+    // process assigns a delta cycle later as for any expression (IEEE 1076 section 6.5.6.3).
+    case T_INERTIAL: return this->expression(tree_value(expression), context);
     case T_TYPE_CONV: return conversion(expression);
     case T_ATTR_REF: return attribute(expression);
 

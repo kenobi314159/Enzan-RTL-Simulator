@@ -2,6 +2,7 @@
 # GHDL's testsuite/gna. ratchet.sh holds every run to this list: a test on it must pass, and a
 # test that newly passes is added in the same commit as the change that made it pass.
 bug010
+bug0103
 bug0106
 bug0108
 bug0111
@@ -71,6 +72,7 @@ deb573721
 fst01
 issue106
 issue107
+issue1129
 issue1137
 issue1196
 issue1224
@@ -127,6 +129,7 @@ issue1727
 issue1768
 issue1772
 issue1810
+issue1814
 issue1818
 issue1823
 issue1831
@@ -135,6 +138,7 @@ issue1843
 issue1857
 issue1862
 issue1864
+issue1867
 issue1894
 issue1897
 issue190
@@ -162,6 +166,7 @@ issue2100
 issue2101
 issue2104
 issue2117
+issue2118
 issue212
 issue2138
 issue2147
@@ -205,10 +210,12 @@ issue2410
 issue242
 issue2425
 issue243
+issue2437
 issue2440
 issue2441
 issue2445
 issue2447
+issue2448
 issue2455
 issue2458
 issue2459
@@ -266,6 +273,7 @@ issue2614
 issue2618
 issue2624
 issue2630
+issue2631
 issue264
 issue273
 issue278
@@ -372,6 +380,7 @@ issue877
 issue881
 issue886
 issue899
+issue917
 issue99
 sr2553
 sr2940

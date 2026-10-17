@@ -786,6 +786,55 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
 }
 
+TEST_F(VhdlDesignTest, AnExpressionActualIsASignalAssignedADeltaLater) {
+    // `a xor b`, which NVC marks inertial, is an implicit signal's value rather than a connection
+    // the update applies (IEEE 1076 section 6.5.6.3).
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity buf is
+  port (i : in bit; o : out bit);
+end entity;
+
+architecture rtl of buf is
+begin
+  o <= i;
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal a, b, r : bit;
+begin
+  u : entity work.buf port map (i => a xor b, o => r);
+
+  process
+  begin
+    a <= '1';
+    wait for 0 ns;
+    wait for 0 ns;
+    assert r = '0' report "followed too soon" severity failure;
+    wait for 0 ns;
+    assert r = '1' report "did not follow" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* bench = design->findModule("tb");
+    ASSERT_NE(bench, nullptr);
+    const auto association = std::ranges::find(bench->processes, "u$i", &enzan::eir::Process::name);
+    ASSERT_NE(association, bench->processes.end());
+    EXPECT_FALSE(association->connectsPort);
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
 TEST_F(VhdlDesignTest, AnArchitecturesAliasIsWhatItNames) {
     // Two processes driving disjoint parts of one signal through aliases drive those bits alone,
     // as they would naming the parts; a port associated with an alias of a whole signal is that
