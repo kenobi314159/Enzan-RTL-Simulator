@@ -1056,6 +1056,13 @@ What a VHDL unit becomes in EIR:
   brings the actual back into once resolved, converted the other way. So a pad cell on one bit
   of a bus sees the bus as every driver of it makes it, its own included. A block's inout port
   is associated with a whole signal only, yet.
+- A port of mode out, inout or buffer is a source of its actual whatever its architecture does
+  (IEEE 1076 section 14.7.3.2), so each bit of one that nothing in the architecture drives, no
+  process and no instance's port, is given a process that drives it at the port's default and
+  never runs again. An unresolved signal a parent drives as well is then driven twice, which is
+  an error, and an inout port a design only reads puts its default on a resolved bus: `'U'`,
+  unless it declares `'Z'`. A record port with a field of a resolved subtype is not given one
+  yet, since a record's fields are not resolved yet and a second driver of one would be refused.
 - A constant function is run as the adapter folds: a call of a pure function of the
   design or of the IEEE packages whose arguments fold runs its body's variables, scalar
   or composite, `if`, `case`, loops and `return` over their values, with an

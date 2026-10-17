@@ -132,6 +132,14 @@ private:
     /// True when `port` is of an unconstrained array type, whose bounds its actual gives it.
     static bool unconstrained(tree_t port);
 
+    /// True when `type` is a record with a field of a resolved subtype, at any depth.
+    static bool hasResolvedField(type_t type);
+
+    /// Makes each port of mode out, inout or buffer a source of its actual where nothing in the
+    /// architecture drives it, as every such port is (IEEE 1076 section 14.7.3.2): its bits
+    /// that no process drives, and no instance's port, are driven at its default for ever.
+    void addPortSources(tree_t entity);
+
     /// The bounds `port`, of an unconstrained array type, takes from `associations` (IEEE 1076
     /// section 6.5.6.3): its actual's as a whole, or those its formals' indices span when it is
     /// associated in parts, or its default's, folded in `portScope`, when it has no actual.
@@ -186,6 +194,10 @@ private:
     eir::ModuleDefinition result;
     std::map<tree_t, std::uint32_t> objects;
     std::map<type_t, std::uint32_t> enums;
+
+    /// The objects associated as a whole with a port of an instance that is a source of them, of
+    /// mode out, inout or buffer, which drives them whatever this architecture does.
+    std::set<std::uint32_t> sourcedByInstances;
 
     /// What a name declared where translation is begins with: the generate blocks and blocks it
     /// is inside, each followed by a dot, as SystemVerilog's are (DESIGN_GUIDE.md section 5.1).
@@ -1061,7 +1073,62 @@ eir::ModuleDefinition ArchitectureTranslator::translate() {
     declarations(specialisation.architecture);
     statements(entity);
     statements(specialisation.architecture);
+    addPortSources(entity);
     return std::move(result);
+}
+
+void ArchitectureTranslator::addPortSources(tree_t entity) {
+    for (unsigned index = 0; index < tree_ports(entity); ++index) {
+        tree_t port = tree_port(entity, index);
+        const auto mode = static_cast<port_mode_t>(tree_subkind(port));
+        if (mode != PORT_OUT && mode != PORT_INOUT && mode != PORT_BUFFER) continue;
+        const auto found = objects.find(port);
+        if (found == objects.end() || sourcedByInstances.contains(found->second)) continue;
+        // A record's fields are not resolved yet, so a second source of a resolved one could
+        // only be refused.
+        if (hasResolvedField(tree_type(port))) continue;
+        const std::uint32_t objectIndex = found->second;
+        const std::uint32_t width = result.objects[objectIndex].type.bitWidth();
+        if (result.objects[objectIndex].holdsNothing) continue;
+
+        // The bits the architecture's processes drive, merged; the rest have no source in it.
+        std::vector<eir::WriteExtent> driven;
+        for (const eir::Process& process : result.processes) {
+            for (const eir::WriteExtent& extent : process.writeSet)
+                if (extent.objectIndex == objectIndex) driven.push_back(extent);
+        }
+        eir::normaliseWriteSet(driven);
+        std::vector<eir::WriteExtent> undriven;
+        std::uint32_t next = 0;
+        for (const eir::WriteExtent& extent : driven) {
+            if (extent.lowBit > next) {
+                undriven.push_back(eir::WriteExtent{
+                    .objectIndex = objectIndex, .lowBit = next, .width = extent.lowBit - next});
+            }
+            next = std::max(next, extent.endBit());
+        }
+        if (next < width) {
+            undriven.push_back(eir::WriteExtent{
+                .objectIndex = objectIndex, .lowBit = next, .width = width - next});
+        }
+        if (undriven.empty()) continue;
+
+        // A process that drives those bits and never runs again: its drivers start at the port's
+        // default and keep it.
+        eir::Process source;
+        source.name = simpleName(tree_ident(port)) + "$default";
+        source.kind = eir::ProcessKind::Always;
+        source.drivesSignals = true;
+        source.location = locate(port);
+        source.writeSet = std::move(undriven);
+        source.eventLists.emplace_back();
+        eir::BasicBlock entry;
+        entry.label = "entry";
+        entry.instructions.push_back(eir::Instruction::make(
+            eir::Opcode::WaitEvents, {}, eir::Operand::immediate(0), eir::Operand::block(0)));
+        source.blocks.push_back(std::move(entry));
+        result.processes.push_back(std::move(source));
+    }
 }
 
 void ArchitectureTranslator::declarations(tree_t container) {
@@ -1421,6 +1488,7 @@ void ArchitectureTranslator::instance(tree_t statement) {
                 if (const std::optional<std::uint32_t> object = objectFor(tree_ref(actual))) {
                     created.connections.push_back(
                         eir::PortConnection{.portIndex = portNumber, .objectIndex = *object});
+                    if (tree_subkind(port) != PORT_IN) sourcedByInstances.insert(*object);
                     continue;
                 }
             }
@@ -1464,6 +1532,16 @@ std::optional<unsigned> ArchitectureTranslator::entityPortFor(tree_t entity, tre
             return port;
     }
     return std::nullopt;
+}
+
+bool ArchitectureTranslator::hasResolvedField(type_t type) {
+    if (!type_is_record(type)) return false;
+    type_t base = type_base_recur(type);
+    for (unsigned index = 0; index < type_fields(base); ++index) {
+        type_t field = tree_type(type_field(base, index));
+        if (resolutionOf(field) || hasResolvedField(field)) return true;
+    }
+    return false;
 }
 
 bool ArchitectureTranslator::unconstrained(tree_t port) {

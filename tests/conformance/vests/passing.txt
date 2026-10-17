@@ -57,6 +57,7 @@ billowitch/compliant/tc1121.vhd
 billowitch/compliant/tc1122.vhd
 billowitch/compliant/tc1123.vhd
 billowitch/compliant/tc1126.vhd
+billowitch/compliant/tc113.vhd
 billowitch/compliant/tc1138.vhd
 billowitch/compliant/tc114.vhd
 billowitch/compliant/tc1140.vhd
@@ -76,6 +77,7 @@ billowitch/compliant/tc1164.vhd
 billowitch/compliant/tc1165.vhd
 billowitch/compliant/tc1166.vhd
 billowitch/compliant/tc1167.vhd
+billowitch/compliant/tc117.vhd
 billowitch/compliant/tc1174.vhd
 billowitch/compliant/tc1175.vhd
 billowitch/compliant/tc1176.vhd

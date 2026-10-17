@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -999,6 +1000,86 @@ end architecture;
     ASSERT_NE(unsupported, nullptr) << transcript();
     EXPECT_EQ(unsupported->message, "associating a block's inout port with this is not supported "
                                     "by the VHDL frontend yet");
+}
+
+TEST_F(VhdlDesignTest, APortNothingDrivesIsASourceOfItsDefault) {
+    // An out port nothing in its architecture assigns still drives its actual, with its default,
+    // and so does each bit of one the architecture assigns only in part.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity idle is
+  port (o : out integer := 7; b : out bit_vector(1 downto 0) := "10");
+end entity;
+
+architecture rtl of idle is
+begin
+  b(0) <= '1';
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal o : integer := 1;
+  signal b : bit_vector(1 downto 0) := "00";
+begin
+  u : entity work.idle port map (o => o, b => b);
+
+  process
+  begin
+    wait for 1 ns;
+    assert o = 7 and b = "11" report integer'image(o) & to_string(b) severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const ModuleDefinition* idle = design->findModule("idle");
+    ASSERT_NE(idle, nullptr);
+    for (const auto& [name, lowBit, width] :
+         {std::tuple<std::string_view, std::uint32_t, std::uint32_t>{"o$default", 0, 32},
+          {"b$default", 8, 8}}) {
+        const auto source = std::ranges::find(idle->processes, name, &enzan::eir::Process::name);
+        ASSERT_NE(source, idle->processes.end()) << name;
+        ASSERT_EQ(source->writeSet.size(), 1U) << name;
+        EXPECT_EQ(source->writeSet[0].lowBit, lowBit) << name;
+        EXPECT_EQ(source->writeSet[0].width, width) << name;
+    }
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AnUnresolvedSignalAPortAndAProcessBothDriveIsRefused) {
+    // The port is a source even though nothing assigns it, so the signal has two.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity idle is
+  port (o : out integer := 7);
+end entity;
+
+architecture rtl of idle is
+begin
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal o : integer := 1;
+begin
+  u : entity work.idle port map (o => o);
+  o <= 3;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    const Simulation simulation(std::move(*design), "tb");
+    EXPECT_FALSE(simulation.ready());
 }
 
 TEST_F(VhdlDesignTest, AnExpressionActualIsASignalAssignedADeltaLater) {

@@ -136,6 +136,9 @@ enzan_add_vhdl_golden_test(actuals)
 # Inout ports associated with parts of a bus and through conversions.
 enzan_add_vhdl_golden_test(inout)
 
+# Out and inout ports that nothing drives, which are sources of their actuals all the same.
+enzan_add_vhdl_golden_test(sources)
+
 # Blocks with generics and ports.
 enzan_add_vhdl_golden_test(blocks)
 
