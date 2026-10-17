@@ -38,6 +38,7 @@ test_one_empty_test
 test_package
 test_packed_array
 test_packed_union
+test_plusargs
 test_random_test_order
 test_seed
 test_select_testcase

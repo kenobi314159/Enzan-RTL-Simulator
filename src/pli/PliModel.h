@@ -100,6 +100,13 @@ struct PliContext::Object {
     std::int64_t number = 0;
     std::string text;
 
+    /// `name` and `fullName` as VHPI gives them, in upper case: made the first time asked for and
+    /// kept with the handle, so that a string `vhpi_get_str` returned stays valid however many it
+    /// returns after it, as VPI's do. An application holding two at once, as cocotb's messages
+    /// do, would otherwise read freed memory once the second outgrew the first.
+    mutable std::string vhpiName;
+    mutable std::string vhpiFullName;
+
     /// What a VHPI iterator has yet to return, made as it is scanned; owned until then.
     std::vector<std::unique_ptr<Object>> pending;
 };

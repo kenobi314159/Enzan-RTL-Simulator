@@ -1942,7 +1942,8 @@ the NVC the VHDL frontend is built on carries, so VHPI is built only with that f
   `vhpiElemType` an array's element, `vhpiConstraints` its ranges, `vhpiEnumLiterals` an
   enumeration's literals. Names are basic identifiers in upper case, `vhpiCaseNameP`'s as well
   as `vhpiNameP`'s: neither NVC's analysis nor Enzan keeps the case a name was declared in, and
-  NVC gives the same.
+  NVC gives the same. A string `vhpi_get_str` returns lives with its handle, as VPI's do, so an
+  application may hold several at once.
 - **Values** are read from and written to the bits in VHPI's formats by the type: a
   std_logic or a bit and arrays of them in the Logic formats, other enumerations' positions,
   integers, reals, strings of characters, binary strings. A record is read and written field by

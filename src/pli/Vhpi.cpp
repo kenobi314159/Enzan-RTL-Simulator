@@ -699,28 +699,32 @@ const vhpiCharT* PliContext::vhpiGetStr(vhpiStrPropertyT property, vhpiHandleT o
     clearError();
     const Object* found = vhpiResolve(object, "vhpi_get_str");
     if (found == nullptr) return nullptr;
+    // Each string lives in the interned object, so it stays valid for as long as its handle does.
+    const auto text = [](const std::string& value) {
+        return reinterpret_cast<const vhpiCharT*>(value.c_str());
+    };
     switch (property) {
     // A VHDL name is a basic identifier, given in upper case; a tool's and an argument's are not.
     // Neither NVC's analysis nor Enzan keeps the case a name was declared in, so its CaseName is
     // its Name, as NVC gives it (section 9.7).
     case vhpiNameP:
     case vhpiCaseNameP:
-        vhpiString = found->vhpiClass == vhpiToolK || found->vhpiClass == vhpiArgvK
-                         ? found->name
-                         : upper(found->name);
-        break;
+        if (found->vhpiClass == vhpiToolK || found->vhpiClass == vhpiArgvK)
+            return text(found->name);
+        if (found->vhpiName.empty()) found->vhpiName = upper(found->name);
+        return text(found->vhpiName);
     case vhpiFullNameP:
-    case vhpiFullCaseNameP: vhpiString = upper(found->fullName); break;
+    case vhpiFullCaseNameP:
+        if (found->vhpiFullName.empty()) found->vhpiFullName = upper(found->fullName);
+        return text(found->vhpiFullName);
     case vhpiKindStrP:
-        vhpiString =
-            className(found->kind == Object::Kind::Callback ? vhpiCallbackK : found->vhpiClass);
-        break;
+        return reinterpret_cast<const vhpiCharT*>(
+            className(found->kind == Object::Kind::Callback ? vhpiCallbackK : found->vhpiClass));
     case vhpiStrValP:
-    case vhpiToolVersionP: vhpiString = found->text; break;
-    case vhpiFileNameP: vhpiString = found->file; break;
+    case vhpiToolVersionP: return text(found->text);
+    case vhpiFileNameP: return text(found->file);
     default: return nullptr;
     }
-    return reinterpret_cast<const vhpiCharT*>(vhpiString.c_str());
 }
 
 vhpiPhysT PliContext::vhpiGetPhys(vhpiPhysPropertyT property, vhpiHandleT /*object*/) {

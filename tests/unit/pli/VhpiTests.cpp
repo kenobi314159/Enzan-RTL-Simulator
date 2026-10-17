@@ -99,4 +99,24 @@ TEST_F(Vhpi, AnEnumerationTakesOnlyItsLiteralsPositions) {
     EXPECT_EQ(lastError(), "vhpi_put_value: ':tb:state' takes the positions of its 3 literals");
 }
 
+TEST_F(Vhpi, AStringReturnedStaysValidWhenAnotherIsAskedFor) {
+    // cocotb formats two of them into one message, the second asked for before the first is read.
+    vhpiHandleT state = vhpi_handle_by_name("tb.state", nullptr);
+    ASSERT_NE(state, nullptr) << lastError();
+    vhpiHandleT root = vhpi_handle(vhpiRootInst, nullptr);
+    ASSERT_NE(root, nullptr) << lastError();
+
+    const auto* name = reinterpret_cast<const char*>(vhpi_get_str(vhpiNameP, state));
+    const auto* kind = reinterpret_cast<const char*>(vhpi_get_str(vhpiKindStrP, root));
+    const auto* full = reinterpret_cast<const char*>(vhpi_get_str(vhpiFullNameP, state));
+    const auto* again = reinterpret_cast<const char*>(vhpi_get_str(vhpiNameP, state));
+    ASSERT_NE(name, nullptr);
+    ASSERT_NE(kind, nullptr);
+    ASSERT_NE(full, nullptr);
+    EXPECT_EQ(std::string(name), "STATE");
+    EXPECT_EQ(std::string(kind), "vhpiRootInstK");
+    EXPECT_EQ(std::string(full), ":TB:STATE");
+    EXPECT_EQ(again, name) << "the same handle's name is the same string";
+}
+
 } // namespace

@@ -256,9 +256,6 @@ private:
     bool vhpiWrite(const Object& object, const eir::BitVector& bits, vhpiPutValueModeT mode);
     int vhpiFormat(const Object& object, const eir::BitVector& bits, vhpiValueT& value);
     void vhpiFire(Callback& callback);
-
-    /// What `vhpi_get_str` last returned, kept until it is called again as the standard says.
-    std::string vhpiString;
 #endif
 
     [[nodiscard]] std::ostream& transcriptStream() const;
