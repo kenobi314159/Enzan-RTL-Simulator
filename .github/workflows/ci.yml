@@ -175,8 +175,8 @@ jobs:
       - name: Design regression - NEORV32
         if: matrix.preset == 'gcc-release' && github.ref == 'refs/heads/main'
         run: >
-          tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)"
-          build/designs/neorv32
+          tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)" \
+            build/designs/neorv32
 
       - name: Keep the NEORV32 logs
         if: failure() && matrix.preset == 'gcc-release'
