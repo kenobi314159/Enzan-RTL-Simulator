@@ -1107,7 +1107,9 @@ What a VHDL unit becomes in EIR:
   severity to end it at, as GHDL's option of the name does. `wait;` waits on an empty event list,
   which nothing ever wakes.
 - Time is a count of femtoseconds, VHDL's resolution limit, and a design with VHDL in it
-  is simulated in femtoseconds unless `--timescale` names another unit (3.1).
+  is simulated in femtoseconds unless `--timescale` names another unit (3.1). A delay that
+  is no whole number of that unit is rounded to the nearest, half up, as a simulator run at
+  a coarser resolution rounds, and one the design states is reported as it is translated.
 
 Mitigations: pin the revision, keep the adapter thin and confined to one
 directory, document the rebase procedure in `docs/nvc_integration.md`, and rely

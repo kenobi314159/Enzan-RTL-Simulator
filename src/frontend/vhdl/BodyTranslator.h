@@ -75,6 +75,9 @@ public:
     /// Reports a construct the adapter does not translate yet.
     virtual void unsupported(tree_t where, std::string_view what) = 0;
 
+    /// Reports what translating `where` changed of what the design says, as a warning.
+    virtual void warn(tree_t where, std::string_view what) = 0;
+
     /// Reports a process that contains no `wait`, and so would never give the simulation back.
     virtual void reportNeverWaits(tree_t process) = 0;
 

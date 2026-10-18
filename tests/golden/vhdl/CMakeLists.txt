@@ -123,6 +123,14 @@ set_tests_properties(golden.vhdl.missing_source
                      PROPERTIES PASS_REGULAR_EXPRESSION "cannot open file 'missing.sv'"
                                 FAIL_REGULAR_EXPRESSION "mixing")
 
+# Delays rounded to a coarser unit than VHDL's femtoseconds, the static one with a warning.
+add_test(NAME golden.vhdl.coarse_timescale
+         COMMAND enzan --timescale ns --top tb "${CMAKE_CURRENT_SOURCE_DIR}/coarse_timescale.vhd")
+set_tests_properties(
+  golden.vhdl.coarse_timescale
+  PROPERTIES PASS_REGULAR_EXPRESSION "is rounded to 8000000 fs.*PASS coarse_timescale"
+             FAIL_REGULAR_EXPRESSION ": (error|fatal): ")
+
 # Components bound by configuration specifications.
 enzan_add_vhdl_golden_test(configurations)
 

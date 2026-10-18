@@ -2004,7 +2004,11 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
 }
 
 std::optional<BodyTranslator::Value> BodyTranslator::delay(tree_t delay) {
+    // A delay counts femtoseconds, and the run's unit may be coarser, `--timescale ns` say; one
+    // that is no whole number of the unit is rounded to the nearest, as a simulator run at a
+    // coarser resolution rounds, and when the design says it, it is told.
     const std::int64_t scale = femtosecondsPerUnit();
+    const std::int64_t half = scale / 2;
     const eir::Type type = eir::Type::bits(64, true, false);
 
     if (const std::optional<std::int64_t> folded = folder().integer(delay)) {
@@ -2012,16 +2016,38 @@ std::optional<BodyTranslator::Value> BodyTranslator::delay(tree_t delay) {
             fail(delay, "a negative delay");
             return std::nullopt;
         }
-        return constant(*folded / scale, type, tree_type(delay));
+        const std::int64_t remainder = *folded % scale;
+        const std::int64_t units = *folded / scale + (remainder >= half && half > 0 ? 1 : 0);
+        if (remainder != 0) {
+            owner.warn(delay,
+                       std::format("a delay of {} fs, which the run's unit of {} fs does not "
+                                   "divide, is rounded to {} fs",
+                                   *folded, scale, units * scale));
+        }
+        return constant(units, type, tree_type(delay));
     }
 
     std::optional<Value> value = expression(delay);
     if (!value || scale == 1) return value;
     const Value divisor = constant(scale, type, nullptr);
-    const std::uint32_t reg = newRegister(type);
-    emit(eir::Instruction::makeSigned(eir::Opcode::Divide, eir::Operand::reg(reg),
+    const std::uint32_t whole = newRegister(type);
+    emit(eir::Instruction::makeSigned(eir::Opcode::Divide, eir::Operand::reg(whole),
                                       eir::Operand::reg(value->reg),
                                       eir::Operand::reg(divisor.reg)));
+    // The quotient, and one more when what is left is half the unit or more.
+    const std::uint32_t taken = newRegister(type);
+    emit(eir::Instruction::makeSigned(eir::Opcode::Multiply, eir::Operand::reg(taken),
+                                      eir::Operand::reg(whole), eir::Operand::reg(divisor.reg)));
+    const Value left{.reg = newRegister(type), .type = type, .vhdlType = nullptr};
+    emit(eir::Instruction::makeSigned(eir::Opcode::Subtract, eir::Operand::reg(left.reg),
+                                      eir::Operand::reg(value->reg), eir::Operand::reg(taken)));
+    const std::uint32_t up = compare(eir::Opcode::LessEqual, constant(half, type, nullptr), left);
+    const std::uint32_t step = newRegister(type);
+    emit(eir::Instruction::make(eir::Opcode::Extend, eir::Operand::reg(step),
+                                eir::Operand::reg(up)));
+    const std::uint32_t reg = newRegister(type);
+    emit(eir::Instruction::makeSigned(eir::Opcode::Add, eir::Operand::reg(reg),
+                                      eir::Operand::reg(whole), eir::Operand::reg(step)));
     return Value{.reg = reg, .type = type, .vhdlType = value->vhdlType};
 }
 

@@ -102,6 +102,8 @@ public:
 
     void unsupported(tree_t where, std::string_view what) override;
 
+    void warn(tree_t where, std::string_view what) override;
+
     void reportNeverWaits(tree_t process) override;
 
     [[nodiscard]] const eir::ModuleDefinition& definition() const override { return result; }
@@ -226,6 +228,8 @@ public:
     [[nodiscard]] SourceLocation locate(tree_t where) const override;
 
     void unsupported(tree_t where, std::string_view what) override;
+
+    void warn(tree_t where, std::string_view what) override;
 
     void reportNeverWaits(tree_t process) override;
 
@@ -871,6 +875,10 @@ void ArchitectureTranslator::unsupported(tree_t where, std::string_view what) {
     design.unsupported(where, what);
 }
 
+void ArchitectureTranslator::warn(tree_t where, std::string_view what) {
+    design.diagnostics().report(DiagCode::VhdlWarning, locate(where), what);
+}
+
 void ArchitectureTranslator::reportNeverWaits(tree_t process) {
     design.diagnostics().report(DiagCode::VhdlProcessNeverWaits, locate(process));
 }
@@ -886,6 +894,10 @@ SourceLocation PackageScope::locate(tree_t where) const {
 
 void PackageScope::unsupported(tree_t where, std::string_view what) {
     design.unsupported(where, what);
+}
+
+void PackageScope::warn(tree_t where, std::string_view what) {
+    design.diagnostics().report(DiagCode::VhdlWarning, locate(where), what);
 }
 
 void PackageScope::reportNeverWaits(tree_t process) {
