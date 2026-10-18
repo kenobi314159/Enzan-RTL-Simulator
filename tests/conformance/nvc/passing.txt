@@ -24,6 +24,7 @@ alias8
 alias9
 arith3
 array1
+array16
 array2
 array3
 array4
@@ -79,6 +80,7 @@ const2
 const3
 const4
 const5
+const7
 conv1
 conv12
 conv15
@@ -116,6 +118,7 @@ elab17
 elab18
 elab19
 elab2
+elab20
 elab21
 elab22
 elab23
@@ -237,12 +240,14 @@ issue376
 issue407
 issue412
 issue414
+issue415
 issue428
 issue429
 issue430
 issue432
 issue433
 issue434
+issue447
 issue460
 issue484
 issue502

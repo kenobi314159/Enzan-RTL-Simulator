@@ -900,6 +900,50 @@ end architecture;
               "a reference to a T_CONST_DECL is not supported by the VHDL frontend yet");
 }
 
+TEST_F(VhdlDesignTest, AnAggregateOfOneChoiceThatIsNotStaticTakesItsRange) {
+    // As OFM's MI splitter maps PIPE_OUT: `(ITEMS - 1 downto 0 => PIPE)`, whose one choice is not
+    // locally static, so that NVC gives the aggregate no bounds of its own; the choice's are its.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package flags is
+  type b_array_t is array (natural range <>) of boolean;
+end package;
+
+use work.flags.all;
+
+entity leaf is
+  generic (PORTS : integer := 3; PIPE_OUT : b_array_t(PORTS - 1 downto 0) := (others => false));
+end entity;
+
+architecture rtl of leaf is
+begin
+  process
+  begin
+    report integer'image(PIPE_OUT'length) & " " & boolean'image(PIPE_OUT(0))
+      & boolean'image(PIPE_OUT(PORTS - 1));
+    wait;
+  end process;
+end architecture;
+
+use work.flags.all;
+
+entity tb is
+  generic (ITEMS : integer := 4; PIPE : boolean := true);
+end entity;
+
+architecture test of tb is
+begin
+  u_leaf : entity work.leaf generic map (PORTS => ITEMS, PIPE_OUT => (ITEMS - 1 downto 0 => PIPE));
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"4 truetrue"});
+}
+
 TEST_F(VhdlDesignTest, AGenericOfARecordTypeIsFoldedIntoOneDefinitionPerValue) {
     std::unique_ptr<enzan::eir::Design> design = translate(R"(
 package types is

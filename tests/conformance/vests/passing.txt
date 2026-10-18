@@ -1299,8 +1299,10 @@ billowitch/compliant/tc746.vhd
 billowitch/compliant/tc747.vhd
 billowitch/compliant/tc748.vhd
 billowitch/compliant/tc749.vhd
+billowitch/compliant/tc750.vhd
 billowitch/compliant/tc751.vhd
 billowitch/compliant/tc752.vhd
+billowitch/compliant/tc753.vhd
 billowitch/compliant/tc754.vhd
 billowitch/compliant/tc755.vhd
 billowitch/compliant/tc756.vhd

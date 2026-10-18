@@ -73,8 +73,12 @@ std::optional<std::vector<eir::BitVector>> aggregateElements(tree_t aggregate,
                                                              std::optional<std::int64_t> length,
                                                              const Folder& folder) {
     // A named association names an index, so it needs the bounds of the type the aggregate has;
-    // a positional one counts from the left.
-    const std::optional<Folder::Range> bounds = folder.rangeOf(tree_type(aggregate));
+    // a positional one counts from the left. A choice that is not locally static is an aggregate's
+    // only one (IEEE 1076 section 9.3.3.3), whose range is the aggregate's: NVC leaves the type
+    // unconstrained then, as in `(ITEMS - 1 downto 0 => PIPE)`.
+    std::optional<Folder::Range> bounds = folder.rangeOf(tree_type(aggregate));
+    if (!bounds && tree_assocs(aggregate) == 1 && tree_subkind(tree_assoc(aggregate, 0)) == A_RANGE)
+        bounds = folder.range(tree_range(tree_assoc(aggregate, 0), 0));
     const auto positionOf = [&bounds](std::int64_t index) -> std::optional<std::size_t> {
         if (!bounds) return std::nullopt;
         const std::int64_t offset = bounds->ascending ? index - bounds->left : bounds->left - index;
