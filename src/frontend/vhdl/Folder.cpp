@@ -281,12 +281,30 @@ std::optional<std::int64_t> Folder::call(tree_t expression) const {
     // Two arrays of different lengths are never equal, and two null arrays always are, whatever
     // their elements would be: the bounds decide, without the values.
     if ((kind == S_ARRAY_EQ || kind == S_ARRAY_NEQ) && tree_params(expression) == 2) {
-        const std::optional<Range> left = boundsOf(tree_value(tree_param(expression, 0)));
-        const std::optional<Range> right = boundsOf(tree_value(tree_param(expression, 1)));
+        tree_t leftValue = tree_value(tree_param(expression, 0));
+        tree_t rightValue = tree_value(tree_param(expression, 1));
+        const std::optional<Range> left = boundsOf(leftValue);
+        const std::optional<Range> right = boundsOf(rightValue);
         if (!left || !right) return std::nullopt;
         if (left->length() != right->length()) return kind == S_ARRAY_NEQ ? 1 : 0;
         if (left->length() == 0) return kind == S_ARRAY_EQ ? 1 : 0;
-        return std::nullopt;
+
+        // Of one length, they are equal when their elements are, left to right, which each lays
+        // out from its highest bits: a string generic against a literal, as a generate condition
+        // chooses an implementation by. A real's bits are not its value, 0.0 and -0.0 being equal.
+        type_t element = type_elem(tree_type(leftValue));
+        while (type_is_array(element)) element = type_elem(element);
+        if (!type_is_discrete(element) && !type_is_physical(element)) return std::nullopt;
+        const std::optional<Layout> leftLayout =
+            arrayLayout(*left, type_elem(tree_type(leftValue)), *this);
+        const std::optional<Layout> rightLayout =
+            arrayLayout(*right, type_elem(tree_type(rightValue)), *this);
+        if (!leftLayout || !rightLayout) return std::nullopt;
+        const std::optional<eir::BitVector> leftBits = constantBits(leftValue, *leftLayout, *this);
+        const std::optional<eir::BitVector> rightBits =
+            constantBits(rightValue, *rightLayout, *this);
+        if (!leftBits || !rightBits) return std::nullopt;
+        return (*leftBits == *rightBits) == (kind == S_ARRAY_EQ) ? 1 : 0;
     }
 
     std::vector<std::int64_t> operands;

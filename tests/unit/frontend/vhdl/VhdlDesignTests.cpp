@@ -1527,6 +1527,48 @@ end architecture;
                                                                "core (single) 100%", "PASS"}));
 }
 
+TEST_F(VhdlDesignTest, AStringGenericChoosesAGenerateBranchByEquality) {
+    // As OFM's memories choose a write mode, `if MODE = "WRITE_FIRST" generate`: static strings of
+    // one length compare element by element, and of two lengths are unequal.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity mem is
+  generic (MODE : string := "WRITE_FIRST");
+end entity;
+
+architecture rtl of mem is
+begin
+  g_first : if MODE = "WRITE_FIRST" generate
+    process begin report "write first"; wait; end process;
+  end generate;
+  g_read : if MODE /= "WRITE_FIRST" and MODE /= "NO_CHANGE" generate
+    process begin report "read first"; wait; end process;
+  end generate;
+  g_none : if MODE = "NO_CHANGE" generate
+    process begin report "no change"; wait; end process;
+  end generate;
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  u_default : entity work.mem;
+  u_read : entity work.mem generic map (MODE => "READ_FIRST_");
+  u_none : entity work.mem generic map (MODE => "NO_CHANGE");
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    std::vector<std::string> messages = simulation.messages();
+    std::ranges::sort(messages);
+    EXPECT_EQ(messages, (std::vector<std::string>{"no change", "read first", "write first"}));
+}
+
 TEST_F(VhdlDesignTest, AControlCharacterInAStaticMessageIsItsCode) {
     // NVC folds the concatenation into one string literal, whose `lf` and `ht` are named without
     // quotes as a graphic character is not; each is the character its position is.
