@@ -60,11 +60,12 @@ to whole signals, to their parts and to aggregates of them, as variable assignme
 and times, `std.env.finish` and `stop`; aggregates, strings, elements and slices, with loops
 unrolled for slices that move with their parameter and variable slices of run-time lengths,
 concatenation, the predefined operators on scalars and arrays, `'event`, `'active` and
-`'last_value`; aliases of objects and of their parts, of constants, subprograms and types; functions
-and procedures of packages and architectures, std_logic_1164's and numeric_std's among them.
-std.textio's `write`, `writeline`, `readline` and `read` of lines of strings, characters and
-integers, files of text and of other types and `endfile`, run natively by the runtime. Anything else
-is refused with ENZ2005 naming it, never left out.
+`'last_value` of whole signals; aliases of objects and of their parts, of constants, subprograms and
+types; functions and procedures of packages and architectures, std_logic_1164's and numeric_std's
+among them. std.textio's `write` of strings, characters and integers to a line, `writeline`,
+`readline` and `read` of characters from a line, the predefined `write` and `read` of files of text
+and of other types, and `endfile`, run natively by the runtime. Anything else is refused with
+ENZ2005 naming it, never left out.
 
 ## Rules
 
