@@ -514,7 +514,13 @@ void KernelServer::onDeposit(const Frame& frame) {
         return;
     }
 
-    simulationKernel->deposit(request.signalIndex, request.value.ref());
+    // Through the session, which takes the value as the signal shows it: a std_logic's '1' is
+    // what `1` deposited into one means.
+    std::string error;
+    if (!session->deposit(request.signalIndex, request.value.ref(), error)) {
+        sendFailure(error);
+        return;
+    }
 
     // The publisher is told so that the window showing the signal updates, because a deposit
     // between runs produces no time advance for the change to be batched into.
@@ -542,7 +548,11 @@ void KernelServer::onForce(const Frame& frame) {
         // signals it may or may not have forced should not have to remember which.
         simulationKernel->release(request.signalIndex);
     } else {
-        simulationKernel->force(request.signalIndex, request.value.ref());
+        std::string error;
+        if (!session->force(request.signalIndex, request.value.ref(), error)) {
+            sendFailure(error);
+            return;
+        }
     }
 
     publisher->flush();

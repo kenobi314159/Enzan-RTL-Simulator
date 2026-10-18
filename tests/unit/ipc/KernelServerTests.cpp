@@ -1148,6 +1148,26 @@ TEST_F(ServerFixture, ASignalOfANullRangeIsListedWithNoBitsAndSendsNothing) {
     EXPECT_NE(states.back().state, SimulationState::Running);
 }
 
+TEST_F(ServerFixture, ADepositIntoAVhdlSignalIsTheBitsItShowsAs) {
+    // As the window sends one, at the width the signal was listed at: `0` into a std_logic is
+    // its '0', and nothing can be written into a null array.
+    rebuild(nullDesign());
+    connectClient();
+
+    DepositMessage deposit;
+    deposit.signalIndex = signalIndex("/tb/ready");
+    deposit.value = literal("1'b0");
+    request(MessageType::Deposit, deposit);
+    EXPECT_EQ(session->examine(signalIndex("/tb/ready"), enzan::eir::Radix::Binary), "0");
+
+    ForceMessage force;
+    force.signalIndex = signalIndex("/tb/nothing");
+    force.value = literal("1'b1");
+    request(MessageType::Force, force);
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
+    EXPECT_NE(failure.reason.find("null array"), std::string::npos) << failure.reason;
+}
+
 TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {
     connectClient();
 

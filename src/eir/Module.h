@@ -53,6 +53,12 @@ enum class Encoding : std::uint8_t {
 /// Writes into `shown`, `presentedWidth` bits wide, the value `stored` shows as.
 void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept;
 
+/// Writes into `stored` the value that shows as `shown`, `presentedWidth` of its width: what a
+/// reader writing a signal means by the bits they give, `1` a std_ulogic's '1'. An unknown bit is
+/// 'X' and a high-impedance one 'Z'. False, `stored` left as it was, when a bit has no code: an
+/// unknown or high-impedance `bit` or `boolean`.
+[[nodiscard]] bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
+
 /// Which kind of net a net is, which decides how a bit with several drivers resolves and what
 /// a bit with none holds (DESIGN_GUIDE.md section 3.7).
 ///

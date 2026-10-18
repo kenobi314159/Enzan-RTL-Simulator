@@ -426,6 +426,32 @@ TEST_F(SessionTest, AValueThatDoesNotParseIsRefused) {
     EXPECT_FALSE(error.empty());
 }
 
+TEST_F(SessionTest, AValueWrittenToAVhdlSignalIsTheBitsItShowsAs) {
+    // `0` is a std_logic's '0', which its code 2 stands for, not the code 0 of 'U'.
+    loadVhdlCoded();
+
+    std::string error;
+    ASSERT_TRUE(session.deposit(signalOf("/tb/ready"), "0", error)) << error;
+    EXPECT_EQ(session.examine(signalOf("/tb/ready"), std::nullopt), "'0'");
+    ASSERT_TRUE(session.force(signalOf("/tb/bus"), "4'b10zx", error)) << error;
+    EXPECT_EQ(session.examine(signalOf("/tb/bus"), Radix::Binary), "10zx");
+    ASSERT_TRUE(session.deposit(signalOf("/tb/flag"), "1", error)) << error;
+    EXPECT_EQ(session.examine(signalOf("/tb/flag"), Radix::Binary), "1");
+}
+
+TEST_F(SessionTest, AValueAVhdlSignalCannotHoldIsRefused) {
+    loadVhdlCoded();
+
+    std::string error;
+    EXPECT_FALSE(session.deposit(signalOf("/tb/flag"), "1'bx", error));
+    EXPECT_NE(error.find("each 0 or 1"), std::string::npos) << error;
+    EXPECT_EQ(session.examine(signalOf("/tb/flag"), Radix::Binary), "0");
+
+    error.clear();
+    EXPECT_FALSE(session.force(signalOf("/tb/nothing"), "1", error));
+    EXPECT_NE(error.find("null array"), std::string::npos) << error;
+}
+
 TEST_F(SessionTest, ForceHoldsAValueAgainstTheDesign) {
     loadCounter();
 

@@ -700,26 +700,43 @@ std::string Session::examine(std::uint32_t signalIndex, std::optional<eir::Radix
     return eir::toString(shown.ref(), radix.value_or(eir::Radix::Hexadecimal));
 }
 
-std::optional<eir::BitVector>
-Session::parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const {
+std::optional<eir::BitVector> Session::parseValue(std::string_view literal, std::string& error) {
     std::optional<eir::BitVector> parsed = eir::BitVector::parse(literal);
-    if (!parsed.has_value()) {
+    if (!parsed.has_value())
         error = "'" + std::string(literal) + "' is not a value Enzan understands";
+    return parsed;
+}
+
+std::optional<eir::BitVector>
+Session::storedValue(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error) const {
+    const runtime::Signal& signal = image->signals()[signalIndex];
+    if (elaborated->slots()[signalIndex].holdsNothing) {
+        error = signal.path + " is a null array, so it has no bits to write";
         return std::nullopt;
     }
 
-    // Widened or narrowed to the signal, so that `deposit /tb/count 5` writes the right number
-    // of bits without the user counting them.
-    const std::uint32_t width = image->signals()[signalIndex].bitWidth;
-    if (parsed->width() == width) return parsed;
-
-    eir::BitVector sized = eir::BitVector::filled(width, eir::Logic::Zero);
-    eir::bitops::extend(sized.mutableRef(), parsed->ref(), false);
-    return sized;
+    // Widened or narrowed to the signal as it shows, so that `deposit /tb/count 5` writes the
+    // right number of bits without the user counting them, and a std_logic takes the one its
+    // code stands for.
+    eir::BitVector sized = eir::BitVector::filled(
+        eir::presentedWidth(signal.encoding, signal.bitWidth), eir::Logic::Zero);
+    eir::bitops::extend(sized.mutableRef(), shown, false);
+    eir::BitVector stored = eir::BitVector::filled(signal.bitWidth, eir::Logic::Zero);
+    if (!eir::storeShown(signal.encoding, sized.ref(), stored.mutableRef())) {
+        error = "'" + eir::toString(sized.ref(), eir::Radix::Binary) + "' is no value of "
+                + signal.path + ", whose bits are each 0 or 1";
+        return std::nullopt;
+    }
+    return stored;
 }
 
 bool Session::deposit(std::uint32_t signalIndex, std::string_view literal, std::string& error) {
-    const std::optional<eir::BitVector> value = parseValue(signalIndex, literal, error);
+    const std::optional<eir::BitVector> value = parseValue(literal, error);
+    return value.has_value() && deposit(signalIndex, value->ref(), error);
+}
+
+bool Session::deposit(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error) {
+    const std::optional<eir::BitVector> value = storedValue(signalIndex, shown, error);
     if (!value.has_value()) return false;
 
     kernel->deposit(signalIndex, value->ref());
@@ -727,7 +744,12 @@ bool Session::deposit(std::uint32_t signalIndex, std::string_view literal, std::
 }
 
 bool Session::force(std::uint32_t signalIndex, std::string_view literal, std::string& error) {
-    const std::optional<eir::BitVector> value = parseValue(signalIndex, literal, error);
+    const std::optional<eir::BitVector> value = parseValue(literal, error);
+    return value.has_value() && force(signalIndex, value->ref(), error);
+}
+
+bool Session::force(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error) {
+    const std::optional<eir::BitVector> value = storedValue(signalIndex, shown, error);
     if (!value.has_value()) return false;
 
     kernel->force(signalIndex, value->ref());

@@ -59,6 +59,30 @@ TEST(Encoding, VhdlLogicShowsAsTheFourStateBitEachCodeStandsFor) {
     EXPECT_EQ(enzan::eir::toString(shown.ref(), enzan::eir::Radix::Binary), "xx01zx01x");
 }
 
+TEST(Encoding, AShownValueIsStoredAsTheCodesItStandsFor) {
+    // 1 0 z x, which a reader writes and which show again as themselves.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    const BitVector shown = *BitVector::parse("4'b10zx");
+    BitVector codes = BitVector::filled(32, Logic::Zero);
+    ASSERT_TRUE(enzan::eir::storeShown(Encoding::VhdlLogic, shown.ref(), codes.mutableRef()));
+    EXPECT_EQ(codes.ref().toUInt64(), 0x03020401U) << "'1', '0', 'Z' and 'X', left highest";
+    BitVector again(4);
+    enzan::eir::present(Encoding::VhdlLogic, codes.ref(), again.mutableRef());
+    EXPECT_EQ(enzan::eir::toString(again.ref(), enzan::eir::Radix::Binary), "10zx");
+}
+
+TEST(Encoding, ABitTakesOnlyZeroAndOne) {
+    BitVector codes = BitVector::filled(16, Logic::Zero);
+    // NOLINTBEGIN(bugprone-unchecked-optional-access)
+    ASSERT_TRUE(enzan::eir::storeShown(Encoding::VhdlBit, BitVector::parse("2'b10")->ref(),
+                                       codes.mutableRef()));
+    EXPECT_EQ(codes.ref().toUInt64(), 0x0100U);
+    EXPECT_FALSE(enzan::eir::storeShown(Encoding::VhdlBit, BitVector::parse("2'b1x")->ref(),
+                                        codes.mutableRef()));
+    // NOLINTEND(bugprone-unchecked-optional-access)
+    EXPECT_EQ(codes.ref().toUInt64(), 0x0100U) << "left as it was";
+}
+
 TEST(Encoding, VhdlBitShowsAsTwoStateBitsAndBitsAsThemselves) {
     const BitVector codes = BitVector::fromUInt64(0x0100, 16);
     BitVector shown(2);

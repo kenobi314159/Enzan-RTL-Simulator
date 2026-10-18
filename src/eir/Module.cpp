@@ -40,6 +40,31 @@ void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept {
     }
 }
 
+bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept {
+    if (encoding == Encoding::Bits || encoding == Encoding::Real) {
+        bitops::copy(stored, shown);
+        return true;
+    }
+    for (std::uint32_t element = 0; element < shown.width(); ++element) {
+        const Logic value = shown.get(element);
+        if (encoding == Encoding::VhdlBit && value != Logic::Zero && value != Logic::One)
+            return false;
+    }
+    for (std::uint32_t element = 0; element < shown.width(); ++element) {
+        // The positions of std_ulogic's '0', '1', 'Z' and 'X', or a bit's.
+        std::uint32_t code = 0;
+        switch (shown.get(element)) {
+        case Logic::Zero: code = encoding == Encoding::VhdlLogic ? 2 : 0; break;
+        case Logic::One: code = encoding == Encoding::VhdlLogic ? 3 : 1; break;
+        case Logic::HighZ: code = 4; break;
+        case Logic::Unknown: code = 1; break;
+        }
+        for (std::uint32_t bit = 0; bit < 8; ++bit)
+            stored.set((element * 8) + bit, ((code >> bit) & 1U) != 0 ? Logic::One : Logic::Zero);
+    }
+    return true;
+}
+
 std::string_view toString(ObjectKind kind) noexcept {
     switch (kind) {
     case ObjectKind::Net: return "net";

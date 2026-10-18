@@ -366,13 +366,22 @@ public:
 
     /// Parses `literal` against a signal's width and writes it once.
     ///
-    /// Returns false having filled `error` when the literal does not parse. The width is
-    /// taken from the signal, so `deposit /tb/count 5` writes the right number of bits
-    /// without the user counting them.
+    /// Returns false having filled `error` when the literal does not parse, or is no value of
+    /// the signal. The width is taken from the signal, so `deposit /tb/count 5` writes the right
+    /// number of bits without the user counting them.
     bool deposit(std::uint32_t signalIndex, std::string_view literal, std::string& error);
+
+    /// Writes `shown` once: a value as the signal shows it (section 3.6), which a VHDL signal
+    /// stores as the codes its bits stand for, `1` a std_logic's '1'. Widened or narrowed to the
+    /// width the signal shows at; false having filled `error` when it is no value of the signal,
+    /// an unknown `bit` or anything of a null range.
+    bool deposit(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error);
 
     /// Parses `literal` and holds the signal at it until `release`.
     bool force(std::uint32_t signalIndex, std::string_view literal, std::string& error);
+
+    /// Holds the signal at `shown`, taken as `deposit` takes it, until `release`.
+    bool force(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error);
 
     /// Releases a forced signal, returning false when it was not forced.
     bool release(std::uint32_t signalIndex);
@@ -436,9 +445,13 @@ private:
     /// Tells a loaded application the simulation is over, once (section 9.5).
     void endVpiSimulation();
 
-    /// Parses `literal` to the width of `signalIndex`, reporting through `error`.
+    /// Parses `literal`, reporting through `error`.
+    [[nodiscard]] static std::optional<eir::BitVector> parseValue(std::string_view literal,
+                                                                  std::string& error);
+
+    /// What `signalIndex` stores for `shown`, reporting through `error`.
     [[nodiscard]] std::optional<eir::BitVector>
-    parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;
+    storedValue(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error) const;
 
     /// Pairs each analysed file with the buffer holding its text, for the library's keys.
     [[nodiscard]] static std::vector<eir::LibrarySource>
