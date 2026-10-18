@@ -73,6 +73,13 @@ std::uint32_t WaveformWriter::recordIndexOf(std::uint32_t signalIndex) const noe
     return signalIndex < recordIndex.size() ? recordIndex[signalIndex] : NotRecorded;
 }
 
+std::uint32_t WaveformWriter::widthOf(std::uint32_t signalIndex) const noexcept {
+    // Its one bit is a placeholder, a bit vector having at least one, which is no value of it.
+    if (designImage->elaboratedDesign().slots()[signalIndex].holdsNothing) return 0;
+    const runtime::Signal& signal = designImage->signals()[signalIndex];
+    return eir::presentedWidth(signal.encoding, signal.bitWidth);
+}
+
 eir::ConstBitRef WaveformWriter::valueOf(std::uint32_t signalIndex) const {
     const runtime::Signal& signal = designImage->signals()[signalIndex];
     const eir::ConstBitRef stored = stateArena->at(signal.wordOffset, signal.bitWidth);

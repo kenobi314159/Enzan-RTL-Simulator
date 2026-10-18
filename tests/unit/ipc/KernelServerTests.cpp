@@ -175,6 +175,20 @@ Design codedDesign() {
     return design;
 }
 
+/// codedDesign's, with a std_logic_vector of a null range beside its signal: a placeholder bit
+/// that holds nothing, as the VHDL frontend declares one.
+Design nullDesign() {
+    Design design = codedDesign();
+    ModuleDefinition top = design.modules().front();
+    top.addObject(Object{.name = "nothing",
+                         .type = Type::bits(1, false, false),
+                         .encoding = enzan::eir::Encoding::VhdlLogic,
+                         .holdsNothing = true});
+    Design withNull;
+    withNull.addModule(std::move(top));
+    return withNull;
+}
+
 /// A design whose only process waits twenty time units and then stops for good.
 Design settlingDesign() {
     ProcessBuilder driver(ProcessKind::Initial, "once");
@@ -1101,6 +1115,37 @@ TEST_F(ServerFixture, ASignalOfVhdlCodesIsListedAtTheWidthItsValuesComeAt) {
     EXPECT_EQ(batches[0].updates[0].value.width(), history.width);
     EXPECT_EQ(enzan::eir::toString(batches[0].updates[0].value.ref(), enzan::eir::Radix::Binary),
               "0");
+}
+
+TEST_F(ServerFixture, ASignalOfANullRangeIsListedWithNoBitsAndSendsNothing) {
+    // Its one bit is a placeholder, shown as no bits at all; a history of it was a value of no
+    // bits, which no bit vector can be, and the kernel stopped on it.
+    rebuild(nullDesign());
+    connectClient();
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    ASSERT_EQ(objects.objects.size(), 2U);
+    EXPECT_EQ(objects.objects[1].name, "nothing");
+    EXPECT_EQ(objects.objects[1].width, 0U);
+
+    SubscribeMessage subscribe;
+    subscribe.signalIndices = {signalIndex("/tb/ready"), signalIndex("/tb/nothing")};
+    request(MessageType::Subscribe, subscribe);
+    const std::vector<HistoryMessage> histories = expectAll<HistoryMessage>(MessageType::History);
+    ASSERT_EQ(histories.size(), 1U);
+    EXPECT_EQ(histories[0].signalIndex, signalIndex("/tb/ready"));
+
+    // And the kernel is still there to run.
+    RunMessage run;
+    run.duration = 100;
+    request(MessageType::Run, run);
+    const auto states = expectAll<RunStateMessage>(MessageType::RunState);
+    ASSERT_GE(states.size(), 2U);
+    EXPECT_EQ(states.front().state, SimulationState::Running);
+    EXPECT_NE(states.back().state, SimulationState::Running);
 }
 
 TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {

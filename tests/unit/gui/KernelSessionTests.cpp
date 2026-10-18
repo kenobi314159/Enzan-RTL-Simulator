@@ -8,6 +8,8 @@
 
 #include "gui/KernelSession.h"
 
+#include "gui/ObjectsModel.h"
+
 #include "SessionFixture.h"
 
 #include <gtest/gtest.h>
@@ -21,6 +23,7 @@
 namespace {
 
 using enzan::gui::KernelSession;
+using enzan::gui::ObjectsModel;
 using enzan::gui::SignalInfo;
 using enzan::test::SessionFixture;
 
@@ -104,6 +107,25 @@ TEST_F(SessionFixture, AScopeListsItsParametersAfterItsSignals) {
     for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
         EXPECT_FALSE(info.isParameter()) << info.name.toStdString();
     }
+}
+
+TEST_F(SessionFixture, ANullArrayIsShownAsOneWithNoValue) {
+    // A VHDL signal of a null range is listed with no bits, which `logic [%1:0]` would have
+    // written as the width less one, wrapped round.
+    ObjectsModel model(*session);
+    SignalInfo nothing;
+    nothing.name = QStringLiteral("nothing");
+    nothing.path = QStringLiteral("/tb/nothing");
+    nothing.width = 0;
+    nothing.recorded = true;
+    model.setObjects(QStringLiteral("/tb"), {nothing});
+
+    ASSERT_EQ(model.rowCount(), 1);
+    EXPECT_EQ(model.data(model.index(0, ObjectsModel::TypeColumn), Qt::DisplayRole).toString(),
+              QStringLiteral("null array"));
+    EXPECT_TRUE(model.data(model.index(0, ObjectsModel::ValueColumn), Qt::DisplayRole)
+                    .toString()
+                    .isEmpty());
 }
 
 TEST_F(SessionFixture, SubscribingBringsTheSignalsPastWithIt) {

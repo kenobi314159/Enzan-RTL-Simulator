@@ -852,6 +852,9 @@ void KernelServer::sendHistory(std::uint32_t signalIndex, runtime::SimTime from,
                                runtime::SimTime to) {
     if (!connection.isOpen() || !greeted) return;
 
+    // A signal of no bits, a VHDL signal of a null range, has neither a past nor a value now.
+    if (publisher->widthOf(signalIndex) == 0) return;
+
     HistoryMessage message;
     message.signalIndex = signalIndex;
     message.width = publisher->widthOf(signalIndex);

@@ -88,10 +88,8 @@ public:
 
     /// A signal's width as it is shown, which for VHDL's codes is one bit for each: the width
     /// of every value this writer gives out for it, and so the width a reader of them is told.
-    [[nodiscard]] std::uint32_t widthOf(std::uint32_t signalIndex) const noexcept {
-        const runtime::Signal& signal = designImage->signals()[signalIndex];
-        return eir::presentedWidth(signal.encoding, signal.bitWidth);
-    }
+    /// None for a VHDL signal of a null range, which has no value to give.
+    [[nodiscard]] std::uint32_t widthOf(std::uint32_t signalIndex) const noexcept;
 
     void onValueChange(std::uint32_t signalIndex, eir::ConstBitRef value) final;
 
