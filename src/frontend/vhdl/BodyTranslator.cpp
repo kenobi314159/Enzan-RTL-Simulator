@@ -1915,6 +1915,13 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
             initial = read(*target, tree_type(actual));
         }
         if (!initial) return std::nullopt;
+        // As for a call of a body of its own: an actual of another length is no value of the
+        // parameter's subtype, and bound to it would be read past its end.
+        if (constrained && constrained->isComposite()
+            && initial->type.bitWidth() != constrained->storage.bitWidth()) {
+            fail(actual, "an actual of another length than its parameter");
+            return std::nullopt;
+        }
         if (unconstrained) {
             if (!initial->layout.isArray()) {
                 fail(actual, "an actual whose bounds are not known here");

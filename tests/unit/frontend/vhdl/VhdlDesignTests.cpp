@@ -2314,6 +2314,42 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(unsupported->location), 14U);
 }
 
+TEST_F(VhdlDesignTest, AnInlinedCallsActualOfAnotherLengthIsRefused) {
+    // As NVC's bounds18 has it: three bits for a parameter of five, which the function would read
+    // past the end of. Analysis cannot see it, the length being a parameter's; a call of a body of
+    // its own is refused the same way.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  function ends (x : bit_vector(1 to 5)) return bit is
+  begin
+    return x(1) and x(5);
+  end function;
+
+  procedure check (n : positive) is
+    variable v : bit_vector(1 to n);
+  begin
+    assert ends(v) = '0';
+  end procedure;
+begin
+  process
+  begin
+    check(3);
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(unsupported, nullptr) << transcript();
+    EXPECT_EQ(unsupported->message, "an actual of another length than its parameter is not "
+                                    "supported by the VHDL frontend yet");
+    EXPECT_EQ(sources.lineNumber(unsupported->location), 14U);
+}
+
 TEST_F(VhdlDesignTest, AProcessThatNeverWaitsIsRefused) {
     const std::unique_ptr<enzan::eir::Design> design = translate(R"(
 entity spins is
