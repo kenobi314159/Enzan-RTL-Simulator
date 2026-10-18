@@ -13,6 +13,7 @@
 #include "runtime/Kernel.h"
 
 #include "support/Simulation.h"
+#include "support/Workspace.h"
 
 #include <gtest/gtest.h>
 
@@ -1553,6 +1554,84 @@ end architecture;
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     simulation.run();
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AFileASubprogramDeclaresIsClosedAsItReturns) {
+    // As VESTs' tc3206 has it: what a subprogram writes to a file it declares is there for the
+    // next to read, since the file is closed as the subprogram returns, inlined or called; one it
+    // closes itself is not closed again, and one it never opens is not closed at all.
+    const enzan::test::Workspace workspace;
+    const enzan::test::ScopedWorkingDirectory inWorkspace(workspace.path());
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  impure function save (text_written : string) return natural is
+    file saved : text open write_mode is "saved.txt";
+    variable l : line;
+  begin
+    write(l, text_written);
+    writeline(saved, l);
+    return 1;
+  end function;
+begin
+  process
+    procedure write_note is
+      file note : text open write_mode is "note.txt";
+      variable l : line;
+    begin
+      write(l, string'("noted"));
+      writeline(note, l);
+    end procedure;
+
+    procedure append_note is
+      file note : text;
+      variable l : line;
+    begin
+      file_open(note, "note.txt", append_mode);
+      write(l, string'("again"));
+      writeline(note, l);
+      file_close(note);
+    end procedure;
+
+    procedure never_open is
+      file note : text;
+    begin
+    end procedure;
+
+    procedure count (name : string) is
+      file counted : text open read_mode is name;
+      variable l : line;
+      variable lines : natural := 0;
+    begin
+      while not endfile(counted) loop
+        readline(counted, l);
+        lines := lines + 1;
+      end loop;
+      report name & " has " & integer'image(lines);
+    end procedure;
+  begin
+    write_note;
+    append_note;
+    never_open;
+    count("note.txt");
+    report "saved " & integer'image(save("called"));
+    count("saved.txt");
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(),
+              (std::vector<std::string>{"note.txt has 2", "saved 1", "saved.txt has 1"}));
 }
 
 TEST_F(VhdlDesignTest, AnImpureFunctionGivenNoFileInitialisesAMemory) {

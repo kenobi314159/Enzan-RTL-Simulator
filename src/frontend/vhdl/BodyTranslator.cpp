@@ -398,6 +398,7 @@ std::optional<BodyTranslator::Translated> BodyTranslator::translateSubprogram() 
             emit(eir::Instruction::make(eir::Opcode::SysTask, {},
                                         eir::Operand::sysCall(addSysCall(std::move(report)))));
         }
+        closeDeclaredFiles(source);
         emit(eir::Instruction::make(eir::Opcode::Return));
     }
     if (tree_kind(source) == T_FUNC_BODY && !resultLayout) {
@@ -1704,6 +1705,7 @@ bool BodyTranslator::returnStatement(tree_t statement) {
         emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(subprogram.resultRegister),
                                     eir::Operand::reg(resize(*value, value->type.bitWidth()).reg)));
     }
+    closeDeclaredFiles(source);
     emit(eir::Instruction::make(eir::Opcode::Return));
     return true;
 }
@@ -1950,6 +1952,7 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
     if (!translated) return std::nullopt;
     jump(frame.exitBlock);
     selectBlock(frame.exitBlock);
+    closeDeclaredFiles(calleeBody);
 
     // What an `out` or `inout` parameter holds at the end goes back to its actual.
     for (const auto& [parameter, target] : copyBack) {

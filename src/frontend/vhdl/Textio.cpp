@@ -109,6 +109,34 @@ bool BodyTranslator::declareFile(tree_t declaration) {
     return true;
 }
 
+void BodyTranslator::closeDeclaredFiles(tree_t declarer) {
+    for (unsigned index = 0; index < tree_decls(declarer); ++index) {
+        tree_t declaration = tree_decl(declarer, index);
+        if (tree_kind(declaration) != T_FILE_DECL) continue;
+        const auto local = locals.find(declaration);
+        if (local == locals.end()) continue;
+        const Value file = local->second;
+        const Value none = constant(0, file.type, nullptr);
+        const std::uint32_t open = compare(eir::Opcode::NotEqual, file, none);
+        const std::uint32_t close = newBlock("file-close");
+        const std::uint32_t closed = newBlock("file-closed");
+        emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(open),
+                                    eir::Operand::block(close), eir::Operand::block(closed)));
+        selectBlock(close);
+        eir::SysTaskCall call;
+        call.kind = eir::SysTaskKind::FileClose;
+        call.location = owner.locate(declaration);
+        call.arguments.push_back(
+            eir::SysTaskArgument{.value = eir::Operand::reg(file.reg), .type = file.type});
+        emit(eir::Instruction::make(eir::Opcode::SysTask, {},
+                                    eir::Operand::sysCall(addSysCall(std::move(call)))));
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(file.reg),
+                                    eir::Operand::reg(none.reg)));
+        jump(closed);
+        selectBlock(closed);
+    }
+}
+
 std::optional<BodyTranslator::Value>
 BodyTranslator::writeBuiltString(tree_t built, const Value& line, const Value& justified,
                                  const Value& field, SourceLocation location) {
@@ -347,6 +375,8 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
         return assignWhole((*actuals)[2], bitsOf(read, width, 32));
     }
 
+    // A closed file holds no descriptor, so that closing it as its subprogram returns does not
+    // close it again.
     case S_FILE_CLOSE: {
         const std::optional<Value> file = fileDescriptor((*actuals)[0]);
         if (!file) return false;
@@ -354,6 +384,8 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
         native.arguments.push_back(argument(*file));
         emit(eir::Instruction::make(eir::Opcode::SysTask, {},
                                     eir::Operand::sysCall(addSysCall(std::move(native)))));
+        emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(file->reg),
+                                    eir::Operand::reg(constant(0, file->type, nullptr).reg)));
         return true;
     }
 

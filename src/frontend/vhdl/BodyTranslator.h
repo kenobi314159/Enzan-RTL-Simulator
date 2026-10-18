@@ -324,6 +324,11 @@ private:
     /// declared when the declaration says so.
     bool declareFile(tree_t declaration);
 
+    /// Closes each file the subprogram body `declarer` declares that is still open, as the
+    /// subprogram returns (IEEE 1076 section 6.4.2.5): one never opened or closed already holds no
+    /// descriptor.
+    void closeDeclaredFiles(tree_t declarer);
+
     /// The descriptor of the file `name` designates: one the process declares, or std.textio's
     /// `output` or `input`.
     std::optional<Value> fileDescriptor(tree_t name);
