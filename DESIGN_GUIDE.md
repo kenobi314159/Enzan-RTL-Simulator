@@ -3422,6 +3422,14 @@ generic packages and their instantiation; configurations; external names. VUnit'
 interface for Enzan, which VUnit chooses by name as cocotb chooses a makefile (9.6). They are
 done when VUnit's own suite and OSVVM's regression each run with a recorded pass rate.
 
+They need three things the RTL milestones do not build. Values whose length only the run knows
+— a message built with `to_string`, a function returning what an access value designates, a
+local sized by an unconstrained parameter — which 4.1 places in scratch the kernel resets when
+a process suspends, where EIR today gives every value a width fixed at translation. Several
+VHDL libraries at once, `vunit_lib` and `osvvm` beside a design's own, which M7 brings. And a
+VHDL top level's generics set from the command line, as `-G` sets a SystemVerilog one's
+parameters (8.1), since VUnit hands each test its `runner_cfg` as one.
+
 ---
 
 ## 19. Risk register
