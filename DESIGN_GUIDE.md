@@ -869,7 +869,7 @@ NVC wins on everything else, and the balance is not close:
   its maintainer is responsive on frontend-level defects, which matters when the
   dependency is on internals nobody has promised to keep.
 
-The VHDL designs Enzan is measured against — NEORV32 in M6, VUnit and OSVVM in M6.1 —
+The VHDL designs Enzan is measured against — NEORV32 in M6, VUnit and OSVVM in M9+ —
 are all first-class NVC targets.
 
 **Understand the integration honestly before working on it.** NVC is not a
@@ -2872,7 +2872,7 @@ Real designs, fetched at pinned revisions:
   compiled for them.
 - VHDL: NEORV32; then SLAC `surf`, an IP library whose cocotb testbenches exercise its RTL as
   `taxi`'s do, and the VUnit and OSVVM suites, which need the verification-library language of
-  M6.1.
+  M9+.
 
 Start with the small ones and add larger designs as capability grows.
 
@@ -3301,9 +3301,9 @@ libraries are written in.** Synthesisable VHDL and the testbenches shipped besid
 almost nothing of what VUnit and OSVVM are built from: protected types, generic packages,
 configurations, external names, and access types used as a general heap. Measured over
 their sources, VUnit allocates in 37 files and OSVVM declares protected types in 31 and
-configurations in 389, while NEORV32 does none of these. The verification libraries are
-M6.1, so that the VHDL frontend, the simulation cycle and VHPI are proven on designs before
-they are asked to carry a library's runtime.
+configurations in 389, while NEORV32 does none of these. The verification libraries come
+with the other verification features in M9+, so that the VHDL frontend, the simulation cycle
+and VHPI are proven on designs before they are asked to carry a library's runtime.
 
 **Access types are in M6 only as far as `std.textio` needs them.** NEORV32 cannot be
 simulated without `line`: its UART prints what the program sends through `write` and
@@ -3312,7 +3312,7 @@ logs both UARTs to files and can load a memory from one. So M6 builds the heap o
 access values are handles in the arena into a heap the kernel owns, since 4.3 lays out every
 piece of state at elaboration and 13.4 forbids allocating on the write path — and makes it
 work for an access to an array, as `std.textio` uses one, with textio's subprograms run
-natively over it (4.3). M6.1 uses the same heap for everything else.
+natively over it (4.3). M9+ uses the same heap for everything else.
 
 The exit designs need no program compiled for them, for the reason M5 gives:
 
@@ -3321,25 +3321,13 @@ The exit designs need no program compiled for them, for the reason M5 gives:
   memory through it, resetting and resuming it — and asserts each step.
 - **cocotb's VHDL designs**, through its own test cases with a VHDL toplevel (14.6). These
   are what VHPI is measured by, as cocotb's suite measured VPI in M4.
-- **VESTs and GHDL's and NVC's own suites** (14.4). Most of each needs nothing M6.1 brings,
+- **VESTs and GHDL's and NVC's own suites** (14.4). Most of each needs nothing M9+ brings,
   and a pass list per suite lets the rest wait without hiding a regression.
 
 **Exit:** NEORV32's testbench completes its debugger sequence under Enzan with no assertion
 failing, and its transcript is GHDL's line for line; cocotb's suite runs with a VHDL
 toplevel with a recorded pass rate; VESTs and GHDL's and NVC's suites run with recorded pass
 rates.
-
-### M6.1 — VHDL verification libraries
-
-What VUnit and OSVVM are built from: access types as a general heap, with `deallocate`;
-protected types and shared variables of them; generic packages and their instantiation;
-configurations; external names. VUnit's simulator interface for Enzan, which VUnit chooses
-by name as cocotb chooses a makefile (9.6).
-
-Numbered with the VHDL milestone and placed straight after it, while the frontend is warm.
-Nothing in M7 depends on it: a mixed-language design is RTL meeting RTL.
-
-**Exit:** VUnit's own suite and OSVVM's regression each run with a recorded pass rate.
 
 ### M7 — Mixed language
 
@@ -3427,6 +3415,12 @@ performance target replaced with a measured, committed figure.
 
 SVA and PSL assertions; functional coverage; constrained random (requires a
 constraint solver); save and restore; multiple clock domain tooling; UVM.
+
+**The VHDL verification libraries, VUnit and OSVVM**, and what they are built from: access
+types as a general heap, with `deallocate`; protected types and shared variables of them;
+generic packages and their instantiation; configurations; external names. VUnit's simulator
+interface for Enzan, which VUnit chooses by name as cocotb chooses a makefile (9.6). They are
+done when VUnit's own suite and OSVVM's regression each run with a recorded pass rate.
 
 ---
 
