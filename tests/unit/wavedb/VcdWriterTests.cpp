@@ -22,6 +22,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -352,6 +353,35 @@ TEST_F(WriterFixture, SingleBitSignalsUseTheScalarForm) {
     for (const std::string& line : outputLines())
         scalar = scalar || (line.size() >= 2 && line[0] == 'z' && line[1] != ' ');
     EXPECT_TRUE(scalar) << readOutput();
+}
+
+TEST_F(WriterFixture, ARealIsDeclaredAndChangedAsTheNumberItIs) {
+    // VCD's own `real` (IEEE 1364 section 18.2.3.8), written in the shortest form that reads back
+    // as the same double, rather than its 64 bits.
+    ModuleDefinition definition;
+    definition.name = "tb";
+    definition.sourceName = "tb";
+    Object level{.name = "level",
+                 .type = Type::real(),
+                 .initialValue = BitVector::fromUInt64(std::bit_cast<std::uint64_t>(2.5), 64)};
+    level.encoding = enzan::eir::Encoding::Real;
+    definition.addObject(std::move(level));
+    Design design;
+    design.addModule(std::move(definition));
+    build(std::move(design), "tb");
+
+    VcdWriter writer(*image, arena, TimeScale());
+    std::string error;
+    ASSERT_TRUE(writer.open(outputPath(), error)) << error;
+    writer.onTimeAdvance(5);
+    enzan::eir::bitops::assignReal(signal("/tb/level"), -0.125);
+    writer.onValueChange(signalIndex("/tb/level"), signal("/tb/level"));
+    writer.close();
+
+    const std::vector<std::string> lines = outputLines();
+    EXPECT_NE(std::ranges::find(lines, "$var real 64 ! level $end"), lines.end()) << readOutput();
+    EXPECT_NE(std::ranges::find(lines, "r2.5 !"), lines.end()) << readOutput();
+    EXPECT_NE(std::ranges::find(lines, "r-0.125 !"), lines.end()) << readOutput();
 }
 
 // ---------------------------------------------------------------------------
