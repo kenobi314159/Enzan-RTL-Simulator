@@ -280,7 +280,7 @@ public:
     }
 
     /// Each requested resolution function, specialised to its driver count: an array parameter
-    /// of `0 to drivers - 1`.
+    /// as long as that, as `driversRange` gives its bounds.
     std::vector<eir::ModuleDefinition> resolve(const std::vector<ResolutionRequest>& requests,
                                                std::vector<ResolutionAnswer>& answers) {
         for (const ResolutionRequest& wanted : requests) {
@@ -291,11 +291,13 @@ public:
                                           wanted.function));
                 continue;
             }
-            const Shape shape{
-                .bounds = {Folder::Range{.left = 0,
-                                         .right = static_cast<std::int64_t>(wanted.drivers) - 1,
-                                         .ascending = true}},
-                .values = {std::nullopt}};
+            const std::optional<Folder::Range> bounds = driversRange(declaration, wanted.drivers);
+            if (!bounds) {
+                unsupported(declaration, "a resolution function whose parameter's index does "
+                                         "not fold");
+                continue;
+            }
+            const Shape shape{.bounds = {*bounds}, .values = {std::nullopt}};
             const std::optional<Callee> made = callee(declaration, shape, declaration, nullptr);
             if (!made) continue;
             answers.push_back(

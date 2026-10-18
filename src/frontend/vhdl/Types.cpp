@@ -416,6 +416,18 @@ eir::Encoding encodingOf(type_t type) {
     return eir::Encoding::Bits;
 }
 
+std::optional<Folder::Range> driversRange(tree_t function, std::uint32_t drivers) {
+    if (tree_ports(function) != 1 || drivers == 0) return std::nullopt;
+    type_t parameter = tree_type(tree_port(function, 0));
+    if (!type_is_array(parameter)) return std::nullopt;
+    const std::optional<std::int64_t> left =
+        Folder().left(type_index(type_base_recur(parameter), 0));
+    std::int64_t right = 0;
+    if (!left || __builtin_add_overflow(*left, std::int64_t{drivers} - 1, &right))
+        return std::nullopt;
+    return Folder::Range{.left = *left, .right = right, .ascending = true};
+}
+
 namespace {
 
 /// What `resolutionOf` finds of `type`: whether it is resolved at all, and the resolution when
@@ -463,14 +475,14 @@ FoundResolution findResolution(type_t type, const Folder& folder) {
         // enumeration of sixteen or fewer (DESIGN_GUIDE.md section 3.7).
         bool identity = false;
         type_t base = type_base_recur(element);
-        if (type_is_enum(base) && type_enum_literals(base) <= 16) {
+        const std::optional<Folder::Range> lone = driversRange(function, 1);
+        if (type_is_enum(base) && type_enum_literals(base) <= 16 && lone) {
             identity = true;
             const Folder unbound;
             for (std::int64_t code = 0; identity && std::cmp_less(code, type_enum_literals(base));
                  ++code) {
                 const std::optional<std::int64_t> resolved =
-                    unbound.applyToArray(function, encode(code, *storage),
-                                         Folder::Range{.left = 0, .right = 0, .ascending = true});
+                    unbound.applyToArray(function, encode(code, *storage), *lone);
                 identity = resolved == code;
             }
         }

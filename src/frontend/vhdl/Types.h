@@ -111,6 +111,12 @@ struct Layout {
 /// it is refused rather than left unresolved.
 [[nodiscard]] bool resolutionNotHeld(type_t type, const Folder& folder);
 
+/// The bounds of the array the resolution function `function` is given the values of `drivers`
+/// drivers in: ascending from the left bound of its parameter's index subtype, as NVC gives them,
+/// so `0 to n - 1` for `std_ulogic_vector`'s natural index and `1 to n` for a positive one.
+/// Nothing when that bound does not fold.
+[[nodiscard]] std::optional<Folder::Range> driversRange(tree_t function, std::uint32_t drivers);
+
 /// True when `type` is an integer or physical type, whose values compare and compute signed.
 [[nodiscard]] bool isSignedScalar(type_t type);
 
