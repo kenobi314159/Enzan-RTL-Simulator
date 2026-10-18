@@ -115,6 +115,14 @@ set_tests_properties(golden.vhdl.options.assert_level_error
                      PROPERTIES PASS_REGULAR_EXPRESSION "an error" FAIL_REGULAR_EXPRESSION
                                 "PASS options")
 
+# A source that cannot be opened is reported as that, whatever its name says it holds, rather than
+# as a design mixing VHDL and SystemVerilog.
+add_test(NAME golden.vhdl.missing_source COMMAND enzan --top tb
+                                                 "${CMAKE_CURRENT_SOURCE_DIR}/counter.vhd" missing.sv)
+set_tests_properties(golden.vhdl.missing_source
+                     PROPERTIES PASS_REGULAR_EXPRESSION "cannot open file 'missing.sv'"
+                                FAIL_REGULAR_EXPRESSION "mixing")
+
 # Components bound by configuration specifications.
 enzan_add_vhdl_golden_test(configurations)
 

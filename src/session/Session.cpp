@@ -247,6 +247,23 @@ bool Session::analyse(const AnalysisRequest& request) {
 
 bool Session::analyseVhdl(const AnalysisRequest& request) {
 #ifdef ENZAN_WITH_VHDL
+    // Every source is read first, so that one that cannot be is reported as that, whatever its
+    // name says it holds, rather than as a design of two languages.
+    frontend::vhdl::DesignOptions options;
+    std::set<std::filesystem::path> seen;
+    for (const std::filesystem::path& file : files) {
+        std::error_code failure;
+        std::filesystem::path key = std::filesystem::weakly_canonical(file, failure);
+        if (failure) key = file;
+        if (!seen.insert(std::move(key)).second) continue;
+
+        const FileReadResult result = sources.readFile(file);
+        if (!result.ok()) {
+            reportFileReadFailure(diagnostics, file, result);
+            return false;
+        }
+        options.units.sources.push_back(result.buffer);
+    }
     if (!std::ranges::all_of(files, isVhdlSource) || !contextFiles.empty()
         || !libraryFiles.empty()) {
         diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
@@ -268,21 +285,6 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     // finest unit anything in it asks for (section 3.1), unless `--timescale` said otherwise.
     if (!scaleChosen) scale = runtime::TimeScale(runtime::FinestTimeExponent);
 
-    frontend::vhdl::DesignOptions options;
-    std::set<std::filesystem::path> seen;
-    for (const std::filesystem::path& file : files) {
-        std::error_code failure;
-        std::filesystem::path key = std::filesystem::weakly_canonical(file, failure);
-        if (failure) key = file;
-        if (!seen.insert(std::move(key)).second) continue;
-
-        const FileReadResult result = sources.readFile(file);
-        if (!result.ok()) {
-            reportFileReadFailure(diagnostics, file, result);
-            return false;
-        }
-        options.units.sources.push_back(result.buffer);
-    }
     options.units.work = frontend::vhdl::UnitLibrary{.name = request.vhdlWork, .directory = {}};
     options.units.searchDirectories.push_back(
         vhdlLibraries.empty() ? frontend::vhdl::standardLibraryDirectory() : vhdlLibraries);
