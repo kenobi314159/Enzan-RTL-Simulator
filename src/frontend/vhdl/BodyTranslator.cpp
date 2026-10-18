@@ -335,6 +335,95 @@ void BodyTranslator::noteRead(std::uint32_t objectIndex) {
     reads.insert(objectIndex);
 }
 
+void BodyTranslator::noteDriversIn(tree_t container) {
+    if (!isProcess) return;
+    std::vector<tree_t> targets;
+    const auto collect = [](tree_t assignment, void* context) {
+        static_cast<std::vector<tree_t>*>(context)->push_back(tree_target(assignment));
+    };
+    tree_visit_only(container, collect, &targets, T_SIGNAL_ASSIGN);
+    tree_visit_only(container, collect, &targets, T_DUMMY_DRIVER);
+    for (std::size_t next = 0; next < targets.size(); ++next) {
+        tree_t target = targets[next];
+        // `(a, b) <= ...` drives each name it is made of.
+        if (tree_kind(target) == T_AGGREGATE) {
+            for (unsigned index = 0; index < tree_assocs(target); ++index)
+                targets.push_back(tree_value(tree_assoc(target, index)));
+            continue;
+        }
+        if (const std::optional<Place> driven = drivenPrefix(target)) noteWrite(*driven);
+    }
+}
+
+std::optional<BodyTranslator::Place> BodyTranslator::drivenPrefix(tree_t name) const {
+    switch (tree_kind(name)) {
+    case T_REF: {
+        if (!tree_has_ref(name)) return std::nullopt;
+        tree_t declaration = tree_ref(name);
+        if (const auto alias = aliases.find(declaration); alias != aliases.end()) {
+            if (alias->second.isVariable || alias->second.empty) return std::nullopt;
+            return alias->second;
+        }
+        if (tree_kind(declaration) == T_ALIAS && tree_has_value(declaration))
+            return drivenPrefix(tree_value(declaration));
+        const std::optional<std::uint32_t> object = owner.objectFor(declaration);
+        if (!object) return std::nullopt;
+        // A signal of a null range has no element to drive.
+        const std::optional<Layout> layout = declaredLayout(declaration, folder());
+        if (!layout) return std::nullopt;
+        return Place{.objectIndex = *object, .layout = *layout};
+    }
+
+    case T_ARRAY_REF:
+    case T_ARRAY_SLICE: {
+        const std::optional<Place> outer = drivenPrefix(tree_value(name));
+        if (!outer || !outer->layout.isArray() || !outer->layout.inner.empty() || outer->offset)
+            return outer;
+        const Layout& array = outer->layout;
+        Place part = *outer;
+        part.whole = false;
+        if (tree_kind(name) == T_ARRAY_REF) {
+            // An index that is not static leaves the prefix the longest static one.
+            if (tree_params(name) != 1) return outer;
+            const std::optional<std::int64_t> index =
+                folder().integer(tree_value(tree_param(name, 0)));
+            const std::optional<Layout> element = elementLayout(array, folder());
+            if (!index.has_value() || !element.has_value()) return outer;
+            const std::int64_t position = index.value();
+            if (position < array.index.low() || position > array.index.high()) return outer;
+            part.layout = element.value();
+            part.staticOffset = outer->staticOffset + array.bitOffset(position);
+            return part;
+        }
+        const std::optional<Folder::Range> bounds = folder().range(tree_range(name, 0));
+        if (bounds && bounds->length() == 0) return std::nullopt;
+        if (!bounds || bounds->low() < array.index.low() || bounds->high() > array.index.high()
+            || bounds->ascending != array.index.ascending)
+            return outer;
+        const std::optional<Layout> slice = arrayLayout(*bounds, array.elementType, folder());
+        if (!slice) return outer;
+        part.layout = *slice;
+        part.staticOffset = outer->staticOffset + array.bitOffset(bounds->right);
+        return part;
+    }
+
+    case T_RECORD_REF: {
+        const std::optional<Place> outer = drivenPrefix(tree_value(name));
+        if (!outer || !outer->layout.isRecord() || outer->offset || !tree_has_ref(name))
+            return outer;
+        const unsigned position = tree_pos(tree_ref(name));
+        if (position >= outer->layout.fields.size()) return outer;
+        Place field = *outer;
+        field.whole = false;
+        field.layout = outer->layout.fields[position];
+        field.staticOffset = outer->staticOffset + outer->layout.fieldOffsets[position];
+        return field;
+    }
+
+    default: return std::nullopt;
+    }
+}
+
 void BodyTranslator::noteWrite(const Place& place) {
     const std::uint32_t width = owner.definition().objects[place.objectIndex].type.bitWidth();
     if (place.offset && place.withinWidth != 0) {
@@ -1069,11 +1158,17 @@ bool BodyTranslator::ifStatement(tree_t statement) {
         // in a subprogram specialised for its bounds, that is how a guard for a case that cannot
         // arise leaves nothing behind.
         if (const std::optional<std::int64_t> known = folder().integer(tree_value(branch))) {
-            if (*known == 0) continue;
+            if (*known == 0) {
+                noteDriversIn(branch);
+                continue;
+            }
             if (!statements(branch)) return false;
             arrive();
             jump(join);
             fallsThrough = false;
+            // Nor does any branch after the one chosen run.
+            for (unsigned later = index + 1; later < count; ++later)
+                noteDriversIn(tree_cond(statement, later));
             break;
         }
 
@@ -1239,15 +1334,14 @@ bool BodyTranslator::forLoop(tree_t statement) {
     tree_t range = tree_range(statement, 0);
 
     // A static null range runs nothing, and what it would run, `rv(i) := ...` of an array as null
-    // as it is, is not translated; unless it assigns a signal, waits or calls a procedure, which
-    // may do either, since a process that does is a driver of what it assigns whether it runs or
-    // not (IEEE 1076 section 14.7.2).
+    // as it is, is not translated, though the process drives what it assigns all the same; unless
+    // it calls a procedure, which may drive what only its translation shows.
     if (const std::optional<Folder::Range> folded = folder().range(range);
         folded && folded->length() == 0
-        && tree_visit_only(statement, nullptr, nullptr, T_SIGNAL_ASSIGN) == 0
-        && tree_visit_only(statement, nullptr, nullptr, T_WAIT) == 0
-        && tree_visit_only(statement, nullptr, nullptr, T_PCALL) == 0)
+        && tree_visit_only(statement, nullptr, nullptr, T_PCALL) == 0) {
+        noteDriversIn(statement);
         return true;
+    }
 
     // A slice whose bounds move with the parameter, `d(4*i+3 downto 4*i)`, has a length only each
     // iteration's value shows, so a loop with one is unrolled, each iteration with its value.

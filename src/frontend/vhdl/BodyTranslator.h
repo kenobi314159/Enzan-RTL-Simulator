@@ -274,6 +274,17 @@ private:
 
     void noteRead(std::uint32_t objectIndex);
 
+    /// Records that the process drives what the signal assignments in `container` assign, which
+    /// is not translated: a branch a static condition rules out, or a loop over a static null
+    /// range. A process is a driver of each signal it has an assignment to, whether that runs or
+    /// not (IEEE 1076 section 14.7.2), as NVC keeps one where it folds an assignment away.
+    void noteDriversIn(tree_t container);
+
+    /// What an assignment to `name` drives: its longest static prefix (IEEE 1076 section 8.1),
+    /// found without translating anything of it. Nothing for a name of nothing that is driven, a
+    /// variable's or a null slice.
+    [[nodiscard]] std::optional<Place> drivenPrefix(tree_t name) const;
+
     /// Records that the process writes `place`: the bits it designates when they are known, and
     /// the whole object when an index is not (DESIGN_GUIDE.md section 3.7).
     void noteWrite(const Place& place);

@@ -98,6 +98,9 @@ enzan_add_vhdl_golden_test(local_resolution)
 # Resolution functions of composite values, of arrays and of records.
 enzan_add_vhdl_golden_test(composite_resolution)
 
+# Drivers of assignments that branches ruled out statically, and a null loop, never run.
+enzan_add_vhdl_golden_test(drivers)
+
 # Arrays of an unconstrained array type, as OFM's slv_array_t: objects, subprograms and a generic.
 enzan_add_vhdl_golden_test(element_constraints)
 
