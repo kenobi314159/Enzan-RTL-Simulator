@@ -666,10 +666,9 @@ TEST(Kernel, DisplayWritesToTheTranscript) {
     EXPECT_EQ(simulation.transcript(), "value = 42 at 0ps in /tb\n");
 }
 
-TEST(Kernel, TextioLinesLiveInTheHeapAndAreWrittenWhole) {
-    // `write(l, 42, left, 5); write(l, -7); writeline(output, l)`: the first write allocates a
-    // line, the second appends to it, and writeline prints it and leaves a new empty one, the
-    // handle the first freed (DESIGN_GUIDE.md section 4.3).
+/// `write(l, 42, left, 5); write(l, -7); writeline(output, l)`, and the handle writeline leaves in
+/// `l` stored in `after`.
+Design makeLineWriter() {
     ProcessBuilder builder(ProcessKind::Initial, "writer");
     const Type handle = Type::bits(64, false, false);
     const Type integer = Type::bits(32, true, false);
@@ -724,8 +723,13 @@ TEST(Kernel, TextioLinesLiveInTheHeapAndAreWrittenWhole) {
     builder.store(0, written);
     builder.emit(Instruction::make(Opcode::Return));
 
-    Simulation simulation(
-        designOf(makeTop({builder.finish()}, {Object{.name = "after", .type = handle}})), "tb");
+    return designOf(makeTop({builder.finish()}, {Object{.name = "after", .type = handle}}));
+}
+
+TEST(Kernel, TextioLinesLiveInTheHeapAndAreWrittenWhole) {
+    // The first write allocates a line, the second appends to it, and writeline prints it and
+    // leaves a new empty one, the handle the first freed (DESIGN_GUIDE.md section 4.3).
+    Simulation simulation(makeLineWriter(), "tb");
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     simulation.run();
     EXPECT_EQ(simulation.transcript(), "42   -7\n");
@@ -1837,6 +1841,19 @@ TEST(Kernel, ReinitialisingClearsAFinishedRun) {
 
     simulation.simulationKernel().initialize();
     EXPECT_EQ(simulation.run(), RunStatus::Finished) << "the design stopped a second time";
+}
+
+TEST(Kernel, ReinitialisingEmptiesTheHeap) {
+    // A line the first run left allocated is gone with the run, so the second allocates the same
+    // handles the first did.
+    Simulation simulation(makeLineWriter(), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    ASSERT_EQ(simulation.value("/tb/after", Radix::Decimal), "1");
+
+    simulation.simulationKernel().initialize();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/after", Radix::Decimal), "1");
 }
 
 TEST(Kernel, ReinitialisingAfterASuspensionDoesNotResumeTheOldRun) {

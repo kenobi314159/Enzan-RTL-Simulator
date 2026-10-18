@@ -223,6 +223,9 @@ void Kernel::initialize() {
     openFiles.clear();
     nextFileNumber = 3;
     nextChannel = 1;
+    // The lines it allocated go too, so that the run that follows allocates the same handles.
+    heap.clear();
+    freedHandles.clear();
     for (EdgeWaiterList& list : edgeWaiters) {
         list.waiters.clear();
         list.sweepAt = MinimumWaiterSweep;
