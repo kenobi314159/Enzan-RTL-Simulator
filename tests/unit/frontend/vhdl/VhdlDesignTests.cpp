@@ -2350,6 +2350,36 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(unsupported->location), 14U);
 }
 
+TEST_F(VhdlDesignTest, ASubprogramThatFailedToTranslateIsNotCalledRecursiveAfter) {
+    // `squared` is refused once, for what its body does; its call from the second assignment is no
+    // recursion, and was reported as one while the failed translation still looked like one in
+    // progress.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  function squared (n : integer) return integer is
+    variable result : integer;
+  begin
+    result := n ** 2;
+    return result;
+  end function;
+  signal a, b, x, y : integer := 3;
+begin
+  x <= squared(a);
+  y <= squared(b);
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    std::vector<std::string> refusals;
+    for (const Diagnostic& diagnostic : consumer.received)
+        if (diagnostic.code == DiagCode::VhdlUnsupported) refusals.push_back(diagnostic.message);
+    ASSERT_EQ(refusals.size(), 1U) << transcript();
+    EXPECT_EQ(refusals.front().find("recursive"), std::string::npos) << refusals.front();
+}
+
 TEST_F(VhdlDesignTest, AProcessThatNeverWaitsIsRefused) {
     const std::unique_ptr<enzan::eir::Design> design = translate(R"(
 entity spins is

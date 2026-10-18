@@ -387,6 +387,8 @@ public:
             }
             key.values.push_back(needed[index] ? value : std::nullopt);
         }
+        // One that failed has said why where it failed, and a call of it again is no recursion.
+        if (failedCallees.contains(key)) return std::nullopt;
         if (const auto known = callees.find(key); known != callees.end()) {
             if (!known->second) {
                 unsupported(where, std::format("a recursive call of {} whose result's bounds are "
@@ -415,6 +417,7 @@ public:
             }
             if (!layout) {
                 unsupported(parameter, std::format("a parameter of type {}", type_pp(type)));
+                failedCallees.insert(key);
                 return std::nullopt;
             }
             if (const std::optional<std::int64_t>& value = key.values[index])
@@ -431,7 +434,10 @@ public:
         callee.name = specialisationName(body, key);
         BodyTranslator translator(scope, body, callee.name, std::move(bindings));
         std::optional<BodyTranslator::Translated> translated = translator.translateSubprogram();
-        if (!translated) return std::nullopt;
+        if (!translated) {
+            failedCallees.insert(key);
+            return std::nullopt;
+        }
         callee.result = translated->result;
         if (inPackage) {
             packages.at(packageName(unit)).scope->addSubprogram(std::move(translated->subprogram));
@@ -841,8 +847,10 @@ private:
 
     std::map<std::string, Package> packages;
 
-    /// Each specialisation translated, or being translated when it holds nothing yet.
+    /// Each specialisation translated, or being translated when it holds nothing yet; and each
+    /// whose translation failed.
     std::map<SpecialisationKey, std::optional<Callee>> callees;
+    std::set<SpecialisationKey> failedCallees;
 
     std::deque<Specialisation> pending;
     std::vector<eir::ModuleDefinition> modules;
