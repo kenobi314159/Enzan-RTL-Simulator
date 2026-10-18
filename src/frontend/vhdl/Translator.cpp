@@ -1000,6 +1000,13 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
         unsupported(declaration, std::format("a signal of type {}", type_pp(type)));
         return false;
     }
+    // Left unresolved, its lone driver's value would be its value, which the function need not
+    // return.
+    if (resolutionNotHeld(type, folding)) {
+        unsupported(declaration,
+                    std::format("the resolution of a signal of type {}", type_pp(type)));
+        return false;
+    }
 
     // Every VHDL object has a value from the start: its own initial value, or its type's left
     // bound (IEEE 1076 section 14.4.2.5). A port's is the default it declares, which is what an
@@ -1031,7 +1038,8 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     object.vhdlType = vhdlTypeFor(type, *layout);
     object.holdsNothing = null;
     object.encoding = encodingOf(type);
-    object.resolution = null ? eir::Resolution{} : resolutionOf(type).value_or(eir::Resolution{});
+    object.resolution =
+        null ? eir::Resolution{} : resolutionOf(type, folding).value_or(eir::Resolution{});
     objects.emplace(declaration, result.addObject(std::move(object)));
     return true;
 }
@@ -1587,7 +1595,9 @@ bool ArchitectureTranslator::hasResolvedField(type_t type) {
     type_t base = type_base_recur(type);
     for (unsigned index = 0; index < type_fields(base); ++index) {
         type_t field = tree_type(type_field(base, index));
-        if (resolutionOf(field) || hasResolvedField(field)) return true;
+        if (resolutionOf(field, Folder()) || resolutionNotHeld(field, Folder())
+            || hasResolvedField(field))
+            return true;
     }
     return false;
 }
@@ -1668,6 +1678,11 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
         unsupported(associations.front(), "associating a port of this type with this");
         return std::nullopt;
     }
+    if (resolutionNotHeld(tree_type(port), childGenerics)) {
+        unsupported(port,
+                    std::format("the resolution of a port of type {}", type_pp(tree_type(port))));
+        return std::nullopt;
+    }
     const auto mode = static_cast<port_mode_t>(tree_subkind(port));
     const bool input = mode == PORT_IN;
     const bool inout = mode == PORT_INOUT;
@@ -1696,7 +1711,8 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
     if (inout) {
         eir::Object driving = through;
         driving.name += "$driving";
-        driving.resolution = resolutionOf(tree_type(port)).value_or(eir::Resolution{});
+        driving.resolution =
+            resolutionOf(tree_type(port), childGenerics).value_or(eir::Resolution{});
         drivenIndex = result.addObject(std::move(driving));
     }
     const std::uint32_t throughIndex = result.addObject(std::move(through));

@@ -191,8 +191,9 @@ struct UnpackedDimension {
 };
 
 /// What a VHDL resolved signal's drivers resolve with (IEEE 1076 section 4.6): a resolution
-/// function, applied to each scalar subelement of the signal, `elementBits` wide, over the values
-/// its drivers give it (DESIGN_GUIDE.md section 3.7).
+/// function, applied to each subelement of the signal it resolves, `elementBits` wide, over the
+/// values its drivers give it (DESIGN_GUIDE.md section 3.7). The subelement is a scalar, or for a
+/// function of composite values an array or a record, which each driver drives whole.
 ///
 /// The function is named as the design names it, by its library, package and signature as NVC
 /// mangles them, `IEEE.STD_LOGIC_1164.RESOLVED(Y)U`, rather than as a subprogram of EIR: its one

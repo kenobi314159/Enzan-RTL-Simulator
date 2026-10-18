@@ -821,6 +821,25 @@ private:
             (slot.kind == eir::ObjectKind::Variable && !slot.resolution.resolved())
             || slot.netKind == eir::NetKind::UWire;
 
+        // A VHDL resolution function is given each driver's whole value of what it resolves, so a
+        // process driving part of a composite one would give it a value no process assigned.
+        if (const std::uint32_t element = slot.resolution.elementBits;
+            slot.resolution.resolved() && element > 0) {
+            for (const DriverRange& range : ranges) {
+                if (!range.continuous
+                    || (range.lowBit % element == 0 && range.width % element == 0))
+                    continue;
+                diagnostics.report(
+                    DiagCode::NotYetImplemented,
+                    processOf(result->processList[range.process]).location,
+                    std::format("driving {} of '{}', whose resolution function resolves {} bits at "
+                                "a time, by {}",
+                                describeBits(range.lowBit, range.endBit(), slot.type.bitWidth()),
+                                slot.path, element, describeProcess(range.process)));
+                return false;
+            }
+        }
+
         for (std::size_t later = 1; later < ranges.size(); ++later) {
             for (std::size_t earlier = 0; earlier < later; ++earlier) {
                 const DriverRange& first = ranges[earlier];

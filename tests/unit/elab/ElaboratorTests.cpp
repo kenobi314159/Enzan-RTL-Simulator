@@ -621,6 +621,47 @@ TEST_F(ElaboratorTest, AProcessThatDrivesItsSignalsIsADriverOfThem) {
     EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
 }
 
+/// `tb` with a 16-bit source and a 16-bit signal resolved sixteen bits at a time, as a VHDL
+/// resolution function of composite values resolves, and `drivers` driving the signal.
+ModuleDefinition makeResolvedWhole(std::vector<Process> drivers) {
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::bits(16, false, false)});
+    Object resolved{.name = "sig", .type = Type::bits(16, false, false)};
+    resolved.resolution = {.function = "WORK.PAIRS.COMBINE", .elementBits = 16};
+    top.addObject(std::move(resolved));
+    for (Process& driver : drivers) {
+        driver.drivesSignals = true;
+        top.processes.push_back(std::move(driver));
+    }
+    return top;
+}
+
+TEST_F(ElaboratorTest, DriversOfAValueResolvedWholeShareOneResolution) {
+    design.addModule(makeResolvedWhole(
+        {makeCopyProcess(ProcessKind::Always, 0, 1, Type::bits(16, false, false)),
+         makeCopyProcess(ProcessKind::Always, 0, 1, Type::bits(16, false, false))}));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->segments().size(), 1U);
+    EXPECT_EQ(elaborated->segments()[0].driverCount, 2U);
+    ASSERT_EQ(elaborated->resolutionCalls().size(), 1U);
+    EXPECT_EQ(elaborated->resolutionCalls()[0].elementBits, 16U);
+}
+
+TEST_F(ElaboratorTest, RejectsAProcessDrivingPartOfAValueResolvedWhole) {
+    // The resolution function is given each driver's whole value, and a process driving eight of
+    // its sixteen bits would give it one no process assigned.
+    design.addModule(
+        makeResolvedWhole({makeCopyProcess(ProcessKind::Always, 0, 1, Type::bits(16, false, false)),
+                           makePartDriver(ProcessKind::Always, 0, 1, 8, 8)}));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::NotYetImplemented));
+    EXPECT_TRUE(reported("bits [15:8] of '/tb/sig'")) << consumer.messages.front();
+}
+
 TEST_F(ElaboratorTest, ASubroutinesStaticVariableIsNoContinuousDriversTarget) {
     // Every call of a static function writes its variables, and a call inlined into a
     // continuous assignment is no more their driver than one in an `always`: two assignments

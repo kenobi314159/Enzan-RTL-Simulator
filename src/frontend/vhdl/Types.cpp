@@ -416,46 +416,83 @@ eir::Encoding encodingOf(type_t type) {
     return eir::Encoding::Bits;
 }
 
-std::optional<eir::Resolution> resolutionOf(type_t type) {
-    if (type == nullptr) return std::nullopt;
+namespace {
+
+/// What `resolutionOf` finds of `type`: whether it is resolved at all, and the resolution when
+/// it is one that is held.
+struct FoundResolution {
+    bool resolved = false;
+    std::optional<eir::Resolution> held;
+};
+
+FoundResolution findResolution(type_t type, const Folder& folder) {
+    if (type == nullptr) return {};
     // Only a subtype has a resolution, the nearest of those it is declared through.
     for (type_t subtype = type; type_kind(subtype) == T_SUBTYPE; subtype = type_base(subtype)) {
         if (!type_has_resolution(subtype)) continue;
 
-        // `(resolved) std_ulogic_vector` resolves each element; the function is innermost.
+        // `(resolved) std_ulogic_vector` resolves each element; the function is innermost. One
+        // that is not an element's resolves the whole value, of the subtype `type` constrains it
+        // to.
         tree_t name = type_resolution(subtype);
-        type_t element = subtype;
+        type_t element = type;
         while (tree_kind(name) == T_ELEM_RESOLUTION) {
-            if (!type_is_array(element) || tree_assocs(name) != 1) return std::nullopt;
+            if (!type_is_array(element) || tree_assocs(name) != 1)
+                return {.resolved = true, .held = std::nullopt};
             name = tree_value(tree_assoc(name, 0));
             element = type_elem(element);
         }
+        if (tree_kind(name) != T_REF || !tree_has_ref(name))
+            return {.resolved = true, .held = std::nullopt};
+        tree_t function = tree_ref(name);
+        const std::string resolver(istr(tree_ident2(function)));
+
+        // A function of composite values resolves each whole value, as wide as its layout; no
+        // lone driver's value is proven to be what it returns.
         const std::optional<eir::Type> storage = scalarStorage(element);
-        if (tree_kind(name) != T_REF || !tree_has_ref(name) || !storage) return std::nullopt;
+        if (!storage) {
+            const std::optional<Layout> layout = layoutOf(element, folder);
+            if (!layout) return {.resolved = true, .held = std::nullopt};
+            return {.resolved = true,
+                    .held = eir::Resolution{.function = resolver,
+                                            .elementBits = layout->storage.bitWidth(),
+                                            .loneDriverIdentity = false}};
+        }
 
         // Proven to return a lone driver's value by running it on each value of an
         // enumeration of sixteen or fewer (DESIGN_GUIDE.md section 3.7).
-        tree_t function = tree_ref(name);
         bool identity = false;
         type_t base = type_base_recur(element);
         if (type_is_enum(base) && type_enum_literals(base) <= 16) {
             identity = true;
-            const Folder folder;
+            const Folder unbound;
             for (std::int64_t code = 0; identity && std::cmp_less(code, type_enum_literals(base));
                  ++code) {
                 const std::optional<std::int64_t> resolved =
-                    folder.applyToArray(function, encode(code, *storage),
-                                        Folder::Range{.left = 0, .right = 0, .ascending = true});
+                    unbound.applyToArray(function, encode(code, *storage),
+                                         Folder::Range{.left = 0, .right = 0, .ascending = true});
                 identity = resolved == code;
             }
         }
-        return eir::Resolution{.function = std::string(istr(tree_ident2(function))),
-                               .elementBits = storage->bitWidth(),
-                               .loneDriverIdentity = identity};
+        return {.resolved = true,
+                .held = eir::Resolution{.function = resolver,
+                                        .elementBits = storage->bitWidth(),
+                                        .loneDriverIdentity = identity}};
     }
     // An array of a resolved subtype, `array (...) of std_logic`.
-    if (type_is_array(type)) return resolutionOf(type_elem(type));
-    return std::nullopt;
+    if (type_is_array(type)) return findResolution(type_elem(type), folder);
+    return {};
+}
+
+} // namespace
+
+std::optional<eir::Resolution> resolutionOf(type_t type, const Folder& folder) {
+    return findResolution(type, folder).held;
+}
+
+bool resolutionNotHeld(type_t type, const Folder& folder) {
+    const FoundResolution found = findResolution(type, folder);
+    return found.resolved && !found.held;
 }
 
 bool isSignedScalar(type_t type) {

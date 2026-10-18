@@ -485,7 +485,10 @@ Further requirements:
   the initial value of the signal its process names, which for an out port is the port's
   default rather than that of the signal connected to it, and is what the function sees
   of it until it first runs. Before the run begins the kernel resolves each such signal
-  from its drivers' starting values, which is where the signal starts.
+  from its drivers' starting values, which is where the signal starts. A function of
+  composite values, of arrays or of records, resolves each whole value, so a process
+  driving only part of one is refused at elaboration: the function would be given a
+  value no process assigned.
 - **Single-driver bits MUST bypass resolution entirely** where resolving a lone
   driver is known to return its value unchanged, and a signal all of whose bits
   are such MUST bypass it as a whole rather than bit by bit. This is the common

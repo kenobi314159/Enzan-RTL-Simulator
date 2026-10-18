@@ -1652,6 +1652,45 @@ end architecture;
     EXPECT_FALSE(resolution("high").loneDriverIdentity);
 }
 
+TEST_F(VhdlDesignTest, AFunctionOfCompositeValuesResolvesEachWholeValue) {
+    // `with_first` resolves a triple of bits at a time, and so an array of triples one triple at a
+    // time; neither is proven to return a lone driver's value, which `with_first` does not.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity top is
+end entity;
+
+architecture rtl of top is
+  type triple is array (1 to 3) of bit;
+  type triple_list is array (positive range <>) of triple;
+  function with_first (drivers : triple_list) return triple is
+    variable result : triple := "100";
+  begin
+    for i in drivers'range loop
+      result := result or drivers(i);
+    end loop;
+    return result;
+  end function;
+  subtype first_set is with_first triple;
+  type first_set_pair is array (0 to 1) of first_set;
+  signal y : first_set;
+  signal both : first_set_pair;
+begin
+end architecture;
+)",
+                                                           "top");
+    ASSERT_NE(design, nullptr) << transcript();
+    const enzan::eir::ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+    for (const std::string_view name : {"y", "both"}) {
+        const auto object = std::ranges::find(top->objects, name, &enzan::eir::Object::name);
+        ASSERT_NE(object, top->objects.end()) << name;
+        EXPECT_NE(object->resolution.function.find("WITH_FIRST"), std::string::npos)
+            << object->resolution.function;
+        EXPECT_EQ(object->resolution.elementBits, 24U) << name << ": three bits of a byte each";
+        EXPECT_FALSE(object->resolution.loneDriverIdentity) << name;
+    }
+}
+
 TEST_F(VhdlDesignTest, AResolutionFunctionIsTranslatedForTheDriversElaborationCounted) {
     // Asked for by name and driver count, as elaboration asks once it has counted them: the
     // function's array parameter holds that many values, and its result is one subelement.
