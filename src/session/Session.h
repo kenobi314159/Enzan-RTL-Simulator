@@ -358,7 +358,9 @@ public:
     ///
     /// An enumerated signal whose value has a name is rendered by that name when `radix` is
     /// absent, matching what the wave window shows (section 10.3): a reader who asked what a
-    /// state register holds wants `S_SEND`, and gets `3'h2` by asking for a radix.
+    /// state register holds wants `S_SEND`, and gets `3'h2` by asking for a radix. Anything else
+    /// is rendered as it shows (section 3.6), a std_logic_vector as the bits its codes stand for,
+    /// and a VHDL signal of a null range, which has no value, as nothing.
     [[nodiscard]] std::string examine(std::uint32_t signalIndex,
                                       std::optional<eir::Radix> radix) const;
 

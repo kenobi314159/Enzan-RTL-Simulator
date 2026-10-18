@@ -7,6 +7,7 @@
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Design.h"
+#include "eir/Module.h"
 #include "eir/Serialization.h"
 #include "eir/Verifier.h"
 #include "elab/ElaboratedDesign.h"
@@ -689,7 +690,14 @@ std::string Session::examine(std::uint32_t signalIndex, std::optional<eir::Radix
         }
     }
 
-    return eir::toString(value, radix.value_or(eir::Radix::Hexadecimal));
+    // As every waveform shows it: a VHDL signal's codes as the bits they stand for, and one of a
+    // null range, whose one bit is a placeholder, as nothing.
+    if (elaborated->slots()[signalIndex].holdsNothing) return {};
+    if (signal.encoding == eir::Encoding::Bits)
+        return eir::toString(value, radix.value_or(eir::Radix::Hexadecimal));
+    eir::BitVector shown(eir::presentedWidth(signal.encoding, signal.bitWidth));
+    eir::present(signal.encoding, value, shown.mutableRef());
+    return eir::toString(shown.ref(), radix.value_or(eir::Radix::Hexadecimal));
 }
 
 std::optional<eir::BitVector>
