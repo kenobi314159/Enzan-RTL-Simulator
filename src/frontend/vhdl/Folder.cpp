@@ -38,6 +38,8 @@ std::optional<std::int64_t> roundedReal(double value) {
 } // namespace
 
 bool isForeign(tree_t declaration) {
+    // A predefined subprogram, which has no mangled name, is named by no attribute.
+    if (!tree_has_ident2(declaration)) return false;
     ident_t foreign = ident_new("FOREIGN");
     ident_t name = tree_ident2(declaration);
     const auto specifies = [foreign, name](tree_t region) {
@@ -70,6 +72,9 @@ tree_t subprogramBody(tree_t declaration) {
     if (isForeign(declaration)) return nullptr;
     const tree_kind_t kind = tree_kind(declaration);
     if (kind == T_FUNC_BODY || kind == T_PROC_BODY) return declaration;
+
+    // A predefined one, `file_open` or `endfile`, has no mangled name, nor any body to have one.
+    if (!tree_has_ident2(declaration)) return nullptr;
 
     // The body has the declaration's mangled name, in the package body when the declaration is in
     // a package, and beside the declaration otherwise.
