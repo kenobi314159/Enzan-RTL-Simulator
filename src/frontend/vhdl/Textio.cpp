@@ -32,6 +32,12 @@ bool inTextio(tree_t declaration) {
            && std::string_view(istr(tree_ident(unit))) == "STD.TEXTIO";
 }
 
+/// True when `type` is std.textio's `text`, whose files hold lines of characters.
+bool isTextFile(type_t type) {
+    type_t base = type_base_recur(type);
+    return type_has_ident(base) && std::string_view(istr(type_ident(base))) == "STD.TEXTIO.TEXT";
+}
+
 /// True when `type` is a string, or a character.
 bool isCharacters(type_t type) {
     type_t element = type_is_array(type) ? type_elem(type) : type;
@@ -282,8 +288,23 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
     // format, which a run reads back as it wrote it.
     case S_FILE_WRITE: {
         const std::optional<Value> file = fileDescriptor((*actuals)[0]);
+        if (!file) return false;
+
+        // std.textio's `text`, `output` among its files, is written as the characters themselves,
+        // as a message is made of them; any other file of strings as values of its type are.
+        if (isTextFile(tree_type((*actuals)[0]))) {
+            std::string format;
+            native.kind = eir::SysTaskKind::FileWrite;
+            native.arguments = {argument(*file)};
+            if (!messageParts((*actuals)[1], format, native.arguments)) return false;
+            native.formatIndex = addString(std::move(format));
+            emit(eir::Instruction::make(eir::Opcode::SysTask, {},
+                                        eir::Operand::sysCall(addSysCall(std::move(native)))));
+            return true;
+        }
+
         const std::optional<Value> written = value(1);
-        if (!file || !written) return false;
+        if (!written) return false;
         native.kind = eir::SysTaskKind::FileWriteValue;
         native.arguments = {argument(*file), argument(*written)};
         // An unconstrained array's values differ in length, so each goes with its count.

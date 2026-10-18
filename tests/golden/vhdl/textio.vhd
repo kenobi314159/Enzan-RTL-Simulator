@@ -2,8 +2,9 @@
 --
 -- std.textio as NEORV32 uses it: lines written with strings, characters and integers, justified
 -- in fields, to `output` and to a file; the file read back a line and a character at a time;
--- `null`; and strings whose lengths only the run shows, which a function builds from images as
--- NEORV32's trace decodes an instruction. What each line and report says is what GHDL 4.1 says.
+-- `null`; strings whose lengths only the run shows, which a function builds from images as
+-- NEORV32's trace decodes an instruction; and strings written to `output` and to the file whole,
+-- with no line. What each line and report says is what GHDL 4.1 says.
 
 use std.textio.all;
 
@@ -37,6 +38,7 @@ begin
     write(l, string'("|"));
     write(l, string'("r"), right, 4);
     writeline(output, l);
+    write(output, "written whole, " & integer'image(42) & LF);
     for i in values'range loop
       write(l, string'(describe(values(i))), left, 12);
       write(l, '|');
@@ -48,6 +50,7 @@ begin
       write(l, i);
       writeline(f, l);
     end loop;
+    write(f, "line 4" & LF);
     file_close(f);
 
     file_open(g, "textio.txt", read_mode);
