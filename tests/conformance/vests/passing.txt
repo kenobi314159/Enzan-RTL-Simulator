@@ -444,6 +444,7 @@ billowitch/compliant/tc1972.vhd
 billowitch/compliant/tc1973.vhd
 billowitch/compliant/tc1974.vhd
 billowitch/compliant/tc1975.vhd
+billowitch/compliant/tc1976.vhd
 billowitch/compliant/tc198.vhd
 billowitch/compliant/tc1981.vhd
 billowitch/compliant/tc1982.vhd

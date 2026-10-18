@@ -110,7 +110,9 @@ run_case() {
     # shellcheck disable=SC2086 # the sources are words
     (cd "$directory" && timeout 120 "$ENZAN" "${arguments[@]}" $files) >"$log" 2>&1
     local status=$?
-    if [[ $status -eq 0 ]] && ! grep -q 'FAILED TEST' "$log"; then
+    # A report that is a failure starts with FAILED TEST, most with `***`; a passing case may say
+    # the words further on, as tc1976's note that it passes when no FAILED TEST appears does.
+    if [[ $status -eq 0 ]] && ! grep -qE ': [a-z]+: (\*\*\*)?FAILED TEST' "$log"; then
         printf 'PASS %s\n' "$name"
     else
         printf 'FAIL %s\n' "$name"
