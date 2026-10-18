@@ -257,7 +257,8 @@ void Image::initializeState(Arena& arena) const {
             for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
                  ++objectIndex) {
                 const eir::Object& object = definition.objects[objectIndex];
-                if (!object.type.isBits()) continue;
+                // A real is held as 64 bits are, and starts at its initial value as they do.
+                if (!object.type.isBits() && !object.type.isReal()) continue;
                 if (object.initialValue.has_value() != wantExplicit) continue;
 
                 const std::uint32_t slotIndex = instance.objectSlots[objectIndex];

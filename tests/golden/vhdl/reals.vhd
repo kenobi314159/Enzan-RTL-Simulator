@@ -2,7 +2,8 @@
 --
 -- Reals as NEORV32's UART receiver has them: real generics folded into a constant, a real
 -- signal counting down a baud period from math_real's round, comparisons, and conversions
--- between reals and integers either way. What each check expects is what GHDL 4.1 gives.
+-- between reals and integers either way; and a real signal starting at a value of its own. What
+-- each check expects is what GHDL 4.1 gives.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -16,6 +17,7 @@ architecture test of tb is
   constant baud_val_c : real := fclk / baud;
   signal clk : std_ulogic := '0';
   signal baudcnt : real := 0.0;
+  signal scale : real := 2.5;
   signal ticks : integer := 0;
   signal done : boolean := false;
 begin
@@ -38,6 +40,7 @@ begin
     variable i : integer;
   begin
     assert baud_val_c > 5.20 and baud_val_c < 5.21 report "baud_val_c" severity failure;
+    assert scale = 2.5 and integer(scale * 2.0) = 5 report "scale starts at 2.5" severity failure;
     r := real(7) / 2.0;
     i := integer(r);
     assert i = 4 report "integer(3.5) is " & integer'image(i) severity failure;

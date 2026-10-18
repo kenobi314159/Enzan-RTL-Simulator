@@ -369,6 +369,7 @@ billowitch/compliant/tc1775.vhd
 billowitch/compliant/tc1776.vhd
 billowitch/compliant/tc1781.vhd
 billowitch/compliant/tc1782.vhd
+billowitch/compliant/tc1785.vhd
 billowitch/compliant/tc1787.vhd
 billowitch/compliant/tc179.vhd
 billowitch/compliant/tc1792.vhd
@@ -706,6 +707,7 @@ billowitch/compliant/tc2528.vhd
 billowitch/compliant/tc2529.vhd
 billowitch/compliant/tc2530.vhd
 billowitch/compliant/tc2531.vhd
+billowitch/compliant/tc2532.vhd
 billowitch/compliant/tc2533.vhd
 billowitch/compliant/tc2535.vhd
 billowitch/compliant/tc254.vhd
@@ -874,7 +876,12 @@ billowitch/compliant/tc3044.vhd
 billowitch/compliant/tc3045.vhd
 billowitch/compliant/tc3046.vhd
 billowitch/compliant/tc3047.vhd
+billowitch/compliant/tc3048.vhd
 billowitch/compliant/tc3049.vhd
+billowitch/compliant/tc3050.vhd
+billowitch/compliant/tc3051.vhd
+billowitch/compliant/tc3052.vhd
+billowitch/compliant/tc3053.vhd
 billowitch/compliant/tc3054.vhd
 billowitch/compliant/tc3059.vhd
 billowitch/compliant/tc3062.vhd
@@ -1195,6 +1202,7 @@ billowitch/compliant/tc636.vhd
 billowitch/compliant/tc637.vhd
 billowitch/compliant/tc638.vhd
 billowitch/compliant/tc639.vhd
+billowitch/compliant/tc64.vhd
 billowitch/compliant/tc640.vhd
 billowitch/compliant/tc641.vhd
 billowitch/compliant/tc642.vhd
@@ -1215,6 +1223,7 @@ billowitch/compliant/tc656.vhd
 billowitch/compliant/tc657.vhd
 billowitch/compliant/tc658.vhd
 billowitch/compliant/tc659.vhd
+billowitch/compliant/tc66.vhd
 billowitch/compliant/tc660.vhd
 billowitch/compliant/tc661.vhd
 billowitch/compliant/tc662.vhd
@@ -1291,7 +1300,10 @@ billowitch/compliant/tc756.vhd
 billowitch/compliant/tc757.vhd
 billowitch/compliant/tc759.vhd
 billowitch/compliant/tc76.vhd
+billowitch/compliant/tc760.vhd
+billowitch/compliant/tc761.vhd
 billowitch/compliant/tc762.vhd
+billowitch/compliant/tc763.vhd
 billowitch/compliant/tc765.vhd
 billowitch/compliant/tc768.vhd
 billowitch/compliant/tc772.vhd

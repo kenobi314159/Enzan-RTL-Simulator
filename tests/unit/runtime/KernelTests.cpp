@@ -24,6 +24,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <format>
 #include <functional>
@@ -120,6 +121,19 @@ TEST(Kernel, ADeclaredInitialValueIsApplied) {
     const Simulation simulation(designOf(std::move(definition)), "tb");
     ASSERT_TRUE(simulation.ready());
     EXPECT_EQ(simulation.value("/tb/preset", Radix::Hexadecimal), "a5");
+}
+
+TEST(Kernel, ARealStartsAtItsDeclaredInitialValue) {
+    // A VHDL real signal is held as 64 bits are, and starts at the double its declaration gives,
+    // 2.5 here, rather than at zero.
+    ModuleDefinition definition = makeTop(
+        {}, {Object{.name = "ratio",
+                    .type = Type::real(),
+                    .initialValue = BitVector::fromUInt64(std::bit_cast<std::uint64_t>(2.5), 64)}});
+
+    const Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready());
+    EXPECT_EQ(simulation.value("/tb/ratio", Radix::Hexadecimal), "4004000000000000");
 }
 
 TEST(Kernel, AlwaysCombRunsAtTimeZero) {
