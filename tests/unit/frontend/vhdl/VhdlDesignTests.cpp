@@ -615,6 +615,43 @@ end architecture;
     EXPECT_TRUE(enzan::eir::verify(*design, engine)) << transcript();
 }
 
+TEST_F(VhdlDesignTest, ObjectsShowAsWhatTheirBitsMean) {
+    // std_logic's codes as four-state bits, a vector of them too; bit's as two-state ones; a real
+    // as the number it is; and an array of reals, several doubles, as its bits, since no one
+    // number is it.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity shown is
+end entity;
+
+architecture rtl of shown is
+  type real_pair is array (0 to 1) of real;
+  signal logic : std_logic_vector(3 downto 0);
+  signal flag : bit;
+  signal level : real;
+  signal levels : real_pair;
+  signal count : integer;
+begin
+end architecture;
+)",
+                                                                 "shown");
+    ASSERT_NE(design, nullptr) << transcript();
+    const ModuleDefinition* shown = design->findModule("shown");
+    ASSERT_NE(shown, nullptr);
+    const auto encodingOf = [&](std::string_view name) {
+        const std::optional<std::uint32_t> object = shown->findObject(name);
+        EXPECT_TRUE(object.has_value()) << name;
+        return shown->objects.at(object.value_or(0)).encoding;
+    };
+    EXPECT_EQ(encodingOf("logic"), enzan::eir::Encoding::VhdlLogic);
+    EXPECT_EQ(encodingOf("flag"), enzan::eir::Encoding::VhdlBit);
+    EXPECT_EQ(encodingOf("level"), enzan::eir::Encoding::Real);
+    EXPECT_EQ(encodingOf("levels"), enzan::eir::Encoding::Bits);
+    EXPECT_EQ(encodingOf("count"), enzan::eir::Encoding::Bits);
+}
+
 TEST_F(VhdlDesignTest, ASignalOfANullRangeHoldsNothing) {
     // Declared all the same, as cocotb's sample design declares two it never touches: its bounds
     // are its type's, and its one bit a placeholder nothing reads or records.

@@ -96,8 +96,8 @@ struct Layout {
 [[nodiscard]] std::optional<eir::Type> scalarStorage(type_t type);
 
 /// What an object of `type` shows as outside the simulation: `std_ulogic`'s codes, and arrays of
-/// them, as four-state bits; `bit`'s and `boolean`'s as two-state ones; anything else as its own
-/// bits (DESIGN_GUIDE.md section 3.6).
+/// them, as four-state bits; `bit`'s and `boolean`'s as two-state ones; a real as the number it
+/// is; anything else, an array of reals among it, as its own bits (DESIGN_GUIDE.md section 3.6).
 [[nodiscard]] eir::Encoding encodingOf(type_t type);
 
 /// What a signal of `type` resolves with: the resolution function of its subtype, or of its

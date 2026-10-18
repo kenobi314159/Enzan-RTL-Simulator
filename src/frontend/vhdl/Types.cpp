@@ -405,6 +405,7 @@ std::optional<Layout> declaredLayout(tree_t declaration, const Folder& folder) {
 }
 
 eir::Encoding encodingOf(type_t type) {
+    const bool scalar = type != nullptr && !type_is_array(type);
     while (type != nullptr && type_is_array(type)) type = type_elem(type);
     if (type == nullptr) return eir::Encoding::Bits;
     type_t base = type_base_recur(type);
@@ -412,7 +413,8 @@ eir::Encoding encodingOf(type_t type) {
     const std::string_view name = istr(type_ident(base));
     if (name == "IEEE.STD_LOGIC_1164.STD_ULOGIC") return eir::Encoding::VhdlLogic;
     if (name == "STD.STANDARD.BIT" || name == "STD.STANDARD.BOOLEAN") return eir::Encoding::VhdlBit;
-    if (type_is_real(base)) return eir::Encoding::Real;
+    // A real's 64 bits are one double; an array of them is several, which shows as its bits.
+    if (type_is_real(base) && scalar) return eir::Encoding::Real;
     return eir::Encoding::Bits;
 }
 
