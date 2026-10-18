@@ -27,8 +27,13 @@ namespace enzan::frontend::vhdl {
 void setIeeeWarnings(bool reported) noexcept;
 
 /// The body of the subprogram `declaration` declares: itself when it is one, and otherwise the one
-/// its package body or its declarative region holds. Null when the body has not been analysed.
+/// its package body or its declarative region holds. Null when the body has not been analysed, and
+/// for a foreign subprogram, whose body only stands in for what NVC's runtime does.
 [[nodiscard]] tree_t subprogramBody(tree_t declaration);
+
+/// True when the subprogram `declaration` declares is foreign: implemented by NVC's runtime, as
+/// an attribute `foreign` specified where it is declared or beside its body says.
+[[nodiscard]] bool isForeign(tree_t declaration);
 
 /// The expression `declaration`, a constant or an alias, stands for: its own value, or a deferred
 /// constant's in its full declaration in the package body (IEEE 1076 section 6.4.2.2). Null for

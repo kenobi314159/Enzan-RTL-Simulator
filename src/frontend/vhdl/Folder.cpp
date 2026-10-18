@@ -37,7 +37,37 @@ std::optional<std::int64_t> roundedReal(double value) {
 
 } // namespace
 
+bool isForeign(tree_t declaration) {
+    ident_t foreign = ident_new("FOREIGN");
+    ident_t name = tree_ident2(declaration);
+    const auto specifies = [foreign, name](tree_t region) {
+        if (region == nullptr) return false;
+        for (unsigned index = 0; index < tree_decls(region); ++index) {
+            tree_t specification = tree_decl(region, index);
+            if (tree_kind(specification) != T_ATTR_SPEC || tree_ident(specification) != foreign
+                || !tree_has_ref(specification))
+                continue;
+            tree_t named = tree_ref(specification);
+            const tree_kind_t kind = tree_kind(named);
+            if ((kind == T_FUNC_DECL || kind == T_FUNC_BODY || kind == T_PROC_DECL
+                 || kind == T_PROC_BODY)
+                && tree_ident2(named) == name)
+                return true;
+        }
+        return false;
+    };
+    tree_t unit = tree_container(declaration);
+    if (unit == nullptr) return false;
+    switch (tree_kind(unit)) {
+    case T_PACKAGE: return specifies(unit) || specifies(body_of(unit));
+    case T_PACK_BODY:
+        return specifies(unit) || (tree_has_primary(unit) && specifies(tree_primary(unit)));
+    default: return specifies(unit);
+    }
+}
+
 tree_t subprogramBody(tree_t declaration) {
+    if (isForeign(declaration)) return nullptr;
     const tree_kind_t kind = tree_kind(declaration);
     if (kind == T_FUNC_BODY || kind == T_PROC_BODY) return declaration;
 

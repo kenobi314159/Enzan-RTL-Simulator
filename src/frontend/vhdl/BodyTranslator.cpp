@@ -1752,6 +1752,13 @@ std::optional<std::vector<tree_t>> BodyTranslator::actualsOf(tree_t call, tree_t
 
 std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
                                                                     tree_t declaration) {
+    // A foreign one's body only stands in for what NVC's runtime does, and running it would give
+    // what it stands in with.
+    if (isForeign(declaration)) {
+        fail(call,
+             std::string("a call of the foreign subprogram ") + istr(tree_ident2(declaration)));
+        return std::nullopt;
+    }
     tree_t calleeBody = subprogramBody(declaration);
     if (calleeBody == nullptr) {
         fail(call, std::string("a call of ") + istr(tree_ident2(declaration))

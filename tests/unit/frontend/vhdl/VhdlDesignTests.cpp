@@ -2247,6 +2247,36 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
 }
 
+TEST_F(VhdlDesignTest, AForeignSubprogramIsRefusedRatherThanItsBodyRun) {
+    // Its body only stands in for what the tool's runtime does, here returning 0 where the host's
+    // clock would be read, so running it would give that instead.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  impure function host_seconds return integer is
+  begin
+    return 0;
+  end function;
+  attribute foreign of host_seconds : function is "VHPIDIRECT host_seconds";
+begin
+  process
+  begin
+    report "started at " & integer'image(host_seconds);
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(unsupported, nullptr) << transcript();
+    EXPECT_TRUE(unsupported->message.starts_with("a call of the foreign subprogram"))
+        << unsupported->message;
+    EXPECT_EQ(sources.lineNumber(unsupported->location), 14U);
+}
+
 TEST_F(VhdlDesignTest, AProcessThatNeverWaitsIsRefused) {
     const std::unique_ptr<enzan::eir::Design> design = translate(R"(
 entity spins is
