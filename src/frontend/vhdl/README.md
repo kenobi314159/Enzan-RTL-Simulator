@@ -24,6 +24,10 @@ before the analysis finishes is reported as ENZ2004 with the message NVC printed
 holds, rather than as a file for NVC to open, so a location in a diagnostic is a location in the
 same buffer every other diagnostic quotes.
 
+**In dependency order.** `SourceOrder.cpp` scans each source for the units it declares and those
+of the work library it names, and NVC analyses each after the sources declaring them, in the order
+given otherwise.
+
 **With its constant evaluator replaced**, by `third_party/nvc-analysis`, so analysis folds
 nothing through NVC's JIT and this adapter folds as it translates. `docs/nvc_integration.md`
 measures what that changes.
@@ -37,6 +41,8 @@ parent. A design's work library is NVC's in-memory one, written nowhere.
 - `VhdlFrontend.h/.cpp` — the interface the rest of Enzan sees, and the child process.
 - `NvcAnalysis.h/.cpp` — NVC set up for one run: its analysis, and its locations in Enzan's
   buffers.
+- `SourceOrder.h/.cpp` — the order sources are analysed in: each after those declaring the units
+  it names.
 - `Translator.h/.cpp` — the hierarchy walk: which architecture an entity is bound to, generics
   bound and folded, one definition per architecture and values, ports, signals and instances.
 - `BodyTranslator.h/.cpp` — a process's or a subprogram's statements and expressions, as EIR-B,

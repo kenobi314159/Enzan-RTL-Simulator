@@ -976,6 +976,14 @@ child translates is the hierarchy under the top, or under every entity of the so
 that none of them instantiates when no top is named: a unit nothing instantiates cannot
 stop a design for using something the adapter lacks.
 
+**Sources are analysed in dependency order.** A unit is analysed against the units
+analysed before it (IEEE 1076 section 13.1), and a file list need not name a package
+before what uses it, as GHDL's `-m` and Questa's `-autoorder` let it not. So each
+source is scanned for the primary units it declares and those of the work library it
+names, and analysed after the sources declaring them, in the order given otherwise:
+one already in an order VHDL can analyse is kept, and sources naming each other's
+units, which no order of whole files satisfies, stay as given.
+
 What a VHDL unit becomes in EIR:
 
 - An entity's ports and its architecture's signals are objects holding codes (3.6),

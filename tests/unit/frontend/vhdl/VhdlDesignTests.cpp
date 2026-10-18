@@ -131,6 +131,58 @@ protected:
     CollectingConsumer consumer;
 };
 
+TEST_F(VhdlDesignTest, SourcesAreAnalysedAfterThoseDeclaringWhatTheyUse) {
+    // The testbench is given first, and uses the package and instantiates the entity given after
+    // it; each is analysed after what it names.
+    DesignOptions options;
+    options.units.sources = {sources.addBuffer("tb.vhd", R"(
+use work.widths.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal width : integer;
+begin
+  u : entity work.leaf port map (doubled => width);
+  process
+  begin
+    wait for 1 ns;
+    report "width " & integer'image(width) & " of " & integer'image(W);
+    wait;
+  end process;
+end architecture;
+)"),
+                             sources.addBuffer("leaf.vhd", R"(
+use work.widths.all;
+
+entity leaf is
+  port (doubled : out integer);
+end entity;
+
+architecture rtl of leaf is
+begin
+  doubled <= W * 2;
+end architecture;
+)"),
+                             sources.addBuffer("widths.vhd", R"(
+package widths is
+  constant W : natural := 8;
+end package;
+)")};
+    options.units.work = {.name = "work", .directory = {}};
+    options.units.searchDirectories = {libraries()};
+    options.top = "tb";
+    std::unique_ptr<enzan::eir::Design> design =
+        enzan::frontend::vhdl::analyse(options, sources, engine);
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"width 16 of 8"});
+}
+
 TEST_F(VhdlDesignTest, AnEntityAndItsArchitectureBecomeOneDefinition) {
     const std::unique_ptr<enzan::eir::Design> design = translate(Counter);
     ASSERT_NE(design, nullptr) << transcript();

@@ -91,8 +91,9 @@ gtkwave wave.fst
 `--vcd` writes a VCD instead, and both may be given at once. Prefer FST unless you want to read or
 diff the file yourself: it is far smaller on a real design and a viewer can seek in it.
 
-A VHDL design runs the same way, from `.vhd` or `.vhdl` files given in the order VHDL analyses
-them; it counts time in femtoseconds unless `--timescale` says otherwise. Sources that name the
+A VHDL design runs the same way, from `.vhd` or `.vhdl` files given in any order, each analysed
+after those declaring the units it names; it counts time in femtoseconds unless `--timescale` says
+otherwise. Sources that name the
 library they belong to, `library neorv32;`, are analysed into it with `--work`, and GHDL's
 `--ieee-asserts` and `--assert-level` mean what they mean there:
 

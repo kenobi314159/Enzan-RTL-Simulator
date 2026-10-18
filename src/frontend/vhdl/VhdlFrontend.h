@@ -45,10 +45,12 @@ struct UnitLibrary {
 
 /// What to analyse, and into which library.
 struct UnitOptions {
-    /// The sources, read by the caller, in the order they are to be analysed.
+    /// The sources, read by the caller.
     ///
     /// The order matters in VHDL as it does not in SystemVerilog: a unit is analysed against the
     /// units already analysed (IEEE 1076 section 13.1), so a package comes before what uses it.
+    /// They are analysed in an order that puts each after the sources declaring the units it
+    /// names, and otherwise in this one (`dependencyOrder`).
     std::vector<BufferId> sources;
 
     /// Where the analysed units go. With no directory, they are held in memory for the run and

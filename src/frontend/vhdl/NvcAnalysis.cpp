@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "frontend/vhdl/NvcAnalysis.h"
+#include "frontend/vhdl/SourceOrder.h"
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
@@ -197,10 +198,10 @@ public:
     ~Run() { diag_set_consumer(nullptr, nullptr); }
 
     /// Exactly the loop of NVC's `nvc -a` (src/nvc.c), with the constant evaluator replaced
-    /// (third_party/nvc-analysis/enzan_nvc_seam.c), so simplification is given no JIT. Returns
-    /// the error count.
+    /// (third_party/nvc-analysis/enzan_nvc_seam.c), so simplification is given no JIT, over the
+    /// sources in an order that analyses each after the units it names. Returns the error count.
     unsigned analyse() {
-        for (const BufferId buffer : options.sources) {
+        for (const BufferId buffer : dependencyOrder(options.sources, sources, options.work.name)) {
             const std::string name(sources.bufferName(buffer));
             const std::string_view text = sources.bufferText(buffer);
             // NVC keeps the pointer to quote lines from, which it stops at a newline; the source
