@@ -72,6 +72,9 @@ struct Layout {
     /// True for an array or a record, whose value is laid out from parts.
     [[nodiscard]] bool isComposite() const noexcept { return isArray() || isRecord(); }
 
+    /// True for an array of a null range, whose one bit is a placeholder (see `nullLayout`).
+    [[nodiscard]] bool isNull() const noexcept { return array && index.length() == 0; }
+
     /// The offset of the bits of the element at `position` of the index range, which must lie
     /// inside it.
     [[nodiscard]] std::int64_t bitOffset(std::int64_t position) const noexcept {
@@ -88,6 +91,21 @@ struct Layout {
 /// unconstrained array type, a port taking its bounds from its actual say, with the bounds
 /// `folder` binds it to. Nothing when neither gives it bounds, or they hold nothing.
 [[nodiscard]] std::optional<Layout> declaredLayout(tree_t declaration, const Folder& folder);
+
+/// The layout of an array of the null range `index`, which holds nothing: a placeholder bit,
+/// since a bit vector has at least one, which no element is part of, so that it is a value, a
+/// variable or a signal like any other array, and its bounds are what it holds. Its elements'
+/// layout is `elementType`'s, or with `elementIndex` as their bounds as for `arrayLayout`; nothing
+/// when that is not known, or `index` is not null. Every element is a byte or more, so the
+/// placeholder is the width of no other array's value, and a value of it put where one of another
+/// length is expected is refused as such.
+[[nodiscard]] std::optional<Layout>
+nullLayout(const Folder::Range& index, type_t elementType, const Folder& folder,
+           const std::optional<Folder::Range>& elementIndex = std::nullopt);
+
+/// `nullLayout` for the object `declaration`, when what it declares is an array of one dimension
+/// whose bounds, its subtype's or those `folder` binds it to, are a null range.
+[[nodiscard]] std::optional<Layout> declaredNullLayout(tree_t declaration, const Folder& folder);
 
 /// The layout of an array with `index` as its bounds and elements of `elementType`, and with the
 /// further dimensions `inner` when it has more than one; or, of one dimension whose element type

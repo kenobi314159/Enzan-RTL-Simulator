@@ -513,6 +513,71 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AFunctionReturnsANullArrayOfArrays) {
+    // type_pack's slv_array_deser given no items returns its null aggregate, whose elements take
+    // their bounds from the "X" it is of; and the one of three declares a variable as null as the
+    // result, whose loop runs no iteration. Each is assigned to a signal of a null range.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+package arrays is
+  type slv_array_t is array (natural range <>) of std_logic_vector;
+  function deser (v : std_logic_vector; items : integer; width : integer) return slv_array_t;
+  function deser (v : std_logic_vector; items : integer) return slv_array_t;
+end package;
+
+package body arrays is
+  function deser (v : std_logic_vector; items : integer; width : integer) return slv_array_t is
+    variable rv : slv_array_t(items - 1 downto 0)(width - 1 downto 0);
+  begin
+    for i in 0 to items - 1 loop
+      rv(i) := v((i + 1) * width - 1 downto i * width);
+    end loop;
+    return rv;
+  end function;
+
+  function deser (v : std_logic_vector; items : integer) return slv_array_t is
+  begin
+    if items = 0 then
+      return (0 downto 1 => "X");
+    else
+      return deser(v, items, v'length / items);
+    end if;
+  end function;
+end package body;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use work.arrays.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal none : std_logic_vector(-1 downto 0);
+  signal empty : slv_array_t(-1 downto 0)(0 downto 0);
+  signal also : slv_array_t(-1 downto 0)(3 downto 0);
+begin
+  empty <= deser(none, 0);
+  also <= deser(none, 0, 4);
+  process
+  begin
+    wait for 1 ns;
+    report integer'image(empty'length) & " " & integer'image(also'length);
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"0 0"});
+}
+
 TEST_F(VhdlDesignTest, ACallIsSpecialisedForAParameterItPassesOnAsABound) {
     // padded's own declarations need no value of n, but the call it makes does, so a call of it
     // is specialised for the n it is given; its if keeps it from being inlined.

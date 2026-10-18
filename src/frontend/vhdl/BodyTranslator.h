@@ -514,6 +514,11 @@ private:
     /// An aggregate of values not all static, built element by element into a register.
     std::optional<Value> aggregate(tree_t expression, const Layout& layout);
 
+    /// The layout of `aggregate` when it is a null one, `(0 downto 1 => "X")`: one choice of a
+    /// null range, which is its bounds (IEEE 1076 section 9.3.3.3), and a value that gives its
+    /// elements' bounds where its element type leaves them to it.
+    [[nodiscard]] std::optional<Layout> nullAggregate(tree_t aggregate);
+
     /// An aggregate of positional elements and whole arrays, which is what NVC makes of a chain of
     /// concatenations: its length is its pieces', and its bounds `layout`'s when that is given.
     std::optional<Value> positionalAggregate(tree_t expression, const Layout* layout);

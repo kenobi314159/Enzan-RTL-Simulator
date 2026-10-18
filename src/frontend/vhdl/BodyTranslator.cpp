@@ -574,7 +574,16 @@ bool BodyTranslator::declare(tree_t declaration) {
         statementLocation = owner.locate(declaration);
         type_t type = tree_type(declaration);
         const std::optional<Layout> layout = layoutFor(type);
-        if (!layout) return fail(declaration, std::string("a variable of type ") + type_pp(type));
+        if (!layout) {
+            // One of a null range is its placeholder; its initial value has no elements either,
+            // and assigning it does nothing.
+            if (const std::optional<Layout> null = declaredNullLayout(declaration, folder())) {
+                locals[declaration] =
+                    constantArray(eir::BitVector::filled(1, eir::Logic::Zero), *null, type);
+                return true;
+            }
+            return fail(declaration, std::string("a variable of type ") + type_pp(type));
+        }
         const eir::Type storage = layout->storage;
 
         // A variable starts at its initial value, or at its type's left bound (IEEE 1076 section
@@ -1229,6 +1238,17 @@ bool BodyTranslator::forLoop(tree_t statement) {
     // attribute's range, `v'range`, has bounds the adapter has folded.
     tree_t range = tree_range(statement, 0);
 
+    // A static null range runs nothing, and what it would run, `rv(i) := ...` of an array as null
+    // as it is, is not translated; unless it assigns a signal, waits or calls a procedure, which
+    // may do either, since a process that does is a driver of what it assigns whether it runs or
+    // not (IEEE 1076 section 14.7.2).
+    if (const std::optional<Folder::Range> folded = folder().range(range);
+        folded && folded->length() == 0
+        && tree_visit_only(statement, nullptr, nullptr, T_SIGNAL_ASSIGN) == 0
+        && tree_visit_only(statement, nullptr, nullptr, T_WAIT) == 0
+        && tree_visit_only(statement, nullptr, nullptr, T_PCALL) == 0)
+        return true;
+
     // A slice whose bounds move with the parameter, `d(4*i+3 downto 4*i)`, has a length only each
     // iteration's value shows, so a loop with one is unrolled, each iteration with its value.
     if (const std::optional<Folder::Range> folded = folder().range(range);
@@ -1696,6 +1716,16 @@ std::optional<BodyTranslator::Value> BodyTranslator::characterString(tree_t expr
 
     const Layout& layout = array->layout;
     const auto length = static_cast<std::uint32_t>(layout.index.length());
+
+    // A null array's is the null string.
+    if (layout.isNull()) {
+        const std::optional<Layout> none =
+            nullLayout(Folder::Range{.left = 1, .right = 0, .ascending = true},
+                       type_elem(tree_type(expression)), folder());
+        if (none)
+            return constantArray(eir::BitVector::filled(1, eir::Logic::Zero), *none,
+                                 tree_type(expression));
+    }
     const std::optional<Layout> string =
         arrayLayout(Folder::Range{.left = 1, .right = length, .ascending = true},
                     type_elem(tree_type(expression)), folder());
@@ -2175,6 +2205,12 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
             const std::optional<Folder::Range> bounds = folder().boundsOf(actual);
             if (bounds && bounds->length() == 0 && type_is_array(formalType)) {
                 bindings.bindBounds(formal, *bounds);
+                // And reads as its placeholder, which is all a null array is.
+                if (const std::optional<Layout> null =
+                        nullLayout(*bounds, type_elem(formalType), folder()))
+                    parameters.emplace_back(
+                        formal, constantArray(eir::BitVector::filled(1, eir::Logic::Zero), *null,
+                                              formalType));
                 continue;
             }
         }
@@ -2421,7 +2457,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
         if (designatesStorage(expression)) {
             const std::optional<Place> part = place(expression);
             if (!part) return std::nullopt;
-            if (part->empty) {
+            if (part->empty && !part->layout.isNull()) {
                 fail(expression, "reading a null slice");
                 return std::nullopt;
             }
@@ -2446,6 +2482,8 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
             positional = positional && (kind == A_POS || kind == A_CONCAT);
         }
         if (positional) return positionalAggregate(expression, layout ? &*layout : nullptr);
+        if (std::optional<Layout> null = nullAggregate(expression))
+            return constantArray(eir::BitVector::filled(1, eir::Logic::Zero), *null, type);
         if (!layout) {
             fail(expression, "an aggregate whose bounds are not known where it is used");
             return std::nullopt;
@@ -2495,8 +2533,12 @@ std::optional<BodyTranslator::Value> BodyTranslator::reference(tree_t expression
         if (value == nullptr) break;
         std::optional<Layout> layout = layoutFor(tree_type(declaration));
         if (!layout && type_is_array(type) && dimension_of(type) == 1) {
-            if (const std::optional<Folder::Range> bounds = folder().boundsOf(expression))
+            if (const std::optional<Folder::Range> bounds = folder().boundsOf(expression)) {
                 layout = arrayLayout(*bounds, type_elem(type), folder());
+                if (const std::optional<Layout> null =
+                        nullLayout(*bounds, type_elem(type), folder()))
+                    return constantArray(eir::BitVector::filled(1, eir::Logic::Zero), *null, type);
+            }
         }
         if (layout) return this->expression(value, &*layout);
         break;
@@ -3058,15 +3100,18 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
             const Value& variable = local->second;
             return Place{.isVariable = true,
                          .variable = variable,
-                         .layout = variable.layout.isComposite()
-                                       ? variable.layout
-                                       : Layout{.storage = variable.type}};
+                         .layout = variable.layout.isComposite() ? variable.layout
+                                                                 : Layout{.storage = variable.type},
+                         .empty = variable.layout.isNull()};
         }
         const std::optional<std::uint32_t> object = owner.objectFor(declaration);
         if (!object) break;
-        const std::optional<Layout> layout = declaredLayout(declaration, folder());
-        if (!layout) break;
-        return Place{.objectIndex = *object, .layout = *layout};
+        if (const std::optional<Layout> layout = declaredLayout(declaration, folder()))
+            return Place{.objectIndex = *object, .layout = *layout};
+        // A signal of a null range designates nothing, as a null slice does.
+        const std::optional<Layout> null = declaredNullLayout(declaration, folder());
+        if (!null) break;
+        return Place{.objectIndex = *object, .layout = *null, .whole = false, .empty = true};
     }
 
     case T_RECORD_REF: {
@@ -3108,6 +3153,9 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
                 Place nothing = *outer;
                 nothing.whole = false;
                 nothing.empty = true;
+                if (const std::optional<Layout> null =
+                        nullLayout(*bounds, outer->layout.elementType, folder()))
+                    nothing.layout = *null;
                 return nothing;
             }
             const std::optional<std::pair<Layout, std::int64_t>> part =
@@ -3141,6 +3189,10 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
 }
 
 BodyTranslator::Value BodyTranslator::read(const Place& place, type_t vhdlType) {
+    // A null array, which has only its bounds, reads as its placeholder.
+    if (place.empty && place.layout.isNull())
+        return constantArray(eir::BitVector::filled(1, eir::Logic::Zero), place.layout, vhdlType);
+
     const eir::Type type = place.layout.storage;
     Value value{.reg = 0, .type = type, .vhdlType = vhdlType};
     value.layout = place.layout;
@@ -3517,6 +3569,8 @@ std::optional<BodyTranslator::Value> BodyTranslator::positionalAggregate(tree_t 
             fail(association, "a concatenation operand whose bounds are not known here");
             return std::nullopt;
         }
+        // A null array is no elements, only its placeholder.
+        if (value->layout.isNull()) continue;
         bits += value->type.bitWidth();
         pieces.push_back(*value);
     }
@@ -3544,6 +3598,21 @@ std::optional<BodyTranslator::Value> BodyTranslator::positionalAggregate(tree_t 
     return built;
 }
 
+std::optional<Layout> BodyTranslator::nullAggregate(tree_t aggregate) {
+    if (tree_assocs(aggregate) != 1) return std::nullopt;
+    tree_t association = tree_assoc(aggregate, 0);
+    if (tree_subkind(association) != A_RANGE) return std::nullopt;
+    const std::optional<Folder::Range> range = folder().range(tree_range(association, 0));
+    type_t type = tree_type(aggregate);
+    if (!range || range->length() != 0 || !type_is_array(type) || dimension_of(type) != 1)
+        return std::nullopt;
+    type_t elementType = type_elem(type);
+    std::optional<Folder::Range> elementIndex;
+    if (type_is_array(elementType) && !layoutFor(elementType))
+        elementIndex = constantBounds(tree_value(association), elementType, folder());
+    return nullLayout(*range, elementType, folder(), elementIndex);
+}
+
 std::optional<BodyTranslator::Value> BodyTranslator::concatenation(tree_t expression) {
     type_t resultType = tree_type(expression);
     type_t elementType = type_elem(resultType);
@@ -3566,8 +3635,11 @@ std::optional<BodyTranslator::Value> BodyTranslator::concatenation(tree_t expres
         }
         operands.push_back(*value);
     }
-    const std::uint32_t leftBits = operands[0].type.bitWidth();
-    const std::uint32_t rightBits = operands[1].type.bitWidth();
+    // A null operand has no elements, only its placeholder; with a null left one the result is
+    // the right one (IEEE 1076 section 9.2.5).
+    if (operands[0].layout.isNull() && operands[1].layout.isArray()) return operands[1];
+    const std::uint32_t leftBits = operands[0].layout.isNull() ? 0 : operands[0].type.bitWidth();
+    const std::uint32_t rightBits = operands[1].layout.isNull() ? 0 : operands[1].type.bitWidth();
     const std::int64_t length = (leftBits + rightBits) / element->storage.bitWidth();
 
     // The bounds are the result subtype's, or the index subtype's left bound and direction.
@@ -3582,10 +3654,16 @@ std::optional<BodyTranslator::Value> BodyTranslator::concatenation(tree_t expres
         eir::BitVector::filled(layout->storage.bitWidth(), eir::Logic::Zero), *layout, resultType);
     const Value low = constant(0, eir::Type::bits(32, false, false), nullptr);
     const Value high = constant(rightBits, eir::Type::bits(32, false, false), nullptr);
-    emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result.reg),
-                                eir::Operand::reg(operands[1].reg), eir::Operand::reg(low.reg)));
-    emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result.reg),
-                                eir::Operand::reg(operands[0].reg), eir::Operand::reg(high.reg)));
+    if (rightBits != 0) {
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result.reg),
+                                    eir::Operand::reg(operands[1].reg),
+                                    eir::Operand::reg(low.reg)));
+    }
+    if (leftBits != 0) {
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result.reg),
+                                    eir::Operand::reg(operands[0].reg),
+                                    eir::Operand::reg(high.reg)));
+    }
     return result;
 }
 

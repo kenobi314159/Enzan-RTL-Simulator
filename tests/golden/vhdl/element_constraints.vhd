@@ -5,8 +5,8 @@
 -- and returning them, one of them called rather than inlined and one reading an element's length,
 -- and a generic of the type whose value a function of the parent's folds to; and, as type_pack's
 -- deserialiser of two parameters does, one that computes the width it passes on from its vector's
--- length and guards against no items with a null aggregate. What each report says, and what each
--- signal does, is what GHDL 4.1 gives.
+-- length and guards against no items with a null aggregate, called with items and with none. What
+-- each report says, and what each signal does, is what GHDL 4.1 gives.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -98,11 +98,14 @@ architecture test of tb is
   signal flat : std_logic_vector(11 downto 0);
   signal back : slv_array_t(2 downto 0)(3 downto 0);
   signal halves : slv_array_t(1 downto 0)(5 downto 0);
+  signal none : std_logic_vector(-1 downto 0);
+  signal empty : slv_array_t(-1 downto 0)(0 downto 0);
   signal based : std_logic_vector(items * width - 1 downto 0);
 begin
   flat <= ser(arr);
   back <= deser(flat, 3, 4);
   halves <= deser(flat, 2);
+  empty <= deser(none, 0);
   u_bases : entity work.bases
     generic map (n => items, w => width, base => counting) port map (flat => based);
 
@@ -111,7 +114,8 @@ begin
     wait for 1 ns;
     report "flat " & to_string(flat) & " back " & to_string(back(2)) & to_string(back(0));
     report "based " & to_string(based);
-    report "halves " & to_string(halves(1)) & " " & to_string(halves(0));
+    report "halves " & to_string(halves(1)) & " " & to_string(halves(0)) & " empty "
+           & integer'image(empty'length);
     arr(1) <= "1111";
     wait for 1 ns;
     report "flat " & to_string(flat) & " back " & to_string(back(1));

@@ -1023,22 +1023,10 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     // bit, since a bit vector has at least one: what names its bounds reads them from its type,
     // or from its actual for a port of an unconstrained type, and VHPI shows it as the empty array
     // it is (DESIGN_GUIDE.md section 9.7). Nothing else of it is translated.
-    std::optional<Folder::Range> bounds;
-    if (!layout && type_is_array(type) && dimension_of(type) == 1) {
-        bounds = folding.boundOf(declaration);
-        if (!bounds) bounds = folding.rangeOf(type);
-    }
-    const Folder::Range index = bounds.value_or(Folder::Range{});
-    const bool null = bounds.has_value() && index.length() == 0;
-    if (null) {
-        const std::optional<Layout> element = layoutOf(type_elem(type), folding);
-        if (element) {
-            layout = Layout{.storage = eir::Type::bits(1, false, false),
-                            .array = true,
-                            .index = index,
-                            .elementBits = element->storage.bitWidth(),
-                            .elementType = type_elem(type)};
-        }
+    bool null = false;
+    if (!layout) {
+        layout = declaredNullLayout(declaration, folding);
+        null = layout.has_value();
     }
     if (!layout) {
         unsupported(declaration, std::format("a signal of type {}", type_pp(type)));

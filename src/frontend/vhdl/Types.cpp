@@ -360,6 +360,31 @@ std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType
                   .inner = inner};
 }
 
+std::optional<Layout> nullLayout(const Folder::Range& index, type_t elementType,
+                                 const Folder& folder,
+                                 const std::optional<Folder::Range>& elementIndex) {
+    if (index.length() != 0) return std::nullopt;
+    const std::optional<Layout> element =
+        elementIndex ? arrayLayout(*elementIndex, type_elem(elementType), folder)
+                     : layoutOf(elementType, folder);
+    if (!element) return std::nullopt;
+    return Layout{.storage = eir::Type::bits(1, false, false),
+                  .array = true,
+                  .index = index,
+                  .elementBits = element->storage.bitWidth(),
+                  .elementType = elementType,
+                  .element = std::make_shared<const Layout>(*element)};
+}
+
+std::optional<Layout> declaredNullLayout(tree_t declaration, const Folder& folder) {
+    type_t type = tree_type(declaration);
+    if (!type_is_array(type) || dimension_of(type) != 1) return std::nullopt;
+    std::optional<Folder::Range> bounds = folder.boundOf(declaration);
+    if (!bounds) bounds = folder.rangeOf(type);
+    if (!bounds) return std::nullopt;
+    return nullLayout(*bounds, type_elem(type), folder);
+}
+
 std::optional<Layout> elementLayout(const Layout& layout, const Folder& folder) {
     if (layout.inner.empty() && layout.element) return *layout.element;
     if (layout.inner.empty()) return layoutOf(layout.elementType, folder);
