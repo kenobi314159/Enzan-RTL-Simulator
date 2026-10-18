@@ -1489,6 +1489,31 @@ end architecture;
                                                                "core (single) 100%", "PASS"}));
 }
 
+TEST_F(VhdlDesignTest, AControlCharacterInAStaticMessageIsItsCode) {
+    // NVC folds the concatenation into one string literal, whose `lf` and `ht` are named without
+    // quotes as a graphic character is not; each is the character its position is.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+  begin
+    report "two" & LF & "lines" & HT & "and a tab";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"two\nlines\tand a tab"});
+}
+
 TEST_F(VhdlDesignTest, AnElementChosenAtRunTimeIsDrivenWithinItsField) {
     // As NEORV32's debug module drives its record: one process a field by an index known only at
     // run time, another a different field. The first drives no more than its field, so they do

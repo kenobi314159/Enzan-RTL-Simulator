@@ -1541,9 +1541,11 @@ bool BodyTranslator::messageParts(tree_t message, std::string& format,
     case T_STRING: {
         const unsigned count = tree_chars(message);
         for (unsigned index = 0; index < count; ++index) {
-            // Each character is a reference to a literal of `character`, named with its quotes.
-            const std::string_view literal = istr(tree_ident(tree_char(message, index)));
-            const char character = literal.size() == 3 ? literal[1] : '?';
+            // Each character is a reference to a literal of `character`, whose position is its
+            // code: a graphic one's and a control one's, `lf` say, which is named without quotes.
+            tree_t literal = tree_char(message, index);
+            const char character =
+                tree_has_ref(literal) ? static_cast<char>(tree_pos(tree_ref(literal))) : '?';
             if (character == '%') format += '%';
             format += character;
         }
