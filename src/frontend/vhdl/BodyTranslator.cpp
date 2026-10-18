@@ -64,6 +64,8 @@ void noteParameter(tree_t reference, void* context) {
 
 /// Notes the parameters named in the bounds of `type` and of the subtypes it is declared through.
 void searchType(type_t type, ShapeSearch& search) {
+    // An element constraint is the element's, `slv_array_t(n - 1 downto 0)(width - 1 downto 0)`.
+    if (type != nullptr && type_is_array(type)) searchType(type_elem(type), search);
     for (; type != nullptr && type_kind(type) == T_SUBTYPE; type = type_base(type)) {
         if (!type_has_constraint(type)) continue;
         tree_t constraint = type_constraint(type);
@@ -216,6 +218,16 @@ BodyTranslator::Value BodyTranslator::constantArray(const eir::BitVector& bits,
     Value value{.reg = reg, .type = layout.storage, .vhdlType = vhdlType};
     value.layout = layout;
     return value;
+}
+
+std::optional<Folder::Range> BodyTranslator::elementBoundsOf(type_t formalType,
+                                                             const Layout& actual) const {
+    type_t element = type_elem(formalType);
+    if (!type_is_array(element) || layoutFor(element) || !actual.isArray() || !actual.inner.empty())
+        return std::nullopt;
+    const std::optional<Layout> each = elementLayout(actual, folder());
+    if (!each || !each->isArray()) return std::nullopt;
+    return each->index;
 }
 
 std::optional<Layout> BodyTranslator::layoutFor(type_t type) const {
@@ -1818,6 +1830,9 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
         shape.bounds.push_back(type_is_array(formalType) && !constrained
                                    ? std::optional(value->layout.index)
                                    : std::nullopt);
+        shape.elementBounds.push_back(type_is_array(formalType) && !constrained
+                                          ? elementBoundsOf(formalType, value->layout)
+                                          : std::nullopt);
         shape.values.push_back(type_is_array(formalType) ? std::nullopt
                                                          : folder().integer((*actuals)[index]));
         values.push_back(*value);
@@ -1928,6 +1943,9 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
                 return std::nullopt;
             }
             bindings.bindBounds(formal, initial->layout.index);
+            if (const std::optional<Folder::Range> elements =
+                    elementBoundsOf(formalType, initial->layout))
+                bindings.bindElementBounds(formal, *elements);
         }
         if (!type_is_array(formalType)) {
             if (const std::optional<std::int64_t> known = folder().integer(actual))
@@ -3069,7 +3087,16 @@ std::optional<std::pair<Layout, std::int64_t>> BodyTranslator::sliceOf(const Lay
         fail(range, "a slice outside the bounds of its array");
         return std::nullopt;
     }
-    const std::optional<Layout> part = arrayLayout(*bounds, layout.elementType, folder());
+    // Of the elements the whole has, so that each keeps the bounds it has there.
+    std::optional<Layout> part;
+    if (layout.element) {
+        part = layout;
+        part->index = *bounds;
+        part->storage = eir::Type::bits(
+            static_cast<std::uint32_t>(bounds->length()) * layout.elementBits, false, false);
+    } else {
+        part = arrayLayout(*bounds, layout.elementType, folder());
+    }
     if (!part) {
         fail(range, "a slice of this array");
         return std::nullopt;

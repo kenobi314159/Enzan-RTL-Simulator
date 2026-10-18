@@ -34,6 +34,9 @@ namespace enzan::frontend::vhdl {
 struct Shape {
     std::vector<std::optional<Folder::Range>> bounds;
     std::vector<std::optional<std::int64_t>> values;
+
+    /// For a parameter whose type's element is an unconstrained array, its elements' bounds.
+    std::vector<std::optional<Folder::Range>> elementBounds;
 };
 
 /// A subprogram specialised for one shape: where a call finds it, and what its parameters and its
@@ -236,6 +239,12 @@ private:
 
     /// How a value of `type` is laid out, with this instance's generics bound.
     [[nodiscard]] std::optional<Layout> layoutFor(type_t type) const;
+
+    /// The bounds each element of an actual laid out as `actual` has, for a formal of
+    /// `formalType`, whose element type is an unconstrained array that takes them from it; nothing
+    /// for any other formal.
+    [[nodiscard]] std::optional<Folder::Range> elementBoundsOf(type_t formalType,
+                                                               const Layout& actual) const;
 
     /// The body being built: the process's, or the subprogram's.
     eir::Body& body() { return isProcess ? static_cast<eir::Body&>(process) : subprogram; }

@@ -9,6 +9,7 @@
 #include "frontend/vhdl/NvcApi.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -48,6 +49,12 @@ struct Layout {
     std::uint32_t elementBits = 0;
     type_t elementType = nullptr;
 
+    /// For an array of one dimension, the layout of each element, made with the bindings the
+    /// array's was: so an element's bounds need not be folded again where the array is used, a
+    /// generic's actual in its instance's parent say, and an element of an unconstrained array
+    /// type, as `slv_array_t`'s `std_logic_vector` is, has the bounds the object gives it.
+    std::shared_ptr<const Layout> element;
+
     /// The dimensions after the first, of an array of more than one: an element of the first is
     /// then a row, an array over these of `elementType`, `elementBits` wide.
     std::vector<Folder::Range> inner;
@@ -83,10 +90,12 @@ struct Layout {
 [[nodiscard]] std::optional<Layout> declaredLayout(tree_t declaration, const Folder& folder);
 
 /// The layout of an array with `index` as its bounds and elements of `elementType`, and with the
-/// further dimensions `inner` when it has more than one.
-[[nodiscard]] std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType,
-                                                const Folder& folder,
-                                                const std::vector<Folder::Range>& inner = {});
+/// further dimensions `inner` when it has more than one; or, of one dimension whose element type
+/// is an unconstrained array, with `elementIndex` as each element's bounds.
+[[nodiscard]] std::optional<Layout>
+arrayLayout(const Folder::Range& index, type_t elementType, const Folder& folder,
+            const std::vector<Folder::Range>& inner = {},
+            const std::optional<Folder::Range>& elementIndex = std::nullopt);
 
 /// The layout of one element of the first dimension of an array laid out as `layout`: its element
 /// type's, or a row of the dimensions after it.

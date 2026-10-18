@@ -483,6 +483,14 @@ std::optional<Folder::Range> Folder::boundsOf(tree_t name, unsigned dimension) c
         const auto bound = objectBounds.find(tree_ref(name));
         if (bound != objectBounds.end()) return bound->second;
     }
+    // An element of an object whose elements take their bounds from its context, `a(i)`.
+    if (dimension == 0 && tree_kind(name) == T_ARRAY_REF && tree_params(name) == 1) {
+        tree_t prefix = tree_value(name);
+        if (tree_kind(prefix) == T_REF && tree_has_ref(prefix)) {
+            const auto bound = elementBounds.find(tree_ref(prefix));
+            if (bound != elementBounds.end()) return bound->second;
+        }
+    }
     if (std::optional<Range> own =
             tree_has_type(name) ? rangeOf(tree_type(name), dimension) : std::nullopt)
         return own;

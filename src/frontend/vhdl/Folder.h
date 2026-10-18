@@ -86,6 +86,8 @@ public:
             composites.insert_or_assign(declaration, bits);
         for (const auto& [declaration, bounds] : other.objectBounds)
             objectBounds.insert_or_assign(declaration, bounds);
+        for (const auto& [declaration, bounds] : other.elementBounds)
+            elementBounds.insert_or_assign(declaration, bounds);
     }
 
     /// Binds `declaration` to whatever `source` binds `bound` to: its value, its bits or its
@@ -103,6 +105,11 @@ public:
         if (const auto range = source.objectBounds.find(bound);
             range != source.objectBounds.end()) {
             objectBounds.insert_or_assign(declaration, range->second);
+            any = true;
+        }
+        if (const auto range = source.elementBounds.find(bound);
+            range != source.elementBounds.end()) {
+            elementBounds.insert_or_assign(declaration, range->second);
             any = true;
         }
         return any;
@@ -171,6 +178,12 @@ public:
     /// context: a parameter's from the actual of the call, so that `l'length` folds.
     void bindBounds(tree_t declaration, const Range& bounds) { objectBounds[declaration] = bounds; }
 
+    /// Gives `declaration`, an object of an array type whose element type is an unconstrained
+    /// array, the bounds each of its elements takes from its context, so that `a(0)'length` folds.
+    void bindElementBounds(tree_t declaration, const Range& bounds) {
+        elementBounds[declaration] = bounds;
+    }
+
     /// The bounds of dimension `dimension` of the array `name` designates: those bound to the
     /// object it names, or its subtype's.
     [[nodiscard]] std::optional<Range> boundsOf(tree_t name, unsigned dimension = 0) const;
@@ -205,6 +218,7 @@ private:
     Generics generics;
     std::map<tree_t, eir::BitVector> composites;
     std::map<tree_t, Range> objectBounds;
+    std::map<tree_t, Range> elementBounds;
     bool impureAllowed = false;
 };
 

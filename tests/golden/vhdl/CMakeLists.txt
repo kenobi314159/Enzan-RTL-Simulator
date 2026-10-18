@@ -98,6 +98,9 @@ enzan_add_vhdl_golden_test(local_resolution)
 # Resolution functions of composite values, of arrays and of records.
 enzan_add_vhdl_golden_test(composite_resolution)
 
+# Arrays of an unconstrained array type, as OFM's slv_array_t: objects, subprograms and a generic.
+enzan_add_vhdl_golden_test(element_constraints)
+
 # GHDL's run options: the IEEE packages' warnings reported, or not, and the severity that ends a
 # run. Each runs the same design and is told apart by what it prints.
 set(options_source "${CMAKE_CURRENT_SOURCE_DIR}/options.vhd")

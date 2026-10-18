@@ -6,6 +6,7 @@
 
 #include <cctype>
 #include <limits>
+#include <memory>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -334,10 +335,14 @@ std::optional<eir::Type> scalarStorage(type_t type) {
 }
 
 std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType,
-                                  const Folder& folder, const std::vector<Folder::Range>& inner) {
-    // A row of the further dimensions is laid out as an array of its own.
+                                  const Folder& folder, const std::vector<Folder::Range>& inner,
+                                  const std::optional<Folder::Range>& elementIndex) {
+    // A row of the further dimensions is laid out as an array of its own, and so is an element
+    // whose type leaves its bounds to the object.
     std::optional<Layout> element;
-    if (inner.empty()) {
+    if (inner.empty() && elementIndex) {
+        element = arrayLayout(*elementIndex, type_elem(elementType), folder);
+    } else if (inner.empty()) {
         element = layoutOf(elementType, folder);
     } else {
         element = arrayLayout(inner.front(), elementType, folder,
@@ -351,10 +356,12 @@ std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType
                   .index = index,
                   .elementBits = element->storage.bitWidth(),
                   .elementType = elementType,
+                  .element = inner.empty() ? std::make_shared<const Layout>(*element) : nullptr,
                   .inner = inner};
 }
 
 std::optional<Layout> elementLayout(const Layout& layout, const Folder& folder) {
+    if (layout.inner.empty() && layout.element) return *layout.element;
     if (layout.inner.empty()) return layoutOf(layout.elementType, folder);
     return arrayLayout(layout.inner.front(), layout.elementType, folder,
                        std::vector<Folder::Range>(layout.inner.begin() + 1, layout.inner.end()));

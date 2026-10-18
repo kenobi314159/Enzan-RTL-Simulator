@@ -372,13 +372,17 @@ public:
                               .definition =
                                   inPackage ? std::string() : architecture->definition().name,
                               .bounds = {},
+                              .elementBounds = {},
                               .values = {}};
+        const auto asKey = [](const std::optional<Folder::Range>& range) {
+            return range ? std::optional(std::tuple(range->left, range->right, range->ascending))
+                         : std::nullopt;
+        };
         for (unsigned index = 0; index < tree_ports(body); ++index) {
-            const std::optional<Folder::Range> bounds =
-                index < shape.bounds.size() ? shape.bounds[index] : std::nullopt;
             key.bounds.push_back(
-                bounds ? std::optional(std::tuple(bounds->left, bounds->right, bounds->ascending))
-                       : std::nullopt);
+                asKey(index < shape.bounds.size() ? shape.bounds[index] : std::nullopt));
+            key.elementBounds.push_back(asKey(
+                index < shape.elementBounds.size() ? shape.elementBounds[index] : std::nullopt));
             const std::optional<std::int64_t> value =
                 index < shape.values.size() ? shape.values[index] : std::nullopt;
             if (needed[index] && !value) {
@@ -417,7 +421,14 @@ public:
                 const auto& [left, right, ascending] = *given;
                 const Folder::Range bounds{.left = left, .right = right, .ascending = ascending};
                 bindings.folder.bindBounds(parameter, bounds);
-                layout = arrayLayout(bounds, type_elem(type), bindings.folder);
+                // Each element's bounds too, where the element type leaves them to the actual.
+                std::optional<Folder::Range> elements;
+                if (const auto& element = key.elementBounds[index]) {
+                    const auto& [low, high, up] = *element;
+                    elements = Folder::Range{.left = low, .right = high, .ascending = up};
+                    bindings.folder.bindElementBounds(parameter, *elements);
+                }
+                layout = arrayLayout(bounds, type_elem(type), bindings.folder, {}, elements);
             }
             if (!layout) {
                 unsupported(parameter, std::format("a parameter of type {}", type_pp(type)));
@@ -808,15 +819,17 @@ private:
         tree_t body = nullptr;
         std::string definition;
         std::vector<std::optional<std::tuple<std::int64_t, std::int64_t, bool>>> bounds;
+        std::vector<std::optional<std::tuple<std::int64_t, std::int64_t, bool>>> elementBounds;
         std::vector<std::optional<std::int64_t>> values;
 
         friend auto operator<=>(const SpecialisationKey&, const SpecialisationKey&) = default;
     };
 
     /// The name of `body` specialised for `key`: its own name and signature, as NVC mangles the
-    /// signature to tell overloads apart, then each parameter's bounds or value, `_` for one the
-    /// shape leaves free: `resolved(Y)U$0to1`. Made of what the specialisation is, so that two
-    /// translations of one name one subprogram, as the second that elaboration asks for
+    /// signature to tell overloads apart, then each parameter's bounds, its elements' after them
+    /// where the actual gives those too, or value, `_` for one the shape leaves free:
+    /// `resolved(Y)U$0to1`, `ser(...)$0to2(3downto0)`. Made of what the specialisation is, so that
+    /// two translations of one name one subprogram, as the second that elaboration asks for
     /// resolution functions does (DESIGN_GUIDE.md section 3.7).
     [[nodiscard]] static std::string specialisationName(tree_t body, const SpecialisationKey& key) {
         std::string name = simpleName(tree_ident(body));
@@ -829,6 +842,10 @@ private:
             if (const auto& bounds = key.bounds[index]) {
                 const auto& [left, right, ascending] = *bounds;
                 name += std::format("{}{}{}", left, ascending ? "to" : "downto", right);
+                if (const auto& element = key.elementBounds[index]) {
+                    const auto& [low, high, up] = *element;
+                    name += std::format("({}{}{})", low, up ? "to" : "downto", high);
+                }
             } else if (const std::optional<std::int64_t>& value = key.values[index]) {
                 name += std::format("={}", *value);
             } else {
