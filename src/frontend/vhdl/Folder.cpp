@@ -698,9 +698,12 @@ private:
         }
     }
 
-    /// `target := value`, of a scalar variable, a composite one, or an element of an array one.
+    /// `target := value`, of a scalar variable, a composite one, or an element or a slice of an
+    /// array one.
     Flow assignment(tree_t target, tree_t value) {
-        tree_t name = tree_kind(target) == T_ARRAY_REF ? tree_value(target) : target;
+        const tree_kind_t targetKind = tree_kind(target);
+        tree_t name =
+            targetKind == T_ARRAY_REF || targetKind == T_ARRAY_SLICE ? tree_value(target) : target;
         if (tree_kind(name) != T_REF || !tree_has_ref(name)
             || tree_kind(tree_ref(name)) != T_VAR_DECL)
             return Flow::Failed;
@@ -721,6 +724,26 @@ private:
             std::optional<eir::BitVector> bits = constantBits(value, *layout, frame);
             if (!bits) return Flow::Failed;
             frame.bindComposite(variable, std::move(*bits));
+            return Flow::Continue;
+        }
+
+        // A slice, at the offset its right bound has in the whole, as wide as it is.
+        if (targetKind == T_ARRAY_SLICE) {
+            const std::optional<Folder::Range> slice = frame.range(tree_range(target, 0));
+            if (!layout->isArray() || !layout->inner.empty() || !slice || slice->length() == 0
+                || slice->ascending != layout->index.ascending || slice->low() < layout->index.low()
+                || slice->high() > layout->index.high())
+                return Flow::Failed;
+            Layout part = *layout;
+            part.index = *slice;
+            part.storage = eir::Type::bits(
+                static_cast<std::uint32_t>(slice->length()) * layout->elementBits, false, false);
+            const std::optional<eir::BitVector> bits = constantBits(value, part, frame);
+            if (!bits) return Flow::Failed;
+            eir::BitVector updated = *current;
+            eir::bitops::assignPartAt(updated.mutableRef(), bits->ref(),
+                                      static_cast<std::uint64_t>(layout->bitOffset(slice->right)));
+            frame.bindComposite(variable, std::move(updated));
             return Flow::Continue;
         }
 

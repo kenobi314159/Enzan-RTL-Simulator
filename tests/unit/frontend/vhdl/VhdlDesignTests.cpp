@@ -513,6 +513,48 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, AConstantFunctionAssignsSlicesOfItsVariables) {
+    // As OFM's MI splitter makes the address mask it gives its generic: ones over a slice of a
+    // variable of zeroes, and two bits over another.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity leaf is
+  generic (W : integer := 8; MASK : bit_vector(W - 1 downto 0) := (others => '0'));
+end entity;
+
+architecture rtl of leaf is
+begin
+  process
+  begin
+    report to_string(MASK);
+    wait;
+  end process;
+end architecture;
+
+entity tb is
+  generic (AW : integer := 5; IW : integer := 2);
+end entity;
+
+architecture test of tb is
+  function make_mask return bit_vector is
+    variable m : bit_vector(AW + IW - 1 downto 0) := (others => '0');
+  begin
+    m(AW + IW - 1 downto AW) := (others => '1');
+    m(1 downto 0) := "01";
+    return m;
+  end function;
+begin
+  u : entity work.leaf generic map (W => AW + IW, MASK => make_mask);
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"1100001"});
+}
+
 TEST_F(VhdlDesignTest, AConversionWithinABaseTypeKeepsTheValue) {
     // std_logic is a subtype of std_ulogic, so converting between them, or between vectors of
     // them, changes nothing.
