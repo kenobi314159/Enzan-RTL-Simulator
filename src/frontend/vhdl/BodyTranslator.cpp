@@ -8,8 +8,11 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <format>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -131,6 +134,54 @@ void noteCall(tree_t call, void* context) {
 
 void noteAssignment(tree_t assignment, void* context) {
     static_cast<std::vector<tree_t>*>(context)->push_back(assignment);
+}
+
+/// Whether a variable of `type` is one whose value translation follows: an integer, an
+/// enumeration value or a physical value, which a folder binds.
+bool followable(type_t type) {
+    type_t base = type_base_recur(type);
+    return type_is_integer(base) || type_is_enum(base) || type_is_physical(base);
+}
+
+/// Whether `body` declares a subprogram, which may assign the variables it declares.
+bool declaresSubprograms(tree_t body) {
+    for (unsigned index = 0; index < tree_decls(body); ++index) {
+        const tree_kind_t kind = tree_kind(tree_decl(body, index));
+        if (kind == T_FUNC_BODY || kind == T_PROC_BODY) return true;
+    }
+    return false;
+}
+
+/// The values both `left` and `right` give a variable: where two paths meet, what is known of one
+/// is known only if the other knows it too.
+std::map<tree_t, std::int64_t> common(const std::map<tree_t, std::int64_t>& left,
+                                      const std::map<tree_t, std::int64_t>& right) {
+    std::map<tree_t, std::int64_t> both;
+    for (const auto& [variable, value] : left) {
+        const auto found = right.find(variable);
+        if (found != right.end() && found->second == value) both.emplace(variable, value);
+    }
+    return both;
+}
+
+/// What `forgetAssignedIn` forgets the values of, and the folder it forgets them in.
+struct Forgetting {
+    const std::set<tree_t>* followed = nullptr;
+    Folder* folder = nullptr;
+};
+
+void forgetReference(tree_t reference, void* context) {
+    const auto& forgetting = *static_cast<Forgetting*>(context);
+    if (tree_has_ref(reference) && forgetting.followed->contains(tree_ref(reference)))
+        forgetting.folder->unbind(tree_ref(reference));
+}
+
+void forgetTarget(tree_t assignment, void* context) {
+    tree_visit_only(tree_target(assignment), forgetReference, context, T_REF);
+}
+
+void forgetActuals(tree_t call, void* context) {
+    tree_visit_only(call, forgetReference, context, T_REF);
 }
 
 } // namespace
@@ -546,6 +597,21 @@ bool BodyTranslator::declare(tree_t declaration) {
         emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(variable.reg),
                                     eir::Operand::reg(resize(*initial, storage.bitWidth()).reg)));
         locals[declaration] = variable;
+
+        // A subprogram's scalar starts at what it is given, which may fold; a process's does so
+        // only the first time the process runs.
+        tree_t declarer = inlined.empty() ? source : inlined.back().body;
+        if (tree_kind(declaration) == T_VAR_DECL && (!isProcess || !inlined.empty())
+            && !layout->isComposite() && followable(type) && !declaresSubprograms(declarer)) {
+            followed.insert(declaration);
+            const std::optional<std::int64_t> start =
+                tree_has_value(declaration) ? folder().integer(tree_value(declaration))
+                                            : folder().left(type);
+            if (start)
+                folders.back().bind(declaration, *start);
+            else
+                folders.back().unbind(declaration);
+        }
         return true;
     }
 
@@ -555,6 +621,19 @@ bool BodyTranslator::declare(tree_t declaration) {
     case T_ALIAS: {
         if (!tree_has_value(declaration) || !designatesStorage(tree_value(declaration)))
             return true;
+        // What is assigned through an alias does not name the variable, whose value is then
+        // followed no further.
+        if (!followed.empty()) {
+            Forgetting forgetting{.followed = &followed, .folder = &folders.back()};
+            tree_visit_only(tree_value(declaration), forgetReference, &forgetting, T_REF);
+            tree_visit_only(
+                tree_value(declaration),
+                [](tree_t reference, void* context) {
+                    if (tree_has_ref(reference))
+                        static_cast<std::set<tree_t>*>(context)->erase(tree_ref(reference));
+                },
+                &followed, T_REF);
+        }
         const std::optional<Place> aliased = aliasPlace(declaration);
         if (!aliased) return false;
         aliases[declaration] = *aliased;
@@ -609,7 +688,13 @@ bool BodyTranslator::statement(tree_t statement) {
     case T_WAIT: return waitStatement(statement);
     case T_ASSERT: return assertion(statement);
     case T_REPORT: return report(statement);
-    case T_PCALL: return procedureCall(statement);
+    case T_PCALL: {
+        // An `out` or `inout` actual is assigned by the procedure.
+        const bool called = procedureCall(statement);
+        Forgetting forgetting{.followed = &followed, .folder = &folders.back()};
+        forgetActuals(statement, &forgetting);
+        return called;
+    }
     case T_RETURN: return returnStatement(statement);
     case T_NULL: return true;
 
@@ -878,6 +963,8 @@ bool BodyTranslator::variableAssignment(tree_t statement) {
                 return fail(name, "assigning a variable that is not declared by the process");
             assignVariable(part, pieces[index]);
         }
+        Forgetting forgetting{.followed = &followed, .folder = &folders.back()};
+        tree_visit_only(name, forgetReference, &forgetting, T_REF);
         return true;
     }
 
@@ -895,7 +982,40 @@ bool BodyTranslator::variableAssignment(tree_t statement) {
     if (target->layout.isComposite() && value->type.bitWidth() != width)
         return fail(name, "a value of another length than the variable it is assigned to");
     assignVariable(*target, resize(*value, width));
+
+    // A followed variable holds what it is assigned where that folds, with what it held before.
+    if (tree_kind(name) == T_REF && tree_has_ref(name) && followed.contains(tree_ref(name))) {
+        if (const std::optional<std::int64_t> known = folder().integer(tree_value(statement)))
+            folders.back().bind(tree_ref(name), *known);
+        else
+            folders.back().unbind(tree_ref(name));
+    }
     return true;
+}
+
+BodyTranslator::KnownValues BodyTranslator::knownValues() const {
+    KnownValues known;
+    for (tree_t variable : followed) {
+        if (const std::optional<std::int64_t> value = folder().boundValue(variable))
+            known.emplace(variable, *value);
+    }
+    return known;
+}
+
+void BodyTranslator::restoreKnownValues(const KnownValues& known) {
+    for (tree_t variable : followed) {
+        if (const auto found = known.find(variable); found != known.end())
+            folders.back().bind(variable, found->second);
+        else
+            folders.back().unbind(variable);
+    }
+}
+
+void BodyTranslator::forgetAssignedIn(tree_t statement) {
+    if (followed.empty()) return;
+    Forgetting forgetting{.followed = &followed, .folder = &folders.back()};
+    tree_visit_only(statement, forgetTarget, &forgetting, T_VAR_ASSIGN);
+    tree_visit_only(statement, forgetActuals, &forgetting, T_PCALL);
 }
 
 void BodyTranslator::assignVariable(const Place& target, const Value& value) {
@@ -911,12 +1031,26 @@ void BodyTranslator::assignVariable(const Place& target, const Value& value) {
 
 bool BodyTranslator::ifStatement(tree_t statement) {
     const std::uint32_t join = newBlock("if-join");
+
+    // Every branch starts from what the variables held before, and the join knows what every
+    // path that reaches it agrees on.
+    const KnownValues before = knownValues();
+    std::optional<KnownValues> joined;
+    const auto arrive = [&] {
+        if (terminated()) return;
+        KnownValues here = knownValues();
+        joined = joined ? common(*joined, here) : std::move(here);
+    };
+    bool fallsThrough = true;
+
     const unsigned count = tree_conds(statement);
     for (unsigned index = 0; index < count; ++index) {
         tree_t branch = tree_cond(statement, index);
         if (!tree_has_value(branch)) {
             if (!statements(branch)) return false;
+            arrive();
             jump(join);
+            fallsThrough = false;
             break;
         }
 
@@ -928,7 +1062,9 @@ bool BodyTranslator::ifStatement(tree_t statement) {
         if (const std::optional<std::int64_t> known = folder().integer(tree_value(branch))) {
             if (*known == 0) continue;
             if (!statements(branch)) return false;
+            arrive();
             jump(join);
+            fallsThrough = false;
             break;
         }
 
@@ -940,11 +1076,15 @@ bool BodyTranslator::ifStatement(tree_t statement) {
                                     eir::Operand::block(taken), eir::Operand::block(next)));
         selectBlock(taken);
         if (!statements(branch)) return false;
+        arrive();
         jump(join);
         selectBlock(next);
+        restoreKnownValues(before);
     }
+    if (fallsThrough) arrive();
     jump(join);
     selectBlock(join);
+    restoreKnownValues(joined.value_or(before));
     return true;
 }
 
@@ -999,6 +1139,13 @@ bool BodyTranslator::caseStatement(tree_t statement) {
     // cover every value once and only once (IEEE 1076 section 10.9), so the order changes nothing
     // but how many tests a value passes on the way.
     const std::uint32_t join = newBlock("case-join");
+    const KnownValues before = knownValues();
+    std::optional<KnownValues> joined;
+    const auto arrive = [&] {
+        if (terminated()) return;
+        KnownValues here = knownValues();
+        joined = joined ? common(*joined, here) : std::move(here);
+    };
     const unsigned alternatives = tree_stmts(statement);
     for (unsigned index = 0; index < alternatives; ++index) {
         tree_t alternative = tree_stmt(statement, index);
@@ -1022,11 +1169,16 @@ bool BodyTranslator::caseStatement(tree_t statement) {
 
         selectBlock(body);
         if (!statements(alternative)) return false;
+        arrive();
         jump(join);
         selectBlock(untested);
+        restoreKnownValues(before);
     }
+    // What no choice matched, which only a case without `others` leaves reachable here.
+    arrive();
     jump(join);
     selectBlock(join);
+    restoreKnownValues(joined.value_or(before));
     return true;
 }
 
@@ -1035,6 +1187,11 @@ bool BodyTranslator::whileLoop(tree_t statement) {
     const std::uint32_t body = newBlock("loop-body");
     const std::uint32_t exit = newBlock("loop-exit");
     jump(head);
+
+    // An iteration starts from what the last left, so what the loop assigns is known nowhere in
+    // it, nor after it.
+    forgetAssignedIn(statement);
+    const KnownValues entry = knownValues();
 
     selectBlock(head);
     if (tree_kind(statement) == T_WHILE && tree_has_value(statement)) {
@@ -1056,6 +1213,7 @@ bool BodyTranslator::whileLoop(tree_t statement) {
     jump(head);
 
     selectBlock(exit);
+    restoreKnownValues(entry);
     return true;
 }
 
@@ -1102,6 +1260,11 @@ bool BodyTranslator::forLoop(tree_t statement) {
     emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(index.reg),
                                 eir::Operand::reg(first.reg)));
 
+    // The bounds were taken with what the variables held before; an iteration starts from what
+    // the last left.
+    forgetAssignedIn(statement);
+    const KnownValues entry = knownValues();
+
     // A null range runs no iteration at all. Otherwise the loop runs from the left bound and stops
     // after the right one, testing for the last value before stepping rather than after, so that a
     // range ending at the type's last value does not step past it.
@@ -1145,6 +1308,7 @@ bool BodyTranslator::forLoop(tree_t statement) {
     jump(body);
 
     selectBlock(exit);
+    restoreKnownValues(entry);
     return true;
 }
 
@@ -1178,6 +1342,10 @@ bool BodyTranslator::slicesMoveWith(tree_t loop, tree_t parameter) {
 }
 
 bool BodyTranslator::unrolledLoop(tree_t statement, tree_t parameter, const Folder::Range& range) {
+    // Each iteration is translated in a folder of its own, which goes with it; what the loop
+    // assigns is forgotten here, so that it is not known in an iteration after the first, nor
+    // after the loop.
+    forgetAssignedIn(statement);
     const std::uint32_t exit = newBlock("for-exit");
     ident_t label = tree_has_ident(statement) ? tree_ident(statement) : nullptr;
     for (std::int64_t offset = 0; offset < range.length(); ++offset) {
@@ -2038,7 +2206,8 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
                     elementBoundsOf(formalType, initial->layout))
                 bindings.bindElementBounds(formal, *elements);
         }
-        if (!type_is_array(formalType)) {
+        // Only an `in` parameter keeps its actual's value: the subprogram may assign another.
+        if (!type_is_array(formalType) && mode == eir::ParameterMode::In) {
             if (const std::optional<std::int64_t> known = folder().integer(actual))
                 bindings.bind(formal, *known);
         }

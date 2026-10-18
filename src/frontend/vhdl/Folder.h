@@ -60,8 +60,17 @@ public:
 
     explicit Folder(Generics bound) : generics(std::move(bound)) {}
 
-    /// Binds `declaration`, a generic or a parameter, to `value`.
+    /// Binds `declaration`, a generic, a parameter or a variable, to `value`.
     void bind(tree_t declaration, std::int64_t value) { generics[declaration] = value; }
+
+    /// Forgets what `declaration` is bound to: a variable assigned what does not fold.
+    void unbind(tree_t declaration) { generics.erase(declaration); }
+
+    /// What `declaration` is bound to, when it is.
+    [[nodiscard]] std::optional<std::int64_t> boundValue(tree_t declaration) const {
+        const auto bound = generics.find(declaration);
+        return bound == generics.end() ? std::nullopt : std::optional(bound->second);
+    }
 
     /// Binds `declaration`, a generic of an array type, to the bits of its value.
     void bindComposite(tree_t declaration, eir::BitVector bits) {

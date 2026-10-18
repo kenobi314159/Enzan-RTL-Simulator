@@ -554,6 +554,176 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"111 00"});
 }
 
+TEST_F(VhdlDesignTest, ACallIsSpecialisedForAWidthItsCallerComputes) {
+    // OFM's slv_array_deser of two parameters: it computes the width from its vector's length and
+    // the number of items, and passes both on to the function whose result's bounds they are.
+    // Neither is static in it unless it is specialised for the number of items too, which then
+    // folds the guard against none away, null aggregate and all.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+package arrays is
+  type arr_t is array (natural range <>) of bit_vector;
+  function deser (v : bit_vector; items : integer; width : integer) return arr_t;
+  function deser (v : bit_vector; items : integer) return arr_t;
+end package;
+
+package body arrays is
+  function deser (v : bit_vector; items : integer; width : integer) return arr_t is
+    variable rv : arr_t(items - 1 downto 0)(width - 1 downto 0);
+  begin
+    for i in 0 to items - 1 loop
+      rv(i) := v((i + 1) * width - 1 downto i * width);
+    end loop;
+    return rv;
+  end function;
+
+  function deser (v : bit_vector; items : integer) return arr_t is
+    variable width : integer := 0;
+  begin
+    if items = 0 then
+      return (0 downto 1 => "0");
+    else
+      width := v'length / items;
+      return deser(v, items, width);
+    end if;
+  end function;
+end package body;
+
+use work.arrays.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal flat : bit_vector(7 downto 0) := "10100101";
+begin
+  process
+    variable back : arr_t(1 downto 0)(3 downto 0);
+  begin
+    back := deser(flat, 2);
+    report to_string(back(1)) & " " & to_string(back(0));
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"1010 0101"});
+}
+
+TEST_F(VhdlDesignTest, AVariableBothBranchesGiveOneValueIsKnownAfterThem) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  function zeros (n : integer) return bit_vector is
+    variable r : bit_vector(n - 1 downto 0) := (others => '0');
+  begin
+    return r;
+  end function;
+
+  function agreed (c : boolean) return bit_vector is
+    variable w : integer;
+  begin
+    if c then
+      w := 3;
+    else
+      w := 3;
+    end if;
+    return zeros(w);
+  end function;
+
+  signal yes : boolean := true;
+begin
+  process
+  begin
+    report to_string(agreed(yes));
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"000"});
+}
+
+TEST_F(VhdlDesignTest, AVariableIsNotKnownWhereWhatAssignsItCannotBeTold) {
+    // Each variable would read as what it held before had translation kept that: k and w after a
+    // loop's later iterations, d and f after branches that a signal chooses, e after a procedure
+    // assigned it, and q after it was assigned through an alias. The while loop's guard is an
+    // array, which is not followed, so that it ends whatever w is taken for.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure bump (x : inout integer) is
+  begin
+    x := x + 1;
+    if x = 2 then
+      report "bumped to two";
+    end if;
+  end procedure;
+
+  function counted (n : integer; c : boolean) return integer is
+    variable k : integer := 0;
+    variable w : integer := 4;
+    variable guard : integer_vector(0 to 0) := (0 => 0);
+    variable d : integer := 1;
+    variable f : integer := 1;
+    variable e : integer := 1;
+    variable q : integer := 1;
+    alias qa : integer is q;
+  begin
+    for i in 1 to n loop
+      k := k + 1;
+    end loop;
+    while w < 7 loop
+      w := w + 1;
+      guard(0) := guard(0) + 1;
+      exit when guard(0) > 10;
+    end loop;
+    if c then
+      d := 5;
+    end if;
+    case c is
+      when true => f := 6;
+      when others => null;
+    end case;
+    bump(e);
+    q := 3;
+    qa := 9;
+    return k * 100000 + w * 10000 + d * 1000 + f * 100 + e * 10 + q;
+  end function;
+
+  signal yes : boolean := true;
+begin
+  process
+  begin
+    report integer'image(counted(3, yes));
+    report integer'image(counted(3, not yes));
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(),
+              (std::vector<std::string>{"bumped to two", "375629", "bumped to two", "371129"}));
+}
+
 TEST_F(VhdlDesignTest, AConstantFunctionAssignsSlicesOfItsVariables) {
     // As OFM's MI splitter makes the address mask it gives its generic: ones over a slice of a
     // variable of zeroes, and two bits over another.

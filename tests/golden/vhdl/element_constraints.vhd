@@ -3,8 +3,10 @@
 -- Arrays of an unconstrained array type, as OFM's type_pack declares slv_array_t, `array (natural
 -- range <>) of std_logic_vector`: objects that constrain index and element both, functions taking
 -- and returning them, one of them called rather than inlined and one reading an element's length,
--- and a generic of the type whose value a function of the parent's folds to. What each report
--- says, and what each signal does, is what GHDL 4.1 gives.
+-- and a generic of the type whose value a function of the parent's folds to; and, as type_pack's
+-- deserialiser of two parameters does, one that computes the width it passes on from its vector's
+-- length and guards against no items with a null aggregate. What each report says, and what each
+-- signal does, is what GHDL 4.1 gives.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -15,6 +17,7 @@ package arrays is
   function ser (a : slv_array_t; items : integer; width : integer) return std_logic_vector;
   function ser (a : slv_array_t) return std_logic_vector;
   function deser (v : std_logic_vector; items : integer; width : integer) return slv_array_t;
+  function deser (v : std_logic_vector; items : integer) return slv_array_t;
 end package;
 
 package body arrays is
@@ -43,6 +46,17 @@ package body arrays is
       rv(i) := v((i + 1) * width - 1 downto i * width);
     end loop;
     return rv;
+  end function;
+
+  function deser (v : std_logic_vector; items : integer) return slv_array_t is
+    variable width : integer := 0;
+  begin
+    if items = 0 then
+      return (0 downto 1 => "X");
+    else
+      width := v'length / items;
+      return deser(v, items, width);
+    end if;
   end function;
 end package body;
 
@@ -83,10 +97,12 @@ architecture test of tb is
   signal arr : slv_array_t(0 to 2)(3 downto 0) := ("0001", "0010", "0100");
   signal flat : std_logic_vector(11 downto 0);
   signal back : slv_array_t(2 downto 0)(3 downto 0);
+  signal halves : slv_array_t(1 downto 0)(5 downto 0);
   signal based : std_logic_vector(items * width - 1 downto 0);
 begin
   flat <= ser(arr);
   back <= deser(flat, 3, 4);
+  halves <= deser(flat, 2);
   u_bases : entity work.bases
     generic map (n => items, w => width, base => counting) port map (flat => based);
 
@@ -95,9 +111,11 @@ begin
     wait for 1 ns;
     report "flat " & to_string(flat) & " back " & to_string(back(2)) & to_string(back(0));
     report "based " & to_string(based);
+    report "halves " & to_string(halves(1)) & " " & to_string(halves(0));
     arr(1) <= "1111";
     wait for 1 ns;
     report "flat " & to_string(flat) & " back " & to_string(back(1));
+    report "halves " & to_string(halves(1)) & " " & to_string(halves(0));
     report "PASS element_constraints";
     std.env.finish;
   end process;

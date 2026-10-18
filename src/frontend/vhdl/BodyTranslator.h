@@ -317,6 +317,19 @@ private:
                      bool rejects);
     bool ifStatement(tree_t statement);
     bool caseStatement(tree_t statement);
+
+    /// The values of the variables in `followed` where translation is, by declaration.
+    using KnownValues = std::map<tree_t, std::int64_t>;
+
+    [[nodiscard]] KnownValues knownValues() const;
+
+    /// Gives the variables in `followed` the values `known` does, and the rest none.
+    void restoreKnownValues(const KnownValues& known);
+
+    /// Forgets the values of the variables in `followed` that `statement` names in the target of
+    /// an assignment or in a procedure call, anywhere in it: before a loop, whose next iteration
+    /// may see what this one assigned.
+    void forgetAssignedIn(tree_t statement);
     bool whileLoop(tree_t statement);
     bool forLoop(tree_t statement);
     bool loopJump(tree_t statement, bool isExit);
@@ -561,6 +574,14 @@ private:
     std::optional<Layout> resultLayout;
 
     std::vector<Folder> folders;
+
+    /// The scalar variables of subprograms whose values are followed while they fold, bound in
+    /// the folder where translation is (DESIGN_GUIDE.md section 4.1): a variable computed from
+    /// what a specialisation binds, `data_width := v'length / items`, is as static as that, and
+    /// a call that takes it as a bound can be specialised for it. Only a subprogram's, which is
+    /// declared anew at each call and which nothing but the subprogram assigns; a process's keeps
+    /// what it held when the process last suspended.
+    std::set<tree_t> followed;
 
     /// The line the next inlined function's `return`s write into, which its frame takes.
     std::optional<std::uint32_t> nextLineSink;

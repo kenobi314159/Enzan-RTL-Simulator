@@ -623,7 +623,9 @@ instead without anything downstream changing.
   own widths are computed from, which a call has to give statically, and of
   those it passes on to what it calls as widths, where the call has them:
   `slv_array_deser(v, items)` is a body for each number of items it is called
-  with.
+  with. A variable of a subprogram folds where every path reaching it leaves it
+  a static value, so that a width computed into one, `width := v'length /
+  items`, is as static as what it is computed from.
 - **A call's frame lives on one stack the kernel owns.** A subprogram never
   suspends — a VHDL procedure that waits, like a SystemVerilog task with a delay,
   is inlined into its caller, and so is one with a signal parameter, whose body
