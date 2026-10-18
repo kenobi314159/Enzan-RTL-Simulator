@@ -379,6 +379,10 @@ std::optional<Outcome> inChild(const Job& job, DiagnosticEngine& diagnostics) {
     if (outcome.errors && !printed.empty()) static_cast<void>(writeAll(STDERR_FILENO, printed));
 
     if (!outcome.errors) {
+        // A child that a signal ended may have said why first, as an assertion of Enzan's own
+        // does before it aborts; that is passed on, since the signal alone says nothing of it.
+        if (WIFSIGNALED(status) && !printed.empty())
+            static_cast<void>(writeAll(STDERR_FILENO, printed));
         if (!outcome.stopReported) {
             diagnostics.report(DiagCode::VhdlAnalysisStopped, SourceLocation(),
                                stopReason(printed, status));
