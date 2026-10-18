@@ -595,7 +595,9 @@ void KernelServer::onQueryObjects(const Frame& frame) {
     // slot visible in two scopes and both names are real, so a user looking inside a DUT finds
     // its ports where they expect them.
     for (std::uint32_t signalIndex = 0; signalIndex < image->signals().size(); ++signalIndex) {
-        const std::uint32_t width = image->signals()[signalIndex].bitWidth;
+        // As the values sent for it are, shown rather than stored: a std_logic is one bit, not
+        // the byte of its code.
+        const std::uint32_t width = publisher->widthOf(signalIndex);
         const bool recorded =
             database != nullptr
             && database->recordIndexOf(signalIndex) != wavedb::WaveformDatabase::NotRecorded;
@@ -852,7 +854,7 @@ void KernelServer::sendHistory(std::uint32_t signalIndex, runtime::SimTime from,
 
     HistoryMessage message;
     message.signalIndex = signalIndex;
-    message.width = image->signals()[signalIndex].bitWidth;
+    message.width = publisher->widthOf(signalIndex);
     message.latestTime = latestRecordedTime();
 
     const std::uint32_t record = database != nullptr ? database->recordIndexOf(signalIndex)

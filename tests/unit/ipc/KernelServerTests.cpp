@@ -142,6 +142,39 @@ Design tickingDesign() {
     return design;
 }
 
+/// A design of one std_ulogic signal, held as its code, a byte, as the VHDL frontend holds it:
+/// '1' at first and '0' from time twenty.
+Design codedDesign() {
+    ProcessBuilder driver(ProcessKind::Initial, "once");
+    const std::uint32_t delay = driver.reg(Type::bits(32, false, false));
+    const std::uint32_t value = driver.reg(Type::bits(8, false, false));
+    const std::uint32_t twenty = driver.constant("32'd20");
+    const std::uint32_t zero = driver.constant("8'd2");
+
+    driver.block("entry");
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(twenty)));
+    driver.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    driver.block("after");
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(zero)));
+    driver.store(0, value);
+    driver.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition top;
+    top.name = "tb";
+    top.sourceName = "tb";
+    top.addObject(Object{.name = "ready",
+                         .type = Type::bits(8, false, false),
+                         .initialValue = enzan::eir::BitVector::parse("8'd3"),
+                         .encoding = enzan::eir::Encoding::VhdlLogic});
+    top.processes.push_back(driver.finish());
+
+    Design design;
+    design.addModule(std::move(top));
+    return design;
+}
+
 /// A design whose only process waits twenty time units and then stops for good.
 Design settlingDesign() {
     ProcessBuilder driver(ProcessKind::Initial, "once");
@@ -1033,6 +1066,41 @@ TEST_F(ServerFixture, HistoryHonoursTheRequestedRange) {
         EXPECT_GE(entry.time, 30U);
         EXPECT_LT(entry.time, 60U);
     }
+}
+
+TEST_F(ServerFixture, ASignalOfVhdlCodesIsListedAtTheWidthItsValuesComeAt) {
+    // A std_ulogic is held as its code and its values are sent as the bit it stands for. A
+    // client told the code's width keeps a trace eight bits wide and drops every one of them as
+    // the wrong width, which left every std_logic of a VHDL design without a value or a wave.
+    rebuild(codedDesign());
+    connectClient();
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    ASSERT_EQ(objects.objects.size(), 1U);
+    EXPECT_EQ(objects.objects[0].width, 1U);
+
+    SubscribeMessage subscribe;
+    subscribe.signalIndices = {signalIndex("/tb/ready")};
+    request(MessageType::Subscribe, subscribe);
+    const auto history = expect<HistoryMessage>(MessageType::History);
+    EXPECT_EQ(history.width, 1U);
+    ASSERT_EQ(history.entries.size(), 1U);
+    EXPECT_EQ(history.entries[0].value.width(), history.width);
+    EXPECT_EQ(enzan::eir::toString(history.entries[0].value.ref(), enzan::eir::Radix::Binary), "1");
+
+    RunMessage run;
+    run.duration = 100;
+    request(MessageType::Run, run);
+    const std::vector<ValueChangesMessage> batches =
+        expectAll<ValueChangesMessage>(MessageType::ValueChanges);
+    ASSERT_EQ(batches.size(), 1U);
+    ASSERT_EQ(batches[0].updates.size(), 1U);
+    EXPECT_EQ(batches[0].updates[0].value.width(), history.width);
+    EXPECT_EQ(enzan::eir::toString(batches[0].updates[0].value.ref(), enzan::eir::Radix::Binary),
+              "0");
 }
 
 TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {
