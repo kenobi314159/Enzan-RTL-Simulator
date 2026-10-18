@@ -104,10 +104,25 @@ struct SubprogramBindings {
     std::vector<Layout> parameters;
 };
 
-/// The parameters of `body`, a subprogram, whose values its bounds depend on: those named in the
-/// constraints of what it declares, or in the values of its constants, which such a constraint
-/// may use.
-[[nodiscard]] std::vector<bool> shapeParameters(tree_t body);
+/// The parameters of a subprogram whose values its specialisations are made for.
+struct ShapeParameters {
+    /// Those its bounds depend on: named in the constraints of what it declares, or in the values
+    /// of its constants, which such a constraint may use. A call has to give each a static value.
+    std::vector<bool> required;
+
+    /// Those that reach the bounds of what it calls, in an actual or through a variable an actual
+    /// names, which only a value of theirs makes static: `deser(v, items, v'length / items)`. A
+    /// call gives each the value it has where it has one, and the specialisation is made without
+    /// it otherwise.
+    std::vector<bool> wanted;
+};
+
+/// What `shapeParameters` has found, by body: a search follows calls, and each callee's answer is
+/// the same wherever it is called from.
+using ShapeCache = std::map<tree_t, ShapeParameters>;
+
+/// The parameters of `body`, a subprogram, whose values its specialisations are made for.
+[[nodiscard]] const ShapeParameters& shapeParameters(tree_t body, ShapeCache& cache);
 
 /// Translates one VHDL process into an EIR process, or one subprogram, specialised for a shape,
 /// into an EIR subprogram.

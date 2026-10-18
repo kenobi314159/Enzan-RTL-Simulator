@@ -619,7 +619,11 @@ instead without anything downstream changing.
 - **A subprogram is specialised by the lengths of its unconstrained
   parameters**, as a unit is by its generics (5.2), so that every width in EIR
   stays fixed: `numeric_std."+"` called on 8-bit and on 32-bit operands is two
-  bodies, each named for its lengths.
+  bodies, each named for its lengths. So it is by the values of the scalars its
+  own widths are computed from, which a call has to give statically, and of
+  those it passes on to what it calls as widths, where the call has them:
+  `slv_array_deser(v, items)` is a body for each number of items it is called
+  with.
 - **A call's frame lives on one stack the kernel owns.** A subprogram never
   suspends — a VHDL procedure that waits, like a SystemVerilog task with a delay,
   is inlined into its caller, and so is one with a signal parameter, whose body

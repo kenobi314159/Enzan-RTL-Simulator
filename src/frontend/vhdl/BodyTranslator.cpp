@@ -7,7 +7,9 @@
 #include "frontend/vhdl/Types.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <format>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -74,9 +76,68 @@ void searchType(type_t type, ShapeSearch& search) {
     }
 }
 
+/// What `noteWanted` and `noteCall` gather: the parameters of one subprogram that reach what it
+/// calls, and the variables they reach it through, whose assignments are searched in turn.
+struct WantedSearch {
+    tree_t body = nullptr;
+    ShapeCache* cache = nullptr;
+    std::vector<bool> wanted;
+    std::vector<tree_t> variables;
+};
+
+void noteWanted(tree_t reference, void* context) {
+    auto& search = *static_cast<WantedSearch*>(context);
+    if (!tree_has_ref(reference)) return;
+    tree_t declaration = tree_ref(reference);
+    if (tree_kind(declaration) == T_VAR_DECL) {
+        if (std::ranges::find(search.variables, declaration) == search.variables.end())
+            search.variables.push_back(declaration);
+        return;
+    }
+    if (tree_kind(declaration) != T_PARAM_DECL || type_is_array(tree_type(declaration))) return;
+    for (unsigned index = 0; index < tree_ports(search.body); ++index) {
+        if (tree_port(search.body, index) == declaration) search.wanted[index] = true;
+    }
+}
+
+/// Notes what the actuals of `call` name, for each formal its callee's specialisations are made
+/// for.
+void noteCall(tree_t call, void* context) {
+    auto& search = *static_cast<WantedSearch*>(context);
+    if (!tree_has_ref(call)) return;
+    tree_t declaration = tree_ref(call);
+    tree_t callee = subprogramBody(declaration);
+    if (callee == nullptr) return;
+    const ShapeParameters& shape = shapeParameters(callee, *search.cache);
+    for (unsigned index = 0; index < tree_params(call); ++index) {
+        tree_t association = tree_param(call, index);
+        std::optional<unsigned> formal;
+        if (tree_subkind(association) == P_POS) {
+            formal = tree_pos(association);
+        } else if (tree_t name = tree_name(association);
+                   tree_kind(name) == T_REF && tree_has_ref(name)) {
+            for (unsigned candidate = 0; candidate < tree_ports(callee); ++candidate) {
+                if (tree_ref(name) == tree_port(callee, candidate)
+                    || tree_ref(name) == tree_port(declaration, candidate))
+                    formal = candidate;
+            }
+        }
+        if (!formal || *formal >= shape.required.size()
+            || (!shape.required[*formal] && !shape.wanted[*formal]))
+            continue;
+        tree_visit_only(tree_value(association), noteWanted, &search, T_REF);
+    }
+}
+
+void noteAssignment(tree_t assignment, void* context) {
+    static_cast<std::vector<tree_t>*>(context)->push_back(assignment);
+}
+
 } // namespace
 
-std::vector<bool> shapeParameters(tree_t body) {
+const ShapeParameters& shapeParameters(tree_t body, ShapeCache& cache) {
+    if (const auto known = cache.find(body); known != cache.end()) return known->second;
+
     ShapeSearch search{.body = body, .found = std::vector<bool>(tree_ports(body), false)};
     for (unsigned index = 0; index < tree_decls(body); ++index) {
         tree_t declaration = tree_decl(body, index);
@@ -93,7 +154,37 @@ std::vector<bool> shapeParameters(tree_t body) {
         default: break;
         }
     }
-    return search.found;
+
+    // Entered before what it calls is searched, so that a recursion through it finds what is
+    // required and wants nothing more.
+    ShapeParameters& shape = cache[body];
+    shape.required = std::move(search.found);
+    shape.wanted.assign(tree_ports(body), false);
+
+    WantedSearch wanted{.body = body,
+                        .cache = &cache,
+                        .wanted = std::vector<bool>(tree_ports(body), false),
+                        .variables = {}};
+    tree_visit_only(body, noteCall, &wanted, T_FCALL);
+    tree_visit_only(body, noteCall, &wanted, T_PCALL);
+
+    // A variable an actual names is as static as what it is given, at its declaration and at
+    // each assignment to it.
+    std::vector<tree_t> assignments;
+    if (!wanted.variables.empty())
+        tree_visit_only(body, noteAssignment, &assignments, T_VAR_ASSIGN);
+    for (std::size_t next = 0; next < wanted.variables.size(); ++next) {
+        tree_t variable = wanted.variables[next];
+        if (tree_has_value(variable))
+            tree_visit_only(tree_value(variable), noteWanted, &wanted, T_REF);
+        for (tree_t assignment : assignments) {
+            tree_t target = tree_target(assignment);
+            if (tree_kind(target) == T_REF && tree_has_ref(target) && tree_ref(target) == variable)
+                tree_visit_only(tree_value(assignment), noteWanted, &wanted, T_REF);
+        }
+    }
+    shape.wanted = std::move(wanted.wanted);
+    return shape;
 }
 
 BodyTranslator::BodyTranslator(DefinitionScope& scope, tree_t statement, std::string name)

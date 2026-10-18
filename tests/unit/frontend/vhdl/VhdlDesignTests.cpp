@@ -513,6 +513,47 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, ACallIsSpecialisedForAParameterItPassesOnAsABound) {
+    // padded's own declarations need no value of n, but the call it makes does, so a call of it
+    // is specialised for the n it is given; its if keeps it from being inlined.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  function ones (n : integer) return bit_vector is
+    variable r : bit_vector(n - 1 downto 0) := (others => '1');
+  begin
+    return r;
+  end function;
+
+  function padded (n : integer; c : boolean) return bit_vector is
+  begin
+    if c then
+      return ones(n);
+    else
+      return not ones(n);
+    end if;
+  end function;
+
+  signal yes : boolean := true;
+begin
+  process
+  begin
+    report to_string(padded(3, yes)) & " " & to_string(padded(2, not yes));
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"111 00"});
+}
+
 TEST_F(VhdlDesignTest, AConstantFunctionAssignsSlicesOfItsVariables) {
     // As OFM's MI splitter makes the address mask it gives its generic: ones over a slice of a
     // variable of zeroes, and two bits over another.

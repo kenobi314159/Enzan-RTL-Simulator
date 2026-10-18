@@ -365,9 +365,10 @@ public:
             return std::nullopt;
         }
 
-        // The values a specialisation depends on: the bounds of its unconstrained parameters, and
-        // the scalars its own bounds are computed from.
-        const std::vector<bool> needed = shapeParameters(body);
+        // The values a specialisation depends on: the bounds of its unconstrained parameters, the
+        // scalars its own bounds are computed from, and those that reach the bounds of what it
+        // calls where the call has them.
+        const ShapeParameters& shaped = shapeParameters(body, shapes);
         SpecialisationKey key{.body = body,
                               .definition =
                                   inPackage ? std::string() : architecture->definition().name,
@@ -385,7 +386,7 @@ public:
                 index < shape.elementBounds.size() ? shape.elementBounds[index] : std::nullopt));
             const std::optional<std::int64_t> value =
                 index < shape.values.size() ? shape.values[index] : std::nullopt;
-            if (needed[index] && !value) {
+            if (shaped.required[index] && !value) {
                 unsupported(where,
                             std::format("a call of {} whose parameter '{}', which its bounds "
                                         "depend on, is not static",
@@ -393,7 +394,8 @@ public:
                                         simpleName(tree_ident(tree_port(body, index)))));
                 return std::nullopt;
             }
-            key.values.push_back(needed[index] ? value : std::nullopt);
+            key.values.push_back(shaped.required[index] || shaped.wanted[index] ? value
+                                                                                : std::nullopt);
         }
         // One that failed has said why where it failed, and a call of it again is no recursion.
         if (failedCallees.contains(key)) return std::nullopt;
@@ -872,6 +874,9 @@ private:
     /// whose translation failed.
     std::map<SpecialisationKey, std::optional<Callee>> callees;
     std::set<SpecialisationKey> failedCallees;
+
+    /// Which parameters of each subprogram called its specialisations are made for.
+    ShapeCache shapes;
 
     std::deque<Specialisation> pending;
     std::vector<eir::ModuleDefinition> modules;
