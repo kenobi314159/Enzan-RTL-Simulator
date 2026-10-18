@@ -1861,7 +1861,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::characterString(tree_t expr
 }
 
 bool BodyTranslator::enumerationImage(tree_t operand, std::string& format,
-                                      std::vector<eir::SysTaskArgument>& arguments) {
+                                      std::vector<eir::SysTaskArgument>& arguments, bool quoted) {
     // A table of the literals' images, each in as many bytes as the longest and right-aligned
     // behind NULs, which `%s` passes over; the value picks its entry (IEEE 1076 section 16.2.2:
     // an identifier's image is in lower case, a character literal's has its quotes).
@@ -1872,8 +1872,10 @@ bool BodyTranslator::enumerationImage(tree_t operand, std::string& format,
     for (unsigned index = 0; index < count; ++index) {
         tree_t literal = type_enum_literal(base, index);
         const std::string_view name = istr(tree_ident(literal));
-        images.emplace_back(name.starts_with('\'') ? std::string(name)
-                                                   : simpleName(tree_ident(literal)));
+        if (!name.starts_with('\''))
+            images.push_back(simpleName(tree_ident(literal)));
+        else
+            images.emplace_back(quoted ? name : name.substr(1, name.size() - 2));
         longest = std::max(longest, images.back().size());
     }
     const auto entryBits = static_cast<std::uint32_t>(longest * 8);
@@ -1983,6 +1985,8 @@ bool BodyTranslator::messageParts(tree_t message, std::string& format,
         }
         if (kind == S_TO_STRING && tree_params(message) == 1) {
             tree_t operand = tree_value(tree_param(message, 0));
+            if (type_is_enum(tree_type(operand)))
+                return enumerationImage(operand, format, arguments, false);
             if (!isSignedScalar(tree_type(operand))) break;
             const std::optional<Value> value = expression(operand);
             if (!value) return false;

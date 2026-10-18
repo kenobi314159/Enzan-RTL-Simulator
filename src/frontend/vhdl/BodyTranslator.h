@@ -450,9 +450,10 @@ private:
     std::optional<Value> characterString(tree_t expression);
 
     /// The image of `operand`, a value of an enumeration known only at run time, as a part of a
-    /// message.
+    /// message; or with `quoted` false its string representation, which `to_string` gives, a
+    /// character literal without its quotes (IEEE 1076 section 5.7).
     bool enumerationImage(tree_t operand, std::string& format,
-                          std::vector<eir::SysTaskArgument>& arguments);
+                          std::vector<eir::SysTaskArgument>& arguments, bool quoted = true);
 
     /// What `name` designates: a signal, a port or a variable of the process, or an element or a
     /// slice of one. Nothing having reported why for anything else.

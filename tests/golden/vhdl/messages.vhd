@@ -1,12 +1,14 @@
 -- SPDX-License-Identifier: GPL-3.0-or-later
 --
 -- Report messages built from any string: a function's result, a constant, a variable character,
--- and a percent sign among them, which is the message's and not a format's. What each report says
--- is what GHDL 4.1 says.
+-- and a percent sign among them, which is the message's and not a format's; and to_string of
+-- enumeration values, a character literal without its quotes. What each report says is what GHDL
+-- 4.1 says.
 
 entity tb is
 end entity;
 architecture test of tb is
+  type state_t is (idle, Busy, done);
   function to_integer_hi (v : bit_vector(7 downto 0)) return natural is
     variable n : natural := 0;
   begin
@@ -34,6 +36,8 @@ architecture test of tb is
     return result;
   end function;
   signal s : bit_vector(7 downto 0) := x"a5";
+  signal state : state_t := Busy;
+  signal flag : boolean := true;
   constant pct : string := "100% sure";
 begin
   process
@@ -41,6 +45,8 @@ begin
   begin
     wait for 1 ns;
     report "value = 0x" & hex(s) & " (" & pct & ") " & c;
+    report "state " & to_string(state) & " flag " & to_string(flag) & " bit " & to_string(s(0))
+           & " character " & to_string(c);
     report "PASS messages";
     wait;
   end process;
