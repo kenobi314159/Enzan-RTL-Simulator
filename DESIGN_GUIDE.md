@@ -234,11 +234,17 @@ Simulated time is a **64-bit unsigned integer** counting units of a single
 global time precision. Time MUST NOT be represented in floating point anywhere
 in the kernel.
 
-The global precision is determined at elaboration as the finest precision
-requested anywhere in the design — SystemVerilog `timeprecision`/`` `timescale ``
-directives and the VHDL resolution limit — with a floor of 1 fs. All delays are
-converted to this unit during elaboration, so the kernel never performs unit
-conversion at run time.
+The global precision is the finest precision requested anywhere in the design —
+SystemVerilog `timeprecision`/`` `timescale `` directives and the VHDL resolution
+limit — with a floor of 1 fs, and never coarser than the unit a SystemVerilog
+module stating no time scale is in: `--timescale`'s, the libraries', or else
+picoseconds. `--timescale` or a library fixes it instead (8.2), and a delay that is
+no whole number of a fixed unit is rounded to the nearest and reported. Delays are
+converted to this unit as they are translated, so the kernel never performs unit
+conversion at run time. A SystemVerilog delay counts the unit of the scope stating
+it, a task's that of the module or package declaring the task, rounded to that
+scope's precision first (IEEE 1800 section 3.14.2.1), and `$time` counts the
+calling module's unit.
 
 `IDEA.md` referred to a "pre-set minimum delta step". The correct concept is
 this global time precision. Delta cycles have no duration at all (see 3.2) and
@@ -1360,10 +1366,12 @@ a library to invent.
 
 **A library carries the time unit it was analysed in**, in its index beside its name. A
 delay is stored as a count of the unit, so `#5` analysed in nanoseconds is five
-nanoseconds and nothing else. A run, or an analysis against or into a library, therefore
-takes its unit from the libraries that hold units, and `--timescale` may be left out. Given
-anyway, it must agree: a run that relabelled the library's counts in another unit would
-report every time wrongly, so a conflict is an error (ENZ6028), and so are two libraries in
+nanoseconds and nothing else. An analysis into a library takes no finer unit from a precision
+a module asks for (3.1): a later analysis into it takes its unit as the one a module stating no
+time scale is in, which has to be the one the first used. A run, or an analysis against or into
+a library, therefore takes its unit from the libraries that hold units, and `--timescale` may be
+left out. Given anyway, it must agree: a run that relabelled the library's counts in another unit
+would report every time wrongly, so a conflict is an error (ENZ6028), and so are two libraries in
 different units (ENZ6027). A library emptied by `lib clean` holds no units, and can be
 filled in another unit.
 
@@ -1926,12 +1934,9 @@ simulator rather than to whatever another simulator's quirks taught it to tolera
 `COCOTB_HDL_TIMEPRECISION` becomes `--timescale`, since Enzan counts every delay in one unit
 (3.1). It must name a single unit, `1ns` and not `10ns`, which is all `--timescale` accepts.
 
-**A design's own delays are read in that unit too.** The frontend does not yet honour
-`` `timescale `` or a module's `timeunit`, which section 3.1 requires: `#10` is ten of whatever
-`--timescale` says, so a design written for nanoseconds and run at cocotb's default picosecond
-precision runs a thousand times fast. A testbench in cocotb that drives every event itself, as
-most do, is unaffected; a design with delays of its own needs `COCOTB_HDL_TIMEPRECISION` set to
-the unit it was written in until the frontend converts delays as 3.1 says it must.
+**A module stating no time scale is in that unit too** (3.1), where cocotb's other simulators
+take `COCOTB_HDL_TIMEUNIT`: its `#10` is ten of the precision. A module with a `` `timescale ``
+or a `timeunit` counts its own, as everywhere.
 
 ### 9.7 VHPI
 
@@ -3366,10 +3371,9 @@ the PLI context hold one design whatever language each definition came from. Wha
 the meeting of the two frontends and of the two interfaces.
 
 **SystemVerilog's time units come first.** A design with VHDL in it counts femtoseconds (5.2),
-while a SystemVerilog delay is still a count of the run's unit rather than of its module's (9.6),
-so every delay of a mixed design would be wrong. Delays, `$time` and `%t` follow each module's
-time unit, as 3.1 requires, before anything crosses the boundary; a module with no time scale
-keeps taking the run's unit.
+so a SystemVerilog delay counted in the run's unit rather than its module's would make every delay
+of a mixed design wrong. Delays, `$time` and `%t` follow each module's time unit (3.1), and a
+module stating no time scale takes `--timescale`'s unit, or picoseconds.
 
 **Analysis of both languages in one session.** The session analyses SystemVerilog through
 slang and VHDL through the NVC child into one `eir::Design`; it refuses a mixed source set

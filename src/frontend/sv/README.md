@@ -35,6 +35,12 @@ same on every run (section 3.8).
 
 ## Deliberate translation decisions
 
+**A delay counts the time unit of the scope stating it** and is translated into a count of
+the run's unit (DESIGN_GUIDE.md section 3.1): the module's `` `timescale `` or `timeunit`, or a
+task's package's, rounded to that scope's precision and then, where the run's unit is fixed and
+coarser, to the run's with a warning (ENZ1009). `$time` is divided back into the calling
+module's unit, and a system task call carries that unit for `%t`.
+
 **A block header's event control becomes the process's sensitivity list**, not a statement
 inside its body. The scheduler re-arms a process, so the body has to begin after the wait.
 `always @(*)` is the exception that needs the read set, so its list is filled in once the

@@ -143,8 +143,12 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
                 continue;
             }
             const FormatArgument& argument = arguments[nextArgument++];
-            const SimTime value =
-                argument.value.hasUnknown() ? context.time : argument.value.toUInt64();
+            SimTime value = context.time;
+            if (!argument.value.hasUnknown()) {
+                value = argument.value.toUInt64();
+                if (context.argumentUnit)
+                    value = context.timeScale.ticksOf(value, *context.argumentUnit);
+            }
             result += context.timeScale.format(value);
             continue;
         }

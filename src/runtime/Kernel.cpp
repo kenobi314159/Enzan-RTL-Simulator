@@ -64,6 +64,12 @@ std::size_t windowScratchWords(const Image& image) {
     return eir::storageWordsFor(widest);
 }
 
+/// The unit a call's `%t` arguments count, or nothing when they count the run's.
+std::optional<TimeExponent> argumentUnit(const codegen::SysTaskDescriptor& descriptor) {
+    if (descriptor.timeUnit == eir::SysTaskCall::RunUnit) return std::nullopt;
+    return descriptor.timeUnit;
+}
+
 /// IEEE 1364's `$random`: the reference C code the standard gives for its distribution
 /// functions, `rtl_dist_uniform`, over the whole 32-bit range. The seed advances as a linear
 /// congruential generator and the draw is computed from it in floating point. Kept bit for bit,
@@ -1392,8 +1398,10 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
 
     const elab::Instance& instance =
         designImage->elaboratedDesign().instances()[state.instanceIndex];
-    const FormatContext context{
-        .time = currentTime, .timeScale = options.timeScale, .scopeName = instance.path};
+    const FormatContext context{.time = currentTime,
+                                .timeScale = options.timeScale,
+                                .argumentUnit = argumentUnit(descriptor),
+                                .scopeName = instance.path};
 
     const std::string text =
         descriptor.hasFormat()
@@ -1586,8 +1594,10 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
         }
         const elab::Instance& instance =
             designImage->elaboratedDesign().instances()[state.instanceIndex];
-        const FormatContext context{
-            .time = currentTime, .timeScale = options.timeScale, .scopeName = instance.path};
+        const FormatContext context{.time = currentTime,
+                                    .timeScale = options.timeScale,
+                                    .argumentUnit = argumentUnit(descriptor),
+                                    .scopeName = instance.path};
         std::string text;
         if (descriptor.kind == eir::SysTaskKind::LineAppend) {
             if (const std::string* source = lineAt(argument(3))) text = *source;

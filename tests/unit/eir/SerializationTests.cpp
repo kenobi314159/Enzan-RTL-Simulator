@@ -194,6 +194,7 @@ ModuleDefinition richModule(BufferId buffer) {
     call.kind = SysTaskKind::Display;
     call.formatIndex = 0;
     call.location = SourceLocation(buffer, 15);
+    call.timeUnit = -9;
     call.arguments.push_back(
         SysTaskArgument{.value = Operand::reg(1), .type = Type::bits(8, true, true)});
     process.sysCalls.push_back(std::move(call));
@@ -357,6 +358,8 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     EXPECT_EQ(process.sysCalls[0].arguments[0].value, Operand::reg(1));
     EXPECT_TRUE(process.sysCalls[0].arguments[0].type.isSigned());
     EXPECT_FALSE(process.sysCalls[1].hasFormat());
+    EXPECT_EQ(process.sysCalls[0].timeUnit, -9);
+    EXPECT_EQ(process.sysCalls[1].timeUnit, SysTaskCall::RunUnit);
 
     ASSERT_EQ(process.sensitivity.size(), 1U);
     EXPECT_EQ(process.sensitivity[0].edge, EdgeKind::Posedge);

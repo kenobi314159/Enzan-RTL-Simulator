@@ -27,4 +27,21 @@ std::string TimeScale::format(SimTime time) const {
     return std::format("{}{}", time, unitName());
 }
 
+SimTime TimeScale::ticksOf(std::uint64_t count, TimeExponent unit) const noexcept {
+    SimTime ticks = count;
+    for (int shift = unit - exponent; shift > 0; --shift) {
+        if (ticks > NoTime / 10) return NoTime;
+        ticks *= 10;
+    }
+
+    // Twenty decimal digits are more than 64 bits hold, so a finer unit than that leaves none.
+    const int finer = exponent - unit;
+    if (finer <= 0) return ticks;
+    if (finer >= 20) return 0;
+    std::uint64_t divisor = 1;
+    for (int shift = finer; shift > 0; --shift) divisor *= 10;
+    const std::uint64_t remainder = ticks % divisor;
+    return ticks / divisor + (remainder >= divisor - remainder ? 1 : 0);
+}
+
 } // namespace enzan::runtime

@@ -58,13 +58,23 @@ struct Options {
     std::vector<std::string> parameterOverrides;
 
     /// The time unit, as a power of ten of a second, that a design element without a
-    /// `` `timescale `` or `timeunit` of its own is taken to be in.
+    /// `` `timescale `` or `timeunit` of its own is taken to be in, as its unit and its
+    /// precision, and the run's unit unless `refineTimeUnit` lets a finer one replace it.
     ///
     /// IEEE 1800 makes a design where some elements have a time scale and others do not an
     /// error, and slang enforces it; other simulators warn, and real designs — a testbench with a
-    /// `` `timescale `` and the RTL without — rely on that. Enzan counts every delay in its one
-    /// unit regardless (DESIGN_GUIDE.md section 9.6), so that unit is the honest default.
+    /// `` `timescale `` and the RTL without — rely on that.
     std::int8_t timeUnitExponent = -12;
+
+    /// Whether the run's unit is the finest precision an element of the design declares, where
+    /// that is finer than `timeUnitExponent` (DESIGN_GUIDE.md section 3.1).
+    ///
+    /// Off when `--timescale` or a library fixes the unit. A delay that is no whole number of a
+    /// fixed unit is rounded to it and reported.
+    bool refineTimeUnit = false;
+
+    /// Receives the run's unit, which every delay of the design counts, when given.
+    std::int8_t* runTimeUnit = nullptr;
 
     /// Receives every file the analysis read, when given.
     ///

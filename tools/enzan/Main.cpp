@@ -150,9 +150,11 @@ Simulation:
       --fst <file>        Write an FST waveform to this file. Far smaller on a
                           real design, and seekable. Both may be given at once.
       --wave-scope <path> Record only this subtree, for example /tb/u_dut.
-      --timescale <unit>  Time unit for delays and reported times: s, ms, us, ns,
-                          ps or fs. The default is the unit the libraries were
-                          analysed in, and ps without any.
+      --timescale <unit>  The run's time unit, which --run and reported times
+                          count, and the unit of a module that states none: s,
+                          ms, us, ns, ps or fs. The default is the unit the
+                          libraries were analysed in; without any, ps, or a
+                          finer precision the design asks for.
       --delta-limit <n>   Delta cycles allowed at one timestamp. Default 10000.
       --seed <n>          The seed random numbers are drawn from. Default 0.
       --dump-stats        Print instruction and delta counts when the run ends.

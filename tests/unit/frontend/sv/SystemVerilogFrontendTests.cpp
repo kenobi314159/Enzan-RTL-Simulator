@@ -11,6 +11,7 @@
 #include "common/SourceManager.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
+#include "eir/Instruction.h"
 #include "eir/Module.h"
 #include "eir/Process.h"
 #include "eir/Verifier.h"
@@ -20,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -108,6 +110,9 @@ protected:
         options.files.push_back(path);
         if (!top.empty()) options.topModules.emplace_back(top);
         options.parameterOverrides = std::move(parameters);
+        options.timeUnitExponent = timeUnit;
+        options.refineTimeUnit = refineTimeUnit;
+        options.runTimeUnit = &runTimeUnit;
 
         return enzan::frontend::sv::analyse(options, sources, engine);
     }
@@ -126,7 +131,28 @@ protected:
     DiagnosticEngine engine;
     CollectingConsumer consumer;
     std::filesystem::path directory;
+
+    /// The unit a module with no time scale is in, whether a finer precision may replace it as
+    /// the run's, and the run's unit the last analysis chose.
+    std::int8_t timeUnit = -12;
+    bool refineTimeUnit = false;
+    std::int8_t runTimeUnit = 0;
 };
+
+/// The values of the constants `process` loads.
+std::vector<std::uint64_t> constantsOf(const enzan::eir::Process& process) {
+    std::vector<std::uint64_t> values;
+    values.reserve(process.constants.size());
+    for (const enzan::eir::BitVector& constant : process.constants)
+        values.push_back(constant.ref().toUInt64());
+    return values;
+}
+
+/// True when `process` loads a constant of `value`.
+bool loads(const enzan::eir::Process& process, std::uint64_t value) {
+    const std::vector<std::uint64_t> values = constantsOf(process);
+    return std::ranges::find(values, value) != values.end();
+}
 
 // ---------------------------------------------------------------------------
 // Well-formed input
@@ -1517,6 +1543,137 @@ TEST_F(FrontendTest, EveryInstanceOfOneParameterisationSharesOneDefinitionAndIsW
         for (const auto& connection : instance.connections) objects.insert(connection.objectIndex);
     }
     EXPECT_EQ(objects.size(), 6U) << "instances are sharing port storage";
+}
+
+// ---------------------------------------------------------------------------
+// Time units (DESIGN_GUIDE.md section 3.1)
+// ---------------------------------------------------------------------------
+
+TEST_F(FrontendTest, ADelayCountsItsModulesUnitAndIsGivenInTheRuns) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ps
+        module m;
+            logic a;
+            initial #2.5 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+    ASSERT_EQ(module->processes.size(), 1U);
+    EXPECT_TRUE(loads(module->processes[0], 2500)) << "2.5 ns is 2500 ps";
+    EXPECT_EQ(runTimeUnit, -12);
+}
+
+TEST_F(FrontendTest, ARunWhoseUnitNothingFixedCountsTheFinestPrecisionAskedFor) {
+    refineTimeUnit = true;
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1fs
+        module m;
+            logic a;
+            initial #1 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_EQ(runTimeUnit, -15);
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 1'000'000)) << "1 ns in fs";
+}
+
+TEST_F(FrontendTest, ARunWhoseUnitIsFixedKeepsItAndADelayFinerIsRoundedAndReported) {
+    timeUnit = -9;
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ps
+        module m;
+            logic a;
+            initial #1.6 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_EQ(runTimeUnit, -9);
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 2)) << "1600 ps is 2 ns, rounded";
+    EXPECT_TRUE(reportedCode(DiagCode::DelayRounded));
+    EXPECT_TRUE(reported("1600ps")) << consumer.messages.front();
+    EXPECT_TRUE(reported("2ns")) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, ADelayIsRoundedToItsModulesPrecisionFirst) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1us / 1ns
+        module m;
+            logic a;
+            initial #0.0036 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 4000)) << "3.6 ns is 4 ns";
+    EXPECT_FALSE(reportedCode(DiagCode::DelayRounded)) << "the language rounds it, not the run";
+}
+
+TEST_F(FrontendTest, ADelayInAPackageTaskCountsThePackagesUnit) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ns
+        package waits;
+            task automatic one;
+                #1;
+            endtask
+        endpackage
+`timescale 1ps / 1ps
+        module m;
+            initial waits::one();
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 1000)) << "1 ns, not 1 ps";
+}
+
+TEST_F(FrontendTest, ADelayKnownOnlyAsTheProcessRunsIsScaledAsItRuns) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ps
+        module m;
+            int amount = 3;
+            logic a;
+            initial #amount a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const enzan::eir::Process& process = design->findModule("m")->processes[0];
+    EXPECT_TRUE(loads(process, 1000)) << "the count is multiplied by the ps in a ns";
+    EXPECT_TRUE(std::ranges::any_of(process.blocks, [](const enzan::eir::BasicBlock& block) {
+        return std::ranges::any_of(block.instructions, [](const enzan::eir::Instruction& op) {
+            return op.opcode == enzan::eir::Opcode::Multiply;
+        });
+    }));
+}
+
+TEST_F(FrontendTest, ANegativeDelayIsRefused) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            initial #(-1) a = 1'b1;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a negative delay"));
+}
+
+TEST_F(FrontendTest, ASystemTaskCallCarriesTheTimeUnitOfItsScope) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ps
+        module m;
+            initial $display("%t", $time);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const enzan::eir::Process& process = design->findModule("m")->processes[0];
+    ASSERT_EQ(process.sysCalls.size(), 1U);
+    EXPECT_EQ(process.sysCalls[0].timeUnit, -9);
 }
 
 } // namespace

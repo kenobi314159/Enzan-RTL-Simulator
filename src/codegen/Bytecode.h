@@ -103,6 +103,9 @@ struct SysTaskDescriptor {
     /// The object the call writes, or `eir::SysTaskCall::NoObject`.
     std::uint32_t objectIndex = eir::SysTaskCall::NoObject;
 
+    /// The unit a `%t` argument counts, as `eir::SysTaskCall::timeUnit`.
+    std::int8_t timeUnit = eir::SysTaskCall::RunUnit;
+
     SourceLocation location;
 
     [[nodiscard]] bool hasFormat() const noexcept {

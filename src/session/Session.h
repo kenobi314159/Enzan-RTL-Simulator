@@ -101,7 +101,10 @@ public:
     [[nodiscard]] DiagnosticEngine& diagnosticEngine() const noexcept { return diagnostics; }
 
     /// Sets the time unit delays are counted in. Takes effect at the next elaboration.
-    void setTimeScale(runtime::TimeScale unit) noexcept { scale = unit; }
+    void setTimeScale(runtime::TimeScale unit) noexcept {
+        scale = unit;
+        defaultScale = unit;
+    }
 
     /// Sets the time unit from the open libraries, or from `requested`, `--timescale`, when they
     /// hold no units; with neither, it is picoseconds.
@@ -505,7 +508,12 @@ private:
     /// What waveform files record, or empty for the whole design.
     std::vector<std::string> scopes;
 
+    /// The run's unit, which every delay of the design counts.
     runtime::TimeScale scale;
+
+    /// The unit a SystemVerilog design element with no time scale of its own is in, as `scale`
+    /// was chosen; `scale` is finer where the design asks for a finer precision (section 3.1).
+    runtime::TimeScale defaultScale;
 
     /// True when the unit was chosen, by `--timescale` or by a library holding units, rather than
     /// left at its default: a VHDL design then counts in it instead of in femtoseconds.

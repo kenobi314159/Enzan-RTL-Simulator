@@ -51,6 +51,13 @@ public:
     /// Formats `time` with its unit, as a transcript line would show it.
     [[nodiscard]] std::string format(SimTime time) const;
 
+    /// How many of this scale's units `count` of `unit` make, rounded to the nearest, a half
+    /// up, or `NoTime` when that does not fit.
+    ///
+    /// A SystemVerilog time value counts the unit of the scope it came from, `$time` the
+    /// calling module's, and a transcript shows it in the run's (IEEE 1800 section 21.3.1).
+    [[nodiscard]] SimTime ticksOf(std::uint64_t count, TimeExponent unit) const noexcept;
+
 private:
     /// One picosecond by default, which is what almost every design asks for and is
     /// coarse enough that the 64-bit range is not a practical limit.

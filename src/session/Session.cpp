@@ -204,18 +204,26 @@ bool Session::analyse(const AnalysisRequest& request) {
         }
     }
 
+    // A design asking for a finer precision than the unit is run in that precision, unless
+    // `--timescale` or a library fixed the unit (section 3.1). A library being written is one:
+    // what it stores counts its unit, and a later analysis into it takes that unit as the one a
+    // module with no time scale of its own is in, which has to be the one this analysis used.
+    std::int8_t runTimeUnit = defaultScale.precisionExponent();
     frontend::sv::Options options;
     options.filesRead = &lastFilesRead;
     options.files = ordered;
     options.buffers = buffers;
     options.defines = defines;
     options.includeDirectories = includeDirectories;
-    options.timeUnitExponent = scale.precisionExponent();
+    options.timeUnitExponent = defaultScale.precisionExponent();
+    options.refineTimeUnit = !scaleChosen && !library.isOpen();
+    options.runTimeUnit = &runTimeUnit;
     options.parameterOverrides = parameters;
 
     std::unique_ptr<eir::Design> analysed = frontend::sv::analyse(options, sources, diagnostics);
     if (analysed == nullptr) return false;
 
+    scale = runtime::TimeScale(runTimeUnit);
     design = std::move(analysed);
 #ifdef ENZAN_WITH_VHDL
     vhdlOptions.reset();
@@ -341,6 +349,7 @@ bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
 
     if (holding.empty()) {
         scale = requested.value_or(runtime::TimeScale());
+        defaultScale = scale;
         scaleChosen = requested.has_value();
         return true;
     }
@@ -353,6 +362,7 @@ bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
         return false;
     }
     scale = unit;
+    defaultScale = unit;
     scaleChosen = true;
     return true;
 }

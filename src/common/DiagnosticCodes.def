@@ -54,6 +54,8 @@ ENZAN_DIAG(ErrorInDeadCode, 1008, Warning,
            "the simulation.")
 ENZAN_DIAG(UnusedParameterOverride, 1007, Warning,
            "-G {} names no parameter of a top level, and changes nothing")
+ENZAN_DIAG(DelayRounded, 1009, Warning,
+           "a delay of {} is no whole number of the run's time unit, and is rounded to {}")
 
 // --- 2000-2999: VHDL frontend -----------------------------------------------
 

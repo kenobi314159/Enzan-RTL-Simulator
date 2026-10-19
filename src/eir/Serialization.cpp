@@ -273,6 +273,7 @@ void writeBody(Writer& out, NameTable& names, const Body& body) {
         out.u32(call.formatIndex);
         out.u32(call.objectIndex);
         writeLocation(out, names, call.location);
+        out.u8(static_cast<std::uint8_t>(call.timeUnit));
         out.u32(static_cast<std::uint32_t>(call.arguments.size()));
         for (const SysTaskArgument& argument : call.arguments) {
             writeOperand(out, argument.value);
@@ -591,6 +592,7 @@ void readBody(Reader& in, BufferResolver& buffers, Body& body) {
         call.formatIndex = in.u32();
         call.objectIndex = in.u32();
         call.location = readLocation(in, buffers);
+        call.timeUnit = static_cast<std::int8_t>(in.u8());
         call.arguments.resize(in.count());
         for (SysTaskArgument& argument : call.arguments) {
             argument.value = readOperand(in);

@@ -150,8 +150,14 @@ struct SysTaskCall {
     /// against the user's source rather than against the generated code.
     SourceLocation location;
 
+    /// The time unit, as a power of ten of a second, of the scope the call is in: what a `%t`
+    /// argument counts (IEEE 1800 section 21.3.1), as `$time` there does. `RunUnit` for a call
+    /// whose times count the run's unit, as VHDL's do.
+    std::int8_t timeUnit = RunUnit;
+
     static constexpr std::uint32_t NoFormat = 0xFFFF'FFFFU;
     static constexpr std::uint32_t NoObject = 0xFFFF'FFFFU;
+    static constexpr std::int8_t RunUnit = 127;
 
     [[nodiscard]] bool hasFormat() const noexcept { return formatIndex != NoFormat; }
 };

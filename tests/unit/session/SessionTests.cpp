@@ -259,6 +259,45 @@ TEST_F(SessionTest, AFileNamedTwiceIsAnalysedOnce) {
     EXPECT_TRUE(session.elaborate("tb")) << firstMessage();
 }
 
+// ---------------------------------------------------------------------------
+// The run's time unit (section 3.1)
+// ---------------------------------------------------------------------------
+
+/// A design whose one module asks for femtoseconds.
+constexpr std::string_view FemtosecondSource = "`timescale 1ns / 1fs\n"
+                                               "module tb;\n  logic a;\n"
+                                               "  initial #1 a = 1'b1;\nendmodule\n";
+
+TEST_F(SessionTest, ARunNothingFixesTheUnitOfCountsTheFinestPrecisionTheDesignAsksFor) {
+    ASSERT_TRUE(session.chooseTimeScale(std::nullopt));
+    ASSERT_TRUE(analyse("fine.sv", FemtosecondSource)) << firstMessage();
+    EXPECT_EQ(session.timeScale().precisionExponent(), -15);
+}
+
+TEST_F(SessionTest, ALibraryBeingWrittenKeepsTheUnitAModuleWithNoTimeScaleIsIn) {
+    // What the library stores counts its unit, and a later analysis into it takes that unit for
+    // a module with no time scale, so this analysis has to have used it too.
+    ASSERT_TRUE(session.openOutputLibrary(workspace / "work")) << firstMessage();
+    ASSERT_TRUE(session.chooseTimeScale(std::nullopt));
+    ASSERT_TRUE(analyse("fine.sv", FemtosecondSource)) << firstMessage();
+    EXPECT_EQ(session.timeScale().precisionExponent(), -12);
+}
+
+TEST_F(SessionTest, AModuleWithNoTimeScaleIsInTheDefaultUnitNotTheRefinedOne) {
+    // Another module asking for femtoseconds makes the run count them, and leaves a module that
+    // states nothing in picoseconds, across a second analysis as within the first.
+    ASSERT_TRUE(session.chooseTimeScale(std::nullopt));
+    ASSERT_TRUE(analyse("fine.sv", FemtosecondSource)) << firstMessage();
+    ASSERT_TRUE(analyse("plain.sv", "module plain;\n  logic a;\n  initial #5 a = 1'b1;\n"
+                                    "endmodule\n"))
+        << firstMessage();
+    ASSERT_EQ(session.timeScale().precisionExponent(), -15);
+
+    ASSERT_TRUE(session.elaborate("plain")) << firstMessage();
+    session.run(std::nullopt);
+    EXPECT_EQ(session.time(), 5000U) << "5 ps, counted in femtoseconds";
+}
+
 TEST_F(SessionTest, AFileASecondAnalysisNamesAgainIsAnalysedOnce) {
     // A session accumulates what each analysis names, so naming a file again is a repeat too.
     ASSERT_TRUE(analyse("counter.sv", CounterSource)) << firstMessage();

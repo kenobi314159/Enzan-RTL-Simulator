@@ -9,6 +9,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -133,6 +135,17 @@ TEST(Format, TimeConsumesAnArgumentSoLaterConversionsAreNotShifted) {
               "[40ns] count = 7");
 }
 
+TEST(Format, TimeCountsTheCallersUnitAndShowsTheRuns) {
+    // `$display("%t", $time)` in a module counting nanoseconds passes nanoseconds, which a run in
+    // picoseconds shows as picoseconds (IEEE 1800 section 21.3.1).
+    const BitVector value = literal("64'd3");
+    const std::vector<FormatArgument> arguments{{.value = value.ref(), .isSigned = false}};
+    const FormatContext context{
+        .time = 3000, .timeScale = TimeScale(-12), .argumentUnit = -9, .scopeName = "/tb"};
+
+    EXPECT_EQ(enzan::runtime::formatSystemTask("at %t", arguments, context), "at 3000ps");
+}
+
 TEST(Format, TimeWithNoArgumentIsShownRatherThanInventingOne) {
     const FormatContext context{.time = 1234, .timeScale = TimeScale(-9), .scopeName = "/tb"};
     EXPECT_EQ(enzan::runtime::formatSystemTask("at %t", {}, context), "at %t");
@@ -227,3 +240,20 @@ TEST(Format, LeftJustifyingWithoutAFieldWidthUsesTheValuesOwn) {
 }
 
 } // namespace
+
+TEST(TimeScale, ACountOfACoarserUnitIsMultipliedOut) {
+    EXPECT_EQ(TimeScale(-15).ticksOf(3, -9), 3'000'000U);
+    EXPECT_EQ(TimeScale(-12).ticksOf(7, -12), 7U);
+}
+
+TEST(TimeScale, ACountOfAFinerUnitIsRoundedToTheNearestAHalfUp) {
+    EXPECT_EQ(TimeScale(-9).ticksOf(1499, -12), 1U);
+    EXPECT_EQ(TimeScale(-9).ticksOf(1500, -12), 2U);
+    EXPECT_EQ(TimeScale(-9).ticksOf(400, -12), 0U);
+    EXPECT_EQ(TimeScale(0).ticksOf(5, -15), 0U) << "fifteen digits finer, nothing is left";
+}
+
+TEST(TimeScale, ACountThatDoesNotFitIsNoTime) {
+    EXPECT_EQ(TimeScale(-15).ticksOf(std::numeric_limits<std::uint64_t>::max() / 10, -12),
+              enzan::runtime::NoTime);
+}

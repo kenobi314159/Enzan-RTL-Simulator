@@ -9,7 +9,7 @@
 # than passing quietly.
 
 # ---------------------------------------------------------------------------
-# enzan_add_golden_test(<name> [NO_DIFFERENTIAL])
+# enzan_add_golden_test(<name> [NO_DIFFERENTIAL] [OWN_TIME_SCALES])
 # ---------------------------------------------------------------------------
 #
 # Registers `golden.<name>`, which runs sv/<name>.sv and requires the PASS line, and
@@ -18,6 +18,9 @@
 # NO_DIFFERENTIAL marks a case where simulators legitimately differ, which section 14.3
 # warns about. Such a case still runs under Enzan; it simply is not held to another tool's
 # behaviour.
+#
+# A case runs in nanoseconds, `--timescale ns`, unless OWN_TIME_SCALES says that every module
+# states its own time scale, when it runs in the unit the design asks for (section 3.1).
 
 # A failure line, anchored to the start of one.
 #
@@ -29,14 +32,19 @@
 set(ENZAN_GOLDEN_FAILURE_PATTERN "\nFAIL")
 
 function(enzan_add_golden_test name)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL" "" "")
+  cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL;OWN_TIME_SCALES" "" "")
 
   set(source "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}.sv")
   if(NOT EXISTS "${source}")
     message(FATAL_ERROR "golden test '${name}' has no source at ${source}")
   endif()
 
-  add_test(NAME golden.${name} COMMAND enzan --top tb --timescale ns "${source}")
+  set(unit --timescale ns)
+  if(arg_OWN_TIME_SCALES)
+    set(unit)
+  endif()
+
+  add_test(NAME golden.${name} COMMAND enzan --top tb ${unit} "${source}")
   set_tests_properties(
     golden.${name}
     PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}"
@@ -50,7 +58,7 @@ function(enzan_add_golden_test name)
   add_test(
     NAME golden.${name}.differential
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-differential.sh" $<TARGET_FILE:enzan>
-            "${ENZAN_REFERENCE_SIMULATOR}" "${source}" tb)
+            "${ENZAN_REFERENCE_SIMULATOR}" "${source}" tb ${unit})
   set_tests_properties(golden.${name}.differential PROPERTIES TIMEOUT 120)
 endfunction()
 
@@ -139,6 +147,9 @@ enzan_add_golden_test(events)
 
 # Intra-assignment delays, and inertial delays on continuous assignments.
 enzan_add_golden_test(delays)
+
+# Delays and `$time` in each module's own time unit, rounded to its precision.
+enzan_add_golden_test(timescales OWN_TIME_SCALES)
 
 # `wait (condition)`.
 enzan_add_golden_test(wait)

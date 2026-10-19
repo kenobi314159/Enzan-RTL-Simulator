@@ -11,6 +11,7 @@
 #include "frontend/sv/ProcessTranslator.h"
 #include "frontend/sv/SvIntConversion.h"
 
+#include "slang/ast/ASTVisitor.h"
 #include "slang/ast/Compilation.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/Expression.h"
@@ -94,6 +95,34 @@ std::optional<slang::TimeUnit> timeUnitOf(std::int8_t exponent) {
     default: return std::nullopt;
     }
 }
+
+/// The finest precision a time scale of the design declares, as a power of ten of a second: of
+/// the bodies it instantiates, and of its packages and compilation units, whose subroutines'
+/// delays count theirs.
+class FinestPrecision : public ast::ASTVisitor<FinestPrecision, ast::VisitFlags::Symbols> {
+public:
+    explicit FinestPrecision(std::int8_t start) noexcept : finest(start) {}
+
+    // An instance whose body duplicates another's is walked where that body is.
+    void handle(const ast::InstanceSymbol& instance) {
+        if (instance.getCanonicalBody() != nullptr) return;
+        visitDefault(instance);
+    }
+
+    void handle(const ast::InstanceBodySymbol& body) {
+        consider(body.getTimeScale());
+        visitDefault(body);
+    }
+
+    void consider(const std::optional<slang::TimeScale>& scale) {
+        if (scale.has_value()) finest = std::min(finest, timeExponentOf(scale->precision));
+    }
+
+    [[nodiscard]] std::int8_t value() const noexcept { return finest; }
+
+private:
+    std::int8_t finest;
+};
 
 /// The index part of an instance's name when it is an element of an instance array, `[2]` or
 /// `[1][0]`, as IEEE 1800 section 23.3.3.5 names it; empty for an instance of its own.
@@ -257,6 +286,9 @@ public:
         /// the package definitions that hold them. Only those: a package may declare variables
         /// of types Enzan does not have, and one nothing uses should not stop a design.
         std::vector<const ast::ValueSymbol*>* packageVariables = nullptr;
+
+        /// The run's time unit, as a power of ten of a second, which every delay counts.
+        std::int8_t runTimeUnit = -12;
     };
 
     ModuleBuilder(Shared& sharedState, std::string name, const ast::InstanceBodySymbol& bodySymbol)
@@ -324,6 +356,11 @@ public:
     }
 
     [[nodiscard]] const ast::Symbol& evaluationScope() const override { return *body; }
+
+    [[nodiscard]] std::int8_t runTimeUnit() const override { return shared->runTimeUnit; }
+
+    void reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
+                            std::string_view rounded) override;
 
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
@@ -617,6 +654,11 @@ SourceLocation ModuleBuilder::convertLocation(slang::SourceLocation location) {
 void ModuleBuilder::reportUnsupported(slang::SourceLocation location, std::string_view what) {
     failed = true;
     shared->diagnostics.report(DiagCode::UnsupportedConstruct, convertLocation(location), what);
+}
+
+void ModuleBuilder::reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
+                                       std::string_view rounded) {
+    shared->diagnostics.report(DiagCode::DelayRounded, convertLocation(location), delay, rounded);
 }
 
 const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {
@@ -1682,12 +1724,27 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         return nullptr;
     }
 
+    // Every delay counts the run's unit, which a design asking for a finer precision than the
+    // default refines unless something fixed it (DESIGN_GUIDE.md section 3.1).
+    std::int8_t runTimeUnit = options.timeUnitExponent;
+    if (options.refineTimeUnit) {
+        FinestPrecision finest(runTimeUnit);
+        root.visit(finest);
+        for (const ast::PackageSymbol* package : compilation.getPackages())
+            finest.consider(package->timeScale);
+        for (const ast::CompilationUnitSymbol* unit : compilation.getCompilationUnits())
+            finest.consider(unit->timeScale);
+        runTimeUnit = finest.value();
+    }
+    if (options.runTimeUnit != nullptr) *options.runTimeUnit = runTimeUnit;
+
     auto design = std::make_unique<eir::Design>();
     const ModuleBuilder::Shared shared{.design = *design,
                                        .diagnostics = diagnostics,
                                        .sources = sources,
                                        .slangSources = slangSources,
-                                       .buffers = buffers};
+                                       .buffers = buffers,
+                                       .runTimeUnit = runTimeUnit};
 
     Walker walker(*design, shared);
     for (const slang::ast::InstanceSymbol* instance : root.topInstances) {
