@@ -711,7 +711,9 @@ private:
             for (char& character : wanted)
                 character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
             ident_t name = ident_prefix(lib_name(request.work), ident_new(wanted.c_str()), '.');
-            for (tree_t unit : request.analysed) {
+            // The last analysed, which replaced any before it of its name, as its architecture
+            // is the last analysed (`architectureOf`).
+            for (tree_t unit : std::views::reverse(request.analysed)) {
                 if (tree_kind(unit) == T_ENTITY && tree_ident(unit) == name) return {unit};
             }
             if (tree_t unit = lib_get(request.work, name);

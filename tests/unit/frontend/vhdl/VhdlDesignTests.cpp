@@ -132,6 +132,41 @@ protected:
     CollectingConsumer consumer;
 };
 
+TEST_F(VhdlDesignTest, ATopAnalysedTwiceIsTheOneAnalysedLast) {
+    // Analysing an entity again replaces it and makes what was analysed of it before obsolete
+    // (IEEE 1076 section 13.5), so the design is the one analysed last, its architecture with it.
+    DesignOptions options;
+    options.units.sources = {sources.addBuffer("first.vhd", R"(
+entity e is
+end entity;
+
+architecture a of e is
+  signal first_signal : bit;
+begin
+end architecture;
+)"),
+                             sources.addBuffer("second.vhd", R"(
+entity e is
+end entity;
+
+architecture a of e is
+  signal second_signal : bit;
+begin
+end architecture;
+)")};
+    options.units.work = {.name = "work", .directory = {}};
+    options.units.searchDirectories = {libraries()};
+    options.top = "e";
+
+    const std::unique_ptr<enzan::eir::Design> design =
+        enzan::frontend::vhdl::analyse(options, sources, engine);
+    ASSERT_NE(design, nullptr) << transcript();
+    const enzan::eir::ModuleDefinition* top = design->findModule("e");
+    ASSERT_NE(top, nullptr) << transcript();
+    EXPECT_TRUE(top->findObject("second_signal").has_value());
+    EXPECT_FALSE(top->findObject("first_signal").has_value());
+}
+
 TEST_F(VhdlDesignTest, SourcesAreAnalysedAfterThoseDeclaringWhatTheyUse) {
     // The testbench is given first, and uses the package and instantiates the entity given after
     // it; each is analysed after what it names.

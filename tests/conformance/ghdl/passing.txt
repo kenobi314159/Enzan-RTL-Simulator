@@ -36,6 +36,7 @@ bug07
 bug072
 bug073
 bug074
+bug075
 bug079
 bug080
 bug082
@@ -72,7 +73,6 @@ bug24326
 bug7186
 deb573721
 fst01
-issue106
 issue107
 issue1129
 issue1137
@@ -194,7 +194,6 @@ issue2233
 issue2235
 issue2238
 issue2239
-issue225
 issue2267
 issue2271
 issue2276
