@@ -10,7 +10,8 @@ if(NOT EXISTS "${_nvc}/src/parse.c")
     FATAL_ERROR
       "ENZAN_ENABLE_VHDL is ON, but NVC's sources are missing from third_party/nvc.\n"
       "They are a git submodule; fetch them with:\n"
-      "  git submodule update --init third_party/nvc")
+      "  git submodule update --init third_party/nvc\n"
+      "or configure with -DENZAN_ENABLE_VHDL=OFF to build without the VHDL frontend.")
 endif()
 
 # The version comes from NVC's own AC_INIT, so that the submodule's commit is the one place the

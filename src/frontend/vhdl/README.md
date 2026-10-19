@@ -1,7 +1,7 @@
 # `src/frontend/vhdl` — the VHDL frontend
 
 Turns VHDL source text into EIR, and nothing else (DESIGN_GUIDE.md section 5), on top of NVC's
-analysis (section 5.2). Built only with `-DENZAN_ENABLE_VHDL=ON`.
+analysis (section 5.2). Built unless configured with `-DENZAN_ENABLE_VHDL=OFF`.
 
 ## Responsibility
 

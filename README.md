@@ -31,10 +31,10 @@ Enzan targets **Linux only**; Windows and macOS support are explicit non-goals.
 | zlib | 1.2.11 | FST waveform compression |
 | Python 3 | 3.8 | optional; only for the waveform structure checks in the test suite |
 | GoogleTest | 1.12 | built from source automatically if absent |
-| Qt 6 | 6.4 | only for the GUI, which is off by default |
-| Tcl | 8.6 | the GUI theme and signal lists; needed only with `-DENZAN_BUILD_GUI=ON` |
-| flex | 2.6 | generates NVC's lexer; needed only with `-DENZAN_ENABLE_VHDL=ON` |
-| zstd | 1.4 | NVC's library files; needed only with `-DENZAN_ENABLE_VHDL=ON` |
+| Qt 6 | 6.4 | the GUI; not needed with `-DENZAN_BUILD_GUI=OFF` |
+| Tcl | 8.6 | the GUI theme and signal lists; not needed with `-DENZAN_BUILD_GUI=OFF` |
+| flex | 2.6 | generates NVC's lexer; not needed with `-DENZAN_ENABLE_VHDL=OFF` |
+| zstd | 1.4 | NVC's library files; not needed with `-DENZAN_ENABLE_VHDL=OFF` |
 | ccache | any | optional; used automatically when present |
 
 On Arch and derivatives:
@@ -73,13 +73,17 @@ install for your distribution rather than with a link error.
 Tcl is needed only for the GUI, whose theme is a Tcl script and whose signal lists are read
 with Tcl's parser.
 
-The VHDL frontend, which is arriving with milestone M6 and is off by default, is built on
-[NVC](https://github.com/nickg/nvc), which is a git submodule. Fetch it before configuring with
-`-DENZAN_ENABLE_VHDL=ON`:
+The VHDL frontend, which is arriving with milestone M6, is built on
+[NVC](https://github.com/nickg/nvc), which is a git submodule. Clone with `--recursive`, or fetch
+it before configuring:
 
 ```sh
 git submodule update --init third_party/nvc
 ```
+
+The VHDL frontend and the GUI are built by default, as both frontends are; any of them can be
+left out, with its dependencies, by configuring with `-DENZAN_ENABLE_VHDL=OFF`,
+`-DENZAN_BUILD_GUI=OFF` or `-DENZAN_ENABLE_SYSTEMVERILOG=OFF`.
 
 ### Running a simulation
 
@@ -106,8 +110,8 @@ enzan --work neorv32 --top neorv32_tb -f neorv32_files.f --ieee-asserts disable 
 
 ### Running a simulation under the GUI
 
-The GUI is built with `-DENZAN_BUILD_GUI=ON` — off by default, because Qt 6 is a sizeable
-thing to install for someone working on the kernel. With it built:
+The GUI is built by default; someone working on the kernel who would rather not install Qt 6
+configures with `-DENZAN_BUILD_GUI=OFF`. With it built:
 
 ```sh
 enzan run --gui --top tb design.sv testbench.sv
@@ -273,10 +277,12 @@ slower, and what dominates its profile is mostly what the optimiser would remove
 The SystemVerilog frontend, [slang](https://sv-lang.com/), is not packaged by any
 mainstream distribution, so by default the build downloads and compiles it. That
 dominates a first configure. Nothing outside the frontend links it, so work on
-the kernel, the waveform database or the GUI can switch it off:
+the kernel, the waveform database or the GUI can switch it off, and the VHDL frontend and the GUI
+the same way:
 
 ```sh
 cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF -DENZAN_ENABLE_VHDL=OFF -DENZAN_BUILD_GUI=OFF
 ```
 
 ### Useful options
@@ -285,8 +291,8 @@ cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
 |---|---|---|
 | `ENZAN_BUILD_TESTS` | `ON` | build the unit test suites |
 | `ENZAN_ENABLE_SYSTEMVERILOG` | `ON` | build the slang-based frontend (M1) |
-| `ENZAN_ENABLE_VHDL` | `OFF` | build the NVC-based frontend (M6); needs flex, zstd and the `third_party/nvc` submodule |
-| `ENZAN_BUILD_GUI` | `OFF` | build the Qt 6 front end; needs Qt 6 and Tcl |
+| `ENZAN_ENABLE_VHDL` | `ON` | build the NVC-based frontend (M6); needs flex, zstd and the `third_party/nvc` submodule |
+| `ENZAN_BUILD_GUI` | `ON` | build the Qt 6 front end; needs Qt 6 and Tcl |
 | `ENZAN_ENABLE_JIT` | `OFF` | build the LLVM JIT backend (M8) |
 | `ENZAN_WERROR` | `OFF` | treat warnings as errors, as CI does |
 | `ENZAN_ALLOW_FETCH` | `ON` | allow missing dependencies to be built from source |
@@ -305,13 +311,13 @@ The checks CI runs are all runnable locally:
 ```sh
 clang-format --dry-run --Werror $(git ls-files '*.h' '*.cpp')
 ./scripts/check-license-headers.sh
-cmake --preset clang-debug -DENZAN_WERROR=ON -DENZAN_BUILD_GUI=ON -DENZAN_ENABLE_VHDL=ON
+cmake --preset clang-debug -DENZAN_WERROR=ON
 cmake --build --preset clang-debug && ctest --preset clang-debug
 clang-tidy -p build/clang-debug --quiet $(git ls-files 'src/*.cpp' 'tools/*.cpp' 'tests/*.cpp')
 ```
 
-Configure with every optional component on before running `clang-tidy`. Linting a translation
-unit the configured build does not compile does not skip it: clang-tidy falls back to default
+Configure with every optional component on, as the defaults are, before running `clang-tidy`.
+Linting a translation unit the configured build does not compile does not skip it: clang-tidy falls back to default
 flags, fails to find the slang, NVC or Qt headers, and reports whatever its half-parsed view of the
 file suggests.
 

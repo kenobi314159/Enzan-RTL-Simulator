@@ -3020,6 +3020,13 @@ Jobs on every branch and pull request:
   SystemVerilog frontend, since a second job would build slang a second time to run them.
 - The design regression of 14.5 for the designs that run quickly: `aes` and `common_cells`.
 
+Each job builds a configuration chosen so that code compiled only with a component, or only
+without one, is compiled somewhere with warnings as errors. The job that builds slang builds the
+defaults, every optional component on, which is what a contributor's plain configure gives. The
+build matrix and the sanitiser build the defaults but for the SystemVerilog frontend, which one
+job is enough to prove. One job builds the GUI with neither language frontend, since what is
+compiled only without them is compiled nowhere else.
+
 Jobs on `main` only:
 
 - `clang-tidy`, which analyses every source file.

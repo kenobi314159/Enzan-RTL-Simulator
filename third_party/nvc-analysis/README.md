@@ -25,5 +25,6 @@ was measured is in `docs/nvc_integration.md`.
 - **The adapter includes C++ copies of NVC's headers**, generated at configure time from the
   pinned sources. NVC's headers are C that C++ rejects in three places, and the copies change only
   those; `CMakeLists.txt` says what and why.
-- **Built only with `-DENZAN_ENABLE_VHDL=ON`**, which needs flex and libzstd (DESIGN_GUIDE.md
-  section 11.3) and the submodule: `git submodule update --init third_party/nvc`.
+- **Built with the VHDL frontend**, which is on unless configured with
+  `-DENZAN_ENABLE_VHDL=OFF`, and needs flex and libzstd (DESIGN_GUIDE.md section 11.3) and the
+  submodule: `git submodule update --init third_party/nvc`.
