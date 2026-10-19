@@ -64,6 +64,53 @@ begin
 end architecture;
 EOF
 
+# A component the package declares, which an instance binds by default in the package's library.
+cat >components.vhd <<'EOF'
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+package ip_components is
+    component counter is
+        generic (W : integer);
+        port (clk : in std_logic; q : out unsigned(W - 1 downto 0));
+    end component;
+end package;
+EOF
+
+# Bound by default (IEEE 1076 section 7.3.3): a component a use clause makes an entity of its name
+# directly visible for binds to that entity, and one a package of another library declares binds
+# to the entity of its name there, rather than in the work library, which has neither.
+cat >binding.vhd <<'EOF'
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+library ip;
+use ip.counter;
+
+entity binding is end entity;
+
+architecture test of binding is
+    component counter is
+        generic (W : integer);
+        port (clk : in std_logic; q : out unsigned(W - 1 downto 0));
+    end component;
+    signal clk : std_logic := '0';
+    signal visible, declared : unsigned(3 downto 0);
+begin
+    u_visible: counter generic map (W => 4) port map (clk => clk, q => visible);
+    u_declared: ip.ip_components.counter generic map (W => 4) port map (clk => clk, q => declared);
+    process begin
+        for i in 1 to 3 loop
+            clk <= '1'; wait for 5 ns; clk <= '0'; wait for 5 ns;
+        end loop;
+        assert visible = 3 and declared = 3 report "an instance was left unbound" severity failure;
+        report "PASS binding";
+        wait;
+    end process;
+end architecture;
+EOF
+
 cat >tb.vhd <<'EOF'
 library ieee;
 use ieee.std_logic_1164.all;
@@ -104,6 +151,11 @@ grep -q 'counter' <<<"$listing" && grep -q 'ip_pkg' <<<"$listing" \
     || fail "--work naming another library than --out-lib's was not refused"
 
 # --- a design is analysed against a library and runs from it -------------------------------------
+
+"$enzan" analyse --out-lib libs/ip components.vhd || fail "the package of components did not analyse"
+binding=$("$enzan" --in-lib libs/ip --top binding binding.vhd 2>&1) \
+    || fail "a design binding components to another library's entities failed: $binding"
+grep -q 'PASS binding' <<<"$binding" || fail "default binding across libraries: $binding"
 
 "$enzan" lib create --name tbl libs/tb >/dev/null || fail "libs/tb could not be created"
 "$enzan" analyse --out-lib libs/tb --in-lib libs/ip tb.vhd \

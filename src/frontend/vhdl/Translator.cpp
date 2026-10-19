@@ -532,6 +532,80 @@ public:
         return name;
     }
 
+    /// The library of the package declaring `component`, or null when no package does: the one
+    /// `instance` names it through, `alib.apkg.acomp`, or one a use clause of `unit` names, whose
+    /// declarations hold it.
+    ident_t declaringLibrary(tree_t component, tree_t instance, tree_t unit) const {
+        if (tree_has_ident2(instance)) {
+            ident_t written = tree_ident2(instance);
+            ident_t prefix = ident_runtil(written, '.');
+            if (prefix != written && ident_until(prefix, '.') != prefix)
+                return ident_until(prefix, '.');
+        }
+        if (unit == nullptr) return nullptr;
+
+        std::vector<tree_t> scopes{unit};
+        if (tree_kind(unit) == T_ARCH && tree_has_primary(unit))
+            scopes.push_back(tree_primary(unit));
+        for (tree_t scope : scopes) {
+            for (unsigned index = 0; index < tree_contexts(scope); ++index) {
+                tree_t item = tree_context(scope, index);
+                if (tree_kind(item) != T_USE) continue;
+                ident_t packageName = tree_ident(item);
+                ident_t libraryName = ident_until(packageName, '.');
+                if (libraryName == packageName) continue;
+                if (libraryName == well_known(W_WORK))
+                    libraryName = ident_until(tree_ident(unit), '.');
+                lib_t library =
+                    libraryName == lib_name(request.work) ? request.work : lib_require(libraryName);
+                if (library == nullptr) continue;
+                tree_t package = lib_get(
+                    library, ident_prefix(lib_name(library), ident_rfrom(packageName, '.'), '.'));
+                if (package == nullptr || tree_kind(package) != T_PACKAGE) continue;
+                for (unsigned decl = 0; decl < tree_decls(package); ++decl) {
+                    if (tree_decl(package, decl) == component) return lib_name(library);
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    /// The entity called `simple` that a use clause of `unit`, or of the entity it is an
+    /// architecture of, makes directly visible: `use alib.acomp;` or `use alib.all;` (IEEE 1076
+    /// section 12.4). Null when none does.
+    tree_t visibleEntity(ident_t simple, tree_t unit) {
+        std::vector<tree_t> scopes{unit};
+        if (tree_kind(unit) == T_ARCH && tree_has_primary(unit))
+            scopes.push_back(tree_primary(unit));
+        for (tree_t scope : scopes) {
+            for (unsigned index = 0; index < tree_contexts(scope); ++index) {
+                tree_t item = tree_context(scope, index);
+                if (tree_kind(item) != T_USE || !tree_has_ident2(item)) continue;
+
+                // A library's unit or all of them; a package's declarations are no entity.
+                ident_t libraryName = tree_ident(item);
+                if (ident_until(libraryName, '.') != libraryName) continue;
+                ident_t wanted = tree_ident2(item);
+                if (wanted != well_known(W_ALL) && !ident_casecmp(wanted, simple)) continue;
+
+                if (libraryName == well_known(W_WORK))
+                    libraryName = ident_until(tree_ident(unit), '.');
+                lib_t library =
+                    libraryName == lib_name(request.work) ? request.work : lib_require(libraryName);
+                if (library == nullptr) continue;
+                ident_t name = ident_prefix(lib_name(library), simple, '.');
+                for (tree_t analysed : std::views::reverse(request.analysed)) {
+                    if (tree_kind(analysed) == T_ENTITY && tree_ident(analysed) == name)
+                        return analysed;
+                }
+                if (tree_t found = lib_get(library, name);
+                    found != nullptr && tree_kind(found) == T_ENTITY)
+                    return found;
+            }
+        }
+        return nullptr;
+    }
+
     /// The architecture an instance of `entity` that names none is bound to.
     tree_t architectureOf(tree_t entity) {
         // One analysed in this run is the one the user just wrote, whatever an older one in the
@@ -612,12 +686,24 @@ public:
         return bound;
     }
 
-    /// The entity a component is bound to by default: the one of its name in the library of
-    /// `unit`, where it is instantiated, or else in the work library (IEEE 1076 section 7.3.3).
-    /// Null when there is none.
-    tree_t boundEntity(tree_t component, tree_t unit) {
+    /// The entity a component `instance` instantiates is bound to by default (IEEE 1076 section
+    /// 7.3.3): the one of its name a use clause makes directly visible where it is instantiated,
+    /// or else the one of its name in the library of the package declaring the component, or in
+    /// the library of `unit`, or else in the work library. Null when there is none.
+    tree_t boundEntity(tree_t component, tree_t instance, tree_t unit) {
         ident_t simple = ident_rfrom(tree_ident(component), '.');
+        if (unit != nullptr) {
+            if (tree_t visible = visibleEntity(simple, unit)) return visible;
+        }
         std::vector<lib_t> libraries;
+
+        // A component a package declares, `alib.apkg.acomp`, is bound in the package's library,
+        // as NVC binds it and GHDL does but in its strict VHDL-93.
+        if (ident_t libraryName = declaringLibrary(component, instance, unit)) {
+            if (lib_t own =
+                    libraryName == lib_name(request.work) ? request.work : lib_require(libraryName))
+                libraries.push_back(own);
+        }
         if (unit != nullptr) {
             ident_t libraryName = ident_until(tree_ident(unit), '.');
             if (lib_t own =
@@ -724,24 +810,36 @@ private:
         }
 
         // Every entity this run analysed that no architecture of it instantiates.
-        std::set<tree_t> instantiated;
+        // What each architecture instantiates, and each instance of a component with the unit it
+        // is in, since a component stands for the entity it is bound to there.
+        struct Collected {
+            std::set<tree_t> instantiated;
+            std::vector<std::pair<tree_t, tree_t>> components;
+            tree_t unit = nullptr;
+        } collected;
+
         for (tree_t unit : request.analysed) {
             if (tree_kind(unit) != T_ARCH) continue;
+            collected.unit = unit;
             tree_visit_only(
                 unit,
                 [](tree_t instance, void* context) {
                     if (!tree_has_ref(instance)) return;
+                    auto& into = *static_cast<Collected*>(context);
                     tree_t target = tree_ref(instance);
                     if (tree_kind(target) == T_ARCH && tree_has_primary(target))
                         target = tree_primary(target);
-                    static_cast<std::set<tree_t>*>(context)->insert(target);
+                    if (tree_kind(target) == T_COMPONENT)
+                        into.components.emplace_back(instance, into.unit);
+                    else
+                        into.instantiated.insert(target);
                 },
-                &instantiated, T_INSTANCE);
+                &collected, T_INSTANCE);
         }
-        // A component stands for the entity it is bound to.
-        for (tree_t target : std::vector<tree_t>(instantiated.begin(), instantiated.end())) {
-            if (tree_kind(target) != T_COMPONENT) continue;
-            if (tree_t entity = boundEntity(target, nullptr)) instantiated.insert(entity);
+        std::set<tree_t>& instantiated = collected.instantiated;
+        for (const auto& [instance, unit] : collected.components) {
+            if (tree_t entity = boundEntity(tree_ref(instance), instance, unit))
+                instantiated.insert(entity);
         }
         std::vector<tree_t> roots;
         for (tree_t unit : request.analysed) {
@@ -1472,7 +1570,7 @@ void ArchitectureTranslator::instance(tree_t statement) {
         }
         // With no entity to bind by default, the instance is unbound, which is legal: it has no
         // behaviour, and its actuals are driven by nothing in it.
-        entity = design.boundEntity(component, specialisation.architecture);
+        entity = design.boundEntity(component, statement, specialisation.architecture);
         if (entity == nullptr) {
             design.diagnostics().report(DiagCode::VhdlUnboundComponent, locate(statement),
                                         simpleName(tree_ident(component)));

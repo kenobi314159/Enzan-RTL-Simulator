@@ -1056,9 +1056,12 @@ What a VHDL unit becomes in EIR:
   are, and fold where it is; each of its ports is the signal associated with it as a
   whole, or else a signal of its own, `b.p`, connected to its actuals as an instance's
   port is, and one left unassociated keeps its default.
-- A component instance is an instance of the entity the component is bound to by
-  default: the one of its name in the library of the unit instantiating it, or else in
-  the work library. The entity's generics take the values of the component's of the
+- A component instance is an instance of the entity the component is bound to by default
+  (IEEE 1076 section 7.3.3): the one of its name a use clause makes directly visible where it is
+  instantiated, or else the one in the library of the package declaring the component, or in
+  the library of the unit instantiating it, or else in the work library. A component a package
+  declares is bound in the package's library in every revision, as NVC binds it and GHDL does
+  but in its strict VHDL-93. The entity's generics take the values of the component's of the
   same names, or their own defaults, and its ports match the component's by name. A
   configuration specification, `for u : c use entity work.e(a);`, names the entity and
   the architecture instead, and its binding maps the entity's generics and ports to
