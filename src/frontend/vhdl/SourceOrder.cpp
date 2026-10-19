@@ -63,7 +63,7 @@ std::vector<Token> tokenise(std::string_view text) {
             while (at < size && text[at] != '\n') ++at;
         } else if (character == '/' && peek(1) == '*') {
             at += 2;
-            while (at < size && !(text[at] == '*' && peek(1) == '/')) ++at;
+            while (at < size && (text[at] != '*' || peek(1) != '/')) ++at;
             at = at < size ? at + 2 : size;
         } else if (character == '"') {
             // A string, `""` standing for one quote inside it.
@@ -158,13 +158,12 @@ Scan scan(std::string_view text, const std::string& workLibrary) {
         }
         if (index > 0 && is(index - 1, "end")) continue;
 
-        if (word == "entity" && identifier(index + 1) && is(index + 2, "is")) {
-            result.declares.push_back(tokens[index + 1].text);
-        } else if (word == "package" && is(index + 1, "body") && identifier(index + 2)) {
+        // `package body x` names its package, which `package x is` declares, as `entity x is`
+        // and `context x is` declare theirs; `body` is reserved, and names no package.
+        if (word == "package" && is(index + 1, "body") && identifier(index + 2)) {
             result.names.push_back(tokens[index + 2].text);
-        } else if (word == "package" && identifier(index + 1) && is(index + 2, "is")) {
-            result.declares.push_back(tokens[index + 1].text);
-        } else if (word == "context" && identifier(index + 1) && is(index + 2, "is")) {
+        } else if ((word == "entity" || word == "package" || word == "context")
+                   && identifier(index + 1) && is(index + 2, "is")) {
             result.declares.push_back(tokens[index + 1].text);
         } else if (word == "architecture" && identifier(index + 1) && is(index + 2, "of")
                    && identifier(index + 3)) {

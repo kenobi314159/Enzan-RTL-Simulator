@@ -178,7 +178,7 @@ Design codedDesign() {
 /// codedDesign's, with a std_logic_vector of a null range beside its signal: a placeholder bit
 /// that holds nothing, as the VHDL frontend declares one.
 Design nullDesign() {
-    Design design = codedDesign();
+    const Design design = codedDesign();
     ModuleDefinition top = design.modules().front();
     top.addObject(Object{.name = "nothing",
                          .type = Type::bits(1, false, false),

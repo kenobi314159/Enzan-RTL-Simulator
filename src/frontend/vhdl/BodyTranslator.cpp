@@ -114,19 +114,20 @@ void noteCall(tree_t call, void* context) {
     const ShapeParameters& shape = shapeParameters(callee, *search.cache);
     for (unsigned index = 0; index < tree_params(call); ++index) {
         tree_t association = tree_param(call, index);
-        std::optional<unsigned> formal;
+        // The formal it is associated with, or one past the last for none that is found.
+        const unsigned formals = tree_ports(callee);
+        unsigned formal = formals;
         if (tree_subkind(association) == P_POS) {
             formal = tree_pos(association);
         } else if (tree_t name = tree_name(association);
                    tree_kind(name) == T_REF && tree_has_ref(name)) {
-            for (unsigned candidate = 0; candidate < tree_ports(callee); ++candidate) {
+            for (unsigned candidate = 0; candidate < formals; ++candidate) {
                 if (tree_ref(name) == tree_port(callee, candidate)
                     || tree_ref(name) == tree_port(declaration, candidate))
                     formal = candidate;
             }
         }
-        if (!formal || *formal >= shape.required.size()
-            || (!shape.required[*formal] && !shape.wanted[*formal]))
+        if (formal >= shape.required.size() || (!shape.required[formal] && !shape.wanted[formal]))
             continue;
         tree_visit_only(tree_value(association), noteWanted, &search, T_REF);
     }
@@ -376,7 +377,7 @@ std::optional<BodyTranslator::Place> BodyTranslator::drivenPrefix(tree_t name) c
 
     case T_ARRAY_REF:
     case T_ARRAY_SLICE: {
-        const std::optional<Place> outer = drivenPrefix(tree_value(name));
+        std::optional<Place> outer = drivenPrefix(tree_value(name));
         if (!outer || !outer->layout.isArray() || !outer->layout.inner.empty() || outer->offset)
             return outer;
         const Layout& array = outer->layout;
@@ -408,7 +409,7 @@ std::optional<BodyTranslator::Place> BodyTranslator::drivenPrefix(tree_t name) c
     }
 
     case T_RECORD_REF: {
-        const std::optional<Place> outer = drivenPrefix(tree_value(name));
+        std::optional<Place> outer = drivenPrefix(tree_value(name));
         if (!outer || !outer->layout.isRecord() || outer->offset || !tree_has_ref(name))
             return outer;
         const unsigned position = tree_pos(tree_ref(name));

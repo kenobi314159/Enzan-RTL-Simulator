@@ -301,7 +301,7 @@ public:
                                          "not fold");
                 continue;
             }
-            const Shape shape{.bounds = {*bounds}, .values = {std::nullopt}};
+            const Shape shape{.bounds = {bounds}, .values = {std::nullopt}};
             const std::optional<Callee> made = callee(declaration, shape, declaration, nullptr);
             if (!made) continue;
             answers.push_back(

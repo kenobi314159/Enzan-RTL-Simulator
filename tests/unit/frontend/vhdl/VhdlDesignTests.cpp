@@ -12,6 +12,7 @@
 #include "eir/Design.h"
 #include "runtime/Kernel.h"
 
+#include "support/Optionals.h"
 #include "support/Simulation.h"
 #include "support/Workspace.h"
 
@@ -2395,18 +2396,18 @@ end architecture;
 
     const std::vector<enzan::frontend::vhdl::ResolutionRequest> requests{
         {.function = lowest, .drivers = 2}};
-    const std::optional<enzan::frontend::vhdl::ResolvedFunctions> found =
-        enzan::frontend::vhdl::resolutions(options, sources, requests, engine);
-    ASSERT_TRUE(found.has_value()) << transcript();
-    ASSERT_EQ(found->answers.size(), 1U);
-    EXPECT_EQ(found->answers[0].definition, "work.top-rtl::");
+    const enzan::frontend::vhdl::ResolvedFunctions found =
+        enzan::test::require(enzan::frontend::vhdl::resolutions(options, sources, requests, engine),
+                             "set of resolution functions");
+    ASSERT_EQ(found.answers.size(), 1U) << transcript();
+    EXPECT_EQ(found.answers[0].definition, "work.top-rtl::");
     const auto definition =
-        std::ranges::find_if(found->definitions, [&](const ModuleDefinition& candidate) {
-            return candidate.library + "." + candidate.name == found->answers[0].definition;
+        std::ranges::find_if(found.definitions, [&](const ModuleDefinition& candidate) {
+            return candidate.library + "." + candidate.name == found.answers[0].definition;
         });
-    ASSERT_NE(definition, found->definitions.end());
+    ASSERT_NE(definition, found.definitions.end());
     ASSERT_EQ(definition->subprograms.size(), 1U);
-    EXPECT_EQ(definition->subprograms[0].name, found->answers[0].subprogram);
+    EXPECT_EQ(definition->subprograms[0].name, found.answers[0].subprogram);
 }
 
 TEST_F(VhdlDesignTest, AnIndexOutsideItsBoundsEndsTheRun) {

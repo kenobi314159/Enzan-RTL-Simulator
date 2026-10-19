@@ -30,6 +30,7 @@ protected:
     /// The names of `buffers`, in their order.
     [[nodiscard]] std::vector<std::string> namesOf(const std::vector<BufferId>& buffers) const {
         std::vector<std::string> names;
+        names.reserve(buffers.size());
         for (const BufferId buffer : buffers) names.emplace_back(sources.bufferName(buffer));
         return names;
     }
