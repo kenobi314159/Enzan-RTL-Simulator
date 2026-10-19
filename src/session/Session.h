@@ -172,8 +172,9 @@ public:
         std::string top;
 
         /// The library VHDL sources are analysed into, by the name they refer to it by
-        /// (`library neorv32;`). SystemVerilog's analysis does not use it.
-        std::string vhdlWork = "work";
+        /// (`library neorv32;`): the output library's own name, or `work` when there is none and
+        /// this is empty. SystemVerilog's analysis does not use it.
+        std::string vhdlWork;
 
         /// Whether the IEEE packages' own warnings are reported, as GHDL's `--ieee-asserts`.
         bool ieeeWarnings = true;
@@ -195,9 +196,18 @@ public:
     /// is analysed and every entry rewritten.
     bool analyse(const AnalysisRequest& request);
 
+    /// True when a library this session resolves against holds analysed VHDL, from which a run
+    /// given no sources translates its top (DESIGN_GUIDE.md section 8.2).
+    [[nodiscard]] bool hasVhdlLibraries() const;
+
 private:
-    /// `analyse` for a design whose sources are VHDL.
+    /// `analyse` for a design whose sources are VHDL, or that has none and libraries of VHDL.
     bool analyseVhdl(const AnalysisRequest& request);
+
+    /// The input library whose VHDL declares `top`: the one `lib.top` or `work` names, or the one
+    /// declaring it. Null having reported when none does, or several do.
+    [[nodiscard]] const eir::Library* vhdlLibraryOf(std::string_view top,
+                                                    std::string_view work) const;
 
     /// Asks the VHDL frontend for each resolution function `tree` needs and no translation has
     /// given yet, each for the number of drivers elaboration counted, links what comes back into

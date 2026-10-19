@@ -770,12 +770,17 @@ named. Nothing a user does writes to them, they change only when Enzan does, and
 reasons above applies; they are to a VHDL design what a compiler's standard headers
 are to a C one. A library the user names `ieee` replaces them (8.2).
 
-**A VHDL entry also holds NVC's analysed units.** VHDL is analysed one unit at a time
-against units already analysed — `use work.pkg.all`, an entity bound to a component —
-so a library holding only EIR could not be analysed against. A VHDL source's entry
-therefore keeps NVC's serialised units beside the EIR, and the NVC revision and the
-VHDL standard are in its key with everything else that changes what analysis
-produces.
+**A library holds VHDL as NVC's analysed units, not as EIR.** VHDL is analysed one unit at a
+time against units already analysed — `use work.pkg.all`, an entity bound to a component —
+so a library holding only EIR could not be analysed against; and a design is translated
+into EIR for the generic values its run gives it (5.2), which no library can know. NVC's
+units live in the library's `vhdl/` directory, in NVC's own format, and a run translates
+from them, parsing nothing again. A VHDL source's entry holds its key — its text, the VHDL
+standard, the library it went into, the state of the libraries it was analysed against, and
+Enzan's version, which names the NVC revision — and the units it declares, for `lib list`.
+It holds no delays, so it fixes no time unit (8.2). As NVC's and GHDL's do, the library
+accumulates: analysing a source again replaces its units, and a unit no source declares any
+more stays until `lib clean`.
 
 A hit is currently all or nothing, and that is a property of the frontend rather
 than of the store. SystemVerilog analysis hands every source to one slang
@@ -1391,6 +1396,11 @@ analysed units (4.4): `use uart.uart_pkg.all` resolves against a library on
 `--in-lib` as the language requires, with no source read again.
 
 **Libraries are searched in the order given**, left to right.
+
+**VHDL is analysed into a library by the name the library carries.** With `--out-lib`, the work
+library is that library, which `library uart;` and `work.` resolve to, and a `--work` naming
+another is an error (ENZ6029). A run given only libraries translates a VHDL top from the one
+whose VHDL declares it, or from the one `lib.top` names.
 
 **A name that two libraries both define is an error, not a silent choice.** The
 message names both, and the fix is to qualify: `uart.fifo`. Picking whichever was

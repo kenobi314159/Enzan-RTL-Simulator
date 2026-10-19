@@ -1100,6 +1100,8 @@ eir::ModuleDefinition ArchitectureTranslator::translate() {
     tree_t entity = specialisation.entity;
     result.name = specialisation.name;
     result.sourceName = simpleName(tree_ident(entity));
+    // The library the entity was analysed into, which a design names it by (section 8.2).
+    result.library = simpleName(ident_until(tree_ident(entity), '.'));
     result.location = locate(specialisation.architecture);
 
     for (unsigned index = 0; index < tree_generics(entity); ++index) {

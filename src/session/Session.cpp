@@ -43,6 +43,15 @@ bool isVhdlSource(const std::filesystem::path& file) {
     return extension == ".vhd" || extension == ".vhdl";
 }
 
+/// True when `left` and `right` are one name of a library or a VHDL unit, which VHDL compares
+/// without its case.
+bool sameName(std::string_view left, std::string_view right) {
+    return std::ranges::equal(left, right, [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a))
+               == std::tolower(static_cast<unsigned char>(b));
+    });
+}
+
 /// Matches `text` against a glob of `*` and `?`.
 ///
 /// Iterative with a backtracking point rather than recursive, so that a pattern of many stars
@@ -117,6 +126,9 @@ bool Session::analyse(const AnalysisRequest& request) {
     for (const std::filesystem::path& directory : request.includeDirectories)
         includeDirectories.push_back(directory);
     for (const std::string& parameter : request.parameters) parameters.push_back(parameter);
+
+    // A run given only libraries whose VHDL declares its top translates it from them.
+    if (files.empty() && hasVhdlLibraries() && !request.top.empty()) return analyseVhdl(request);
 
     if (files.empty()) {
         diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
@@ -259,6 +271,7 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     // Every source is read first, so that one that cannot be is reported as that, whatever its
     // name says it holds, rather than as a design of two languages.
     frontend::vhdl::DesignOptions options;
+    std::vector<eir::LibrarySource> read;
     std::set<std::filesystem::path> seen;
     for (const std::filesystem::path& file : files) {
         std::error_code failure;
@@ -272,16 +285,12 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
             return false;
         }
         options.units.sources.push_back(result.buffer);
+        read.push_back({.path = file, .buffer = result.buffer});
     }
     if (!std::ranges::all_of(files, isVhdlSource) || !contextFiles.empty()
         || !libraryFiles.empty()) {
         diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
                            "a design mixing VHDL and SystemVerilog sources");
-        return false;
-    }
-    if (library.isOpen() || !inputLibraries.empty()) {
-        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                           "analysing VHDL into an Enzan library, or against one");
         return false;
     }
     if (!parameters.empty()) {
@@ -294,10 +303,45 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     // finest unit anything in it asks for (section 3.1), unless `--timescale` said otherwise.
     if (!scaleChosen) scale = runtime::TimeScale(runtime::FinestTimeExponent);
 
-    options.units.work = frontend::vhdl::UnitLibrary{.name = request.vhdlWork, .directory = {}};
+    // The work library is the one analysis writes into, whose name is its own (section 8.2): a
+    // `--work` naming another would analyse a design that refers to itself by a name the
+    // library does not answer to.
+    std::string work = request.vhdlWork;
+    if (library.isOpen()) {
+        if (!work.empty() && !sameName(work, library.name())) {
+            diagnostics.report(DiagCode::WorkLibraryNamedOtherwise, SourceLocation(), work,
+                               library.name());
+            return false;
+        }
+        work = library.name();
+    }
+    if (work.empty()) work = "work";
+    options.units.work = frontend::vhdl::UnitLibrary{
+        .name = work,
+        .directory = library.isOpen() ? library.vhdlDirectory() : std::filesystem::path()};
+
+    // A run given only libraries translates its top from the one whose VHDL declares it.
+    std::string top = request.top;
+    if (read.empty() && !library.isOpen()) {
+        const eir::Library* holder = vhdlLibraryOf(top, request.vhdlWork);
+        if (holder == nullptr) return false;
+        options.units.work = {.name = holder->name(), .directory = holder->vhdlDirectory()};
+        if (const std::size_t dot = top.find('.'); dot != std::string::npos)
+            top = top.substr(dot + 1);
+    }
+
+    // The VHDL of every library this design is analysed against, by the names it carries.
+    std::string keyOptions = "std " + request.vhdlStandard + "\nwork " + work;
+    for (const eir::Library& input : inputLibraries) {
+        if (!input.holdsVhdl() || sameName(input.name(), options.units.work.name)) continue;
+        options.units.libraries.push_back(
+            {.name = input.name(), .directory = input.vhdlDirectory()});
+        keyOptions += "\nagainst " + input.name() + " " + input.vhdlStamp();
+    }
+
     options.units.searchDirectories.push_back(
         vhdlLibraries.empty() ? frontend::vhdl::standardLibraryDirectory() : vhdlLibraries);
-    options.top = request.top;
+    options.top = top;
     options.timeUnitExponent = scale.precisionExponent();
     options.ieeeWarnings = request.ieeeWarnings;
     const std::string_view year = request.vhdlStandard;
@@ -307,11 +351,29 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     if (year.ends_with("08")) options.units.standard = frontend::vhdl::Standard::Vhdl2008;
     if (year.ends_with("19")) options.units.standard = frontend::vhdl::Standard::Vhdl2019;
 
+    // Sources the library holds analysed already, with these options, are not analysed again:
+    // the design under a named top is translated from NVC's units, parsing nothing (section
+    // 4.4). Without a top, what to translate is every entity the sources declare that none of
+    // them instantiates, which only analysing them shows.
+    const bool reused =
+        library.isOpen() && !top.empty() && library.vhdlCurrent(read, sources, keyOptions);
+    if (reused) options.units.sources.clear();
+
     std::unique_ptr<eir::Design> analysed = frontend::vhdl::analyse(options, sources, diagnostics);
     if (analysed == nullptr) return false;
 
+    // A failed store is reported and otherwise ignored, as SystemVerilog's is: the design is in
+    // hand either way.
+    if (library.isOpen() && !reused) {
+        std::vector<std::vector<std::string>> declared;
+        declared.reserve(read.size());
+        for (const eir::LibrarySource& source : read)
+            declared.push_back(frontend::vhdl::declaredUnits(source.buffer, sources));
+        static_cast<void>(library.storeVhdl(read, sources, keyOptions, declared, diagnostics));
+    }
+
     design = std::move(analysed);
-    loadedFromLibrary = false;
+    loadedFromLibrary = reused;
     vhdlOptions = std::make_unique<frontend::vhdl::DesignOptions>(std::move(options));
     resolutionAnswers.clear();
     lastFilesRead.assign(files.begin(), files.end());
@@ -324,6 +386,61 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
                        "VHDL analysis in a build configured with -DENZAN_ENABLE_VHDL=OFF");
     return false;
 #endif
+}
+
+bool Session::hasVhdlLibraries() const {
+    return std::ranges::any_of(inputLibraries,
+                               [](const eir::Library& input) { return input.holdsVhdl(); });
+}
+
+const eir::Library* Session::vhdlLibraryOf(std::string_view top, std::string_view work) const {
+    // `lib.entity` names the library; `--work` names it too, for GHDL's spelling of a run.
+    std::string_view wanted = work;
+    std::string_view entity = top;
+    if (const std::size_t dot = top.find('.'); dot != std::string_view::npos) {
+        wanted = top.substr(0, dot);
+        entity = top.substr(dot + 1);
+        if (wanted.empty() || entity.empty()) {
+            diagnostics.report(DiagCode::TopModuleNotFound, SourceLocation(), std::string(top),
+                               "no unit of an empty name");
+            return nullptr;
+        }
+    }
+
+    std::vector<const eir::Library*> holders;
+    for (const eir::Library& input : inputLibraries) {
+        if (!input.holdsVhdl()) continue;
+        if (!wanted.empty()) {
+            if (sameName(input.name(), wanted)) return &input;
+            continue;
+        }
+        const std::vector<std::string> units = input.vhdlUnits();
+        if (std::ranges::any_of(
+                units, [entity](const std::string& unit) { return sameName(unit, entity); }))
+            holders.push_back(&input);
+    }
+
+    if (holders.size() == 1) return holders.front();
+
+    std::string names;
+    for (const eir::Library& input : inputLibraries) {
+        if (!input.holdsVhdl()) continue;
+        if (!names.empty()) names += ", ";
+        names += input.name();
+    }
+    if (holders.empty()) {
+        diagnostics.report(DiagCode::TopModuleNotFound, SourceLocation(), std::string(top),
+                           "the VHDL of the libraries " + names);
+        return nullptr;
+    }
+    names.clear();
+    for (const eir::Library* holder : holders) {
+        if (!names.empty()) names += ", ";
+        names += holder->name();
+    }
+    diagnostics.report(DiagCode::AmbiguousModule, SourceLocation(), std::string(entity), names,
+                       std::string(entity));
+    return nullptr;
 }
 
 bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {

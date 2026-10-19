@@ -5,6 +5,7 @@
 #include "common/SourceLocation.h"
 
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -30,5 +31,8 @@ namespace enzan::frontend::vhdl {
 [[nodiscard]] std::vector<BufferId> dependencyOrder(std::span<const BufferId> sources,
                                                     const SourceManager& manager,
                                                     std::string_view workLibrary);
+
+/// The primary units `text` declares, as `dependencyOrder` scans for them, in lower case.
+[[nodiscard]] std::vector<std::string> primaryUnits(std::string_view text);
 
 } // namespace enzan::frontend::vhdl

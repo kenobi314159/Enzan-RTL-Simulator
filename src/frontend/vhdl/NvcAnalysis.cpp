@@ -174,6 +174,8 @@ public:
 
         set_standard(nvcStandard(options.standard));
         if (options.bootstrap) opt_set_int(OPT_BOOTSTRAP, 1);
+        for (const UnitLibrary& library : options.libraries)
+            lib_add_map(library.name.c_str(), library.directory.c_str());
         for (const std::filesystem::path& directory : options.searchDirectories)
             lib_add_search_path(directory.c_str());
 
@@ -227,7 +229,10 @@ public:
             }
         }
 
-        if (error_count() == 0 && !options.work.directory.empty()) lib_save(work);
+        // A run that analysed nothing, translating from a library's units, leaves the library as
+        // it found it: it may be one the user only reads.
+        if (error_count() == 0 && !options.work.directory.empty() && !options.sources.empty())
+            lib_save(work);
         return error_count();
     }
 

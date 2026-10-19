@@ -8,6 +8,7 @@
 #include "eir/Serialization.h"
 #include "eir/Verifier.h"
 #include "frontend/vhdl/NvcAnalysis.h"
+#include "frontend/vhdl/SourceOrder.h"
 
 #include <array>
 #include <cerrno>
@@ -490,6 +491,10 @@ std::optional<ResolvedFunctions> resolutions(const DesignOptions& options,
         return std::nullopt;
     }
     return ResolvedFunctions{.definitions = std::move(*modules), .answers = outcome->answers};
+}
+
+std::vector<std::string> declaredUnits(BufferId source, const SourceManager& sources) {
+    return primaryUnits(sources.bufferText(source));
 }
 
 std::filesystem::path standardLibraryDirectory() {

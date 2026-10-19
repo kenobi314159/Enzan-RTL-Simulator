@@ -194,6 +194,15 @@ enzan_add_vhdl_golden_test(deferred)
 # Generics of record types, and their fields folded.
 enzan_add_vhdl_golden_test(record_generics)
 
+# VHDL analysed into libraries and run from them, as a Makefile drives it (sections 4.4 and 8.2).
+add_test(NAME golden.vhdl.library COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh"
+                                          $<TARGET_FILE:enzan>)
+set_tests_properties(
+  golden.vhdl.library
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS library"
+             FAIL_REGULAR_EXPRESSION "FAIL vhdl library"
+             TIMEOUT 120)
+
 # cocotb driving a VHDL toplevel through VHPI (DESIGN_GUIDE.md section 9.7), as the golden test
 # beside the SystemVerilog cases drives one through VPI, when a Python has cocotb.
 if(ENZAN_HAVE_COCOTB)

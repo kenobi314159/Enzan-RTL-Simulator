@@ -179,6 +179,10 @@ Scan scan(std::string_view text, const std::string& workLibrary) {
 
 } // namespace
 
+std::vector<std::string> primaryUnits(std::string_view text) {
+    return scan(text, std::string()).declares;
+}
+
 std::vector<BufferId> dependencyOrder(std::span<const BufferId> sources,
                                       const SourceManager& manager, std::string_view workLibrary) {
     const std::string library = lowered(workLibrary);

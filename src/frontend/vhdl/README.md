@@ -34,7 +34,9 @@ measures what that changes.
 
 **Translating in the same child.** `analyse` runs the analysis and then the translation in one
 child, and the child sends the design back in EIR's own encoding: NVC's trees never reach the
-parent. A design's work library is NVC's in-memory one, written nowhere.
+parent. A design's work library is NVC's in-memory one, written nowhere, unless analysis writes
+into an Enzan library, whose `vhdl/` directory then holds NVC's units; the libraries a design is
+analysed against reach NVC by name (`UnitOptions::libraries`, DESIGN_GUIDE.md section 4.4).
 
 ## Files
 

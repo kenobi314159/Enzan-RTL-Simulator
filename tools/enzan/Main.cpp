@@ -129,7 +129,8 @@ Libraries:
                           The same, overriding the name the library carries.
       --name <n>          The name `lib create` gives a library.
       --work <name>       The library VHDL sources are analysed into, which they
-                          name it by: `library neorv32;`. Default `work`.
+                          name it by: `library neorv32;`. Default the name of the
+                          library --out-lib writes, or `work`.
       --std <1993|2000|2002|2008|2019>
                           The revision of IEEE 1076 VHDL sources are analysed
                           against, or its last two digits. Default 2008.
@@ -223,7 +224,8 @@ struct Invocation {
     std::vector<std::string> parameters;
 
     /// The library VHDL sources are analysed into, by the name they refer to it by.
-    std::string workLibrary = "work";
+    /// Given with `--work`; otherwise the output library's name, or `work`.
+    std::string workLibrary;
     std::string vhdlStandard = "2008";
     bool ieeeWarnings = true;
 
@@ -904,6 +906,14 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
     if (hasSources && !analyseOnly(invocation, session, sources, diagnostics)) return false;
     if (!hasSources && !openLibraries(invocation, session)) return false;
 
+    // A VHDL design is translated for the run that needs it (section 5.2), so a run given only
+    // libraries holding VHDL translates its top from them.
+    if (!hasSources && session.hasVhdlLibraries()) {
+        enzan::session::Session::AnalysisRequest request;
+        if (!collectSources(invocation, sources, diagnostics, request)) return false;
+        if (!session.analyse(request)) return false;
+    }
+
     if (!invocation.waveformScope.empty() && !session.addWaveformScope(invocation.waveformScope))
         return false;
 
@@ -1124,12 +1134,7 @@ ExitStatus runLibCommand(const Invocation& invocation, enzan::DiagnosticEngine& 
 
     // Clean: the entries go, the library and its name stay, so a Makefile that created it once
     // does not have to create it again.
-    std::error_code failure;
-    std::size_t removed = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(path, failure)) {
-        if (entry.path().extension() != ".eirlib") continue;
-        if (std::filesystem::remove(entry.path(), failure)) ++removed;
-    }
+    const std::size_t removed = library.clean();
     std::cout << "-- removed " << removed << (removed == 1 ? " entry\n" : " entries\n");
     return ExitStatus::Success;
 }

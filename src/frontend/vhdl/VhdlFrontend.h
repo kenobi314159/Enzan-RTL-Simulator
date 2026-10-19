@@ -57,6 +57,11 @@ struct UnitOptions {
     /// written nowhere.
     UnitLibrary work;
 
+    /// Libraries a design refers to by name, each where its units are: the VHDL of the Enzan
+    /// libraries a design is analysed against (`--in-lib`, DESIGN_GUIDE.md section 8.2). Found
+    /// before anything in `searchDirectories`.
+    std::vector<UnitLibrary> libraries;
+
     /// Directories holding the other libraries a design refers to, searched in order.
     ///
     /// Each library is a subdirectory named for it, as NVC lays them out, with the standard's
@@ -149,6 +154,10 @@ std::optional<ResolvedFunctions> resolutions(const DesignOptions& options,
                                              const SourceManager& sources,
                                              const std::vector<ResolutionRequest>& requests,
                                              DiagnosticEngine& diagnostics);
+
+/// The primary units `source` declares, `entity`, `package`, `configuration` and `context`, by
+/// their names in lower case: what a library records it holding, without analysing anything.
+[[nodiscard]] std::vector<std::string> declaredUnits(BufferId source, const SourceManager& sources);
 
 /// Where the standard libraries built with Enzan are: `lib/enzan/vhdl` beside the directory of the
 /// running program, which is where a build puts them and an installation keeps them (section 4.4).
