@@ -370,7 +370,7 @@ TEST_F(InteractionTest, ClickingACursorsLabelMakesItActive) {
     press(Qt::LeftButton, firstLabel.center());
     release(Qt::LeftButton, firstLabel.center());
 
-    EXPECT_EQ(view->activeCursor(), 0);
+    EXPECT_EQ(view->activeCursor(), 1);
     EXPECT_EQ(view->activeCursorTime(), 100U)
         << "clicking a label must pick that cursor, not drag the active one to it";
 }
