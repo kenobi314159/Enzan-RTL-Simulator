@@ -129,6 +129,7 @@ issue1697
 issue17
 issue1704
 issue1717
+issue1718
 issue1726
 issue1727
 issue1768
@@ -327,6 +328,7 @@ issue471
 issue472
 issue478
 issue516
+issue521
 issue524
 issue529
 issue535
@@ -357,6 +359,7 @@ issue663
 issue672
 issue676
 issue689
+issue69
 issue691
 issue694
 issue707

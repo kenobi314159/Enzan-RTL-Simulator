@@ -2890,13 +2890,12 @@ count.
 
 `tests/conformance/ghdl/run-suite.sh` runs GHDL's own regression tests, its `testsuite/gna`, from
 GHDL at the revision VESTs is run from. Each test's `testsuite.sh` runs unchanged under GHDL's
-`testenv.sh`, with `ghdl-shim.sh` as the `ghdl` it calls: since Enzan analyses and runs VHDL in
-one process rather than through libraries on disk, the shim's `-a` analyses every file recorded
-so far with the new ones and records them, and `-e` and `-r` elaborate or run a top over all of
-them, `--expect-failure` inverting what Enzan's exit says. A test passes when its script exits 0.
-A test of what only GHDL has, synthesis, VPI or VHPI, GHW waveforms, PSL, a C compiler or a
-feature it probes for, is in neither count; one comparing GHDL's own messages, or using its
-vendors' IEEE packages or several work libraries, fails. So does one expecting an analysis
+`testenv.sh`, with `ghdl-shim.sh` as the `ghdl` it calls: each GHDL library is an Enzan library
+(8.2), the shim's `-a` analyses into the one `--work` names against the others, and `-e` and `-r`
+elaborate or run a top from them, `--expect-failure` inverting what Enzan's exit says. A test
+passes when its script exits 0. A test of what only GHDL has, synthesis, VPI or VHPI, GHW
+waveforms, PSL, a C compiler or a feature it probes for, is in neither count; one comparing
+GHDL's own messages or using its vendors' IEEE packages fails. So does one expecting an analysis
 error that NVC, which Enzan analyses with, does not report until elaboration or not at all.
 
 The ratchet is a list for each suite, as 14.6 describes, and one script,

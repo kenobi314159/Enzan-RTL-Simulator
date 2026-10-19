@@ -4,14 +4,13 @@
 # The `ghdl` GHDL's own test suite calls, standing in for it with Enzan (DESIGN_GUIDE.md section
 # 14.4), so that the suite's testsuite.sh scripts run unchanged. ENZAN names the Enzan to run.
 #
-# Enzan analyses and runs VHDL in one process rather than through libraries on disk, so `-a`
-# records the files it is given in the test's directory, in .enzan-shim, after analysing all of
-# them so far to report what the test analyses wrong, and `-i` records them unanalysed; `-e` and
-# `-m`, `-r` and `--elab-run` elaborate or run a top over every file recorded; and `--remove`
-# forgets them. `--expect-failure` asks for the
-# step to fail, and inverts what Enzan's exit says. A design across several work libraries, which
-# Enzan's one `--work` cannot give, and anything else GHDL does that Enzan does not, fails with a
-# line saying so.
+# Each GHDL library is an Enzan library in the test's directory, .enzan-shim/libs/<name>
+# (sections 4.4 and 8.2): `-a` analyses its files into the library `--work` names, against every
+# other, as GHDL does; `-i` records them, to be analysed so before the next elaboration; `-e` and
+# `-m`, `-r` and `--elab-run` elaborate or run a top from the libraries, `lib.top` or a top of the
+# `--work` library; and `--remove` removes the `--work` library. `--expect-failure` asks for the
+# step to fail, and inverts what Enzan's exit says. Anything GHDL does that Enzan does not fails
+# with a line saying so.
 
 set -uo pipefail
 
@@ -59,23 +58,23 @@ case "$command" in
     printf 'GHDL 4.1.0 (Enzan conformance shim)\n llvm code generator\n'
     exit 0
     ;;
---remove)
-    rm -rf "$state"
-    exit 0
-    ;;
--a | -s | -i | -e | -m | -r | --elab-run) ;;
+-a | -s | -i | -e | -m | -r | --elab-run | --remove) ;;
 *) fail "GHDL's $command is not something Enzan does" ;;
 esac
 
 # The options GHDL takes before its operands; what GHDL alone has, fails.
 std=1993
+stdGiven=no
 work=work
 expectFailure=no
 operands=()
 generics=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-    --std=*) std="$(revision "${1#--std=}")" || fail "the revision $1" ;;
+    --std=*)
+        std="$(revision "${1#--std=}")" || fail "the revision $1"
+        stdGiven=yes
+        ;;
     -g*=*) generics+=(-G "${1#-g}") ;;
     --work=*) work="${1#--work=}" ;;
     --expect-failure) expectFailure=yes ;;
@@ -90,14 +89,45 @@ while [[ $# -gt 0 ]]; do
 done
 runOptions=("$@")
 
-recorded=()
-if [[ -f "$state/sources" ]]; then
-    while IFS=$'\t' read -r library file; do
-        [[ "$library" == "$work" ]] || fail "a design in the libraries $library and $work"
-        recorded+=("$file")
-    done <"$state/sources"
-    [[ -f "$state/std" ]] && std="$(cat "$state/std")"
-fi
+library=$(tr '[:upper:]' '[:lower:]' <<<"$work")
+readonly libraries="$state/libs"
+# A step naming no revision takes the one the design was analysed in.
+[[ "$stdGiven" == no && -f "$state/std" ]] && std="$(cat "$state/std")"
+
+# `--in-lib` for every library there is but `except`.
+others() {
+    local except="$1" directory
+    for directory in "$libraries"/*/; do
+        [[ -d "$directory" ]] || continue
+        directory="${directory%/}"
+        [[ "$(basename "$directory")" == "$except" ]] || printf '%s\n' --in-lib "$directory"
+    done
+}
+
+# Analyses files into the library named `$1`, creating it the first time, against every other.
+analyse_into() {
+    local into="$1"
+    shift
+    mkdir -p "$libraries"
+    if [[ ! -d "$libraries/$into" ]]; then
+        "$ENZAN" lib create --name "$into" "$libraries/$into" >/dev/null || return 1
+    fi
+    local against=()
+    mapfile -t against < <(others "$into")
+    "$ENZAN" analyse --std "$std" --out-lib "$libraries/$into" "${against[@]}" "$@"
+}
+
+# The files `-i` recorded, analysed into their libraries, before anything elaborates.
+analyse_imported() {
+    local list name files=()
+    for list in "$state"/imported/*.f; do
+        [[ -f "$list" ]] || continue
+        name="$(basename "$list" .f)"
+        mapfile -t files <"$list"
+        analyse_into "$name" "${files[@]}" || return 1
+        rm -f "$list"
+    done
+}
 
 # The step's own exit, inverted when the test expects it to fail.
 finish() {
@@ -110,26 +140,29 @@ finish() {
 }
 
 case "$command" in
--i)
-    mkdir -p "$state"
-    echo "$std" >"$state/std"
-    for file in "${operands[@]}"; do
-        printf '%s\t%s\n' "$work" "$(realpath "$file")" >>"$state/sources"
-    done
+--remove)
+    rm -rf "${libraries:?}/$library" "$state/imported/$library.f"
     exit 0
     ;;
--a | -s)
+-i)
+    mkdir -p "$state/imported"
+    echo "$std" >"$state/std"
+    for file in "${operands[@]}"; do realpath "$file" >>"$state/imported/$library.f"; done
+    exit 0
+    ;;
+-a)
     [[ ${#operands[@]} -gt 0 ]] || fail "nothing to analyse"
-    "$ENZAN" analyse --std "$std" --work "$work" "${recorded[@]}" "${operands[@]}"
-    status=$?
-    if [[ $status -eq 0 && "$command" == -a && "$expectFailure" == no ]]; then
-        mkdir -p "$state"
-        echo "$std" >"$state/std"
-        for file in "${operands[@]}"; do
-            printf '%s\t%s\n' "$work" "$(realpath "$file")" >>"$state/sources"
-        done
-    fi
-    finish "$status"
+    mkdir -p "$state"
+    echo "$std" >"$state/std"
+    analyse_into "$library" "${operands[@]}"
+    finish $?
+    ;;
+-s)
+    # Checked, and stored nowhere: analysed into a library of the name that holds nothing.
+    [[ ${#operands[@]} -gt 0 ]] || fail "nothing to analyse"
+    mapfile -t against < <(others "$library")
+    "$ENZAN" analyse --std "$std" --work "$library" "${against[@]}" "${operands[@]}"
+    finish $?
     ;;
 esac
 
@@ -138,11 +171,11 @@ esac
 top="${operands[0]}"
 [[ ${#operands[@]} -le 2 ]] || fail "operands after the top: ${operands[*]}"
 [[ ${#operands[@]} -eq 1 ]] || fail "choosing the architecture ${operands[1]} of the top"
-[[ ${#recorded[@]} -gt 0 ]] || fail "nothing analysed to elaborate"
+analyse_imported || finish 1
+compgen -G "$libraries/*/" >/dev/null || fail "nothing analysed to elaborate"
 
-# Elaboration and a run take their sources from a file list.
-printf '%s\n' "${recorded[@]}" >"$state/sources.f"
-arguments=(--std "$std" --work "$work" -f "$state/sources.f" "${generics[@]}")
+mapfile -t against < <(others "")
+arguments=(--std "$std" --work "$library" "${against[@]}" "${generics[@]}")
 if [[ "$command" == -e || "$command" == -m ]]; then
     "$ENZAN" elaborate "$top" "${arguments[@]}"
     finish $?
