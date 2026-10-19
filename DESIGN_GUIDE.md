@@ -1946,6 +1946,8 @@ simulator rather than to whatever another simulator's quirks taught it to tolera
 
 `COCOTB_HDL_TIMEPRECISION` becomes `--timescale`, since Enzan counts every delay in one unit
 (3.1). It must name a single unit, `1ns` and not `10ns`, which is all `--timescale` accepts.
+Each library `VHDL_LIB_ORDER` names is analysed from its `VHDL_SOURCES_<library>` into an Enzan
+library of its own, and the run reads them (8.2).
 
 **A module stating no time scale is in that unit too** (3.1), where cocotb's other simulators
 take `COCOTB_HDL_TIMEUNIT`: its `#10` is ten of the precision. A module with a `` `timescale ``

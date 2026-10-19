@@ -50,8 +50,14 @@ endif
 
 # VHDL is analysed into the library cocotb names, `work` unless RTL_LIBRARY says otherwise.
 ifneq ($(strip $(VHDL_SOURCES)),)
-    COMPILE_ARGS += --work $(or $(RTL_LIBRARY),work)
+    ENZAN_WORK := --work $(or $(RTL_LIBRARY),work)
 endif
+
+# Each library VHDL_LIB_ORDER names is analysed from its VHDL_SOURCES_<library> into an Enzan
+# library of its own, in that order and against those before it, and the run reads them all
+# (DESIGN_GUIDE.md section 8.2).
+ENZAN_LIBRARIES := $(SIM_BUILD)/enzan-libraries
+ENZAN_IN_LIBS := $(foreach LIB,$(VHDL_LIB_ORDER),--in-lib $(ENZAN_LIBRARIES)/$(LIB))
 
 TOPLEVELS := $(call deprecate,TOPLEVEL,COCOTB_TOPLEVEL)
 ifneq ($(words $(TOPLEVELS)),0)
@@ -76,14 +82,23 @@ ifeq ($(WAVES),1)
     SIM_ARGS += --fst $(SIM_BUILD)/$(TOPLEVELS).fst
 endif
 
-ENZAN_ARGS = $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) $(ENZAN_PLI) \
-             $(COMPILE_ARGS) $(SIM_ARGS) $(EXTRA_ARGS) $(VERILOG_SOURCES) $(VHDL_SOURCES) \
-             $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
+ENZAN_ARGS = $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) $(ENZAN_PLI) $(ENZAN_WORK) \
+             $(ENZAN_IN_LIBS) $(COMPILE_ARGS) $(SIM_ARGS) $(EXTRA_ARGS) $(VERILOG_SOURCES) \
+             $(VHDL_SOURCES) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
+
+# The libraries VHDL_LIB_ORDER names, analysed afresh, each against those analysed before it.
+ifneq ($(strip $(VHDL_LIB_ORDER)),)
+define enzan_analyse_libraries
+	$(RM) -r $(ENZAN_LIBRARIES)
+	set -e; against=""; $(foreach LIB,$(VHDL_LIB_ORDER),$(CMD) lib create --name $(LIB) $(ENZAN_LIBRARIES)/$(LIB) >/dev/null; $(CMD) analyse --out-lib $(ENZAN_LIBRARIES)/$(LIB) $$against $(COMPILE_ARGS) $(VHDL_SOURCES_$(LIB)); against="$$against --in-lib $(ENZAN_LIBRARIES)/$(LIB)";) true
+endef
+endif
 
 # Analysis, elaboration and the run are one process, so there is no compiled image to keep and
 # the results file is the only target.
 $(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
 	$(RM) $(COCOTB_RESULTS_FILE)
+	$(enzan_analyse_libraries)
 
 	$(COCOTB_ENV) $(SIM_CMD_PREFIX) $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
 
@@ -91,6 +106,7 @@ $(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS
 
 debug: $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
 	$(RM) $(COCOTB_RESULTS_FILE)
+	$(enzan_analyse_libraries)
 
 	$(COCOTB_ENV) $(SIM_CMD_PREFIX) gdb --args $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
 
