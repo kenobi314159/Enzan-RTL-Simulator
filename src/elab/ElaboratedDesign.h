@@ -52,6 +52,10 @@ struct Slot {
     std::vector<eir::UnpackedDimension> unpackedDimensions;
     std::uint32_t elementWidth = 0;
 
+    /// True when the object that declared this slot holds nothing (eir::Object::holdsNothing),
+    /// which a waveform does not record.
+    bool holdsNothing = false;
+
     /// The hierarchical path of the object that declared this slot, for diagnostics
     /// and for the waveform database's default name.
     std::string path;
@@ -64,7 +68,40 @@ struct Slot {
     /// display is told the names once however many signals share them.
     std::uint32_t enumIndex = NoEnum;
 
+    /// What the bits mean outside the simulation (DESIGN_GUIDE.md section 3.6).
+    eir::Encoding encoding = eir::Encoding::Bits;
+
+    /// For a VHDL resolved signal, the function its drivers resolve with; empty otherwise.
+    eir::Resolution resolution;
+
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
+};
+
+/// A VHDL resolution function for a number of drivers, which segments resolve with
+/// (DESIGN_GUIDE.md section 3.7). Elaboration counts the drivers and leaves `definition` and
+/// `subprogram` empty for whoever asks the frontend for the function to fill in.
+struct ResolutionCall {
+    std::string function;
+    std::uint32_t drivers = 0;
+    std::uint32_t elementBits = 0;
+    std::string definition;
+    std::string subprogram;
+
+    /// The binding of the function once answered, as an index into `subprograms()`.
+    std::uint32_t subprogramInstance = 0xFFFF'FFFFU;
+
+    [[nodiscard]] bool answered() const noexcept { return !subprogram.empty(); }
+};
+
+/// Some bits of one slot.
+struct SlotRange {
+    std::uint32_t slot = 0;
+    std::uint32_t lowBit = 0;
+    std::uint32_t width = 0;
+
+    [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + width; }
+
+    friend bool operator==(SlotRange, SlotRange) noexcept = default;
 };
 
 /// One instantiated module.
@@ -95,6 +132,11 @@ struct Instance {
     /// absolute offsets in as constants, which is what section 4.3 anticipates.
     std::vector<std::uint32_t> objectSlots;
 
+    /// Slot index the instance's drivers of each object write, indexed by object index: the
+    /// object's own slot, but for a port whose connection names a separate object to drive
+    /// (`eir::PortConnection::driveObjectIndex`), which a port collapsed onto it inherits.
+    std::vector<std::uint32_t> objectDriveSlots;
+
     /// Each interface port, by name, and the path of the interface instance it reaches, for
     /// the hierarchical references that go through it.
     std::map<std::string, std::string, std::less<>> interfaces;
@@ -114,6 +156,37 @@ struct ProcessInstance {
 
     /// Index into the definition's process list.
     std::uint32_t processIndex = 0;
+
+    /// For each of the process's call sites, the subprogram instance it calls.
+    std::vector<std::uint32_t> calls;
+
+    /// The slots the process's callees read, through any depth of calls, sorted and each once:
+    /// what it reaches beyond its own read set (DESIGN_GUIDE.md section 4.2).
+    std::vector<std::uint32_t> calleeReads;
+
+    /// The bits of slots its callees write, likewise.
+    std::vector<SlotRange> calleeWrites;
+};
+
+/// A subprogram bound to the instance whose objects it reaches (DESIGN_GUIDE.md section 4.1).
+///
+/// One declared by a module is bound to the instance whose process calls it; a package's to the
+/// package's one instance; one whose definition holds no objects to no instance at all. A pair
+/// rather than a copy of the body, as a process instance is, so one compiled body serves every
+/// binding.
+struct SubprogramInstance {
+    std::uint32_t definitionIndex = 0;
+
+    /// Index into the definition's subprogram list.
+    std::uint32_t subprogramIndex = 0;
+
+    /// The instance whose slots the subprogram's object indices resolve to, or `NoInstance`.
+    std::uint32_t instanceIndex = NoInstance;
+
+    /// For each of the subprogram's call sites, the subprogram instance it calls.
+    std::vector<std::uint32_t> calls;
+
+    static constexpr std::uint32_t NoInstance = 0xFFFF'FFFFU;
 };
 
 /// One driver of a resolved signal: one continuous process's write of one range of it
@@ -158,8 +231,12 @@ struct Segment {
     std::uint32_t firstDriver = 0;
     std::uint32_t driverCount = 0;
 
-    /// How the drivers combine: the slot's net kind.
+    /// How the drivers combine: the slot's net kind, or for a VHDL resolved signal the index of
+    /// its resolution call in the elaborated design's list.
     eir::NetKind netKind = eir::NetKind::Wire;
+    std::uint32_t resolution = NoResolution;
+
+    static constexpr std::uint32_t NoResolution = 0xFFFF'FFFFU;
 };
 
 /// The result of elaborating one top level.
@@ -182,6 +259,11 @@ public:
         return processList;
     }
 
+    /// Every subprogram a process can reach through its calls, bound to its instance, each once.
+    [[nodiscard]] std::span<const SubprogramInstance> subprograms() const noexcept {
+        return subprogramList;
+    }
+
     /// Every driver of a resolved signal, ordered by process, then by object, then by bit, so
     /// that one process's drivers through one object are a contiguous run.
     [[nodiscard]] std::span<const Driver> drivers() const noexcept { return driverList; }
@@ -191,6 +273,11 @@ public:
     /// Driver indices, referred to in runs by `Segment`.
     [[nodiscard]] std::span<const std::uint32_t> segmentDrivers() const noexcept {
         return segmentDriverList;
+    }
+
+    /// The resolution functions segments call, each for one number of drivers.
+    [[nodiscard]] std::span<const ResolutionCall> resolutionCalls() const noexcept {
+        return resolutionList;
     }
 
     /// The widest driver, which bounds the scratch space resolution needs and lets the
@@ -237,9 +324,11 @@ private:
     std::vector<Slot> slotList;
     std::vector<eir::EnumDefinition> enumList;
     std::vector<ProcessInstance> processList;
+    std::vector<SubprogramInstance> subprogramList;
     std::vector<Driver> driverList;
     std::vector<Segment> segmentList;
     std::vector<std::uint32_t> segmentDriverList;
+    std::vector<ResolutionCall> resolutionList;
     std::uint32_t widestDriverBits = 0;
     std::uint32_t arenaSize = 0;
     std::string topName;

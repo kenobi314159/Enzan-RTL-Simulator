@@ -514,7 +514,13 @@ void KernelServer::onDeposit(const Frame& frame) {
         return;
     }
 
-    simulationKernel->deposit(request.signalIndex, request.value.ref());
+    // Through the session, which takes the value as the signal shows it: a std_logic's '1' is
+    // what `1` deposited into one means.
+    std::string error;
+    if (!session->deposit(request.signalIndex, request.value.ref(), error)) {
+        sendFailure(error);
+        return;
+    }
 
     // The publisher is told so that the window showing the signal updates, because a deposit
     // between runs produces no time advance for the change to be batched into.
@@ -542,7 +548,11 @@ void KernelServer::onForce(const Frame& frame) {
         // signals it may or may not have forced should not have to remember which.
         simulationKernel->release(request.signalIndex);
     } else {
-        simulationKernel->force(request.signalIndex, request.value.ref());
+        std::string error;
+        if (!session->force(request.signalIndex, request.value.ref(), error)) {
+            sendFailure(error);
+            return;
+        }
     }
 
     publisher->flush();
@@ -595,7 +605,9 @@ void KernelServer::onQueryObjects(const Frame& frame) {
     // slot visible in two scopes and both names are real, so a user looking inside a DUT finds
     // its ports where they expect them.
     for (std::uint32_t signalIndex = 0; signalIndex < image->signals().size(); ++signalIndex) {
-        const std::uint32_t width = image->signals()[signalIndex].bitWidth;
+        // As the values sent for it are, shown rather than stored: a std_logic is one bit, not
+        // the byte of its code.
+        const std::uint32_t width = publisher->widthOf(signalIndex);
         const bool recorded =
             database != nullptr
             && database->recordIndexOf(signalIndex) != wavedb::WaveformDatabase::NotRecorded;
@@ -850,9 +862,12 @@ void KernelServer::sendHistory(std::uint32_t signalIndex, runtime::SimTime from,
                                runtime::SimTime to) {
     if (!connection.isOpen() || !greeted) return;
 
+    // A signal of no bits, a VHDL signal of a null range, has neither a past nor a value now.
+    if (publisher->widthOf(signalIndex) == 0) return;
+
     HistoryMessage message;
     message.signalIndex = signalIndex;
-    message.width = image->signals()[signalIndex].bitWidth;
+    message.width = publisher->widthOf(signalIndex);
     message.latestTime = latestRecordedTime();
 
     const std::uint32_t record = database != nullptr ? database->recordIndexOf(signalIndex)

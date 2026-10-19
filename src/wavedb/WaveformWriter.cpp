@@ -2,6 +2,8 @@
 
 #include "wavedb/WaveformWriter.h"
 
+#include "eir/BitOps.h"
+
 #include "elab/ElaboratedDesign.h"
 
 #include <algorithm>
@@ -71,9 +73,27 @@ std::uint32_t WaveformWriter::recordIndexOf(std::uint32_t signalIndex) const noe
     return signalIndex < recordIndex.size() ? recordIndex[signalIndex] : NotRecorded;
 }
 
-eir::ConstBitRef WaveformWriter::valueOf(std::uint32_t signalIndex) const noexcept {
+std::uint32_t WaveformWriter::widthOf(std::uint32_t signalIndex) const noexcept {
+    // Its one bit is a placeholder, a bit vector having at least one, which is no value of it.
+    if (designImage->elaboratedDesign().slots()[signalIndex].holdsNothing) return 0;
     const runtime::Signal& signal = designImage->signals()[signalIndex];
-    return stateArena->at(signal.wordOffset, signal.bitWidth);
+    return eir::presentedWidth(signal.encoding, signal.bitWidth);
+}
+
+eir::ConstBitRef WaveformWriter::valueOf(std::uint32_t signalIndex) const {
+    const runtime::Signal& signal = designImage->signals()[signalIndex];
+    const eir::ConstBitRef stored = stateArena->at(signal.wordOffset, signal.bitWidth);
+    if (signal.encoding == eir::Encoding::Bits) return stored;
+
+    const std::uint32_t width = eir::presentedWidth(signal.encoding, signal.bitWidth);
+    if (shown.width() != width) shown = eir::BitVector(width);
+    eir::present(signal.encoding, stored, shown.mutableRef());
+    return shown.ref();
+}
+
+double WaveformWriter::realValueOf(std::uint32_t signalIndex) const {
+    const runtime::Signal& signal = designImage->signals()[signalIndex];
+    return eir::bitops::realOf(stateArena->at(signal.wordOffset, signal.bitWidth));
 }
 
 void WaveformWriter::selectSignals() {
@@ -86,8 +106,11 @@ void WaveformWriter::selectSignals() {
         // A memory is not recorded, as IEEE 1364 section 18 leaves memories out of a VCD: one
         // of any size would dominate the file and the database with a value nobody reads as a
         // waveform.
-        if (!designImage->elaboratedDesign().slots()[signalIndex].unpackedDimensions.empty())
-            continue;
+        const elab::Slot& slot = designImage->elaboratedDesign().slots()[signalIndex];
+        if (!slot.unpackedDimensions.empty()) continue;
+
+        // Nor is a VHDL signal of a null range, whose one bit is no value of it.
+        if (slot.holdsNothing) continue;
 
         recordIndex[signalIndex] = static_cast<std::uint32_t>(recorded.size());
         recorded.push_back(signalIndex);

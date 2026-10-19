@@ -707,6 +707,69 @@ TEST(BitOpsSelect, AssignPartDiscardsBitsPastTheEnd) {
     EXPECT_EQ(binary(destination.ref()), "11000000");
 }
 
+TEST(BitOpsSelect, PartsAcrossWordsMatchABitAtATime) {
+    // Selecting and assigning a word at a time, against doing it bit by bit: every width and
+    // offset crossing a word boundary, four-state values, and windows reaching past the end.
+    std::uint64_t state = 0x9E3779B97F4A7C15U;
+    const auto next = [&state] {
+        state ^= state << 13U;
+        state ^= state >> 7U;
+        state ^= state << 17U;
+        return state;
+    };
+    const auto randomVector = [&next](std::uint32_t width) {
+        BitVector vector(width);
+        for (std::uint32_t bit = 0; bit < width; ++bit)
+            vector.mutableRef().set(bit, static_cast<Logic>(next() % 4));
+        return vector;
+    };
+    for (const std::uint32_t sourceWidth : {1U, 7U, 63U, 64U, 65U, 130U, 200U}) {
+        for (const std::uint32_t width : {1U, 8U, 63U, 64U, 65U, 129U}) {
+            for (const std::uint64_t low : {0U, 1U, 31U, 63U, 64U, 65U, 127U, 190U, 260U}) {
+                const BitVector source = randomVector(sourceWidth);
+
+                BitVector selected(width);
+                bitops::partSelectAt(selected.mutableRef(), source.ref(), low);
+                for (std::uint32_t bit = 0; bit < width; ++bit) {
+                    const Logic expected =
+                        low + bit < sourceWidth
+                            ? source.ref().get(static_cast<std::uint32_t>(low + bit))
+                            : Logic::Unknown;
+                    ASSERT_EQ(selected.ref().get(bit), expected)
+                        << "select " << width << " of " << sourceWidth << " from " << low;
+                }
+                EXPECT_TRUE(bitops::holdsPartAt(source.ref(), selected.ref(), low))
+                    << "a part read back holds, what lies past the end included";
+
+                const BitVector part = randomVector(width);
+                BitVector assigned = source;
+                bitops::assignPartAt(assigned.mutableRef(), part.ref(), low);
+                for (std::uint32_t bit = 0; bit < sourceWidth; ++bit) {
+                    const bool inside = bit >= low && bit < low + width;
+                    const Logic expected =
+                        inside ? part.ref().get(static_cast<std::uint32_t>(bit - low))
+                               : source.ref().get(bit);
+                    ASSERT_EQ(assigned.ref().get(bit), expected)
+                        << "assign " << width << " into " << sourceWidth << " at " << low;
+                }
+                ASSERT_EQ(assigned, BitVector::from(assigned.ref())) << "kept canonical";
+                if (low + width <= sourceWidth) {
+                    bool same = true;
+                    for (std::uint32_t bit = 0; bit < width; ++bit)
+                        same = same
+                               && assigned.ref().get(static_cast<std::uint32_t>(low + bit))
+                                      == source.ref().get(static_cast<std::uint32_t>(low + bit));
+                    EXPECT_EQ(bitops::samePartAt(source.ref(), assigned.ref(), low, width), same)
+                        << "compare " << width << " of " << sourceWidth << " at " << low;
+                    EXPECT_TRUE(bitops::samePartAt(source.ref(), source.ref(), low, width));
+                }
+                EXPECT_EQ(bitops::holdsPartAt(source.ref(), part.ref(), low), assigned == source)
+                    << "assign " << width << " into " << sourceWidth << " at " << low;
+            }
+        }
+    }
+}
+
 TEST(BitOpsSelect, AssignPartThroughAnUnknownIndexWritesNothing) {
     // The target of the write is unknown, so nothing may be written. Making the
     // whole vector X because one index bit was unknown would lose far more

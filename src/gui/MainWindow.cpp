@@ -698,6 +698,10 @@ void MainWindow::depositOrForceSelectedObject(bool force) {
         note(tr("%1 is a parameter, so it has no value to write").arg(info->path));
         return;
     }
+    if (info->width == 0) {
+        note(tr("%1 is a null array, so it has no bits to write").arg(info->path));
+        return;
+    }
 
     bool accepted = false;
     const QString entered =

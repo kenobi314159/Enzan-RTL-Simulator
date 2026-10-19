@@ -7,6 +7,7 @@
 #include "eir/Module.h"
 #include "eir/Process.h"
 
+#include <algorithm>
 #include <format>
 #include <vector>
 
@@ -19,6 +20,8 @@ Image::Image(const eir::Design& analysedDesign, const elab::ElaboratedDesign& el
     buildSignals();
     buildInstanceTables();
     buildProcesses();
+    buildSubprograms();
+    measureCallStack();
 }
 
 void Image::buildSignals() {
@@ -27,6 +30,7 @@ void Image::buildSignals() {
         signalList.push_back(Signal{.wordOffset = slot.wordOffset,
                                     .bitWidth = slot.type.bitWidth(),
                                     .path = slot.path,
+                                    .encoding = slot.encoding,
                                     .subscribers = {}});
     }
 }
@@ -34,6 +38,7 @@ void Image::buildSignals() {
 void Image::buildInstanceTables() {
     instanceObjectOffsets.resize(elaborated->instances().size());
     instanceObjectSignals.resize(elaborated->instances().size());
+    instanceWriteSignals.resize(elaborated->instances().size());
 
     for (std::size_t instanceIndex = 0; instanceIndex < elaborated->instances().size();
          ++instanceIndex) {
@@ -47,6 +52,7 @@ void Image::buildInstanceTables() {
             offsets.push_back(elaborated->slots()[slotIndex].wordOffset);
             signals.push_back(slotIndex);
         }
+        instanceWriteSignals[instanceIndex] = instance.objectDriveSlots;
     }
 }
 
@@ -65,7 +71,7 @@ void Image::buildProcesses() {
         ENZAN_ALWAYS_ASSERT(bodyIndex != codegen::CompiledDesign::NotCompiled,
                             "every elaborated process must have a compiled body");
 
-        const codegen::CompiledProcess& body = compiled->body(bodyIndex);
+        const codegen::CompiledBody& body = compiled->body(bodyIndex);
 
         ProcessState state;
         state.bodyIndex = bodyIndex;
@@ -73,6 +79,8 @@ void Image::buildProcesses() {
         state.frameOffset = frameSize;
         state.objectOffsets = instanceObjectOffsets[processInstance.instanceIndex];
         state.objectSignals = instanceObjectSignals[processInstance.instanceIndex];
+        state.writeSignals = instanceWriteSignals[processInstance.instanceIndex];
+        state.calls = processInstance.calls;
         state.name = std::format("{} {}", instance.path, body.name);
         frameSize += body.frameWords;
 
@@ -133,6 +141,101 @@ void Image::buildProcesses() {
     }
 }
 
+void Image::buildSubprograms() {
+    const std::span<const elab::SubprogramInstance> bound = elaborated->subprograms();
+    subprogramList.reserve(bound.size());
+    subprogramWriteRoutes.resize(bound.size());
+
+    for (std::size_t index = 0; index < bound.size(); ++index) {
+        const elab::SubprogramInstance& subprogramInstance = bound[index];
+        const std::uint32_t bodyIndex = compiled->subprogramBodyIndex(
+            subprogramInstance.definitionIndex, subprogramInstance.subprogramIndex);
+        ENZAN_ALWAYS_ASSERT(bodyIndex != codegen::CompiledDesign::NotCompiled,
+                            "every bound subprogram must have a compiled body");
+
+        BoundSubprogram subprogram;
+        subprogram.bodyIndex = bodyIndex;
+        subprogram.calls = subprogramInstance.calls;
+        if (subprogramInstance.instanceIndex != elab::SubprogramInstance::NoInstance) {
+            subprogram.objectOffsets = instanceObjectOffsets[subprogramInstance.instanceIndex];
+            subprogram.objectSignals = instanceObjectSignals[subprogramInstance.instanceIndex];
+            subprogram.writeSignals = instanceWriteSignals[subprogramInstance.instanceIndex];
+        }
+
+        std::vector<WriteRoute>& routes = subprogramWriteRoutes[index];
+        routes.assign(eir::writtenObjects(compiled->body(bodyIndex).writeSet).size(),
+                      WriteRoute{.firstDriver = 0, .driverCount = 0});
+        subprogram.writeRoutes = routes;
+
+        subprogramList.push_back(subprogram);
+    }
+}
+
+void Image::measureCallStack() {
+    // Depth-first over the bound calls, memoising each subprogram's deepest chain. A call that
+    // reaches a subprogram still on the path is recursion, which no depth bounds.
+    constexpr std::uint8_t Unvisited = 0;
+    constexpr std::uint8_t OnPath = 1;
+    constexpr std::uint8_t Done = 2;
+    std::vector<std::uint8_t> state(subprogramList.size(), Unvisited);
+    std::vector<std::uint32_t> depth(subprogramList.size(), 0);
+    std::vector<std::uint32_t> words(subprogramList.size(), 0);
+
+    struct Step {
+        std::uint32_t subprogram;
+        std::size_t nextCall;
+    };
+
+    std::vector<Step> path;
+
+    for (std::uint32_t root = 0; root < subprogramList.size(); ++root) {
+        if (state[root] != Unvisited) continue;
+        state[root] = OnPath;
+        path.push_back(Step{.subprogram = root, .nextCall = 0});
+
+        while (!path.empty()) {
+            Step& step = path.back();
+            const BoundSubprogram& subprogram = subprogramList[step.subprogram];
+            if (step.nextCall < subprogram.calls.size()) {
+                const std::uint32_t callee = subprogram.calls[step.nextCall++];
+                if (state[callee] == OnPath) stackShape.recursive = true;
+                if (state[callee] != Unvisited) continue;
+                state[callee] = OnPath;
+                path.push_back(Step{.subprogram = callee, .nextCall = 0});
+                continue;
+            }
+
+            const std::uint32_t frame = compiled->body(subprogram.bodyIndex).frameWords;
+            stackShape.largestFrame = std::max(stackShape.largestFrame, frame);
+            std::uint32_t deepest = 0;
+            std::uint32_t heaviest = 0;
+            for (const std::uint32_t callee : subprogram.calls) {
+                deepest = std::max(deepest, depth[callee]);
+                heaviest = std::max(heaviest, words[callee]);
+            }
+            depth[step.subprogram] = deepest + 1;
+            words[step.subprogram] = heaviest + frame;
+            state[step.subprogram] = Done;
+            path.pop_back();
+        }
+    }
+
+    for (const ProcessState& process : processList) {
+        for (const std::uint32_t callee : process.calls) {
+            stackShape.depth = std::max(stackShape.depth, depth[callee]);
+            stackShape.words = std::max(stackShape.words, words[callee]);
+        }
+    }
+
+    // The kernel calls a VHDL resolution function itself, while no process's call is in progress
+    // (DESIGN_GUIDE.md section 3.7), so each is a chain of its own.
+    for (const elab::ResolutionCall& call : elaborated->resolutionCalls()) {
+        if (call.subprogramInstance >= subprogramList.size()) continue;
+        stackShape.depth = std::max(stackShape.depth, depth[call.subprogramInstance]);
+        stackShape.words = std::max(stackShape.words, words[call.subprogramInstance]);
+    }
+}
+
 void Image::initializeState(Arena& arena) const {
     // Initialisation is per **slot**, not per object, and an explicit initialiser always
     // wins over a type default.
@@ -154,7 +257,8 @@ void Image::initializeState(Arena& arena) const {
             for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
                  ++objectIndex) {
                 const eir::Object& object = definition.objects[objectIndex];
-                if (!object.type.isBits()) continue;
+                // A real is held as 64 bits are, and starts at its initial value as they do.
+                if (!object.type.isBits() && !object.type.isReal()) continue;
                 if (object.initialValue.has_value() != wantExplicit) continue;
 
                 const std::uint32_t slotIndex = instance.objectSlots[objectIndex];
@@ -194,10 +298,54 @@ void Image::initializeState(Arena& arena) const {
     visit(true);
     visit(false);
 
-    // A driver that has not run yet has no value the design gave it, so it starts at X, as the
-    // net's driven bits do.
-    for (const elab::Driver& driver : elaborated->drivers())
-        arena.at(driver.wordOffset, driver.width).fill(eir::Logic::Unknown);
+    // A VHDL driver starts at the initial value of the signal its process names (IEEE 1076
+    // section 14.7.2), which for a port is the port's default and not the value of the signal it
+    // is connected to; a signal takes what its drivers start at (section 14.7.5.2), so a connected
+    // out port's default is where the signal it drives begins. The process writing a bit gives
+    // it that value here; where a resolved signal has drivers, they are given it, and the kernel
+    // resolves them before the run begins.
+    const auto startOf = [&](const elab::ProcessInstance& processInstance,
+                             std::uint32_t objectIndex) -> const eir::BitVector* {
+        const elab::Instance& instance = elaborated->instances()[processInstance.instanceIndex];
+        const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
+        if (!definition.processes[processInstance.processIndex].drivesSignals) return nullptr;
+        const eir::Object& object = definition.objects[objectIndex];
+        const elab::Slot& slot = elaborated->slots()[instance.objectDriveSlots[objectIndex]];
+        // A port collapsed onto all of its signal; one reaching only part of it is not.
+        if (!object.initialValue || object.type.bitWidth() != slot.type.bitWidth()) return nullptr;
+        return &*object.initialValue;
+    };
+    for (const elab::ProcessInstance& processInstance : elaborated->processes()) {
+        const elab::Instance& instance = elaborated->instances()[processInstance.instanceIndex];
+        const eir::ModuleDefinition& definition = design->module(instance.definitionIndex);
+        for (const eir::WriteExtent& extent :
+             definition.processes[processInstance.processIndex].writeSet) {
+            const elab::Slot& slot =
+                elaborated->slots()[instance.objectDriveSlots[extent.objectIndex]];
+            const eir::BitVector* start = startOf(processInstance, extent.objectIndex);
+            if (start == nullptr) continue;
+            eir::BitVector part(extent.width);
+            eir::bitops::partSelectAt(part.mutableRef(), start->ref(), extent.lowBit);
+            eir::bitops::assignPartAt(arena.at(slot.wordOffset, slot.type.bitWidth()), part.ref(),
+                                      extent.lowBit);
+        }
+    }
+
+    // Any other driver that has not run yet has no value the design gave it, so it starts at X,
+    // as the net's driven bits do.
+    for (const elab::Driver& driver : elaborated->drivers()) {
+        const elab::Slot& slot = elaborated->slots()[driver.slot];
+        const eir::BitRef value = arena.at(driver.wordOffset, driver.width);
+        if (!slot.resolution.resolved()) {
+            value.fill(eir::Logic::Unknown);
+            continue;
+        }
+        const eir::BitVector* start =
+            startOf(elaborated->processes()[driver.process], driver.objectIndex);
+        const eir::ConstBitRef from =
+            start != nullptr ? start->ref() : arena.at(slot.wordOffset, slot.type.bitWidth());
+        eir::bitops::partSelectAt(value, from, driver.lowBit);
+    }
 }
 
 std::uint32_t Image::findSignal(std::string_view path) const {

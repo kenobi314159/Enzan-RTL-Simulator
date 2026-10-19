@@ -261,27 +261,13 @@ set_tests_properties(
              FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
              TIMEOUT 180)
 
-# cocotb driving Enzan through VPI, as a user runs it (DESIGN_GUIDE.md section 14.6). Skipped
-# rather than failed when no Python has cocotb installed, so that a contributor without it can
-# still run the suite; CI installs it. ENZAN_COCOTB_PYTHON names the Python to use when the one
-# CMake finds is not the one cocotb was installed into.
-set(ENZAN_COCOTB_PYTHON
-    "${Python3_EXECUTABLE}"
-    CACHE FILEPATH "A Python that has cocotb installed, for the cocotb golden test")
-if(ENZAN_COCOTB_PYTHON)
-  execute_process(
-    COMMAND "${ENZAN_COCOTB_PYTHON}" -c "import cocotb"
-    RESULT_VARIABLE _enzan_cocotb_missing
-    OUTPUT_QUIET ERROR_QUIET)
-endif()
-if(ENZAN_COCOTB_PYTHON AND _enzan_cocotb_missing EQUAL 0)
-  message(STATUS "The cocotb golden test will use ${ENZAN_COCOTB_PYTHON}")
+# cocotb driving Enzan through VPI, as a user runs it (DESIGN_GUIDE.md section 14.6), when a
+# Python has cocotb (tests/CMakeLists.txt).
+if(ENZAN_HAVE_COCOTB)
   add_test(NAME golden.cocotb
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-cocotb-check.sh" $<TARGET_FILE:enzan>
                    "${ENZAN_COCOTB_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/cocotb")
   set_tests_properties(
     golden.cocotb PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb" FAIL_REGULAR_EXPRESSION
                              "FAIL=[1-9]" TIMEOUT 300)
-else()
-  message(STATUS "cocotb not found; the cocotb golden test is skipped")
 endif()

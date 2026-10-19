@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
+#include <cstdint>
 #include <limits>
 #include <span>
 #include <vector>
@@ -872,12 +874,56 @@ void bitSelect(BitRef dst, ConstBitRef source, ConstBitRef index) {
     setBit(dst, source.get(static_cast<std::uint32_t>(position)));
 }
 
-void partSelectAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
-    for (std::uint32_t index = 0; index < dst.width(); ++index) {
-        const std::uint64_t position = lowIndex + index;
-        dst.set(index, position < source.width() ? source.get(static_cast<std::uint32_t>(position))
-                                                 : Logic::Unknown);
+namespace {
+
+/// The 64 bits of `plane`, `words` long, from bit `from` up, zero past its end.
+Word readWord(const Word* plane, std::uint32_t words, std::uint64_t from) noexcept {
+    const std::uint64_t index = from / BitsPerWord;
+    const auto shift = static_cast<unsigned>(from % BitsPerWord);
+    const Word low = index < words ? plane[index] : Word{0};
+    if (shift == 0) return low;
+    const Word high = index + 1 < words ? plane[index + 1] : Word{0};
+    return (low >> shift) | (high << (BitsPerWord - shift));
+}
+
+/// Writes the low `count` bits of `value`, at most 64, into `plane` from bit `at` up, leaving
+/// alone what lies past `width`.
+void writeBits(Word* plane, std::uint32_t width, std::uint64_t at, Word value,
+               std::uint32_t count) noexcept {
+    if (at >= width) return;
+    count = static_cast<std::uint32_t>(std::min<std::uint64_t>(count, width - at));
+    if (count == 0) return;
+    const Word mask = count == BitsPerWord ? ~Word{0} : (Word{1} << count) - 1;
+    value &= mask;
+    const std::uint64_t index = at / BitsPerWord;
+    const auto shift = static_cast<unsigned>(at % BitsPerWord);
+    plane[index] = (plane[index] & ~(mask << shift)) | (value << shift);
+    if (shift != 0 && shift + count > BitsPerWord) {
+        const unsigned spill = BitsPerWord - shift;
+        plane[index + 1] = (plane[index + 1] & ~(mask >> spill)) | (value >> spill);
     }
+}
+
+} // namespace
+
+void partSelectAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
+    // A word at a time: this is how every element of an array and every field of a record is
+    // read, and how a table of constants is looked up.
+    for (std::uint32_t word = 0; word < dst.words(); ++word) {
+        const std::uint64_t from = lowIndex + (std::uint64_t{word} * BitsPerWord);
+        dst.aval()[word] = readWord(source.aval(), source.words(), from);
+        dst.bval()[word] = readWord(source.bval(), source.words(), from);
+    }
+    // What lies past the source's end reads as unknown.
+    const std::uint64_t available = lowIndex < source.width() ? source.width() - lowIndex : 0;
+    for (std::uint32_t word = 0; word < dst.words(); ++word) {
+        const std::uint64_t first = std::uint64_t{word} * BitsPerWord;
+        if (first + BitsPerWord <= available) continue;
+        const Word past = first >= available ? ~Word{0} : ~Word{0} << (available - first);
+        dst.aval()[word] |= past;
+        dst.bval()[word] |= past;
+    }
+    dst.canonicalize();
 }
 
 void partSelect(BitRef dst, ConstBitRef source, ConstBitRef lowIndex) {
@@ -890,11 +936,44 @@ void partSelect(BitRef dst, ConstBitRef source, ConstBitRef lowIndex) {
 }
 
 void assignPartAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
-    for (std::uint32_t index = 0; index < source.width(); ++index) {
-        const std::uint64_t position = lowIndex + index;
-        if (position < dst.width())
-            dst.set(static_cast<std::uint32_t>(position), source.get(index));
+    // A word at a time, as partSelectAt reads; what reaches past the destination's end is dropped.
+    for (std::uint32_t word = 0; word < source.words(); ++word) {
+        const std::uint64_t at = lowIndex + (std::uint64_t{word} * BitsPerWord);
+        const auto count = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+            BitsPerWord, source.width() - (std::uint64_t{word} * BitsPerWord)));
+        writeBits(dst.aval(), dst.width(), at, source.aval()[word], count);
+        writeBits(dst.bval(), dst.width(), at, source.bval()[word], count);
     }
+}
+
+bool holdsPartAt(ConstBitRef dst, ConstBitRef source, std::uint64_t lowIndex) {
+    if (lowIndex >= dst.width()) return true;
+    const std::uint64_t compared = std::min<std::uint64_t>(source.width(), dst.width() - lowIndex);
+    for (std::uint32_t word = 0; std::uint64_t{word} * BitsPerWord < compared; ++word) {
+        const std::uint64_t done = std::uint64_t{word} * BitsPerWord;
+        const Word mask =
+            compared - done >= BitsPerWord ? ~Word{0} : (Word{1} << (compared - done)) - 1;
+        const std::uint64_t from = lowIndex + done;
+        if (((readWord(dst.aval(), dst.words(), from) ^ source.aval()[word]) & mask) != 0
+            || ((readWord(dst.bval(), dst.words(), from) ^ source.bval()[word]) & mask) != 0)
+            return false;
+    }
+    return true;
+}
+
+bool samePartAt(ConstBitRef a, ConstBitRef b, std::uint64_t lowIndex, std::uint64_t width) {
+    ENZAN_ASSERT(a.width() == b.width() && lowIndex + width <= a.width(),
+                 "the part must lie within two vectors of one width");
+    for (std::uint64_t done = 0; done < width; done += BitsPerWord) {
+        const Word mask = width - done >= BitsPerWord ? ~Word{0} : (Word{1} << (width - done)) - 1;
+        const std::uint64_t from = lowIndex + done;
+        const auto differs = [&](const Word* left, const Word* right) {
+            return ((readWord(left, a.words(), from) ^ readWord(right, b.words(), from)) & mask)
+                   != 0;
+        };
+        if (differs(a.aval(), b.aval()) || differs(a.bval(), b.bval())) return false;
+    }
+    return true;
 }
 
 void assignPart(BitRef dst, ConstBitRef source, ConstBitRef lowIndex) {
@@ -1014,6 +1093,42 @@ void pullHighImpedance(BitRef value, Logic pull) {
         if (pull == Logic::One) value.aval()[index] |= isHighZ;
     }
     value.canonicalize();
+}
+
+double realOf(ConstBitRef value) noexcept {
+    return std::bit_cast<double>(value.toUInt64());
+}
+
+void assignReal(BitRef dst, double value) noexcept {
+    copy(dst, BitVector::fromUInt64(std::bit_cast<std::uint64_t>(value), dst.width()).ref());
+}
+
+void integerToReal(BitRef dst, ConstBitRef source, bool isSigned) {
+    // An unknown bit converts as zero.
+    BitVector known(source.width());
+    const BitRef bits = known.mutableRef();
+    copy(bits, source);
+    std::ranges::fill(bits.bvalWords(), Word{0});
+    const double value = isSigned ? static_cast<double>(known.ref().toInt64())
+                                  : static_cast<double>(known.ref().toUInt64());
+    assignReal(dst, value);
+}
+
+void realToInteger(BitRef dst, ConstBitRef source) {
+    // std::round rounds halfway away from zero, as both languages do. A value past what 64 bits
+    // hold, or not a number, has no integer to be; it saturates rather than being undefined.
+    const double rounded = std::round(realOf(source));
+    std::int64_t value = 0;
+    if (std::isnan(rounded)) {
+        value = 0;
+    } else if (rounded >= 0x1p63) {
+        value = std::numeric_limits<std::int64_t>::max();
+    } else if (rounded < -0x1p63) {
+        value = std::numeric_limits<std::int64_t>::min();
+    } else {
+        value = static_cast<std::int64_t>(rounded);
+    }
+    copy(dst, BitVector::fromInt64(value, dst.width()).ref());
 }
 
 } // namespace enzan::eir::bitops

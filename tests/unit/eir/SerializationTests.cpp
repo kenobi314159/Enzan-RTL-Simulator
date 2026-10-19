@@ -29,7 +29,9 @@ using enzan::SourceLocation;
 using enzan::SourceManager;
 using enzan::eir::BasicBlock;
 using enzan::eir::BitVector;
+using enzan::eir::CallSite;
 using enzan::eir::EdgeKind;
+using enzan::eir::Encoding;
 using enzan::eir::EnumDefinition;
 using enzan::eir::EnumMember;
 using enzan::eir::Instance;
@@ -41,17 +43,21 @@ using enzan::eir::ObjectKind;
 using enzan::eir::Opcode;
 using enzan::eir::Operand;
 using enzan::eir::Parameter;
+using enzan::eir::ParameterMode;
 using enzan::eir::Port;
 using enzan::eir::PortConnection;
 using enzan::eir::PortDirection;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::SensitivityEntry;
+using enzan::eir::Subprogram;
+using enzan::eir::SubprogramParameter;
 using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
 using enzan::eir::Type;
 using enzan::eir::UnpackedDimension;
+using enzan::eir::VhdlType;
 using enzan::eir::WriteExtent;
 using enzan::test::literal;
 
@@ -93,6 +99,23 @@ ModuleDefinition richModule(BufferId buffer) {
     states.members.push_back(EnumMember{.name = "S_RUN", .value = literal("2'b01")});
     definition.enums.push_back(std::move(states));
 
+    // A record of a bit and a vector of them, `7 downto 0`.
+    definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Enumeration,
+                                            .name = "BIT",
+                                            .width = 1,
+                                            .ranges = {{.left = 0, .right = 1, .ascending = true}},
+                                            .enumIndex = 0});
+    definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Array,
+                                            .name = "BIT_VECTOR",
+                                            .width = 8,
+                                            .ranges = {{.left = 7, .right = 0, .ascending = false}},
+                                            .element = 0});
+    definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Record,
+                                            .name = "PAIR",
+                                            .width = 9,
+                                            .fields = {{.name = "FLAG", .type = 0, .offset = 8},
+                                                       {.name = "DATA", .type = 1, .offset = 0}}});
+
     definition.addObject(Object{.name = "clk",
                                 .type = Type::logic(),
                                 .kind = ObjectKind::Net,
@@ -103,13 +126,16 @@ ModuleDefinition richModule(BufferId buffer) {
                                 .elementWidth = 1,
                                 .elementSigned = true,
                                 .subroutineStatic = true});
-    definition.addObject(Object{.name = "count",
-                                .type = Type::bits(8, true, true),
-                                .kind = ObjectKind::Variable,
-                                .location = SourceLocation(buffer, 17),
-                                .initialValue = literal("8'hA5"),
-                                .isAlias = true,
-                                .enumIndex = 0});
+    definition.addObject(
+        Object{.name = "count",
+               .type = Type::bits(8, true, true),
+               .kind = ObjectKind::Variable,
+               .location = SourceLocation(buffer, 17),
+               .initialValue = literal("8'hA5"),
+               .isAlias = true,
+               .encoding = Encoding::VhdlLogic,
+               .resolution = {.function = "IEEE.STD_LOGIC_1164.RESOLVED(Y)U", .elementBits = 8},
+               .enumIndex = 0});
 
     definition.ports.push_back(Port{.name = "clk",
                                     .direction = PortDirection::Input,
@@ -124,13 +150,17 @@ ModuleDefinition richModule(BufferId buffer) {
     instance.name = "u_child";
     instance.definitionName = "child";
     instance.location = SourceLocation(buffer, 21);
-    instance.connections.push_back(PortConnection{.portIndex = 0, .objectIndex = 1});
+    instance.connections.push_back(
+        PortConnection{.portIndex = 0, .objectIndex = 1, .driveObjectIndex = 0});
     instance.connections.push_back(
         PortConnection{.portIndex = 1, .objectIndex = PortConnection::Unconnected});
     definition.instances.push_back(std::move(instance));
 
     Process process;
     process.kind = ProcessKind::AlwaysFf;
+    process.drivesSignals = true;
+    process.postponed = true;
+    process.connectsPort = true;
     process.name = "always_ff@counter.sv:14";
     process.location = SourceLocation(buffer, 14);
     process.registerTypes = {Type::logic(), Type::bits(8, false, false), Type::real(),
@@ -178,7 +208,37 @@ ModuleDefinition richModule(BufferId buffer) {
     // wrong order or an extent dropped shows up.
     process.writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
                         WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}};
+    process.calls.push_back(CallSite{.definition = "arith::",
+                                     .subprogram = "accumulate$8",
+                                     .arguments = {Operand::reg(1), Operand::constant(0)},
+                                     .result = Operand::reg(1),
+                                     .location = SourceLocation(buffer, 22)});
     definition.processes.push_back(std::move(process));
+
+    // A subprogram, with a parameter of each mode but one, a result, and a call of its own: a
+    // body is written once for both kinds, so this is what shows the subprogram's half of it.
+    Subprogram accumulate;
+    accumulate.name = "accumulate$8";
+    accumulate.location = SourceLocation(buffer, 30);
+    accumulate.registerTypes = {Type::bits(8, false, true), Type::bits(8, false, true),
+                                Type::bits(8, false, true)};
+    accumulate.parameters = {
+        SubprogramParameter{.name = "total", .mode = ParameterMode::InOut, .registerIndex = 0},
+        SubprogramParameter{.name = "step", .mode = ParameterMode::In, .registerIndex = 1}};
+    accumulate.resultType = Type::bits(8, false, true);
+    accumulate.resultRegister = 2;
+    accumulate.readSet = {1};
+    accumulate.calls.push_back(CallSite{.definition = "",
+                                        .subprogram = "accumulate$8",
+                                        .arguments = {Operand::reg(0), Operand::reg(1)},
+                                        .result = Operand::reg(2),
+                                        .location = SourceLocation(buffer, 31)});
+    BasicBlock accumulateEntry;
+    accumulateEntry.label = "entry";
+    accumulateEntry.instructions.push_back(Instruction::make(Opcode::Call, {}, Operand::call(0)));
+    accumulateEntry.instructions.push_back(Instruction::make(Opcode::Return));
+    accumulate.blocks.push_back(std::move(accumulateEntry));
+    definition.subprograms.push_back(std::move(accumulate));
 
     definition.parameters.push_back(Parameter{.name = "WIDTH",
                                               .value = literal("32'd8"),
@@ -229,6 +289,11 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     EXPECT_TRUE(definition.objects[1].type.isFourState());
     EXPECT_TRUE(definition.objects[1].isAlias);
     EXPECT_EQ(definition.objects[1].enumIndex, 0U);
+    EXPECT_EQ(definition.objects[1].encoding, Encoding::VhdlLogic);
+    EXPECT_EQ(definition.objects[0].encoding, Encoding::Bits);
+    EXPECT_EQ(definition.objects[1].resolution.function, "IEEE.STD_LOGIC_1164.RESOLVED(Y)U");
+    EXPECT_EQ(definition.objects[1].resolution.elementBits, 8U);
+    EXPECT_FALSE(definition.objects[0].resolution.resolved());
     ASSERT_TRUE(definition.objects[1].initialValue.has_value());
     // Read through `value_or` rather than dereferenced: the assertion above already returns
     // from the test on an empty optional, but clang-tidy follows an `if` and not a GoogleTest
@@ -250,7 +315,9 @@ TEST_F(SerializationTest, PortsAndInstancesRoundTrip) {
     EXPECT_EQ(definition.instances[0].definitionName, "child");
     ASSERT_EQ(definition.instances[0].connections.size(), 2U);
     EXPECT_TRUE(definition.instances[0].connections[0].connected());
+    EXPECT_EQ(definition.instances[0].connections[0].driveObjectIndex, 0U);
     EXPECT_FALSE(definition.instances[0].connections[1].connected());
+    EXPECT_EQ(definition.instances[0].connections[1].driveObjectIndex, PortConnection::Unconnected);
 }
 
 TEST_F(SerializationTest, ProcessesRoundTrip) {
@@ -259,6 +326,9 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     const Process& process = decoded.front().processes.front();
 
     EXPECT_EQ(process.kind, ProcessKind::AlwaysFf);
+    EXPECT_TRUE(process.drivesSignals);
+    EXPECT_TRUE(process.postponed);
+    EXPECT_TRUE(process.connectsPort);
     EXPECT_EQ(process.name, "always_ff@counter.sv:14");
     EXPECT_EQ(process.location, SourceLocation(buffer, 14));
 
@@ -294,6 +364,46 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     EXPECT_EQ(process.writeSet,
               (std::vector<WriteExtent>{WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
                                         WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}}));
+}
+
+TEST_F(SerializationTest, SubprogramsAndCallsRoundTrip) {
+    const std::vector<ModuleDefinition> decoded = roundTrip({richModule(buffer)});
+    const ModuleDefinition& definition = decoded.front();
+
+    ASSERT_EQ(definition.processes.front().calls.size(), 1U);
+    const CallSite& call = definition.processes.front().calls.front();
+    EXPECT_EQ(call.definition, "arith::");
+    EXPECT_EQ(call.subprogram, "accumulate$8");
+    EXPECT_EQ(call.arguments, (std::vector<Operand>{Operand::reg(1), Operand::constant(0)}));
+    EXPECT_EQ(call.result, Operand::reg(1));
+    EXPECT_EQ(call.location, SourceLocation(buffer, 22));
+
+    ASSERT_EQ(definition.subprograms.size(), 1U);
+    const Subprogram& subprogram = definition.subprograms.front();
+    EXPECT_EQ(subprogram.name, "accumulate$8");
+    EXPECT_EQ(subprogram.location, SourceLocation(buffer, 30));
+    EXPECT_EQ(subprogram.registerTypes.size(), 3U);
+    EXPECT_EQ(
+        subprogram.parameters,
+        (std::vector<SubprogramParameter>{
+            SubprogramParameter{.name = "total", .mode = ParameterMode::InOut, .registerIndex = 0},
+            SubprogramParameter{.name = "step", .mode = ParameterMode::In, .registerIndex = 1}}));
+    EXPECT_EQ(subprogram.resultType, Type::bits(8, false, true));
+    EXPECT_EQ(subprogram.resultRegister, 2U);
+    EXPECT_EQ(subprogram.readSet, (std::vector<std::uint32_t>{1}));
+    ASSERT_EQ(subprogram.calls.size(), 1U);
+    EXPECT_TRUE(subprogram.calls.front().definition.empty());
+    EXPECT_FALSE(subprogram.calls.front().arguments.empty());
+    ASSERT_EQ(subprogram.blocks.size(), 1U);
+    EXPECT_EQ(subprogram.blocks.front().instructions.front().a, Operand::call(0));
+}
+
+TEST_F(SerializationTest, AProcedureRoundTripsWithoutAResult) {
+    ModuleDefinition definition = richModule(buffer);
+    definition.subprograms.front().resultType = Type::voidType();
+
+    const std::vector<ModuleDefinition> decoded = roundTrip({definition});
+    EXPECT_FALSE(decoded.front().subprograms.front().isFunction());
 }
 
 TEST_F(SerializationTest, InstructionLocationsRoundTrip) {
@@ -340,7 +450,7 @@ TEST_F(SerializationTest, AnInstructionWithNoLocationStaysWithoutOne) {
     EXPECT_FALSE(decoded.front().processes[0].blocks[0].instructions[0].location.valid());
 }
 
-TEST_F(SerializationTest, EnumerationsAndParametersRoundTrip) {
+TEST_F(SerializationTest, EnumerationsVhdlTypesAndParametersRoundTrip) {
     const std::vector<ModuleDefinition> decoded = roundTrip({richModule(buffer)});
     const ModuleDefinition& definition = decoded.front();
 
@@ -349,6 +459,9 @@ TEST_F(SerializationTest, EnumerationsAndParametersRoundTrip) {
     ASSERT_EQ(definition.enums[0].members.size(), 2U);
     EXPECT_EQ(definition.enums[0].members[1].name, "S_RUN");
     EXPECT_EQ(definition.enums[0].members[1].value, literal("2'b01"));
+
+    ASSERT_EQ(definition.vhdlTypes.size(), 3U);
+    EXPECT_EQ(definition.vhdlTypes, richModule(buffer).vhdlTypes);
 
     ASSERT_EQ(definition.parameters.size(), 2U);
     EXPECT_EQ(definition.parameters[0].name, "WIDTH");

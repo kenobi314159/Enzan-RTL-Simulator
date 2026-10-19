@@ -130,6 +130,41 @@ endif()
 message(STATUS "Using zlib ${ZLIB_VERSION_STRING}")
 
 # ---------------------------------------------------------------------------
+# flex and zstd — building NVC's analysis (DESIGN_GUIDE.md section 5.2)
+# ---------------------------------------------------------------------------
+
+# Needed only by the VHDL frontend, and only to build the part of NVC it uses
+# (docs/nvc_integration.md). NVC's lexer is a flex source, so flex runs at build time and
+# nothing of it is linked. NVC compresses the analysed units it writes into a library with
+# zstd, whose header its file layer includes unconditionally. Neither has a source fallback:
+# both are packaged everywhere Enzan builds.
+if(ENZAN_ENABLE_VHDL)
+  find_package(FLEX QUIET)
+  if(NOT FLEX_FOUND)
+    enzan_dependency_missing(
+      NAME FLEX
+      PURPOSE
+        "generating NVC's VHDL lexer for the VHDL frontend; configure with -DENZAN_ENABLE_VHDL=OFF to skip it"
+      ARCH flex
+      DEBIAN flex
+      FEDORA flex)
+  endif()
+  message(STATUS "Using flex ${FLEX_VERSION}")
+
+  find_package(ZSTD 1.4 QUIET)
+  if(NOT ZSTD_FOUND)
+    enzan_dependency_missing(
+      NAME ZSTD
+      PURPOSE
+        "the analysed VHDL units NVC writes into a library, which it compresses with zstd; configure with -DENZAN_ENABLE_VHDL=OFF to skip the VHDL frontend"
+      ARCH zstd
+      DEBIAN libzstd-dev
+      FEDORA libzstd-devel)
+  endif()
+  message(STATUS "Using zstd ${ZSTD_VERSION}")
+endif()
+
+# ---------------------------------------------------------------------------
 # slang — SystemVerilog frontend (DESIGN_GUIDE.md section 5.1)
 # ---------------------------------------------------------------------------
 
@@ -222,7 +257,8 @@ if(ENZAN_BUILD_GUI)
   if(NOT TCL_FOUND)
     enzan_dependency_missing(
       NAME TCL
-      PURPOSE "the Tcl theme language of the graphical front end"
+      PURPOSE
+        "the Tcl theme language of the graphical front end; configure with -DENZAN_BUILD_GUI=OFF to skip it"
       ARCH tcl
       DEBIAN tcl-dev
       FEDORA tcl-devel)
@@ -246,7 +282,7 @@ if(ENZAN_BUILD_GUI)
   if(NOT Qt6_FOUND)
     enzan_dependency_missing(
       NAME Qt6
-      PURPOSE "the Qt 6 Widgets graphical front end"
+      PURPOSE "the Qt 6 Widgets graphical front end; configure with -DENZAN_BUILD_GUI=OFF to skip it"
       ARCH qt6-base
       DEBIAN qt6-base-dev
       FEDORA qt6-qtbase-devel)

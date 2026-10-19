@@ -292,9 +292,17 @@ void WaveformView::onScrollBarMoved(int value) {
 // Cursors
 // ---------------------------------------------------------------------------
 
+void WaveformView::updateActive() {
+    previouslyActive =
+        std::clamp(static_cast<int>(cursorList.size()) - 2, 0, static_cast<int>(cursorList.size()));
+    active =
+        std::clamp(static_cast<int>(cursorList.size()) - 1, 0, static_cast<int>(cursorList.size()));
+}
+
 int WaveformView::addCursor(const QString& name, runtime::SimTime time) {
     cursorList.push_back(WaveCursor{.name = name, .time = time, .locked = false});
-    setActiveCursor(static_cast<int>(cursorList.size()) - 1);
+    updateActive();
+    update();
     return static_cast<int>(cursorList.size()) - 1;
 }
 
@@ -304,8 +312,7 @@ void WaveformView::removeCursor(int index) {
     if (index < 0 || index >= cursorList.size() || cursorList.size() == 1) return;
 
     cursorList.remove(index);
-    active = std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1);
-    previouslyActive = std::clamp(previouslyActive, 0, static_cast<int>(cursorList.size()) - 1);
+    updateActive();
     update();
     Q_EMIT cursorsChanged();
 }
@@ -313,8 +320,9 @@ void WaveformView::removeCursor(int index) {
 void WaveformView::setActiveCursor(int index) {
     if (index < 0 || index >= cursorList.size() || index == active) return;
 
-    previouslyActive = active;
-    active = index;
+    const WaveCursor cursor = cursorList.takeAt(index);
+    cursorList.push_back(cursor);
+
     update();
     Q_EMIT cursorsChanged();
 }
@@ -1145,7 +1153,7 @@ void WaveformView::mousePressEvent(QMouseEvent* event) {
         const int label = cursorLabelAt(event->pos());
         if (label >= 0) {
             setActiveCursor(label);
-            showCursorMenu(label, event->globalPosition().toPoint());
+            showCursorMenu(active, event->globalPosition().toPoint());
             return;
         }
 

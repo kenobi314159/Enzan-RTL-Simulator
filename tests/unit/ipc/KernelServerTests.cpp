@@ -142,6 +142,53 @@ Design tickingDesign() {
     return design;
 }
 
+/// A design of one std_ulogic signal, held as its code, a byte, as the VHDL frontend holds it:
+/// '1' at first and '0' from time twenty.
+Design codedDesign() {
+    ProcessBuilder driver(ProcessKind::Initial, "once");
+    const std::uint32_t delay = driver.reg(Type::bits(32, false, false));
+    const std::uint32_t value = driver.reg(Type::bits(8, false, false));
+    const std::uint32_t twenty = driver.constant("32'd20");
+    const std::uint32_t zero = driver.constant("8'd2");
+
+    driver.block("entry");
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(delay), Operand::constant(twenty)));
+    driver.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    driver.block("after");
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(zero)));
+    driver.store(0, value);
+    driver.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition top;
+    top.name = "tb";
+    top.sourceName = "tb";
+    top.addObject(Object{.name = "ready",
+                         .type = Type::bits(8, false, false),
+                         .initialValue = enzan::eir::BitVector::parse("8'd3"),
+                         .encoding = enzan::eir::Encoding::VhdlLogic});
+    top.processes.push_back(driver.finish());
+
+    Design design;
+    design.addModule(std::move(top));
+    return design;
+}
+
+/// codedDesign's, with a std_logic_vector of a null range beside its signal: a placeholder bit
+/// that holds nothing, as the VHDL frontend declares one.
+Design nullDesign() {
+    const Design design = codedDesign();
+    ModuleDefinition top = design.modules().front();
+    top.addObject(Object{.name = "nothing",
+                         .type = Type::bits(1, false, false),
+                         .encoding = enzan::eir::Encoding::VhdlLogic,
+                         .holdsNothing = true});
+    Design withNull;
+    withNull.addModule(std::move(top));
+    return withNull;
+}
+
 /// A design whose only process waits twenty time units and then stops for good.
 Design settlingDesign() {
     ProcessBuilder driver(ProcessKind::Initial, "once");
@@ -1033,6 +1080,92 @@ TEST_F(ServerFixture, HistoryHonoursTheRequestedRange) {
         EXPECT_GE(entry.time, 30U);
         EXPECT_LT(entry.time, 60U);
     }
+}
+
+TEST_F(ServerFixture, ASignalOfVhdlCodesIsListedAtTheWidthItsValuesComeAt) {
+    // A std_ulogic is held as its code and its values are sent as the bit it stands for. A
+    // client told the code's width keeps a trace eight bits wide and drops every one of them as
+    // the wrong width, which left every std_logic of a VHDL design without a value or a wave.
+    rebuild(codedDesign());
+    connectClient();
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    ASSERT_EQ(objects.objects.size(), 1U);
+    EXPECT_EQ(objects.objects[0].width, 1U);
+
+    SubscribeMessage subscribe;
+    subscribe.signalIndices = {signalIndex("/tb/ready")};
+    request(MessageType::Subscribe, subscribe);
+    const auto history = expect<HistoryMessage>(MessageType::History);
+    EXPECT_EQ(history.width, 1U);
+    ASSERT_EQ(history.entries.size(), 1U);
+    EXPECT_EQ(history.entries[0].value.width(), history.width);
+    EXPECT_EQ(enzan::eir::toString(history.entries[0].value.ref(), enzan::eir::Radix::Binary), "1");
+
+    RunMessage run;
+    run.duration = 100;
+    request(MessageType::Run, run);
+    const std::vector<ValueChangesMessage> batches =
+        expectAll<ValueChangesMessage>(MessageType::ValueChanges);
+    ASSERT_EQ(batches.size(), 1U);
+    ASSERT_EQ(batches[0].updates.size(), 1U);
+    EXPECT_EQ(batches[0].updates[0].value.width(), history.width);
+    EXPECT_EQ(enzan::eir::toString(batches[0].updates[0].value.ref(), enzan::eir::Radix::Binary),
+              "0");
+}
+
+TEST_F(ServerFixture, ASignalOfANullRangeIsListedWithNoBitsAndSendsNothing) {
+    // Its one bit is a placeholder, shown as no bits at all; a history of it was a value of no
+    // bits, which no bit vector can be, and the kernel stopped on it.
+    rebuild(nullDesign());
+    connectClient();
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    ASSERT_EQ(objects.objects.size(), 2U);
+    EXPECT_EQ(objects.objects[1].name, "nothing");
+    EXPECT_EQ(objects.objects[1].width, 0U);
+
+    SubscribeMessage subscribe;
+    subscribe.signalIndices = {signalIndex("/tb/ready"), signalIndex("/tb/nothing")};
+    request(MessageType::Subscribe, subscribe);
+    const std::vector<HistoryMessage> histories = expectAll<HistoryMessage>(MessageType::History);
+    ASSERT_EQ(histories.size(), 1U);
+    EXPECT_EQ(histories[0].signalIndex, signalIndex("/tb/ready"));
+
+    // And the kernel is still there to run.
+    RunMessage run;
+    run.duration = 100;
+    request(MessageType::Run, run);
+    const auto states = expectAll<RunStateMessage>(MessageType::RunState);
+    ASSERT_GE(states.size(), 2U);
+    EXPECT_EQ(states.front().state, SimulationState::Running);
+    EXPECT_NE(states.back().state, SimulationState::Running);
+}
+
+TEST_F(ServerFixture, ADepositIntoAVhdlSignalIsTheBitsItShowsAs) {
+    // As the window sends one, at the width the signal was listed at: `0` into a std_logic is
+    // its '0', and nothing can be written into a null array.
+    rebuild(nullDesign());
+    connectClient();
+
+    DepositMessage deposit;
+    deposit.signalIndex = signalIndex("/tb/ready");
+    deposit.value = literal("1'b0");
+    request(MessageType::Deposit, deposit);
+    EXPECT_EQ(session->examine(signalIndex("/tb/ready"), enzan::eir::Radix::Binary), "0");
+
+    ForceMessage force;
+    force.signalIndex = signalIndex("/tb/nothing");
+    force.value = literal("1'b1");
+    request(MessageType::Force, force);
+    const auto failure = expect<FailureMessage>(MessageType::Failure);
+    EXPECT_NE(failure.reason.find("null array"), std::string::npos) << failure.reason;
 }
 
 TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {

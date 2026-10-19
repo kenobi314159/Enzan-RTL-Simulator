@@ -56,8 +56,8 @@ bool Scheduler::allRegionsEmpty() const noexcept {
     return std::ranges::all_of(queues, [](const Queue& queue) { return queue.empty(); });
 }
 
-void Scheduler::scheduleAt(SimTime time, std::uint32_t processIndex) {
-    timeWheel[time].push_back(processIndex);
+void Scheduler::scheduleAt(SimTime time, std::uint32_t processIndex, Region region) {
+    timeWheel[time].push_back(Timed{.processIndex = processIndex, .region = region});
 }
 
 SimTime Scheduler::nextEventTime() const noexcept {
@@ -68,7 +68,7 @@ void Scheduler::releaseTime(SimTime time) {
     const auto found = timeWheel.find(time);
     if (found == timeWheel.end()) return;
 
-    for (const std::uint32_t processIndex : found->second) schedule(Region::Active, processIndex);
+    for (const Timed& timed : found->second) schedule(timed.region, timed.processIndex);
 
     timeWheel.erase(found);
 }

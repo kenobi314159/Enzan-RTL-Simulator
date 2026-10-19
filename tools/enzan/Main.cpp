@@ -34,7 +34,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+// Simulating needs a frontend to analyse with, and either language's will do.
+#if defined(ENZAN_WITH_SYSTEMVERILOG) || defined(ENZAN_WITH_VHDL)
+#define ENZAN_WITH_FRONTEND
+#endif
+
+#ifdef ENZAN_WITH_FRONTEND
 #include "ipc/KernelServer.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
@@ -123,11 +128,24 @@ Libraries:
       --in-lib <name>=<dir>
                           The same, overriding the name the library carries.
       --name <n>          The name `lib create` gives a library.
+      --work <name>       The library VHDL sources are analysed into, which they
+                          name it by: `library neorv32;`. Default `work`.
+      --std <1993|2000|2002|2008|2019>
+                          The revision of IEEE 1076 VHDL sources are analysed
+                          against, or its last two digits. Default 2008.
+      --ieee-asserts <enable|disable>
+                          Whether the IEEE packages' own warnings, numeric_std's
+                          of metavalues and truncation, are reported. As GHDL's
+                          option of the name; enabled by default.
 
 Simulation:
   -t, --top <module>      Module to elaborate as the top level. `elaborate` and
                           `run` take it as their one positional word instead.
   -r, --run <time>        Stop after this many time units.
+      --assert-level <note|warning|error|failure|none>
+                          The severity at which a VHDL report or failed assertion
+                          ends the run, as GHDL's option of the name. Default
+                          `failure`; `none` never ends it.
       --vcd <file>        Write a VCD waveform to this file.
       --fst <file>        Write an FST waveform to this file. Far smaller on a
                           real design, and seekable. Both may be given at once.
@@ -140,6 +158,10 @@ Simulation:
       --dump-stats        Print instruction and delta counts when the run ends.
       --vpi <lib[:entry]> Load a VPI application, such as cocotb's; repeatable.
                           Without an entry, its vlog_startup_routines are run.
+      --vhpi <lib[:entry]>
+                          Load a VHPI application, such as cocotb's for a VHDL
+                          toplevel; repeatable. Without an entry, its
+                          vhpi_startup_routines are run.
   +<plusarg>              Passed to the design and to VPI applications.
 
 Graphical front end:
@@ -197,6 +219,15 @@ struct Invocation {
 
     /// Top-level parameter overrides, each `NAME=VALUE`.
     std::vector<std::string> parameters;
+
+    /// The library VHDL sources are analysed into, by the name they refer to it by.
+    std::string workLibrary = "work";
+    std::string vhdlStandard = "2008";
+    bool ieeeWarnings = true;
+
+    /// The severity, as a position of `severity_level`, at which a VHDL report ends the run; 4
+    /// never does.
+    std::uint8_t stopSeverity = 3;
     std::string topModule;
     std::optional<std::uint64_t> runUntil;
     std::filesystem::path vcdPath;
@@ -209,8 +240,10 @@ struct Invocation {
     std::uint32_t seed = 0;
     bool dumpStatistics = false;
 
-    /// VPI applications to load, in the order given (DESIGN_GUIDE.md section 9.1).
+    /// VPI and VHPI applications to load, each in the order given (DESIGN_GUIDE.md sections 9.1
+    /// and 9.7).
     std::vector<std::string> vpiApplications;
+    std::vector<std::string> vhpiApplications;
 
     /// The command line as it was given, which is what `vpi_get_vlog_info` reports.
     std::vector<std::string> commandLine;
@@ -316,6 +349,54 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             invocation.topModule = value;
+            continue;
+        }
+
+        if (argument == "--work") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            invocation.workLibrary = value;
+            continue;
+        }
+
+        if (argument == "--std") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            static constexpr std::array<std::string_view, 10> Revisions{
+                "1993", "93", "2000", "00", "2002", "02", "2008", "08", "2019", "19"};
+            if (std::ranges::find(Revisions, std::string_view(value)) == Revisions.end()) {
+                std::cerr << "enzan: '" << value
+                          << "' is not a revision of VHDL: 1993, 2000, 2002, 2008 or 2019\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.vhdlStandard = value;
+            continue;
+        }
+
+        if (argument == "--ieee-asserts") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            const std::string_view chosen = value;
+            if (chosen != "enable" && chosen != "disable") {
+                std::cerr << "enzan: '" << chosen << "' is not `enable` or `disable`\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.ieeeWarnings = chosen == "enable";
+            continue;
+        }
+
+        if (argument == "--assert-level") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            static constexpr std::array<std::string_view, 5> Severities{"note", "warning", "error",
+                                                                        "failure", "none"};
+            const auto* const found = std::ranges::find(Severities, std::string_view(value));
+            if (found == Severities.end()) {
+                std::cerr << "enzan: '" << value
+                          << "' is not a severity: note, warning, error, failure or none\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.stopSeverity = static_cast<std::uint8_t>(found - Severities.begin());
             continue;
         }
 
@@ -435,6 +516,18 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             if (value == nullptr) return ParseOutcome::BadUsage;
             invocation.vpiApplications.emplace_back(value);
             continue;
+        }
+
+        if (argument == "--vhpi") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+#ifdef ENZAN_WITH_VHDL
+            invocation.vhpiApplications.emplace_back(value);
+            continue;
+#else
+            std::cerr << "enzan: '--vhpi' needs the VHDL frontend, which this build leaves out\n";
+            return ParseOutcome::BadUsage;
+#endif
         }
 
         if (argument == "--out-lib") {
@@ -580,7 +673,7 @@ std::filesystem::path frontEndProgram() {
     return "enzan-gui";
 }
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
 
 /// The socket a signal handler has to remove, and nothing else.
 ///
@@ -620,7 +713,7 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
     }
 }
 
-#endif // ENZAN_WITH_SYSTEMVERILOG
+#endif // ENZAN_WITH_FRONTEND
 
 /// The window's own options, as the front end spells them.
 ///
@@ -667,7 +760,7 @@ std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::exit(static_cast<int>(ExitStatus::Usage));
 }
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
 
 /// Starts a window attached to `socketPath`, and returns its process id or -1.
 ///
@@ -699,7 +792,7 @@ std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::_Exit(static_cast<int>(ExitStatus::Usage));
 }
 
-#endif // ENZAN_WITH_SYSTEMVERILOG
+#endif // ENZAN_WITH_FRONTEND
 
 /// Replaces this process with a window attached to an already-listening kernel.
 ///
@@ -737,10 +830,14 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
         request.parameters.push_back(parameter);
 
     request.contextFiles = invocation.contextFiles;
+    request.top = invocation.topModule;
+    request.vhdlWork = invocation.workLibrary;
+    request.ieeeWarnings = invocation.ieeeWarnings;
+    request.vhdlStandard = invocation.vhdlStandard;
     return true;
 }
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
 
 /// Builds the session every path shares: analysis and elaboration, once.
 ///
@@ -796,6 +893,7 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
     // libraries alone skips analysis, and a seed or a delta limit given to it would otherwise be
     // dropped without a word.
     session.setDeltaLimit(invocation.deltaLimit);
+    session.setStopSeverity(invocation.stopSeverity);
     session.setSeed(invocation.seed);
 
     // A run given nothing but libraries has no sources of its own to analyse, and elaboration
@@ -893,6 +991,10 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
         if (!session.loadVpiApplication(application, invocation.commandLine))
             return ExitStatus::AnalysisFailed;
     }
+    for (const std::string& application : invocation.vhpiApplications) {
+        if (!session.loadVhpiApplication(application, invocation.commandLine))
+            return ExitStatus::AnalysisFailed;
+    }
 
     if (!prepare(invocation, session, sources, diagnostics)) return ExitStatus::AnalysisFailed;
 
@@ -944,9 +1046,9 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     return ExitStatus::Success;
 }
 
-#endif // ENZAN_WITH_SYSTEMVERILOG
+#endif // ENZAN_WITH_FRONTEND
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
 
 /// Writes a `make`-style dependency file naming every file the analysis read (8.3).
 ///
@@ -988,7 +1090,7 @@ bool writeDependencyFile(const Invocation& invocation, const enzan::session::Ses
     return false;
 }
 
-#endif // ENZAN_WITH_SYSTEMVERILOG
+#endif // ENZAN_WITH_FRONTEND
 
 /// `enzan lib create|list|clean`.
 ExitStatus runLibCommand(const Invocation& invocation, enzan::DiagnosticEngine& diagnostics) {
@@ -1084,10 +1186,10 @@ int main(int argc, char** argv) {
     if (!invocation.writeThemePath.empty()) becomeFrontEnd(frontEndOptions(invocation));
 
     // An application observes a simulation, and these commands run none (section 9.1).
-    if (!invocation.vpiApplications.empty() && invocation.command != Command::Run
-        && invocation.command != Command::OneShot) {
-        std::cerr << "enzan: '--vpi' needs a simulation to load into; give it to `run` or to "
-                     "the one-shot form\n";
+    if ((!invocation.vpiApplications.empty() || !invocation.vhpiApplications.empty())
+        && invocation.command != Command::Run && invocation.command != Command::OneShot) {
+        std::cerr << "enzan: '--vpi' and '--vhpi' need a simulation to load into; give them to "
+                     "`run` or to the one-shot form\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 
@@ -1185,7 +1287,7 @@ int main(int argc, char** argv) {
         return static_cast<int>(printExpandedSources(invocation, sources, diagnostics));
     }
 
-#ifdef ENZAN_WITH_SYSTEMVERILOG
+#ifdef ENZAN_WITH_FRONTEND
     if (invocation.command == Command::Analyse) {
         enzan::session::Session session(sources, diagnostics);
         const bool analysed = analyseOnly(invocation, session, sources, diagnostics);
@@ -1212,7 +1314,8 @@ int main(int argc, char** argv) {
     // Building without the frontend is a legitimate configuration — it is what the CI build
     // matrix uses — so it must fail with the reason rather than with a link error.
     diagnostics.report(enzan::DiagCode::NotYetImplemented, enzan::SourceLocation(),
-                       "simulation in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF");
+                       "simulation in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF "
+                       "and -DENZAN_ENABLE_VHDL=OFF");
     return static_cast<int>(ExitStatus::AnalysisFailed);
 #endif
 }

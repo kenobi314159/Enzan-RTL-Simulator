@@ -36,7 +36,7 @@ public:
     /// `diagnostics` must outlive the compiler.
     explicit Compiler(DiagnosticEngine& engine) noexcept;
 
-    /// Compiles every process of every definition in `design`.
+    /// Compiles every process and every subprogram of every definition in `design`.
     ///
     /// Compiling the whole design rather than only what the current top instantiates:
     /// the result is keyed by definition, so it is reusable across top levels, and
@@ -47,23 +47,37 @@ public:
     std::unique_ptr<CompiledDesign> compile(const eir::Design& design);
 
 private:
-    /// Compiles one process body. Returns false having reported why, on failure.
+    /// Compiles one body, a process's or a subprogram's, into `out`. Returns false having
+    /// reported why, on failure.
+    bool compileBody(const eir::ModuleDefinition& definition, const eir::Body& body,
+                     CompiledBody& out, const std::vector<std::uint32_t>& parameters = {});
+
+    /// Compiles a process: its body, and what the scheduler needs to know of it.
     bool compileProcess(const eir::ModuleDefinition& definition, const eir::Process& process,
-                        CompiledProcess& out);
+                        CompiledBody& out);
 
-    /// Resolves the process's system task descriptors against the register frame and
+    /// Compiles a subprogram: its body, and where a call finds its parameters and result.
+    bool compileSubprogram(const eir::ModuleDefinition& definition,
+                           const eir::Subprogram& subprogram, CompiledBody& out);
+
+    /// Resolves the body's system task descriptors against the register frame and
     /// the compiled constant pool, which must already be built.
-    bool compileSysTaskCalls(const eir::ModuleDefinition& definition, const eir::Process& process,
+    bool compileSysTaskCalls(const eir::ModuleDefinition& definition, const eir::Body& body,
                              const std::vector<std::uint32_t>& registerOffsets,
-                             const std::vector<std::uint32_t>& registerWidths,
-                             CompiledProcess& out);
+                             const std::vector<std::uint32_t>& registerWidths, CompiledBody& out);
 
-    /// Reports malformed EIR, naming the module and the process.
+    /// Resolves the caller's half of each call the body makes against its register frame and
+    /// constant pool.
+    bool compileCalls(const eir::ModuleDefinition& definition, const eir::Body& body,
+                      const std::vector<std::uint32_t>& registerOffsets,
+                      const std::vector<std::uint32_t>& registerWidths, CompiledBody& out);
+
+    /// Reports malformed EIR, naming the module and the body.
     ///
     /// Reaching any of these means the EIR verifier was not run, so the message says
     /// so: a compiler that quietly tolerates bad input is how a frontend bug becomes a
     /// runtime crash.
-    void reportInvalid(const eir::ModuleDefinition& definition, const eir::Process& process,
+    void reportInvalid(const eir::ModuleDefinition& definition, const eir::Body& body,
                        const std::string& message);
 
     DiagnosticEngine& diagnostics;

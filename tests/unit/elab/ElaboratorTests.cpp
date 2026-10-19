@@ -12,6 +12,7 @@
 #include "eir/Type.h"
 
 #include "support/Optionals.h"
+#include "support/ProcessBuilder.h"
 
 #include <gtest/gtest.h>
 
@@ -43,7 +44,11 @@ using enzan::eir::WriteExtent;
 using enzan::elab::ElaboratedDesign;
 using enzan::elab::Elaborator;
 using enzan::elab::Instance;
+using enzan::elab::SlotRange;
+using enzan::elab::SubprogramInstance;
+using enzan::test::ProcessBuilder;
 using enzan::test::require;
+using enzan::test::SubprogramBuilder;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -429,6 +434,76 @@ TEST_F(ElaboratorTest, TheChildsObjectSlotPointsAtTheParentsStorage) {
               require(elaborated->findSlot("/parent/drive"), "slot for /parent/drive"));
 }
 
+TEST_F(ElaboratorTest, APortsDriversDriveTheObjectItsConnectionNames) {
+    // The middle instance reads the object it is connected to and drives the other one, and the
+    // leaf's port collapsed onto the middle's does the same.
+    ModuleDefinition leaf;
+    leaf.name = "leaf";
+    leaf.addObject(Object{.name = "io", .type = Type::bits(8, false, true)});
+    leaf.ports.push_back(Port{.name = "io", .direction = PortDirection::InOut, .objectIndex = 0});
+    design.addModule(std::move(leaf));
+
+    ModuleDefinition middle;
+    middle.name = "middle";
+    middle.addObject(Object{.name = "io", .type = Type::bits(8, false, true)});
+    middle.ports.push_back(Port{.name = "io", .direction = PortDirection::InOut, .objectIndex = 0});
+    enzan::eir::Instance inner;
+    inner.name = "u_leaf";
+    inner.definitionName = "leaf";
+    inner.connections.push_back(PortConnection{.portIndex = 0, .objectIndex = 0});
+    middle.instances.push_back(std::move(inner));
+    design.addModule(std::move(middle));
+
+    ModuleDefinition top;
+    top.name = "top";
+    top.addObject(Object{.name = "effective", .type = Type::bits(8, false, true)});
+    top.addObject(Object{.name = "driving", .type = Type::bits(8, false, true)});
+    enzan::eir::Instance outer;
+    outer.name = "u_middle";
+    outer.definitionName = "middle";
+    outer.connections.push_back(
+        PortConnection{.portIndex = 0, .objectIndex = 0, .driveObjectIndex = 1});
+    top.instances.push_back(std::move(outer));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("top");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+
+    const std::uint32_t effective =
+        require(elaborated->findSlot("/top/effective"), "slot for /top/effective");
+    const std::uint32_t driving =
+        require(elaborated->findSlot("/top/driving"), "slot for /top/driving");
+    for (const std::string_view path : {"/top/u_middle", "/top/u_middle/u_leaf"}) {
+        const Instance& instance = elaborated->instances()[require(
+            elaborated->findInstance(std::string(path)), std::string(path))];
+        EXPECT_EQ(instance.objectSlots[0], effective) << path;
+        EXPECT_EQ(instance.objectDriveSlots[0], driving) << path;
+    }
+}
+
+TEST_F(ElaboratorTest, RejectsADrivenObjectOfAnotherWidthThanItsPort) {
+    ModuleDefinition child;
+    child.name = "child";
+    child.addObject(Object{.name = "io", .type = Type::bits(8, false, true)});
+    child.ports.push_back(Port{.name = "io", .direction = PortDirection::InOut, .objectIndex = 0});
+    design.addModule(std::move(child));
+
+    ModuleDefinition parent;
+    parent.name = "parent";
+    parent.addObject(Object{.name = "effective", .type = Type::bits(8, false, true)});
+    parent.addObject(Object{.name = "narrow", .type = Type::bits(4, false, true)});
+    enzan::eir::Instance instance;
+    instance.name = "u_child";
+    instance.definitionName = "child";
+    instance.connections.push_back(
+        PortConnection{.portIndex = 0, .objectIndex = 0, .driveObjectIndex = 1});
+    parent.instances.push_back(std::move(instance));
+    design.addModule(std::move(parent));
+
+    EXPECT_EQ(elaborate("parent"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::PortWidthMismatch));
+}
+
 TEST_F(ElaboratorTest, RejectsAPortWidthMismatch) {
     // A port is collapsed onto the signal it is connected to, and collapsing a mismatched
     // pair onto one slot would silently read or write the wrong bits. A frontend converts the
@@ -525,6 +600,66 @@ TEST_F(ElaboratorTest, RejectsTwoContinuousAssignmentsDrivingOneObject) {
     EXPECT_EQ(elaborate("tb"), nullptr);
     EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
     EXPECT_TRUE(reported("/tb/net")) << "the report must name the object";
+}
+
+TEST_F(ElaboratorTest, AProcessThatDrivesItsSignalsIsADriverOfThem) {
+    // Each VHDL process has a driver of its own for every signal it assigns, so two of them
+    // assigning one unresolved signal is the error two continuous assignments are, not a race
+    // the last write wins.
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::bits(8, false, false)});
+    top.addObject(Object{.name = "sig", .type = Type::bits(8, false, false)});
+    for (int copy = 0; copy < 2; ++copy) {
+        Process process = makeCopyProcess(ProcessKind::Always, 0, 1, Type::bits(8, false, false));
+        process.drivesSignals = true;
+        top.processes.push_back(std::move(process));
+    }
+    design.addModule(std::move(top));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
+}
+
+/// `tb` with a 16-bit source and a 16-bit signal resolved sixteen bits at a time, as a VHDL
+/// resolution function of composite values resolves, and `drivers` driving the signal.
+ModuleDefinition makeResolvedWhole(std::vector<Process> drivers) {
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::bits(16, false, false)});
+    Object resolved{.name = "sig", .type = Type::bits(16, false, false)};
+    resolved.resolution = {.function = "WORK.PAIRS.COMBINE", .elementBits = 16};
+    top.addObject(std::move(resolved));
+    for (Process& driver : drivers) {
+        driver.drivesSignals = true;
+        top.processes.push_back(std::move(driver));
+    }
+    return top;
+}
+
+TEST_F(ElaboratorTest, DriversOfAValueResolvedWholeShareOneResolution) {
+    design.addModule(makeResolvedWhole(
+        {makeCopyProcess(ProcessKind::Always, 0, 1, Type::bits(16, false, false)),
+         makeCopyProcess(ProcessKind::Always, 0, 1, Type::bits(16, false, false))}));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->segments().size(), 1U);
+    EXPECT_EQ(elaborated->segments()[0].driverCount, 2U);
+    ASSERT_EQ(elaborated->resolutionCalls().size(), 1U);
+    EXPECT_EQ(elaborated->resolutionCalls()[0].elementBits, 16U);
+}
+
+TEST_F(ElaboratorTest, RejectsAProcessDrivingPartOfAValueResolvedWhole) {
+    // The resolution function is given each driver's whole value, and a process driving eight of
+    // its sixteen bits would give it one no process assigned.
+    design.addModule(
+        makeResolvedWhole({makeCopyProcess(ProcessKind::Always, 0, 1, Type::bits(16, false, false)),
+                           makePartDriver(ProcessKind::Always, 0, 1, 8, 8)}));
+
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::NotYetImplemented));
+    EXPECT_TRUE(reported("bits [15:8] of '/tb/sig'")) << consumer.messages.front();
 }
 
 TEST_F(ElaboratorTest, ASubroutinesStaticVariableIsNoContinuousDriversTarget) {
@@ -921,6 +1056,113 @@ TEST_F(ElaboratorTest, APackageNamedAsTheTopLevelIsReported) {
 
     EXPECT_EQ(elaborate("counters"), nullptr);
     EXPECT_TRUE(reportedCode(enzan::DiagCode::PackageNamedAsTop));
+}
+
+// ---------------------------------------------------------------------------
+// Calls of subprograms (DESIGN_GUIDE.md section 4.1)
+// ---------------------------------------------------------------------------
+
+/// A process of `definition` that calls `subprogram` of `callee` with no arguments.
+Process makeCaller(std::string callee, std::string subprogram) {
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    builder.block("entry");
+    builder.call(std::move(callee), std::move(subprogram), {});
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+TEST_F(ElaboratorTest, BindsAModulesSubprogramToEachInstanceThatCallsIt) {
+    // One compiled body, two bindings: each instance's call reaches its own `x`.
+    ModuleDefinition leaf;
+    leaf.name = "leaf";
+    leaf.addObject(Object{.name = "x", .type = Type::bits(8, false, true)});
+    SubprogramBuilder touch("touch");
+    const std::uint32_t value = touch.reg(Type::bits(8, false, true));
+    touch.block("entry");
+    touch.readObject(value, 0);
+    touch.emit(Instruction::make(Opcode::Return));
+    leaf.subprograms.push_back(touch.finish());
+    leaf.processes.push_back(makeCaller("", "touch"));
+
+    ModuleDefinition top;
+    top.name = "top";
+    top.instances.push_back(enzan::eir::Instance{.name = "u0", .definitionName = "leaf"});
+    top.instances.push_back(enzan::eir::Instance{.name = "u1", .definitionName = "leaf"});
+
+    design.addModule(std::move(leaf));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("top");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->subprograms().size(), 2U);
+    ASSERT_EQ(elaborated->processes().size(), 2U);
+
+    for (const enzan::elab::ProcessInstance& process : elaborated->processes()) {
+        ASSERT_EQ(process.calls.size(), 1U);
+        const SubprogramInstance& bound = elaborated->subprograms()[process.calls.front()];
+        EXPECT_EQ(bound.instanceIndex, process.instanceIndex);
+
+        const std::string& path = elaborated->instances()[process.instanceIndex].path;
+        EXPECT_EQ(process.calleeReads,
+                  std::vector<std::uint32_t>{require(elaborated->findSlot(path + "/x"))});
+    }
+}
+
+TEST_F(ElaboratorTest, BindsAPackagesSubprogramToThePackagesOneInstance) {
+    ModuleDefinition package;
+    package.name = "pkg::";
+    package.sourceName = "pkg";
+    package.isPackage = true;
+    package.addObject(Object{.name = "state", .type = Type::bits(8, false, true)});
+    SubprogramBuilder set("set");
+    const std::uint32_t value = set.reg(Type::bits(8, false, true));
+    set.block("entry");
+    set.store(0, value);
+    set.emit(Instruction::make(Opcode::Return));
+    package.subprograms.push_back(set.finish());
+
+    ModuleDefinition top;
+    top.name = "top";
+    top.processes.push_back(makeCaller("pkg::", "set"));
+
+    design.addModule(std::move(package));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("top");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->subprograms().size(), 1U);
+    EXPECT_EQ(elaborated->subprograms().front().instanceIndex,
+              require(elaborated->findInstance("/pkg")));
+
+    const std::uint32_t state = require(elaborated->findSlot("/pkg/state"));
+    EXPECT_EQ(elaborated->processes().front().calleeWrites,
+              (std::vector<SlotRange>{SlotRange{.slot = state, .lowBit = 0, .width = 8}}));
+}
+
+TEST_F(ElaboratorTest, APackageHoldingNoObjectsIsGivenNoInstance) {
+    // Its subprograms touch only their parameters and registers, so there is nothing for an
+    // instance to hold.
+    ModuleDefinition package;
+    package.name = "pure::";
+    package.sourceName = "pure";
+    package.isPackage = true;
+    SubprogramBuilder nothing("nothing");
+    nothing.block("entry");
+    nothing.emit(Instruction::make(Opcode::Return));
+    package.subprograms.push_back(nothing.finish());
+
+    ModuleDefinition top;
+    top.name = "top";
+    top.processes.push_back(makeCaller("pure::", "nothing"));
+
+    design.addModule(std::move(package));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("top");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(elaborated->findInstance("/pure").has_value());
+    ASSERT_EQ(elaborated->subprograms().size(), 1U);
+    EXPECT_EQ(elaborated->subprograms().front().instanceIndex, SubprogramInstance::NoInstance);
 }
 
 } // namespace

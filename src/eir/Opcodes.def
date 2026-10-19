@@ -46,6 +46,11 @@ ENZAN_OPCODE(Truncate, "trunc", true, 1, "trunc of both planes")
 ENZAN_OPCODE(CoerceTwoState, "twostate", true, 1,
              "aval := aval & ~bval, bval := 0, which is the X-to-zero conversion an "
              "assignment into a two-state object performs")
+ENZAN_OPCODE(Convert, "conv", true, 1,
+             "between a real and an integer, one of which the source is: sitofp or uitofp by "
+             "the source's signedness into a real, and llvm.round, halfway away from zero as "
+             "IEEE 1076 section 9.3.6 and IEEE 1800 section 6.12.2 both round, then fptosi "
+             "out of one; an unknown bit of an integer source converts as zero")
 
 // --- State access ----------------------------------------------------------
 //
@@ -87,6 +92,30 @@ ENZAN_OPCODE(StoreDelayed, "dstore", false, 3,
 ENZAN_OPCODE(StoreNonBlockingDelayed, "nbdstore", false, 3,
              "a call to the runtime helper that schedules a non-blocking update the "
              "third operand later, where it joins that time step's NBA region")
+
+// A VHDL signal assignment: a transaction of the process's driver of the object, the third
+// operand later, and in the next delta cycle when that is zero (IEEE 1076 section 10.5.2.2). It
+// first deletes the driver's transactions at or after its own time, so the last assignment of a
+// process run is the one that happens.
+ENZAN_OPCODE(Drive, "drive", false, 3,
+             "a call to the runtime helper that schedules the transaction on the driver's "
+             "projected waveform; as VHDL's inertial delay, it also deletes the transactions "
+             "within the delay before it, but for a run of its own value ending there")
+ENZAN_OPCODE(DriveTransport, "tdrive", false, 3,
+             "as Drive, rejecting nothing before the new transaction: VHDL's transport delay, "
+             "and every element of a waveform after its first")
+ENZAN_OPCODE(DrivePart, "pdrive", false, 3,
+             "as Drive with no delay, of the bits from the offset the third operand gives up, as "
+             "wide as the value: an assignment to an element or a slice of a signal, which "
+             "deletes only what is pending for those bits")
+ENZAN_OPCODE(DrivePartAfter, "pdrivea", false, 3,
+             "as DrivePart after a delay, inertially: the third operand holds the offset in its "
+             "low 64 bits and the delay in the 64 above, two values one operand carries since "
+             "the instruction's other operands are the object and the value; an extract of each "
+             "half, then the call Drive makes")
+ENZAN_OPCODE(DriveTransportPart, "pdrivet", false, 3,
+             "as DrivePartAfter with transport delay, rejecting nothing before the new "
+             "transaction")
 
 // --- Bitwise, element by element -------------------------------------------
 
@@ -133,7 +162,9 @@ ENZAN_OPCODE(LogicalNot, "lnot", true, 1, "the three-valued negation of the trut
 ENZAN_OPCODE(Add, "add", true, 2,
              "a branch on the combined bval planes; the known path is `add` with "
              "llvm.uadd.with.overflow chaining across limbs, the unknown path stores "
-             "all-ones to both planes")
+             "all-ones to both planes; on reals, fadd of the aval planes as doubles, as "
+             "Subtract, Multiply, Divide, Negate and Power are fsub, fmul, fdiv, fneg and "
+             "llvm.powi")
 ENZAN_OPCODE(Subtract, "sub", true, 2, "as Add with `sub` and borrow chaining")
 ENZAN_OPCODE(Multiply, "mul", true, 2,
              "as Add with `mul`; wide values call the runtime helper, since LLVM has "
@@ -184,7 +215,9 @@ ENZAN_OPCODE(CaseXMatch, "cxmatch", true, 2,
              "is set, which is how `casex` compares an item with its selector")
 ENZAN_OPCODE(LessThan, "lt", true, 2,
              "a branch on the combined bval planes to the X result, then icmp ult or "
-             "icmp slt on the aval planes according to the signed flag")
+             "icmp slt on the aval planes according to the signed flag; on reals, fcmp olt "
+             "of the aval planes as doubles, as Equal, NotEqual and LessEqual are fcmp oeq, "
+             "une and ole")
 ENZAN_OPCODE(LessEqual, "le", true, 2, "as LessThan with icmp ule or icmp sle")
 
 // --- Selection and splicing ------------------------------------------------
@@ -206,6 +239,17 @@ ENZAN_OPCODE(Conditional, "sel", true, 3,
 
 // --- Time and system tasks -------------------------------------------------
 
+ENZAN_OPCODE(ReadEvent, "event", true, 1,
+             "a compare of the signal's last-change cycle, an array of the kernel's indexed by "
+             "the signal, against the kernel's current cycle: VHDL's 'event, true when the "
+             "signal changed in the update this cycle began with")
+ENZAN_OPCODE(ReadActive, "active", true, 1,
+             "as ReadEvent, of the cycle the signal last had a transaction or a change in: "
+             "VHDL's 'active, true when the signal was active in the update this cycle began "
+             "with, whether or not its value changed")
+ENZAN_OPCODE(ReadLastValue, "lastvalue", true, 1,
+             "a load from the shadow copy the kernel keeps of the signal's value before its last "
+             "change, for the signals a body reads it of: VHDL's 'last_value")
 ENZAN_OPCODE(ReadTime, "time", true, 0,
              "a load of the kernel's current-time field; the JIT keeps the arena "
              "base and the time field in the same structure so this is one load")
@@ -217,6 +261,20 @@ ENZAN_OPCODE(SysFunction, "sysfunc", true, 1,
              "as SysTask, with a pointer to the result register as a second argument; "
              "a system function's result depends on state the runtime keeps, such as "
              "a random generator")
+
+// --- Calls -----------------------------------------------------------------
+//
+// A call runs a subprogram's body to its return (DESIGN_GUIDE.md section 4.1). It never
+// suspends: a subprogram that waits is inlined into its caller instead, which is what lets the
+// callee be an ordinary LLVM function and its registers live on one stack.
+
+ENZAN_OPCODE(Call, "call", false, 1,
+             "a `call` of the LLVM function the callee's body is compiled to, the call site "
+             "the first operand names giving its in arguments by value and pointers to the "
+             "caller's registers for its out and inout ones; the callee's registers are an "
+             "`alloca` of that function, as they are the kernel's call stack in the "
+             "interpreter, and a function's result is copied into the call site's register "
+             "after the `ret`")
 
 // --- Suspension ------------------------------------------------------------
 //
@@ -236,3 +294,7 @@ ENZAN_OPCODE(WaitEvents, "waitevents", false, 2,
 ENZAN_OPCODE(WaitEdge, "waitedge", false, 3,
              "a call to the scheduler to subscribe to the given edge on the given "
              "object, a store of the resume index, then ret void")
+ENZAN_OPCODE(WaitEventsFor, "waitfor", false, 3,
+             "as WaitEvents, and a call to the scheduler to resume the process after the delay "
+             "the third operand holds should none of the events come first, under the same wait "
+             "generation: VHDL's wait with a timeout and a sensitivity or a condition")

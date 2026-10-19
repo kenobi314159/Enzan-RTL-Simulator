@@ -104,6 +104,7 @@ public:
         runtime::KernelOptions options;
         options.transcript = &transcriptStream;
         options.deltaLimit = deltaLimit;
+        options.callDepthLimit = callDepthLimit;
         kernel = std::make_unique<runtime::Kernel>(*image, engine, options);
         kernel->initialize();
     }
@@ -147,6 +148,9 @@ public:
     /// Delta limit applied to the kernel. Set before constructing to test the limit
     /// without waiting for ten thousand iterations.
     inline static std::uint32_t deltaLimit = 10'000;
+
+    /// Call depth limit applied to the kernel, for the same reason.
+    inline static std::uint32_t callDepthLimit = 10'000;
 
 private:
     SourceManager sources;

@@ -42,6 +42,18 @@ namespace enzan::eir::bitops {
 /// `source`.
 void copy(BitRef dst, ConstBitRef source);
 
+/// The double a real's bits hold (eir::Type::Kind::Real): the aval plane of a 64-bit value.
+[[nodiscard]] double realOf(ConstBitRef value) noexcept;
+
+/// Writes `value` into `dst`, a 64-bit real, with the second plane zero.
+void assignReal(BitRef dst, double value) noexcept;
+
+/// Convert's two directions: `source`, an integer of either signedness, into the real `dst`; and
+/// the real `source` into the integer `dst`, rounded halfway away from zero and wrapped to its
+/// width.
+void integerToReal(BitRef dst, ConstBitRef source, bool isSigned);
+void realToInteger(BitRef dst, ConstBitRef source);
+
 /// Copies `source` into `dst` at any width, zero-extending, sign-extending or
 /// truncating as required. `dst` may alias `source` only when the widths are
 /// equal.
@@ -237,6 +249,15 @@ void partSelectAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex);
 
 /// As `assignPart`, with the index as a plain integer. See `partSelectAt`.
 void assignPartAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex);
+
+/// True when `assignPartAt(dst, source, lowIndex)` would leave `dst` as it is: how a write
+/// learns whether it changes anything before it makes it.
+[[nodiscard]] bool holdsPartAt(ConstBitRef dst, ConstBitRef source, std::uint64_t lowIndex);
+
+/// True when `a` and `b`, of one width, hold the same `width` bits from `lowIndex` up, which
+/// lie within them: how a change of a signal is told to those waiting on part of it.
+[[nodiscard]] bool samePartAt(ConstBitRef a, ConstBitRef b, std::uint64_t lowIndex,
+                              std::uint64_t width);
 
 /// `dst` receives `dst.width()` bits of `source` starting at bit `lowIndex`.
 ///

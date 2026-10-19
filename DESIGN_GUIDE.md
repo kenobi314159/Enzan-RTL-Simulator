@@ -144,8 +144,12 @@ spare Enzan's own translation of each parameterisation and a library's sources a
 the boundary, but slang would still elaborate every parameterisation of the design
 being analysed. And a unit derived from one of slang's bodies would be checked
 against slang only at the values slang saw, and trusted at the others; 1.2 ranks a
-slower analysis above a result that is trusted rather than checked. Whether VHDL
-generics take the same shape is decided by the M6 spike (5.2).
+slower analysis above a result that is trusted rather than checked.
+
+**VHDL generics take the same shape** (5.2). An entity and its architecture become one
+unit per set of generic values, and of the bounds its ports of unconstrained types take from
+their actuals, named for them, with the values folded by the VHDL adapter rather than by
+elaboration.
 
 **Elaboration** takes a named top level plus the libraries, binds each instance
 to the unit for its values, resolves whatever parameters and generics analysis
@@ -296,6 +300,33 @@ Per IEEE 1076, a VHDL simulation cycle is:
    next process timeout.
 6. If `Tn == Tc`, the next cycle is a delta cycle.
 
+**A signal assignment is a transaction of its process's driver.** A VHDL process has one
+driver for each signal it assigns, and each driver a projected waveform of transactions
+waiting for their time (IEEE 1076 section 14.7.2). The kernel keeps that waveform per
+driver, because the language defines an assignment by what it does to it (section
+10.5.2.2): the driver's transactions at or after the new one's time are deleted, so of a
+process's assignments to one signal in one run the last is what happens and the others
+leave no event; and an inertial assignment also deletes those within its rejection limit
+before it, but for a run of its own value ending there, so a pulse shorter than the
+limit never reaches the signal. Treating an assignment as a SystemVerilog non-blocking
+update instead gives every one of them its own event, and a design whose clock stops by
+reassigning it toggles once more.
+
+The drivers are of scalar subelements, so a transaction is of the bits it assigns: an
+assignment to an element or a slice deletes what is pending for those bits and leaves the
+rest of a pending transaction to happen, cut down to what it still assigns.
+
+**A cycle begins with each batch of updates**, a delta cycle's or a time step's, and the
+kernel numbers them. A signal's `'event` is whether it last changed in the cycle now
+running, and its `'last_value` is what it held before that change, which the kernel copies
+aside only for the signals some body reads it of: a shadow of every signal would double the
+state of a design that never asks.
+
+A transaction for the current time takes effect in the next delta cycle, after every
+process of this one has run. A later one takes effect when its time step begins, before
+any process resumes in it, which is step 2 coming before step 3: a process woken by a
+timeout sees the values signals take at that time, not the ones they had before it.
+
 ### 3.5 Mixed-language interleaving
 
 **This is the single hardest correctness problem in the project and it is
@@ -311,6 +342,20 @@ commercial tools on real designs, this section is what gets updated.
 - VHDL has no non-blocking-assignment region. A VHDL delta cycle therefore
   corresponds to one full Active/Inactive/NBA iteration of the SystemVerilog
   time slot.
+- A VHDL process's `wait for 0 ns` is not `#0`: it resumes in the next delta
+  cycle, after that cycle's signal update, where `#0` resumes in Inactive
+  before the NBA updates. The kernel holds such a process until the delta
+  cycle's transactions are applied and then schedules it in Active with the
+  processes those updates wake.
+- A VHDL wait with a timeout and a sensitivity or a condition arms both under one
+  wait generation (`WaitEventsFor`): whichever comes first resumes the process and
+  makes the other stale, and an event that comes first takes the timeout back, so
+  its time is not a step the run stops at. The process waits again for what is left
+  of the timeout while its condition is false.
+- A VHDL postponed process resumes in the **Postponed** region, so it runs
+  once the time step has settled and sees the values the step ends with. At
+  initialization it runs in Inactive, after the other processes and before the
+  first delta cycle (IEEE 1076 section 14.7.5.2).
 - A port connection crossing a language boundary is modelled as a zero-delay
   continuous assignment and **consumes one delta cycle**. This MUST be
   documented in the user manual, because it is observable and will surprise
@@ -344,14 +389,41 @@ cocotb's priority (section 9).
 **Two-state fast path:** a vector whose `bval` words are all zero is
 two-state. The runtime SHOULD branch to specialised two-state operations in
 that case. Two-state is an optimisation of the four-state representation, never
-a separate engine.
+a separate engine. The interpreter does so for the commonest operations on
+values of one word (arithmetic, bitwise operations, comparisons, extension,
+part selects and branches), which is nearly everything VHDL computes, its values
+being two-state codes.
 
-**VHDL `std_logic`** has nine values (`U X 0 1 Z W L H -`) and does not fit two
-planes. It is stored as **one byte per element**, holding the enumeration
-value. Conversion to the packed two-plane form happens at language boundaries,
-in the waveform database, and in the PLI, with `L`→`0`, `H`→`1`, `W`/`U`/`-`→`X`.
-A future optimisation MAY pack `std_logic_vector` values that provably carry
-only `{0,1,X,Z}`; this is not part of the initial implementation.
+**VHDL's values are codes in the same vectors.** `std_logic` has nine values
+(`U X 0 1 Z W L H -`) and does not fit two planes as a value, so it is not stored
+as one: a VHDL scalar is a two-state code in EIR's packed vector type. An
+enumeration, `std_ulogic` among them, is its position in as many whole bytes as
+its values need — **one byte per element** for `std_ulogic`, `bit`, `boolean` and
+`character`, holding the enumeration value — and an integer or a physical value
+such as `time` is signed, 32 or 64 bits as its range needs. A real, VHDL's or
+SystemVerilog's, is its IEEE 754 double's 64 bits in EIR's real type, held as 64 bits
+are; arithmetic and comparison read them as the double, and Convert goes between it
+and an integer, rounding halfway away from zero as both languages round. Records and
+constrained arrays are flat, as SystemVerilog's aggregates are (4.3), so a
+`std_logic_vector(7 downto 0)` is a 64-bit vector of eight codes.
+
+So everything built on bit ranges serves VHDL unchanged: drivers per range and
+resolved segments (3.7), part stores, change detection, waveform capture and
+VPI. What VHDL adds is what a code means, which the type carries — for display,
+for conversion at language boundaries and for range checks. The second plane of
+such a vector is always zero, so a `std_logic` costs two bytes of arena rather
+than one until two-state values are packed into one plane, an optimisation
+`Type::storageWords` already anticipates.
+
+Conversion to the four-state form happens at language boundaries, in the
+waveform database and in the PLI, with `L`→`0`, `H`→`1`, `W`/`U`/`-`→`X`. An EIR
+object carries what its bits mean as its encoding, `std_ulogic` codes, `bit` or `boolean`
+codes, or the value itself, so that what converts needs nothing of VHDL but that: a
+`std_logic_vector(7 downto 0)` shows in a waveform as eight four-state bits.
+
+A new kind of storage for VHDL was rejected because each of the mechanisms above
+would have needed a second path kept in step with the first, which is the
+second engine this section exists to forbid.
 
 Integers, reals, strings and aggregate types use native representations
 described in the EIR type system (section 4).
@@ -399,9 +471,38 @@ Further requirements:
 - VHDL resolution functions are arbitrary user code. They are compiled to EIR like
   any other subprogram and invoked by the runtime. The runtime MUST NOT assume
   resolution is a built-in table.
-- **Single-driver bits MUST bypass resolution entirely**, and a signal all of whose
-  bits have one driver MUST bypass it as a whole rather than bit by bit. This is the
-  common case and it is on the hot path (13.4).
+- **Elaboration asks for a resolution function by its driver count.** Its one parameter
+  is an array as long as the bit has drivers, which only elaboration knows, while the
+  adapter specialises a subprogram for a static shape (5.2). So an EIR object names
+  its function as the design does, by library, the package, entity or architecture declaring
+  it, and signature, with the width of the subelement it resolves, and once elaboration has
+  counted the drivers the session
+  asks the frontend, in a second child over the same sources, for the function
+  specialised to each count, a definition of its own even where an architecture declares
+  it, links what comes back into the design, and elaborates
+  again with it, which binds each segment to its function. The kernel calls it for each
+  subelement with its drivers' values, the first driver's left; a VHDL driver starts at
+  the initial value of the signal its process names, which for an out port is the port's
+  default rather than that of the signal connected to it, and is what the function sees
+  of it until it first runs. Before the run begins the kernel resolves each such signal
+  from its drivers' starting values, which is where the signal starts. A function of
+  composite values, of arrays or of records, resolves each whole value, so a process
+  driving only part of one is refused at elaboration: the function would be given a
+  value no process assigned.
+- **Single-driver bits MUST bypass resolution entirely** where resolving a lone
+  driver is known to return its value unchanged, and a signal all of whose bits
+  are such MUST bypass it as a whole rather than bit by bit. This is the common
+  case and it is on the hot path (13.4). It is known of the built-in tables of
+  every net kind but the pulled and supply ones, and of a VHDL resolution
+  function proven to be the identity on a lone driver by calling it once with each
+  value of its element type, where that is an enumeration of sixteen values or fewer,
+  as NVC does; `ieee.std_logic_1164.resolved` is one. The adapter proves it as it
+  translates, running the function on each as a constant function (5.2), and an EIR
+  object's resolution records it.
+- **Any other resolution function is called for a lone driver too.** VHDL defines a
+  resolved signal's value as its resolution function applied to its sources,
+  however many there are (IEEE 1076 section 14.7.3.2), and a user's function need
+  not return a lone driver's value. Bypassing it would be a different language.
 - A driver's range is fixed at elaboration. A part-select whose bounds are not
   constant does not create a driver over the bits it might touch; it is a write
   through the driver that owns them, and a design that drives one signal from two
@@ -415,9 +516,10 @@ select — so the drivers of a signal are known before anything runs, and elabor
 finds where they overlap. The runtime keeps no record of which driver owns which bit, because nothing
 about ownership changes once elaboration is done.
 
-- **A signal none of whose bits has two drivers carries no driver state at all.**
-  Every legal variable is one, and so is most of every net. A write goes straight
-  into the signal, which is how such a signal bypasses resolution as a whole.
+- **A signal none of whose bits has two drivers carries no driver state at all**,
+  unless its resolution must still be applied to a lone driver, as above. Every
+  legal variable is one, and so is most of every net. A write goes straight into
+  the signal, which is how such a signal bypasses resolution as a whole.
 - **A signal with a bit driven more than once is split into segments**: maximal runs
   of bits driven by the same set of drivers. Each driver of such a signal has its own
   value in the arena, in both planes, over its range; each segment lists its drivers
@@ -434,6 +536,12 @@ about ownership changes once elaboration is done.
   drivers of it — more than one when it writes separate ranges of the object, in which
   case a part store goes through the one holding its bits. A JIT, which specialises a
   process per instance, burns the answer in as a constant.
+- **What a store writes need not be what a read of the same name reads.** A port connection
+  may name a second object for the instance's drivers of the port, and elaboration binds the
+  port to the slot it reads and the slot its drivers write, a port collapsed onto it taking
+  both. Every driver of the port at any depth then drives that slot, and every read sees the
+  other. It is how a VHDL inout port associated through a conversion or with part of a signal
+  keeps its driving value apart from its effective value (5.2), which no single slot can hold.
 
 A per-bit table of owning drivers was rejected because it holds at run time a fact
 that is fixed at elaboration, and pays a lookup on every write, single-driver ones
@@ -498,6 +606,45 @@ cover arithmetic, logical and bitwise ops, part- and bit-selects, concatenation,
 comparison, branching, calls, signal reads, blocking and non-blocking drives,
 and the suspension primitives (`wait` on event, on time, on condition).
 
+**A subprogram is a body that is called rather than scheduled.** It is the same
+control-flow graph a process is, over registers of its own, with parameters, a
+result, and the read and write sets of what it reaches beyond its parameters
+(4.2). It belongs to the definition that declares it — a package's to the
+package, an architecture's to the architecture — and a call names it by its
+definition and its name, resolved when the design is compiled as an instance is
+resolved at elaboration. Nothing in it is particular to VHDL: a SystemVerilog
+function is the same thing, and the frontend that inlines one today can call it
+instead without anything downstream changing.
+
+- **A subprogram is specialised by the lengths of its unconstrained
+  parameters**, as a unit is by its generics (5.2), so that every width in EIR
+  stays fixed: `numeric_std."+"` called on 8-bit and on 32-bit operands is two
+  bodies, each named for its lengths. So it is by the values of the scalars its
+  own widths are computed from, which a call has to give statically, and of
+  those it passes on to what it calls as widths, where the call has them:
+  `slv_array_deser(v, items)` is a body for each number of items it is called
+  with. A variable of a subprogram folds where every path reaching it leaves it
+  a static value, so that a width computed into one, `width := v'length /
+  items`, is as static as what it is computed from.
+- **A call's frame lives on one stack the kernel owns.** A subprogram never
+  suspends — a VHDL procedure that waits, like a SystemVerilog task with a delay,
+  is inlined into its caller, and so is one with a signal parameter, whose body
+  needs to know which signal it is — so every frame a process pushes is popped
+  before the process suspends, and one stack serves every process of a
+  single-threaded kernel (6.4). It is laid out at elaboration, sized for the
+  deepest chain of calls the design can make, and a recursive design is given a
+  depth limit, configurable, past which the run stops with a diagnostic naming the
+  subprogram, as the delta limit does (3.2).
+- **A caller's sets include its callees'.** A process declares what it touches
+  itself; elaboration adds what its callees touch, bound to the instances they
+  touch it in, so the bound process's sets are exactly what a run of it can reach
+  (4.2).
+- **A value whose length is known only when it is computed** — `integer'image`,
+  `to_string`, a concatenation of either — lives in scratch the kernel resets
+  whenever a process suspends. It is a temporary of one activation, which is all
+  a VHDL expression of unconstrained type is; anything that has to outlive it is
+  stored in an object of fixed size or in the heap of 4.3.
+
 ### 4.2 The core invariant
 
 **Every EIR process MUST be expressible as a pure function over an explicit
@@ -536,6 +683,35 @@ bit has nothing here but itself. The segment tables and the store routing of 3.7
 fixed at elaboration and only read during a run, so they belong to the image rather
 than to the arena, and a checkpoint has nothing of theirs to save. Nothing about
 drivers is sized at run time, which on the write path 13.4 forbids.
+
+**An access value is a handle.** What VHDL's `new` allocates — a textio `line`, a
+VUnit queue — has a number and a size known only as the design runs, which is
+what the arena cannot hold. It lives in a heap the kernel owns, beside the arena,
+and an access value in the arena is a handle into that heap: an integer, numbered
+in the order the allocations happen, so that a run allocates the same handles
+every time (3.8) and change detection, waveforms and VPI see an integer like any
+other. Allocating and deallocating are calls into the runtime from a process,
+which RTL's write path never makes; textio is where they happen. The heap is
+state a process reaches, so a process that dereferences a handle has the heap in
+its read or write set (4.2), and a checkpoint (M9) saves it with the arena. A
+freed handle is reused, the last freed first, which keeps a run's handles the same
+every time without the heap growing with every line written.
+
+**std.textio runs natively.** NVC's textio body grows a line through accesses to strings
+of run-time lengths, which registers of fixed width cannot hold, so it is not translated:
+`write`, `writeline`, `readline`, `read` and `endfile` are system functions the runtime
+runs over its heap and its files, as NVC's runtime runs its foreign subprograms, and the
+adapter calls them for textio's subprograms and VHDL's predefined file operations. A file
+of a type other than text holds its values' bits in whole bytes, the lowest first: Enzan's
+own format, as each simulator has its own, which a run reads back as it wrote it. A file a
+subprogram declares is closed as the subprogram returns (IEEE 1076 section 6.4.2.5), so
+that what it wrote is there for whatever reads the file next. A value
+of an unconstrained array type goes with its count of elements, so that `read(f, v, n)`
+gives `v` as many of its leftmost elements as fit, leaves the rest of `v` as it was, and
+gives `n` how many it read, as GHDL does. A
+string whose length only the run shows, which a function builds from images and writes,
+is built in a line of its own: the function is inlined with its `return`s appending
+their pieces to that line, and the line is appended to the one written.
 
 ### 4.4 Libraries
 
@@ -579,6 +755,21 @@ from a one-time analysis by default. The version is in the key and the format
 version is disciplined, but a cache that can change a simulation result is a thing
 a user must be able to stop doing without having to find it first — and a cache
 that appeared without being asked for is one they would have to find first.
+
+**VHDL's standard libraries are part of the tool, not a cache.** `std`, `ieee` and
+NVC's own `nvc`, which NVC's 2008 `ieee` bodies use, are analysed from the sources
+NVC ships when Enzan is built, and are found beside the executable without being
+named. Nothing a user does writes to them, they change only when Enzan does, and
+`library ieee;` has to resolve with no flag in every VHDL tool, so none of the
+reasons above applies; they are to a VHDL design what a compiler's standard headers
+are to a C one. A library the user names `ieee` replaces them (8.2).
+
+**A VHDL entry also holds NVC's analysed units.** VHDL is analysed one unit at a time
+against units already analysed — `use work.pkg.all`, an entity bound to a component —
+so a library holding only EIR could not be analysed against. A VHDL source's entry
+therefore keeps NVC's serialised units beside the EIR, and the NVC revision and the
+VHDL standard are in its key with everything else that changes what analysis
+produces.
 
 A hit is currently all or nothing, and that is a property of the frontend rather
 than of the store. SystemVerilog analysis hands every source to one slang
@@ -648,8 +839,9 @@ place, its variables bound to registers, so a task's delays suspend the caller a
 statements would, the caller's read and write sets are exactly what the call touches (4.2),
 and nothing at run time keeps a call stack. A recursive call is refused, since an inlined
 body cannot contain itself; slang folds a recursive call with constant arguments before
-Enzan sees it, which is where recursion in RTL usually is. EIR gains a callable subprogram
-when one is needed rather than sooner: VHDL resolution functions are the first case (3.7, M6).
+Enzan sees it, which is where recursion in RTL usually is. EIR has callable subprograms
+(4.1), which the VHDL frontend uses; calling a SystemVerilog function rather than inlining it
+is a change to this frontend alone, and a task with a delay stays inlined either way.
 
 slang requires **C++20**, which sets the project's language floor.
 
@@ -675,9 +867,10 @@ NVC wins on everything else, and the balance is not close:
   elaboration ordering, a secondary stack, and exceptions at the boundary. It
   also degrades the sanitiser configuration of 11.4, which would no longer see
   into the frontend. NVC is C11: one toolchain, one runtime, `extern "C"`.
-- **Only NVC can be consumed in part.** Its analysis stage pulls in no LLVM, so
-  the vendored subset is small (see the integration plan below). GHDL has no
-  equivalent subset; `libghdl` is built whole, with GNAT, or not at all.
+- **Only NVC can be consumed in part.** Its analysis stage pulls in no LLVM, and
+  with NVC's constant evaluator replaced (see the integration plan below) it is 34
+  of NVC's C files, about 66,000 of its 172,000 lines. GHDL has no equivalent
+  subset; `libghdl` is built whole, with GNAT, or not at all.
 - **`tree_t` is a better tree to walk.** It is arena-allocated behind uniform
   accessors that assert node kinds at runtime with usable messages. GHDL's `Iir`
   is an untyped integer handle over several hundred node kinds with heavy field
@@ -687,7 +880,8 @@ NVC wins on everything else, and the balance is not close:
   its maintainer is responsive on frontend-level defects, which matters when the
   dependency is on internals nobody has promised to keep.
 
-The M6 exit criteria — NEORV32, VUnit, OSVVM — are all first-class NVC targets.
+The VHDL designs Enzan is measured against — NEORV32 in M6, VUnit and OSVVM in M9+ —
+are all first-class NVC targets.
 
 **Understand the integration honestly before working on it.** NVC is not a
 frontend library; it is a complete simulator written in C that lowers VHDL
@@ -700,6 +894,14 @@ The integration plan is therefore:
 - Use its lexer, parser and semantic analysis, consuming the resulting `tree_t`
   after its simplification and bounds-check passes.
 - **Do not** use its `lower`/`vcode`/LLVM path, its runtime, or its scheduler.
+- **Replace its constant evaluator.** NVC's simplification folds locally static
+  expressions by lowering them and running them on its JIT interpreter, so
+  analysis as NVC builds it links 80 of its 102 objects, the path the previous
+  point rules out among them. Enzan does not compile `eval.c` and supplies the
+  two functions the simplifier calls instead, so a tree arrives with those
+  expressions unfolded and the adapter folds them as it translates. On NEORV32
+  that is 159 expressions, 135 of them implicit type conversions, and the
+  analysis is otherwise unchanged.
 - `src/frontend/vhdl/` walks the analysed tree and emits EIR, exactly as the
   SystemVerilog adapter does.
 
@@ -724,25 +926,204 @@ M6 rather than an argument about 5.2.
 simplification and bounds checking is the right boundary: it is what section 5
 means by a frontend that does not flatten hierarchy, and Enzan elaborates for
 itself. The consequence is that generic folding, subtype resolution and
-unconstrained arrays sized by a generic are Enzan's work, not NVC's, and the
-VHDL elaborator therefore reimplements them rather than reusing NVC's `elab`.
-The spike MUST size this before the milestone commits to the boundary.
+unconstrained arrays sized by a generic are Enzan's work, not NVC's, and Enzan
+reimplements them rather than reusing NVC's `elab`. The spike sized this
+(`docs/nvc_integration.md`), and the adapter does it, as the next paragraph decides.
 
-**The spike also decides where generics are folded** *(open)*, which 2.1 leaves
+**The adapter folds generics.** That was the spike's to decide, since 2.1 had left it
 open for VHDL. Unlike slang, NVC hands over a tree with the expressions over
 generics still in it, so the adapter can either fold them as it translates each
 instance — one unit per set of values, as SystemVerilog has — or emit units that
 carry those expressions for elaboration to evaluate per instance. The second gives VHDL the
 reusable library of 2.1, at the cost of EIR holding expressions over a unit's
 generics, an elaborator that specialises units by them, and constant functions
-run at elaboration; the first needs none of these. Subtypes, generate statements
+run at elaboration; the first needs neither of the first two. Subtypes, generate statements
 and constant functions that depend on a generic are what the spike sizes the two
 against.
+
+Measured on NEORV32 (`docs/nvc_integration.md`): 60 of its 77 entities have
+generics, 610 in all; outside processes and subprograms its architectures refer to
+them 802 times, hold 209 generate statements, and call user functions 61 times,
+such as `index_size_f(IMEM_SIZE)` in a subtype. Since NVC's evaluator is replaced,
+**both choices run those functions with the generics' values** — the first in the
+adapter, the second at elaboration — so constant functions are not what tells them
+apart.
+
+The first was chosen. The adapter translates an entity and its architecture once per
+set of generic values a design gives them, into a unit named for the values as a
+SystemVerilog specialisation is (8.2): subtypes sized, generate statements expanded and
+constant functions run as it goes, starting from the units a design names as its top
+and following its instances down. EIR holds no expression over a generic, and
+elaboration specialises nothing. The second would have made generate statements
+conditional structure in EIR and every width an expression, the largest change to
+EIR, elaboration and VPI that anything in M6 would make, to buy libraries reusable at
+values no design has asked for; what a VHDL library keeps for those values instead is
+NVC's analysed units (4.4), from which a design that needs them translates them
+without parsing anything again.
 
 Known risks, to be confirmed by a spike at the start of M6: NVC's internal APIs
 are not stability-guaranteed and will drift; NVC is C and uses its own arena
 allocators and global state, so reentrancy and ownership need checking; and the
-C/C++20 boundary needs careful `extern "C"` wrapping.
+C/C++20 boundary needs careful `extern "C"` wrapping. The spike found one
+analysis context per process, no threads started by analysis, and fatal errors
+that end the process with status 1 rather than reaching Enzan's diagnostics; its
+findings are in `docs/nvc_integration.md`.
+
+**So NVC runs in a child process**, forked for each analysis. A fatal error, which
+a design naming a library nobody built is enough to cause, then ends the child and
+is reported as a diagnostic, and every analysis starts from NVC's initial state
+rather than the previous one's. The child reports each of NVC's diagnostics back as
+NVC gives it, so what the user sees is what one process would have shown.
+
+**The child translates as well.** A design to simulate is analysed and translated in
+one child, which sends the parent the result in EIR's own encoding (4.4), so NVC's
+trees, and NVC's memory, never reach the process that runs the simulation. What the
+child translates is the hierarchy under the top, or under every entity of the sources
+that none of them instantiates when no top is named: a unit nothing instantiates cannot
+stop a design for using something the adapter lacks.
+
+**Sources are analysed in dependency order.** A unit is analysed against the units
+analysed before it (IEEE 1076 section 13.1), and a file list need not name a package
+before what uses it, as GHDL's `-m` and Questa's `-autoorder` let it not. So each
+source is scanned for the primary units it declares and those of the work library it
+names, and analysed after the sources declaring them, in the order given otherwise:
+one already in an order VHDL can analyse is kept, and sources naming each other's
+units, which no order of whole files satisfies, stay as given.
+
+What a VHDL unit becomes in EIR:
+
+- An entity's ports and its architecture's signals are objects holding codes (3.6),
+  each starting at its declared value or its type's left bound, as VHDL's objects do.
+- A process is an EIR process that loops for ever, its declarations initialised on
+  entry; its variables are registers, which keep their values while it waits. It is
+  marked as **driving** the signals it assigns, so that elaboration counts each as a
+  driver as it counts a continuous assignment (3.7), and two processes assigning one
+  unresolved signal are refused. A process that cannot suspend is refused too, since it
+  would never let time advance.
+- A signal assignment is `Drive`, or `DriveTransport` for a transport assignment and
+  for each element of a waveform after the first: the transactions of 3.4. One to an
+  element or a slice is `DrivePart`, at the offset of its bits, or after a delay
+  `DrivePartAfter` and `DriveTransportPart`, whose one operand holds the offset and the
+  delay together.
+- An array is its elements end to end, the left element highest (3.6), with bounds the
+  adapter has folded; a record is its fields end to end, the first highest. A field is
+  at an offset its type fixes, so a field of a signal is a part of it like a slice. An
+  element or a slice of a variable is spliced into its register;
+  an index known only at run time is checked against the bounds, and one outside them
+  ends the run with a failure, as VHDL's index check does. An index that cannot leave
+  the bounds is not checked: a loop's parameter over a static range within them, or
+  an enumeration whose literals the bounds span, since its value is always one of
+  its literals' positions (`'val`, `'succ` and `'pred` check theirs, and VHPI
+  refuses any other). A slice is a part of a fixed
+  width, so one whose bounds move with a loop's parameter, `d(4*i+3 downto 4*i)`, unrolls
+  that loop, each copy with its value bound. A variable's slice whose length is known only
+  at run time, as numeric_std's shifts by a count assign, is its value shifted into place
+  and merged under a mask of the slice's bits.
+- An alias of an object is a name of what it names: of a signal or a part of one, a window of
+  its bits like any other, seen through the alias's own subtype when it gives one, so `alias top
+  is x(7)` is read, driven and waited on as `x(7)` is, and a port associated with an alias of a
+  whole signal is that signal. An architecture's alias names a static part, the same wherever it
+  is used; a process's names what its name does as it is declared, an element chosen by a
+  variable's value then among it. An alias of anything else, a constant, a subprogram or a type,
+  is what it names wherever it is used.
+- A function is a callable subprogram (4.1), translated once for each shape it is called
+  with: the bounds of its unconstrained parameters, and the values of the scalar ones its
+  own bounds are computed from. Inside a shape those bounds are static, so `l'length`
+  folds and a branch on a condition that folds is translated alone, as a generate
+  statement is: a guard for a null array that cannot be one leaves nothing behind. A
+  package's subprograms are a definition `<package>::` of their own, which a call needs no
+  instance of. A procedure, a subprogram taking a signal, and one a process declares are
+  inlined into their caller, since a body of its own could not wait, assign a signal, read
+  a signal's attributes or reach the process's variables. So is a pure function that is
+  one `return` of an expression, which costs less than a call of it: std_logic_1164's
+  operators on a `std_ulogic` are each a table looked up, and a design calls them for
+  every element of every vector it computes.
+- A generate statement is flattened into the architecture it is in, as SystemVerilog's
+  are (5.1): the alternative whose condition folds true, or each iteration of a loop with
+  its parameter bound, and what each declares is named inside it, `g(0).u`. A block is the
+  same, named by its label: its generics are bound by its generic map, as an instance's
+  are, and fold where it is; each of its ports is the signal associated with it as a
+  whole, or else a signal of its own, `b.p`, connected to its actuals as an instance's
+  port is, and one left unassociated keeps its default.
+- A component instance is an instance of the entity the component is bound to by
+  default: the one of its name in the library of the unit instantiating it, or else in
+  the work library. The entity's generics take the values of the component's of the
+  same names, or their own defaults, and its ports match the component's by name. A
+  configuration specification, `for u : c use entity work.e(a);`, names the entity and
+  the architecture instead, and its binding maps the entity's generics and ports to
+  the component's. A configuration declaration is not translated yet.
+- A port of an unconstrained array type takes its bounds from its actual (IEEE 1076 section
+  6.5.6.3): a whole actual's own; for a port associated in parts, the lowest to the highest
+  index its formals name, running the way its index subtype does (section 5.3.2.2); for an
+  input left open, its default's; and from a component's port of a constrained type, that
+  port's. The entity is translated once for each set of bounds its ports take, as for its
+  generics' values, and named for them, `reverser$d_7downto0_q_7downto0`, so that what its
+  architecture computes from them folds as a subprogram's does in its shape. A port of more
+  than one dimension takes no bounds from its actual yet.
+- A port associated with a whole signal is that signal's storage. One associated with
+  part of a signal, with an expression, or in parts is connected through an object of
+  the instantiating definition, `u$port`, which a process for each association keeps
+  equal to its actual: into it for an input, out of it for an output. Where the
+  association is a name or a conversion of one, the process is the connection itself
+  (`eir::Process::connectsPort`): the kernel runs it as part of the signal update,
+  applying what it drives in the same delta cycle as what it copies, and once at
+  initialization, so neither side lags the other, as a collapsed port does not. An
+  expression actual is a signal of its own, assigned a delta later (IEEE 1076 section
+  6.5.6.3), and its process is an ordinary one.
+- An inout port so associated has two such objects, since what it drives and what it reads
+  differ (IEEE 1076 section 14.7.3): its driving value, `u$port$driving`, which the instance's
+  drivers of it drive (3.7) and a connection takes out to the actual, converted, as one of the
+  actual's sources; and its effective value, `u$port`, which it reads, and which a connection
+  brings the actual back into once resolved, converted the other way. So a pad cell on one bit
+  of a bus sees the bus as every driver of it makes it, its own included. A block's inout port
+  is associated with a whole signal only, yet.
+- A port of mode out, inout or buffer is a source of its actual whatever its architecture does
+  (IEEE 1076 section 14.7.3.2), so each bit of one that nothing in the architecture drives, no
+  process and no instance's port, is given a process that drives it at the port's default and
+  never runs again. An unresolved signal a parent drives as well is then driven twice, which is
+  an error, and an inout port a design only reads puts its default on a resolved bus: `'U'`,
+  unless it declares `'Z'`. A record port with a field of a resolved subtype is not given one
+  yet, since a record's fields are not resolved yet and a second driver of one would be refused.
+- A constant function is run as the adapter folds: a call of a pure function of the
+  design or of the IEEE packages whose arguments fold runs its body's variables, scalar
+  or composite, `if`, `case`, loops and `return` over their values, with an
+  architecture's generics in view, as `index_size_f(MEM_SIZE/4)` sizing a memory needs.
+  A signal's initial value is computed once at elaboration, so an impure function folds
+  there too when what it runs is static, as a memory that reads a file only when given
+  its name does when given none; elsewhere an impure function never folds, `now` least
+  of all. What it returns is folded where it
+  returned, a scalar or an array, so a function choosing between two vectors folds too.
+  A call that does anything else, or runs a million statements, does not fold, and its
+  use is refused where a static value is needed. Elements and slices of static arrays
+  fold as well, so a generate statement can be conditioned on a constant list, and so do
+  strings built from them and from the `'image` of static scalars: a string generic
+  naming a log file, or a report announcing a configuration, which is its text then.
+- A null array, a generic left at `""` most often, has no bits to hold, so it is its bounds:
+  a comparison or an attribute of it folds, and a call given one is inlined, where its
+  uses can fold too. A testbench that reads a file only when a name is given needs no
+  files when none is.
+- An architecture's constant is folded where it is used, and one whose value folds is also
+  recorded beside the generics as a parameter local to the definition, which VHPI shows as a
+  constant (9.7); so is each for-generate iteration's parameter.
+- A deferred constant, which a package declares without a value, has the one its full
+  declaration in the package body gives it (IEEE 1076 section 4.8), folded or computed as any
+  constant's is.
+- A generic of a record type is bound to its value's bits, the first field highest, as an array
+  generic is, and a field of it folds as an element of a static array does, so a configuration
+  record can size a port or choose a generate statement's alternative.
+- The IEEE packages are translated from their own bodies like any other VHDL. What NVC's
+  versions of them take from its runtime instead, Enzan supplies: numeric_std's warnings
+  are on, as they are in GHDL and in the IEEE's own packages, unless `--ieee-asserts
+  disable` turns them off as GHDL's option of the name does.
+- `report` and a failed `assert` are one system task taking the severity as an
+  argument: note, warning and error are reported and the run goes on, and failure ends
+  it with a failing status, as GHDL's default does; `--assert-level` names another
+  severity to end it at, as GHDL's option of the name does. `wait;` waits on an empty event list,
+  which nothing ever wakes.
+- Time is a count of femtoseconds, VHDL's resolution limit, and a design with VHDL in it
+  is simulated in femtoseconds unless `--timescale` names another unit (3.1). A delay that
+  is no whole number of that unit is rounded to the nearest, half up, as a simulator run at
+  a coarser resolution rounds, and one the design states is reported as it is translated.
 
 Mitigations: pin the revision, keep the adapter thin and confined to one
 directory, document the rebase procedure in `docs/nvc_integration.md`, and rely
@@ -775,6 +1156,14 @@ Requirements:
 
 - Each process has its own register file. Wide vectors that do not fit in a
   register spill to a per-process scratch area.
+- A call pushes the callee's register file onto the kernel's one call stack (4.1)
+  and a return pops it. The lowering is an LLVM function per subprogram body and
+  a `call` to it, which is why a subprogram never suspends: an LLVM function
+  cannot return to the scheduler half-way and be resumed.
+- A register file starts as its body's image: zero, but for each register whose
+  one writer is a constant load, which holds the constant from the start and
+  whose load is not emitted. A body's bounds, widths and offsets are such
+  constants, and a load left in runs every time it is reached.
 - The dispatch loop SHOULD use computed goto (threaded dispatch) rather than a
   `switch`.
 - **Every opcode MUST have an obvious, documented lowering to LLVM IR.** The JIT
@@ -938,7 +1327,8 @@ analysis output lives and dies with the process and a simulation runs from a
 one-time analysis. A directory that appeared because the user ran the tool would be
 a cache they did not ask for, and section 4.4 explains why that is worse than no
 cache: it can change a result, and they would have to find it before they could
-stop using it.
+stop using it. VHDL's `std`, `ieee` and `nvc` are not caches and are found without
+being named (4.4); `--in-lib ieee=<dir>` replaces them.
 
 ```
 enzan lib create [--name <n>] <dir>   creates a library and fixes its logical name
@@ -988,7 +1378,9 @@ reference — a package import, an interface named in a port list — because sl
 type-checks from syntax and EIR does not feed back into it. Commercial tools manage
 this because their compiled library is a semantic artifact their own front end
 re-consumes; ours is not. A reader who assumes otherwise will write a library split
-that cannot be analysed.
+that cannot be analysed. **VHDL is the exception**, because a VHDL entry holds NVC's
+analysed units (4.4): `use uart.uart_pkg.all` resolves against a library on
+`--in-lib` as the language requires, with no source read again.
 
 **Libraries are searched in the order given**, left to right.
 
@@ -1024,7 +1416,10 @@ it reads them. That is what makes the boundary crossable at all: slang type-chec
 from syntax, so a unit instantiating one from another library needs that unit's
 declaration however it was analysed before, and EIR does not feed back into slang.
 Paths rather than text, because duplicating the RTL into every library that uses it
-would make a library a copy of the design instead of an index of it.
+would make a library a copy of the design instead of an index of it. This is the
+SystemVerilog rule; a VHDL library carries NVC's analysed units instead (4.4), and a
+design needing a VHDL unit at generic values its library does not hold translates it
+from those, parsing nothing again.
 
 **A file is analysed once however often it is named.** Two libraries built on one IP
 both record its sources, and a file can be a source, a context file and a library's
@@ -1537,6 +1932,70 @@ simulator rather than to whatever another simulator's quirks taught it to tolera
 precision runs a thousand times fast. A testbench in cocotb that drives every event itself, as
 most do, is unaffected; a design with delays of its own needs `COCOTB_HDL_TIMEPRECISION` set to
 the unit it was written in until the frontend converts delays as 3.1 says it must.
+
+### 9.7 VHPI
+
+VHPI is how cocotb reaches a VHDL toplevel (M6), as VPI is how it reaches a SystemVerilog one.
+What VHPI names that VPI does not is the VHDL type of everything: a signal's type and its base
+type, an array's bounds, direction and element type, a record's fields, an enumeration's
+literals, a scalar's range. cocotb reads them to decide what a handle is, `std_logic` or a
+vector of it, an integer, a record whose fields it can name, before it reads a value.
+
+**The types live in EIR**, as `eir::VhdlType` in a table of each definition's that its objects
+and generics index, filled by the VHDL adapter from the layouts it gives them (5.2). They change
+nothing about how a design behaves, as an enumeration's table changes nothing; they say what
+the bits mean to something outside the simulation, and are serialized with the definition, so a
+library holds them. The analysis that knows them runs in a child process (5.2) and is gone by
+the time an application asks, so EIR is the only place they can be kept.
+
+**VHPI is VPI's context with a second set of routines.** `--vhpi <library>[:<entry>]` loads an
+application as `--vpi` does, running its `vhpi_startup_routines`, into the one `PliContext`: the
+kernel calls one set of hooks, and cocotb loads both its layers for a design of both languages,
+which must see one simulation. Its header is the IEEE P1076 working group's `vhpi_user.h`, which
+the NVC the VHDL frontend is built on carries, so VHPI is built only with that frontend.
+
+- **Regions** are VPI's scopes: the root instance, named for its entity; component instances;
+  and the blocks and generate iterations the frontend flattens into names, an indexed one
+  (`g(0)`) a for-generate iteration and any other a block.
+- **Objects** are a region's signals and ports, every one with a VHDL type, a real's included,
+  its generics, and its constants whose values fold, a for-generate iteration's parameter among
+  them. An element of an array is an indexed name and a field of a record a
+  selected one, each a window of its object's bits; an array's elements are numbered row by
+  row from the left, which is its highest bits.
+- **Types** come from the table: `vhpiBaseType` a type declaration of the type's kind, with an
+  array's base type unconstrained, `vhpiType` the object's subtype with its bounds,
+  `vhpiElemType` an array's element, `vhpiConstraints` its ranges, `vhpiEnumLiterals` an
+  enumeration's literals. `vhpiNameP` gives a basic identifier in upper case. `vhpiCaseNameP`
+  gives a declared object's name as its declaration spells it, read from the source where the
+  object is declared, since NVC's analysis keeps no case, and a region's in upper case, since
+  EIR keeps no position of a block's or a generate statement's label. An extended identifier,
+  `\weird.name\`, is given as it is written, its case being part of it, and is one name however
+  many dots it holds. A string `vhpi_get_str` returns lives with its handle, as VPI's do, so an
+  application may hold several at once.
+- **Values** are read from and written to the bits in VHPI's formats by the type: a
+  std_logic or a bit and arrays of them in the Logic formats, other enumerations' positions,
+  integers, reals, strings of characters, binary strings. A record is read and written field by
+  field.
+- **A deposit is an update of the time step**, applied after the callback that made it returns,
+  as VPI's write with no delay is: a deposit applied inside the call would wake what watches the
+  signal inside the application's own call, which cocotb, writing a batch of values, does not
+  expect. A force and a release are of the whole signal.
+- **Callbacks** share VPI's dispatch: the last known delta cycle of a time step is VPI's
+  read-write synchronisation, its end the read-only one, and the next time step VPI's next
+  simulation time. A repetitive callback, `vhpiCbRep...`, fires at each occurrence until it is
+  removed, waiting for the next time step after each.
+
+**cocotb's VHPI library is `libcocotbvhpi_nvc`**, whose one workaround, to compare names
+without their case, answers the one way Enzan differs from the standard, the declared case of a
+region's name, which it does not keep (section 9.6 chose the VPI library by the same rule). The toplevel's language
+decides which is loaded, `--vpi` or `--vhpi`. A design of both languages is not simulated yet,
+and the makefile skips it as cocotb's makefiles skip a language a simulator lacks; when it is
+(M7), cocotb loads the other language's library itself, named in `GPI_EXTRA`, as it does
+elsewhere.
+
+A VHDL signal of a null range holds nothing, and a bit vector has at least one bit, so its
+object has a placeholder bit that nothing reads, writes or records (`eir::Object::holdsNothing`);
+VHPI shows it as the empty array its type says it is.
 
 ---
 
@@ -2161,8 +2620,8 @@ dependencies" means a user reading the CMake output knows exactly what to
 install.
 
 Vendoring in `third_party/` is reserved for cases where it is unavoidable — NVC
-is the expected case, since it is consumed as a pinned fork rather than as a
-released library.
+is the expected case, since it is consumed at a pinned revision of its internals
+rather than as a released library.
 
 Adding a dependency requires: an entry in this section, a `find_package` path
 with a good error message, a `FetchContent` fallback, CI installation, and a
@@ -2174,6 +2633,8 @@ license check against section 1.4.
 |---|---|---|
 | slang | SystemVerilog frontend | system, FetchContent fallback |
 | NVC | VHDL frontend (M6) | vendored submodule, pinned |
+| flex | generating NVC's lexer when the VHDL frontend is built; nothing linked | system |
+| zstd | the analysed units NVC writes into a library, which it compresses (M6) | system |
 | Tcl 8.6+ | GUI theme language (M2); signal list syntax (M2.2) | system |
 | Qt 6 | GUI (M2) | system |
 | GoogleTest | unit tests | system, FetchContent fallback |
@@ -2232,6 +2693,7 @@ Enzan-RTL-Simulator/
 ├── tools/
 │   ├── enzan/                headless kernel CLI
 │   ├── enzan-gui/            Qt 6 front end, started by `enzan --gui`
+│   ├── vhdl-libraries/       builds VHDL's standard libraries at build time (4.4)
 │   └── cocotb/               cocotb's simulator makefile for Enzan (section 9.6)
 ├── tests/
 │   ├── unit/                 GoogleTest, mirrors src/ layout
@@ -2360,15 +2822,23 @@ VHDL differential reference and MUST be part of the suite**, with NVC kept as a
 secondary reference that is still meaningful for everything downstream of EIR.
 The same reasoning will apply to any future frontend dependency.
 
+A VHDL golden case is compared with GHDL on two things: what the design reported, as each
+report's severity and message in order, and every signal GHDL records, as the value it
+settled on at each time step. GHDL writes `std_logic` as its nine values, which are mapped
+as 3.6 maps them before comparing; and the time step a run finishes in is left out, since
+GHDL stops before it writes that step and Enzan writes it.
+
 ### 14.4 Conformance suites
 
 Run against public suites and **track the pass rate as a number over time**:
-`sv-tests` (CHIPS Alliance) for SystemVerilog, `ivtest` for Verilog, and the
-GHDL/NVC VHDL suites plus VUnit and OSVVM for VHDL. A published compliance
+`sv-tests` (CHIPS Alliance) for SystemVerilog, `ivtest` for Verilog, and for VHDL
+the VESTs suite and GHDL's and NVC's own test suites. A published compliance
 percentage is also a credible public signal of maturity.
 
 The GHDL and NVC suites are both run for the reason given in 14.3: NVC's suite
-cannot exercise a defect Enzan inherited from NVC's own frontend.
+cannot exercise a defect Enzan inherited from NVC's own frontend. VESTs is
+GPL-2.0 and ships inside GHDL's test suite, and every one of its compliant cases
+checks itself, reporting `PASSED TEST` or `FAILED TEST`.
 
 **The pass rate MUST NOT regress.** This is a ratchet: a change that lowers it
 is a defect unless the regression is explicitly justified.
@@ -2382,6 +2852,35 @@ case is skipped, as sv-tests skips a case of a kind a tool does not run, and is 
 count. A case that expects the tool to fail passes whenever Enzan fails, an unsupported construct
 included; those passes count, being sv-tests' definition, and are reported as a second number.
 
+`tests/conformance/vests/run-suite.sh` runs VESTs from GHDL's test suite, fetched at the
+revision its `revision.txt` names: every compliant VHDL-93 case the suite's own `.exp` files
+run, by their rules as GHDL's `testsuite.sh` reads them — the units an `.exp` builds before a
+case analysed with it, the top its `ENTITY=` names or else the last entity named as a top, its
+`STOP=` time, `--assert-level error`. A case passes when Enzan runs it to its end and it reports
+no `FAILED TEST`. The cases run in parallel but for those using files, which run one after
+another in the suite's order, since the suite reads back in a later case what a simulator wrote
+in its own format in an earlier one, and gives several pairs of cases one file name.
+
+`tests/conformance/nvc/run-suite.sh` runs NVC's own regression tests, from the NVC vendored
+under `third_party/nvc` and so at its revision: every test `test/regress/testlist.txt` lists,
+by its options as NVC's `run_regr.c` reads them — the revision of the language, `stop=`, `fail`
+for a test that must fail, `gold` for one whose transcript must hold each line of its gold file
+in order. NVC writes a message's time and delta before it, which Enzan does not, so a gold line
+is matched without them. A test of what only NVC has, VHPI, its shell, PSL, coverage, waveform
+dumps, Verilog or its relaxed rules, or one setting generics on the command line, is in neither
+count.
+
+`tests/conformance/ghdl/run-suite.sh` runs GHDL's own regression tests, its `testsuite/gna`, from
+GHDL at the revision VESTs is run from. Each test's `testsuite.sh` runs unchanged under GHDL's
+`testenv.sh`, with `ghdl-shim.sh` as the `ghdl` it calls: since Enzan analyses and runs VHDL in
+one process rather than through libraries on disk, the shim's `-a` analyses every file recorded
+so far with the new ones and records them, and `-e` and `-r` elaborate or run a top over all of
+them, `--expect-failure` inverting what Enzan's exit says. A test passes when its script exits 0.
+A test of what only GHDL has, synthesis, VPI or VHPI, GHW waveforms, PSL, a C compiler or a
+feature it probes for, is in neither count; one comparing GHDL's own messages, or using its
+vendors' IEEE packages or several work libraries, fails. So does one expecting an analysis
+error that NVC, which Enzan analyses with, does not report until elaboration or not at all.
+
 The ratchet is a list for each suite, as 14.6 describes, and one script,
 `tests/conformance/ratchet.sh`, holds every suite to its list.
 
@@ -2392,14 +2891,21 @@ Real designs, fetched at pinned revisions:
 - SystemVerilog: secworks `aes`, fpganinja `taxi`, PULP `common_cells`; then the
   processors picorv32, VexRiscv (generated), Ibex and CVA6, which each need a program
   compiled for them.
-- VHDL: NEORV32, plus the VUnit and OSVVM suites.
+- VHDL: NEORV32; then SLAC `surf`, an IP library whose cocotb testbenches exercise its RTL as
+  `taxi`'s do, and the VUnit and OSVVM suites, which need the verification-library language of
+  M9+.
 
 Start with the small ones and add larger designs as capability grows.
+
+NEORV32's is held to GHDL's reports and to the CPU trace and UART logs its testbench writes, for
+the 160 us its on-chip debugger sequence takes, since those hold every instruction each core
+retired; on the main branch only, as it takes minutes.
 
 Each design is a directory under `tests/designs/` holding the revision it is pinned at and a
 `run.sh` that fetches it there (`tests/fetch-revision.sh`, which every suite shares), runs its
 own testbenches and says PASS or FAIL for each. A testbench passes when it reports success
-and, where Icarus Verilog runs it, when Enzan's transcript is the reference's line for line, so
+and, where the reference simulator runs it — Icarus Verilog for SystemVerilog, GHDL for VHDL
+(14.3) — when Enzan's transcript is the reference's line for line, so
 a pass is a design checking its own answers and two simulators agreeing on them. Testbenches
 the reference cannot run are held to their own verdicts alone, and the harness says why. A
 testbench or a case that cannot pass for a reason outside Enzan — a design slang rightly
@@ -2444,6 +2950,13 @@ cases share one design that uses unpacked arrays, structs, `real`, `string` and 
 and a design that does not analyse fails every test in it. The cases that do analyse are what
 exercise VPI, and the golden cocotb test of `tests/golden/` pins the VPI behaviour cocotb
 relies on whatever the rate is.
+
+**A VHDL toplevel is a second run of the same suite**, through VHPI (M6, section 9.7). Most of
+cocotb's cases have a VHDL design beside the Verilog one, chosen by `TOPLEVEL_LANG=vhdl`, so the
+suite runs twice, `run-suite.sh <enzan> <work> vhdl` the second time, and each run has its own
+pass list, `passing.txt` and `passing-vhdl.txt`: a case passing in one language says nothing
+about the other. The golden cocotb test has a VHDL twin, `tests/golden/vhdl/cocotb`, which pins
+the VHPI behaviour cocotb relies on as the other pins VPI's.
 
 ### 14.7 Sanitisers and fuzzing
 
@@ -2506,6 +3019,13 @@ Jobs on every branch and pull request:
 - cocotb's regression suite (14.6) and sv-tests (14.4), in the job that already builds the
   SystemVerilog frontend, since a second job would build slang a second time to run them.
 - The design regression of 14.5 for the designs that run quickly: `aes` and `common_cells`.
+
+Each job builds a configuration chosen so that code compiled only with a component, or only
+without one, is compiled somewhere with warnings as errors. The job that builds slang builds the
+defaults, every optional component on, which is what a contributor's plain configure gives. The
+build matrix and the sanitiser build the defaults but for the SystemVerilog frontend, which one
+job is enough to prove. One job builds the GUI with neither language frontend, since what is
+compiled only without them is compiled nowhere else.
 
 Jobs on `main` only:
 
@@ -2800,20 +3320,116 @@ bit are still refused — a variable with an error and a net by resolving them.
 ### M6 — VHDL via NVC
 
 NVC integration spike first, to confirm the approach in 5.2 before committing
-to it; vendored pinned fork; NVC tree to EIR adapter; `std_logic` value model;
-VHDL generic and subtype elaboration, with generics folded where the spike decides
-(5.2); Enzan's own implementations of the predefined and foreign subprograms NVC's
+to it; NVC vendored at a pinned revision; NVC tree to EIR adapter; `std_logic` value model;
+VHDL generic and subtype elaboration, with generics folded by the adapter (5.2); Enzan's own implementations of the predefined and foreign subprograms NVC's
 runtime would have resolved; VHDL simulation cycle; VHPI subset for cocotb.
 
-**Exit:** NEORV32 simulates; the VUnit suite runs.
+**M6 is cut at the language designs are written in, not the language verification
+libraries are written in.** Synthesisable VHDL and the testbenches shipped beside it use
+almost nothing of what VUnit and OSVVM are built from: protected types, generic packages,
+configurations, external names, and access types used as a general heap. Measured over
+their sources, VUnit allocates in 37 files and OSVVM declares protected types in 31 and
+configurations in 389, while NEORV32 does none of these. The verification libraries come
+with the other verification features in M9+, so that the VHDL frontend, the simulation cycle
+and VHPI are proven on designs before they are asked to carry a library's runtime.
+
+**Access types are in M6 only as far as `std.textio` needs them.** NEORV32 cannot be
+simulated without `line`: its UART prints what the program sends through `write` and
+`writeline` in every simulation, from its RTL rather than its testbench, and the testbench
+logs both UARTs to files and can load a memory from one. So M6 builds the heap of 4.3 —
+access values are handles in the arena into a heap the kernel owns, since 4.3 lays out every
+piece of state at elaboration and 13.4 forbids allocating on the write path — and makes it
+work for an access to an array, as `std.textio` uses one, with textio's subprograms run
+natively over it (4.3). M9+ uses the same heap for everything else.
+
+The exit designs need no program compiled for them, for the reason M5 gives:
+
+- **NEORV32**, simulated by its own testbench with the program image its repository
+  commits. The testbench drives the on-chip debugger over JTAG — halting the CPU, writing
+  memory through it, resetting and resuming it — and asserts each step.
+- **cocotb's VHDL designs**, through its own test cases with a VHDL toplevel (14.6). These
+  are what VHPI is measured by, as cocotb's suite measured VPI in M4.
+- **VESTs and GHDL's and NVC's own suites** (14.4). Most of each needs nothing M9+ brings,
+  and a pass list per suite lets the rest wait without hiding a regression.
+
+**Exit:** NEORV32's testbench completes its debugger sequence under Enzan with no assertion
+failing, and its transcript is GHDL's line for line; cocotb's suite runs with a VHDL
+toplevel with a recorded pass rate; VESTs and GHDL's and NVC's suites run with recorded pass
+rates.
 
 ### M7 — Mixed language
 
-Boundary port mapping and value conversion; the cross-language delta semantics
-of 3.5; mixed-language golden tests.
+A design whose hierarchy crosses between SystemVerilog and VHDL, in either direction and at
+any depth, simulated by the one kernel of 3.5. Everything below the frontends already serves
+both: EIR, elaboration, drivers and resolution (3.7), the kernel, the waveform database and
+the PLI context hold one design whatever language each definition came from. What M7 adds is
+the meeting of the two frontends and of the two interfaces.
 
-**Exit:** a SystemVerilog testbench drives a VHDL DUT and vice versa, matching
-a reference simulator.
+**Analysis of both languages in one session.** The session analyses SystemVerilog through
+slang and VHDL through the NVC child into one `eir::Design`; it refuses a mixed source set
+today. VHDL goes into Enzan's libraries as SystemVerilog does, `--out-lib` and `--in-lib`
+(8.2), and a design may draw on several VHDL libraries at once, not only the one `--work`
+names, since a mixed design is usually built as a testbench in one library and its DUT in
+another. Both are also what the GHDL suite's multi-library tests and cocotb's VHDL designs in
+their own libraries need (14.4, 14.6).
+
+**Instances across the boundary.**
+
+- *SystemVerilog instantiating a VHDL entity.* The entities' interfaces, their generics and
+  ports with their types, are given to slang as the modules it would otherwise not find, so
+  that the instance type-checks; its parameter values are the generics' values, and the
+  architecture is the entity's default one or the one a library binding names.
+- *VHDL instantiating a SystemVerilog module.* A component with no VHDL entity to bind is
+  bound to the module of its name (the default binding of IEEE 1076 section 7.3.3 extended
+  to the other language, as commercial tools extend it), and `entity work.m` names a module
+  the same way; the component's generics are the module's parameter overrides.
+- *Specialisation across the boundary.* VHDL generics are folded by the adapter (5.2) and
+  SystemVerilog parameters by slang, so each side's instance asks the other's frontend for
+  the specialisation its values make. The session alternates between the frontends until
+  neither asks for one the other has not given, as elaboration asks the VHDL frontend for
+  resolution functions (3.7), with a bound on the rounds so that a hierarchy recursing
+  through both languages is reported rather than followed for ever.
+
+**Ports across the boundary.** A port whose two sides are of different languages is
+connected by a zero-delay continuous assignment that converts between them and consumes one
+delta cycle (3.5), in each direction its mode needs:
+
+- `std_ulogic` codes to four-state bits with `L`→`0`, `H`→`1` and `W`, `U`, `-`→`X` (3.6),
+  and `0`, `1`, `X`, `Z` back to their codes; `bit` and `boolean` to two-state bits and back;
+- `std_logic_vector` and its kin to packed vectors, left element to the most significant bit;
+  integers to `int` or `longint` by their range; reals to `real`; arrays of these to unpacked
+  arrays and records to packed structs, field by field, where the shapes agree;
+- an `inout` port as two conversions, each a driver on its own side, so that each language's
+  resolution sees the other's contribution as a driver: a `std_logic` signal resolves the
+  SystemVerilog side's value with its own function, and a net resolves the VHDL side's as a
+  driver of its kind. A port no rule covers is refused by name.
+
+**The interfaces across the boundary.** VPI and VHPI share the one PLI context (9.7), and
+each sees the whole hierarchy: VPI shows a VHDL region as a module and its objects as nets of
+their four-state bits; VHPI shows a SystemVerilog region as one of kind `vhpiVerilog`, which
+cocotb leaves to VPI. cocotb runs a mixed design as it does elsewhere: the toplevel's
+language's library is loaded with `--vpi` or `--vhpi`, and the other's is named in
+`GPI_EXTRA`, which `Makefile.enzan` sets in place of the skip it has today (9.7).
+
+**Reference simulation.** No free simulator takes SystemVerilog and VHDL together. NVC
+simulates Verilog with VHDL, and is the reference for the mixed cases its Verilog subset
+covers, its own `mixed` regression tests among them (14.4). The rest are checked by
+splitting: the same design with the boundary moved — the DUT in one language driven by a
+testbench in the other, against the DUT in its own language's testbench under iverilog or
+GHDL — matches transcript for transcript, the boundary's delta aside.
+
+The exit designs need no program compiled for them, for the reason M5 gives:
+
+- **NEORV32** in a SystemVerilog testbench that drives it as its VHDL one does and checks
+  its UART output, against the VHDL testbench's run under GHDL (14.5).
+- **An M5 SystemVerilog design in a VHDL testbench**: secworks' `aes` core, its test vectors
+  driven from VHDL, against its own testbench under iverilog.
+- **cocotb's mixed-language test cases**, and its VHDL cases whose designs sit in libraries
+  of their own (14.6); **NVC's `mixed` regression tests**.
+
+**Exit:** a SystemVerilog testbench drives a VHDL DUT and a VHDL testbench a SystemVerilog
+one, each matching its reference; cocotb's mixed-language cases run with a recorded pass rate;
+NVC's mixed tests run with one.
 
 ### M8 — Performance
 
@@ -2827,6 +3443,20 @@ performance target replaced with a measured, committed figure.
 
 SVA and PSL assertions; functional coverage; constrained random (requires a
 constraint solver); save and restore; multiple clock domain tooling; UVM.
+
+**The VHDL verification libraries, VUnit and OSVVM**, and what they are built from: access
+types as a general heap, with `deallocate`; protected types and shared variables of them;
+generic packages and their instantiation; configurations; external names. VUnit's simulator
+interface for Enzan, which VUnit chooses by name as cocotb chooses a makefile (9.6). They are
+done when VUnit's own suite and OSVVM's regression each run with a recorded pass rate.
+
+They need three things the RTL milestones do not build. Values whose length only the run knows
+— a message built with `to_string`, a function returning what an access value designates, a
+local sized by an unconstrained parameter — which 4.1 places in scratch the kernel resets when
+a process suspends, where EIR today gives every value a width fixed at translation. Several
+VHDL libraries at once, `vunit_lib` and `osvvm` beside a design's own, which M7 brings. And a
+VHDL top level's generics set from the command line, as `-G` sets a SystemVerilog one's
+parameters (8.1), since VUnit hands each test its `runner_cfg` as one.
 
 ---
 
@@ -2858,8 +3488,8 @@ same simulated time.
 top level. Not cacheable across designs.
 
 **Analysis** — compiling one design unit to EIR, independent of any top level;
-a parameterised SystemVerilog module once per parameterisation the design uses
-(2.1). Cacheable and reusable.
+a parameterised SystemVerilog module, or a VHDL entity with generics, once per
+parameterisation the design uses (2.1). Cacheable and reusable.
 
 **Region** — one of the ordered phases within a SystemVerilog time slot.
 

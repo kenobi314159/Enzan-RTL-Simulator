@@ -7,12 +7,23 @@ add_library(enzan_vpi_headers INTERFACE)
 add_library(enzan::vpi_headers ALIAS enzan_vpi_headers)
 target_include_directories(enzan_vpi_headers INTERFACE "${PROJECT_SOURCE_DIR}/include/enzan")
 
+# VHPI is the VHDL frontend's (DESIGN_GUIDE.md section 9.7), and its header is the IEEE P1076
+# working group's, which the NVC that frontend is built on carries.
+set(ENZAN_VHPI_SOURCES "")
+if(ENZAN_ENABLE_VHDL)
+  set(ENZAN_VHPI_SOURCES Vhpi.cpp VhpiRoutines.cpp)
+endif()
+
 enzan_add_component(
   pli
-  SOURCES VpiContext.cpp VpiRoutines.cpp VpiValue.cpp
-  HEADERS VpiContext.h VpiValue.h
+  SOURCES PliContext.cpp VpiRoutines.cpp VpiValue.cpp ${ENZAN_VHPI_SOURCES}
+  HEADERS PliContext.h PliModel.h VpiValue.h
   DEPENDS enzan::common enzan::eir enzan::runtime enzan::vpi_headers
   PRIVATE_DEPENDS enzan::elab ${CMAKE_DL_LIBS})
+
+if(ENZAN_ENABLE_VHDL)
+  target_include_directories(enzan_pli SYSTEM PUBLIC "${PROJECT_SOURCE_DIR}/third_party/nvc/src/vhpi")
+endif()
 
 # ---------------------------------------------------------------------------
 # enzan_export_vpi(<target>)

@@ -75,8 +75,10 @@ void FstWriter::declareSignal(std::uint32_t signalIndex, std::string_view leafNa
     // knows, so the values are stored once. That is what a collapsed port needs: two real
     // hierarchical names for one piece of state.
     const fstHandle alias = handles[record];
-    const fstHandle handle = fstWriterCreateVar(context, FST_VT_VCD_WIRE, FST_VD_IMPLICIT,
-                                                widthOf(signalIndex), name.c_str(), alias);
+    // A real is the format's own real, which holds the double rather than its bits.
+    const fstHandle handle =
+        fstWriterCreateVar(context, isReal(signalIndex) ? FST_VT_VCD_REAL : FST_VT_VCD_WIRE,
+                           FST_VD_IMPLICIT, widthOf(signalIndex), name.c_str(), alias);
 
     if (alias == 0) handles[record] = handle;
 }
@@ -90,6 +92,11 @@ void FstWriter::writeTimestamp(runtime::SimTime time) {
 }
 
 void FstWriter::writeChange(std::uint32_t signalIndex) {
+    if (isReal(signalIndex)) {
+        const double value = realValueOf(signalIndex);
+        fstWriterEmitValueChange(context, handles[recordIndexOf(signalIndex)], &value);
+        return;
+    }
     // The library takes one character per bit, most significant first — which is exactly what the
     // value engine's binary rendering produces, including `x` and `z`.
     valueBuffer = eir::toString(valueOf(signalIndex), eir::Radix::Binary);

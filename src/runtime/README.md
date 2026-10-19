@@ -15,7 +15,11 @@ elaborated, compiled design.
   wheel, and the non-blocking update queue. Holds ordering, not policy.
 - **The interpreter** (`Interpreter.h`) — executes compiled bodies.
 - **The kernel** (`Kernel.h`) — drives the regions, applies updates, detects value
-  changes, resolves drivers, enforces the delta limit and performs system tasks.
+  changes, resolves drivers, enforces the delta limit and performs system tasks. It also
+  keeps each VHDL driver's projected waveform, which is what a VHDL signal assignment acts
+  on (section 3.4): the transactions an assignment deletes are taken out of the time wheel,
+  so they leave no time step behind. And it keeps the heap of section 4.3, where std.textio's
+  lines live by handle, and runs textio's subprograms on them natively.
 - **Formatting** (`Format.h`) — the `$display` conversions.
 
 ## Invariants this component is responsible for
@@ -41,6 +45,13 @@ spinning in the Active region forever.
 **No allocation on the hot path** (section 13.4). Register frames are one allocation for
 the whole design, the non-blocking update pool keeps its capacity between time slots, and
 the region queues reuse their storage.
+
+**One call stack** (section 4.1). A call's registers go on a stack that follows the processes'
+frames in that one allocation, since a subprogram never suspends and every call a process makes
+has returned before it does. The image measures the deepest chain of calls the design can make
+and the stack is laid out for exactly that; where a call can reach itself again, it is laid out
+for `KernelOptions::callDepthLimit` calls, 10,000 by default, and a run that would go deeper
+stops with ENZ5011 naming the subprogram.
 
 **Single-threaded.** That is the plan and not a fallback (section 6.4): a cache-friendly
 single-threaded loop outperforms a naively parallel one, and determinism comes free.

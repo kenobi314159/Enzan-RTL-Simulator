@@ -9,6 +9,10 @@
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"
+#include "eir/BitVector.h"
+#include "eir/Design.h"
+#include "eir/Module.h"
+#include "eir/Type.h"
 #include "runtime/Kernel.h"
 
 #include "support/Workspace.h"
@@ -16,7 +20,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -73,6 +79,50 @@ module tb;
 endmodule
 )";
 
+/// Signals as the VHDL frontend holds them (DESIGN_GUIDE.md section 3.6): a std_logic holding '1'
+/// and a std_logic_vector(3 downto 0) holding "0101" as their codes, a bit's, and a
+/// std_logic_vector of a null range, whose one bit is a placeholder. Built by hand, so that
+/// neither frontend is needed.
+enzan::eir::Design vhdlCodedDesign() {
+    using enzan::eir::BitVector;
+    using enzan::eir::Encoding;
+    using enzan::eir::Object;
+    using enzan::eir::Type;
+
+    enzan::eir::ModuleDefinition top;
+    top.name = "tb";
+    top.sourceName = "tb";
+    enzan::eir::EnumDefinition logic{.name = "std_ulogic", .members = {}};
+    constexpr std::array<std::string_view, 9> Literals = {"'U'", "'X'", "'0'", "'1'", "'Z'",
+                                                          "'W'", "'L'", "'H'", "'-'"};
+    for (std::uint64_t position = 0; position < Literals.size(); ++position) {
+        logic.members.push_back(enzan::eir::EnumMember{
+            .name = std::string(Literals[position]), .value = BitVector::fromUInt64(position, 8)});
+    }
+    const std::uint32_t logicEnum = top.addEnum(std::move(logic));
+    top.addObject(Object{.name = "ready",
+                         .type = Type::bits(8, false, false),
+                         .initialValue = BitVector::fromUInt64(3, 8),
+                         .encoding = Encoding::VhdlLogic,
+                         .enumIndex = logicEnum});
+    top.addObject(Object{.name = "bus",
+                         .type = Type::bits(32, false, false),
+                         .initialValue = BitVector::fromUInt64(0x02030203, 32),
+                         .encoding = Encoding::VhdlLogic});
+    top.addObject(Object{.name = "flag",
+                         .type = Type::bits(8, false, false),
+                         .initialValue = BitVector::fromUInt64(0, 8),
+                         .encoding = Encoding::VhdlBit});
+    top.addObject(Object{.name = "nothing",
+                         .type = Type::bits(1, false, false),
+                         .encoding = Encoding::VhdlLogic,
+                         .holdsNothing = true});
+
+    enzan::eir::Design design;
+    design.addModule(std::move(top));
+    return design;
+}
+
 class SessionTest : public ::testing::Test {
 protected:
     SessionTest() : engine(sources), session(sources, engine) {
@@ -92,6 +142,12 @@ protected:
     /// Analyses and elaborates the shared counter design.
     void loadCounter() {
         ASSERT_TRUE(analyse("counter.sv", CounterSource)) << firstMessage();
+        ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+    }
+
+    /// Elaborates `vhdlCodedDesign`.
+    void loadVhdlCoded() {
+        session.setDesign(std::make_unique<enzan::eir::Design>(vhdlCodedDesign()));
         ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
     }
 
@@ -318,6 +374,17 @@ TEST_F(SessionTest, ExamineFallsBackToHexadecimalForAPlainSignal) {
     EXPECT_EQ(session.examine(signalOf("/tb/count"), std::nullopt), "00");
 }
 
+TEST_F(SessionTest, AVhdlSignalIsExaminedAsTheBitsItsCodesStandFor) {
+    loadVhdlCoded();
+
+    EXPECT_EQ(session.examine(signalOf("/tb/ready"), std::nullopt), "'1'");
+    EXPECT_EQ(session.examine(signalOf("/tb/ready"), Radix::Binary), "1");
+    EXPECT_EQ(session.examine(signalOf("/tb/bus"), Radix::Binary), "0101");
+    EXPECT_EQ(session.examine(signalOf("/tb/bus"), std::nullopt), "5");
+    EXPECT_EQ(session.examine(signalOf("/tb/nothing"), std::nullopt), "")
+        << "a null array has no value";
+}
+
 TEST_F(SessionTest, AMissingSignalIsReportedAsNoSignal) {
     loadCounter();
 
@@ -357,6 +424,32 @@ TEST_F(SessionTest, AValueThatDoesNotParseIsRefused) {
     std::string error;
     EXPECT_FALSE(session.deposit(signalOf("/tb/count"), "not a number", error));
     EXPECT_FALSE(error.empty());
+}
+
+TEST_F(SessionTest, AValueWrittenToAVhdlSignalIsTheBitsItShowsAs) {
+    // `0` is a std_logic's '0', which its code 2 stands for, not the code 0 of 'U'.
+    loadVhdlCoded();
+
+    std::string error;
+    ASSERT_TRUE(session.deposit(signalOf("/tb/ready"), "0", error)) << error;
+    EXPECT_EQ(session.examine(signalOf("/tb/ready"), std::nullopt), "'0'");
+    ASSERT_TRUE(session.force(signalOf("/tb/bus"), "4'b10zx", error)) << error;
+    EXPECT_EQ(session.examine(signalOf("/tb/bus"), Radix::Binary), "10zx");
+    ASSERT_TRUE(session.deposit(signalOf("/tb/flag"), "1", error)) << error;
+    EXPECT_EQ(session.examine(signalOf("/tb/flag"), Radix::Binary), "1");
+}
+
+TEST_F(SessionTest, AValueAVhdlSignalCannotHoldIsRefused) {
+    loadVhdlCoded();
+
+    std::string error;
+    EXPECT_FALSE(session.deposit(signalOf("/tb/flag"), "1'bx", error));
+    EXPECT_NE(error.find("each 0 or 1"), std::string::npos) << error;
+    EXPECT_EQ(session.examine(signalOf("/tb/flag"), Radix::Binary), "0");
+
+    error.clear();
+    EXPECT_FALSE(session.force(signalOf("/tb/nothing"), "1", error));
+    EXPECT_NE(error.find("null array"), std::string::npos) << error;
 }
 
 TEST_F(SessionTest, ForceHoldsAValueAgainstTheDesign) {

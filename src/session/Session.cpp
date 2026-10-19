@@ -7,10 +7,12 @@
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Design.h"
+#include "eir/Module.h"
 #include "eir/Serialization.h"
+#include "eir/Verifier.h"
 #include "elab/ElaboratedDesign.h"
 #include "elab/Elaborator.h"
-#include "pli/VpiContext.h"
+#include "pli/PliContext.h"
 #include "runtime/Image.h"
 #include "wavedb/FstWriter.h"
 #include "wavedb/VcdWriter.h"
@@ -18,8 +20,12 @@
 #ifdef ENZAN_WITH_SYSTEMVERILOG
 #include "frontend/sv/SystemVerilogFrontend.h"
 #endif
+#ifdef ENZAN_WITH_VHDL
+#include "frontend/vhdl/VhdlFrontend.h"
+#endif
 
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <map>
 #include <set>
@@ -28,6 +34,14 @@
 namespace enzan::session {
 
 namespace {
+
+/// True when `file` is named as a VHDL source is: `.vhd` or `.vhdl`, in any case.
+bool isVhdlSource(const std::filesystem::path& file) {
+    std::string extension = file.extension().string();
+    for (char& character : extension)
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    return extension == ".vhd" || extension == ".vhdl";
+}
 
 /// Matches `text` against a glob of `*` and `?`.
 ///
@@ -109,6 +123,8 @@ bool Session::analyse(const AnalysisRequest& request) {
         return false;
     }
 
+    if (std::ranges::any_of(files, isVhdlSource)) return analyseVhdl(request);
+
 #ifdef ENZAN_WITH_SYSTEMVERILOG
     // Read here rather than by the frontend, so that each file has exactly one buffer: the
     // manager does not deduplicate, and a second buffer per file makes a location's identity
@@ -172,6 +188,10 @@ bool Session::analyse(const AnalysisRequest& request) {
         if (library.load(stored, sources, *reused)) {
             design = std::move(reused);
             loadedFromLibrary = true;
+#ifdef ENZAN_WITH_VHDL
+            vhdlOptions.reset();
+#endif
+            resolutionAnswers.clear();
 
             // Left empty on purpose. A hit does not run the frontend, so nothing knows which
             // files were included, and a dependency file listing only the sources would drop
@@ -197,6 +217,10 @@ bool Session::analyse(const AnalysisRequest& request) {
     if (analysed == nullptr) return false;
 
     design = std::move(analysed);
+#ifdef ENZAN_WITH_VHDL
+    vhdlOptions.reset();
+#endif
+    resolutionAnswers.clear();
 
     // A failed store is reported and otherwise ignored: the design is in hand either way, and
     // refusing to simulate because a cache could not be written would be the cache making
@@ -218,6 +242,78 @@ bool Session::analyse(const AnalysisRequest& request) {
 #else
     diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
                        "analysis in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF");
+    return false;
+#endif
+}
+
+bool Session::analyseVhdl(const AnalysisRequest& request) {
+#ifdef ENZAN_WITH_VHDL
+    // Every source is read first, so that one that cannot be is reported as that, whatever its
+    // name says it holds, rather than as a design of two languages.
+    frontend::vhdl::DesignOptions options;
+    std::set<std::filesystem::path> seen;
+    for (const std::filesystem::path& file : files) {
+        std::error_code failure;
+        std::filesystem::path key = std::filesystem::weakly_canonical(file, failure);
+        if (failure) key = file;
+        if (!seen.insert(std::move(key)).second) continue;
+
+        const FileReadResult result = sources.readFile(file);
+        if (!result.ok()) {
+            reportFileReadFailure(diagnostics, file, result);
+            return false;
+        }
+        options.units.sources.push_back(result.buffer);
+    }
+    if (!std::ranges::all_of(files, isVhdlSource) || !contextFiles.empty()
+        || !libraryFiles.empty()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "a design mixing VHDL and SystemVerilog sources");
+        return false;
+    }
+    if (library.isOpen() || !inputLibraries.empty()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "analysing VHDL into an Enzan library, or against one");
+        return false;
+    }
+    if (!parameters.empty()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "-G for a VHDL top level");
+        return false;
+    }
+
+    // VHDL counts time in femtoseconds, its resolution limit, and a design is simulated in the
+    // finest unit anything in it asks for (section 3.1), unless `--timescale` said otherwise.
+    if (!scaleChosen) scale = runtime::TimeScale(runtime::FinestTimeExponent);
+
+    options.units.work = frontend::vhdl::UnitLibrary{.name = request.vhdlWork, .directory = {}};
+    options.units.searchDirectories.push_back(
+        vhdlLibraries.empty() ? frontend::vhdl::standardLibraryDirectory() : vhdlLibraries);
+    options.top = request.top;
+    options.timeUnitExponent = scale.precisionExponent();
+    options.ieeeWarnings = request.ieeeWarnings;
+    const std::string_view year = request.vhdlStandard;
+    if (year.ends_with("93")) options.units.standard = frontend::vhdl::Standard::Vhdl1993;
+    if (year.ends_with("00")) options.units.standard = frontend::vhdl::Standard::Vhdl2000;
+    if (year.ends_with("02")) options.units.standard = frontend::vhdl::Standard::Vhdl2002;
+    if (year.ends_with("08")) options.units.standard = frontend::vhdl::Standard::Vhdl2008;
+    if (year.ends_with("19")) options.units.standard = frontend::vhdl::Standard::Vhdl2019;
+
+    std::unique_ptr<eir::Design> analysed = frontend::vhdl::analyse(options, sources, diagnostics);
+    if (analysed == nullptr) return false;
+
+    design = std::move(analysed);
+    loadedFromLibrary = false;
+    vhdlOptions = std::make_unique<frontend::vhdl::DesignOptions>(std::move(options));
+    resolutionAnswers.clear();
+    lastFilesRead.assign(files.begin(), files.end());
+    std::ranges::sort(lastFilesRead);
+    lastFilesRead.erase(std::ranges::unique(lastFilesRead).begin(), lastFilesRead.end());
+    return true;
+#else
+    static_cast<void>(request);
+    diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                       "VHDL analysis in a build configured with -DENZAN_ENABLE_VHDL=OFF");
     return false;
 #endif
 }
@@ -245,6 +341,7 @@ bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
 
     if (holding.empty()) {
         scale = requested.value_or(runtime::TimeScale());
+        scaleChosen = requested.has_value();
         return true;
     }
 
@@ -256,6 +353,7 @@ bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
         return false;
     }
     scale = unit;
+    scaleChosen = true;
     return true;
 }
 
@@ -285,6 +383,67 @@ void Session::setDesign(std::unique_ptr<eir::Design> analysed) {
     discardElaboration();
     design = std::move(analysed);
     loadedFromLibrary = false;
+#ifdef ENZAN_WITH_VHDL
+    vhdlOptions.reset();
+#endif
+    resolutionAnswers.clear();
+}
+
+bool Session::answerResolutions(const elab::ElaboratedDesign& tree) {
+    std::vector<std::uint32_t> asked;
+    for (std::uint32_t index = 0; index < tree.resolutionCalls().size(); ++index) {
+        if (!tree.resolutionCalls()[index].answered()) asked.push_back(index);
+    }
+    if (asked.empty()) return true;
+#ifdef ENZAN_WITH_VHDL
+    if (vhdlOptions == nullptr) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "a VHDL resolved signal in a design not analysed from its sources here");
+        return false;
+    }
+    std::vector<frontend::vhdl::ResolutionRequest> requests;
+    requests.reserve(asked.size());
+    for (const std::uint32_t index : asked) {
+        const elab::ResolutionCall& call = tree.resolutionCalls()[index];
+        requests.push_back(
+            frontend::vhdl::ResolutionRequest{.function = call.function, .drivers = call.drivers});
+    }
+    std::optional<frontend::vhdl::ResolvedFunctions> found =
+        frontend::vhdl::resolutions(*vhdlOptions, sources, requests, diagnostics);
+    if (!found) return false;
+
+    // A package the design already has gains the functions it lacks; a specialisation is named
+    // for what it is, so one it has is the same one (section 3.7).
+    for (eir::ModuleDefinition& definition : found->definitions) {
+        const std::string qualified = definition.library.empty()
+                                          ? definition.name
+                                          : definition.library + "." + definition.name;
+        if (const eir::ModuleDefinition* existing = design->findModule(qualified)) {
+            eir::ModuleDefinition merged = *existing;
+            for (eir::Subprogram& subprogram : definition.subprograms) {
+                const bool known = std::ranges::any_of(merged.subprograms,
+                                                       [&subprogram](const eir::Subprogram& held) {
+                                                           return held.name == subprogram.name;
+                                                       });
+                if (!known) merged.subprograms.push_back(std::move(subprogram));
+            }
+            design->addModule(std::move(merged));
+        } else {
+            design->addModule(std::move(definition));
+        }
+    }
+    if (!eir::verify(*design, diagnostics)) return false;
+    for (std::size_t index = 0; index < asked.size(); ++index) {
+        resolutionAnswers.insert_or_assign(
+            std::pair(requests[index].function, requests[index].drivers),
+            std::pair(found->answers[index].definition, found->answers[index].subprogram));
+    }
+    return true;
+#else
+    diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                       "a VHDL resolved signal in a build without the VHDL frontend");
+    return false;
+#endif
 }
 
 void Session::discardElaboration() {
@@ -376,8 +535,19 @@ bool Session::elaborate(std::string_view topModule) {
     discardElaboration();
 
     elab::Elaborator elaborator(*design, diagnostics);
-    std::unique_ptr<elab::ElaboratedDesign> tree = elaborator.elaborate(topModule);
+    std::unique_ptr<elab::ElaboratedDesign> tree =
+        elaborator.elaborate(topModule, resolutionAnswers);
     if (tree == nullptr) return false;
+
+    // A resolved signal's function for a driver count no translation has given yet is asked for,
+    // and the design elaborated again with it (DESIGN_GUIDE.md section 3.7).
+    const bool unanswered = std::ranges::any_of(
+        tree->resolutionCalls(), [](const elab::ResolutionCall& call) { return !call.answered(); });
+    if (unanswered) {
+        if (!answerResolutions(*tree)) return false;
+        tree = elab::Elaborator(*design, diagnostics).elaborate(topModule, resolutionAnswers);
+        if (tree == nullptr) return false;
+    }
 
     codegen::Compiler compiler(diagnostics);
     std::unique_ptr<codegen::CompiledDesign> bodies = compiler.compile(*design);
@@ -392,6 +562,7 @@ bool Session::elaborate(std::string_view topModule) {
     options.deltaLimit = deltaLimit;
     options.transcript = transcript;
     options.seed = seed;
+    options.stopSeverity = stopSeverity;
 
     kernel = std::make_unique<runtime::Kernel>(*image, diagnostics, options);
     kernel->initialize();
@@ -407,12 +578,23 @@ bool Session::elaborate(std::string_view topModule) {
 
 bool Session::loadVpiApplication(std::string_view specification,
                                  std::span<const std::string> commandLine) {
+    return loadApplication(specification, commandLine, false);
+}
+
+bool Session::loadVhpiApplication(std::string_view specification,
+                                  std::span<const std::string> commandLine) {
+    return loadApplication(specification, commandLine, true);
+}
+
+bool Session::loadApplication(std::string_view specification,
+                              std::span<const std::string> commandLine, bool vhpi) {
     if (vpi == nullptr) {
-        vpi = std::make_unique<pli::VpiContext>(
+        vpi = std::make_unique<pli::PliContext>(
             diagnostics, std::vector<std::string>(commandLine.begin(), commandLine.end()));
         vpi->setTranscript(transcript);
     }
-    return vpi->load(specification);
+    return vpi->load(specification,
+                     vhpi ? pli::PliContext::Interface::Vhpi : pli::PliContext::Interface::Vpi);
 }
 
 bool Session::hasVpiApplication() const noexcept {
@@ -508,29 +690,53 @@ std::string Session::examine(std::uint32_t signalIndex, std::optional<eir::Radix
         }
     }
 
-    return eir::toString(value, radix.value_or(eir::Radix::Hexadecimal));
+    // As every waveform shows it: a VHDL signal's codes as the bits they stand for, and one of a
+    // null range, whose one bit is a placeholder, as nothing.
+    if (elaborated->slots()[signalIndex].holdsNothing) return {};
+    if (signal.encoding == eir::Encoding::Bits)
+        return eir::toString(value, radix.value_or(eir::Radix::Hexadecimal));
+    eir::BitVector shown(eir::presentedWidth(signal.encoding, signal.bitWidth));
+    eir::present(signal.encoding, value, shown.mutableRef());
+    return eir::toString(shown.ref(), radix.value_or(eir::Radix::Hexadecimal));
+}
+
+std::optional<eir::BitVector> Session::parseValue(std::string_view literal, std::string& error) {
+    std::optional<eir::BitVector> parsed = eir::BitVector::parse(literal);
+    if (!parsed.has_value())
+        error = "'" + std::string(literal) + "' is not a value Enzan understands";
+    return parsed;
 }
 
 std::optional<eir::BitVector>
-Session::parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const {
-    std::optional<eir::BitVector> parsed = eir::BitVector::parse(literal);
-    if (!parsed.has_value()) {
-        error = "'" + std::string(literal) + "' is not a value Enzan understands";
+Session::storedValue(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error) const {
+    const runtime::Signal& signal = image->signals()[signalIndex];
+    if (elaborated->slots()[signalIndex].holdsNothing) {
+        error = signal.path + " is a null array, so it has no bits to write";
         return std::nullopt;
     }
 
-    // Widened or narrowed to the signal, so that `deposit /tb/count 5` writes the right number
-    // of bits without the user counting them.
-    const std::uint32_t width = image->signals()[signalIndex].bitWidth;
-    if (parsed->width() == width) return parsed;
-
-    eir::BitVector sized = eir::BitVector::filled(width, eir::Logic::Zero);
-    eir::bitops::extend(sized.mutableRef(), parsed->ref(), false);
-    return sized;
+    // Widened or narrowed to the signal as it shows, so that `deposit /tb/count 5` writes the
+    // right number of bits without the user counting them, and a std_logic takes the one its
+    // code stands for.
+    eir::BitVector sized = eir::BitVector::filled(
+        eir::presentedWidth(signal.encoding, signal.bitWidth), eir::Logic::Zero);
+    eir::bitops::extend(sized.mutableRef(), shown, false);
+    eir::BitVector stored = eir::BitVector::filled(signal.bitWidth, eir::Logic::Zero);
+    if (!eir::storeShown(signal.encoding, sized.ref(), stored.mutableRef())) {
+        error = "'" + eir::toString(sized.ref(), eir::Radix::Binary) + "' is no value of "
+                + signal.path + ", whose bits are each 0 or 1";
+        return std::nullopt;
+    }
+    return stored;
 }
 
 bool Session::deposit(std::uint32_t signalIndex, std::string_view literal, std::string& error) {
-    const std::optional<eir::BitVector> value = parseValue(signalIndex, literal, error);
+    const std::optional<eir::BitVector> value = parseValue(literal, error);
+    return value.has_value() && deposit(signalIndex, value->ref(), error);
+}
+
+bool Session::deposit(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error) {
+    const std::optional<eir::BitVector> value = storedValue(signalIndex, shown, error);
     if (!value.has_value()) return false;
 
     kernel->deposit(signalIndex, value->ref());
@@ -538,7 +744,12 @@ bool Session::deposit(std::uint32_t signalIndex, std::string_view literal, std::
 }
 
 bool Session::force(std::uint32_t signalIndex, std::string_view literal, std::string& error) {
-    const std::optional<eir::BitVector> value = parseValue(signalIndex, literal, error);
+    const std::optional<eir::BitVector> value = parseValue(literal, error);
+    return value.has_value() && force(signalIndex, value->ref(), error);
+}
+
+bool Session::force(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error) {
+    const std::optional<eir::BitVector> value = storedValue(signalIndex, shown, error);
     if (!value.has_value()) return false;
 
     kernel->force(signalIndex, value->ref());

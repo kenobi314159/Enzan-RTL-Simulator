@@ -55,6 +55,9 @@ QString ObjectsModel::valueOf(const SignalInfo& info) const {
         return QString::fromStdString(eir::toString(info.constantValue->ref(), valueRadix));
     }
 
+    // A null array has no bits, and so no value at any time.
+    if (info.width == 0) return {};
+
     const wavedb::WaveformDatabase& database = kernelSession->waveforms();
 
     const std::uint32_t record = database.recordIndexOf(info.signalIndex);
@@ -89,6 +92,7 @@ QVariant ObjectsModel::data(const QModelIndex& index, int role) const {
         // A parameter says which it is rather than how wide it is. Its width is whatever the
         // value needed, which is not something the reader wrote and not worth showing them.
         if (info.isParameter()) return info.isLocalParameter ? tr("localparam") : tr("parameter");
+        if (info.width == 0) return tr("null array");
         return info.width == 1 ? tr("logic") : tr("logic [%1:0]").arg(info.width - 1);
     default: return {};
     }

@@ -9,6 +9,9 @@ Records value changes, and exports them in the formats external viewers understa
   hierarchy to declare them, coalescing the changes within a time slot, and attributing those
   changes to the right timestamp. All of that is the same problem for VCD, for FST and for the
   live database, and it is where the subtle mistakes live, so there is one copy of the answer.
+  It is also where a VHDL signal's codes become the bits they stand for (DESIGN_GUIDE.md section
+  3.6), so that every format and the database show one value, and where a real is told apart, which
+  VCD and FST each hold as the number in a variable of their own real type.
 - **VCD export** (`VcdWriter.h`) — the universal interchange format. Human-readable, understood by
   every viewer, and required both for interoperability and for the differential testing of section
   14.3.

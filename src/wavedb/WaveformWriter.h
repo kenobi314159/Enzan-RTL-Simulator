@@ -86,6 +86,11 @@ public:
     /// Number of signals being recorded, for the transcript line that says so.
     [[nodiscard]] std::size_t recordedSignals() const noexcept { return recorded.size(); }
 
+    /// A signal's width as it is shown, which for VHDL's codes is one bit for each: the width
+    /// of every value this writer gives out for it, and so the width a reader of them is told.
+    /// None for a VHDL signal of a null range, which has no value to give.
+    [[nodiscard]] std::uint32_t widthOf(std::uint32_t signalIndex) const noexcept;
+
     void onValueChange(std::uint32_t signalIndex, eir::ConstBitRef value) final;
 
     void onTimeAdvance(runtime::SimTime time) final;
@@ -103,15 +108,21 @@ protected:
     /// Position of `signalIndex` among the recorded signals, or `NotRecorded`.
     [[nodiscard]] std::uint32_t recordIndexOf(std::uint32_t signalIndex) const noexcept;
 
-    /// Reads a signal's current value out of the state arena.
+    /// Reads a signal's current value out of the state arena, as it is shown: a VHDL signal's
+    /// codes converted to the bits they stand for (DESIGN_GUIDE.md section 3.6), and anything else
+    /// as it is.
     ///
     /// Read at flush time rather than copied when the change was reported, which is what section
-    /// 7.2 describes and what makes coalescing free.
-    [[nodiscard]] eir::ConstBitRef valueOf(std::uint32_t signalIndex) const noexcept;
+    /// 7.2 describes and what makes coalescing free. A converted value lives until the next call.
+    [[nodiscard]] eir::ConstBitRef valueOf(std::uint32_t signalIndex) const;
 
-    [[nodiscard]] std::uint32_t widthOf(std::uint32_t signalIndex) const noexcept {
-        return designImage->signals()[signalIndex].bitWidth;
+    /// True when a signal is a real, which a waveform holds as a number rather than as bits.
+    [[nodiscard]] bool isReal(std::uint32_t signalIndex) const noexcept {
+        return designImage->signals()[signalIndex].encoding == eir::Encoding::Real;
     }
+
+    /// A real signal's current value.
+    [[nodiscard]] double realValueOf(std::uint32_t signalIndex) const;
 
     static constexpr std::uint32_t NotRecorded = 0xFFFF'FFFFU;
 
@@ -164,6 +175,9 @@ private:
 
     const runtime::Image* designImage;
     const runtime::Arena* stateArena;
+
+    /// Where `valueOf` converts a VHDL signal's codes.
+    mutable eir::BitVector shown{1};
     runtime::TimeScale scale;
 
     /// What to record, or empty to record everything. Ordered, not a set: the declaration

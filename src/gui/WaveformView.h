@@ -93,6 +93,8 @@ public:
 
     [[nodiscard]] const QVector<WaveCursor>& cursors() const noexcept { return cursorList; }
 
+    void updateActive();
+
     int addCursor(const QString& name, runtime::SimTime time);
 
     void removeCursor(int index);

@@ -31,7 +31,10 @@ This directory builds **two** libraries, and the split is the point rather than 
 Both ends of a connection link it, and the GUI has no business linking the simulation kernel: the
 separation of section 2.2 is only real if the two halves can be built apart. Values cross the
 socket as `eir::BitVector`, in the same two-plane layout the state arena uses (section 3.6), so a
-value is copied rather than converted.
+value is copied rather than converted. A VHDL signal's are sent as the bits its codes stand for, as
+every waveform shows them, and so its width is given as that too: a client told the width of the
+codes would hold a trace that none of the values sent for it fits. A value a client deposits or
+forces comes the same way, and the session stores the codes it stands for.
 
 `enzan::ipc_server` — the kernel end — depends on `ipc`, `runtime`, `wavedb` and `elab`, because
 by its nature it owns a kernel and a waveform database. Only the `enzan` executable links it.

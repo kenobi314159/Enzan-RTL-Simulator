@@ -224,6 +224,20 @@ public:
         return {*this, std::move(diagnostic)};
     }
 
+    /// Prepares a diagnostic of `code` whose message is already formatted: one another engine
+    /// made, in a process of its own, and handed over (DESIGN_GUIDE.md section 5.2). Severity
+    /// overrides, suppression, counting and the error limit apply to it as to `report`.
+    DiagnosticBuilder reportFormatted(DiagCode code, SourceLocation location, std::string message) {
+        const DiagnosticSeverity effective = severity(code);
+        if (effective == DiagnosticSeverity::Ignored || limitReached) return {};
+        Diagnostic diagnostic;
+        diagnostic.code = code;
+        diagnostic.severity = effective;
+        diagnostic.location = location;
+        diagnostic.message = std::move(message);
+        return {*this, std::move(diagnostic)};
+    }
+
     /// Overrides the severity of `code`.
     ///
     /// This is how `-Wno-ENZ0007` and "warnings as errors" are implemented. A

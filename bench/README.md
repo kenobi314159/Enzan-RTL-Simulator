@@ -19,6 +19,11 @@ cmake --build --preset gcc-release
 
 CMake also exposes it as a target: `cmake --build --preset gcc-release --target enzan-bench`.
 
+The designs are `designs/pipeline.sv`, a chain of registered stages, and
+`designs/pipeline.vhd`, the same chain written as VHDL RTL is, on `std_logic_vector`
+through `numeric_std`, recorded as `pipeline-vhdl`. A design in a language the build has no
+frontend for is skipped, as `enzan --version` lists the frontends.
+
 Each row records the timestamp, the git revision, the design, the cycle count, the elapsed
 seconds, cycles per second, and the instruction and delta counts the kernel reports. A
 measurement taken from a dirty working tree is marked `-dirty`, because a number that cannot be

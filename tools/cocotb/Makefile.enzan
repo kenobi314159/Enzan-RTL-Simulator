@@ -14,10 +14,16 @@
 
 TOPLEVEL_LANG ?= verilog
 
-ifneq ($(or $(filter-out $(TOPLEVEL_LANG),verilog),$(VHDL_SOURCES)),)
+ifeq ($(filter verilog vhdl,$(TOPLEVEL_LANG)),)
+    $(error A valid value (verilog or vhdl) was not provided for TOPLEVEL_LANG=$(TOPLEVEL_LANG))
+endif
+
+# A design of both languages is not simulated yet, so it is skipped, as cocotb's makefiles skip a
+# language a simulator lacks.
+ifneq ($(and $(strip $(VERILOG_SOURCES)),$(strip $(VHDL_SOURCES))),)
 
 $(COCOTB_RESULTS_FILE):
-	@echo "Skipping simulation as only Verilog is supported on simulator=$(SIM)"
+	@echo "Skipping simulation as a design of both languages is not supported on simulator=$(SIM)"
 debug: $(COCOTB_RESULTS_FILE)
 
 else
@@ -29,8 +35,23 @@ else
 endif
 
 # cocotb's VPI layer compiled with no simulator-specific workaround in it, so that Enzan is held
-# to what cocotb expects of a standard simulator (section 9.6).
+# to what cocotb expects of a standard simulator (section 9.6); and its VHPI layer as built for
+# NVC, whose one workaround is to compare names without their case, which Enzan does not keep
+# for VHDL any more than NVC does (section 9.7).
 ENZAN_VPI_LIBRARY := $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vpi dsim)
+ENZAN_VHPI_LIBRARY := $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vhpi nvc)
+
+# The toplevel's language's layer is loaded.
+ifeq ($(TOPLEVEL_LANG),verilog)
+    ENZAN_PLI := --vpi $(ENZAN_VPI_LIBRARY)
+else
+    ENZAN_PLI := --vhpi $(ENZAN_VHPI_LIBRARY)
+endif
+
+# VHDL is analysed into the library cocotb names, `work` unless RTL_LIBRARY says otherwise.
+ifneq ($(strip $(VHDL_SOURCES)),)
+    COMPILE_ARGS += --work $(or $(RTL_LIBRARY),work)
+endif
 
 TOPLEVELS := $(call deprecate,TOPLEVEL,COCOTB_TOPLEVEL)
 ifneq ($(words $(TOPLEVELS)),0)
@@ -55,20 +76,20 @@ ifeq ($(WAVES),1)
     SIM_ARGS += --fst $(SIM_BUILD)/$(TOPLEVELS).fst
 endif
 
-ENZAN_ARGS = $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) --vpi $(ENZAN_VPI_LIBRARY) \
-             $(COMPILE_ARGS) $(SIM_ARGS) $(EXTRA_ARGS) $(VERILOG_SOURCES) \
+ENZAN_ARGS = $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) $(ENZAN_PLI) \
+             $(COMPILE_ARGS) $(SIM_ARGS) $(EXTRA_ARGS) $(VERILOG_SOURCES) $(VHDL_SOURCES) \
              $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
 
 # Analysis, elaboration and the run are one process, so there is no compiled image to keep and
 # the results file is the only target.
-$(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
+$(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
 	$(RM) $(COCOTB_RESULTS_FILE)
 
 	$(COCOTB_ENV) $(SIM_CMD_PREFIX) $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
 
 	$(call check_results)
 
-debug: $(VERILOG_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
+debug: $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
 	$(RM) $(COCOTB_RESULTS_FILE)
 
 	$(COCOTB_ENV) $(SIM_CMD_PREFIX) gdb --args $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)

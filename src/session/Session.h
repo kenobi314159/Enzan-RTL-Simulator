@@ -4,6 +4,7 @@
 
 #include "eir/BitVector.h"
 #include "eir/Library.h"
+#include "elab/Elaborator.h"
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
 
@@ -34,8 +35,12 @@ namespace enzan::elab {
 class ElaboratedDesign;
 }
 
+namespace enzan::frontend::vhdl {
+struct DesignOptions;
+}
+
 namespace enzan::pli {
-class VpiContext;
+class PliContext;
 }
 
 namespace enzan::runtime {
@@ -110,8 +115,18 @@ public:
 
     [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
 
+    /// Sets where VHDL's standard libraries are, for a program that does not keep them beside
+    /// itself; by default they are where `frontend::vhdl::standardLibraryDirectory` says.
+    void setVhdlLibraryDirectory(std::filesystem::path directory) {
+        vhdlLibraries = std::move(directory);
+    }
+
     /// Sets the delta cycles allowed at one timestamp. Takes effect at the next elaboration.
     void setDeltaLimit(std::uint32_t limit) noexcept { deltaLimit = limit; }
+
+    /// Sets the severity, as a position of VHDL's `severity_level`, at which a report ends the
+    /// run; 4 never does. Takes effect at the next elaboration.
+    void setStopSeverity(std::uint8_t severity) noexcept { stopSeverity = severity; }
 
     /// The seed random draws start from (DESIGN_GUIDE.md section 3.8).
     void setSeed(std::uint32_t value) noexcept { seed = value; }
@@ -144,6 +159,25 @@ public:
 
         /// Top-level parameter overrides, each `NAME=VALUE`.
         std::vector<std::string> parameters;
+
+        /// The top level the design will be elaborated from, when it is known.
+        ///
+        /// VHDL's adapter translates the hierarchy under its top rather than every unit analysed,
+        /// so that a unit nothing instantiates cannot stop a design for using something the
+        /// adapter lacks (DESIGN_GUIDE.md section 5.2); without one it translates every entity
+        /// that nothing instantiates. SystemVerilog's analysis does not use it.
+        std::string top;
+
+        /// The library VHDL sources are analysed into, by the name they refer to it by
+        /// (`library neorv32;`). SystemVerilog's analysis does not use it.
+        std::string vhdlWork = "work";
+
+        /// Whether the IEEE packages' own warnings are reported, as GHDL's `--ieee-asserts`.
+        bool ieeeWarnings = true;
+
+        /// The revision of IEEE 1076 VHDL sources are analysed against: its year, or the
+        /// year's last two digits.
+        std::string vhdlStandard = "2008";
     };
 
     /// Analyses `request` together with everything analysed before it.
@@ -158,6 +192,16 @@ public:
     /// is analysed and every entry rewritten.
     bool analyse(const AnalysisRequest& request);
 
+private:
+    /// `analyse` for a design whose sources are VHDL.
+    bool analyseVhdl(const AnalysisRequest& request);
+
+    /// Asks the VHDL frontend for each resolution function `tree` needs and no translation has
+    /// given yet, each for the number of drivers elaboration counted, links what comes back into
+    /// the design, and records where each is (DESIGN_GUIDE.md section 3.7).
+    bool answerResolutions(const elab::ElaboratedDesign& tree);
+
+public:
     [[nodiscard]] bool hasDesign() const noexcept { return design != nullptr; }
 
     /// Every file the last `analyse` read: the sources, the files they included, and the
@@ -236,6 +280,12 @@ public:
     bool loadVpiApplication(std::string_view specification,
                             std::span<const std::string> commandLine);
 
+    /// Loads a VHPI application into the same context (section 9.7), which a design of both
+    /// languages shows to both interfaces as one simulation. Only a build with the VHDL frontend
+    /// has VHPI.
+    bool loadVhpiApplication(std::string_view specification,
+                             std::span<const std::string> commandLine);
+
     [[nodiscard]] bool hasVpiApplication() const noexcept;
 
     /// True when the last `analyse` came out of the library rather than the frontend.
@@ -308,19 +358,30 @@ public:
     ///
     /// An enumerated signal whose value has a name is rendered by that name when `radix` is
     /// absent, matching what the wave window shows (section 10.3): a reader who asked what a
-    /// state register holds wants `S_SEND`, and gets `3'h2` by asking for a radix.
+    /// state register holds wants `S_SEND`, and gets `3'h2` by asking for a radix. Anything else
+    /// is rendered as it shows (section 3.6), a std_logic_vector as the bits its codes stand for,
+    /// and a VHDL signal of a null range, which has no value, as nothing.
     [[nodiscard]] std::string examine(std::uint32_t signalIndex,
                                       std::optional<eir::Radix> radix) const;
 
     /// Parses `literal` against a signal's width and writes it once.
     ///
-    /// Returns false having filled `error` when the literal does not parse. The width is
-    /// taken from the signal, so `deposit /tb/count 5` writes the right number of bits
-    /// without the user counting them.
+    /// Returns false having filled `error` when the literal does not parse, or is no value of
+    /// the signal. The width is taken from the signal, so `deposit /tb/count 5` writes the right
+    /// number of bits without the user counting them.
     bool deposit(std::uint32_t signalIndex, std::string_view literal, std::string& error);
+
+    /// Writes `shown` once: a value as the signal shows it (section 3.6), which a VHDL signal
+    /// stores as the codes its bits stand for, `1` a std_logic's '1'. Widened or narrowed to the
+    /// width the signal shows at; false having filled `error` when it is no value of the signal,
+    /// an unknown `bit` or anything of a null range.
+    bool deposit(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error);
 
     /// Parses `literal` and holds the signal at it until `release`.
     bool force(std::uint32_t signalIndex, std::string_view literal, std::string& error);
+
+    /// Holds the signal at `shown`, taken as `deposit` takes it, until `release`.
+    bool force(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error);
 
     /// Releases a forced signal, returning false when it was not forced.
     bool release(std::uint32_t signalIndex);
@@ -376,12 +437,21 @@ private:
     /// Drops the kernel, the image and everything they were built from.
     void discardElaboration();
 
+    /// Loads a VPI application, or a VHPI one when `vhpi` is set, creating the context the first
+    /// time.
+    bool loadApplication(std::string_view specification, std::span<const std::string> commandLine,
+                         bool vhpi);
+
     /// Tells a loaded application the simulation is over, once (section 9.5).
     void endVpiSimulation();
 
-    /// Parses `literal` to the width of `signalIndex`, reporting through `error`.
+    /// Parses `literal`, reporting through `error`.
+    [[nodiscard]] static std::optional<eir::BitVector> parseValue(std::string_view literal,
+                                                                  std::string& error);
+
+    /// What `signalIndex` stores for `shown`, reporting through `error`.
     [[nodiscard]] std::optional<eir::BitVector>
-    parseValue(std::uint32_t signalIndex, std::string_view literal, std::string& error) const;
+    storedValue(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error) const;
 
     /// Pairs each analysed file with the buffer holding its text, for the library's keys.
     [[nodiscard]] static std::vector<eir::LibrarySource>
@@ -427,7 +497,7 @@ private:
     ///
     /// Declared after the kernel so that it is destroyed first: it holds the kernel's hooks
     /// and must let go of them before the kernel goes.
-    std::unique_ptr<pli::VpiContext> vpi;
+    std::unique_ptr<pli::PliContext> vpi;
 
     /// Open waveform files. Owned here so that `quit` and the destructor both finish them.
     std::vector<std::unique_ptr<wavedb::WaveformWriter>> writers;
@@ -436,8 +506,26 @@ private:
     std::vector<std::string> scopes;
 
     runtime::TimeScale scale;
+
+    /// True when the unit was chosen, by `--timescale` or by a library holding units, rather than
+    /// left at its default: a VHDL design then counts in it instead of in femtoseconds.
+    bool scaleChosen = false;
+
+    std::filesystem::path vhdlLibraries;
+
+#ifdef ENZAN_WITH_VHDL
+    /// What the design was analysed from when it was VHDL, which the frontend analyses again to
+    /// translate the resolution functions elaboration asks for; null otherwise. Only a build
+    /// with the VHDL frontend has its options to hold.
+    std::unique_ptr<frontend::vhdl::DesignOptions> vhdlOptions;
+#endif
+
+    /// Where each VHDL resolution function translated for this design is, by its name and its
+    /// number of drivers, which elaboration binds segments to.
+    elab::ResolutionAnswers resolutionAnswers;
     runtime::RunStatus status = runtime::RunStatus::Quiescent;
     std::uint32_t deltaLimit = 10'000;
+    std::uint8_t stopSeverity = 3;
     std::uint32_t seed = 0;
 
     /// Bumped by `discardElaboration`, which every path that replaces the simulation goes

@@ -23,6 +23,9 @@ struct Signal {
     /// Hierarchical path, for diagnostics, the waveform database and `examine`.
     std::string path;
 
+    /// What the bits mean to what shows them: VHDL's codes, or the value itself.
+    eir::Encoding encoding = eir::Encoding::Bits;
+
     /// Processes whose static sensitivity includes this signal, with the edge each one
     /// wants.
     ///
@@ -90,6 +93,13 @@ struct ProcessState {
     /// Object index to signal index, for the same instance.
     std::span<const std::uint32_t> objectSignals;
 
+    /// Object index to the signal a store to it writes: the one it reads, but for a port whose
+    /// drivers drive another object (elab::Instance::objectDriveSlots).
+    std::span<const std::uint32_t> writeSignals;
+
+    /// For each of the body's call sites, the index of the bound subprogram it calls.
+    std::span<const std::uint32_t> calls;
+
     /// One route per object the process writes, indexed by a store's `dst`.
     ///
     /// Per process rather than per instance, because drivers belong to processes: one
@@ -118,6 +128,42 @@ struct ProcessState {
     std::string name;
 };
 
+/// A subprogram's compiled body bound to the instance whose objects it reaches
+/// (elab::SubprogramInstance), as a process state binds a process's body.
+struct BoundSubprogram {
+    /// Index into the compiled design's bodies.
+    std::uint32_t bodyIndex = 0;
+
+    /// Object index to arena Word offset and to signal index, for the instance it is bound to;
+    /// empty when it is bound to none.
+    std::span<const std::uint32_t> objectOffsets;
+    std::span<const std::uint32_t> objectSignals;
+    std::span<const std::uint32_t> writeSignals;
+
+    /// One route per object the subprogram writes, each straight into the signal: elaboration
+    /// refuses a subprogram writing anything a driver resolves.
+    std::span<const WriteRoute> writeRoutes;
+
+    /// For each of the body's call sites, the index of the bound subprogram it calls.
+    std::span<const std::uint32_t> calls;
+};
+
+/// What sizing the kernel's call stack needs to know of a design's calls (DESIGN_GUIDE.md
+/// section 4.1).
+struct CallStackShape {
+    /// The deepest chain of calls a process can make, in calls and in Words of their frames,
+    /// when no call can reach itself again.
+    std::uint32_t depth = 0;
+    std::uint32_t words = 0;
+
+    /// True when a call can reach itself again, so that only a limit bounds the chain.
+    bool recursive = false;
+
+    /// The largest frame of any bound subprogram, which bounds a recursive chain's Words per
+    /// call.
+    std::uint32_t largestFrame = 0;
+};
+
 /// Everything needed to run an elaborated, compiled design.
 ///
 /// Assembling this is the last step of turning source into something executable, and it
@@ -135,6 +181,12 @@ public:
     [[nodiscard]] std::span<const ProcessState> processes() const noexcept { return processList; }
 
     [[nodiscard]] std::vector<ProcessState>& mutableProcesses() noexcept { return processList; }
+
+    [[nodiscard]] std::span<const BoundSubprogram> subprograms() const noexcept {
+        return subprogramList;
+    }
+
+    [[nodiscard]] const CallStackShape& callStackShape() const noexcept { return stackShape; }
 
     [[nodiscard]] const codegen::CompiledDesign& compiledDesign() const noexcept {
         return *compiled;
@@ -173,6 +225,11 @@ private:
 
     void buildProcesses();
 
+    void buildSubprograms();
+
+    /// Works out the deepest chain of calls, and whether any call can reach itself.
+    void measureCallStack();
+
     const eir::Design* design;
     const elab::ElaboratedDesign* elaborated;
     const codegen::CompiledDesign* compiled;
@@ -184,9 +241,17 @@ private:
     /// that the spans in ProcessState stay valid for the image's lifetime.
     std::vector<std::vector<std::uint32_t>> instanceObjectOffsets;
     std::vector<std::vector<std::uint32_t>> instanceObjectSignals;
+    std::vector<std::vector<std::uint32_t>> instanceWriteSignals;
 
     /// Per-process routes, indexed by process. Owned here for the same reason.
     std::vector<std::vector<WriteRoute>> processWriteRoutes;
+
+    std::vector<BoundSubprogram> subprogramList;
+
+    /// Per-subprogram routes, indexed like `subprogramList`.
+    std::vector<std::vector<WriteRoute>> subprogramWriteRoutes;
+
+    CallStackShape stackShape;
 
     std::uint32_t arenaSize = 0;
     std::uint32_t frameSize = 0;

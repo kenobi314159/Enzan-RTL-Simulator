@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs the cocotb golden test against Enzan, through cocotb's own makefiles with SIM=enzan.
+# Runs a cocotb golden test against Enzan, through cocotb's own makefiles with SIM=enzan.
 #
-#   run-cocotb-check.sh <enzan> <python-with-cocotb> <test-directory>
+#   run-cocotb-check.sh <enzan> <python-with-cocotb> <test-directory> [verilog|vhdl]
+#
+# The last is the toplevel's language, `verilog` unless given, which decides whether cocotb
+# reaches the design through VPI or VHPI (DESIGN_GUIDE.md sections 9.6 and 9.7).
 #
 # Prints `PASS cocotb` when every test in it passed.
 
@@ -12,6 +15,7 @@ set -euo pipefail
 readonly enzan="$(realpath "$1")"
 readonly python="$2"
 readonly source="$(realpath "$3")"
+readonly language="${4:-verilog}"
 readonly root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 work="$(mktemp -d)"
@@ -24,6 +28,6 @@ cp -r "$source" "$work/case"
 export PATH="$(dirname "$(command -v "$python")"):$PATH"
 
 cd "$work/case"
-SIM=enzan TOPLEVEL_LANG=verilog make COCOTB_MAKEFILES_DIR="$work/makefiles" \
+SIM=enzan TOPLEVEL_LANG="$language" make COCOTB_MAKEFILES_DIR="$work/makefiles" \
     ENZAN_BIN_DIR="$(dirname "$enzan")"
 echo "PASS cocotb"

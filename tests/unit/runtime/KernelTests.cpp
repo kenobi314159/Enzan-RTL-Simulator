@@ -11,6 +11,7 @@
 #include "runtime/Kernel.h"
 
 #include "common/Diagnostics.h"
+#include "eir/BitOps.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
 #include "eir/Module.h"
@@ -23,11 +24,16 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
+#include <cstdint>
+#include <format>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -43,10 +49,12 @@ using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
 using enzan::eir::Opcode;
 using enzan::eir::Operand;
+using enzan::eir::ParameterMode;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::Radix;
 using enzan::eir::SensitivityEntry;
+using enzan::eir::Subprogram;
 using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
@@ -60,6 +68,7 @@ using enzan::runtime::SimTime;
 using enzan::test::literal;
 using enzan::test::ProcessBuilder;
 using enzan::test::Simulation;
+using enzan::test::SubprogramBuilder;
 
 // NOLINTEND(misc-unused-using-decls)
 
@@ -112,6 +121,19 @@ TEST(Kernel, ADeclaredInitialValueIsApplied) {
     const Simulation simulation(designOf(std::move(definition)), "tb");
     ASSERT_TRUE(simulation.ready());
     EXPECT_EQ(simulation.value("/tb/preset", Radix::Hexadecimal), "a5");
+}
+
+TEST(Kernel, ARealStartsAtItsDeclaredInitialValue) {
+    // A VHDL real signal is held as 64 bits are, and starts at the double its declaration gives,
+    // 2.5 here, rather than at zero.
+    ModuleDefinition definition = makeTop(
+        {}, {Object{.name = "ratio",
+                    .type = Type::real(),
+                    .initialValue = BitVector::fromUInt64(std::bit_cast<std::uint64_t>(2.5), 64)}});
+
+    const Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready());
+    EXPECT_EQ(simulation.value("/tb/ratio", Radix::Hexadecimal), "4004000000000000");
 }
 
 TEST(Kernel, AlwaysCombRunsAtTimeZero) {
@@ -644,6 +666,76 @@ TEST(Kernel, DisplayWritesToTheTranscript) {
     EXPECT_EQ(simulation.transcript(), "value = 42 at 0ps in /tb\n");
 }
 
+/// `write(l, 42, left, 5); write(l, -7); writeline(output, l)`, and the handle writeline leaves in
+/// `l` stored in `after`.
+Design makeLineWriter() {
+    ProcessBuilder builder(ProcessKind::Initial, "writer");
+    const Type handle = Type::bits(64, false, false);
+    const Type integer = Type::bits(32, true, false);
+    const std::uint32_t line = builder.reg(handle);
+    const std::uint32_t left = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t right = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t field = builder.reg(integer);
+    const std::uint32_t none = builder.reg(integer);
+    const std::uint32_t first = builder.reg(integer);
+    const std::uint32_t second = builder.reg(integer);
+    const std::uint32_t output = builder.reg(Type::bits(32, false, false));
+    const std::uint32_t written = builder.reg(handle);
+    const std::uint32_t decimal = builder.string("%0d");
+
+    const auto argument = [](std::uint32_t reg, Type type) {
+        return SysTaskArgument{.value = Operand::reg(reg), .type = type};
+    };
+    const auto write = [&](std::uint32_t justified, std::uint32_t width, std::uint32_t value) {
+        SysTaskCall call;
+        call.kind = SysTaskKind::LineWrite;
+        call.formatIndex = decimal;
+        call.arguments = {argument(line, handle), argument(justified, Type::bits(8, false, false)),
+                          argument(width, integer), argument(value, integer)};
+        return builder.sysCall(std::move(call));
+    };
+    const std::uint32_t writeFirst = write(left, field, first);
+    const std::uint32_t writeSecond = write(right, none, second);
+    SysTaskCall writeLine;
+    writeLine.kind = SysTaskKind::LineWriteLine;
+    writeLine.arguments = {argument(output, Type::bits(32, false, false)), argument(line, handle)};
+    const std::uint32_t printLine = builder.sysCall(std::move(writeLine));
+
+    const auto load = [&](std::uint32_t reg, std::string_view literal) {
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(reg),
+                                       Operand::constant(builder.constant(literal))));
+    };
+    builder.block("entry");
+    load(line, "64'd0");
+    load(left, "8'd1");
+    load(right, "8'd0");
+    load(field, "32'sd5");
+    load(none, "32'sd0");
+    load(first, "32'sd42");
+    load(second, "32'hfffffff9");
+    load(output, "32'h80000001");
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(line), Operand::sysCall(writeFirst)));
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(line), Operand::sysCall(writeSecond)));
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(written), Operand::sysCall(printLine)));
+    builder.store(0, written);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    return designOf(makeTop({builder.finish()}, {Object{.name = "after", .type = handle}}));
+}
+
+TEST(Kernel, TextioLinesLiveInTheHeapAndAreWrittenWhole) {
+    // The first write allocates a line, the second appends to it, and writeline prints it and
+    // leaves a new empty one, the handle the first freed (DESIGN_GUIDE.md section 4.3).
+    Simulation simulation(makeLineWriter(), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.transcript(), "42   -7\n");
+    EXPECT_EQ(simulation.value("/tb/after", Radix::Decimal), "1");
+}
+
 TEST(Kernel, FinishEndsTheRun) {
     ProcessBuilder builder(ProcessKind::Initial, "quitter");
     SysTaskCall call;
@@ -701,6 +793,350 @@ TEST(Kernel, SeverityTasksReportThroughTheDiagnosticEngine) {
     simulation.run();
     EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::UserError));
     EXPECT_TRUE(simulation.transcript().empty()) << "$error is a diagnostic, not output";
+}
+
+TEST(Kernel, AReportsSeverityChoosesItsDiagnostic) {
+    // VHDL's `report` and failed `assert`: note, warning and error are reported and the run goes
+    // on, and failure stops it, as GHDL's default does.
+    ProcessBuilder builder(ProcessKind::Initial, "reporter");
+    const std::uint32_t severity = builder.reg(Type::bits(8, false, false));
+    std::vector<std::uint32_t> constants;
+    std::vector<std::uint32_t> descriptors;
+    for (const std::string_view level : {"8'd0", "8'd1", "8'd2", "8'd3"}) {
+        constants.push_back(builder.constant(level));
+        SysTaskCall call;
+        call.kind = SysTaskKind::Report;
+        call.formatIndex = builder.string(std::string("severity ") + std::string(level));
+        call.arguments.push_back(
+            SysTaskArgument{.value = Operand::reg(severity), .type = Type::bits(8, false, false)});
+        descriptors.push_back(builder.sysCall(std::move(call)));
+    }
+
+    builder.block("entry");
+    for (std::size_t index = 0; index < constants.size(); ++index) {
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(severity),
+                                       Operand::constant(constants[index])));
+        builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(descriptors[index])));
+    }
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_EQ(simulation.simulationKernel().exitStatus(), 1);
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::UserInfo));
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::UserWarning));
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::UserError));
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::AssertionFailure));
+    // The severity is not part of the message.
+    EXPECT_EQ(simulation.messages().back(), "severity 8'd3");
+}
+
+TEST(Kernel, AnEmptyEventListWaitsForEver) {
+    // VHDL's `wait;`, which ends a testbench process: nothing wakes it, and what follows never
+    // runs.
+    ProcessBuilder builder(ProcessKind::Always, "waiter");
+    SysTaskCall call;
+    call.kind = SysTaskKind::Display;
+    call.formatIndex = builder.string("woken");
+    const std::uint32_t descriptor = builder.sysCall(std::move(call));
+
+    builder.block("entry");
+    builder.waitEvents({}, 1);
+    builder.block("after");
+    builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(descriptor)));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_TRUE(simulation.transcript().empty());
+}
+
+// ---------------------------------------------------------------------------
+// VHDL drivers (IEEE 1076 section 10.5.2.2)
+// ---------------------------------------------------------------------------
+
+/// A VHDL-style process: `steps` run in order, each loading `value` into a register and driving
+/// object 0 with it `delay` from now, `inertial` or not; a `wait` of `waitBefore` comes first when
+/// it is not zero. Then it waits for ever.
+struct DriveStep {
+    std::uint64_t waitBefore = 0;
+    std::uint8_t value = 0;
+    std::uint64_t delay = 0;
+    bool inertial = true;
+};
+
+Process makeDriver(const std::vector<DriveStep>& steps) {
+    ProcessBuilder builder(ProcessKind::Always, "driver");
+    const std::uint32_t value = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t delay = builder.reg(Type::bits(64, true, false));
+    builder.block("entry");
+    for (const DriveStep& step : steps) {
+        if (step.waitBefore != 0) {
+            builder.emit(Instruction::make(
+                Opcode::LoadConstant, Operand::reg(delay),
+                Operand::constant(builder.constant("64'd" + std::to_string(step.waitBefore)))));
+            const auto resume = builder.nextBlock();
+            builder.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay),
+                                           Operand::block(resume)));
+            builder.block("resumed");
+        }
+        builder.emit(Instruction::make(
+            Opcode::LoadConstant, Operand::reg(value),
+            Operand::constant(builder.constant("8'd" + std::to_string(step.value)))));
+        builder.emit(Instruction::make(
+            Opcode::LoadConstant, Operand::reg(delay),
+            Operand::constant(builder.constant("64'd" + std::to_string(step.delay)))));
+        builder.drive(0, value, delay, step.inertial);
+    }
+    const auto end = builder.nextBlock();
+    builder.waitEvents({}, end);
+    builder.block("end");
+    builder.emit(Instruction::make(Opcode::Return));
+    Process process = builder.finish();
+    process.drivesSignals = true;
+    return process;
+}
+
+ModuleDefinition driven(std::vector<Process> processes) {
+    return makeTop(std::move(processes),
+                   {Object{.name = "s", .type = Type::bits(8, false, false)},
+                    Object{.name = "seen", .type = Type::bits(8, false, false)}});
+}
+
+TEST(Kernel, ADriveDeletesWhatItsDriverHadPendingFromItsTimeOn) {
+    // s <= transport 1 after 10; s <= transport 2 after 5: the second deletes the first.
+    Simulation simulation(
+        designOf(driven({makeDriver({{.value = 1, .delay = 10, .inertial = false},
+                                     {.value = 2, .delay = 5, .inertial = false}})})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "2");
+    EXPECT_EQ(simulation.time(), 5U) << "the deleted transaction leaves no time step behind";
+}
+
+TEST(Kernel, OfTwoAssignmentsInOneDeltaTheLastHappens) {
+    // s <= 1; s <= 2; in one run of a process: one transaction, so one event.
+    Simulation simulation(designOf(driven({makeDriver({{.value = 1}, {.value = 2}})})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "2");
+}
+
+TEST(Kernel, AnInertialDriveRejectsAPulseShorterThanItsDelay) {
+    // s <= 1 after 10; then at 2, s <= 0 after 10: the 1 would last less than the delay, so it is
+    // rejected and s never leaves 0.
+    Simulation simulation(
+        designOf(driven(
+            {makeDriver({{.value = 1, .delay = 10}, {.waitBefore = 2, .value = 0, .delay = 10}})})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(11), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "0");
+}
+
+TEST(Kernel, AnInertialDriveKeepsARunOfItsOwnValue) {
+    // s <= 1 after 10; then at 2, s <= 1 after 10: the earlier 1 is part of the new one's run, so
+    // s becomes 1 at 10 rather than at 12.
+    Simulation simulation(
+        designOf(driven(
+            {makeDriver({{.value = 1, .delay = 10}, {.waitBefore = 2, .value = 1, .delay = 10}})})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(10), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "1");
+}
+
+TEST(Kernel, ATransportDriveRejectsNothing) {
+    Simulation simulation(designOf(driven({makeDriver(
+                              {{.value = 1, .delay = 10, .inertial = false},
+                               {.waitBefore = 2, .value = 0, .delay = 10, .inertial = false}})})),
+                          "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(10), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "1");
+}
+
+/// A process driving a 16-bit `s` as `steps` say: a whole drive when `offset` is absent, and a
+/// part drive of the low or the high byte otherwise.
+struct PartStep {
+    std::uint16_t value = 0;
+    std::optional<std::uint32_t> offset;
+    std::uint64_t delay = 0;
+    bool inertial = true;
+};
+
+Process makePartDriver(const std::vector<PartStep>& steps) {
+    ProcessBuilder builder(ProcessKind::Always, "driver");
+    const std::uint32_t whole = builder.reg(Type::bits(16, false, false));
+    const std::uint32_t byte = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t delay = builder.reg(Type::bits(64, true, false));
+    const std::uint32_t offset = builder.reg(Type::bits(32, false, false));
+    builder.block("entry");
+    for (const PartStep& step : steps) {
+        if (step.offset) {
+            builder.emit(Instruction::make(
+                Opcode::LoadConstant, Operand::reg(byte),
+                Operand::constant(builder.constant("8'd" + std::to_string(step.value)))));
+            builder.emit(Instruction::make(
+                Opcode::LoadConstant, Operand::reg(offset),
+                Operand::constant(builder.constant("32'd" + std::to_string(*step.offset)))));
+            builder.drivePart(0, byte, offset, 16);
+            continue;
+        }
+        builder.emit(Instruction::make(
+            Opcode::LoadConstant, Operand::reg(whole),
+            Operand::constant(builder.constant("16'd" + std::to_string(step.value)))));
+        builder.emit(Instruction::make(
+            Opcode::LoadConstant, Operand::reg(delay),
+            Operand::constant(builder.constant("64'd" + std::to_string(step.delay)))));
+        builder.drive(0, whole, delay, step.inertial);
+    }
+    builder.waitEvents({}, builder.nextBlock());
+    builder.block("end");
+    builder.emit(Instruction::make(Opcode::Return));
+    Process process = builder.finish();
+    process.drivesSignals = true;
+    return process;
+}
+
+ModuleDefinition partDriven(std::vector<Process> processes) {
+    return makeTop(std::move(processes),
+                   {Object{.name = "s", .type = Type::bits(16, false, false)}});
+}
+
+TEST(Kernel, AssignmentsToSeparatePartsOfASignalAreSeparateTransactions) {
+    // s(0) <= ...; s(1) <= ...; in one run: neither deletes the other.
+    Simulation simulation(designOf(partDriven({makePartDriver(
+                              {{.value = 0x34, .offset = 0}, {.value = 0x12, .offset = 8}})})),
+                          "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Hexadecimal), "1234");
+}
+
+TEST(Kernel, APartAssignmentDeletesOnlyThePendingBitsItAssigns) {
+    // s <= transport x"1111" after 10; s(low byte) <= x"22": what was pending for the low byte is
+    // gone, and the high byte's part of it still happens at 10.
+    Simulation simulation(
+        designOf(partDriven({makePartDriver(
+            {{.value = 0x1111, .delay = 10, .inertial = false}, {.value = 0x22, .offset = 0}})})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Hexadecimal), "0022");
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Hexadecimal), "1122");
+    EXPECT_EQ(simulation.time(), 10U);
+}
+
+TEST(Kernel, InertialRejectionOverAPartlyPendingSignalIsRefused) {
+    // Rejection is decided for each subelement, and a pending transaction for part of what an
+    // inertial assignment assigns would need it decided for some of them and not others.
+    Simulation simulation(designOf(partDriven({makePartDriver(
+                              {{.value = 0x22, .offset = 0}, {.value = 0x1111, .delay = 10}})})),
+                          "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::NotYetImplemented));
+}
+
+/// A process that waits for `s` (object 0) to change, then records whether `s` and `other`
+/// (object 2) had an event, in objects 1 and 3, and what `s` was before, in object 4.
+Process makeWatcher() {
+    ProcessBuilder builder(ProcessKind::Always, "watcher");
+    const std::uint32_t event = builder.reg(Type::bits(1, false, false));
+    const std::uint32_t widened = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t otherEvent = builder.reg(Type::bits(1, false, false));
+    const std::uint32_t otherWidened = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t before = builder.reg(Type::bits(8, false, false));
+    builder.block("entry");
+    builder.waitEvents({SensitivityEntry{.objectIndex = 0}}, builder.nextBlock());
+    builder.block("woken");
+    builder.readObject(before, 0);
+    builder.readObject(otherWidened, 2);
+    builder.emit(Instruction::make(Opcode::ReadEvent, Operand::reg(event), Operand::object(0)));
+    builder.emit(
+        Instruction::make(Opcode::ReadEvent, Operand::reg(otherEvent), Operand::object(2)));
+    builder.emit(
+        Instruction::make(Opcode::ReadLastValue, Operand::reg(before), Operand::object(0)));
+    builder.emit(Instruction::make(Opcode::Extend, Operand::reg(widened), Operand::reg(event)));
+    builder.emit(
+        Instruction::make(Opcode::Extend, Operand::reg(otherWidened), Operand::reg(otherEvent)));
+    builder.store(1, widened);
+    builder.store(3, otherWidened);
+    builder.store(4, before);
+    builder.emit(Instruction::make(Opcode::Jump, {}, Operand::block(0)));
+    return builder.finish();
+}
+
+ModuleDefinition watched(std::vector<Process> processes) {
+    return makeTop(std::move(processes),
+                   {Object{.name = "s", .type = Type::bits(8, false, false)},
+                    Object{.name = "event", .type = Type::bits(8, false, false)},
+                    Object{.name = "other", .type = Type::bits(8, false, false)},
+                    Object{.name = "other_event", .type = Type::bits(8, false, false)},
+                    Object{.name = "last", .type = Type::bits(8, false, false)}});
+}
+
+TEST(Kernel, AnEventIsAChangeInTheUpdateThisCycleBeganWith) {
+    // VHDL's 'event: true of the signal that changed, false of one that did not.
+    Simulation simulation(designOf(watched({makeDriver({{.value = 5}}), makeWatcher()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/event", Radix::Decimal), "1");
+    EXPECT_EQ(simulation.value("/tb/other_event", Radix::Decimal), "0");
+}
+
+TEST(Kernel, ALastValueIsTheValueBeforeTheLastChange) {
+    // s goes to 5, then at 10 to 7: when it does, its 'last_value is 5.
+    Simulation simulation(
+        designOf(
+            watched({makeDriver({{.value = 5}, {.waitBefore = 10, .value = 7}}), makeWatcher()})),
+        "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    EXPECT_EQ(simulation.run(5), RunStatus::TimeLimitReached);
+    EXPECT_EQ(simulation.value("/tb/last", Radix::Decimal), "0");
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/s", Radix::Decimal), "7");
+    EXPECT_EQ(simulation.value("/tb/last", Radix::Decimal), "5");
+}
+
+TEST(Kernel, ATransactionTakesEffectBeforeProcessesResumeAtItsTime) {
+    // A process waking from `wait for 5` at 5 sees what a transaction for 5 set, since VHDL
+    // updates signals before it resumes processes (IEEE 1076 section 14.7.5).
+    ProcessBuilder reader(ProcessKind::Initial, "reader");
+    const std::uint32_t delay = reader.reg(Type::bits(64, true, false));
+    const std::uint32_t value = reader.reg(Type::bits(8, false, false));
+    reader.block("entry");
+    reader.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(delay),
+                                  Operand::constant(reader.constant("64'd5"))));
+    reader.emit(Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+    reader.block("after");
+    reader.readObject(value, 0);
+    reader.store(1, value);
+    reader.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(
+        designOf(driven({makeDriver({{.value = 7, .delay = 5}}), reader.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/seen", Radix::Decimal), "7");
 }
 
 TEST(Kernel, TimeIsReadableAsAValue) {
@@ -1024,6 +1460,68 @@ TEST(Kernel, ACollapsedPortIsOnePieceOfStorage) {
     EXPECT_EQ(simulation.value("/tb/u_child/in", Radix::Hexadecimal), "77");
 }
 
+TEST(Kernel, APortsDriversWriteTheObjectItsConnectionDrives) {
+    // A VHDL inout port associated through a conversion reads one object and drives another
+    // (eir::PortConnection::driveObjectIndex), and so does a port collapsed onto it below.
+    ModuleDefinition leaf;
+    leaf.name = "leaf";
+    leaf.sourceName = "leaf";
+    leaf.addObject(Object{.name = "io", .type = Type::bits(8, false, true)});
+    leaf.ports.push_back(enzan::eir::Port{
+        .name = "io", .direction = enzan::eir::PortDirection::InOut, .objectIndex = 0});
+    ProcessBuilder driver(ProcessKind::Initial, "driver");
+    const std::uint32_t value = driver.reg(Type::bits(8, false, true));
+    const std::uint32_t constant = driver.constant("8'h77");
+    driver.block("entry");
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(constant)));
+    driver.store(0, value);
+    driver.emit(Instruction::make(Opcode::Return));
+    leaf.processes.push_back(driver.finish());
+
+    ModuleDefinition middle;
+    middle.name = "middle";
+    middle.sourceName = "middle";
+    middle.addObject(Object{.name = "io", .type = Type::bits(8, false, true)});
+    middle.ports.push_back(enzan::eir::Port{
+        .name = "io", .direction = enzan::eir::PortDirection::InOut, .objectIndex = 0});
+    enzan::eir::Instance inner;
+    inner.name = "u_leaf";
+    inner.definitionName = "leaf";
+    inner.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0});
+    middle.instances.push_back(std::move(inner));
+
+    ModuleDefinition parent;
+    parent.name = "tb";
+    parent.sourceName = "tb";
+    parent.addObject(Object{.name = "effective",
+                            .type = Type::bits(8, false, true),
+                            .initialValue = BitVector::parse("8'h00")});
+    parent.addObject(Object{.name = "driving",
+                            .type = Type::bits(8, false, true),
+                            .initialValue = BitVector::parse("8'h00")});
+    enzan::eir::Instance outer;
+    outer.name = "u_middle";
+    outer.definitionName = "middle";
+    outer.connections.push_back(
+        enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0, .driveObjectIndex = 1});
+    parent.instances.push_back(std::move(outer));
+
+    Design design;
+    design.addModule(std::move(leaf));
+    design.addModule(std::move(middle));
+    design.addModule(std::move(parent));
+
+    Simulation simulation(std::move(design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/driving", Radix::Hexadecimal), "77");
+    EXPECT_EQ(simulation.value("/tb/effective", Radix::Hexadecimal), "00");
+    EXPECT_EQ(simulation.value("/tb/u_middle/u_leaf/io", Radix::Hexadecimal), "00")
+        << "the port reads the object it is connected to";
+}
+
 // ---------------------------------------------------------------------------
 // Interruption
 // ---------------------------------------------------------------------------
@@ -1343,6 +1841,19 @@ TEST(Kernel, ReinitialisingClearsAFinishedRun) {
 
     simulation.simulationKernel().initialize();
     EXPECT_EQ(simulation.run(), RunStatus::Finished) << "the design stopped a second time";
+}
+
+TEST(Kernel, ReinitialisingEmptiesTheHeap) {
+    // A line the first run left allocated is gone with the run, so the second allocates the same
+    // handles the first did.
+    Simulation simulation(makeLineWriter(), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    ASSERT_EQ(simulation.value("/tb/after", Radix::Decimal), "1");
+
+    simulation.simulationKernel().initialize();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/after", Radix::Decimal), "1");
 }
 
 TEST(Kernel, ReinitialisingAfterASuspensionDoesNotResumeTheOldRun) {
@@ -1764,6 +2275,503 @@ TEST(Kernel, ADepositOnAResolvedNetHoldsOnlyUntilADriverChanges) {
     simulation.simulationKernel().deposit(simulation.signal("/tb/b"), literal("1'b1"));
     simulation.run();
     EXPECT_EQ(simulation.value("/tb/n"), "1");
+}
+
+// ---------------------------------------------------------------------------
+// Calls of subprograms (DESIGN_GUIDE.md section 4.1)
+// ---------------------------------------------------------------------------
+
+/// Every message a simulation reported, one per line, for a failed assertion to show.
+std::string reportedMessages(const Simulation& simulation) {
+    std::string text;
+    for (const std::string& message : simulation.messages()) text += message + '\n';
+    return text;
+}
+
+/// `double(value)`: an 8-bit function returning its parameter twice over.
+Subprogram makeDoubler() {
+    SubprogramBuilder builder("double");
+    const std::uint32_t value = builder.parameter("value", Type::bits(8, false, true));
+    const std::uint32_t result = builder.result(Type::bits(8, false, true));
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::Add, Operand::reg(result), Operand::reg(value),
+                                   Operand::reg(value)));
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+TEST(Kernel, AFunctionsResultReachesItsCaller) {
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t argument = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t result = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t value = builder.constant("8'h15");
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(argument), Operand::constant(value)));
+    builder.call("", "double", {Operand::reg(argument)}, Operand::reg(result));
+    builder.store(1, result);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({builder.finish()});
+    definition.subprograms.push_back(makeDoubler());
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "2a");
+}
+
+TEST(Kernel, OutParametersAreCopiedBackAndInOutOnesInAsWell) {
+    // `accumulate(total, step)` adds to an inout parameter, so what it starts from is the
+    // caller's; `produce(value)` sets an out one, so the caller's value never reaches it.
+    SubprogramBuilder accumulate("accumulate");
+    const std::uint32_t total =
+        accumulate.parameter("total", Type::bits(8, false, true), ParameterMode::InOut);
+    const std::uint32_t step = accumulate.parameter("step", Type::bits(8, false, true));
+    const std::uint32_t sum = accumulate.reg(Type::bits(8, false, true));
+    accumulate.block("entry");
+    accumulate.emit(
+        Instruction::make(Opcode::Add, Operand::reg(sum), Operand::reg(total), Operand::reg(step)));
+    accumulate.emit(Instruction::make(Opcode::Move, Operand::reg(total), Operand::reg(sum)));
+    accumulate.emit(Instruction::make(Opcode::Return));
+
+    SubprogramBuilder produce("produce");
+    const std::uint32_t produced =
+        produce.parameter("value", Type::bits(8, false, true), ParameterMode::Out);
+    const std::uint32_t nine = produce.constant("8'h09");
+    produce.block("entry");
+    produce.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(produced), Operand::constant(nine)));
+    produce.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t running = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t other = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t five = builder.constant("8'h05");
+    const std::uint32_t three = builder.constant("8'h03");
+    const std::uint32_t junk = builder.constant("8'h55");
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(running), Operand::constant(five)));
+    builder.call("", "accumulate", {Operand::reg(running), Operand::constant(three)});
+    builder.call("", "accumulate", {Operand::reg(running), Operand::constant(three)});
+    builder.store(0, running);
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(other), Operand::constant(junk)));
+    builder.call("", "produce", {Operand::reg(other)});
+    builder.store(1, other);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({builder.finish()});
+    definition.subprograms.push_back(accumulate.finish());
+    definition.subprograms.push_back(produce.finish());
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Hexadecimal), "0b");
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "09");
+}
+
+/// `factorial(n)`, recursively, in 16 bits.
+Subprogram makeFactorial() {
+    SubprogramBuilder builder("factorial");
+    const Type word = Type::bits(16, false, true);
+    const std::uint32_t n = builder.parameter("n", word);
+    const std::uint32_t result = builder.result(word);
+    const std::uint32_t one = builder.reg(word);
+    const std::uint32_t atMostOne = builder.reg(Type::bits(1, false, true));
+    const std::uint32_t smaller = builder.reg(word);
+    const std::uint32_t product = builder.reg(word);
+    const std::uint32_t oneValue = builder.constant("16'd1");
+
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(one), Operand::constant(oneValue)));
+    builder.emit(Instruction::make(Opcode::LessEqual, Operand::reg(atMostOne), Operand::reg(n),
+                                   Operand::reg(one)));
+    builder.emit(Instruction::make(Opcode::BranchIf, {}, Operand::reg(atMostOne), Operand::block(1),
+                                   Operand::block(2)));
+
+    builder.block("base");
+    builder.emit(Instruction::make(Opcode::Move, Operand::reg(result), Operand::reg(one)));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    builder.block("recurse");
+    builder.emit(Instruction::make(Opcode::Subtract, Operand::reg(smaller), Operand::reg(n),
+                                   Operand::reg(one)));
+    builder.call("", "factorial", {Operand::reg(smaller)}, Operand::reg(product));
+    builder.emit(Instruction::make(Opcode::Multiply, Operand::reg(result), Operand::reg(n),
+                                   Operand::reg(product)));
+    builder.emit(Instruction::make(Opcode::Return));
+    return builder.finish();
+}
+
+TEST(Kernel, ARecursiveFunctionCallsItself) {
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t n = builder.reg(Type::bits(16, false, true));
+    const std::uint32_t result = builder.reg(Type::bits(16, false, true));
+    const std::uint32_t five = builder.constant("16'd5");
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(n), Operand::constant(five)));
+    builder.call("", "factorial", {Operand::reg(n)}, Operand::reg(result));
+    builder.store(1, result);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition =
+        makeTop({builder.finish()}, {Object{.name = "a", .type = Type::bits(16, false, true)},
+                                     Object{.name = "b", .type = Type::bits(16, false, true)}});
+    definition.subprograms.push_back(makeFactorial());
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Decimal), "120");
+}
+
+TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
+    // 1.5 + real(2) is 3.5, which rounds to 4 and its negation to -4; 2.0 ** 3 is 8.0; and 1.5 is
+    // less than 2.0.
+    ProcessBuilder builder(ProcessKind::Initial, "reals");
+    const Type real = Type::real();
+    const Type integer = Type::bits(32, true, false);
+    const std::uint32_t oneAndAHalf = builder.reg(real);
+    const std::uint32_t two = builder.reg(integer);
+    const std::uint32_t three = builder.reg(integer);
+    const std::uint32_t twoReal = builder.reg(real);
+    const std::uint32_t sum = builder.reg(real);
+    const std::uint32_t negated = builder.reg(real);
+    const std::uint32_t cubed = builder.reg(real);
+    const std::uint32_t rounded = builder.reg(integer);
+    const std::uint32_t roundedNegated = builder.reg(integer);
+    const std::uint32_t cubedInteger = builder.reg(integer);
+    const std::uint32_t less = builder.reg(Type::bits(1, false, false));
+    const std::uint32_t oneAndAHalfValue = builder.constant("64'h3FF8000000000000");
+    const std::uint32_t twoValue = builder.constant("32'sd2");
+    const std::uint32_t threeValue = builder.constant("32'sd3");
+
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(oneAndAHalf),
+                                   Operand::constant(oneAndAHalfValue)));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(two), Operand::constant(twoValue)));
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(three),
+                                   Operand::constant(threeValue)));
+    Instruction toReal =
+        Instruction::make(Opcode::Convert, Operand::reg(twoReal), Operand::reg(two));
+    toReal.isSigned = true;
+    builder.emit(toReal);
+    builder.emit(Instruction::make(Opcode::Add, Operand::reg(sum), Operand::reg(oneAndAHalf),
+                                   Operand::reg(twoReal)));
+    builder.emit(Instruction::make(Opcode::Negate, Operand::reg(negated), Operand::reg(sum)));
+    builder.emit(Instruction::make(Opcode::Power, Operand::reg(cubed), Operand::reg(twoReal),
+                                   Operand::reg(three), Operand::immediate(1)));
+    builder.emit(Instruction::make(Opcode::Convert, Operand::reg(rounded), Operand::reg(sum)));
+    builder.emit(
+        Instruction::make(Opcode::Convert, Operand::reg(roundedNegated), Operand::reg(negated)));
+    builder.emit(
+        Instruction::make(Opcode::Convert, Operand::reg(cubedInteger), Operand::reg(cubed)));
+    builder.emit(Instruction::make(Opcode::LessThan, Operand::reg(less), Operand::reg(oneAndAHalf),
+                                   Operand::reg(twoReal)));
+    builder.store(0, rounded);
+    builder.store(1, roundedNegated);
+    builder.store(2, cubedInteger);
+    builder.store(3, less);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition =
+        makeTop({builder.finish()},
+                {Object{.name = "a", .type = integer}, Object{.name = "b", .type = integer},
+                 Object{.name = "c", .type = integer},
+                 Object{.name = "d", .type = Type::bits(1, false, false)}});
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "4");
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "fffffffc") << "-4";
+    EXPECT_EQ(simulation.value("/tb/c", Radix::Decimal), "8");
+    EXPECT_EQ(simulation.value("/tb/d", Radix::Decimal), "1");
+}
+
+TEST(Kernel, OneWordOperationsMatchTheGeneralRoutines) {
+    // The interpreter computes the commonest operations on values of one word itself and leaves
+    // the rest to eir::bitops, so each must give what the other would. Every operation runs on
+    // operands around the edges of their widths, and each result is held against what bitops
+    // computes from the same operands.
+    namespace bitops = enzan::eir::bitops;
+    ProcessBuilder builder(ProcessKind::Initial, "operations");
+    builder.block("entry");
+    std::vector<Object> results;
+    std::vector<BitVector> expected;
+
+    const auto load = [&builder](const BitVector& value) {
+        const std::uint32_t loaded = builder.reg(Type::bits(value.width(), false, true));
+        const std::string text =
+            std::format("{}'b{}", value.width(), toString(value.ref(), enzan::eir::Radix::Binary));
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(loaded),
+                                       Operand::constant(builder.constant(text))));
+        return loaded;
+    };
+    // Runs `opcode` into a register of `value`'s width and stores it, expecting `value`.
+    const auto check = [&](Opcode opcode, bool isSigned, BitVector value,
+                           std::initializer_list<std::uint32_t> operands) {
+        const std::uint32_t destination = builder.reg(Type::bits(value.width(), false, true));
+        std::vector<Operand> sources;
+        for (const std::uint32_t operand : operands) sources.push_back(Operand::reg(operand));
+        Instruction instruction =
+            sources.size() == 1
+                ? Instruction::make(opcode, Operand::reg(destination), sources[0])
+                : Instruction::make(opcode, Operand::reg(destination), sources[0], sources[1]);
+        instruction.isSigned = isSigned;
+        builder.emit(instruction);
+        const auto index = static_cast<std::uint32_t>(results.size());
+        results.push_back(Object{.name = std::format("r{}", index),
+                                 .type = Type::bits(value.width(), false, true)});
+        builder.store(index, destination);
+        expected.push_back(std::move(value));
+    };
+
+    for (const std::uint32_t width : {1U, 5U, 32U, 63U, 64U}) {
+        const std::uint64_t all = width == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << width) - 1;
+        const std::uint64_t signBit = std::uint64_t{1} << (width - 1);
+        std::vector<BitVector> values;
+        for (const std::uint64_t value : {std::uint64_t{0}, std::uint64_t{1}, all, signBit,
+                                          signBit - 1, std::uint64_t{0x5A3C96E1F00F7B2D}})
+            values.push_back(BitVector::fromUInt64(value & all, width));
+
+        for (const BitVector& a : values) {
+            for (const BitVector& b : values) {
+                const std::uint32_t left = load(a);
+                const std::uint32_t right = load(b);
+                for (const bool isSigned : {false, true}) {
+                    const auto computed = [&](auto operation, std::uint32_t resultWidth) {
+                        BitVector value(resultWidth);
+                        operation(value.mutableRef());
+                        return value;
+                    };
+                    const auto arithmetic = [&](Opcode opcode, auto operation) {
+                        check(opcode, isSigned, computed(operation, width), {left, right});
+                    };
+                    const auto comparison = [&](Opcode opcode, auto operation) {
+                        check(opcode, isSigned, computed(operation, 1), {left, right});
+                    };
+                    arithmetic(Opcode::Add, [&](auto dst) { bitops::add(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Subtract,
+                               [&](auto dst) { bitops::subtract(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Multiply,
+                               [&](auto dst) { bitops::multiply(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::And,
+                               [&](auto dst) { bitops::bitwiseAnd(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Or,
+                               [&](auto dst) { bitops::bitwiseOr(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Xor,
+                               [&](auto dst) { bitops::bitwiseXor(dst, a.ref(), b.ref()); });
+                    arithmetic(Opcode::Divide,
+                               [&](auto dst) { bitops::divide(dst, a.ref(), b.ref(), isSigned); });
+                    arithmetic(Opcode::Modulo,
+                               [&](auto dst) { bitops::modulo(dst, a.ref(), b.ref(), isSigned); });
+                    comparison(Opcode::Equal,
+                               [&](auto dst) { bitops::equal(dst, a.ref(), b.ref()); });
+                    comparison(Opcode::NotEqual,
+                               [&](auto dst) { bitops::notEqual(dst, a.ref(), b.ref()); });
+                    comparison(Opcode::LessThan, [&](auto dst) {
+                        bitops::lessThan(dst, a.ref(), b.ref(), isSigned);
+                    });
+                    comparison(Opcode::LessEqual, [&](auto dst) {
+                        bitops::lessEqual(dst, a.ref(), b.ref(), isSigned);
+                    });
+                }
+            }
+
+            const std::uint32_t source = load(a);
+            check(Opcode::Move, false, a, {source});
+            for (const std::uint32_t to : {1U, 17U, 64U}) {
+                if (to == width) continue;
+                for (const bool isSigned : {false, true}) {
+                    BitVector value(to);
+                    bitops::extend(value.mutableRef(), a.ref(), isSigned);
+                    check(to > width ? Opcode::Extend : Opcode::Truncate, isSigned, value,
+                          {source});
+                }
+            }
+        }
+    }
+
+    // A part of any source, unknown bits and all, at an offset in it or past it.
+    for (const std::string_view text :
+         {"64'h0123456789abcdef", "100'hf_0123_4567_89ab_cdef_x0z1_5a5a",
+          "130'h3_ffff_0000_ffff_0000_1234_xxxx_8765_4321"}) {
+        const BitVector source = literal(text);
+        const std::uint32_t sourceRegister = load(source);
+        for (const std::uint32_t width : {1U, 8U, 64U}) {
+            for (const std::uint64_t low : {0U, 3U, 36U, 60U, 64U, 66U, 99U, 129U, 140U}) {
+                const std::uint32_t offset = load(BitVector::fromUInt64(low, 32));
+                BitVector value(width);
+                bitops::partSelectAt(value.mutableRef(), source.ref(), low);
+                check(Opcode::PartSelect, false, value, {sourceRegister, offset});
+            }
+        }
+    }
+    builder.emit(Instruction::make(Opcode::Return));
+
+    const std::size_t count = results.size();
+    Simulation simulation(designOf(makeTop({builder.finish()}, std::move(results))), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    for (std::size_t index = 0; index < count; ++index) {
+        EXPECT_EQ(simulation.value(std::format("/tb/r{}", index)),
+                  toString(expected[index].ref(), enzan::eir::Radix::Binary))
+            << "result " << index;
+    }
+}
+
+TEST(Kernel, ARecursionWithoutEndStopsAtTheCallDepthLimit) {
+    SubprogramBuilder forever("forever");
+    const std::uint32_t value = forever.parameter("value", Type::bits(8, false, true));
+    const std::uint32_t result = forever.result(Type::bits(8, false, true));
+    forever.block("entry");
+    forever.call("", "forever", {Operand::reg(value)}, Operand::reg(result));
+    forever.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t argument = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t returned = builder.reg(Type::bits(8, false, true));
+    builder.block("entry");
+    builder.call("", "forever", {Operand::reg(argument)}, Operand::reg(returned));
+    builder.store(1, returned);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({builder.finish()});
+    definition.subprograms.push_back(forever.finish());
+
+    const std::uint32_t previous = Simulation::callDepthLimit;
+    Simulation::callDepthLimit = 50;
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    Simulation::callDepthLimit = previous;
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::CallDepthExceeded))
+        << reportedMessages(simulation);
+}
+
+TEST(Kernel, APackagesSubprogramReachesThePackagesOwnObjects) {
+    // One instance of the package, at the root, holds `count`, so two calls see one count.
+    ModuleDefinition package;
+    package.name = "counter_pkg::";
+    package.sourceName = "counter_pkg";
+    package.isPackage = true;
+    package.addObject(Object{.name = "count",
+                             .type = Type::bits(8, false, true),
+                             .initialValue = BitVector::parse("8'h00")});
+
+    SubprogramBuilder bump("bump");
+    const std::uint32_t current = bump.reg(Type::bits(8, false, true));
+    const std::uint32_t one = bump.reg(Type::bits(8, false, true));
+    const std::uint32_t oneValue = bump.constant("8'h01");
+    const std::uint32_t result = bump.result(Type::bits(8, false, true));
+    bump.block("entry");
+    bump.readObject(current, 0);
+    bump.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(one), Operand::constant(oneValue)));
+    bump.emit(Instruction::make(Opcode::Add, Operand::reg(result), Operand::reg(current),
+                                Operand::reg(one)));
+    bump.store(0, result);
+    bump.emit(Instruction::make(Opcode::Return));
+    package.subprograms.push_back(bump.finish());
+
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t first = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t second = builder.reg(Type::bits(8, false, true));
+    builder.block("entry");
+    builder.call("counter_pkg::", "bump", {}, Operand::reg(first));
+    builder.call("counter_pkg::", "bump", {}, Operand::reg(second));
+    builder.store(1, second);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Design design;
+    design.addModule(std::move(package));
+    design.addModule(makeTop({builder.finish()}));
+
+    Simulation simulation(std::move(design), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "02");
+    EXPECT_EQ(simulation.value("/counter_pkg/count", Radix::Hexadecimal), "02");
+}
+
+TEST(Kernel, ASystemTaskInASubprogramReadsTheSubprogramsRegisters) {
+    SubprogramBuilder show("show");
+    const std::uint32_t value = show.parameter("value", Type::bits(8, false, true));
+    const std::uint32_t format = show.string("shown %0d");
+    SysTaskCall display;
+    display.kind = SysTaskKind::Display;
+    display.formatIndex = format;
+    display.arguments.push_back(
+        SysTaskArgument{.value = Operand::reg(value), .type = Type::bits(8, false, true)});
+    const std::uint32_t descriptor = show.sysCall(std::move(display));
+    show.block("entry");
+    show.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(descriptor)));
+    show.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    const std::uint32_t seven = builder.constant("8'd7");
+    builder.block("entry");
+    builder.call("", "show", {Operand::constant(seven)});
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({builder.finish()});
+    definition.subprograms.push_back(show.finish());
+
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.transcript(), "shown 7\n");
+}
+
+TEST(Kernel, ASubprogramMayNotWriteASignalSomethingDrives) {
+    // Its writes are immediate and go through no driver, so `a`, which a continuous
+    // assignment drives, would be written past its driver.
+    ProcessBuilder assign(ProcessKind::ContinuousAssign, "assign");
+    const std::uint32_t copied = assign.reg(Type::bits(8, false, true));
+    assign.block("entry");
+    assign.readObject(copied, 1);
+    assign.store(0, copied);
+    assign.emit(Instruction::make(Opcode::Return));
+
+    SubprogramBuilder clobber("clobber");
+    const std::uint32_t value = clobber.reg(Type::bits(8, false, true));
+    const std::uint32_t constant = clobber.constant("8'h3c");
+    clobber.block("entry");
+    clobber.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(constant)));
+    clobber.store(0, value);
+    clobber.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder caller(ProcessKind::Initial, "caller");
+    caller.block("entry");
+    caller.call("", "clobber", {});
+    caller.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({assign.finish(), caller.finish()});
+    definition.subprograms.push_back(clobber.finish());
+
+    const Simulation simulation(designOf(std::move(definition)), "tb");
+    EXPECT_FALSE(simulation.ready());
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::SubprogramWritesDrivenSignal))
+        << reportedMessages(simulation);
+}
+
+TEST(Kernel, ACallOfASubprogramNoUnitDeclaresIsAnElaborationError) {
+    ProcessBuilder builder(ProcessKind::Initial, "caller");
+    builder.block("entry");
+    builder.call("elsewhere::", "missing", {});
+    builder.emit(Instruction::make(Opcode::Return));
+
+    const Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    EXPECT_FALSE(simulation.ready());
+    EXPECT_TRUE(simulation.reportedCode(enzan::DiagCode::UnresolvedSubprogram))
+        << reportedMessages(simulation);
 }
 
 } // namespace

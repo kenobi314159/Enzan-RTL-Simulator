@@ -43,7 +43,8 @@ TEST(Type, StorageWordsCountsBothPlanes) {
 }
 
 TEST(Type, RealAndStringStorage) {
-    EXPECT_EQ(Type::real().storageWords(), 1U) << "one double";
+    // A real is held as 64 bits are, both planes, so that one value path serves it.
+    EXPECT_EQ(Type::real().storageWords(), Type::bits(64, false, false).storageWords());
     EXPECT_EQ(Type::real().bitWidth(), 64U);
 
     // Strings live in the constant pool in the M1 subset, not the state arena.

@@ -42,8 +42,20 @@ std::vector<std::uint32_t> writtenObjects(const std::vector<WriteExtent>& writeS
 }
 
 bool isSystemFunction(SysTaskKind kind) noexcept {
-    return kind == SysTaskKind::Random || kind == SysTaskKind::URandom
-           || kind == SysTaskKind::URandomRange || kind == SysTaskKind::FileOpen;
+    switch (kind) {
+    case SysTaskKind::Random:
+    case SysTaskKind::URandom:
+    case SysTaskKind::URandomRange:
+    case SysTaskKind::FileOpen:
+    case SysTaskKind::LineWrite:
+    case SysTaskKind::LineWriteLine:
+    case SysTaskKind::LineReadLine:
+    case SysTaskKind::LineReadCharacter:
+    case SysTaskKind::FileEnd:
+    case SysTaskKind::LineAppend:
+    case SysTaskKind::FileReadValue: return true;
+    default: return false;
+    }
 }
 
 std::string_view toString(SysTaskKind kind) noexcept {
@@ -66,9 +78,29 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::FileFlush: return "$fflush";
     case SysTaskKind::ReadMemHex: return "$readmemh";
     case SysTaskKind::ReadMemBinary: return "$readmemb";
+    case SysTaskKind::Report: return "report";
     case SysTaskKind::FileOpen: return "$fopen";
+    case SysTaskKind::LineDeallocate: return "deallocate";
+    // VHDL names each by the subprogram the design calls, which several share.
+    case SysTaskKind::LineWrite:
+    case SysTaskKind::LineAppend:
+    case SysTaskKind::FileWriteValue: return "write";
+    case SysTaskKind::LineReadCharacter:
+    case SysTaskKind::FileReadValue: return "read";
+    case SysTaskKind::LineWriteLine: return "writeline";
+    case SysTaskKind::LineReadLine: return "readline";
+    case SysTaskKind::FileEnd: return "endfile";
     }
     return "$unknown";
+}
+
+std::string_view toString(ParameterMode mode) noexcept {
+    switch (mode) {
+    case ParameterMode::In: return "in";
+    case ParameterMode::Out: return "out";
+    case ParameterMode::InOut: return "inout";
+    }
+    return "?";
 }
 
 std::string_view toString(ProcessKind kind) noexcept {

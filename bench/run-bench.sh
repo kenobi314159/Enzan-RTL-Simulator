@@ -47,9 +47,21 @@ fi
 
 printf '%-16s %12s %12s %14s\n' design cycles seconds cycles/sec
 
+# A design is in the language its extension names, and one the build has no frontend for is
+# skipped, as a build of one language measures that language's designs.
+components="$("$enzan" --version 2>/dev/null | sed -n 's/^Optional components: //p' | tr ',' ' ')"
+
 status=0
-for design in "$here"/designs/*.sv; do
-    name="$(basename "$design" .sv)"
+for design in "$here"/designs/*.sv "$here"/designs/*.vhd; do
+    [[ -f "$design" ]] || continue
+    case "$design" in
+    *.sv) language=systemverilog name="$(basename "$design" .sv)" ;;
+    *.vhd) language=vhdl name="$(basename "$design" .vhd)-vhdl" ;;
+    esac
+    if [[ " $components " != *" $language "* ]]; then
+        printf '%-16s skipped: no %s frontend in this build\n' "$name" "$language"
+        continue
+    fi
     output="$(mktemp)"
 
     # The elapsed time covers analysis, elaboration and the run, which is what a user waits
@@ -65,7 +77,9 @@ for design in "$here"/designs/*.sv; do
     fi
     finish="$(date +%s.%N)"
 
-    cycles="$(sed -n 's/^cycles=\([0-9]*\).*/\1/p' "$output" | head -1)"
+    # SystemVerilog's $display prints the count at the start of its line, and VHDL's report
+    # after the location it reports.
+    cycles="$(sed -n 's/^\(.*: note: \)\{0,1\}cycles=\([0-9][0-9]*\).*/\2/p' "$output" | head -1)"
     instructions="$(sed -n 's/^-- \([0-9]*\) instructions.*/\1/p' "$output" | head -1)"
     deltas="$(sed -n 's/^-- .* \([0-9]*\) delta cycles.*/\1/p' "$output" | head -1)"
     rm -f "$output"

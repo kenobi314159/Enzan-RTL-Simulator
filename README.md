@@ -31,8 +31,10 @@ Enzan targets **Linux only**; Windows and macOS support are explicit non-goals.
 | zlib | 1.2.11 | FST waveform compression |
 | Python 3 | 3.8 | optional; only for the waveform structure checks in the test suite |
 | GoogleTest | 1.12 | built from source automatically if absent |
-| Qt 6 | 6.4 | only for the GUI, which is off by default |
-| Tcl | 8.6 | the GUI theme and signal lists; needed only with `-DENZAN_BUILD_GUI=ON` |
+| Qt 6 | 6.4 | the GUI; not needed with `-DENZAN_BUILD_GUI=OFF` |
+| Tcl | 8.6 | the GUI theme and signal lists; not needed with `-DENZAN_BUILD_GUI=OFF` |
+| flex | 2.6 | generates NVC's lexer; not needed with `-DENZAN_ENABLE_VHDL=OFF` |
+| zstd | 1.4 | NVC's library files; not needed with `-DENZAN_ENABLE_VHDL=OFF` |
 | ccache | any | optional; used automatically when present |
 
 On Arch and derivatives:
@@ -41,6 +43,8 @@ On Arch and derivatives:
 sudo pacman -S --needed base-devel cmake ninja zlib gtest tcl ccache
 # for the GUI:
 sudo pacman -S --needed qt6-base
+# for the VHDL frontend:
+sudo pacman -S --needed flex zstd
 ```
 
 On Debian and Ubuntu:
@@ -49,6 +53,8 @@ On Debian and Ubuntu:
 sudo apt install build-essential cmake ninja-build zlib1g-dev libgtest-dev tcl-dev ccache
 # for the GUI:
 sudo apt install qt6-base-dev
+# for the VHDL frontend:
+sudo apt install flex libzstd-dev
 ```
 
 On Fedora:
@@ -57,6 +63,8 @@ On Fedora:
 sudo dnf install gcc-c++ cmake ninja-build zlib-devel gtest-devel tcl-devel ccache
 # for the GUI:
 sudo dnf install qt6-qtbase-devel
+# for the VHDL frontend:
+sudo dnf install flex libzstd-devel
 ```
 
 If a dependency is missing, CMake stops with a message naming the package to
@@ -64,6 +72,18 @@ install for your distribution rather than with a link error.
 
 Tcl is needed only for the GUI, whose theme is a Tcl script and whose signal lists are read
 with Tcl's parser.
+
+The VHDL frontend, which is arriving with milestone M6, is built on
+[NVC](https://github.com/nickg/nvc), which is a git submodule. Clone with `--recursive`, or fetch
+it before configuring:
+
+```sh
+git submodule update --init third_party/nvc
+```
+
+The VHDL frontend and the GUI are built by default, as both frontends are; any of them can be
+left out, with its dependencies, by configuring with `-DENZAN_ENABLE_VHDL=OFF`,
+`-DENZAN_BUILD_GUI=OFF` or `-DENZAN_ENABLE_SYSTEMVERILOG=OFF`.
 
 ### Running a simulation
 
@@ -75,12 +95,23 @@ gtkwave wave.fst
 `--vcd` writes a VCD instead, and both may be given at once. Prefer FST unless you want to read or
 diff the file yourself: it is far smaller on a real design and a viewer can seek in it.
 
+A VHDL design runs the same way, from `.vhd` or `.vhdl` files given in any order, each analysed
+after those declaring the units it names; it counts time in femtoseconds unless `--timescale` says
+otherwise. Sources that name the
+library they belong to, `library neorv32;`, are analysed into it with `--work`, and GHDL's
+`--ieee-asserts` and `--assert-level` mean what they mean there:
+
+```sh
+enzan --top tb counter.vhd counter_tb.vhd
+enzan --work neorv32 --top neorv32_tb -f neorv32_files.f --ieee-asserts disable --assert-level error
+```
+
 `enzan --help` lists the options.
 
 ### Running a simulation under the GUI
 
-The GUI is built with `-DENZAN_BUILD_GUI=ON` — off by default, because Qt 6 is a sizeable
-thing to install for someone working on the kernel. With it built:
+The GUI is built by default; someone working on the kernel who would rather not install Qt 6
+configures with `-DENZAN_BUILD_GUI=OFF`. With it built:
 
 ```sh
 enzan run --gui --top tb design.sv testbench.sv
@@ -165,13 +196,14 @@ tools/cocotb/makefiles.sh build/cocotb-makefiles
 make SIM=enzan COCOTB_MAKEFILES_DIR=$PWD/build/cocotb-makefiles
 ```
 
-run in the directory of an ordinary cocotb testbench. `ENZAN_BIN_DIR` names the directory holding
-`enzan` when it is not on your `PATH`. Delays inside the design are counted in the unit
+run in the directory of an ordinary cocotb testbench, with `TOPLEVEL_LANG=vhdl` for a VHDL
+toplevel, which cocotb reaches through VHPI (`--vhpi`, in a build with the VHDL frontend).
+`ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`. Delays inside the design are counted in the unit
 `COCOTB_HDL_TIMEPRECISION` names, because Enzan does not read `` `timescale `` yet; a testbench
 that drives every event from Python, as most do, does not notice.
 
 cocotb's own regression suite runs in CI, and `tests/conformance/cocotb/run-suite.sh` runs it
-locally. Its pass rate is low until M5: most of its cases share one design that uses unpacked
+locally, `run-suite.sh <enzan> <work> vhdl` with VHDL toplevels. Its pass rate is low until M5: most of its cases share one design that uses unpacked
 arrays, `real`, `string` and structs, which Enzan does not analyse yet.
 
 ## What works today
@@ -197,8 +229,16 @@ arrays, `real`, `string` and structs, which Enzan does not analyse yet.
 | `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
 | Driver resolution, multiple drivers per signal | not yet — M5 |
 | VPI, and cocotb testbenches through it | yes — modules, generate blocks, nets, variables, bits, parameters; every callback cocotb uses |
+| VHPI, and cocotb testbenches of a VHDL toplevel through it | yes — regions, signals, ports, generics, their elements and fields, their VHDL types; every callback cocotb uses |
 | `` `timescale `` and `timeunit` | not yet — every delay is counted in the `--timescale` unit |
-| The Processes and Source windows, VHDL | not yet — M6 |
+| VHDL: entities, architectures, processes, scalar and real types, arrays, records, `wait`, `assert`, `report` | yes — M6 is under way |
+| VHDL: generics, generate statements, components bound by default, ports associated in parts | yes |
+| VHDL: functions and procedures, `std_logic_1164`, `numeric_std`, `math_real`, `rising_edge` | yes, translated from the IEEE packages' own bodies |
+| VHDL: resolved signals with several drivers, `std.textio` and its files | yes; textio runs natively over a heap of lines |
+| NEORV32, through its own testbench's on-chip debugger sequence | yes — its reports, CPU traces and UART logs are GHDL's |
+| VHDL: access types beyond `line`, protected types, configurations | not yet — reported by name |
+| A design mixing VHDL and SystemVerilog | not yet — M7 |
+| The Processes and Source windows | not yet — M6 |
 
 Anything unsupported is reported with a source location and the construct named, never
 mistranslated: a partially translated design would simulate and give the wrong answer, which is
@@ -237,10 +277,12 @@ slower, and what dominates its profile is mostly what the optimiser would remove
 The SystemVerilog frontend, [slang](https://sv-lang.com/), is not packaged by any
 mainstream distribution, so by default the build downloads and compiles it. That
 dominates a first configure. Nothing outside the frontend links it, so work on
-the kernel, the waveform database or the GUI can switch it off:
+the kernel, the waveform database or the GUI can switch it off, and the VHDL frontend and the GUI
+the same way:
 
 ```sh
 cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF -DENZAN_ENABLE_VHDL=OFF -DENZAN_BUILD_GUI=OFF
 ```
 
 ### Useful options
@@ -249,8 +291,8 @@ cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF
 |---|---|---|
 | `ENZAN_BUILD_TESTS` | `ON` | build the unit test suites |
 | `ENZAN_ENABLE_SYSTEMVERILOG` | `ON` | build the slang-based frontend (M1) |
-| `ENZAN_ENABLE_VHDL` | `OFF` | build the NVC-based frontend (M6) |
-| `ENZAN_BUILD_GUI` | `OFF` | build the Qt 6 front end; needs Qt 6 and Tcl |
+| `ENZAN_ENABLE_VHDL` | `ON` | build the NVC-based frontend (M6); needs flex, zstd and the `third_party/nvc` submodule |
+| `ENZAN_BUILD_GUI` | `ON` | build the Qt 6 front end; needs Qt 6 and Tcl |
 | `ENZAN_ENABLE_JIT` | `OFF` | build the LLVM JIT backend (M8) |
 | `ENZAN_WERROR` | `OFF` | treat warnings as errors, as CI does |
 | `ENZAN_ALLOW_FETCH` | `ON` | allow missing dependencies to be built from source |
@@ -269,14 +311,14 @@ The checks CI runs are all runnable locally:
 ```sh
 clang-format --dry-run --Werror $(git ls-files '*.h' '*.cpp')
 ./scripts/check-license-headers.sh
-cmake --preset clang-debug -DENZAN_WERROR=ON -DENZAN_BUILD_GUI=ON
+cmake --preset clang-debug -DENZAN_WERROR=ON
 cmake --build --preset clang-debug && ctest --preset clang-debug
 clang-tidy -p build/clang-debug --quiet $(git ls-files 'src/*.cpp' 'tools/*.cpp' 'tests/*.cpp')
 ```
 
-Configure with every optional component on before running `clang-tidy`. Linting a translation
-unit the configured build does not compile does not skip it: clang-tidy falls back to default
-flags, fails to find the slang or Qt headers, and reports whatever its half-parsed view of the
+Configure with every optional component on, as the defaults are, before running `clang-tidy`.
+Linting a translation unit the configured build does not compile does not skip it: clang-tidy falls back to default
+flags, fails to find the slang, NVC or Qt headers, and reports whatever its half-parsed view of the
 file suggests.
 
 The GUI's own tests need no display. They select Qt's offscreen platform from inside the test

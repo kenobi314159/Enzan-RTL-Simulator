@@ -10,13 +10,16 @@
 #include "runtime/Scheduler.h"
 #include "runtime/Time.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <iosfwd>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace enzan {
@@ -164,6 +167,34 @@ struct KernelOptions {
     /// process's `$urandom` generator is derived from. Zero by default, which is where other
     /// simulators start `$random` too.
     std::uint32_t seed = 0;
+
+    /// Calls one process may have in progress at once, in a design where a call can reach
+    /// itself again (DESIGN_GUIDE.md section 4.1). The call stack is laid out for this many when
+    /// the kernel is built, and a run that would go deeper stops with a diagnostic naming the
+    /// subprogram, as the delta limit stops a design that does not settle. A design that cannot
+    /// recurse is given exactly the stack its deepest chain of calls needs, and no limit.
+    std::uint32_t callDepthLimit = 10'000;
+
+    /// The severity, as a position of VHDL's `severity_level`, at which a report or a failed
+    /// assertion ends the run with a failing status: failure, as GHDL's default has it, unless
+    /// `--assert-level` says otherwise; 4 never ends it.
+    std::uint8_t stopSeverity = 3;
+};
+
+/// The body the interpreter is running and what it is bound to: a process's own, or that of a
+/// subprogram the process called.
+struct Activation {
+    const codegen::CompiledBody* body = nullptr;
+
+    /// Word offset of the body's registers in the kernel's frame storage.
+    std::uint32_t frameOffset = 0;
+
+    std::span<const std::uint32_t> objectSignals;
+    std::span<const std::uint32_t> writeSignals;
+    std::span<const WriteRoute> writeRoutes;
+
+    /// For each of the body's call sites, the bound subprogram it calls.
+    std::span<const std::uint32_t> calls;
 };
 
 /// The simulation kernel: one time wheel, one event queue, one arena.
@@ -369,6 +400,40 @@ public:
                               std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
                               bool nonBlocking);
 
+    /// True when `signalIndex` changed in the update the current simulation cycle began with:
+    /// VHDL's 'event.
+    [[nodiscard]] bool changedThisCycle(std::uint32_t signalIndex) const noexcept {
+        return lastChange[signalIndex] == cycle;
+    }
+
+    /// True when `signalIndex` had a transaction or changed in the update the current simulation
+    /// cycle began with: VHDL's 'active.
+    [[nodiscard]] bool activeThisCycle(std::uint32_t signalIndex) const noexcept {
+        return lastActive[signalIndex] == cycle;
+    }
+
+    /// The value `signalIndex` had before its last change, or its value when it has never changed:
+    /// VHDL's 'last_value. Kept only for the signals some body reads it of.
+    [[nodiscard]] eir::ConstBitRef lastValue(std::uint32_t signalIndex) const;
+
+    /// Adds a transaction of `value` to the projected waveform of the driver a VHDL process has
+    /// through its write position `position`, `delay` from now (IEEE 1076 section 10.5.2.2).
+    ///
+    /// The driver's transactions at or after the new one's time are deleted first. An `inertial`
+    /// one also deletes those within `delay` before it, but for a run of transactions of its
+    /// value immediately before it: a pulse shorter than the delay never reaches the signal.
+    ///
+    /// A transaction for now takes effect in the next delta cycle, after every process of this
+    /// one has run, which is when a non-blocking update does. A later one takes effect when its
+    /// time step begins, before any process runs in it, which is VHDL's signal update phase
+    /// mapped onto the start of the Active region (DESIGN_GUIDE.md section 3.5).
+    ///
+    /// `value` is the bits from `lowBit` up that the assignment gives a value, all of the signal
+    /// or part of it: each scalar subelement has a driver of its own, so a transaction deletes
+    /// only what is pending for the bits it assigns.
+    void drive(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,
+               eir::ConstBitRef value, std::uint32_t lowBit, SimTime delay, bool inertial);
+
     /// Suspends a process until `edge` occurs on `signalIndex`.
     void suspendForEdge(std::uint32_t processIndex, std::uint32_t signalIndex, eir::EdgeKind edge,
                         std::uint32_t resumePc);
@@ -377,12 +442,40 @@ public:
     void suspendForEvents(std::uint32_t processIndex, std::uint32_t listIndex,
                           std::uint32_t resumePc);
 
-    /// Performs a system task call.
-    void runSystemTask(std::uint32_t processIndex, std::uint32_t sysCallIndex);
+    /// Suspends `processIndex` until any entry of its event list `listIndex` happens or `delay`
+    /// passes, whichever comes first.
+    void suspendForEventsFor(std::uint32_t processIndex, std::uint32_t listIndex,
+                             std::uint32_t resumePc, SimTime delay);
+
+    /// Performs a system task call of `activation`'s body, for process `processIndex`.
+    void runSystemTask(std::uint32_t processIndex, const Activation& activation,
+                       std::uint32_t sysCallIndex);
 
     /// Performs a system function call, writing its result to `result`.
-    void runSystemFunction(std::uint32_t processIndex, std::uint32_t sysCallIndex,
-                           eir::BitRef result);
+    void runSystemFunction(std::uint32_t processIndex, const Activation& activation,
+                           std::uint32_t sysCallIndex, eir::BitRef result);
+
+    /// Fills the frame at `frame` with what `body`'s registers start as, which is its frame image:
+    /// zero, but for the constants codegen placed there.
+    void startFrame(std::uint32_t frame, const codegen::CompiledBody& body) noexcept {
+        std::ranges::copy(body.frameImage, frameStorage.begin() + frame);
+    }
+
+    /// Starts the call `callIndex` of `caller`'s body: lays the callee's registers out on the
+    /// call stack, copies the arguments in, and returns the callee's activation, the caller's
+    /// being kept to return to at `resumePc`. Returns nothing having stopped the run when the
+    /// call would go deeper than the stack holds.
+    std::optional<Activation> enterCall(std::uint32_t processIndex, const Activation& caller,
+                                        std::uint32_t callIndex, std::uint32_t resumePc);
+
+    /// Returns from the innermost call to the activation that made it, copying the result and
+    /// the `out` and `inout` parameters back, and returns that activation and the instruction
+    /// to resume it at. Returns nothing when no call is in progress: the body returning is the
+    /// process's own.
+    std::optional<std::pair<Activation, std::uint32_t>> leaveCall(const Activation& callee);
+
+    /// Abandons every call in progress, for a process that stops the run from inside one.
+    void unwindCalls() noexcept;
 
 private:
     /// Runs one timestamp to completion, iterating the regions per section 3.3.
@@ -405,6 +498,17 @@ private:
 
     /// Schedules `processIndex` into Active to continue at `resumePc`.
     void resume(std::uint32_t processIndex, std::uint32_t resumePc);
+
+    /// Where a process goes when it resumes: Active, or Postponed for a VHDL postponed process.
+    [[nodiscard]] Region resumeRegion(std::uint32_t processIndex) const;
+
+    /// Queues `processIndex`, which is not queued, to run: a port's connection with the others
+    /// due in this update, any other process in its region.
+    void enqueue(std::uint32_t processIndex);
+
+    /// Runs the ports' connections due and applies what they drive, again until none is due, all
+    /// in the delta cycle under way (eir::Process::connectsPort).
+    void runConnections();
 
     /// Counts one delta cycle and enforces the limit. Returns false when the limit was
     /// exceeded and the run must stop.
@@ -431,8 +535,43 @@ private:
     /// an empty view for a signal nothing watches by window.
     eir::ConstBitRef keepPrevious(const Signal& signal, eir::ConstBitRef target);
 
+    /// Records that `signalIndex` is about to change from `current`: the cycle it changes in, and,
+    /// the first time in that cycle, the value it had, for a signal whose 'last_value is read.
+    void recordEvent(std::uint32_t signalIndex, eir::ConstBitRef current);
+
+    /// The cycle each signal last changed in, or `NeverChanged`, for VHDL's 'event; and the cycle
+    /// now, which begins with each batch of updates: a delta cycle's, or a time step's.
+    std::vector<std::uint64_t> lastChange;
+
+    /// The cycle each signal last had a transaction or a change in, for 'active.
+    std::vector<std::uint64_t> lastActive;
+    std::uint64_t cycle = 0;
+    static constexpr std::uint64_t NeverChanged = ~std::uint64_t{0};
+
+    /// The value each signal had before its last change, for those signals some body reads
+    /// 'last_value of: the Word offset of its copy in `lastValues`, or `NoLastValue`.
+    std::vector<std::uint32_t> lastValueOffset;
+    std::vector<eir::Word> lastValues;
+    static constexpr std::uint32_t NoLastValue = 0xFFFF'FFFFU;
+
     /// Resolves every segment `driverIndex` covers and writes the result into its signal.
     void resolveDriver(std::uint32_t driverIndex);
+
+    /// Gives each VHDL resolved signal the value its drivers' initial values resolve to, before
+    /// the run begins.
+    void resolveInitialValues();
+
+    /// Resolves `segment`, of a VHDL resolved signal, into `acc` with its resolution function,
+    /// called for each subelement with its drivers' values, the first driver's left (IEEE 1076
+    /// section 14.7.3.2). False when a call stopped the run.
+    bool resolveByFunction(std::uint32_t processIndex, const elab::Segment& segment,
+                           eir::BitRef acc);
+
+    /// Calls the resolution function bound as `subprogram` with `drivers` as its array and
+    /// leaves its result in `resolved`, on behalf of process `processIndex`. False when the call
+    /// stopped the run.
+    bool callResolution(std::uint32_t processIndex, std::uint32_t subprogram,
+                        eir::ConstBitRef drivers, eir::BitRef resolved);
 
     /// Reports the delta limit being exceeded, naming what is still active.
     void reportDeltaLimit();
@@ -444,7 +583,28 @@ private:
     KernelOptions options;
 
     Arena stateArena;
+
+    /// Every process's registers, then the call stack (DESIGN_GUIDE.md section 4.1).
     std::vector<eir::Word> frameStorage;
+
+    /// A call in progress: the activation that made it, the call it made, and where to resume.
+    struct CallInProgress {
+        Activation caller;
+        std::uint32_t callIndex = 0;
+        std::uint32_t resumePc = 0;
+    };
+
+    /// The calls in progress, innermost last. Empty whenever no process is running, since a
+    /// subprogram never suspends; reserved for the deepest the stack allows, so that a call
+    /// does not allocate (section 13.4).
+    std::vector<CallInProgress> callsInProgress;
+
+    /// Where the call stack starts in `frameStorage`, and where its next frame goes.
+    std::uint32_t callStackBase = 0;
+    std::uint32_t callStackTop = 0;
+
+    /// How many calls the stack holds at once.
+    std::uint32_t callDepthCapacity = 0;
     Scheduler scheduler;
 
     /// Mutable per-process state. A copy of the image's list, because `resumePc` and
@@ -477,21 +637,42 @@ private:
     /// A file the design opened with `$fopen`: by descriptor, `0x8000'0000` with a number
     /// above the standard streams' 0 to 2, or by one channel bit of a multichannel descriptor
     /// when it was opened with no mode (IEEE 1800 section 21.3.1).
+    ///
+    /// A file opened for reading, as VHDL's are, has `input` rather than `stream`.
     struct OpenFile {
         std::uint32_t descriptor = 0;
         std::unique_ptr<std::ostream> stream;
+        std::unique_ptr<std::istream> input;
     };
 
     std::vector<OpenFile> openFiles;
     std::uint32_t nextFileNumber = 3;
     std::uint32_t nextChannel = 1;
 
+    /// The heap of DESIGN_GUIDE.md section 4.3: what VHDL allocates, std.textio's lines so far,
+    /// by handle. Handle `n` is entry `n - 1`, and 0 is `null`; a freed entry is empty until an
+    /// allocation reuses it, the last freed first, so that a run allocates the same handles every
+    /// time.
+    std::vector<std::optional<std::string>> heap;
+    std::vector<std::uint64_t> freedHandles;
+
+    /// Allocates a line holding `text` and returns its handle.
+    std::uint64_t allocateLine(std::string text);
+
+    /// The line `handle` designates, or null for `null` and for one freed.
+    std::string* lineAt(std::uint64_t handle);
+
+    /// Frees the line `handle` designates; freeing `null` does nothing.
+    void freeLine(std::uint64_t handle);
+
     /// Runs `$readmemh` or `$readmemb`, whose arguments are the file name and the optional
     /// start and end addresses.
-    void readMemory(std::uint32_t processIndex, const codegen::SysTaskDescriptor& descriptor,
+    void readMemory(std::span<const std::uint32_t> objectSignals,
+                    const codegen::SysTaskDescriptor& descriptor,
                     std::span<const FormatArgument> arguments);
 
-    /// Opens `name` for `$fopen`, and returns its descriptor or 0.
+    /// Opens `name` for `$fopen`, or for VHDL's `file_open` with `r` to read it, and returns its
+    /// descriptor or 0.
     std::uint32_t openFile(const std::string& name, const std::string& mode,
                            SourceLocation location);
 
@@ -516,6 +697,9 @@ private:
         std::uint32_t position = 0;
         std::uint32_t signalIndex = 0;
         bool nonBlocking = false;
+
+        /// A transaction of a VHDL driver, applied only if still on its projected waveform.
+        bool transaction = false;
         std::uint64_t serial = 0;
         eir::BitVector value;
     };
@@ -535,6 +719,93 @@ private:
 
     /// Performs every delayed write due at the current time.
     void applyDelayedWrites();
+
+    /// A transaction on the projected waveform of a VHDL driver. One for now is also in
+    /// `deltaTransactions`, and a later one in `delayedWrites`, both by its serial.
+    struct Transaction {
+        SimTime time = 0;
+        std::uint64_t serial = 0;
+
+        /// The bits of the signal it assigns: from `lowBit`, as wide as `value`.
+        std::uint32_t lowBit = 0;
+        eir::BitVector value;
+
+        [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + value.width(); }
+    };
+
+    /// Each VHDL driver's projected waveform, in time order, indexed by `driverBase` of its
+    /// process plus its write position. Flat, so that finding one costs an addition.
+    std::vector<std::vector<Transaction>> projectedWaveforms;
+    std::vector<std::uint32_t> driverBase;
+
+    /// The transactions due in the next delta cycle, in the order they were made.
+    struct DeltaTransaction {
+        std::uint32_t processIndex = 0;
+        std::uint32_t position = 0;
+        std::uint32_t signalIndex = 0;
+        std::uint64_t serial = 0;
+    };
+
+    std::vector<DeltaTransaction> deltaTransactions;
+
+    /// A VHDL process's timeout: when it falls, the process resumes at `resumePc` unless what
+    /// else it waits on resumed it first, which advanced its wait generation past `generation`.
+    struct Timeout {
+        std::uint32_t processIndex = 0;
+        std::uint32_t generation = 0;
+        std::uint32_t resumePc = 0;
+    };
+
+    /// Resumes the process of `timeout` unless it has already resumed.
+    void resumeTimedOut(const Timeout& timeout);
+
+    /// Takes back the timeout of `processIndex`, which what else it waited on resumed first, so
+    /// that its time is not a step the run stops at.
+    void cancelTimeout(std::uint32_t processIndex);
+
+    /// The VHDL processes whose wait of no time, or timeout of none, resumes them in the next
+    /// delta cycle, run with those its transactions wake (codegen::CompiledBody::resumesNextCycle).
+    std::vector<Timeout> nextCycleResumes;
+
+    /// The later timeouts of VHDL waits on events too, by the time each falls, and the time of
+    /// each process's, or NoTime.
+    std::map<SimTime, std::vector<Timeout>> timeouts;
+    std::vector<SimTime> timeoutOf;
+
+    /// The ports' connections whose sources changed, to run before the cycle's processes.
+    std::vector<std::uint32_t> connectionsDue;
+
+    /// Deletes `transaction`, a later one, from `delayedWrites`, taking its time step with it
+    /// when nothing else is due then: a deleted transaction leaves no step behind.
+    void unscheduleTransaction(const Transaction& transaction);
+
+    /// Takes the transaction `serial` off its driver's projected waveform, or nothing when a later
+    /// assignment has already deleted it.
+    std::optional<Transaction> takeTransaction(std::uint32_t processIndex, std::uint32_t position,
+                                               std::uint64_t serial);
+
+    /// Writes what `transaction` assigns, through the process's route as a store does.
+    void applyTransaction(std::uint32_t processIndex, std::uint32_t position,
+                          std::uint32_t signalIndex, const Transaction& transaction);
+
+    /// Whose a transaction is: the driver a process has through a write position, of a signal.
+    struct DriverOf {
+        std::uint32_t processIndex = 0;
+        std::uint32_t position = 0;
+        std::uint32_t signalIndex = 0;
+    };
+
+    /// Queues the transaction `serial` of `driver` for `time`: for the next delta cycle when that
+    /// is now, and in the time wheel otherwise.
+    void schedule(const DriverOf& driver, SimTime time, std::uint64_t serial);
+
+    /// What remains of `transaction` on bits `lowBit` to `endBit` when an assignment deletes the
+    /// rest, queued afresh as a transaction of its own.
+    Transaction remainder(const DriverOf& driver, const Transaction& transaction,
+                          std::uint32_t lowBit, std::uint32_t endBit);
+
+    /// Applies the transactions due in this delta cycle, from the `first` made on.
+    void applyDeltaTransactions(std::size_t first = 0);
 
     /// A write as a Store makes it: through the process's drivers when its route has any.
     void writeRouted(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,

@@ -66,13 +66,26 @@ jobs:
       matrix:
         preset: [gcc-debug, gcc-release, clang-debug, clang-release]
     steps:
+      # NVC, which the VHDL frontend builds part of, is a submodule.
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
+      # flex and zstd build NVC's analysis (DESIGN_GUIDE.md section 11.3), and GHDL is the
+      # reference the VHDL golden cases are compared against (section 14.3). Python and cocotb
+      # are for the cocotb golden test of a VHDL toplevel, through VHPI (section 9.7), and for
+      # cocotb's suite run with VHDL toplevels.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev flex libzstd-dev \
+            ghdl ghdl-mcode python3 python3-venv libpython3-dev
+
+      - name: Install cocotb
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -r tests/conformance/cocotb/requirements.txt
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -81,22 +94,94 @@ jobs:
           key: ccache-${{ matrix.preset }}-${{ github.sha }}
           restore-keys: ccache-${{ matrix.preset }}-
 
-      # The SystemVerilog frontend is switched off here and exercised by the
-      # dedicated job below. Nothing at M0 links slang, and building it five
-      # times per commit would spend most of the CI budget on a dependency that
-      # one job proves just as well.
-      #
+      # The defaults, but for the SystemVerilog frontend and the GUI, which would take too much
+      # time to compile repeatedly.
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
           -DENZAN_WERROR=ON
           -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+          -DENZAN_BUILD_GUI=OFF
+          -DENZAN_COCOTB_PYTHON="$PWD/.venv/bin/python"
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
+
+      # The VESTs conformance suite (section 14.4), held to its pass list as sv-tests is. Seconds
+      # against this build, so on every branch.
+      - name: VESTs conformance suite
+        if: matrix.preset == 'gcc-release'
+        run: |
+          status=0
+          tests/conformance/vests/run-suite.sh build/gcc-release/bin/enzan build/vests \
+            > build/vests.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/vests.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/vests.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # NVC's own regression tests, from the NVC the VHDL frontend is built on (section 14.4), held
+      # to their pass list. About a minute against this build, so on every branch.
+      - name: NVC regression tests
+        if: matrix.preset == 'gcc-release'
+        run: |
+          status=0
+          tests/conformance/nvc/run-suite.sh build/gcc-release/bin/enzan build/nvc \
+            > build/nvc.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/nvc.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/nvc.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # GHDL's own regression tests (section 14.4), from the GHDL VESTs is run from, held to
+      # their pass list. About a minute against this build, so on every branch.
+      - name: GHDL regression tests
+        if: matrix.preset == 'gcc-release'
+        run: |
+          status=0
+          tests/conformance/ghdl/run-suite.sh build/gcc-release/bin/enzan build/ghdl \
+            > build/ghdl.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/ghdl.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/ghdl.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # cocotb's own regression suite with VHDL toplevels, through VHPI (section 14.6), held to
+      # its own pass list; the run with Verilog ones is in the SystemVerilog job.
+      - name: cocotb regression suite, VHDL toplevels
+        if: matrix.preset == 'gcc-release'
+        env:
+          COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          status=0
+          tests/conformance/cocotb/run-suite.sh build/gcc-release/bin/enzan build/cocotb-vhdl \
+            vhdl > build/cocotb-vhdl.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/cocotb-vhdl.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/cocotb-vhdl.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # M6's exit design (section 14.5): NEORV32 through its own testbench's on-chip debugger
+      # sequence, held to GHDL's reports and to its CPU trace and UART logs. A few minutes, so
+      # on the main branch only, and with the one build that is optimised for GCC.
+      - name: Design regression - NEORV32
+        if: matrix.preset == 'gcc-release' && github.ref == 'refs/heads/main'
+        run: >
+          tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)" \
+            build/designs/neorv32
+
+      - name: Keep the NEORV32 logs
+        if: failure() && matrix.preset == 'gcc-release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: neorv32-logs
+          path: |
+            build/designs/neorv32/differences.txt
+            build/designs/neorv32/enzan/*.txt
+            build/designs/neorv32/ghdl/transcript.txt
 
       - name: Report cache statistics
         if: always()
@@ -107,12 +192,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache clang libgtest-dev zlib1g-dev
+            cmake ninja-build ccache clang libgtest-dev zlib1g-dev flex libzstd-dev \
+            ghdl ghdl-mcode qt6-base-dev tcl-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -121,6 +209,8 @@ jobs:
           key: ccache-sanitize-${{ github.sha }}
           restore-keys: ccache-sanitize-
 
+      # The build matrix's configuration, the defaults but for slang: NVC's analysis runs
+      # instrumented, and so do the GUI's tests, a kernel and a window talking over a socket.
       - name: Configure
         run: >
           cmake --preset clang-sanitize
@@ -144,13 +234,15 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ccache clang clang-tidy-18 libgtest-dev zlib1g-dev \
-            qt6-base-dev tcl-dev
+            qt6-base-dev tcl-dev flex libzstd-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -159,14 +251,14 @@ jobs:
           key: ccache-tidy-${{ github.sha }}
           restore-keys: ccache-tidy-
 
-      # Every optional component is enabled here even though it makes this the second job that
-      # builds slang. Linting a translation unit that the configured build does not compile
-      # does not merely skip it: clang-tidy falls back to default flags, fails to find the
-      # slang or Qt headers, and then reports whatever its half-parsed view of the file
-      # suggests. That produced nineteen findings that were not defects, and would have hidden
-      # any real one behind them.
+      # The defaults, which enable every optional component, even though that makes this the
+      # second job that builds slang. Linting a translation unit that the configured build does
+      # not compile does not merely skip it: clang-tidy falls back to default flags, fails to
+      # find the slang, NVC or Qt headers, and then reports whatever its half-parsed view of the
+      # file suggests. That produced nineteen findings that were not defects, and would have
+      # hidden any real one behind them.
       - name: Configure
-        run: cmake --preset clang-debug -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_BUILD_GUI=ON
+        run: cmake --preset clang-debug
 
       # The generated version header is produced at configure time, but
       # GoogleTest's headers may only appear after a build when they were
@@ -185,12 +277,12 @@ jobs:
         run: ccache --show-stats
 
   gui:
-    name: Graphical front end
+    name: Graphical front end without the language frontends
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      # Qt 6 for the windows and Tcl for the theme.
+      # Qt 6 for the windows and Tcl for the theme; nothing of NVC's or slang's.
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -204,15 +296,19 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           restore-keys: ccache-gui-
 
-      # The SystemVerilog frontend is off: nothing in the front end or in its tests links slang,
-      # and the tests drive a kernel built from EIR they construct themselves, so enabling it
-      # would spend the job's time building a dependency it never uses.
+      # Both frontends are off, which is this job's reason to exist now that the build matrix
+      # builds the GUI too. The kernel and the front end are meant to be usable without slang
+      # or NVC, and what is compiled only without them, behind the ENZAN_WITH_SYSTEMVERILOG and
+      # ENZAN_WITH_VHDL guards of tools/enzan, src/session and src/pli, is compiled nowhere
+      # else; a helper left on the wrong side of a guard is an unused function only here. The
+      # front end's tests drive a kernel built from EIR they construct themselves, so they need
+      # neither.
       - name: Configure
         run: >
           cmake --preset gcc-debug
           -DENZAN_WERROR=ON
-          -DENZAN_BUILD_GUI=ON
           -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+          -DENZAN_ENABLE_VHDL=OFF
 
       - name: Build
         run: cmake --build --preset gcc-debug
@@ -228,10 +324,13 @@ jobs:
         run: ccache --show-stats
 
   systemverilog:
-    name: SystemVerilog frontend and golden suite
+    name: SystemVerilog frontend and golden suite, default configuration
     runs-on: ubuntu-24.04
     steps:
+      # NVC, which the VHDL frontend builds part of, is a submodule.
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       # iverilog is the reference the golden suite compares against. Running the same design
       # under two simulators and comparing the result is the single highest-value testing
@@ -244,12 +343,15 @@ jobs:
       #
       # libpython3-dev because cocotb embeds Python into the simulator it is loaded into, and
       # needs the shared library to do it.
+      #
+      # flex and zstd for NVC's analysis, and Qt 6 and Tcl for the GUI, which the default
+      # configuration builds.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ccache libgtest-dev zlib1g-dev python3 python3-venv \
-            libpython3-dev iverilog gtkwave
+            libpython3-dev iverilog gtkwave flex libzstd-dev qt6-base-dev tcl-dev
 
       # The cocotb version is named once, in requirements.txt (DESIGN_GUIDE.md section 14.6), and
       # so is what sv-tests' driver needs (section 14.4).
@@ -274,9 +376,13 @@ jobs:
       # the frontend unit tests and the golden suite. The build matrix above configures the
       # frontend off: nothing outside this job links slang, and compiling it five times per
       # commit would spend most of the CI budget on one dependency.
-      - name: Configure and build with the SystemVerilog frontend enabled
+      #
+      # Everything else is the defaults too, the VHDL frontend and the GUI with it, so that the
+      # configuration a plain `cmake --preset` gives a contributor is the one built and tested
+      # on every commit, rather than only on main by clang-tidy's job.
+      - name: Configure and build the default configuration
         run: |
-          cmake --preset gcc-release -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_WERROR=ON \
+          cmake --preset gcc-release -DENZAN_WERROR=ON \
             -DENZAN_COCOTB_PYTHON="$PWD/.venv/bin/python"
           cmake --build --preset gcc-release
 

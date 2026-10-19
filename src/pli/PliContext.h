@@ -8,6 +8,10 @@
 
 #include "vpi_user.h"
 
+#ifdef ENZAN_WITH_VHDL
+#include "vhpi_user.h"
+#endif
+
 #include <cstdint>
 #include <iosfwd>
 #include <map>
@@ -28,7 +32,10 @@ class Image;
 
 namespace enzan::pli {
 
-/// The Verilog Procedural Interface of one `enzan` process (DESIGN_GUIDE.md section 9).
+/// The procedural interfaces of one `enzan` process: the Verilog Procedural Interface
+/// (DESIGN_GUIDE.md section 9), and the VHDL one beside it (section 9.7), which share one model
+/// of the design and one set of callbacks, so that an application using both, as cocotb does
+/// with a design of both languages, sees one simulation.
 ///
 /// Holds everything an application can reach: the libraries it was loaded from, the handles
 /// it has been given, the callbacks it has registered and the last error. The `vpi_*` routines
@@ -41,26 +48,31 @@ namespace enzan::pli {
 ///
 /// Loading comes first and needs no design; `attach` binds one when elaboration has produced
 /// it, and from then until `detach` the application can see and drive it.
-class VpiContext final : public runtime::PliHooks {
+class PliContext final : public runtime::PliHooks {
 public:
     /// `diagnostics` must outlive the context. `commandLine` is what `vpi_get_vlog_info`
     /// reports: the whole command line, so that an application finds its plusargs there.
-    VpiContext(DiagnosticEngine& engine, std::vector<std::string> commandLine);
+    PliContext(DiagnosticEngine& engine, std::vector<std::string> commandLine);
 
-    VpiContext(const VpiContext&) = delete;
-    VpiContext& operator=(const VpiContext&) = delete;
-    VpiContext(VpiContext&&) = delete;
-    VpiContext& operator=(VpiContext&&) = delete;
-    ~VpiContext() override;
+    PliContext(const PliContext&) = delete;
+    PliContext& operator=(const PliContext&) = delete;
+    PliContext(PliContext&&) = delete;
+    PliContext& operator=(PliContext&&) = delete;
+    ~PliContext() override;
 
     /// The context the `vpi_*` routines act on, or null when none exists.
-    static VpiContext* current() noexcept;
+    static PliContext* current() noexcept;
 
-    /// Loads `library[:entry]` and runs its startup routines (section 9.1).
+    /// The interface an application is loaded through, which says what its table of startup
+    /// routines is called.
+    enum class Interface : std::uint8_t { Vpi, Vhpi };
+
+    /// Loads `library[:entry]` and runs its startup routines (sections 9.1 and 9.7).
     ///
     /// Returns false having reported why when the library cannot be opened, or offers neither
-    /// the entry it was asked for nor `vlog_startup_routines`.
-    bool load(std::string_view specification);
+    /// the entry it was asked for nor the interface's table, `vlog_startup_routines` or
+    /// `vhpi_startup_routines`.
+    bool load(std::string_view specification, Interface which = Interface::Vpi);
 
     /// True once at least one application has been loaded.
     [[nodiscard]] bool hasApplications() const noexcept { return loadedLibraries > 0; }
@@ -131,6 +143,31 @@ public:
     /// Records that `routine` is not supported, for `vpi_chk_error` (section 9.1).
     void unsupported(std::string_view routine);
 
+#ifdef ENZAN_WITH_VHDL
+    // -----------------------------------------------------------------------
+    // The routines of vhpi_user.h (section 9.7). VhpiRoutines.cpp forwards to these.
+    // -----------------------------------------------------------------------
+
+    vhpiHandleT vhpiHandle(vhpiOneToOneT type, vhpiHandleT reference);
+    vhpiHandleT vhpiHandleByName(const char* name, vhpiHandleT scope);
+    vhpiHandleT vhpiHandleByIndex(vhpiOneToManyT type, vhpiHandleT parent, std::int32_t index);
+    vhpiHandleT vhpiIterator(vhpiOneToManyT type, vhpiHandleT reference);
+    vhpiHandleT vhpiScan(vhpiHandleT iterator);
+    vhpiIntT vhpiGet(vhpiIntPropertyT property, vhpiHandleT object);
+    const vhpiCharT* vhpiGetStr(vhpiStrPropertyT property, vhpiHandleT object);
+    vhpiPhysT vhpiGetPhys(vhpiPhysPropertyT property, vhpiHandleT object);
+    int vhpiGetValue(vhpiHandleT object, vhpiValueT* value);
+    int vhpiPutValue(vhpiHandleT object, vhpiValueT* value, vhpiPutValueModeT mode);
+    void vhpiGetTime(vhpiTimeT* time, long* cycles);
+    vhpiHandleT vhpiRegisterCallback(vhpiCbDataT* data, std::int32_t flags);
+    int vhpiRemoveCallback(vhpiHandleT handle);
+    int vhpiReleaseHandle(vhpiHandleT handle);
+    int vhpiCompareHandles(vhpiHandleT first, vhpiHandleT second);
+    int vhpiCheckError(vhpiErrorInfoT* info);
+    int vhpiControl(vhpiSimControlT command);
+    int vhpiPrint(std::string_view text);
+#endif
+
     /// Forgets the last error. Every routine but `vpi_chk_error` starts with this, because
     /// the standard defines that routine as reporting on the call before it.
     void clearError() noexcept { errorLevel = 0; }
@@ -186,14 +223,43 @@ private:
     /// freed by the next sweep, once no dispatch can still be holding it.
     void retire(Callback& callback);
 
-    /// Fires every callback in `pending` once and empties it.
-    void runOnce(std::vector<Callback*>& pending);
+    /// Fires every callback in `pending` once and empties it. A repetitive VHPI callback goes
+    /// to `rearm`, for its next occurrence, rather than being retired.
+    void runOnce(std::vector<Callback*>& pending, std::vector<Callback*>* rearm = nullptr);
 
     /// Drops retired callbacks from every list and frees them. Only ever called when no
     /// callback is running.
     void sweepNow();
 
     void fail(PLI_INT32 level, std::string message);
+
+#ifdef ENZAN_WITH_VHDL
+    // -- VHPI ---------------------------------------------------------------
+    // A VHPI handle is made for each request and freed when the application releases it, as
+    // VHPI has it; what it stands for is in the fields of Object that Vhpi.cpp fills.
+
+    [[nodiscard]] Object* vhpiResolve(vhpiHandleT handle, std::string_view routine);
+    vhpiHandleT vhpiKeep(std::unique_ptr<Object> object);
+    [[nodiscard]] std::unique_ptr<Object> vhpiRegion(std::uint32_t scopeIndex) const;
+    [[nodiscard]] std::unique_ptr<Object>
+    vhpiDeclared(std::uint32_t instanceIndex, std::uint32_t objectIndex, bool isGeneric) const;
+    [[nodiscard]] std::unique_ptr<Object> vhpiElement(const Object& parent,
+                                                      std::uint64_t flatIndex) const;
+    [[nodiscard]] std::unique_ptr<Object> vhpiField(const Object& parent, std::size_t field) const;
+    [[nodiscard]] std::unique_ptr<Object> vhpiTypeHandle(const Object& of, std::uint32_t type,
+                                                         bool base) const;
+    [[nodiscard]] std::vector<std::unique_ptr<Object>> vhpiChildren(vhpiOneToManyT type,
+                                                                    const Object& reference);
+    [[nodiscard]] const eir::VhdlType* vhdlTypeOf(const Object& object) const;
+    [[nodiscard]] const eir::ModuleDefinition& definitionOf(std::uint32_t instanceIndex) const;
+    [[nodiscard]] eir::BitVector vhpiBits(const Object& object) const;
+    bool vhpiWrite(const Object& object, const eir::BitVector& bits, vhpiPutValueModeT mode);
+    int vhpiFormat(const Object& object, const eir::BitVector& bits, vhpiValueT& value);
+    void vhpiFire(Callback& callback);
+
+    /// `object`'s name as its declaration spells it, or in upper case when there is none to read.
+    [[nodiscard]] std::string declaredCase(const Object& object) const;
+#endif
 
     [[nodiscard]] std::ostream& transcriptStream() const;
 
@@ -279,5 +345,10 @@ private:
 /// the `enzan` executable, and every application would fail to load over a routine that was
 /// never linked rather than one that does not exist.
 void keepRoutinesLinked() noexcept;
+
+#ifdef ENZAN_WITH_VHDL
+/// The same for the `vhpi_*` routines, which are defined beside it in VhpiRoutines.cpp.
+void keepVhpiRoutinesLinked() noexcept;
+#endif
 
 } // namespace enzan::pli

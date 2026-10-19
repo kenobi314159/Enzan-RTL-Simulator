@@ -2,10 +2,68 @@
 
 #include "eir/Module.h"
 
+#include "eir/BitOps.h"
+
 #include <algorithm>
+#include <iterator>
 #include <utility>
 
 namespace enzan::eir {
+
+std::uint32_t presentedWidth(Encoding encoding, std::uint32_t width) noexcept {
+    return encoding == Encoding::Bits || encoding == Encoding::Real ? width : width / 8;
+}
+
+void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept {
+    if (encoding == Encoding::Bits || encoding == Encoding::Real) {
+        bitops::copy(shown, stored);
+        return;
+    }
+    // The positions of std_ulogic's literals: U X 0 1 Z W L H -.
+    static constexpr Logic Logic9[] = {Logic::Unknown, Logic::Unknown, Logic::Zero,
+                                       Logic::One,     Logic::HighZ,   Logic::Unknown,
+                                       Logic::Zero,    Logic::One,     Logic::Unknown};
+    for (std::uint32_t element = 0; element < shown.width(); ++element) {
+        std::uint32_t code = 0;
+        bool known = true;
+        for (std::uint32_t bit = 0; bit < 8; ++bit) {
+            const Logic value = stored.get((element * 8) + bit);
+            if (value == Logic::One) code |= 1U << bit;
+            known = known && (value == Logic::Zero || value == Logic::One);
+        }
+        Logic shownBit = Logic::Unknown;
+        if (known && encoding == Encoding::VhdlLogic && code < std::size(Logic9))
+            shownBit = Logic9[code];
+        if (known && encoding == Encoding::VhdlBit && code < 2)
+            shownBit = code == 0 ? Logic::Zero : Logic::One;
+        shown.set(element, shownBit);
+    }
+}
+
+bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept {
+    if (encoding == Encoding::Bits || encoding == Encoding::Real) {
+        bitops::copy(stored, shown);
+        return true;
+    }
+    for (std::uint32_t element = 0; element < shown.width(); ++element) {
+        const Logic value = shown.get(element);
+        if (encoding == Encoding::VhdlBit && value != Logic::Zero && value != Logic::One)
+            return false;
+    }
+    for (std::uint32_t element = 0; element < shown.width(); ++element) {
+        // The positions of std_ulogic's '0', '1', 'Z' and 'X', or a bit's.
+        std::uint32_t code = 0;
+        switch (shown.get(element)) {
+        case Logic::Zero: code = encoding == Encoding::VhdlLogic ? 2 : 0; break;
+        case Logic::One: code = encoding == Encoding::VhdlLogic ? 3 : 1; break;
+        case Logic::HighZ: code = 4; break;
+        case Logic::Unknown: code = 1; break;
+        }
+        for (std::uint32_t bit = 0; bit < 8; ++bit)
+            stored.set((element * 8) + bit, ((code >> bit) & 1U) != 0 ? Logic::One : Logic::Zero);
+    }
+    return true;
+}
 
 std::string_view toString(ObjectKind kind) noexcept {
     switch (kind) {
@@ -81,6 +139,14 @@ std::optional<std::uint32_t> ModuleDefinition::findObject(std::string_view wante
     if (found == objects.end()) return std::nullopt;
 
     return static_cast<std::uint32_t>(found - objects.begin());
+}
+
+std::optional<std::uint32_t> ModuleDefinition::findSubprogram(std::string_view wanted) const {
+    const auto found = std::ranges::find_if(
+        subprograms, [wanted](const Subprogram& subprogram) { return subprogram.name == wanted; });
+    if (found == subprograms.end()) return std::nullopt;
+
+    return static_cast<std::uint32_t>(found - subprograms.begin());
 }
 
 std::uint32_t ModuleDefinition::addObject(Object object) {

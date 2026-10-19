@@ -11,6 +11,7 @@
 #include "eir/Type.h"
 
 #include "support/Literals.h"
+#include "support/ProcessBuilder.h"
 
 #include <gtest/gtest.h>
 
@@ -33,11 +34,14 @@ using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
 using enzan::eir::Opcode;
 using enzan::eir::Operand;
+using enzan::eir::ParameterMode;
 using enzan::eir::Process;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
 using enzan::eir::WriteExtent;
 using enzan::test::literal;
+using enzan::test::ProcessBuilder;
+using enzan::test::SubprogramBuilder;
 
 class CollectingConsumer final : public enzan::DiagnosticConsumer {
 public:
@@ -225,6 +229,77 @@ TEST_F(CompilerTest, UnknownBitsSurviveTheConstantPool) {
 
     EXPECT_EQ(enzan::eir::toString(compiled->body(0).constant(0), enzan::eir::Radix::Binary),
               "10xz");
+}
+
+TEST_F(CompilerTest, ARegisterHoldingOneConstantStartsWithItAndIsNotLoaded) {
+    // A register whose only writer is one constant load holds the constant in the frame's
+    // starting image, extended as the load would extend it, and the load is left out. One
+    // written again keeps its load, which has to run where it stands.
+    ProcessBuilder builder(ProcessKind::Initial, "constants");
+    const std::uint32_t mask = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t widened = builder.reg(Type::bits(16, true, false));
+    const std::uint32_t counter = builder.reg(Type::bits(8, false, true));
+    const std::uint32_t a5 = builder.constant("8'hA5");
+    const std::uint32_t minus128 = builder.constant("8'sh80");
+    builder.block("entry");
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(mask), Operand::constant(a5)));
+    builder.emit(Instruction::makeSigned(Opcode::LoadConstant, Operand::reg(widened),
+                                         Operand::constant(minus128)));
+    builder.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(counter), Operand::constant(a5)));
+    builder.emit(Instruction::make(Opcode::Add, Operand::reg(counter), Operand::reg(counter),
+                                   Operand::reg(mask)));
+    builder.store(1, counter);
+    builder.emit(Instruction::make(Opcode::Return));
+    design.addModule(makeModule(builder.finish()));
+
+    const std::unique_ptr<CompiledDesign> compiled = compile();
+    ASSERT_NE(compiled, nullptr) << consumer.messages.front();
+    const auto& body = compiled->body(0);
+    ASSERT_EQ(body.code.size(), 4U);
+    EXPECT_EQ(body.code[0].opcode, Opcode::LoadConstant);
+    EXPECT_EQ(body.code[0].dst, 4U) << "the counter's load stays";
+    EXPECT_EQ(body.code[1].opcode, Opcode::Add);
+
+    ASSERT_EQ(body.frameImage.size(), body.frameWords);
+    EXPECT_EQ(body.frameImage, (std::vector<enzan::eir::Word>{0xA5, 0, 0xFF80, 0, 0, 0}))
+        << "the mask's and the widened value's planes, and the counter's zero";
+}
+
+TEST_F(CompilerTest, AParameterOrACallsArgumentIsNotAConstantRegister) {
+    // A caller writes a parameter as the call starts, and a call writes its out arguments back
+    // as it returns, so a constant load into either has to run where it stands.
+    SubprogramBuilder callee("reset");
+    const std::uint32_t value =
+        callee.parameter("value", Type::bits(8, false, true), ParameterMode::InOut);
+    const std::uint32_t zero = callee.constant("8'h00");
+    callee.block("entry");
+    callee.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(value), Operand::constant(zero)));
+    callee.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder caller(ProcessKind::Initial, "caller");
+    const std::uint32_t argument = caller.reg(Type::bits(8, false, true));
+    const std::uint32_t seven = caller.constant("8'h07");
+    caller.block("entry");
+    caller.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(argument), Operand::constant(seven)));
+    caller.call("", "reset", {Operand::reg(argument)});
+    caller.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeModule(caller.finish());
+    definition.subprograms.push_back(callee.finish());
+    design.addModule(std::move(definition));
+
+    const std::unique_ptr<CompiledDesign> compiled = compile();
+    ASSERT_NE(compiled, nullptr) << consumer.messages.front();
+    const auto& calleeBody = compiled->body(compiled->subprogramBodyIndex(0, 0));
+    ASSERT_FALSE(calleeBody.code.empty());
+    EXPECT_EQ(calleeBody.code[0].opcode, Opcode::LoadConstant);
+    const auto& callerBody = compiled->body(compiled->bodyIndex(0, 0));
+    ASSERT_FALSE(callerBody.code.empty());
+    EXPECT_EQ(callerBody.code[0].opcode, Opcode::LoadConstant);
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +520,59 @@ TEST_F(CompilerTest, RejectsAFormatStringIndexOutOfRange) {
     design.addModule(makeModule(std::move(process)));
     EXPECT_EQ(compile(), nullptr);
     EXPECT_TRUE(reported("names string 3"));
+}
+
+TEST_F(CompilerTest, ACallKeepsTheCallersHalfAndTheCalleeKeepsItsOwn) {
+    // A call resolves only what the caller knows — where its arguments are and where the
+    // result goes. Where the callee keeps its parameters is on the callee, since which
+    // binding of it a call reaches is elaboration's to say.
+    SubprogramBuilder callee("scale");
+    const std::uint32_t wide = callee.reg(Type::bits(128, false, true));
+    const std::uint32_t factor =
+        callee.parameter("factor", Type::bits(8, false, true), ParameterMode::InOut);
+    const std::uint32_t result = callee.result(Type::bits(8, false, true));
+    callee.block("entry");
+    callee.emit(Instruction::make(Opcode::Move, Operand::reg(result), Operand::reg(factor)));
+    callee.emit(Instruction::make(Opcode::Return));
+    static_cast<void>(wide);
+
+    ProcessBuilder caller(ProcessKind::Initial, "caller");
+    const std::uint32_t padding = caller.reg(Type::bits(64, false, true));
+    const std::uint32_t argument = caller.reg(Type::bits(8, false, true));
+    const std::uint32_t returned = caller.reg(Type::bits(8, false, true));
+    caller.block("entry");
+    caller.call("", "scale", {Operand::reg(argument)}, Operand::reg(returned));
+    caller.emit(Instruction::make(Opcode::Return));
+    static_cast<void>(padding);
+
+    ModuleDefinition definition = makeModule(caller.finish());
+    definition.subprograms.push_back(callee.finish());
+    design.addModule(std::move(definition));
+
+    const std::unique_ptr<CompiledDesign> compiled = compile();
+    ASSERT_NE(compiled, nullptr) << consumer.messages.front();
+
+    const std::uint32_t calleeIndex = compiled->subprogramBodyIndex(0, 0);
+    ASSERT_NE(calleeIndex, CompiledDesign::NotCompiled);
+    const enzan::codegen::CompiledBody& calleeBody = compiled->body(calleeIndex);
+    // A 128-bit register takes four Words, both planes of two, before the parameter's.
+    ASSERT_EQ(calleeBody.parameters.size(), 1U);
+    EXPECT_EQ(calleeBody.parameters[0].offset, 4U);
+    EXPECT_EQ(calleeBody.parameters[0].bitWidth, 8U);
+    EXPECT_EQ(calleeBody.parameters[0].mode, ParameterMode::InOut);
+    EXPECT_EQ(calleeBody.resultOffset, 6U);
+    EXPECT_EQ(calleeBody.resultWidth, 8U);
+
+    const enzan::codegen::CompiledBody& callerBody = compiled->body(compiled->bodyIndex(0, 0));
+    ASSERT_EQ(callerBody.calls.size(), 1U);
+    const enzan::codegen::CallDescriptor& call = callerBody.calls[0];
+    ASSERT_EQ(call.arguments.size(), 1U);
+    EXPECT_FALSE(call.arguments[0].isConstant);
+    EXPECT_EQ(call.arguments[0].location, 2U);
+    EXPECT_TRUE(call.hasResult);
+    EXPECT_EQ(call.resultLocation, 4U);
+    EXPECT_EQ(callerBody.code[0].opcode, Opcode::Call);
+    EXPECT_EQ(callerBody.code[0].a, 0U);
 }
 
 } // namespace

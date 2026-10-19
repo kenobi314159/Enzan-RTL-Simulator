@@ -24,6 +24,12 @@ ports and computes the flat state layout (DESIGN_GUIDE.md section 2.1).
   pulled or supply net with any driver — a **driver** with its own value in the arena, and
   split the net into **segments** with one set of drivers each. Every other signal has no
   driver state and is written straight into its slot.
+- Bind every call a process can reach to a **subprogram instance** (DESIGN_GUIDE.md section
+  4.1): a module's subprogram to the instance whose process calls it, a package's to the
+  package's one instance, which a call reaching a package that holds objects is enough to
+  create, and one holding no objects to none. Record what each process's callees read and
+  write, and refuse a callee that writes a bit something drives, since its writes go through no
+  driver.
 - Reject the cases that would need features later milestones bring, such as port width
   conversion, rather than let them simulate to a plausible wrong answer.
 
@@ -61,6 +67,15 @@ which is why an instance holds a slot index per object rather than a base offset
 a fixed displacement. The interpreter pays one extra load per state access; a JIT
 specialises a process per instance and burns the absolute offsets in as constants,
 which is what section 4.3 anticipates.
+
+**A port may drive another slot than it reads.** A connection that names a separate object
+for the port's drivers (`eir::PortConnection::driveObjectIndex`) binds the child's port to two
+slots: the one it reads, `objectSlots`, and the one its drivers write, `objectDriveSlots`. A
+port collapsed onto it below takes both, so whatever drives it at any depth drives the one
+slot. Everything about drivers — overlap, resolution, segments, a driver's starting value —
+is of the slot written, and everything about reading — values, sensitivity, events — of the
+slot read. A VHDL inout port associated through a conversion or with part of a signal is the
+one case: its driving value and its effective value differ (DESIGN_GUIDE.md section 3.7).
 
 ## Port collapsing across a language boundary
 

@@ -55,6 +55,20 @@ ENZAN_DIAG(ErrorInDeadCode, 1008, Warning,
 ENZAN_DIAG(UnusedParameterOverride, 1007, Warning,
            "-G {} names no parameter of a top level, and changes nothing")
 
+// --- 2000-2999: VHDL frontend -----------------------------------------------
+
+ENZAN_DIAG(VhdlError, 2001, Error, "{}")
+ENZAN_DIAG(VhdlWarning, 2002, Warning, "{}")
+ENZAN_DIAG(VhdlNote, 2003, Note, "{}")
+ENZAN_DIAG(VhdlAnalysisStopped, 2004, Fatal, "VHDL analysis stopped: {}")
+ENZAN_DIAG(VhdlUnsupported, 2005, Error, "{} is not supported by the VHDL frontend yet")
+ENZAN_DIAG(VhdlProcessNeverWaits, 2006, Error,
+           "this process has no sensitivity list and no wait statement, so once started it would "
+           "run for ever without letting simulated time advance")
+ENZAN_DIAG(VhdlUnboundComponent, 2007, Warning,
+           "component '{}' has no entity of its name to be bound to, so this instance is left "
+           "unbound and does nothing (IEEE 1076 section 7.3.3)")
+
 // --- 3000-3999: elaboration -------------------------------------------------
 
 ENZAN_DIAG(TopModuleNotFound, 3001, Error,
@@ -87,6 +101,12 @@ ENZAN_DIAG(UnresolvedHierarchicalReference, 3011, Error,
 ENZAN_DIAG(PackageNamedAsTop, 3012, Error,
            "package '{}' has the name of the top-level module; its variables live at '/{}', "
            "which is the top level's path")
+ENZAN_DIAG(UnresolvedSubprogram, 3013, Error,
+           "{} calls '{}' of '{}', which no unit of the design declares")
+ENZAN_DIAG(SubprogramWritesDrivenSignal, 3014, Error,
+           "'{}' has {} written by the subprogram '{}', called from {}, and also driven by {}; a "
+           "subprogram's writes are immediate, and a signal that is driven has to be written "
+           "through its drivers")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 
@@ -95,6 +115,9 @@ ENZAN_DIAG(UnconnectedPort, 3008, Warning,
 ENZAN_DIAG(DeltaLimitExceeded, 5001, Error,
            "exceeded the delta cycle limit of {} at time {}; the design is not settling. "
            "Still active: {}")
+ENZAN_DIAG(CallDepthExceeded, 5011, Error,
+           "exceeded the call depth limit of {} calling '{}' from {} at time {}; the design "
+           "recurses deeper than the limit, or without end")
 ENZAN_DIAG(TimeOverflow, 5002, Error,
            "a delay at time {} would advance simulated time past the 64-bit range; time is "
            "counted in units of {}")
@@ -102,6 +125,7 @@ ENZAN_DIAG(UserFatal, 5003, Error, "$fatal: {}")
 ENZAN_DIAG(UserError, 5004, Error, "{}")
 ENZAN_DIAG(UserWarning, 5005, Warning, "{}")
 ENZAN_DIAG(UserInfo, 5006, Note, "{}")
+ENZAN_DIAG(AssertionFailure, 5012, Error, "{}")
 ENZAN_DIAG(FileNotOpened, 5008, Warning, "$fopen could not open '{}' with mode '{}': {}")
 ENZAN_DIAG(FileNotOpen, 5009, Warning, "{} names file descriptor {:#x}, which is not open")
 ENZAN_DIAG(ReadMemProblem, 5010, Warning, "{} of '{}': {}")
@@ -164,12 +188,12 @@ ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
            "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
            "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "
            "library again in {} (after `enzan lib clean` for a library being written to)")
-ENZAN_DIAG(VpiLibraryUnloadable, 8001, Error, "the VPI library '{}' could not be loaded: {}")
+ENZAN_DIAG(VpiLibraryUnloadable, 8001, Error, "the {} library '{}' could not be loaded: {}")
 ENZAN_DIAG(VpiEntryNotFound, 8002, Error,
-           "the VPI library '{}' has no function called '{}' to start it with")
+           "the {} library '{}' has no function called '{}' to start it with")
 ENZAN_DIAG(VpiNoStartupRoutines, 8003, Error,
-           "the VPI library '{}' defines no vlog_startup_routines; if it is started some other "
-           "way, name the function as --vpi <library>:<function>")
+           "the {} library '{}' defines no {}; if it is started some other way, name the "
+           "function as --{} <library>:<function>")
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 

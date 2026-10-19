@@ -1,8 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# User-facing executables (DESIGN_GUIDE.md section 12).
+# User-facing executables (DESIGN_GUIDE.md section 12), and the build-time tool that builds
+# VHDL's standard libraries for them.
 
 add_subdirectory(enzan)
+
+if(ENZAN_ENABLE_VHDL)
+  add_subdirectory(vhdl-libraries)
+endif()
 
 if(ENZAN_BUILD_GUI)
   # Fail with the reason rather than with "no CMakeLists.txt in that directory",
