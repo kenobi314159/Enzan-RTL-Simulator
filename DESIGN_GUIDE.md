@@ -3365,6 +3365,12 @@ both: EIR, elaboration, drivers and resolution (3.7), the kernel, the waveform d
 the PLI context hold one design whatever language each definition came from. What M7 adds is
 the meeting of the two frontends and of the two interfaces.
 
+**SystemVerilog's time units come first.** A design with VHDL in it counts femtoseconds (5.2),
+while a SystemVerilog delay is still a count of the run's unit rather than of its module's (9.6),
+so every delay of a mixed design would be wrong. Delays, `$time` and `%t` follow each module's
+time unit, as 3.1 requires, before anything crosses the boundary; a module with no time scale
+keeps taking the run's unit.
+
 **Analysis of both languages in one session.** The session analyses SystemVerilog through
 slang and VHDL through the NVC child into one `eir::Design`; it refuses a mixed source set
 today. VHDL goes into Enzan's libraries as SystemVerilog does, `--out-lib` and `--in-lib`
@@ -3378,7 +3384,8 @@ their own libraries need (14.4, 14.6).
 - *SystemVerilog instantiating a VHDL entity.* The entities' interfaces, their generics and
   ports with their types, are given to slang as the modules it would otherwise not find, so
   that the instance type-checks; its parameter values are the generics' values, and the
-  architecture is the entity's default one or the one a library binding names.
+  architecture is the entity's default one (5.2), since choosing another from SystemVerilog takes
+  a `config`, which Enzan does not read.
 - *VHDL instantiating a SystemVerilog module.* A component with no VHDL entity to bind is
   bound to the module of its name (the default binding of IEEE 1076 section 7.3.3 extended
   to the other language, as commercial tools extend it), and `entity work.m` names a module
@@ -3397,25 +3404,36 @@ delta cycle (3.5), in each direction its mode needs:
 - `std_ulogic` codes to four-state bits with `L`→`0`, `H`→`1` and `W`, `U`, `-`→`X` (3.6),
   and `0`, `1`, `X`, `Z` back to their codes; `bit` and `boolean` to two-state bits and back;
 - `std_logic_vector` and its kin to packed vectors, left element to the most significant bit;
-  integers to `int` or `longint` by their range; reals to `real`; arrays of these to unpacked
-  arrays and records to packed structs, field by field, where the shapes agree;
-- an `inout` port as two conversions, each a driver on its own side, so that each language's
-  resolution sees the other's contribution as a driver: a `std_logic` signal resolves the
-  SystemVerilog side's value with its own function, and a net resolves the VHDL side's as a
-  driver of its kind. A port no rule covers is refused by name.
+  integers to `int` or `longint` by their range; arrays of these to unpacked arrays and records
+  to packed structs, field by field, where the shapes agree;
+- an `inout` port as two conversions, split as 3.7 splits a port's driving value from its
+  effective value: the inner port's driving value, what its own drivers resolve to, goes out as
+  one driver of the outer signal, which resolves it by its own language's rule — a `std_logic`
+  signal's function, a net's table — and the outer signal's value comes back as the inner port's
+  effective value, not as a driver. Were each side's value a driver of the other, a value driven
+  once would be held for ever: a port released to `Z` would go on seeing its own `1`.
+
+A port no rule covers is refused by name: a real, until the SystemVerilog frontend has `real`; a
+VHDL port of an unconstrained type instantiated from SystemVerilog, whose bounds nothing there
+gives; and enumeration, time and physical ports other than those above.
 
 **The interfaces across the boundary.** VPI and VHPI share the one PLI context (9.7), and
-each sees the whole hierarchy: VPI shows a VHDL region as a module and its objects as nets of
-their four-state bits; VHPI shows a SystemVerilog region as one of kind `vhpiVerilog`, which
-cocotb leaves to VPI. cocotb runs a mixed design as it does elsewhere: the toplevel's
-language's library is loaded with `--vpi` or `--vhpi`, and the other's is named in
-`GPI_EXTRA`, which `Makefile.enzan` sets in place of the skip it has today (9.7).
+each shows its own language. VHPI shows a SystemVerilog region as one of kind `vhpiVerilog`,
+which cocotb leaves to VPI. VPI finds no VHDL object by name, and an iteration that meets a VHDL
+instance returns it as an object VPI does not describe, which cocotb then asks VHPI for by name.
+A name either is asked for may begin in the other's hierarchy. cocotb requires this: for a
+Verilog toplevel, its mixed-language test asserts that VPI alone does not find the VHDL instance
+and that VHPI does, and a VHDL region shown through VPI would lose the types 9.7 gives it.
+cocotb runs a mixed design as it does elsewhere: the toplevel's language's library is loaded
+with `--vpi` or `--vhpi`, and the other's is named in `GPI_EXTRA`, which `Makefile.enzan` sets
+in place of the skip it has today (9.7).
 
 **Reference simulation.** No free simulator takes SystemVerilog and VHDL together. NVC
-simulates Verilog with VHDL, and is the reference for the mixed cases its Verilog subset
-covers, its own `mixed` regression tests among them (14.4). The rest are checked by
-splitting: the same design with the boundary moved — the DUT in one language driven by a
-testbench in the other, against the DUT in its own language's testbench under iverilog or
+simulates Verilog with VHDL, but only its analysis is built here, and CI runs no NVC: its own
+`mixed` regression tests check themselves and run under Enzan alone (14.4), and a mixed testbench
+written for Enzan is run under a locally built NVC before it is committed (14.5). Results are
+checked by splitting: the same design with the boundary moved — the DUT in one language driven
+by a testbench in the other, against the DUT in its own language's testbench under iverilog or
 GHDL — matches transcript for transcript, the boundary's delta aside.
 
 The exit designs need no program compiled for them, for the reason M5 gives:
