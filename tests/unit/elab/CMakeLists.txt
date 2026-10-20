@@ -2,5 +2,5 @@
 
 enzan_add_unit_test(
   elab
-  SOURCES BoundaryTests.cpp ElaboratorTests.cpp
+  SOURCES BoundaryTests.cpp ElaboratorTests.cpp LinkTests.cpp
   DEPENDS enzan::elab enzan::codegen enzan::runtime)

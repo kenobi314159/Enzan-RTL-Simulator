@@ -100,6 +100,11 @@ ENZAN_DIAG(PortWidthMismatch, 3005, Error,
 ENZAN_DIAG(UnconvertiblePort, 3016, Error,
            "port '{}' of '{}' crosses between SystemVerilog and VHDL, and {}; a port no "
            "conversion covers is refused")
+ENZAN_DIAG(RequestedPortMissing, 3017, Error,
+           "module '{}' has no port '{}' for the instance '{}' of another language to connect")
+ENZAN_DIAG(RequestedPortDirection, 3018, Error,
+           "port '{}' of '{}' is an {}, but the instance '{}' of another language connects it as an "
+           "{}")
 ENZAN_DIAG(PortEncodingMismatch, 3015, Error,
            "port '{}' of '{}' holds {} but is connected to an object holding {}; a connection "
            "between languages converts its values, and nothing converted this one")
