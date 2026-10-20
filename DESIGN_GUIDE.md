@@ -3417,7 +3417,10 @@ their own libraries need (14.4, 14.6).
 
 **Ports across the boundary.** A port whose two sides are of different languages is
 connected by a zero-delay continuous assignment that converts between them and consumes one
-delta cycle (3.5), in each direction its mode needs:
+delta cycle (3.5), in each direction its mode needs. Elaboration makes them, from what the VHDL
+side's type is made of, so neither frontend converts anything: into VHDL by a transaction, and
+into SystemVerilog through the non-blocking region and then a continuous assignment, so that a
+net it drives still resolves its drivers:
 
 - `std_ulogic` codes to four-state bits with `L`→`0`, `H`→`1` and `W`, `U`, `-`→`X` (3.6),
   and `0`, `1`, `X`, `Z` back to their codes; `bit` and `boolean` to two-state bits and back;

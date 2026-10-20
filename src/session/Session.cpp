@@ -10,6 +10,7 @@
 #include "eir/Module.h"
 #include "eir/Serialization.h"
 #include "eir/Verifier.h"
+#include "elab/Boundary.h"
 #include "elab/ElaboratedDesign.h"
 #include "elab/Elaborator.h"
 #include "pli/PliContext.h"
@@ -653,9 +654,15 @@ bool Session::elaborate(std::string_view topModule) {
     // Two libraries built on one IP each hold the parameterisations they needed, and a design
     // analysed here against a library reproduces the units it reads from that library's
     // sources. Copies that are the same unit are one; any that differ stay ambiguous (8.2).
-    design->mergeIdenticalDefinitions([this](const eir::ModuleDefinition& definition) {
+    const auto contentOf = [this](const eir::ModuleDefinition& definition) {
         return eir::encodeContent(definition, sources);
-    });
+    };
+    design->mergeIdenticalDefinitions(contentOf);
+
+    // A port crossing between languages is connected through conversions before anything is
+    // elaborated (section 3.5). Copies of one unit are converted alike, and so merged again.
+    if (!elab::bridgeLanguages(*design, diagnostics)) return false;
+    design->mergeIdenticalDefinitions(contentOf);
 
     // Before anything new is built, so that a failed elaboration on a running design leaves nothing
     // half-replaced for the next command to find.

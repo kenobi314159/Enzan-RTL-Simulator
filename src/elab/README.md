@@ -11,6 +11,11 @@ ports and computes the flat state layout (DESIGN_GUIDE.md section 2.1).
   in the single contiguous arena of section 4.3.
 - Bind ports by collapsing a connected port onto the parent object's slot, so that a
   port costs nothing at run time.
+- Before any of it, connect each port crossing between SystemVerilog and VHDL through
+  conversions (`Boundary.h`, DESIGN_GUIDE.md section 3.5): an object of the port's own
+  representation in the instantiating definition and a process each way the port's mode needs,
+  each costing one delta cycle. A port no conversion covers is refused (ENZ3016), and one whose
+  encoding still differs from its object's is refused at binding (ENZ3015).
 - Produce the list of processes to schedule, as (instance, process) pairs.
 - Find bits with more than one driver, per bit rather than per signal (DESIGN_GUIDE.md
   section 3.7), and refuse those the language does not allow: a bit of a variable or a
