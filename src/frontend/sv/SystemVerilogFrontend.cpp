@@ -72,16 +72,17 @@ const ast::Expression& withoutConversions(const ast::Expression& expression) {
 /// Returns the *external* side of a port connection.
 ///
 /// slang models a connection as an assignment between the port and what it is attached to,
-/// and which side is which depends on the direction: an input flows into the port, an
-/// output out of it. Picking the wrong side binds the instance to its own port, and the
-/// design then behaves as though the connection were not there at all.
+/// and which side is which depends on the direction: an input flows into the port, and what an
+/// output or an inout is attached to is bound as an lvalue, the assignment's left. Picking the
+/// wrong side binds the instance to its own port, and the design then behaves as though the
+/// connection were not there at all.
 const ast::Expression& externalSideOf(const ast::Expression& expression,
                                       slang::ast::ArgumentDirection direction) {
     if (expression.kind != ast::ExpressionKind::Assignment) return withoutConversions(expression);
 
     const auto& assignment = expression.as<ast::AssignmentExpression>();
     const ast::Expression& external =
-        direction == slang::ast::ArgumentDirection::Out ? assignment.left() : assignment.right();
+        direction == slang::ast::ArgumentDirection::In ? assignment.right() : assignment.left();
     return withoutConversions(external);
 }
 

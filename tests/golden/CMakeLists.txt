@@ -177,6 +177,9 @@ enzan_add_golden_test(dead_code NO_DIFFERENTIAL)
 # Ports connected to signals wider or narrower than themselves.
 enzan_add_golden_test(port_widths)
 
+# A bus shared through inout ports of the signal's own width, connected as the signal itself.
+enzan_add_golden_test(inout)
+
 # File output, and memories loaded from files the design writes first: compared file by file
 # with what Icarus Verilog does, each in an empty directory, so they need it.
 if(ENZAN_REFERENCE_SIMULATOR)
