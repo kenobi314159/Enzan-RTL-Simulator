@@ -113,7 +113,8 @@ protected:
         options.units.work = {.name = std::move(work), .directory = {}};
         options.units.searchDirectories = {libraries()};
         options.top = std::move(top);
-        return enzan::frontend::vhdl::analyse(options, sources, engine);
+        options.modules = modules;
+        return enzan::frontend::vhdl::analyse(options, sources, engine, &moduleRequests);
     }
 
     [[nodiscard]] const Diagnostic* first(DiagCode code) const {
@@ -130,6 +131,11 @@ protected:
     SourceManager sources;
     DiagnosticEngine engine;
     CollectingConsumer consumer;
+
+    /// The SystemVerilog modules a component may be bound to, and what the last translation asked
+    /// of them.
+    std::vector<std::string> modules;
+    std::vector<enzan::eir::UnitRequest> moduleRequests;
 };
 
 TEST_F(VhdlDesignTest, ATopAnalysedTwiceIsTheOneAnalysedLast) {
@@ -1131,6 +1137,120 @@ end architecture;
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     simulation.run();
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AComponentWithNoEntityIsBoundToTheModuleOfItsNameInAnyCase) {
+    // The instance names a placeholder and asks for the module, its generics' values as
+    // SystemVerilog literals, the ports it connects in the order met (DESIGN_GUIDE.md section 18,
+    // M7). Two instances asking for the same are one request.
+    modules = {"other", "ClkBuf"};
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  component clkbuf is
+    generic (w : integer := 4;
+             flag : boolean := true;
+             name : string := "a""b\c";
+             init : std_logic_vector(3 downto 0) := "01ZW";
+             neg : integer := -3;
+             level : std_logic := 'H';
+             b : bit := '0');
+    port (o : out std_logic_vector(w - 1 downto 0);
+          i : in std_logic;
+          io : inout std_logic);
+  end component;
+
+  signal a : std_logic := '0';
+  signal v : std_logic_vector(5 downto 0);
+  signal x : std_logic_vector(5 downto 0);
+begin
+  u : clkbuf generic map (w => 6) port map (i => a, o => v, io => open);
+  w : clkbuf generic map (w => 6) port map (o => x, i => a, io => open);
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_EQ(first(DiagCode::VhdlUnboundComponent), nullptr);
+
+    ASSERT_EQ(moduleRequests.size(), 1U);
+    const enzan::eir::UnitRequest& request = moduleRequests.front();
+    EXPECT_EQ(request.unit, "ClkBuf");
+    using Parameter = enzan::eir::UnitRequest::Parameter;
+    EXPECT_EQ(request.parameters,
+              (std::vector<Parameter>{{.name = "w", .value = "6"},
+                                      {.name = "flag", .value = "1'b1"},
+                                      {.name = "name", .value = "\"a\\\"b\\\\c\""},
+                                      {.name = "init", .value = "4'b01zx"},
+                                      {.name = "neg", .value = "-3"},
+                                      {.name = "level", .value = "1'b1"},
+                                      {.name = "b", .value = "1'b0"}}));
+    using enzan::eir::PortDirection;
+    using PortUse = enzan::eir::UnitRequest::PortUse;
+    EXPECT_EQ(request.ports,
+              (std::vector<PortUse>{{.name = "o", .direction = PortDirection::Output},
+                                    {.name = "i", .direction = PortDirection::Input}}));
+
+    const enzan::eir::ModuleDefinition* tb = design->findModule("tb");
+    ASSERT_NE(tb, nullptr);
+    ASSERT_EQ(tb->instances.size(), 2U);
+    for (const enzan::eir::Instance& instance : tb->instances) {
+        EXPECT_EQ(instance.definitionName, request.placeholder);
+        ASSERT_EQ(instance.connections.size(), 2U) << "the open inout is not connected";
+        EXPECT_EQ(instance.connections[0].portIndex, 0U) << "o";
+        EXPECT_EQ(instance.connections[1].portIndex, 1U) << "i";
+    }
+    EXPECT_EQ(tb->objects[tb->instances[0].connections[0].objectIndex].name, "v");
+    EXPECT_EQ(tb->objects[tb->instances[1].connections[0].objectIndex].name, "x");
+}
+
+TEST_F(VhdlDesignTest, AComponentTwoModulesMatchOnlyInOtherCasesIsRefused) {
+    modules = {"Buf", "BUF"};
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  component buf is
+    port (o : out bit);
+  end component;
+  signal s : bit;
+begin
+  u : buf port map (o => s);
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlError);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'Buf', 'BUF'"), std::string::npos) << refused->message;
+}
+
+TEST_F(VhdlDesignTest, AGenericOfATypeNoParameterHasCannotSetOne) {
+    modules = {"buf"};
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  component buf is
+    generic (period : time := 1 ns);
+    port (o : out bit);
+  end component;
+  signal s : bit;
+begin
+  u : buf port map (o => s);
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'period'"), std::string::npos) << refused->message;
 }
 
 TEST_F(VhdlDesignTest, AnUnconstrainedPortTakesItsActualsBounds) {

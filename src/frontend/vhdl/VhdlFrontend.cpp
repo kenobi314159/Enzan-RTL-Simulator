@@ -49,6 +49,10 @@ enum class Record : std::uint8_t {
     /// Where each requested resolution function is: how many, then the definition and the
     /// subprogram of each.
     Resolutions = 4,
+    /// The SystemVerilog modules the design instantiates: how many, then each request's
+    /// placeholder, unit, its parameters' count, name and value, and its ports' count, name and
+    /// direction.
+    Requests = 5,
 };
 
 class Encoder {
@@ -172,6 +176,27 @@ public:
         static_cast<void>(writeAll(output, encoder.view()));
     }
 
+    void requests(const std::vector<eir::UnitRequest>& asked) const {
+        Encoder encoder;
+        encoder.byte(static_cast<std::uint8_t>(Record::Requests));
+        encoder.u32(static_cast<std::uint32_t>(asked.size()));
+        for (const eir::UnitRequest& request : asked) {
+            encoder.text(request.placeholder);
+            encoder.text(request.unit);
+            encoder.u32(static_cast<std::uint32_t>(request.parameters.size()));
+            for (const eir::UnitRequest::Parameter& parameter : request.parameters) {
+                encoder.text(parameter.name);
+                encoder.text(parameter.value);
+            }
+            encoder.u32(static_cast<std::uint32_t>(request.ports.size()));
+            for (const eir::UnitRequest::PortUse& port : request.ports) {
+                encoder.text(port.name);
+                encoder.byte(static_cast<std::uint8_t>(port.direction));
+            }
+        }
+        static_cast<void>(writeAll(output, encoder.view()));
+    }
+
     void finish(unsigned errors) const {
         Encoder encoder;
         encoder.byte(static_cast<std::uint8_t>(Record::Finished));
@@ -277,7 +302,41 @@ struct Outcome {
 
     /// Where each requested resolution function is, when the child was asked for some.
     std::vector<ResolutionAnswer> answers;
+
+    /// The SystemVerilog modules the design instantiates.
+    std::vector<eir::UnitRequest> requests;
 };
+
+/// One request of a `Record::Requests`; nothing when the stream ends inside it.
+std::optional<eir::UnitRequest> decodeRequest(Decoder& decoder) {
+    eir::UnitRequest request;
+    std::optional<std::string> placeholder = decoder.text();
+    std::optional<std::string> unit = decoder.text();
+    const std::optional<std::uint32_t> parameters = decoder.u32();
+    if (!placeholder || !unit || !parameters) return std::nullopt;
+    request.placeholder = std::move(*placeholder);
+    request.unit = std::move(*unit);
+    const std::uint32_t parameterCount = *parameters;
+    for (std::uint32_t index = 0; index < parameterCount; ++index) {
+        std::optional<std::string> name = decoder.text();
+        std::optional<std::string> value = decoder.text();
+        if (!name || !value) return std::nullopt;
+        request.parameters.push_back({.name = std::move(*name), .value = std::move(*value)});
+    }
+    const std::optional<std::uint32_t> ports = decoder.u32();
+    if (!ports) return std::nullopt;
+    const std::uint32_t portCount = *ports;
+    for (std::uint32_t index = 0; index < portCount; ++index) {
+        std::optional<std::string> name = decoder.text();
+        const std::optional<std::uint8_t> direction = decoder.byte();
+        if (!name || !direction
+            || *direction > static_cast<std::uint8_t>(eir::PortDirection::InOut))
+            return std::nullopt;
+        request.ports.push_back(
+            {.name = std::move(*name), .direction = static_cast<eir::PortDirection>(*direction)});
+    }
+    return request;
+}
 
 /// Reports what the child wrote, record by record.
 Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
@@ -310,6 +369,17 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
                 if (!definition || !subprogram) return outcome;
                 outcome.answers.push_back(ResolutionAnswer{.definition = std::move(*definition),
                                                            .subprogram = std::move(*subprogram)});
+            }
+            continue;
+        }
+        if (kind == static_cast<std::uint8_t>(Record::Requests)) {
+            const std::optional<std::uint32_t> count = decoder.u32();
+            if (!count) return outcome;
+            const std::uint32_t total = *count;
+            for (std::uint32_t index = 0; index < total; ++index) {
+                std::optional<eir::UnitRequest> request = decodeRequest(decoder);
+                if (!request) return outcome;
+                outcome.requests.push_back(std::move(*request));
             }
             continue;
         }
@@ -441,13 +511,18 @@ std::optional<std::vector<eir::ModuleDefinition>> definitionsFrom(const Outcome&
 } // namespace
 
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
-                                     DiagnosticEngine& diagnostics) {
+                                     DiagnosticEngine& diagnostics,
+                                     std::vector<eir::UnitRequest>* requests) {
     const std::optional<Outcome> outcome = inChild(
         [&options, &sources](PipeSink& sink) {
             std::string encoded;
             std::vector<std::string> libraries;
-            const unsigned errors = runNvcDesign(options, sources, sink, encoded, libraries);
-            if (errors == 0) sink.design(encoded, libraries);
+            std::vector<eir::UnitRequest> asked;
+            const unsigned errors = runNvcDesign(options, sources, sink, encoded, libraries, asked);
+            if (errors == 0) {
+                sink.design(encoded, libraries);
+                sink.requests(asked);
+            }
             return errors;
         },
         diagnostics);
@@ -455,6 +530,7 @@ std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceM
     std::optional<std::vector<eir::ModuleDefinition>> modules =
         definitionsFrom(*outcome, options.units, sources, diagnostics);
     if (!modules) return nullptr;
+    if (requests != nullptr) *requests = outcome->requests;
 
     auto design = std::make_unique<eir::Design>();
     for (eir::ModuleDefinition& module : *modules) design->addModule(std::move(module));

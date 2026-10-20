@@ -3,6 +3,7 @@
 #pragma once
 
 #include "common/SourceLocation.h"
+#include "eir/UnitRequest.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -108,6 +109,11 @@ struct DesignOptions {
     /// reported, as GHDL's `--ieee-asserts`: they are guarded by a constant NVC's runtime would
     /// give, which the adapter folds to this.
     bool ieeeWarnings = true;
+
+    /// The SystemVerilog modules of a design of both languages, by their names as declared: a
+    /// component with no entity to be bound to is bound to the module of its name, in any case
+    /// (DESIGN_GUIDE.md section 18, M7).
+    std::vector<std::string> modules;
 };
 
 /// Analyses `options.units` and translates the design under the top into EIR (section 5.2).
@@ -116,10 +122,15 @@ struct DesignOptions {
 /// EIR's own encoding: NVC's trees live in the child and end with it, and nothing of NVC reaches
 /// the parent's memory.
 ///
+/// An instance of one of `options.modules` names a placeholder as its definition, and `requests`,
+/// when given, receives what each placeholder asks for, for the SystemVerilog frontend to translate
+/// and the session to link.
+///
 /// Returns nothing having reported why, when a source does not analyse or the design uses
 /// something the adapter does not translate yet.
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
-                                     DiagnosticEngine& diagnostics);
+                                     DiagnosticEngine& diagnostics,
+                                     std::vector<eir::UnitRequest>* requests = nullptr);
 
 /// A resolution function asked for by how many drivers it resolves (DESIGN_GUIDE.md section 3.7):
 /// `function` names it as `eir::Resolution` does.

@@ -12,12 +12,14 @@
 #include <cctype>
 #include <deque>
 #include <format>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
 #include <ranges>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -132,6 +134,10 @@ private:
     void declarations(tree_t container);
     void statements(tree_t container);
     void instance(tree_t statement);
+
+    /// An instance of `component` bound to the SystemVerilog module `module`, which names the
+    /// placeholder of a request for it and connects the request's ports (`eir::UnitRequest`).
+    void moduleInstance(tree_t statement, tree_t component, const std::string& module);
 
     /// The index among `entity`'s ports of the one `formalPort`, a port of the entity or of the
     /// component instantiated, is: as `binding`'s port map associates them, or else by name.
@@ -787,6 +793,59 @@ public:
 
     DiagnosticEngine& diagnostics() { return engine; }
 
+    /// The SystemVerilog modules a component called `simple` may be bound to: those of its name in
+    /// any case.
+    [[nodiscard]] std::vector<std::string> modulesNamed(std::string_view simple) const {
+        std::vector<std::string> found;
+        for (const std::string& module : request.modules) {
+            if (std::ranges::equal(module, simple, [](char a, char b) {
+                    return std::tolower(static_cast<unsigned char>(a))
+                           == std::tolower(static_cast<unsigned char>(b));
+                }))
+                found.push_back(module);
+        }
+        return found;
+    }
+
+    /// The index of the request for `module` with `parameters`, made the first time it is asked
+    /// for. Its placeholder is the module and the values, as no definition can be named.
+    std::uint32_t requestFor(const std::string& module,
+                             std::vector<eir::UnitRequest::Parameter> parameters) {
+        for (std::uint32_t index = 0; index < moduleRequests.size(); ++index) {
+            if (moduleRequests[index].unit == module
+                && moduleRequests[index].parameters == parameters)
+                return index;
+        }
+        std::string values;
+        for (const eir::UnitRequest::Parameter& parameter : parameters) {
+            if (!values.empty()) values += ", ";
+            values += std::format(".{}({})", parameter.name, parameter.value);
+        }
+        moduleRequests.push_back({.placeholder = std::format("{} #({})", module, values),
+                                  .unit = module,
+                                  .parameters = std::move(parameters),
+                                  .ports = {}});
+        return static_cast<std::uint32_t>(moduleRequests.size() - 1);
+    }
+
+    /// The index among request `index`'s ports of the one called `name`, added as connected in
+    /// `direction` the first time.
+    std::uint32_t requestPort(std::uint32_t index, const std::string& name,
+                              eir::PortDirection direction) {
+        std::vector<eir::UnitRequest::PortUse>& ports = moduleRequests[index].ports;
+        for (std::uint32_t port = 0; port < ports.size(); ++port) {
+            if (ports[port].name == name) return port;
+        }
+        ports.push_back({.name = name, .direction = direction});
+        return static_cast<std::uint32_t>(ports.size() - 1);
+    }
+
+    [[nodiscard]] const std::string& placeholderOf(std::uint32_t index) const {
+        return moduleRequests[index].placeholder;
+    }
+
+    std::vector<eir::UnitRequest> takeRequests() { return std::move(moduleRequests); }
+
     [[nodiscard]] std::int8_t timeUnitExponent() const { return request.timeUnitExponent; }
 
 private:
@@ -981,6 +1040,7 @@ private:
 
     std::deque<Specialisation> pending;
     std::vector<eir::ModuleDefinition> modules;
+    std::vector<eir::UnitRequest> moduleRequests;
     std::map<std::pair<tree_t, std::vector<std::string>>, std::string> names;
     std::map<std::string, tree_t> baseOwners;
     std::set<std::string> taken;
@@ -1571,12 +1631,31 @@ void ArchitectureTranslator::instance(tree_t statement) {
             }
             break;
         }
-        // With no entity to bind by default, the instance is unbound, which is legal: it has no
-        // behaviour, and its actuals are driven by nothing in it.
+        // With no entity to bind by default, the instance is bound to the SystemVerilog module of
+        // its name, as commercial tools extend IEEE 1076 section 7.3.3 to the other language, or
+        // else it is unbound, which is legal: it has no behaviour, and its actuals are driven by
+        // nothing in it.
         entity = design.boundEntity(component, statement, specialisation.architecture);
         if (entity == nullptr) {
-            design.diagnostics().report(DiagCode::VhdlUnboundComponent, locate(statement),
-                                        simpleName(tree_ident(component)));
+            const std::string simple = simpleName(tree_ident(component));
+            const std::vector<std::string> modules = design.modulesNamed(simple);
+            if (modules.size() == 1) {
+                moduleInstance(statement, component, modules.front());
+                return;
+            }
+            if (modules.size() > 1) {
+                std::string listed;
+                for (const std::string& module : modules)
+                    listed += std::format("{}'{}'", listed.empty() ? "" : ", ", module);
+                design.diagnostics().report(
+                    DiagCode::VhdlError, locate(statement),
+                    std::format("component '{}' has no entity of its name, and the SystemVerilog "
+                                "modules {} differ from it only in case, so which it is bound to "
+                                "is not known",
+                                simple, listed));
+                return;
+            }
+            design.diagnostics().report(DiagCode::VhdlUnboundComponent, locate(statement), simple);
             return;
         }
         architecture = design.architectureOf(entity);
@@ -1690,6 +1769,175 @@ void ArchitectureTranslator::instance(tree_t statement) {
                 connectThrough(std::format("{}${}", created.name, simpleName(tree_ident(port))),
                                port, formalPorts[portNumber], associations, childGenerics)) {
             created.connections.push_back(eir::PortConnection{.portIndex = portNumber,
+                                                              .objectIndex = through->object,
+                                                              .driveObjectIndex = through->driven});
+        }
+    }
+    result.instances.push_back(std::move(created));
+}
+
+namespace {
+
+/// The value `generics` binds the generic `generic` to as a SystemVerilog literal, which sets the
+/// parameter of its name of the module its component is bound to: an integer in decimal, a `bit`, a
+/// `boolean` or a `std_ulogic` as one bit by section 3.6's mapping, an array of them as that many
+/// bits, the left element highest, and a string as a string. Nothing for a value of another type.
+std::optional<std::string> systemVerilogLiteral(const Folder& generics, tree_t generic) {
+    // std_ulogic's codes, U X 0 1 Z W L H -, as four-state bits.
+    static constexpr std::string_view Logic = "xx01zx01x";
+    type_t type = tree_type(generic);
+
+    if (const eir::BitVector* bits = generics.compositeOf(generic)) {
+        if (!type_is_array(type) || dimension_of(type) != 1) return std::nullopt;
+        type_t element = type_elem(type);
+        type_t base = type_base_recur(element);
+        const bool characters =
+            type_has_ident(base)
+            && std::string_view(istr(type_ident(base))) == "STD.STANDARD.CHARACTER";
+        const eir::Encoding encoding = encodingOf(element);
+        const std::optional<eir::Type> storage = scalarStorage(element);
+        if (!storage || bits->width() == 0 || bits->width() % storage->bitWidth() != 0)
+            return std::nullopt;
+        if (!characters && encoding != eir::Encoding::VhdlLogic
+            && encoding != eir::Encoding::VhdlBit)
+            return std::nullopt;
+
+        const std::uint32_t width = storage->bitWidth();
+        std::string text =
+            characters ? std::string("\"") : std::format("{}'b", bits->width() / width);
+        for (std::uint32_t at = bits->width(); at >= width; at -= width) {
+            eir::BitVector one(width);
+            eir::bitops::partSelectAt(one.mutableRef(), bits->ref(), at - width);
+            const std::uint64_t code = one.ref().toUInt64();
+            if (characters) {
+                if (code == '"' || code == '\\') {
+                    text += '\\';
+                    text += static_cast<char>(code);
+                } else if (code >= 0x20 && code < 0x7f) {
+                    text += static_cast<char>(code);
+                } else {
+                    text += std::format("\\{:03o}", code & 0xffU);
+                }
+            } else if (encoding == eir::Encoding::VhdlLogic) {
+                if (code >= Logic.size()) return std::nullopt;
+                text += Logic[code];
+            } else {
+                text += code == 0 ? '0' : '1';
+            }
+        }
+        if (characters) text += '"';
+        return text;
+    }
+
+    const std::optional<std::int64_t> value = generics.boundValue(generic);
+    if (!value) return std::nullopt;
+    if (type_is_integer(type)) {
+        // Wider than an unsized literal's 32 bits, sized and signed.
+        if (*value >= std::numeric_limits<std::int32_t>::min()
+            && *value <= std::numeric_limits<std::int32_t>::max())
+            return std::to_string(*value);
+        const std::uint64_t magnitude = *value < 0 ? 0 - static_cast<std::uint64_t>(*value)
+                                                   : static_cast<std::uint64_t>(*value);
+        return std::format("{}64'sd{}", *value < 0 ? "-" : "", magnitude);
+    }
+    const eir::Encoding encoding = encodingOf(type);
+    if (encoding == eir::Encoding::VhdlLogic && *value >= 0 && std::cmp_less(*value, Logic.size()))
+        return std::format("1'b{}", Logic[static_cast<std::size_t>(*value)]);
+    if (encoding == eir::Encoding::VhdlBit) return *value != 0 ? "1'b1" : "1'b0";
+    return std::nullopt;
+}
+
+} // namespace
+
+void ArchitectureTranslator::moduleInstance(tree_t statement, tree_t component,
+                                            const std::string& module) {
+    // The component's generics are the module's parameters of their names (DESIGN_GUIDE.md
+    // section 18, M7), and its ports' bounds fold with them.
+    const std::optional<Folder> local = design.bindGenerics(component, statement, folding);
+    if (!local) return;
+    std::vector<eir::UnitRequest::Parameter> parameters;
+    for (unsigned index = 0; index < tree_generics(component); ++index) {
+        tree_t generic = tree_generic(component, index);
+        std::optional<std::string> value = systemVerilogLiteral(*local, generic);
+        if (!value) {
+            unsupported(generic,
+                        std::format("setting the parameter '{}' of the SystemVerilog module '{}' "
+                                    "from a generic of type {}",
+                                    simpleName(tree_ident(generic)), module,
+                                    type_pp(tree_type(generic))));
+            return;
+        }
+        parameters.push_back({.name = simpleName(tree_ident(generic)), .value = std::move(*value)});
+    }
+    Folder formals = *local;
+
+    std::vector<std::vector<tree_t>> byPort(tree_ports(component));
+    for (unsigned index = 0; index < tree_params(statement); ++index) {
+        tree_t association = tree_param(statement, index);
+        const unsigned formalNumber =
+            formalIndex(association, component).value_or(tree_ports(component));
+        if (formalNumber >= tree_ports(component)) {
+            unsupported(association, "this port association");
+            continue;
+        }
+        byPort[formalNumber].push_back(association);
+    }
+
+    // A port of an unconstrained type takes its bounds from its actual (IEEE 1076 section
+    // 6.5.6.3).
+    for (unsigned portNumber = 0; portNumber < tree_ports(component); ++portNumber) {
+        tree_t port = tree_port(component, portNumber);
+        if (!unconstrained(port)) continue;
+        const std::optional<Folder::Range> bounds =
+            actualBounds(port, byPort[portNumber], statement, *local);
+        if (!bounds) return;
+        formals.bindBounds(port, *bounds);
+    }
+
+    eir::Instance created;
+    created.name = prefix + simpleName(tree_ident(statement));
+    const std::uint32_t request = design.requestFor(module, std::move(parameters));
+    created.definitionName = design.placeholderOf(request);
+    created.location = locate(statement);
+
+    for (unsigned portNumber = 0; portNumber < tree_ports(component); ++portNumber) {
+        const std::vector<tree_t>& associations = byPort[portNumber];
+        if (associations.empty()) continue;
+        tree_t port = tree_port(component, portNumber);
+        eir::PortDirection direction = eir::PortDirection::Input;
+        switch (static_cast<port_mode_t>(tree_subkind(port))) {
+        case PORT_IN: break;
+        case PORT_OUT:
+        case PORT_BUFFER: direction = eir::PortDirection::Output; break;
+        case PORT_INOUT: direction = eir::PortDirection::InOut; break;
+        default:
+            unsupported(port, "a port of this mode bound to a SystemVerilog module's");
+            continue;
+        }
+        // An open port is not connected, and a whole signal is connected as itself; anything else
+        // is connected through an object of the component port's type standing for it, as an
+        // entity's port is.
+        tree_t first = associations.front();
+        const bool whole =
+            associations.size() == 1
+            && (tree_subkind(first) == P_POS || tree_kind(tree_name(first)) == T_REF);
+        if (whole && tree_kind(tree_value(first)) == T_OPEN) continue;
+        const std::string portName = simpleName(tree_ident(port));
+        const std::uint32_t portIndex = design.requestPort(request, portName, direction);
+        if (whole) {
+            tree_t actual = tree_value(first);
+            if (tree_kind(actual) == T_REF && tree_has_ref(actual)) {
+                if (const std::optional<std::uint32_t> object = objectFor(tree_ref(actual))) {
+                    created.connections.push_back(
+                        eir::PortConnection{.portIndex = portIndex, .objectIndex = *object});
+                    if (direction != eir::PortDirection::Input) sourcedByInstances.insert(*object);
+                    continue;
+                }
+            }
+        }
+        if (const std::optional<Through> through = connectThrough(
+                std::format("{}${}", created.name, portName), port, port, associations, formals)) {
+            created.connections.push_back(eir::PortConnection{.portIndex = portIndex,
                                                               .objectIndex = through->object,
                                                               .driveObjectIndex = through->driven});
         }
@@ -1920,11 +2168,15 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
 
 } // namespace
 
-std::vector<eir::ModuleDefinition>
-translateDesign(const DesignRequest& request, const Locate& locate, DiagnosticEngine& diagnostics) {
+std::vector<eir::ModuleDefinition> translateDesign(const DesignRequest& request,
+                                                   const Locate& locate,
+                                                   DiagnosticEngine& diagnostics,
+                                                   std::vector<eir::UnitRequest>& requests) {
     setIeeeWarnings(request.ieeeWarnings);
     DesignTranslator translator(request, locate, diagnostics);
-    return translator.run();
+    std::vector<eir::ModuleDefinition> definitions = translator.run();
+    requests = translator.takeRequests();
+    return definitions;
 }
 
 std::vector<eir::ModuleDefinition>

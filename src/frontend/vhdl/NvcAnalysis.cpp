@@ -262,7 +262,8 @@ unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources
 
 unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources,
                       DiagnosticSink& sink, std::string& encoded,
-                      std::vector<std::string>& libraries) {
+                      std::vector<std::string>& libraries,
+                      std::vector<eir::UnitRequest>& requests) {
     Run run(options.units, sources, sink);
     const unsigned analysisErrors = run.analyse();
     if (analysisErrors != 0) return analysisErrors;
@@ -275,9 +276,10 @@ unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources
                                 .timeUnitExponent = options.timeUnitExponent,
                                 .work = run.workLibrary(),
                                 .analysed = run.analysed(),
-                                .ieeeWarnings = options.ieeeWarnings};
+                                .ieeeWarnings = options.ieeeWarnings,
+                                .modules = options.modules};
     const std::vector<eir::ModuleDefinition> modules = translateDesign(
-        request, [&run](const loc_t* location) { return run.locate(location); }, engine);
+        request, [&run](const loc_t* location) { return run.locate(location); }, engine, requests);
 
     const unsigned errors = engine.errorCount() + error_count();
     if (errors == 0) {
