@@ -2,13 +2,18 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
+
 namespace enzan {
 class DiagnosticEngine;
 }
 
 namespace enzan::eir {
 class Design;
-}
+struct ModuleDefinition;
+struct Object;
+} // namespace enzan::eir
 
 namespace enzan::elab {
 
@@ -36,5 +41,11 @@ namespace enzan::elab {
 /// nothing: a connection already made through a boundary object is left alone. A library stores
 /// what analysis produced, never this. Returns false having reported.
 bool bridgeLanguages(eir::Design& design, DiagnosticEngine& diagnostics);
+
+/// How many bits `object`, a VHDL object of `definition`, is in SystemVerilog: what the ports of a
+/// module standing for a VHDL entity are as wide as (DESIGN_GUIDE.md section 18, M7). Nothing when
+/// it has a part no conversion covers, which bridging then refuses.
+std::optional<std::uint32_t> shownWidth(const eir::ModuleDefinition& definition,
+                                        const eir::Object& object);
 
 } // namespace enzan::elab

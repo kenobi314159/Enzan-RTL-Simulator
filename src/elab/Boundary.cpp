@@ -512,4 +512,14 @@ bool bridgeLanguages(eir::Design& design, DiagnosticEngine& diagnostics) {
     return converted;
 }
 
+std::optional<std::uint32_t> shownWidth(const eir::ModuleDefinition& definition,
+                                        const eir::Object& object) {
+    std::string refusal;
+    const std::optional<std::vector<Leaf>> leaves = leavesOf(definition, object, refusal);
+    if (!leaves) return std::nullopt;
+    std::uint32_t width = 0;
+    for (const Leaf& leaf : *leaves) width += leaf.shownWidth();
+    return width;
+}
+
 } // namespace enzan::elab

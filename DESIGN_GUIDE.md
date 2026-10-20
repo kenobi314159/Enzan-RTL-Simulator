@@ -3393,13 +3393,13 @@ of a mixed design wrong. Delays, `$time` and `%t` follow each module's time unit
 module stating no time scale takes `--timescale`'s unit, or picoseconds.
 
 **Analysis of both languages in one session.** The session analyses SystemVerilog through
-slang and VHDL through the NVC child into one `eir::Design`. VHDL is translated first, under its
-top; an instance of a module names a placeholder and an `eir::UnitRequest`, which slang answers
-through a module instantiating the one asked for with the values asked for, and the session links
-the two by port name. A design of both is not stored in a library yet. VHDL goes into Enzan's libraries as SystemVerilog does, `--out-lib` and `--in-lib`
-(8.2), and a design may draw on several VHDL libraries at once, not only the one `--work`
-names, since a mixed design is usually built as a testbench in one library and its DUT in
-another. Both are also what the GHDL suite's multi-library tests and cocotb's VHDL designs in
+slang and VHDL through the NVC child into one `eir::Design`. An instance of the other language's
+unit names a placeholder and an `eir::UnitRequest`, which the other frontend answers, slang through
+a module instantiating the one asked for and the adapter by translating the entity for the values;
+the session links the two by port name. A design of both is not stored in a library yet. VHDL goes
+into Enzan's libraries as SystemVerilog does, `--out-lib` and `--in-lib` (8.2), and a design may
+draw on several VHDL libraries at once, not only the one `--work` names, since a mixed design is
+usually built as a testbench in one library and its DUT in another. Both are also what the GHDL suite's multi-library tests and cocotb's VHDL designs in
 their own libraries need (14.4, 14.6).
 
 **Instances across the boundary.**
@@ -3418,7 +3418,10 @@ their own libraries need (14.4, 14.6).
   the specialisation its values make. The session alternates between the frontends until
   neither asks for one the other has not given, as elaboration asks the VHDL frontend for
   resolution functions (3.7), with a bound on the rounds so that a hierarchy recursing
-  through both languages is reported rather than followed for ever.
+  through both languages is reported rather than followed for ever. A port's width may depend on
+  generics in any way VHDL can say, so the module an entity stands in as has ports as wide as a
+  translation for the instance's values made them, from a table each translation adds a row to,
+  and one bit wide until one has: instantiating VHDL from SystemVerilog takes a second round.
 
 **Ports across the boundary.** A port whose two sides are of different languages is
 connected by a zero-delay continuous assignment that converts between them and consumes one

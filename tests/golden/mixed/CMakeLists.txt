@@ -2,7 +2,8 @@
 #
 # Self-checking designs of both languages (DESIGN_GUIDE.md sections 14.2 and 18, M7): a VHDL
 # testbench `tb`, <name>.vhd, around SystemVerilog modules, <name>.sv, that ends by reporting
-# `PASS <name>` and calling `std.env.finish`, as ../vhdl's cases do.
+# `PASS <name>` and calling `std.env.finish`, as ../vhdl's cases do; or a SystemVerilog testbench
+# `tb`, <name>.sv, around VHDL units, <name>.vhd, that ends by displaying `PASS <name>`.
 
 # ---------------------------------------------------------------------------
 # enzan_add_mixed_golden_test(<name>)
@@ -38,6 +39,38 @@ function(enzan_add_mixed_golden_test name)
   set_tests_properties(golden.mixed.${name}.differential PROPERTIES TIMEOUT 120)
 endfunction()
 
+# ---------------------------------------------------------------------------
+# enzan_add_mixed_sv_golden_test(<name>)
+# ---------------------------------------------------------------------------
+#
+# Registers `golden.mixed.<name>` for a SystemVerilog testbench, and
+# `golden.mixed.<name>.differential`, which compares its transcript with Icarus Verilog's of the
+# same design all in SystemVerilog, the units as <name>_ref.sv.
+function(enzan_add_mixed_sv_golden_test name)
+  set(directory "${CMAKE_CURRENT_SOURCE_DIR}")
+  foreach(source "${name}.sv" "${name}.vhd" "${name}_ref.sv")
+    if(NOT EXISTS "${directory}/${source}")
+      message(FATAL_ERROR "golden test '${name}' has no ${source}")
+    endif()
+  endforeach()
+
+  add_test(NAME golden.mixed.${name} COMMAND enzan --top tb "${directory}/${name}.sv"
+                                             "${directory}/${name}.vhd")
+  set_tests_properties(
+    golden.mixed.${name}
+    PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}"
+               FAIL_REGULAR_EXPRESSION ": (error|fatal|warning): |\nFAIL"
+               TIMEOUT 60)
+
+  if(NOT ENZAN_REFERENCE_SIMULATOR)
+    return()
+  endif()
+  add_test(NAME golden.mixed.${name}.differential
+           COMMAND "${directory}/run-sv-differential.sh" $<TARGET_FILE:enzan>
+                   "${ENZAN_REFERENCE_SIMULATOR}" "${directory}" ${name})
+  set_tests_properties(golden.mixed.${name}.differential PROPERTIES TIMEOUT 120)
+endfunction()
+
 # Two counters, of widths generics set through a parameter with no default, one with a limit a
 # generic sets and one with the parameter's default.
 enzan_add_mixed_golden_test(counter)
@@ -48,3 +81,14 @@ enzan_add_mixed_golden_test(ports)
 
 # A module holding two others, connected through slices each way, a constant and an open output.
 enzan_add_mixed_golden_test(pipeline)
+
+# A VHDL counter three times, with its generics' defaults, with a width and a step set, and with a
+# boolean cleared; its ports a vector, an integer and a boolean.
+enzan_add_mixed_sv_golden_test(generics)
+
+# A record as a packed struct, an array of vectors as an unpacked array, and a bus both sides drive
+# and release.
+enzan_add_mixed_sv_golden_test(shapes)
+
+# SystemVerilog instantiating VHDL instantiating SystemVerilog, at two widths.
+enzan_add_mixed_sv_golden_test(nesting)

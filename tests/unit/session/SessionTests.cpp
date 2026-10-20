@@ -760,12 +760,6 @@ TEST_F(BothLanguagesTest, ADesignOfBothLanguagesIsNotStoredInALibraryYet) {
     EXPECT_FALSE(analyseBoth("tb"));
     EXPECT_TRUE(reported(DiagCode::NotYetImplemented));
 }
-
-TEST_F(BothLanguagesTest, ASystemVerilogTopOfADesignOfBothLanguagesIsNotAnalysedYet) {
-    EXPECT_FALSE(analyseBoth("buffer"));
-    EXPECT_TRUE(reported(DiagCode::NotYetImplemented));
-    EXPECT_NE(firstMessage().find("SystemVerilog top level"), std::string::npos) << firstMessage();
-}
 #else
 TEST_F(BothLanguagesTest, ADesignOfBothLanguagesNeedsABuildWithBothFrontends) {
     EXPECT_FALSE(analyseBoth("tb"));

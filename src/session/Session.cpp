@@ -9,6 +9,7 @@
 #include "eir/Design.h"
 #include "eir/Module.h"
 #include "eir/Serialization.h"
+#include "eir/UnitRequest.h"
 #include "eir/Verifier.h"
 #include "elab/Boundary.h"
 #include "elab/ElaboratedDesign.h"
@@ -54,6 +55,111 @@ bool sameName(std::string_view left, std::string_view right) {
                == std::tolower(static_cast<unsigned char>(b));
     });
 }
+
+#if defined(ENZAN_WITH_SYSTEMVERILOG) && defined(ENZAN_WITH_VHDL)
+/// Diagnostics held back, for an analysis that may be repeated and only its last run reported: a
+/// design of both languages is analysed in rounds (`Session::analyseMixed`).
+class BufferedDiagnostics {
+public:
+    explicit BufferedDiagnostics(const SourceManager& sources) : engine(sources) {
+        engine.addConsumer(collected);
+    }
+
+    /// Reports to `into` what was held, as it was reported here: only the errors, when `errors`.
+    void replay(DiagnosticEngine& into, bool errors = false) const {
+        for (const Diagnostic& held : collected.received) {
+            if (errors && held.severity != DiagnosticSeverity::Error
+                && held.severity != DiagnosticSeverity::Fatal)
+                continue;
+            DiagnosticBuilder again = into.reportFormatted(held.code, held.location, held.message);
+            if (held.range.valid()) again.highlight(held.range);
+            for (const DiagnosticNote& note : held.notes) again.note(note.location, note.message);
+        }
+    }
+
+private:
+    class Collector final : public DiagnosticConsumer {
+    public:
+        void consume(const Diagnostic& diagnostic) override { received.push_back(diagnostic); }
+
+        std::vector<Diagnostic> received;
+    };
+
+    Collector collected;
+
+public:
+    DiagnosticEngine engine;
+};
+
+/// The interface named as `request` asks for its unit, or null when none is.
+eir::UnitInterface* interfaceOf(std::vector<eir::UnitInterface>& interfaces,
+                                const eir::UnitRequest& request) {
+    const auto found = std::ranges::find(interfaces, request.unit, &eir::UnitInterface::name);
+    return found == interfaces.end() ? nullptr : &*found;
+}
+
+/// The values `request` asks for, in order.
+std::vector<std::string> valuesOf(const eir::UnitRequest& request) {
+    std::vector<std::string> values;
+    values.reserve(request.parameters.size());
+    for (const eir::UnitRequest::Parameter& parameter : request.parameters)
+        values.push_back(parameter.value);
+    return values;
+}
+
+/// True when the interface `request` asks for its unit through has a row of widths for its values,
+/// or there is none: what the instances asking were checked against is then exact.
+bool hasWidths(std::vector<eir::UnitInterface>& interfaces, const eir::UnitRequest& request) {
+    const eir::UnitInterface* unit = interfaceOf(interfaces, request);
+    return unit == nullptr
+           || std::ranges::find(unit->widths, valuesOf(request),
+                                &eir::UnitInterface::Widths::values)
+                  != unit->widths.end();
+}
+
+/// Adds to the interface each of `requests` asks for its entity through a row of the widths its
+/// ports have in SystemVerilog in the definition `answers` names for it in `translated`, unless it
+/// has one for those values. A port the definition does not convert is one bit wide, which
+/// bridging refuses by name.
+void addWidths(std::vector<eir::UnitInterface>& interfaces,
+               const std::vector<eir::UnitRequest>& requests,
+               const std::vector<std::string>& answers, const eir::Design& translated) {
+    for (std::size_t index = 0; index < requests.size() && index < answers.size(); ++index) {
+        eir::UnitInterface* unit = interfaceOf(interfaces, requests[index]);
+        const eir::ModuleDefinition* definition = translated.findModule(answers[index]);
+        if (unit == nullptr || definition == nullptr || hasWidths(interfaces, requests[index]))
+            continue;
+        eir::UnitInterface::Widths row{.values = valuesOf(requests[index]), .ports = {}};
+        for (const eir::UnitInterface::Port& port : unit->ports) {
+            const auto inside = std::ranges::find_if(definition->ports, [&](const eir::Port& one) {
+                return sameName(one.name, port.name);
+            });
+            eir::UnitInterface::PortWidth width;
+            if (inside != definition->ports.end()) {
+                const eir::Object& object = definition->objects[inside->objectIndex];
+                width.bits = elab::shownWidth(*definition, object).value_or(1);
+
+                // An unpacked one's element is as wide as the whole over the elements.
+                if (port.unpacked && object.vhdlType < definition->vhdlTypes.size()) {
+                    const eir::VhdlType& type = definition->vhdlTypes[object.vhdlType];
+                    if (type.kind == eir::VhdlType::Kind::Array && !type.ranges.empty()) {
+                        const eir::VhdlType::Range& range = type.ranges.front();
+                        width.left = static_cast<std::int32_t>(range.left);
+                        width.right = static_cast<std::int32_t>(range.right);
+                        const std::int64_t count =
+                            (range.left > range.right ? range.left - range.right
+                                                      : range.right - range.left)
+                            + 1;
+                        width.bits = static_cast<std::uint32_t>(width.bits / count);
+                    }
+                }
+            }
+            row.ports.push_back(width);
+        }
+        unit->widths.push_back(std::move(row));
+    }
+}
+#endif
 
 /// Matches `text` against a glob of `*` and `?`.
 ///
@@ -442,51 +548,153 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
         return false;
     }
 
-    // The SystemVerilog modules are what a component no entity is bound to may be bound to.
+    // The modules the SystemVerilog declares are what a component no entity is bound to may be
+    // bound to, and the names it instantiates and declares nowhere what may be entities.
     svOptions.defines = defines;
     svOptions.includeDirectories = includeDirectories;
     const unsigned errorsBefore = diagnostics.errorCount();
-    const std::vector<std::string> modules =
-        frontend::sv::moduleNames(svOptions, sources, diagnostics).declared;
+    const frontend::sv::ModuleNames names =
+        frontend::sv::moduleNames(svOptions, sources, diagnostics);
     if (diagnostics.errorCount() != errorsBefore) return false;
-    if (std::ranges::any_of(
-            modules, [&](const std::string& module) { return sameName(module, request.top); })) {
-        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                           "a SystemVerilog top level in a design of both VHDL and SystemVerilog");
-        return false;
-    }
+    const bool svTop =
+        !request.top.empty() && std::ranges::any_of(names.declared, [&](const std::string& name) {
+            return sameName(name, request.top);
+        });
 
     std::string keyOptions;
     if (!setVhdlOptions(request, true, options, keyOptions)) return false;
-    options.modules = modules;
-    frontend::vhdl::Exchange exchange;
-    std::unique_ptr<eir::Design> analysed =
-        frontend::vhdl::analyse(options, sources, diagnostics, &exchange);
-    if (analysed == nullptr) return false;
-    const std::vector<eir::UnitRequest>& requests = exchange.asked;
-
-    // Each module the VHDL instantiates is specialised as it asks, and the instances linked to
-    // what it became. Under a named top that is all of the SystemVerilog there is; without one,
-    // a module nothing instantiates is a top level as well.
-    std::vector<std::filesystem::path> svFilesRead;
-    if (!requests.empty() || request.top.empty()) {
-        std::vector<std::string> answers;
-        svOptions.filesRead = &svFilesRead;
-        svOptions.timeUnitExponent = defaultScale.precisionExponent();
-        svOptions.fixedRunTimeUnit = scale.precisionExponent();
-        svOptions.requests = requests;
-        svOptions.requestAnswers = &answers;
+    options.modules = names.declared;
+    options.described = names.undeclared;
+    if (svTop) {
+        options.top.clear();
+        options.onlyRequested = true;
+        svOptions.topModules = {request.top};
+    } else {
         svOptions.onlyRequested = !request.top.empty();
-        const std::unique_ptr<eir::Design> modulesDesign =
-            frontend::sv::analyse(svOptions, sources, diagnostics);
-        if (modulesDesign == nullptr) return false;
-        for (const eir::ModuleDefinition& definition : modulesDesign->modules())
-            analysed->addModule(definition);
-        if (!elab::linkRequests(*analysed, requests, answers, diagnostics)) return false;
-        if (!eir::verify(*analysed, diagnostics)) return false;
+    }
+    std::vector<std::filesystem::path> svFilesRead;
+    svOptions.filesRead = &svFilesRead;
+    svOptions.timeUnitExponent = defaultScale.precisionExponent();
+    svOptions.fixedRunTimeUnit = scale.precisionExponent();
+
+    // Each frontend in turn, with every unit the other has asked for so far, until neither asks for
+    // one the other has not given, and every instance of an entity was checked against ports as
+    // wide as the entity's translation for its values makes them (DESIGN_GUIDE.md section 18, M7).
+    // What the rounds before the last reported is said again by the last, so only its diagnostics
+    // are reported.
+    const auto sameRequest = [](const eir::UnitRequest& left, const eir::UnitRequest& right) {
+        return left.unit == right.unit && left.parameters == right.parameters;
+    };
+    std::vector<eir::UnitRequest> forSystemVerilog;
+    std::vector<eir::UnitRequest> forVhdl;
+    std::vector<eir::UnitInterface> interfaces;
+    constexpr int Rounds = 8;
+    for (int round = 1;; ++round) {
+        options.requests = forVhdl;
+        BufferedDiagnostics vhdlReports(sources);
+        frontend::vhdl::Exchange exchange;
+        std::unique_ptr<eir::Design> vhdlDesign =
+            frontend::vhdl::analyse(options, sources, vhdlReports.engine, &exchange);
+        if (vhdlDesign == nullptr || exchange.answers.size() != forVhdl.size()) {
+            vhdlReports.replay(diagnostics);
+            return false;
+        }
+        if (round == 1) interfaces = exchange.interfaces;
+        addWidths(interfaces, forVhdl, exchange.answers, *vhdlDesign);
+        for (const eir::UnitRequest& asked : exchange.asked) {
+            if (std::ranges::none_of(forSystemVerilog, [&](const eir::UnitRequest& known) {
+                    return sameRequest(known, asked);
+                }))
+                forSystemVerilog.push_back(asked);
+        }
+
+        // Under a VHDL top that instantiates no module, there is no SystemVerilog to analyse.
+        BufferedDiagnostics svReports(sources);
+        std::unique_ptr<eir::Design> svDesign;
+        std::vector<std::string> svAnswers;
+        std::vector<eir::UnitRequest> asked;
+        bool settled = true;
+        std::string newlyAsked;
+        if (svTop || request.top.empty() || !forSystemVerilog.empty()) {
+            svOptions.requests = forSystemVerilog;
+            svOptions.requestAnswers = &svAnswers;
+            svOptions.interfaces = interfaces;
+            svOptions.asked = &asked;
+            bool unsettled = false;
+            svOptions.unsettled = &unsettled;
+            svDesign = frontend::sv::analyse(svOptions, sources, svReports.engine);
+            if (svDesign == nullptr && unsettled && round < Rounds) {
+                // Analysed again with the widths of what it asked for.
+                for (const eir::UnitRequest& entity : asked) {
+                    if (std::ranges::none_of(forVhdl, [&](const eir::UnitRequest& was) {
+                            return sameRequest(was, entity);
+                        }))
+                        forVhdl.push_back(entity);
+                }
+                continue;
+            }
+            if (svDesign == nullptr) {
+                // Its warnings may be of ports whose widths were not known yet, which would
+                // mislead: only its errors are said.
+                vhdlReports.replay(diagnostics);
+                svReports.replay(diagnostics, !interfaces.empty());
+                return false;
+            }
+            for (const eir::UnitRequest& entity : asked) {
+                const auto known = std::ranges::find_if(
+                    forVhdl, [&](const eir::UnitRequest& was) { return sameRequest(was, entity); });
+                if (known == forVhdl.end()) {
+                    newlyAsked +=
+                        std::format("{}'{}'", newlyAsked.empty() ? "" : ", ", entity.placeholder);
+                    forVhdl.push_back(entity);
+                    settled = false;
+                } else if (!hasWidths(interfaces, entity)) {
+                    settled = false;
+                }
+            }
+        }
+        if (!settled && round == Rounds) {
+            vhdlReports.replay(diagnostics);
+            svReports.replay(diagnostics);
+            diagnostics.report(DiagCode::MixedAnalysisUnsettled, SourceLocation(), Rounds,
+                               newlyAsked.empty() ? std::string("the widths of its ports")
+                                                  : newlyAsked);
+            return false;
+        }
+        if (!settled) continue;
+
+        // The last round's designs are one, each side's instances of the other's units linked to
+        // the definitions their requests became.
+        vhdlReports.replay(diagnostics);
+        svReports.replay(diagnostics);
+        if (svDesign != nullptr) {
+            for (const eir::ModuleDefinition& definition : svDesign->modules())
+                vhdlDesign->addModule(definition);
+        }
+        const auto answersFor = [&](const std::vector<eir::UnitRequest>& requests,
+                                    const std::vector<eir::UnitRequest>& given,
+                                    const std::vector<std::string>& answered) {
+            std::vector<std::string> answers;
+            for (const eir::UnitRequest& wanted : requests) {
+                const auto at = std::ranges::find_if(
+                    given, [&](const eir::UnitRequest& one) { return sameRequest(one, wanted); });
+                const auto index = static_cast<std::size_t>(at - given.begin());
+                answers.push_back(index < answered.size() ? answered[index] : std::string());
+            }
+            return answers;
+        };
+        if (!elab::linkRequests(*vhdlDesign, exchange.asked,
+                                answersFor(exchange.asked, forSystemVerilog, svAnswers),
+                                diagnostics)
+            || !elab::linkRequests(*vhdlDesign, asked, answersFor(asked, forVhdl, exchange.answers),
+                                   diagnostics)
+            || !eir::verify(*vhdlDesign, diagnostics))
+            return false;
+
+        design = std::move(vhdlDesign);
+        break;
     }
 
-    design = std::move(analysed);
     loadedFromLibrary = false;
     vhdlOptions = std::make_unique<frontend::vhdl::DesignOptions>(std::move(options));
     resolutionAnswers.clear();

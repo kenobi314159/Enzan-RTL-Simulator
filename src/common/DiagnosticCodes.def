@@ -206,6 +206,10 @@ ENZAN_DIAG(WorkLibraryNamedOtherwise, 6029, Error,
            "`--work {}` names another library than the one analysis writes into, which is called "
            "'{}'; leave `--work` out, or create the library with that name (`enzan lib create "
            "--name`)")
+ENZAN_DIAG(MixedAnalysisUnsettled, 6030, Error,
+           "the design's VHDL and SystemVerilog still ask each other for units after {} rounds of "
+           "analysis, the last asking for {}; a hierarchy recursing through both languages is not "
+           "followed for ever")
 ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
            "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
            "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "
