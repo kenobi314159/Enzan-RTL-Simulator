@@ -56,6 +56,11 @@ ENZAN_DIAG(UnusedParameterOverride, 1007, Warning,
            "-G {} names no parameter of a top level, and changes nothing")
 ENZAN_DIAG(DelayRounded, 1009, Warning,
            "a delay of {} is no whole number of the run's time unit, and is rounded to {}")
+ENZAN_DIAG(RequestedModuleMissing, 1010, Error,
+           "VHDL instantiates the module '{}', which no SystemVerilog source declares")
+ENZAN_DIAG(RequestedParameterMissing, 1011, Error,
+           "module '{}' has no parameter '{}' for the VHDL instantiating it to set; a component's "
+           "generic sets the module's parameter of its name")
 
 // --- 2000-2999: VHDL frontend -----------------------------------------------
 

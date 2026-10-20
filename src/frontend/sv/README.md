@@ -9,6 +9,10 @@ Turns SystemVerilog source text into EIR, and nothing else (DESIGN_GUIDE.md sect
 - Walk slang's elaborated AST and emit one EIR module definition per distinct instance
   body.
 - Translate procedural blocks, continuous assignments and expressions into EIR-B.
+- Specialise the modules another language's units instantiate, as each `eir::UnitRequest` asks,
+  through a module of its own instantiating the one asked for, which is dropped after
+  (DESIGN_GUIDE.md section 18, M7); and list the modules the sources declare, from their syntax
+  alone, for the other frontend to bind its components to.
 
 ## What a frontend must not do
 

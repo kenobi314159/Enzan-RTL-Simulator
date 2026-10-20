@@ -37,11 +37,13 @@
 #include "slang/diagnostics/Diagnostics.h"
 #include "slang/numeric/Time.h"
 #include "slang/parsing/Preprocessor.h"
+#include "slang/syntax/AllSyntax.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/SourceManager.h"
 #include "slang/util/Bag.h"
 
 #include <algorithm>
+#include <cctype>
 #include <format>
 #include <limits>
 #include <map>
@@ -1577,22 +1579,16 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
     return name;
 }
 
-} // namespace
-
-std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sources,
-                                     DiagnosticEngine& diagnostics) {
-    if (options.files.empty()) {
-        diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
-        return nullptr;
-    }
-
-    // Every file is read through Enzan's source manager and the text is then handed to
-    // slang, so that a diagnostic from slang and one from elaboration quote the same bytes
-    // and the same snippet. Reading each file twice would be slower and could disagree.
-    slang::SourceManager slangSources;
-    std::map<slang::BufferID, BufferId> buffers;
-    std::vector<slang::SourceBuffer> slangBuffers;
-
+/// slang's buffers of `options.files`, each mapped to the buffer of Enzan's holding its text;
+/// false, having reported why, when a file cannot be read.
+///
+/// Every file is read through Enzan's source manager and the text is then handed to slang, so that
+/// a diagnostic from slang and one from elaboration quote the same bytes and the same snippet.
+/// Reading each file twice would be slower and could disagree.
+bool slangBuffersOf(const Options& options, SourceManager& sources, DiagnosticEngine& diagnostics,
+                    slang::SourceManager& slangSources,
+                    std::map<slang::BufferID, BufferId>& buffers,
+                    std::vector<slang::SourceBuffer>& slangBuffers) {
     for (std::size_t index = 0; index < options.files.size(); ++index) {
         const std::filesystem::path& path = options.files[index];
 
@@ -1601,7 +1597,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             const FileReadResult result = sources.readFile(path);
             if (!result.ok()) {
                 reportFileReadFailure(diagnostics, path, result);
-                return nullptr;
+                return false;
             }
             text = result.buffer;
         }
@@ -1611,15 +1607,181 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         buffers.emplace(buffer.id, text);
         slangBuffers.push_back(buffer);
     }
+    return true;
+}
 
-    slang::Bag bag;
+slang::parsing::PreprocessorOptions preprocessorOptionsOf(const Options& options) {
     slang::parsing::PreprocessorOptions preprocessorOptions;
     preprocessorOptions.predefines = options.defines;
     preprocessorOptions.additionalIncludePaths = options.includeDirectories;
-    bag.set(preprocessorOptions);
+    return preprocessorOptions;
+}
+
+/// A module a source declares, and the parameters an instance of it may set.
+struct DeclaredModule {
+    std::string_view name;
+    std::vector<std::string_view> parameters;
+};
+
+/// The modules `tree` declares outside any other, in order.
+void collectModules(const slang::syntax::SyntaxTree& tree, std::vector<DeclaredModule>& found) {
+    namespace syntax = slang::syntax;
+    if (tree.root().kind != syntax::SyntaxKind::CompilationUnit) return;
+
+    // The value parameters a declaration declares, unless they are local.
+    const auto values = [](const syntax::ParameterDeclarationBaseSyntax& declaration,
+                           std::vector<std::string_view>& names) {
+        if (declaration.kind != syntax::SyntaxKind::ParameterDeclaration
+            || declaration.keyword.kind == slang::parsing::TokenKind::LocalParamKeyword)
+            return;
+        for (const syntax::DeclaratorSyntax* declarator :
+             declaration.as<syntax::ParameterDeclarationSyntax>().declarators)
+            names.push_back(declarator->name.valueText());
+    };
+
+    for (const syntax::MemberSyntax* member :
+         tree.root().as<syntax::CompilationUnitSyntax>().members) {
+        if (member->kind != syntax::SyntaxKind::ModuleDeclaration) continue;
+        const auto& module = member->as<syntax::ModuleDeclarationSyntax>();
+        DeclaredModule declared{.name = module.header->name.valueText(), .parameters = {}};
+
+        // With a parameter port list, a parameter of the body is local (IEEE 1800 section 6.20.1).
+        if (module.header->parameters != nullptr) {
+            for (const syntax::ParameterDeclarationBaseSyntax* declaration :
+                 module.header->parameters->declarations)
+                values(*declaration, declared.parameters);
+        } else {
+            for (const syntax::MemberSyntax* item : module.members) {
+                if (item->kind == syntax::SyntaxKind::ParameterDeclarationStatement)
+                    values(*item->as<syntax::ParameterDeclarationStatementSyntax>().parameter,
+                           declared.parameters);
+            }
+        }
+        if (!declared.name.empty()) found.push_back(std::move(declared));
+    }
+}
+
+/// Whether two names are one in any case.
+bool sameName(std::string_view left, std::string_view right) {
+    return std::ranges::equal(left, right, [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a))
+               == std::tolower(static_cast<unsigned char>(b));
+    });
+}
+
+/// The one of `names` that is `wanted` exactly, or else the one that is in some case; nothing when
+/// there is none, or several in other cases.
+std::optional<std::string_view> nameMatching(std::span<const std::string_view> names,
+                                             std::string_view wanted) {
+    if (const auto exact = std::ranges::find(names, wanted); exact != names.end()) return *exact;
+    std::optional<std::string_view> found;
+    for (const std::string_view name : names) {
+        if (!sameName(name, wanted)) continue;
+        if (found) return std::nullopt;
+        found = name;
+    }
+    return found;
+}
+
+/// The module through which the request at `index` is specialised: one instantiating the module it
+/// asks for, as `u`, with the values it asks for.
+std::string requestModuleName(std::size_t index) {
+    return std::format("enzan$request${}", index);
+}
+
+/// The text of each request's module (`requestModuleName`); nothing, having reported why, when one
+/// asks for what no module of `declared` has.
+std::optional<std::string> requestText(const std::vector<eir::UnitRequest>& requests,
+                                       const std::vector<DeclaredModule>& declared,
+                                       DiagnosticEngine& diagnostics) {
+    std::vector<std::string_view> moduleNames;
+    moduleNames.reserve(declared.size());
+    for (const DeclaredModule& module : declared) moduleNames.push_back(module.name);
+
+    // Escaped, which names a module as its plain spelling does whatever characters it holds
+    // (IEEE 1800 section 5.6.1).
+    const auto escaped = [](std::string_view name) { return std::format("\\{} ", name); };
+
+    std::string text;
+    for (std::size_t index = 0; index < requests.size(); ++index) {
+        const eir::UnitRequest& request = requests[index];
+        const std::optional<std::string_view> name = nameMatching(moduleNames, request.unit);
+        if (!name) {
+            diagnostics.report(DiagCode::RequestedModuleMissing, SourceLocation(), request.unit);
+            return std::nullopt;
+        }
+        const DeclaredModule& module = declared[static_cast<std::size_t>(
+            std::ranges::find(moduleNames, *name) - moduleNames.begin())];
+
+        std::string values;
+        for (const eir::UnitRequest::Parameter& parameter : request.parameters) {
+            const std::optional<std::string_view> parameterName =
+                nameMatching(module.parameters, parameter.name);
+            if (!parameterName) {
+                diagnostics.report(DiagCode::RequestedParameterMissing, SourceLocation(), *name,
+                                   parameter.name);
+                return std::nullopt;
+            }
+            if (!values.empty()) values += ", ";
+            values += std::format(".{}({})", escaped(*parameterName), parameter.value);
+        }
+        text += std::format("module {};\n  {}{} u ();\nendmodule\n", requestModuleName(index),
+                            escaped(*name), values.empty() ? "" : std::format(" #({})", values));
+    }
+    return text;
+}
+
+} // namespace
+
+std::vector<std::string> declaredModules(const Options& options, SourceManager& sources,
+                                         DiagnosticEngine& diagnostics) {
+    slang::SourceManager slangSources;
+    std::map<slang::BufferID, BufferId> buffers;
+    std::vector<slang::SourceBuffer> slangBuffers;
+    if (!slangBuffersOf(options, sources, diagnostics, slangSources, buffers, slangBuffers))
+        return {};
+
+    slang::Bag bag;
+    bag.set(preprocessorOptionsOf(options));
+    std::vector<std::string> names;
+    for (const slang::SourceBuffer& buffer : slangBuffers) {
+        const std::shared_ptr<slang::syntax::SyntaxTree> tree =
+            slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag);
+        std::vector<DeclaredModule> declared;
+        collectModules(*tree, declared);
+        for (const DeclaredModule& module : declared) names.emplace_back(module.name);
+    }
+    return names;
+}
+
+std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sources,
+                                     DiagnosticEngine& diagnostics) {
+    if (options.files.empty()) {
+        diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
+        return nullptr;
+    }
+
+    slang::SourceManager slangSources;
+    std::map<slang::BufferID, BufferId> buffers;
+    std::vector<slang::SourceBuffer> slangBuffers;
+    if (!slangBuffersOf(options, sources, diagnostics, slangSources, buffers, slangBuffers))
+        return nullptr;
+
+    slang::Bag bag;
+    bag.set(preprocessorOptionsOf(options));
+
+    // A module another language's units instantiate is specialised through a top level of its own
+    // instantiating it, which makes it no top level itself, as an instance from the other
+    // language would (DESIGN_GUIDE.md section 18, M7).
+    std::vector<std::string> requestModules;
+    for (std::size_t index = 0; index < options.requests.size(); ++index)
+        requestModules.push_back(requestModuleName(index));
 
     slang::ast::CompilationOptions compilationOptions;
     for (const std::string& top : options.topModules) compilationOptions.topModules.insert(top);
+    if (!options.topModules.empty() || options.onlyRequested) {
+        for (const std::string& top : requestModules) compilationOptions.topModules.insert(top);
+    }
     compilationOptions.paramOverrides = options.parameterOverrides;
     if (const std::optional<slang::TimeUnit> unit = timeUnitOf(options.timeUnitExponent)) {
         const slang::TimeScaleValue value(*unit, slang::TimeScaleMagnitude::One);
@@ -1628,8 +1790,28 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     bag.set(compilationOptions);
 
     slang::ast::Compilation compilation(bag);
+    std::vector<std::shared_ptr<slang::syntax::SyntaxTree>> trees;
+    trees.reserve(slangBuffers.size() + 1);
     for (const slang::SourceBuffer& buffer : slangBuffers)
-        compilation.addSyntaxTree(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+        trees.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+
+    slang::BufferID requestBuffer;
+    if (!options.requests.empty()) {
+        std::vector<DeclaredModule> declared;
+        for (const std::shared_ptr<slang::syntax::SyntaxTree>& tree : trees)
+            collectModules(*tree, declared);
+        const std::optional<std::string> text =
+            requestText(options.requests, declared, diagnostics);
+        if (!text) return nullptr;
+        const std::string name = "<modules another language instantiates>";
+        const BufferId held = sources.addBuffer(name, *text);
+        const slang::SourceBuffer buffer = slangSources.assignText(name, sources.bufferText(held));
+        buffers.emplace(buffer.id, held);
+        requestBuffer = buffer.id;
+        trees.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+    }
+    for (const std::shared_ptr<slang::syntax::SyntaxTree>& tree : trees)
+        compilation.addSyntaxTree(tree);
 
     // slang's diagnostics are dramatically better than most commercial tools', and
     // preserving that quality end to end is a genuine selling point rather than polish
@@ -1645,6 +1827,13 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
         const slang::DiagnosticSeverity severity = slang::getDefaultSeverity(diagnostic.code);
         if (severity == slang::DiagnosticSeverity::Ignored) continue;
+
+        // A request's module leaves the ports of what it instantiates open, which the instances
+        // asking for it connect.
+        if (diagnostic.location && diagnostic.location.buffer() == requestBuffer
+            && severity != slang::DiagnosticSeverity::Error
+            && severity != slang::DiagnosticSeverity::Fatal)
+            continue;
 
         const std::string message = slangEngine.formatMessage(diagnostic);
         const SourceLocation location = [&] {
@@ -1694,6 +1883,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         // that no file will ever satisfy makes `make` rebuild on every run.
         std::set<std::filesystem::path> opened;
         for (const slang::BufferID buffer : slangSources.getAllBuffers()) {
+            if (buffer == requestBuffer) continue;
             if (!buffers.contains(buffer) && !slangSources.getIncludedFrom(buffer).valid())
                 continue;
             const std::filesystem::path& path = slangSources.getFullPath(buffer);
@@ -1726,8 +1916,8 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
 
     // Every delay counts the run's unit, which a design asking for a finer precision than the
     // default refines unless something fixed it (DESIGN_GUIDE.md section 3.1).
-    std::int8_t runTimeUnit = options.timeUnitExponent;
-    if (options.refineTimeUnit) {
+    std::int8_t runTimeUnit = options.fixedRunTimeUnit.value_or(options.timeUnitExponent);
+    if (options.refineTimeUnit && !options.fixedRunTimeUnit) {
         FinestPrecision finest(runTimeUnit);
         root.visit(finest);
         for (const ast::PackageSymbol* package : compilation.getPackages())
@@ -1752,6 +1942,26 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     }
 
     if (!walker.ok() || !walker.translatePackages()) return nullptr;
+
+    // Each request is answered by the definition its module's instance became, and its module,
+    // which is no part of the design, is dropped.
+    if (!requestModules.empty()) {
+        if (options.requestAnswers != nullptr) {
+            options.requestAnswers->clear();
+            for (const std::string& name : requestModules) {
+                const eir::ModuleDefinition* found = design->findModule(name);
+                options.requestAnswers->push_back(found == nullptr || found->instances.empty()
+                                                      ? std::string()
+                                                      : found->instances.front().definitionName);
+            }
+        }
+        auto kept = std::make_unique<eir::Design>();
+        for (const eir::ModuleDefinition& definition : design->modules()) {
+            if (std::ranges::find(requestModules, definition.name) == requestModules.end())
+                kept->addModule(definition);
+        }
+        design = std::move(kept);
+    }
 
     // A frontend's output is verified before it is accepted. Section 4.2's core invariant —
     // a process is a pure function over a declared slice of the arena — is exactly the kind

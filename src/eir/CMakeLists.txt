@@ -22,5 +22,6 @@ enzan_add_component(
           Process.h
           Serialization.h
           Type.h
+          UnitRequest.h
           Verifier.h
   DEPENDS enzan::common)

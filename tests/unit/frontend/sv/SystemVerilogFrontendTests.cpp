@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -113,6 +114,10 @@ protected:
         options.timeUnitExponent = timeUnit;
         options.refineTimeUnit = refineTimeUnit;
         options.runTimeUnit = &runTimeUnit;
+        options.fixedRunTimeUnit = fixedRunTimeUnit;
+        options.requests = requests;
+        options.requestAnswers = &answers;
+        options.onlyRequested = onlyRequested;
 
         return enzan::frontend::sv::analyse(options, sources, engine);
     }
@@ -137,6 +142,13 @@ protected:
     std::int8_t timeUnit = -12;
     bool refineTimeUnit = false;
     std::int8_t runTimeUnit = 0;
+    std::optional<std::int8_t> fixedRunTimeUnit;
+
+    /// What another language's units ask for, whether they are the only tops, and the
+    /// definitions the last analysis answered with.
+    std::vector<enzan::eir::UnitRequest> requests;
+    bool onlyRequested = false;
+    std::vector<std::string> answers;
 };
 
 /// The values of the constants `process` loads.
@@ -1674,6 +1686,118 @@ TEST_F(FrontendTest, ASystemTaskCallCarriesTheTimeUnitOfItsScope) {
     const enzan::eir::Process& process = design->findModule("m")->processes[0];
     ASSERT_EQ(process.sysCalls.size(), 1U);
     EXPECT_EQ(process.sysCalls[0].timeUnit, -9);
+}
+
+// ---------------------------------------------------------------------------
+// Modules another language instantiates (DESIGN_GUIDE.md section 18, M7)
+// ---------------------------------------------------------------------------
+
+/// A module VHDL instantiates, whose width has no default, and one nothing instantiates whose
+/// parameter has none either, which as a top level could not be elaborated.
+constexpr std::string_view RequestedModules = R"(
+    module Adder #(parameter int Width, parameter int Step = 1) (
+        input logic [Width-1:0] a,
+        output logic [Width-1:0] y
+    );
+        assign y = Step > 0 ? a : ~a;
+    endmodule
+
+    module unused #(parameter int P) ();
+    endmodule
+)";
+
+TEST_F(FrontendTest, AModuleAnotherLanguageAsksForIsSpecialisedAsItAsks) {
+    requests.push_back({.placeholder = "adder #(.width(5))",
+                        .unit = "adder",
+                        .parameters = {{.name = "width", .value = "5"}},
+                        .ports = {}});
+    onlyRequested = true;
+    const std::unique_ptr<Design> design = analyse(RequestedModules);
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    ASSERT_EQ(answers.size(), 1U);
+    const ModuleDefinition* adder = design->findModule(answers[0]);
+    ASSERT_NE(adder, nullptr) << answers[0];
+    ASSERT_EQ(adder->ports.size(), 2U);
+    EXPECT_EQ(adder->objects[adder->ports[0].objectIndex].type.bitWidth(), 5U);
+
+    // Nothing but what was asked for: the module asking is no part of the design, and a module
+    // nothing asked for is not a top level.
+    EXPECT_EQ(design->size(), 1U);
+    EXPECT_TRUE(consumer.codes.empty()) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, TwoRequestsOfOneModuleWithOtherValuesAreTwoSpecialisations) {
+    requests.push_back({.placeholder = "a",
+                        .unit = "Adder",
+                        .parameters = {{.name = "WIDTH", .value = "5"}},
+                        .ports = {}});
+    requests.push_back(
+        {.placeholder = "b",
+         .unit = "Adder",
+         .parameters = {{.name = "width", .value = "7"}, {.name = "step", .value = "-2"}},
+         .ports = {}});
+    onlyRequested = true;
+    const std::unique_ptr<Design> design = analyse(RequestedModules);
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    ASSERT_EQ(answers.size(), 2U);
+    EXPECT_NE(answers[0], answers[1]);
+    EXPECT_NE(design->findModule(answers[0]), nullptr);
+    EXPECT_NE(design->findModule(answers[1]), nullptr);
+}
+
+TEST_F(FrontendTest, WithoutATopAModuleNothingInstantiatesIsATopAsWell) {
+    requests.push_back({.placeholder = "a",
+                        .unit = "adder",
+                        .parameters = {{.name = "width", .value = "5"}},
+                        .ports = {}});
+    const std::unique_ptr<Design> design = analyse(R"(
+        module Adder #(parameter int Width) (input logic [Width-1:0] a);
+        endmodule
+
+        module checker_top;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_EQ(design->candidateTopModules(), (std::vector<std::string>{answers[0], "checker_top"}));
+}
+
+TEST_F(FrontendTest, ARequestSettingAParameterTheModuleLacksIsRefusedByName) {
+    requests.push_back({.placeholder = "a",
+                        .unit = "adder",
+                        .parameters = {{.name = "depth", .value = "5"}},
+                        .ports = {}});
+    onlyRequested = true;
+    EXPECT_EQ(analyse(RequestedModules), nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::RequestedParameterMissing));
+    EXPECT_TRUE(reported("'depth'")) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, TheModulesASourceDeclaresAreListedAsWrittenWithoutElaborating) {
+    const std::filesystem::path path = directory / "design.sv";
+    std::ofstream(path) << RequestedModules;
+
+    enzan::frontend::sv::Options options;
+    options.files.push_back(path);
+    EXPECT_EQ(enzan::frontend::sv::declaredModules(options, sources, engine),
+              (std::vector<std::string>{"Adder", "unused"}));
+    EXPECT_TRUE(consumer.codes.empty());
+}
+
+TEST_F(FrontendTest, ARunUnitAnotherLanguageFixedIsTheOneDelaysCount) {
+    fixedRunTimeUnit = -15;
+    refineTimeUnit = true;
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic a;
+            initial #2 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_EQ(runTimeUnit, -15);
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 2000)) << "2 ps in fs";
 }
 
 } // namespace

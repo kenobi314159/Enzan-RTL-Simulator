@@ -4,10 +4,12 @@
 
 #include "common/SourceLocation.h"
 #include "eir/Design.h"
+#include "eir/UnitRequest.h"
 
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -76,6 +78,21 @@ struct Options {
     /// Receives the run's unit, which every delay of the design counts, when given.
     std::int8_t* runTimeUnit = nullptr;
 
+    /// The run's unit when something other than this analysis fixed it: VHDL's femtoseconds, in a
+    /// design of both languages (DESIGN_GUIDE.md section 3.1). `refineTimeUnit` is then ignored,
+    /// and a delay that is no whole number of it is rounded and reported.
+    std::optional<std::int8_t> fixedRunTimeUnit;
+
+    /// Modules that another language's units instantiate, each specialised as its request asks
+    /// and translated with the rest of the design (section 18, M7). The name of the definition
+    /// each became goes into `requestAnswers`, in the order they were asked for.
+    std::vector<eir::UnitRequest> requests;
+    std::vector<std::string>* requestAnswers = nullptr;
+
+    /// Whether the only top levels are the modules `requests` asks for, as when the design's top
+    /// level is another language's unit.
+    bool onlyRequested = false;
+
     /// Receives every file the analysis read, when given.
     ///
     /// The sources handed in *and* the files they included, which is the part a caller cannot
@@ -98,5 +115,12 @@ struct Options {
 /// as the worst possible outcome.
 std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sources,
                                      DiagnosticEngine& diagnostics);
+
+/// The modules `options.files` declare, by their names as written, in the order declared: what
+/// another language's units may instantiate. Read from the sources' syntax, preprocessed with
+/// `options.defines` and `options.includeDirectories`, without elaborating anything. Reports only a
+/// file that cannot be read, since the analysis that follows reports whatever is wrong with them.
+std::vector<std::string> declaredModules(const Options& options, SourceManager& sources,
+                                         DiagnosticEngine& diagnostics);
 
 } // namespace enzan::frontend::sv
