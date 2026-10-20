@@ -118,6 +118,9 @@ protected:
         options.requests = requests;
         options.requestAnswers = &answers;
         options.onlyRequested = onlyRequested;
+        options.interfaces = interfaces;
+        options.asked = &asked;
+        options.unsettled = &unsettled;
 
         return enzan::frontend::sv::analyse(options, sources, engine);
     }
@@ -149,6 +152,12 @@ protected:
     std::vector<enzan::eir::UnitRequest> requests;
     bool onlyRequested = false;
     std::vector<std::string> answers;
+
+    /// The other language's units the sources instantiate, and what the last analysis asked of
+    /// them.
+    std::vector<enzan::eir::UnitInterface> interfaces;
+    std::vector<enzan::eir::UnitRequest> asked;
+    bool unsettled = false;
 };
 
 /// The values of the constants `process` loads.
@@ -1774,14 +1783,37 @@ TEST_F(FrontendTest, ARequestSettingAParameterTheModuleLacksIsRefusedByName) {
     EXPECT_TRUE(reported("'depth'")) << consumer.messages.front();
 }
 
-TEST_F(FrontendTest, TheModulesASourceDeclaresAreListedAsWrittenWithoutElaborating) {
+TEST_F(FrontendTest, TheNamesSourcesDeclareAndInstantiateAreListedWithoutElaborating) {
+    // `missing` is no module of the sources, and so may be another language's unit; an interface
+    // and a primitive are declared as modules are, and a gate is no instance of anything.
     const std::filesystem::path path = directory / "design.sv";
-    std::ofstream(path) << RequestedModules;
+    std::ofstream(path) << RequestedModules << R"(
+        interface Bus;
+        endinterface
+
+        primitive inverter(output o, input i);
+            table 0 : 1; 1 : 0; endtable
+        endprimitive
+
+        module top;
+            wire a, b;
+            Bus bus ();
+            inverter i1 (b, a);
+            and g1 (b, a, a);
+            Adder #(.Width(4)) u1 (.a(), .y());
+            if (1) begin : g
+                Missing m ();
+            end
+            Missing n ();
+        endmodule
+    )";
 
     enzan::frontend::sv::Options options;
     options.files.push_back(path);
-    EXPECT_EQ(enzan::frontend::sv::declaredModules(options, sources, engine),
-              (std::vector<std::string>{"Adder", "unused"}));
+    const enzan::frontend::sv::ModuleNames names =
+        enzan::frontend::sv::moduleNames(options, sources, engine);
+    EXPECT_EQ(names.declared, (std::vector<std::string>{"Adder", "unused", "top"}));
+    EXPECT_EQ(names.undeclared, std::vector<std::string>{"Missing"});
     EXPECT_TRUE(consumer.codes.empty());
 }
 
@@ -1798,6 +1830,111 @@ TEST_F(FrontendTest, ARunUnitAnotherLanguageFixedIsTheOneDelaysCount) {
 
     EXPECT_EQ(runTimeUnit, -15);
     EXPECT_TRUE(loads(design->findModule("m")->processes[0], 2000)) << "2 ps in fs";
+}
+
+TEST_F(FrontendTest, AnInstanceOfAnotherLanguagesUnitAsksForItWithItsValues) {
+    // A VHDL entity `fifo` with a width generic and a name, whose ports are as wide as its one
+    // translation so far says for the width 8, and one bit wide for any other.
+    using Kind = enzan::eir::UnitInterface::Kind;
+    using enzan::eir::PortDirection;
+    interfaces.push_back(
+        {.name = "Fifo",
+         .parameters = {{.name = "Width", .kind = Kind::Integer, .length = 0, .value = "8"},
+                        {.name = "Name", .kind = Kind::String, .length = 0, .value = "\"f\""}},
+         .ports = {{.name = "Clk",
+                    .direction = PortDirection::Input,
+                    .fourState = true,
+                    .isSigned = false},
+                   {.name = "Din",
+                    .direction = PortDirection::Input,
+                    .fourState = true,
+                    .isSigned = false},
+                   {.name = "Count",
+                    .direction = PortDirection::Output,
+                    .fourState = false,
+                    .isSigned = true}},
+         .widths = {
+             {.values = {"8", "\"f\""}, .ports = {{.bits = 1}, {.bits = 8}, {.bits = 32}}}}});
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic clk;
+            logic [7:0] d;
+            int n, m, k;
+            Fifo u (.Clk(clk), .Din(d), .Count(n));
+            Fifo #(.Width(8)) v (.Clk(clk), .Din(d), .Count(m));
+            Fifo #(.Width(4), .Name("g")) w (.Clk(clk), .Din(d[3:0]), .Count(k));
+        endmodule
+)");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    ASSERT_EQ(asked.size(), 2U) << "u and v ask for the same";
+    EXPECT_EQ(asked[0].unit, "Fifo");
+    using Parameter = enzan::eir::UnitRequest::Parameter;
+    EXPECT_EQ(asked[0].parameters, (std::vector<Parameter>{{.name = "Width", .value = "8"},
+                                                           {.name = "Name", .value = "\"f\""}}));
+    EXPECT_EQ(asked[1].parameters, (std::vector<Parameter>{{.name = "Width", .value = "4"},
+                                                           {.name = "Name", .value = "\"g\""}}));
+    ASSERT_EQ(asked[0].ports.size(), 3U);
+    EXPECT_EQ(asked[0].ports[2].name, "Count");
+    EXPECT_EQ(asked[0].ports[2].direction, PortDirection::Output);
+
+    // The unit is not translated; its instances name the requests, and connect by its ports.
+    EXPECT_EQ(design->size(), 1U);
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+    ASSERT_EQ(top->instances.size(), 3U);
+    EXPECT_EQ(top->instances[0].definitionName, asked[0].placeholder);
+    EXPECT_EQ(top->instances[1].definitionName, asked[0].placeholder);
+    EXPECT_EQ(top->instances[2].definitionName, asked[1].placeholder);
+    const Instance& u = top->instances[0];
+    ASSERT_EQ(u.connections.size(), 3U);
+    EXPECT_EQ(u.connections[1].portIndex, 1U);
+    EXPECT_EQ(top->objects[u.connections[1].objectIndex].name, "d")
+        << "the row for the width 8 makes Din as wide as d";
+
+    // No row is for the width 4 yet, so w's ports are one bit until an analysis with one.
+    EXPECT_EQ(consumer.messages,
+              (std::vector<std::string>{
+                  "implicit conversion of port connection truncates from 4 to 1 bits",
+                  "implicit conversion of port connection expands from 1 to 32 bits"}));
+}
+
+TEST_F(FrontendTest, AnAnalysisFailingBeforeAnInstancesWidthsAreKnownSaysWhatItAsks) {
+    // An unpacked port is an unpacked array of one one-bit element until a row says otherwise,
+    // which no array of four bytes can be connected to; what the instance asks for is said, so that
+    // it can be translated and the analysis made again with its widths.
+    using enzan::eir::PortDirection;
+    interfaces.push_back({.name = "Lanes",
+                          .parameters = {},
+                          .ports = {{.name = "Words",
+                                     .direction = PortDirection::Input,
+                                     .fourState = true,
+                                     .isSigned = false,
+                                     .unpacked = true}},
+                          .widths = {}});
+    const std::string source = R"(
+        module top;
+            logic [7:0] words [0:3];
+            Lanes u (.Words(words));
+        endmodule
+)";
+    EXPECT_EQ(analyse(source), nullptr);
+    EXPECT_TRUE(unsettled);
+    ASSERT_EQ(asked.size(), 1U);
+    EXPECT_EQ(asked[0].unit, "Lanes");
+
+    // With the row its translation gives, the same analysis succeeds.
+    interfaces[0].widths.push_back({.values = {}, .ports = {{.bits = 8, .left = 0, .right = 3}}});
+    unsettled = false;
+    consumer.messages.clear();
+    const std::unique_ptr<Design> design = analyse(source);
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(unsettled);
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+    ASSERT_EQ(top->instances.size(), 1U);
+    ASSERT_EQ(top->instances[0].connections.size(), 1U);
+    EXPECT_EQ(top->objects[top->instances[0].connections[0].objectIndex].name, "words");
 }
 
 } // namespace

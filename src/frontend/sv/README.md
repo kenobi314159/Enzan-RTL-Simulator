@@ -11,8 +11,10 @@ Turns SystemVerilog source text into EIR, and nothing else (DESIGN_GUIDE.md sect
 - Translate procedural blocks, continuous assignments and expressions into EIR-B.
 - Specialise the modules another language's units instantiate, as each `eir::UnitRequest` asks,
   through a module of its own instantiating the one asked for, which is dropped after
-  (DESIGN_GUIDE.md section 18, M7); and list the modules the sources declare, from their syntax
-  alone, for the other frontend to bind its components to.
+  (DESIGN_GUIDE.md section 18, M7); and list the modules the sources declare, and the names they
+  instantiate and declare nowhere, from their syntax alone, for the other frontend.
+- Check an instance of another language's unit against a module standing for it, built from its
+  `eir::UnitInterface`, and make it ask for the unit with its values rather than translate it.
 
 ## What a frontend must not do
 

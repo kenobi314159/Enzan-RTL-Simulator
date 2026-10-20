@@ -93,6 +93,18 @@ struct Options {
     /// level is another language's unit.
     bool onlyRequested = false;
 
+    /// The units of another language the sources instantiate, each standing in as a module that
+    /// instances are checked against (`eir::UnitInterface`). An instance of one is not translated
+    /// but asks for its unit with its values, into `asked`, and names the request's placeholder as
+    /// its definition: once for each set of values, in the order first met.
+    std::vector<eir::UnitInterface> interfaces;
+    std::vector<eir::UnitRequest>* asked = nullptr;
+
+    /// Set when the analysis failed with an instance of one of `interfaces` whose values no row of
+    /// widths is for: the failure may be only that its ports were not as wide as they will be, and
+    /// `asked` holds what to translate before analysing again.
+    bool* unsettled = nullptr;
+
     /// Receives every file the analysis read, when given.
     ///
     /// The sources handed in *and* the files they included, which is the part a caller cannot
@@ -116,11 +128,22 @@ struct Options {
 std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sources,
                                      DiagnosticEngine& diagnostics);
 
-/// The modules `options.files` declare, by their names as written, in the order declared: what
-/// another language's units may instantiate. Read from the sources' syntax, preprocessed with
-/// `options.defines` and `options.includeDirectories`, without elaborating anything. Reports only a
-/// file that cannot be read, since the analysis that follows reports whatever is wrong with them.
-std::vector<std::string> declaredModules(const Options& options, SourceManager& sources,
-                                         DiagnosticEngine& diagnostics);
+/// What the sources declare and what they instantiate without declaring it.
+struct ModuleNames {
+    /// The modules the sources declare, by their names as written, in the order declared: what
+    /// another language's units may instantiate.
+    std::vector<std::string> declared;
+
+    /// The names the sources instantiate that no module, interface, program or primitive of theirs
+    /// has, in the order first instantiated: what may be another language's units.
+    std::vector<std::string> undeclared;
+};
+
+/// The names `options.files` declare and instantiate, read from the sources' syntax, preprocessed
+/// with `options.defines` and `options.includeDirectories`, without elaborating anything. Reports
+/// only a file that cannot be read, since the analysis that follows reports whatever is wrong with
+/// them.
+ModuleNames moduleNames(const Options& options, SourceManager& sources,
+                        DiagnosticEngine& diagnostics);
 
 } // namespace enzan::frontend::sv

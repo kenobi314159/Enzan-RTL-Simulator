@@ -447,7 +447,7 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     svOptions.includeDirectories = includeDirectories;
     const unsigned errorsBefore = diagnostics.errorCount();
     const std::vector<std::string> modules =
-        frontend::sv::declaredModules(svOptions, sources, diagnostics);
+        frontend::sv::moduleNames(svOptions, sources, diagnostics).declared;
     if (diagnostics.errorCount() != errorsBefore) return false;
     if (std::ranges::any_of(
             modules, [&](const std::string& module) { return sameName(module, request.top); })) {
