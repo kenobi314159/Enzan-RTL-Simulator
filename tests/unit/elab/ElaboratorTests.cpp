@@ -504,6 +504,19 @@ TEST_F(ElaboratorTest, RejectsADrivenObjectOfAnotherWidthThanItsPort) {
     EXPECT_TRUE(reportedCode(enzan::DiagCode::PortWidthMismatch));
 }
 
+TEST_F(ElaboratorTest, RejectsAPortOfAnotherEncodingThanItsObject) {
+    // Eight std_ulogic codes and 64 four-state bits are as wide, and joined, one side would read
+    // the other's codes as bits: a connection between languages has to convert its values
+    // (DESIGN_GUIDE.md section 3.5), and EIR asking for one that does not is refused.
+    buildPortedPair(design, 64, 64);
+    ModuleDefinition child = *design.findModule("child");
+    child.objects[0].encoding = enzan::eir::Encoding::VhdlLogic;
+    design.addModule(std::move(child));
+
+    EXPECT_EQ(elaborate("parent"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::PortEncodingMismatch));
+}
+
 TEST_F(ElaboratorTest, RejectsAPortWidthMismatch) {
     // A port is collapsed onto the signal it is connected to, and collapsing a mismatched
     // pair onto one slot would silently read or write the wrong bits. A frontend converts the

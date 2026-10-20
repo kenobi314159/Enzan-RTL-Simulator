@@ -331,13 +331,23 @@ private:
             // What the child drives through the port goes where the parent drives the object
             // the connection names for it, so a separate one reaches every level below.
             const std::uint32_t driveSlot = parent.objectDriveSlots[connection.drivenObject()];
-            const eir::Type portType = childDefinition.objects[port.objectIndex].type;
+            const eir::Object& portObject = childDefinition.objects[port.objectIndex];
             for (const std::uint32_t slotIndex : {parentSlot, driveSlot}) {
-                const eir::Type parentType = result->slotList[slotIndex].type;
-                if (portType.bitWidth() != parentType.bitWidth()) {
+                const Slot& parentSlotOf = result->slotList[slotIndex];
+                if (portObject.type.bitWidth() != parentSlotOf.type.bitWidth()) {
                     diagnostics.report(DiagCode::PortWidthMismatch, port.location, port.name,
-                                       child.definitionName, portType.bitWidth(),
-                                       parentType.bitWidth());
+                                       child.definitionName, portObject.type.bitWidth(),
+                                       parentSlotOf.type.bitWidth());
+                    return false;
+                }
+
+                // Equal widths of different encodings, std_logic_vector(7 downto 0) and logic
+                // [63:0] say, are a connection between languages that nothing converted: joined,
+                // one side would read the other's codes as bits (DESIGN_GUIDE.md section 3.5).
+                if (portObject.encoding != parentSlotOf.encoding) {
+                    diagnostics.report(DiagCode::PortEncodingMismatch, port.location, port.name,
+                                       child.definitionName, eir::toString(portObject.encoding),
+                                       eir::toString(parentSlotOf.encoding));
                     return false;
                 }
             }
