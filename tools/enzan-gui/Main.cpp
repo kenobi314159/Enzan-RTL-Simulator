@@ -61,8 +61,6 @@ Options:
       --write-theme <file>
                           Write the built-in theme to this file and exit.
       --wave-list <file>  Open the wave window with this signal list in it.
-
-The normative specification is DESIGN_GUIDE.md in the source tree.
 )";
 
 /// Answers `--help` and `--version` before Qt's parser sees the command line.

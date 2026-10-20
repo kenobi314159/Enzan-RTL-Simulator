@@ -129,15 +129,15 @@ Libraries:
                           The same, overriding the name the library carries.
       --name <n>          The name `lib create` gives a library.
       --work <name>       The library VHDL sources are analysed into, which they
-                          name it by: `library neorv32;`. Default the name of the
+                          name it by: `library myLib;`. Default the name of the
                           library --out-lib writes, or `work`.
       --std <1993|2000|2002|2008|2019>
                           The revision of IEEE 1076 VHDL sources are analysed
                           against, or its last two digits. Default 2008.
       --ieee-asserts <enable|disable>
                           Whether the IEEE packages' own warnings, numeric_std's
-                          of metavalues and truncation, are reported. As GHDL's
-                          option of the name; enabled by default.
+                          of metavalues and truncation, are reported. Enabled by
+                          default.
 
 Simulation:
   -t, --top <module>      Module to elaborate as the top level. `elaborate` and
@@ -145,8 +145,7 @@ Simulation:
   -r, --run <time>        Stop after this many time units.
       --assert-level <note|warning|error|failure|none>
                           The severity at which a VHDL report or failed assertion
-                          ends the run, as GHDL's option of the name. Default
-                          `failure`; `none` never ends it.
+                          ends the run. Default `failure`; `none` never ends it.
       --vcd <file>        Write a VCD waveform to this file.
       --fst <file>        Write an FST waveform to this file. Far smaller on a
                           real design, and seekable. Both may be given at once.
@@ -187,8 +186,6 @@ Graphical front end:
 
 Exit statuses: 0 success, 1 the command line was wrong, 2 analysis or elaboration
 failed, 3 the simulation ran and the design failed.
-
-The normative specification is DESIGN_GUIDE.md in the source tree.
 )";
 
 void printVersion() {
