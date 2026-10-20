@@ -91,4 +91,23 @@ TEST(Encoding, VhdlBitShowsAsTwoStateBitsAndBitsAsThemselves) {
     EXPECT_EQ(enzan::eir::presentedWidth(Encoding::Bits, 16), 16U);
 }
 
+TEST(Encoding, EncodingGivesAnUnknownBitOfABitOrABooleanItsZero) {
+    // A value crossing into VHDL arrives whatever it holds (DESIGN_GUIDE.md section 3.5), as
+    // assigning an unknown bit to a two-state variable makes it 0.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    const BitVector shown = *BitVector::parse("4'b10zx");
+    BitVector bits = BitVector::filled(32, Logic::One);
+    enzan::eir::encode(Encoding::VhdlBit, shown.ref(), bits.mutableRef());
+    EXPECT_EQ(bits.ref().toUInt64(), 0x01000000U);
+
+    BitVector logic = BitVector::filled(32, Logic::Zero);
+    enzan::eir::encode(Encoding::VhdlLogic, shown.ref(), logic.mutableRef());
+    EXPECT_EQ(logic.ref().toUInt64(), 0x03020401U) << "as storeShown stores them";
+}
+
+TEST(Encoding, IsNamedByWhatItHolds) {
+    EXPECT_EQ(enzan::eir::toString(Encoding::VhdlLogic), "std_ulogic codes");
+    EXPECT_EQ(enzan::eir::toString(Encoding::Bits), "four-state bits");
+}
+
 } // namespace

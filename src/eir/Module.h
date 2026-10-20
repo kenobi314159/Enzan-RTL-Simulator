@@ -59,6 +59,14 @@ void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept;
 /// unknown or high-impedance `bit` or `boolean`.
 [[nodiscard]] bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
 
+/// As `storeShown`, for a value that has to arrive whatever it holds, as one crossing from
+/// SystemVerilog into VHDL does (section 3.5): an unknown or high-impedance bit becomes a `bit`'s
+/// or a `boolean`'s 0, as assigning one to a two-state variable makes it.
+void encode(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
+
+/// What an object stored as `encoding` holds, for a diagnostic: `std_ulogic codes`.
+[[nodiscard]] std::string_view toString(Encoding encoding) noexcept;
+
 /// Which kind of net a net is, which decides how a bit with several drivers resolves and what
 /// a bit with none holds (DESIGN_GUIDE.md section 3.7).
 ///

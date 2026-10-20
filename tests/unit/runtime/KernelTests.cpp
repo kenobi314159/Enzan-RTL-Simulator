@@ -2493,6 +2493,50 @@ TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
     EXPECT_EQ(simulation.value("/tb/d", Radix::Decimal), "1");
 }
 
+TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {
+    // What crosses a language boundary (DESIGN_GUIDE.md section 3.5): std_ulogic's '1', '0', 'H'
+    // and 'Z' as the bits 1 0 1 z, and the bits 1 0 x z as std_ulogic's '1', '0', 'X' and 'Z' and
+    // as bits' 1, 0, 0 and 0.
+    ProcessBuilder builder(ProcessKind::Initial, "boundary");
+    const Type codes = Type::bits(32, false, false);
+    const Type bits = Type::bits(4, false, true);
+    const std::uint32_t logicCodes = builder.reg(codes);
+    const std::uint32_t presented = builder.reg(bits);
+    const std::uint32_t shown = builder.reg(bits);
+    const std::uint32_t asLogic = builder.reg(codes);
+    const std::uint32_t asBit = builder.reg(codes);
+    const auto encoding = [](enzan::eir::Encoding which) {
+        return Operand::immediate(static_cast<std::uint32_t>(which));
+    };
+
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(logicCodes),
+                                   Operand::constant(builder.constant("32'h03020704"))));
+    builder.emit(Instruction::make(Opcode::Present, Operand::reg(presented),
+                                   Operand::reg(logicCodes),
+                                   encoding(enzan::eir::Encoding::VhdlLogic)));
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(shown),
+                                   Operand::constant(builder.constant("4'b10xz"))));
+    builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asLogic), Operand::reg(shown),
+                                   encoding(enzan::eir::Encoding::VhdlLogic)));
+    builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asBit), Operand::reg(shown),
+                                   encoding(enzan::eir::Encoding::VhdlBit)));
+    builder.store(0, presented);
+    builder.store(1, asLogic);
+    builder.store(2, asBit);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition = makeTop({builder.finish()}, {Object{.name = "a", .type = bits},
+                                                               Object{.name = "b", .type = codes},
+                                                               Object{.name = "c", .type = codes}});
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/a", Radix::Binary), "101z");
+    EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "03020104");
+    EXPECT_EQ(simulation.value("/tb/c", Radix::Hexadecimal), "01000000");
+}
+
 TEST(Kernel, OneWordOperationsMatchTheGeneralRoutines) {
     // The interpreter computes the commonest operations on values of one word itself and leaves
     // the rest to eir::bitops, so each must give what the other would. Every operation runs on

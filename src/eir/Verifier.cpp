@@ -4,6 +4,7 @@
 
 #include "common/Diagnostics.h"
 #include "eir/Instruction.h"
+#include "eir/Module.h"
 #include "eir/Type.h"
 
 #include <array>
@@ -824,6 +825,31 @@ private:
                                        isRealRegister(body, instruction.a) ? "reals" : "bits"));
             }
             break;
+
+        // Between an encoding's codes, a byte each, and the bits they stand for, one each.
+        case Opcode::Present:
+        case Opcode::Encode: {
+            const std::uint32_t dstWidth = registerWidth(definition, body, instruction.dst, where);
+            const std::uint32_t aWidth = registerWidth(definition, body, instruction.a, where);
+            const auto encoding = static_cast<Encoding>(instruction.b.index());
+            if (instruction.b.kind() != Operand::Kind::Immediate
+                || (encoding != Encoding::VhdlLogic && encoding != Encoding::VhdlBit)) {
+                reportBody(
+                    definition, body,
+                    std::format("{} names no encoding of codes by its second operand", where));
+                break;
+            }
+            const bool present = instruction.opcode == Opcode::Present;
+            const std::uint32_t codes = present ? aWidth : dstWidth;
+            const std::uint32_t bits = present ? dstWidth : aWidth;
+            if (codes != bits * 8) {
+                reportBody(definition, body,
+                           std::format("{} converts {} bits of codes and {} bits; each code is "
+                                       "a byte, so the codes have to be eight times as wide",
+                                       where, codes, bits));
+            }
+            break;
+        }
 
         // Predicates and reductions produce exactly one bit.
         case Opcode::Equal:
