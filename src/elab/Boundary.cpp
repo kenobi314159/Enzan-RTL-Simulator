@@ -3,6 +3,7 @@
 #include "elab/Boundary.h"
 
 #include "common/Diagnostics.h"
+#include "eir/BitOps.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
 #include "eir/Instruction.h"
@@ -124,6 +125,42 @@ std::optional<std::vector<Leaf>> leavesOf(const eir::ModuleDefinition& definitio
         merged.push_back(leaf);
     }
     return merged;
+}
+
+/// What `object` holds before anything runs: its initial value, or else X when it is four-state and
+/// 0 when it is not.
+eir::BitVector startOf(const eir::Object& object) {
+    const std::uint32_t width = object.type.bitWidth();
+    if (object.initialValue && object.initialValue->width() == width) return *object.initialValue;
+    return eir::BitVector::filled(width, object.type.isFourState() ? eir::Logic::Unknown
+                                                                   : eir::Logic::Zero);
+}
+
+/// `value`, of one side's representation, as `convert` converts it into `target`'s, the other's.
+eir::BitVector converted(const eir::BitVector& value, const std::vector<Leaf>& leaves, bool toShown,
+                         eir::Type target) {
+    eir::BitVector result = eir::BitVector::filled(target.bitWidth(), eir::Logic::Zero);
+    std::uint32_t shown = 0;
+    for (const Leaf& leaf : std::views::reverse(leaves)) {
+        eir::BitVector part(toShown ? leaf.width : leaf.shownWidth());
+        eir::bitops::partSelectAt(part.mutableRef(), value.ref(), toShown ? leaf.offset : shown);
+        eir::BitVector into(toShown ? leaf.shownWidth() : leaf.width);
+        if (leaf.encoding == Encoding::Bits) {
+            into = part;
+        } else if (toShown) {
+            eir::present(leaf.encoding, part.ref(), into.mutableRef());
+        } else {
+            eir::encode(leaf.encoding, part.ref(), into.mutableRef());
+        }
+        eir::bitops::assignPartAt(result.mutableRef(), into.ref(), toShown ? shown : leaf.offset);
+        shown += leaf.shownWidth();
+    }
+    if (!target.isFourState()) {
+        for (std::uint32_t bit = 0; bit < result.width(); ++bit)
+            result.set(bit,
+                       result.get(bit) == eir::Logic::One ? eir::Logic::One : eir::Logic::Zero);
+    }
+    return result;
 }
 
 /// Writes one process's body.
@@ -367,7 +404,8 @@ bool bridge(eir::ModuleDefinition& parent, const eir::Instance& instance,
         if (vhdlInside) {
             eir::Object shownObject = standIn(outer, base + "$shown", instance.location);
             shownObject.kind = eir::ObjectKind::Variable;
-            shownObject.initialValue.reset();
+            shownObject.initialValue =
+                converted(startOf(parent.objects[from]), *leaves, true, outerType);
             shownObject.resolution = {};
             const std::uint32_t shownIndex = add(std::move(shownObject));
             addProcess(converter(Conversion{.name = base + "$out",
@@ -393,14 +431,14 @@ bool bridge(eir::ModuleDefinition& parent, const eir::Instance& instance,
     };
 
     // The port's own representation, which the port reads: written by the inward conversion
-    // alone, so one VHDL driver or a SystemVerilog variable.
+    // alone, so one VHDL driver or a SystemVerilog variable. It starts as the outer object does,
+    // converted, as a VHDL port takes its actual's initial value, so that the first conversion is
+    // no event: an edge at time zero from a value nothing ever held.
     const auto effective = [&](std::string name) {
         eir::Object object = standIn(inner, std::move(name), instance.location);
         object.resolution = {};
-        if (!vhdlInside) {
-            object.kind = eir::ObjectKind::Variable;
-            object.initialValue.reset();
-        }
+        if (!vhdlInside) object.kind = eir::ObjectKind::Variable;
+        object.initialValue = converted(startOf(outer), *leaves, !vhdlInside, innerType);
         return add(std::move(object));
     };
 

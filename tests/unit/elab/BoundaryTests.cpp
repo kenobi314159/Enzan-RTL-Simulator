@@ -15,6 +15,7 @@
 #include "eir/Module.h"
 #include "eir/Process.h"
 
+#include "support/Optionals.h"
 #include "support/ProcessBuilder.h"
 #include "support/Simulation.h"
 
@@ -25,6 +26,7 @@
 #include <format>
 #include <initializer_list>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -54,10 +56,12 @@ using enzan::eir::Radix;
 using enzan::eir::Type;
 using enzan::eir::VhdlType;
 using enzan::test::ProcessBuilder;
+using enzan::test::require;
 using enzan::test::Simulation;
 
 /// std_ulogic's codes, the positions of its literals U X 0 1 Z W L H -.
 constexpr std::uint8_t CodeU = 0;
+constexpr std::uint8_t Code0 = 2;
 constexpr std::uint8_t Code1 = 3;
 constexpr std::uint8_t CodeZ = 4;
 constexpr std::uint8_t CodeL = 6;
@@ -489,6 +493,45 @@ TEST_F(BoundaryTest, SidesOfDifferentShapesAreRefused) {
 
     EXPECT_FALSE(enzan::elab::bridgeLanguages(design, engine));
     EXPECT_TRUE(reported(DiagCode::UnconvertiblePort));
+}
+
+TEST_F(BoundaryTest, WhatAPortReadsStartsAsItsActualDoesConverted) {
+    // A clock that starts at '1' is 1 in SystemVerilog before anything runs, so the first
+    // conversion is no edge; and a SystemVerilog 0 is '0' in VHDL from the start, as a VHDL port
+    // takes its actual's initial value.
+    Design design;
+    design.addModule(vhdlChild());
+    ModuleDefinition svbuf;
+    svbuf.name = "svbuf";
+    svbuf.addObject(Object{.name = "i", .type = Type::bits(1, false, true)});
+    svbuf.ports.push_back(Port{.name = "i", .direction = PortDirection::Input, .objectIndex = 0});
+    design.addModule(std::move(svbuf));
+
+    ModuleDefinition vtop = vhdlDefinition("vtop");
+    vtop.addObject(logicSignal("clk", 1, Code1));
+    vtop.instances.push_back(
+        Instance{.name = "u", .definitionName = "svbuf", .connections = {connect(0, 0)}});
+    design.addModule(std::move(vtop));
+
+    ModuleDefinition top;
+    top.name = "top";
+    top.addObject(Object{.name = "a",
+                         .type = Type::bits(1, false, true),
+                         .initialValue = BitVector::fromUInt64(0, 1)});
+    top.addObject(Object{.name = "y", .type = Type::bits(4, false, true)});
+    top.instances.push_back(Instance{
+        .name = "v", .definitionName = "vchild", .connections = {connect(0, 0), connect(1, 1)}});
+    design.addModule(std::move(top));
+
+    ASSERT_TRUE(enzan::elab::bridgeLanguages(design, engine));
+
+    const ModuleDefinition& parent = *design.findModule("vtop");
+    const Object& shown = parent.objects[require(parent.findObject("u$i$boundary"))];
+    EXPECT_EQ(shown.initialValue, std::optional(BitVector::fromUInt64(1, 1)));
+
+    const ModuleDefinition& svParent = *design.findModule("top");
+    const Object& coded = svParent.objects[require(svParent.findObject("v$input$boundary"))];
+    EXPECT_EQ(coded.initialValue, std::optional(codes({Code0})));
 }
 
 TEST_F(BoundaryTest, BridgingTwiceChangesNothingTheSecondTime) {
