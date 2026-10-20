@@ -459,10 +459,11 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     std::string keyOptions;
     if (!setVhdlOptions(request, true, options, keyOptions)) return false;
     options.modules = modules;
-    std::vector<eir::UnitRequest> requests;
+    frontend::vhdl::Exchange exchange;
     std::unique_ptr<eir::Design> analysed =
-        frontend::vhdl::analyse(options, sources, diagnostics, &requests);
+        frontend::vhdl::analyse(options, sources, diagnostics, &exchange);
     if (analysed == nullptr) return false;
+    const std::vector<eir::UnitRequest>& requests = exchange.asked;
 
     // Each module the VHDL instantiates is specialised as it asks, and the instances linked to
     // what it became. Under a named top that is all of the SystemVerilog there is; without one,

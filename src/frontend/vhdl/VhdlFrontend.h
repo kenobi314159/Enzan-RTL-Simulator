@@ -114,6 +114,31 @@ struct DesignOptions {
     /// component with no entity to be bound to is bound to the module of its name, in any case
     /// (DESIGN_GUIDE.md section 18, M7).
     std::vector<std::string> modules;
+
+    /// The entities SystemVerilog instantiates, each translated with the values it asks for, the
+    /// name of the definition each becomes answered in `Exchange::answers`.
+    std::vector<eir::UnitRequest> requests;
+
+    /// The names SystemVerilog instantiates and declares nowhere, of which each an entity has is
+    /// described, in `Exchange::interfaces`, and none is a top level.
+    std::vector<std::string> described;
+
+    /// Whether nothing but `requests` is translated, as when the top level is SystemVerilog's.
+    bool onlyRequested = false;
+};
+
+/// What a translation of the VHDL of a design of both languages exchanges with the SystemVerilog
+/// side (DESIGN_GUIDE.md section 18, M7).
+struct Exchange {
+    /// The SystemVerilog modules the design instantiates, which its instances name placeholders of.
+    std::vector<eir::UnitRequest> asked;
+
+    /// The definition each of `DesignOptions::requests` became, in order.
+    std::vector<std::string> answers;
+
+    /// The interface of each of `DesignOptions::described` that an entity has, named as asked, its
+    /// generics and ports named as declared.
+    std::vector<eir::UnitInterface> interfaces;
 };
 
 /// Analyses `options.units` and translates the design under the top into EIR (section 5.2).
@@ -122,15 +147,14 @@ struct DesignOptions {
 /// EIR's own encoding: NVC's trees live in the child and end with it, and nothing of NVC reaches
 /// the parent's memory.
 ///
-/// An instance of one of `options.modules` names a placeholder as its definition, and `requests`,
+/// An instance of one of `options.modules` names a placeholder as its definition, and `exchange`,
 /// when given, receives what each placeholder asks for, for the SystemVerilog frontend to translate
-/// and the session to link.
+/// and the session to link, with what the design answers SystemVerilog.
 ///
 /// Returns nothing having reported why, when a source does not analyse or the design uses
 /// something the adapter does not translate yet.
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
-                                     DiagnosticEngine& diagnostics,
-                                     std::vector<eir::UnitRequest>* requests = nullptr);
+                                     DiagnosticEngine& diagnostics, Exchange* exchange = nullptr);
 
 /// A resolution function asked for by how many drivers it resolves (DESIGN_GUIDE.md section 3.7):
 /// `function` names it as `eir::Resolution` does.

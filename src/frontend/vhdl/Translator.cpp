@@ -3,6 +3,7 @@
 #include "frontend/vhdl/Translator.h"
 
 #include "common/Diagnostics.h"
+#include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "frontend/vhdl/BodyTranslator.h"
 #include "frontend/vhdl/Folder.h"
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <deque>
 #include <format>
 #include <limits>
@@ -20,6 +22,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -75,6 +78,200 @@ std::string sanitised(std::string text) {
         if (!keep) character = '_';
     }
     return text;
+}
+
+/// The value `generics` binds the generic `generic` to as a SystemVerilog literal, which sets the
+/// parameter of its name of the module its component is bound to: an integer in decimal, a `bit`, a
+/// `boolean` or a `std_ulogic` as one bit by section 3.6's mapping, an array of them as that many
+/// bits, the left element highest, and a string as a string. Nothing for a value of another type.
+std::optional<std::string> systemVerilogLiteral(const Folder& generics, tree_t generic) {
+    // std_ulogic's codes, U X 0 1 Z W L H -, as four-state bits.
+    static constexpr std::string_view Logic = "xx01zx01x";
+    type_t type = tree_type(generic);
+
+    if (const eir::BitVector* bits = generics.compositeOf(generic)) {
+        if (!type_is_array(type) || dimension_of(type) != 1) return std::nullopt;
+        type_t element = type_elem(type);
+        type_t base = type_base_recur(element);
+        const bool characters =
+            type_has_ident(base)
+            && std::string_view(istr(type_ident(base))) == "STD.STANDARD.CHARACTER";
+        const eir::Encoding encoding = encodingOf(element);
+        const std::optional<eir::Type> storage = scalarStorage(element);
+        if (!storage || bits->width() == 0 || bits->width() % storage->bitWidth() != 0)
+            return std::nullopt;
+        if (!characters && encoding != eir::Encoding::VhdlLogic
+            && encoding != eir::Encoding::VhdlBit)
+            return std::nullopt;
+
+        const std::uint32_t width = storage->bitWidth();
+        std::string text =
+            characters ? std::string("\"") : std::format("{}'b", bits->width() / width);
+        for (std::uint32_t at = bits->width(); at >= width; at -= width) {
+            eir::BitVector one(width);
+            eir::bitops::partSelectAt(one.mutableRef(), bits->ref(), at - width);
+            const std::uint64_t code = one.ref().toUInt64();
+            if (characters) {
+                if (code == '"' || code == '\\') {
+                    text += '\\';
+                    text += static_cast<char>(code);
+                } else if (code >= 0x20 && code < 0x7f) {
+                    text += static_cast<char>(code);
+                } else {
+                    text += std::format("\\{:03o}", code & 0xffU);
+                }
+            } else if (encoding == eir::Encoding::VhdlLogic) {
+                if (code >= Logic.size()) return std::nullopt;
+                text += Logic[code];
+            } else {
+                text += code == 0 ? '0' : '1';
+            }
+        }
+        if (characters) text += '"';
+        return text;
+    }
+
+    const std::optional<std::int64_t> value = generics.boundValue(generic);
+    if (!value) return std::nullopt;
+    if (type_is_integer(type)) {
+        // Wider than an unsized literal's 32 bits, sized and signed.
+        if (*value >= std::numeric_limits<std::int32_t>::min()
+            && *value <= std::numeric_limits<std::int32_t>::max())
+            return std::to_string(*value);
+        const std::uint64_t magnitude = *value < 0 ? 0 - static_cast<std::uint64_t>(*value)
+                                                   : static_cast<std::uint64_t>(*value);
+        return std::format("{}64'sd{}", *value < 0 ? "-" : "", magnitude);
+    }
+    const eir::Encoding encoding = encodingOf(type);
+    if (encoding == eir::Encoding::VhdlLogic && *value >= 0 && std::cmp_less(*value, Logic.size()))
+        return std::format("1'b{}", Logic[static_cast<std::size_t>(*value)]);
+    if (encoding == eir::Encoding::VhdlBit) return *value != 0 ? "1'b1" : "1'b0";
+    return std::nullopt;
+}
+
+/// Whether two names are one in any case.
+bool sameName(std::string_view left, std::string_view right) {
+    return std::ranges::equal(left, right, [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a))
+               == std::tolower(static_cast<unsigned char>(b));
+    });
+}
+
+/// The integer a literal (`eir::UnitRequest`) is, `-5` or `64'sd5000000000`; nothing when it is not
+/// one.
+std::optional<std::int64_t> integerLiteral(std::string_view text) {
+    const bool negative = text.starts_with('-');
+    if (negative) text.remove_prefix(1);
+    if (text.starts_with("64'sd")) text.remove_prefix(5);
+    std::uint64_t magnitude = 0;
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), magnitude);
+    if (error != std::errc() || end != text.data() + text.size() || text.empty())
+        return std::nullopt;
+    const std::uint64_t limit =
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + (negative ? 1 : 0);
+    if (magnitude > limit) return std::nullopt;
+    if (!negative) return static_cast<std::int64_t>(magnitude);
+    return magnitude == limit ? std::numeric_limits<std::int64_t>::min()
+                              : -static_cast<std::int64_t>(magnitude);
+}
+
+/// The bits a literal of one bit or a vector is, `1'bx` or `4'b01xz`, left first, each `0`, `1`,
+/// `x` or `z`; nothing when it is not one.
+std::optional<std::string> bitsLiteral(std::string_view text) {
+    const std::size_t base = text.find("'b");
+    if (base == std::string_view::npos) return std::nullopt;
+    std::uint64_t count = 0;
+    const auto [end, error] = std::from_chars(text.data(), text.data() + base, count);
+    if (error != std::errc() || end != text.data() + base) return std::nullopt;
+    std::string bits(text.substr(base + 2));
+    if (bits.size() != count || !std::ranges::all_of(bits, [](char bit) {
+            return std::string_view("01xz").find(bit) != std::string_view::npos;
+        }))
+        return std::nullopt;
+    return bits;
+}
+
+/// The characters a string literal is, `"a\"b"`, its escapes undone; nothing when it is not one.
+std::optional<std::string> stringLiteral(std::string_view text) {
+    if (text.size() < 2 || !text.starts_with('"') || !text.ends_with('"')) return std::nullopt;
+    text = text.substr(1, text.size() - 2);
+    std::string characters;
+    for (std::size_t at = 0; at < text.size(); ++at) {
+        if (text[at] != '\\') {
+            characters += text[at];
+            continue;
+        }
+        if (at + 1 < text.size() && (text[at + 1] == '"' || text[at + 1] == '\\')) {
+            characters += text[++at];
+            continue;
+        }
+        if (at + 3 >= text.size()) return std::nullopt;
+        unsigned code = 0;
+        const auto [end, error] =
+            std::from_chars(text.data() + at + 1, text.data() + at + 4, code, 8);
+        if (error != std::errc() || end != text.data() + at + 4 || code > 0xffU)
+            return std::nullopt;
+        characters += static_cast<char>(code);
+        at += 3;
+    }
+    return characters;
+}
+
+/// The position among the values of the enumeration `type` of `bit`, a literal's `0`, `1`, `x` or
+/// `z`: a `boolean`'s false or true for 0 or 1, and otherwise its character literal of that bit,
+/// `'0'`, `'1'`, `'X'` or `'Z'`.
+std::optional<std::uint64_t> positionOf(type_t type, char bit) {
+    type_t base = type_base_recur(type);
+    if (type_has_ident(base)
+        && std::string_view(istr(type_ident(base))) == "STD.STANDARD.BOOLEAN") {
+        if (bit == '0' || bit == '1') return bit == '1' ? 1U : 0U;
+        return std::nullopt;
+    }
+    const char wanted = static_cast<char>(std::toupper(static_cast<unsigned char>(bit)));
+    for (unsigned index = 0; index < type_enum_literals(base); ++index) {
+        const std::string_view name = istr(tree_ident(type_enum_literal(base, index)));
+        if (name.size() == 3 && name[0] == '\'' && name[1] == wanted && name[2] == '\'')
+            return index;
+    }
+    return std::nullopt;
+}
+
+/// The name of `type`'s base type, `STD.STANDARD.BIT`, or nothing when it has none.
+std::string_view baseName(type_t type) {
+    type_t base = type_base_recur(type);
+    return type_has_ident(base) ? std::string_view(istr(type_ident(base))) : std::string_view();
+}
+
+/// What a generic of `type` is as a SystemVerilog parameter, or nothing when it is none.
+std::optional<eir::UnitInterface::Kind> kindOf(type_t type) {
+    using Kind = eir::UnitInterface::Kind;
+    if (type_is_integer(type)) return Kind::Integer;
+    const auto scalar = [](type_t of) -> std::optional<Kind> {
+        const std::string_view name = baseName(of);
+        if (name == "STD.STANDARD.BIT" || name == "STD.STANDARD.BOOLEAN") return Kind::Bit;
+        if (name == "IEEE.STD_LOGIC_1164.STD_ULOGIC") return Kind::Logic;
+        return std::nullopt;
+    };
+    if (!type_is_array(type)) return scalar(type);
+    if (dimension_of(type) != 1) return std::nullopt;
+    type_t element = type_elem(type);
+    if (baseName(element) == "STD.STANDARD.CHARACTER") return Kind::String;
+    const std::optional<Kind> elements = scalar(element);
+    if (!elements) return std::nullopt;
+    return *elements == Kind::Bit ? Kind::BitVector : Kind::LogicVector;
+}
+
+/// Whether a value of `type` has a `std_ulogic` in it, which makes it four-state in SystemVerilog.
+bool holdsLogic(type_t type) {
+    if (type_is_array(type)) return holdsLogic(type_elem(type));
+    if (type_is_record(type)) {
+        type_t base = type_base_recur(type);
+        for (unsigned index = 0; index < type_fields(base); ++index) {
+            if (holdsLogic(tree_type(type_field(base, index)))) return true;
+        }
+        return false;
+    }
+    return encodingOf(type) == eir::Encoding::VhdlLogic;
 }
 
 class DesignTranslator;
@@ -265,7 +462,7 @@ public:
         : request(translated), locator(locate), engine(diagnostics) {}
 
     std::vector<eir::ModuleDefinition> run() {
-        for (tree_t top : tops()) {
+        for (tree_t top : request.onlyRequested ? std::vector<tree_t>() : tops()) {
             tree_t architecture = architectureOf(top);
             if (architecture == nullptr) {
                 engine.report(DiagCode::VhdlError, locate(top),
@@ -276,6 +473,14 @@ public:
             std::optional<Folder> generics = bindGenerics(top, nullptr, Folder());
             if (!generics) continue;
             static_cast<void>(definitionFor(top, architecture, std::move(*generics)));
+        }
+
+        // What SystemVerilog asks of the design: an entity it instantiates for its values, and the
+        // interface of each it may.
+        for (const eir::UnitRequest& asked : request.requests) answered.push_back(answer(asked));
+        for (const std::string& name : request.described) {
+            if (std::optional<eir::UnitInterface> unit = describe(name))
+                described.push_back(std::move(*unit));
         }
 
         // Breadth first, so that a deep hierarchy does not recurse as deep, and in the order
@@ -798,11 +1003,7 @@ public:
     [[nodiscard]] std::vector<std::string> modulesNamed(std::string_view simple) const {
         std::vector<std::string> found;
         for (const std::string& module : request.modules) {
-            if (std::ranges::equal(module, simple, [](char a, char b) {
-                    return std::tolower(static_cast<unsigned char>(a))
-                           == std::tolower(static_cast<unsigned char>(b));
-                }))
-                found.push_back(module);
+            if (sameName(module, simple)) found.push_back(module);
         }
         return found;
     }
@@ -844,7 +1045,12 @@ public:
         return moduleRequests[index].placeholder;
     }
 
-    std::vector<eir::UnitRequest> takeRequests() { return std::move(moduleRequests); }
+    /// What the design exchanges with SystemVerilog, once it is translated.
+    Exchange takeExchange() {
+        return Exchange{.asked = std::move(moduleRequests),
+                        .answers = std::move(answered),
+                        .interfaces = std::move(described)};
+    }
 
     [[nodiscard]] std::int8_t timeUnitExponent() const { return request.timeUnitExponent; }
 
@@ -852,20 +1058,9 @@ private:
     /// The entities the design is translated from.
     std::vector<tree_t> tops() {
         if (!request.top.empty()) {
-            std::string wanted = request.top;
-            for (char& character : wanted)
-                character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
-            ident_t name = ident_prefix(lib_name(request.work), ident_new(wanted.c_str()), '.');
-            // The last analysed, which replaced any before it of its name, as its architecture
-            // is the last analysed (`architectureOf`).
-            for (tree_t unit : std::views::reverse(request.analysed)) {
-                if (tree_kind(unit) == T_ENTITY && tree_ident(unit) == name) return {unit};
-            }
-            if (tree_t unit = lib_get(request.work, name);
-                unit != nullptr && tree_kind(unit) == T_ENTITY)
-                return {unit};
-            // Left to elaboration, which says what the design does have.
-            return {};
+            // Left to elaboration, when there is none, which says what the design does have.
+            tree_t top = entityIn(request.work, request.top);
+            return top == nullptr ? std::vector<tree_t>() : std::vector<tree_t>{top};
         }
 
         // Every entity this run analysed that no architecture of it instantiates.
@@ -900,11 +1095,252 @@ private:
             if (tree_t entity = boundEntity(tree_ref(instance), instance, unit))
                 instantiated.insert(entity);
         }
+        // Nor is one SystemVerilog instantiates a top level.
         std::vector<tree_t> roots;
         for (tree_t unit : request.analysed) {
-            if (tree_kind(unit) == T_ENTITY && !instantiated.contains(unit)) roots.push_back(unit);
+            if (tree_kind(unit) != T_ENTITY || instantiated.contains(unit)) continue;
+            const std::string name = simpleName(tree_ident(unit));
+            if (std::ranges::any_of(request.described,
+                                    [&name](const std::string& fromSystemVerilog) {
+                                        return sameName(fromSystemVerilog, name);
+                                    }))
+                continue;
+            roots.push_back(unit);
         }
         return roots;
+    }
+
+    /// The entity called `name`, in any case, in `library`: the last this run analysed, which
+    /// replaced any before it of its name, as its architecture is the last analysed
+    /// (`architectureOf`), or else the library's. Null when there is none.
+    tree_t entityIn(lib_t library, std::string_view name) {
+        std::string wanted(name);
+        for (char& character : wanted)
+            character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+        ident_t qualified = ident_prefix(lib_name(library), ident_new(wanted.c_str()), '.');
+        if (library == request.work) {
+            for (tree_t unit : std::views::reverse(request.analysed)) {
+                if (tree_kind(unit) == T_ENTITY && tree_ident(unit) == qualified) return unit;
+            }
+        }
+        tree_t unit = lib_get(library, qualified);
+        return unit != nullptr && tree_kind(unit) == T_ENTITY ? unit : nullptr;
+    }
+
+    /// The entity SystemVerilog names `name`: the work library's, or else the first of the other
+    /// libraries the design is analysed against that has one. Null when none does.
+    tree_t entityNamed(std::string_view name) {
+        if (tree_t entity = entityIn(request.work, name)) return entity;
+        for (const std::string& library : request.libraries) {
+            std::string upper = library;
+            for (char& character : upper)
+                character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+            lib_t found = lib_require(ident_new(upper.c_str()));
+            if (found == nullptr) continue;
+            if (tree_t entity = entityIn(found, name)) return entity;
+        }
+        return nullptr;
+    }
+
+    /// The name `declaration` was declared with, in the case written, which SystemVerilog names it
+    /// in; its name in lower case when the source is not one this run read.
+    [[nodiscard]] std::string declaredName(tree_t declaration) const {
+        std::string lower = simpleName(tree_ident(declaration));
+        const SourceLocation at = locate(declaration);
+        if (request.sources == nullptr || !at.valid()) return lower;
+        const std::string_view text = request.sources->bufferText(at.buffer());
+        if (at.offset() > text.size() || text.size() - at.offset() < lower.size()) return lower;
+        const std::string_view written = text.substr(at.offset(), lower.size());
+        return sameName(written, lower) ? std::string(written) : lower;
+    }
+
+    /// The name of the definition the entity SystemVerilog asks for is with the values it asks for,
+    /// or an empty one having reported why it cannot be translated.
+    std::string answer(const eir::UnitRequest& asked) {
+        tree_t entity = entityNamed(asked.unit);
+        if (entity == nullptr) {
+            engine.report(
+                DiagCode::VhdlError, SourceLocation(),
+                std::format("SystemVerilog instantiates '{}', which no entity is", asked.unit));
+            return {};
+        }
+        tree_t architecture = architectureOf(entity);
+        if (architecture == nullptr) {
+            engine.report(DiagCode::VhdlError, locate(entity),
+                          std::format("entity '{}' has no architecture to simulate",
+                                      simpleName(tree_ident(entity))));
+            return {};
+        }
+
+        // A port of an unconstrained type takes its bounds from its actual, which SystemVerilog
+        // does not give (DESIGN_GUIDE.md section 18, M7).
+        for (unsigned index = 0; index < tree_ports(entity); ++index) {
+            type_t type = tree_type(tree_port(entity, index));
+            if (type_is_array(type) && type_is_unconstrained(type)) {
+                unsupported(tree_port(entity, index),
+                            std::format("the port '{}' of an unconstrained type, which nothing in "
+                                        "SystemVerilog gives bounds,",
+                                        simpleName(tree_ident(tree_port(entity, index)))));
+                return {};
+            }
+        }
+
+        std::optional<Folder> generics = bindLiterals(entity, asked.parameters);
+        if (!generics) return {};
+        return definitionFor(entity, architecture, std::move(*generics));
+    }
+
+    /// The values of `entity`'s generics SystemVerilog sets, each by its name in any case, and
+    /// each other's default. Nothing, having reported why, when one cannot be bound.
+    std::optional<Folder> bindLiterals(tree_t entity,
+                                       const std::vector<eir::UnitRequest::Parameter>& values) {
+        Folder bound;
+        for (unsigned index = 0; index < tree_generics(entity); ++index) {
+            tree_t generic = tree_generic(entity, index);
+            const std::string name = simpleName(tree_ident(generic));
+            const auto given =
+                std::ranges::find_if(values, [&name](const eir::UnitRequest::Parameter& value) {
+                    return sameName(value.name, name);
+                });
+            if (given == values.end()) {
+                if (!tree_has_value(generic)) {
+                    engine.report(DiagCode::VhdlError, locate(generic),
+                                  std::format("the generic '{}' of '{}' has no default, and the "
+                                              "SystemVerilog instantiating it sets none",
+                                              name, simpleName(tree_ident(entity))));
+                    return std::nullopt;
+                }
+                if (!bindGeneric(bound, generic, tree_value(generic), bound)) return std::nullopt;
+                continue;
+            }
+            if (!bindLiteral(bound, generic, given->value)) {
+                unsupported(generic, std::format("setting the generic '{}' to SystemVerilog's {}",
+                                                 name, given->value));
+                return std::nullopt;
+            }
+        }
+        return bound;
+    }
+
+    /// Binds `generic` to the value of `text`, a literal (`eir::UnitRequest`); false when it is not
+    /// a value of the generic's type.
+    static bool bindLiteral(Folder& bound, tree_t generic, std::string_view text) {
+        type_t type = tree_type(generic);
+        if (type_is_integer(type)) {
+            const std::optional<std::int64_t> value = integerLiteral(text);
+            if (value) bound.bind(generic, *value);
+            return value.has_value();
+        }
+        if (type_is_enum(type)) {
+            const std::optional<std::string> bits = bitsLiteral(text);
+            if (!bits || bits->size() != 1) return false;
+            const std::optional<std::uint64_t> position = positionOf(type, bits->front());
+            if (position) bound.bind(generic, static_cast<std::int64_t>(*position));
+            return position.has_value();
+        }
+        if (!type_is_array(type) || dimension_of(type) != 1) return false;
+
+        // An array's elements, left first, as positions of its element type's values: a string's
+        // characters are their codes, as `character`'s positions are.
+        type_t element = type_elem(type);
+        std::vector<std::uint64_t> positions;
+        if (text.starts_with('"')) {
+            if (baseName(element) != "STD.STANDARD.CHARACTER") return false;
+            const std::optional<std::string> characters = stringLiteral(text);
+            if (!characters) return false;
+            for (const char character : *characters)
+                positions.push_back(static_cast<unsigned char>(character));
+        } else {
+            const std::optional<std::string> bits = bitsLiteral(text);
+            if (!type_is_enum(element) || !bits) return false;
+            for (const char bit : *bits) {
+                const std::optional<std::uint64_t> position = positionOf(element, bit);
+                if (!position) return false;
+                positions.push_back(*position);
+            }
+        }
+
+        // Its subtype's bounds, or for an unconstrained type the literal's, from the left of its
+        // index subtype in the direction it runs, as a string literal's are (IEEE 1076 section
+        // 9.3.2).
+        std::optional<Layout> layout = layoutOf(type, bound);
+        if (!layout) {
+            const std::optional<Folder::Range> index =
+                Folder().rangeOf(type_index(type_base_recur(type), 0));
+            if (!index || positions.empty()) return false;
+            const auto last = static_cast<std::int64_t>(positions.size()) - 1;
+            const Folder::Range bounds{.left = index->left,
+                                       .right = index->ascending ? index->left + last
+                                                                 : index->left - last,
+                                       .ascending = index->ascending};
+            bound.bindBounds(generic, bounds);
+            layout = arrayLayout(bounds, element, bound);
+        }
+        if (!layout || !layout->isArray()
+            || layout->index.length() != static_cast<std::int64_t>(positions.size()))
+            return false;
+        eir::BitVector bits = eir::BitVector::filled(layout->storage.bitWidth(), eir::Logic::Zero);
+        for (std::size_t at = 0; at < positions.size(); ++at) {
+            eir::bitops::assignPartAt(
+                bits.mutableRef(),
+                eir::BitVector::fromUInt64(positions[at], layout->elementBits).ref(),
+                (positions.size() - 1 - at) * layout->elementBits);
+        }
+        bound.bindComposite(generic, std::move(bits));
+        return true;
+    }
+
+    /// The interface of the entity SystemVerilog names `name`, which it is checked against as a
+    /// module of that name, or nothing when no entity has the name. A generic no SystemVerilog
+    /// parameter can hold is left out, so that one can only take its default.
+    std::optional<eir::UnitInterface> describe(const std::string& name) {
+        tree_t entity = entityNamed(name);
+        if (entity == nullptr) return std::nullopt;
+        eir::UnitInterface unit{.name = name, .parameters = {}, .ports = {}, .widths = {}};
+
+        // The defaults, each folded where the generics before it are bound, as an instance setting
+        // none folds them.
+        Folder defaults;
+        bool folding = true;
+        for (unsigned index = 0; index < tree_generics(entity); ++index) {
+            tree_t generic = tree_generic(entity, index);
+            type_t type = tree_type(generic);
+            const std::optional<eir::UnitInterface::Kind> kind = kindOf(type);
+            folding = folding && tree_has_value(generic)
+                      && bindGeneric(defaults, generic, tree_value(generic), defaults);
+            if (!kind) continue;
+
+            eir::UnitInterface::Parameter parameter{
+                .name = declaredName(generic), .kind = *kind, .length = 0, .value = std::nullopt};
+            if (type_is_array(type) && *kind != eir::UnitInterface::Kind::String) {
+                if (const std::optional<Layout> layout = layoutOf(type, Folder()))
+                    parameter.length = static_cast<std::uint32_t>(layout->index.length());
+            }
+            if (folding) parameter.value = systemVerilogLiteral(defaults, generic);
+            unit.parameters.push_back(std::move(parameter));
+        }
+
+        for (unsigned index = 0; index < tree_ports(entity); ++index) {
+            tree_t port = tree_port(entity, index);
+            eir::PortDirection direction = eir::PortDirection::Input;
+            switch (static_cast<port_mode_t>(tree_subkind(port))) {
+            case PORT_IN: break;
+            case PORT_OUT:
+            case PORT_BUFFER: direction = eir::PortDirection::Output; break;
+            case PORT_INOUT: direction = eir::PortDirection::InOut; break;
+            default: continue;
+            }
+            type_t type = tree_type(port);
+            const bool unpacked =
+                type_is_array(type) && dimension_of(type) == 1
+                && (type_is_array(type_elem(type)) || type_is_record(type_elem(type)));
+            unit.ports.push_back({.name = declaredName(port),
+                                  .direction = direction,
+                                  .fourState = holdsLogic(type),
+                                  .isSigned = type_is_integer(type),
+                                  .unpacked = unpacked});
+        }
+        return unit;
     }
 
     /// The entity's name, with the architecture when another of the entity's architectures has
@@ -1041,6 +1477,8 @@ private:
     std::deque<Specialisation> pending;
     std::vector<eir::ModuleDefinition> modules;
     std::vector<eir::UnitRequest> moduleRequests;
+    std::vector<std::string> answered;
+    std::vector<eir::UnitInterface> described;
     std::map<std::pair<tree_t, std::vector<std::string>>, std::string> names;
     std::map<std::string, tree_t> baseOwners;
     std::set<std::string> taken;
@@ -1776,79 +2214,6 @@ void ArchitectureTranslator::instance(tree_t statement) {
     result.instances.push_back(std::move(created));
 }
 
-namespace {
-
-/// The value `generics` binds the generic `generic` to as a SystemVerilog literal, which sets the
-/// parameter of its name of the module its component is bound to: an integer in decimal, a `bit`, a
-/// `boolean` or a `std_ulogic` as one bit by section 3.6's mapping, an array of them as that many
-/// bits, the left element highest, and a string as a string. Nothing for a value of another type.
-std::optional<std::string> systemVerilogLiteral(const Folder& generics, tree_t generic) {
-    // std_ulogic's codes, U X 0 1 Z W L H -, as four-state bits.
-    static constexpr std::string_view Logic = "xx01zx01x";
-    type_t type = tree_type(generic);
-
-    if (const eir::BitVector* bits = generics.compositeOf(generic)) {
-        if (!type_is_array(type) || dimension_of(type) != 1) return std::nullopt;
-        type_t element = type_elem(type);
-        type_t base = type_base_recur(element);
-        const bool characters =
-            type_has_ident(base)
-            && std::string_view(istr(type_ident(base))) == "STD.STANDARD.CHARACTER";
-        const eir::Encoding encoding = encodingOf(element);
-        const std::optional<eir::Type> storage = scalarStorage(element);
-        if (!storage || bits->width() == 0 || bits->width() % storage->bitWidth() != 0)
-            return std::nullopt;
-        if (!characters && encoding != eir::Encoding::VhdlLogic
-            && encoding != eir::Encoding::VhdlBit)
-            return std::nullopt;
-
-        const std::uint32_t width = storage->bitWidth();
-        std::string text =
-            characters ? std::string("\"") : std::format("{}'b", bits->width() / width);
-        for (std::uint32_t at = bits->width(); at >= width; at -= width) {
-            eir::BitVector one(width);
-            eir::bitops::partSelectAt(one.mutableRef(), bits->ref(), at - width);
-            const std::uint64_t code = one.ref().toUInt64();
-            if (characters) {
-                if (code == '"' || code == '\\') {
-                    text += '\\';
-                    text += static_cast<char>(code);
-                } else if (code >= 0x20 && code < 0x7f) {
-                    text += static_cast<char>(code);
-                } else {
-                    text += std::format("\\{:03o}", code & 0xffU);
-                }
-            } else if (encoding == eir::Encoding::VhdlLogic) {
-                if (code >= Logic.size()) return std::nullopt;
-                text += Logic[code];
-            } else {
-                text += code == 0 ? '0' : '1';
-            }
-        }
-        if (characters) text += '"';
-        return text;
-    }
-
-    const std::optional<std::int64_t> value = generics.boundValue(generic);
-    if (!value) return std::nullopt;
-    if (type_is_integer(type)) {
-        // Wider than an unsized literal's 32 bits, sized and signed.
-        if (*value >= std::numeric_limits<std::int32_t>::min()
-            && *value <= std::numeric_limits<std::int32_t>::max())
-            return std::to_string(*value);
-        const std::uint64_t magnitude = *value < 0 ? 0 - static_cast<std::uint64_t>(*value)
-                                                   : static_cast<std::uint64_t>(*value);
-        return std::format("{}64'sd{}", *value < 0 ? "-" : "", magnitude);
-    }
-    const eir::Encoding encoding = encodingOf(type);
-    if (encoding == eir::Encoding::VhdlLogic && *value >= 0 && std::cmp_less(*value, Logic.size()))
-        return std::format("1'b{}", Logic[static_cast<std::size_t>(*value)]);
-    if (encoding == eir::Encoding::VhdlBit) return *value != 0 ? "1'b1" : "1'b0";
-    return std::nullopt;
-}
-
-} // namespace
-
 void ArchitectureTranslator::moduleInstance(tree_t statement, tree_t component,
                                             const std::string& module) {
     // The component's generics are the module's parameters of their names (DESIGN_GUIDE.md
@@ -2171,11 +2536,11 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
 std::vector<eir::ModuleDefinition> translateDesign(const DesignRequest& request,
                                                    const Locate& locate,
                                                    DiagnosticEngine& diagnostics,
-                                                   std::vector<eir::UnitRequest>& requests) {
+                                                   Exchange& exchange) {
     setIeeeWarnings(request.ieeeWarnings);
     DesignTranslator translator(request, locate, diagnostics);
     std::vector<eir::ModuleDefinition> definitions = translator.run();
-    requests = translator.takeRequests();
+    exchange = translator.takeExchange();
     return definitions;
 }
 

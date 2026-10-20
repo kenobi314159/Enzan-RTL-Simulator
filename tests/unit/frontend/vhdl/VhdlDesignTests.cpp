@@ -114,7 +114,10 @@ protected:
         options.units.searchDirectories = {libraries()};
         options.top = std::move(top);
         options.modules = modules;
-        return enzan::frontend::vhdl::analyse(options, sources, engine, &moduleRequests);
+        options.requests = entityRequests;
+        options.described = described;
+        options.onlyRequested = onlyRequested;
+        return enzan::frontend::vhdl::analyse(options, sources, engine, &exchange);
     }
 
     [[nodiscard]] const Diagnostic* first(DiagCode code) const {
@@ -135,7 +138,12 @@ protected:
     /// The SystemVerilog modules a component may be bound to, and what the last translation asked
     /// of them.
     std::vector<std::string> modules;
-    std::vector<enzan::eir::UnitRequest> moduleRequests;
+
+    /// What SystemVerilog asks of the design, and what the last translation exchanged with it.
+    std::vector<enzan::eir::UnitRequest> entityRequests;
+    std::vector<std::string> described;
+    bool onlyRequested = false;
+    enzan::frontend::vhdl::Exchange exchange;
 };
 
 TEST_F(VhdlDesignTest, ATopAnalysedTwiceIsTheOneAnalysedLast) {
@@ -1177,8 +1185,8 @@ end architecture;
     ASSERT_NE(design, nullptr) << transcript();
     EXPECT_EQ(first(DiagCode::VhdlUnboundComponent), nullptr);
 
-    ASSERT_EQ(moduleRequests.size(), 1U);
-    const enzan::eir::UnitRequest& request = moduleRequests.front();
+    ASSERT_EQ(exchange.asked.size(), 1U);
+    const enzan::eir::UnitRequest& request = exchange.asked.front();
     EXPECT_EQ(request.unit, "ClkBuf");
     using Parameter = enzan::eir::UnitRequest::Parameter;
     EXPECT_EQ(request.parameters,
@@ -1251,6 +1259,160 @@ end architecture;
     const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(refused, nullptr) << transcript();
     EXPECT_NE(refused->message.find("'period'"), std::string::npos) << refused->message;
+}
+
+/// An entity SystemVerilog instantiates, with a generic of each kind a parameter can set it to.
+constexpr std::string_view InstantiatedFromSystemVerilog = R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+package fifo_types is
+  type words is array (0 to 1) of std_logic_vector(7 downto 0);
+end package;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use work.fifo_types.all;
+
+entity Fifo is
+  generic (Width : integer := 4;
+           Name : string := "f";
+           Init : std_logic_vector(3 downto 0) := "01ZX";
+           Flag : boolean := false;
+           Level : std_logic := 'H';
+           Period : time := 1 ns);
+  port (Clk : in std_logic;
+        Data : out std_logic_vector(Width - 1 downto 0);
+        Count : out integer;
+        Pair : inout words);
+end entity;
+
+architecture rtl of Fifo is
+begin
+  Data <= (others => '0');
+  Count <= Width;
+end architecture;
+)";
+
+TEST_F(VhdlDesignTest, AnEntitySystemVerilogInstantiatesIsDescribedWithItsNamesAsDeclared) {
+    // Its generics and ports in the case written, which SystemVerilog names them in; a generic no
+    // parameter can hold is left out.
+    described = {"FIFO"};
+    onlyRequested = true;
+    const std::unique_ptr<enzan::eir::Design> design = translate(InstantiatedFromSystemVerilog);
+    ASSERT_NE(design, nullptr) << transcript();
+
+    ASSERT_EQ(exchange.interfaces.size(), 1U);
+    const enzan::eir::UnitInterface& unit = exchange.interfaces.front();
+    EXPECT_EQ(unit.name, "FIFO");
+    using Kind = enzan::eir::UnitInterface::Kind;
+    using Parameter = enzan::eir::UnitInterface::Parameter;
+    EXPECT_EQ(unit.parameters,
+              (std::vector<Parameter>{
+                  {.name = "Width", .kind = Kind::Integer, .length = 0, .value = "4"},
+                  {.name = "Name", .kind = Kind::String, .length = 0, .value = "\"f\""},
+                  {.name = "Init", .kind = Kind::LogicVector, .length = 4, .value = "4'b01zx"},
+                  {.name = "Flag", .kind = Kind::Bit, .length = 0, .value = "1'b0"},
+                  {.name = "Level", .kind = Kind::Logic, .length = 0, .value = "1'b1"}}));
+    using enzan::eir::PortDirection;
+    using Port = enzan::eir::UnitInterface::Port;
+    EXPECT_EQ(unit.ports, (std::vector<Port>{{.name = "Clk",
+                                              .direction = PortDirection::Input,
+                                              .fourState = true,
+                                              .isSigned = false,
+                                              .unpacked = false},
+                                             {.name = "Data",
+                                              .direction = PortDirection::Output,
+                                              .fourState = true,
+                                              .isSigned = false,
+                                              .unpacked = false},
+                                             {.name = "Count",
+                                              .direction = PortDirection::Output,
+                                              .fourState = false,
+                                              .isSigned = true,
+                                              .unpacked = false},
+                                             {.name = "Pair",
+                                              .direction = PortDirection::InOut,
+                                              .fourState = true,
+                                              .isSigned = false,
+                                              .unpacked = true}}));
+    EXPECT_TRUE(design->empty()) << "nothing was asked to be translated";
+}
+
+TEST_F(VhdlDesignTest, AnEntitySystemVerilogAsksForIsTranslatedWithItsValues) {
+    // Each value by its generic's name in any case, the rest their defaults.
+    entityRequests.push_back({.placeholder = "fifo generic map (...)",
+                              .unit = "fifo",
+                              .parameters = {{.name = "WIDTH", .value = "6"},
+                                             {.name = "init", .value = "4'b1100"},
+                                             {.name = "Name", .value = R"("a\"b")"},
+                                             {.name = "flag", .value = "1'b1"}},
+                              .ports = {}});
+    onlyRequested = true;
+    const std::unique_ptr<enzan::eir::Design> design = translate(InstantiatedFromSystemVerilog);
+    ASSERT_NE(design, nullptr) << transcript();
+
+    ASSERT_EQ(exchange.answers.size(), 1U);
+    const enzan::eir::ModuleDefinition* fifo = design->findModule(exchange.answers.front());
+    ASSERT_NE(fifo, nullptr) << exchange.answers.front();
+    ASSERT_EQ(fifo->ports.size(), 4U);
+    EXPECT_EQ(fifo->objects[fifo->ports[1].objectIndex].type.bitWidth(), 6U * 8U)
+        << "six std_ulogic codes for the width 6";
+}
+
+TEST_F(VhdlDesignTest, AnEntitySystemVerilogInstantiatesIsNoTopLevel) {
+    described = {"fifo"};
+    const std::unique_ptr<enzan::eir::Design> design = translate(InstantiatedFromSystemVerilog);
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_EQ(design->findModule("fifo"), nullptr);
+}
+
+TEST_F(VhdlDesignTest, AValueNoValueOfTheGenericsTypeIsRefused) {
+    // Three elements for a vector of four.
+    entityRequests.push_back({.placeholder = "p",
+                              .unit = "fifo",
+                              .parameters = {{.name = "init", .value = "3'b110"}},
+                              .ports = {}});
+    onlyRequested = true;
+    EXPECT_EQ(translate(InstantiatedFromSystemVerilog), nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'init'"), std::string::npos) << refused->message;
+}
+
+TEST_F(VhdlDesignTest, AGenericSystemVerilogLeavesWithoutADefaultIsRefused) {
+    entityRequests.push_back({.placeholder = "p", .unit = "needs", .parameters = {}, .ports = {}});
+    onlyRequested = true;
+    EXPECT_EQ(translate(R"(
+entity needs is
+  generic (n : integer);
+end entity;
+architecture a of needs is
+begin
+end architecture;
+)"),
+              nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlError);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("no default"), std::string::npos) << refused->message;
+}
+
+TEST_F(VhdlDesignTest, AnEntityWhosePortHasNoBoundsCannotBeInstantiatedFromSystemVerilog) {
+    entityRequests.push_back(
+        {.placeholder = "p", .unit = "open_bounds", .parameters = {}, .ports = {}});
+    onlyRequested = true;
+    EXPECT_EQ(translate(R"(
+entity open_bounds is
+  port (d : in bit_vector);
+end entity;
+architecture a of open_bounds is
+begin
+end architecture;
+)"),
+              nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("unconstrained"), std::string::npos) << refused->message;
 }
 
 TEST_F(VhdlDesignTest, AnUnconstrainedPortTakesItsActualsBounds) {

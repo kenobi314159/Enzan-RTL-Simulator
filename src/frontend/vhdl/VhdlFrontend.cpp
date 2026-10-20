@@ -53,6 +53,12 @@ enum class Record : std::uint8_t {
     /// placeholder, unit, its parameters' count, name and value, and its ports' count, name and
     /// direction.
     Requests = 5,
+    /// The definition each entity SystemVerilog asked for became: how many, then each's name.
+    Answers = 6,
+    /// The interfaces of the entities SystemVerilog instantiates: how many, then each's name, its
+    /// parameters' count, name, kind, length and value when it has one, and its ports' count,
+    /// name, direction, whether four-state, whether signed and whether unpacked.
+    Interfaces = 7,
 };
 
 class Encoder {
@@ -197,6 +203,40 @@ public:
         static_cast<void>(writeAll(output, encoder.view()));
     }
 
+    void answers(const std::vector<std::string>& names) const {
+        Encoder encoder;
+        encoder.byte(static_cast<std::uint8_t>(Record::Answers));
+        encoder.u32(static_cast<std::uint32_t>(names.size()));
+        for (const std::string& name : names) encoder.text(name);
+        static_cast<void>(writeAll(output, encoder.view()));
+    }
+
+    void interfaces(const std::vector<eir::UnitInterface>& described) const {
+        Encoder encoder;
+        encoder.byte(static_cast<std::uint8_t>(Record::Interfaces));
+        encoder.u32(static_cast<std::uint32_t>(described.size()));
+        for (const eir::UnitInterface& unit : described) {
+            encoder.text(unit.name);
+            encoder.u32(static_cast<std::uint32_t>(unit.parameters.size()));
+            for (const eir::UnitInterface::Parameter& parameter : unit.parameters) {
+                encoder.text(parameter.name);
+                encoder.byte(static_cast<std::uint8_t>(parameter.kind));
+                encoder.u32(parameter.length);
+                encoder.byte(parameter.value ? 1 : 0);
+                if (parameter.value) encoder.text(*parameter.value);
+            }
+            encoder.u32(static_cast<std::uint32_t>(unit.ports.size()));
+            for (const eir::UnitInterface::Port& port : unit.ports) {
+                encoder.text(port.name);
+                encoder.byte(static_cast<std::uint8_t>(port.direction));
+                encoder.byte(port.fourState ? 1 : 0);
+                encoder.byte(port.isSigned ? 1 : 0);
+                encoder.byte(port.unpacked ? 1 : 0);
+            }
+        }
+        static_cast<void>(writeAll(output, encoder.view()));
+    }
+
     void finish(unsigned errors) const {
         Encoder encoder;
         encoder.byte(static_cast<std::uint8_t>(Record::Finished));
@@ -303,9 +343,57 @@ struct Outcome {
     /// Where each requested resolution function is, when the child was asked for some.
     std::vector<ResolutionAnswer> answers;
 
-    /// The SystemVerilog modules the design instantiates.
-    std::vector<eir::UnitRequest> requests;
+    /// What the design exchanges with SystemVerilog.
+    Exchange exchange;
 };
+
+/// One interface of a `Record::Interfaces`; nothing when the stream ends inside it.
+std::optional<eir::UnitInterface> decodeInterface(Decoder& decoder) {
+    eir::UnitInterface unit;
+    std::optional<std::string> name = decoder.text();
+    const std::optional<std::uint32_t> parameters = decoder.u32();
+    if (!name || !parameters) return std::nullopt;
+    unit.name = std::move(*name);
+    const std::uint32_t parameterCount = *parameters;
+    for (std::uint32_t index = 0; index < parameterCount; ++index) {
+        std::optional<std::string> parameterName = decoder.text();
+        const std::optional<std::uint8_t> kind = decoder.byte();
+        const std::optional<std::uint32_t> length = decoder.u32();
+        const std::optional<std::uint8_t> valued = decoder.byte();
+        if (!parameterName || !kind || !length || !valued
+            || *kind > static_cast<std::uint8_t>(eir::UnitInterface::Kind::String))
+            return std::nullopt;
+        eir::UnitInterface::Parameter parameter{.name = std::move(*parameterName),
+                                                .kind =
+                                                    static_cast<eir::UnitInterface::Kind>(*kind),
+                                                .length = *length,
+                                                .value = std::nullopt};
+        if (*valued != 0) {
+            parameter.value = decoder.text();
+            if (!parameter.value) return std::nullopt;
+        }
+        unit.parameters.push_back(std::move(parameter));
+    }
+    const std::optional<std::uint32_t> ports = decoder.u32();
+    if (!ports) return std::nullopt;
+    const std::uint32_t portCount = *ports;
+    for (std::uint32_t index = 0; index < portCount; ++index) {
+        std::optional<std::string> portName = decoder.text();
+        const std::optional<std::uint8_t> direction = decoder.byte();
+        const std::optional<std::uint8_t> fourState = decoder.byte();
+        const std::optional<std::uint8_t> isSigned = decoder.byte();
+        const std::optional<std::uint8_t> unpacked = decoder.byte();
+        if (!portName || !direction || !fourState || !isSigned || !unpacked
+            || *direction > static_cast<std::uint8_t>(eir::PortDirection::InOut))
+            return std::nullopt;
+        unit.ports.push_back({.name = std::move(*portName),
+                              .direction = static_cast<eir::PortDirection>(*direction),
+                              .fourState = *fourState != 0,
+                              .isSigned = *isSigned != 0,
+                              .unpacked = *unpacked != 0});
+    }
+    return unit;
+}
 
 /// One request of a `Record::Requests`; nothing when the stream ends inside it.
 std::optional<eir::UnitRequest> decodeRequest(Decoder& decoder) {
@@ -379,7 +467,29 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
             for (std::uint32_t index = 0; index < total; ++index) {
                 std::optional<eir::UnitRequest> request = decodeRequest(decoder);
                 if (!request) return outcome;
-                outcome.requests.push_back(std::move(*request));
+                outcome.exchange.asked.push_back(std::move(*request));
+            }
+            continue;
+        }
+        if (kind == static_cast<std::uint8_t>(Record::Answers)) {
+            const std::optional<std::uint32_t> count = decoder.u32();
+            if (!count) return outcome;
+            const std::uint32_t total = *count;
+            for (std::uint32_t index = 0; index < total; ++index) {
+                std::optional<std::string> name = decoder.text();
+                if (!name) return outcome;
+                outcome.exchange.answers.push_back(std::move(*name));
+            }
+            continue;
+        }
+        if (kind == static_cast<std::uint8_t>(Record::Interfaces)) {
+            const std::optional<std::uint32_t> count = decoder.u32();
+            if (!count) return outcome;
+            const std::uint32_t total = *count;
+            for (std::uint32_t index = 0; index < total; ++index) {
+                std::optional<eir::UnitInterface> unit = decodeInterface(decoder);
+                if (!unit) return outcome;
+                outcome.exchange.interfaces.push_back(std::move(*unit));
             }
             continue;
         }
@@ -511,17 +621,19 @@ std::optional<std::vector<eir::ModuleDefinition>> definitionsFrom(const Outcome&
 } // namespace
 
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
-                                     DiagnosticEngine& diagnostics,
-                                     std::vector<eir::UnitRequest>* requests) {
+                                     DiagnosticEngine& diagnostics, Exchange* exchange) {
     const std::optional<Outcome> outcome = inChild(
         [&options, &sources](PipeSink& sink) {
             std::string encoded;
             std::vector<std::string> libraries;
-            std::vector<eir::UnitRequest> asked;
-            const unsigned errors = runNvcDesign(options, sources, sink, encoded, libraries, asked);
+            Exchange exchanged;
+            const unsigned errors =
+                runNvcDesign(options, sources, sink, encoded, libraries, exchanged);
             if (errors == 0) {
                 sink.design(encoded, libraries);
-                sink.requests(asked);
+                sink.requests(exchanged.asked);
+                sink.answers(exchanged.answers);
+                sink.interfaces(exchanged.interfaces);
             }
             return errors;
         },
@@ -530,7 +642,7 @@ std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceM
     std::optional<std::vector<eir::ModuleDefinition>> modules =
         definitionsFrom(*outcome, options.units, sources, diagnostics);
     if (!modules) return nullptr;
-    if (requests != nullptr) *requests = outcome->requests;
+    if (exchange != nullptr) *exchange = outcome->exchange;
 
     auto design = std::make_unique<eir::Design>();
     for (eir::ModuleDefinition& module : *modules) design->addModule(std::move(module));

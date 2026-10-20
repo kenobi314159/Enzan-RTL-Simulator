@@ -262,8 +262,7 @@ unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources
 
 unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources,
                       DiagnosticSink& sink, std::string& encoded,
-                      std::vector<std::string>& libraries,
-                      std::vector<eir::UnitRequest>& requests) {
+                      std::vector<std::string>& libraries, Exchange& exchange) {
     Run run(options.units, sources, sink);
     const unsigned analysisErrors = run.analyse();
     if (analysisErrors != 0) return analysisErrors;
@@ -272,14 +271,21 @@ unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources
     SinkConsumer consumer(sink);
     engine.addConsumer(consumer);
 
-    const DesignRequest request{.top = options.top,
-                                .timeUnitExponent = options.timeUnitExponent,
-                                .work = run.workLibrary(),
-                                .analysed = run.analysed(),
-                                .ieeeWarnings = options.ieeeWarnings,
-                                .modules = options.modules};
+    DesignRequest request{.top = options.top,
+                          .timeUnitExponent = options.timeUnitExponent,
+                          .work = run.workLibrary(),
+                          .analysed = run.analysed(),
+                          .ieeeWarnings = options.ieeeWarnings,
+                          .modules = options.modules,
+                          .requests = options.requests,
+                          .described = options.described,
+                          .onlyRequested = options.onlyRequested,
+                          .libraries = {},
+                          .sources = &sources};
+    for (const UnitLibrary& library : options.units.libraries)
+        request.libraries.push_back(library.name);
     const std::vector<eir::ModuleDefinition> modules = translateDesign(
-        request, [&run](const loc_t* location) { return run.locate(location); }, engine, requests);
+        request, [&run](const loc_t* location) { return run.locate(location); }, engine, exchange);
 
     const unsigned errors = engine.errorCount() + error_count();
     if (errors == 0) {
