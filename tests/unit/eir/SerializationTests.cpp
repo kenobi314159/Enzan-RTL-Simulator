@@ -36,6 +36,7 @@ using enzan::eir::EnumDefinition;
 using enzan::eir::EnumMember;
 using enzan::eir::Instance;
 using enzan::eir::Instruction;
+using enzan::eir::Language;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::NetKind;
 using enzan::eir::Object;
@@ -91,6 +92,7 @@ ModuleDefinition richModule(BufferId buffer) {
     ModuleDefinition definition;
     definition.name = "counter$WIDTH=8";
     definition.sourceName = "counter";
+    definition.language = Language::Vhdl;
     definition.location = SourceLocation(buffer, 3);
 
     EnumDefinition states;
@@ -103,6 +105,7 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Enumeration,
                                             .name = "BIT",
                                             .width = 1,
+                                            .encoding = Encoding::VhdlBit,
                                             .ranges = {{.left = 0, .right = 1, .ascending = true}},
                                             .enumIndex = 0});
     definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Array,
@@ -263,6 +266,7 @@ TEST_F(SerializationTest, ModuleIdentityRoundTrips) {
 
     EXPECT_EQ(decoded.front().name, "counter$WIDTH=8");
     EXPECT_EQ(decoded.front().sourceName, "counter");
+    EXPECT_EQ(decoded.front().language, Language::Vhdl);
     EXPECT_EQ(decoded.front().location, SourceLocation(buffer, 3));
 }
 

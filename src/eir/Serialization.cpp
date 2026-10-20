@@ -341,6 +341,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
     out.text(definition.name);
     out.text(definition.sourceName);
     out.boolean(definition.isPackage);
+    out.u8(static_cast<std::uint8_t>(definition.language));
     writeLocation(out, names, definition.location);
 
     out.u32(static_cast<std::uint32_t>(definition.objects.size()));
@@ -419,6 +420,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.u8(static_cast<std::uint8_t>(type.kind));
         out.text(type.name);
         out.u32(type.width);
+        out.u8(static_cast<std::uint8_t>(type.encoding));
         out.u32(static_cast<std::uint32_t>(type.ranges.size()));
         for (const VhdlType::Range& range : type.ranges) {
             out.u64(static_cast<std::uint64_t>(range.left));
@@ -666,6 +668,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     definition.name = in.text();
     definition.sourceName = in.text();
     definition.isPackage = in.boolean();
+    definition.language = static_cast<Language>(in.u8());
     definition.location = readLocation(in, buffers);
 
     definition.objects.resize(in.count());
@@ -749,6 +752,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         type.kind = static_cast<VhdlType::Kind>(in.u8());
         type.name = in.text();
         type.width = in.u32();
+        type.encoding = static_cast<Encoding>(in.u8());
         type.ranges.resize(in.count());
         for (VhdlType::Range& range : type.ranges) {
             range.left = static_cast<std::int64_t>(in.u64());

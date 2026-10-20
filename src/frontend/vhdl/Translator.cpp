@@ -909,6 +909,7 @@ private:
             module.library = simpleName(ident_until(identifier, '.'));
             module.sourceName = simpleName(identifier);
             module.isPackage = true;
+            module.language = eir::Language::Vhdl;
             module.location = locate(unit);
             found->second.scope = std::make_unique<PackageScope>(*this, module);
         }
@@ -1101,6 +1102,7 @@ std::uint32_t ArchitectureTranslator::vhdlTypeFor(type_t type, const Layout& lay
         case T_REAL: described.kind = eir::VhdlType::Kind::Floating; break;
         default: return eir::VhdlType::None;
         }
+        described.encoding = encodingOf(type);
         if (described.kind != eir::VhdlType::Kind::Floating) {
             if (const std::optional<Folder::Range> range = folding.rangeOf(type))
                 described.ranges.push_back(rangeOf(*range));
@@ -1200,6 +1202,7 @@ eir::ModuleDefinition ArchitectureTranslator::translate() {
     tree_t entity = specialisation.entity;
     result.name = specialisation.name;
     result.sourceName = simpleName(tree_ident(entity));
+    result.language = eir::Language::Vhdl;
     // The library the entity was analysed into, which a design names it by (section 8.2).
     result.library = simpleName(ident_until(tree_ident(entity), '.'));
     result.location = locate(specialisation.architecture);

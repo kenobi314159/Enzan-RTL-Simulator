@@ -67,6 +67,14 @@ void encode(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
 /// What an object stored as `encoding` holds, for a diagnostic: `std_ulogic codes`.
 [[nodiscard]] std::string_view toString(Encoding encoding) noexcept;
 
+/// The language a definition was written in.
+///
+/// Nothing about simulating a definition depends on it: what its bits mean is its objects'
+/// encodings. It says where a port crosses from one language into the other, which is connected by
+/// a conversion that consumes a delta cycle (DESIGN_GUIDE.md section 3.5), and which procedural
+/// interface shows the definition (section 9.7).
+enum class Language : std::uint8_t { SystemVerilog, Vhdl };
+
 /// Which kind of net a net is, which decides how a bit with several drivers resolves and what
 /// a bit with none holds (DESIGN_GUIDE.md section 3.7).
 ///
@@ -171,6 +179,11 @@ struct VhdlType {
     std::string name;
 
     std::uint32_t width = 0;
+
+    /// What a scalar's bits mean, as an object's encoding says (section 3.6): std_ulogic codes, a
+    /// bit's or a boolean's, or the value itself. `Bits` for an array or a record, whose elements
+    /// and fields say for themselves.
+    Encoding encoding = Encoding::Bits;
 
     /// A scalar's range, or each dimension of an array, the first first.
     std::vector<Range> ranges;
@@ -448,6 +461,9 @@ struct ModuleDefinition {
     /// instance of it exists, at the root as `/<package>`, when some module refers to one of
     /// them, and it is never a top level. Named `<package>::`, which no module can be.
     bool isPackage = false;
+
+    /// The language the definition was written in.
+    Language language = Language::SystemVerilog;
 
     SourceLocation location;
 
