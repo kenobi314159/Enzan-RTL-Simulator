@@ -2888,7 +2888,10 @@ for a test that must fail, `gold` for one whose transcript must hold each line o
 in order. NVC writes a message's time and delta before it, which Enzan does not, so a gold line
 is matched without them. A test of what only NVC has, VHPI, its shell, PSL, coverage, waveform
 dumps, Verilog or its relaxed rules, or one setting generics on the command line, is in neither
-count.
+count. Its `mixed` tests, VHDL with Verilog, are run apart, `run-suite.sh ... mixed`, by a build
+with both frontends and against `passing-mixed.txt` (M7). Several fail by design: NVC shows
+Verilog's `x` as `'U'` where 3.6 shows `'X'`, and counts a delta for each Verilog net a value
+crosses where 3.5 counts one for the boundary.
 
 `tests/conformance/ghdl/run-suite.sh` runs GHDL's own regression tests, its `testsuite/gna`, from
 GHDL at the revision VESTs is run from. Each test's `testsuite.sh` runs unchanged under GHDL's
@@ -3390,8 +3393,10 @@ of a mixed design wrong. Delays, `$time` and `%t` follow each module's time unit
 module stating no time scale takes `--timescale`'s unit, or picoseconds.
 
 **Analysis of both languages in one session.** The session analyses SystemVerilog through
-slang and VHDL through the NVC child into one `eir::Design`; it refuses a mixed source set
-today. VHDL goes into Enzan's libraries as SystemVerilog does, `--out-lib` and `--in-lib`
+slang and VHDL through the NVC child into one `eir::Design`. VHDL is translated first, under its
+top; an instance of a module names a placeholder and an `eir::UnitRequest`, which slang answers
+through a module instantiating the one asked for with the values asked for, and the session links
+the two by port name. A design of both is not stored in a library yet. VHDL goes into Enzan's libraries as SystemVerilog does, `--out-lib` and `--in-lib`
 (8.2), and a design may draw on several VHDL libraries at once, not only the one `--work`
 names, since a mixed design is usually built as a testbench in one library and its DUT in
 another. Both are also what the GHDL suite's multi-library tests and cocotb's VHDL designs in

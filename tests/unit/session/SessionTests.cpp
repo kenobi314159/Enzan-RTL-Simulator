@@ -736,4 +736,42 @@ TEST_F(SessionTest, AnApplicationThatCannotBeLoadedIsReported) {
     EXPECT_FALSE(session.hasVpiApplication());
 }
 
+// ---------------------------------------------------------------------------
+// A design of both languages (DESIGN_GUIDE.md section 18, M7)
+// ---------------------------------------------------------------------------
+
+class BothLanguagesTest : public SessionTest {
+protected:
+    bool analyseBoth(std::string_view top) {
+        workspace.write("tb.vhd", "entity tb is\nend entity;\narchitecture a of tb is\nbegin\n"
+                                  "end architecture;\n");
+        workspace.write("m.sv", "module Buffer(input logic i, output logic o);\n"
+                                "  assign o = i;\nendmodule\n");
+        Session::AnalysisRequest request;
+        request.files = {workspace / "tb.vhd", workspace / "m.sv"};
+        request.top = top;
+        return session.analyse(request);
+    }
+};
+
+#ifdef ENZAN_WITH_VHDL
+TEST_F(BothLanguagesTest, ADesignOfBothLanguagesIsNotStoredInALibraryYet) {
+    ASSERT_TRUE(session.openOutputLibrary(workspace / "work")) << firstMessage();
+    EXPECT_FALSE(analyseBoth("tb"));
+    EXPECT_TRUE(reported(DiagCode::NotYetImplemented));
+}
+
+TEST_F(BothLanguagesTest, ASystemVerilogTopOfADesignOfBothLanguagesIsNotAnalysedYet) {
+    EXPECT_FALSE(analyseBoth("buffer"));
+    EXPECT_TRUE(reported(DiagCode::NotYetImplemented));
+    EXPECT_NE(firstMessage().find("SystemVerilog top level"), std::string::npos) << firstMessage();
+}
+#else
+TEST_F(BothLanguagesTest, ADesignOfBothLanguagesNeedsABuildWithBothFrontends) {
+    EXPECT_FALSE(analyseBoth("tb"));
+    EXPECT_TRUE(reported(DiagCode::NotYetImplemented));
+    EXPECT_NE(firstMessage().find("ENZAN_ENABLE_VHDL=OFF"), std::string::npos) << firstMessage();
+}
+#endif
+
 } // namespace

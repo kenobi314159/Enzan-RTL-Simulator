@@ -430,6 +430,18 @@ jobs:
           name: sv-tests-logs
           path: build/sv-tests/out/logs
 
+      # NVC's regression tests of VHDL with Verilog (section 14.4), which only this build, with both
+      # frontends, can run, held to a pass list of their own. Seconds.
+      - name: NVC regression tests, VHDL with Verilog
+        run: |
+          status=0
+          tests/conformance/nvc/run-suite.sh build/gcc-release/bin/enzan build/nvc-mixed mixed \
+            > build/nvc-mixed.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/nvc-mixed.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/nvc-mixed.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
       # The design regression (section 14.5): each design's own testbenches, held to their own
       # verdicts and, where Icarus Verilog can run them, to its transcript. Under a second here.
       - name: Design regression

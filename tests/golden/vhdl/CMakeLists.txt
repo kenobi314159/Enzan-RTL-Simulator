@@ -122,12 +122,12 @@ set_tests_properties(golden.vhdl.options.assert_level_error
                                 "PASS options")
 
 # A source that cannot be opened is reported as that, whatever its name says it holds, rather than
-# as a design mixing VHDL and SystemVerilog.
+# as a design of both languages, which a build without SystemVerilog cannot analyse.
 add_test(NAME golden.vhdl.missing_source COMMAND enzan --top tb
                                                  "${CMAKE_CURRENT_SOURCE_DIR}/counter.vhd" missing.sv)
 set_tests_properties(golden.vhdl.missing_source
                      PROPERTIES PASS_REGULAR_EXPRESSION "cannot open file 'missing.sv'"
-                                FAIL_REGULAR_EXPRESSION "mixing")
+                                FAIL_REGULAR_EXPRESSION "both VHDL and SystemVerilog")
 
 # Delays rounded to a coarser unit than VHDL's femtoseconds, the static one with a warning.
 add_test(NAME golden.vhdl.coarse_timescale

@@ -36,4 +36,7 @@ endif()
 if(ENZAN_ENABLE_VHDL)
   add_subdirectory(golden/vhdl)
 endif()
+if(ENZAN_ENABLE_SYSTEMVERILOG AND ENZAN_ENABLE_VHDL)
+  add_subdirectory(golden/mixed)
+endif()
 # add_subdirectory(conformance)  # M5 — sv-tests, ivtest harnesses

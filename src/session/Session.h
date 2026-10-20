@@ -204,6 +204,21 @@ private:
     /// `analyse` for a design whose sources are VHDL, or that has none and libraries of VHDL.
     bool analyseVhdl(const AnalysisRequest& request);
 
+    /// `analyse` for a design whose sources are of both languages (DESIGN_GUIDE.md section 18,
+    /// M7): the VHDL translated under its top, each SystemVerilog module it instantiates
+    /// specialised as it asks, and the two linked into one design.
+    bool analyseMixed(const AnalysisRequest& request);
+
+#ifdef ENZAN_WITH_VHDL
+    /// Sets what of `options` is not the sources: the work library, the libraries analysed
+    /// against, the standard, the top and the time unit. Without `sourcesGiven`, the work library
+    /// is the input library whose VHDL declares the top. `keyOptions` receives what of them a
+    /// library entry's key holds. False having reported when the work library is named otherwise
+    /// than the library being written, or no input library declares the top.
+    bool setVhdlOptions(const AnalysisRequest& request, bool sourcesGiven,
+                        frontend::vhdl::DesignOptions& options, std::string& keyOptions);
+#endif
+
     /// The input library whose VHDL declares `top`: the one `lib.top` or `work` names, or the one
     /// declaring it. Null having reported when none does, or several do.
     [[nodiscard]] const eir::Library* vhdlLibraryOf(std::string_view top,
