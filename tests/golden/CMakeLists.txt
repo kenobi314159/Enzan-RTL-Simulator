@@ -32,9 +32,14 @@
 set(ENZAN_GOLDEN_FAILURE_PATTERN "\nFAIL")
 
 function(enzan_add_golden_test name)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL;OWN_TIME_SCALES" "" "")
+  cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL;OWN_TIME_SCALES;DIR_WITH_MAKE" "" "")
 
-  set(source "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}.sv")
+  if(arg_DIR_WITH_MAKE)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}")
+  else()
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}.sv")
+  endif()
+
   if(NOT EXISTS "${source}")
     message(FATAL_ERROR "golden test '${name}' has no source at ${source}")
   endif()
@@ -43,8 +48,14 @@ function(enzan_add_golden_test name)
   if(arg_OWN_TIME_SCALES)
     set(unit)
   endif()
+  string(JOIN " " unit_string ${unit})
 
-  add_test(NAME golden.${name} COMMAND enzan --top tb ${unit} "${source}")
+  if(arg_DIR_WITH_MAKE)
+      add_test(NAME golden.${name}
+               COMMAND make -C "${source}" SYNTH_ARGS=${unit_string} ENZAN=$<TARGET_FILE:enzan>)
+  else()
+    add_test(NAME golden.${name} COMMAND enzan --top tb ${unit} "${source}")
+  endif()
   set_tests_properties(
     golden.${name}
     PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}"
@@ -179,6 +190,9 @@ enzan_add_golden_test(port_widths)
 
 # A bus shared through inout ports of the signal's own width, connected as the signal itself.
 enzan_add_golden_test(inout)
+
+# A complex design with many module instances and many levels of hierarchy.
+enzan_add_golden_test(large_design_00 DIR_WITH_MAKE NO_DIFFERENTIAL)
 
 # File output, and memories loaded from files the design writes first: compared file by file
 # with what Icarus Verilog does, each in an empty directory, so they need it.
