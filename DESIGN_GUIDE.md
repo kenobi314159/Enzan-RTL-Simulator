@@ -2007,11 +2007,10 @@ the NVC the VHDL frontend is built on carries, so VHPI is built only with that f
 
 **cocotb's VHPI library is `libcocotbvhpi_nvc`**, whose one workaround, to compare names
 without their case, answers the one way Enzan differs from the standard, the declared case of a
-region's name, which it does not keep (section 9.6 chose the VPI library by the same rule). The toplevel's language
-decides which is loaded, `--vpi` or `--vhpi`. A design of both languages is not simulated yet,
-and the makefile skips it as cocotb's makefiles skip a language a simulator lacks; when it is
-(M7), cocotb loads the other language's library itself, named in `GPI_EXTRA`, as it does
-elsewhere.
+region's name, which it does not keep (section 9.6 chose the VPI library by the same rule). The
+toplevel's language decides which is loaded, `--vpi` or `--vhpi`; in a design of both languages
+cocotb loads the other's itself, named in `GPI_EXTRA`, as it does elsewhere, and each interface
+shows its own language (M7).
 
 A VHDL signal of a null range holds nothing, and a bit vector has at least one bit, so its
 object has a placeholder bit that nothing reads, writes or records (`eir::Object::holdsNothing`);
@@ -3456,7 +3455,7 @@ Verilog toplevel, its mixed-language test asserts that VPI alone does not find t
 and that VHPI does, and a VHDL region shown through VPI would lose the types 9.7 gives it.
 cocotb runs a mixed design as it does elsewhere: the toplevel's language's library is loaded
 with `--vpi` or `--vhpi`, and the other's is named in `GPI_EXTRA`, which `Makefile.enzan` sets
-in place of the skip it has today (9.7).
+(9.7).
 
 **Reference simulation.** No free simulator takes SystemVerilog and VHDL together. NVC
 simulates Verilog with VHDL, but only its analysis is built here, and CI runs no NVC: its own

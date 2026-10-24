@@ -92,3 +92,17 @@ enzan_add_mixed_sv_golden_test(shapes)
 
 # SystemVerilog instantiating VHDL instantiating SystemVerilog, at two widths.
 enzan_add_mixed_sv_golden_test(nesting)
+
+# cocotb driving a design of both languages, through the toplevel's language's interface and the
+# other's (section 18, M7), once with each language's toplevel, when a Python has cocotb.
+if(ENZAN_HAVE_COCOTB)
+  foreach(language verilog vhdl)
+    add_test(NAME golden.mixed.cocotb.${language}
+             COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../run-cocotb-check.sh" $<TARGET_FILE:enzan>
+                     "${ENZAN_COCOTB_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/cocotb" ${language})
+    set_tests_properties(
+      golden.mixed.cocotb.${language}
+      PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb" FAIL_REGULAR_EXPRESSION "FAIL=[1-9]"
+                 TIMEOUT 300)
+  endforeach()
+endif()

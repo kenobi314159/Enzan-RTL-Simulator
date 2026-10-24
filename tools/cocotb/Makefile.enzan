@@ -18,16 +18,6 @@ ifeq ($(filter verilog vhdl,$(TOPLEVEL_LANG)),)
     $(error A valid value (verilog or vhdl) was not provided for TOPLEVEL_LANG=$(TOPLEVEL_LANG))
 endif
 
-# A design of both languages is not simulated yet, so it is skipped, as cocotb's makefiles skip a
-# language a simulator lacks.
-ifneq ($(and $(strip $(VERILOG_SOURCES)),$(strip $(VHDL_SOURCES))),)
-
-$(COCOTB_RESULTS_FILE):
-	@echo "Skipping simulation as a design of both languages is not supported on simulator=$(SIM)"
-debug: $(COCOTB_RESULTS_FILE)
-
-else
-
 ifdef ENZAN_BIN_DIR
     CMD := $(call find_command,$(ENZAN_BIN_DIR)/enzan)
 else
@@ -41,11 +31,20 @@ endif
 ENZAN_VPI_LIBRARY := $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vpi dsim)
 ENZAN_VHPI_LIBRARY := $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vhpi nvc)
 
-# The toplevel's language's layer is loaded.
+# The toplevel's language's layer is loaded, and in a design of both languages cocotb loads the
+# other's, which GPI_EXTRA names with its entry point, as it does for every simulator of both
+# (DESIGN_GUIDE.md section 18, M7).
+GPI_EXTRA :=
 ifeq ($(TOPLEVEL_LANG),verilog)
     ENZAN_PLI := --vpi $(ENZAN_VPI_LIBRARY)
+ifneq ($(strip $(VHDL_SOURCES)),)
+    GPI_EXTRA := $(ENZAN_VHPI_LIBRARY):cocotbvhpi_entry_point
+endif
 else
     ENZAN_PLI := --vhpi $(ENZAN_VHPI_LIBRARY)
+ifneq ($(strip $(VERILOG_SOURCES)),)
+    GPI_EXTRA := $(ENZAN_VPI_LIBRARY):cocotbvpi_entry_point
+endif
 endif
 
 # VHDL is analysed into the library cocotb names, `work` unless RTL_LIBRARY says otherwise.
@@ -100,7 +99,7 @@ $(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS
 	$(RM) $(COCOTB_RESULTS_FILE)
 	$(enzan_analyse_libraries)
 
-	$(COCOTB_ENV) $(SIM_CMD_PREFIX) $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
+	GPI_EXTRA=$(GPI_EXTRA) $(COCOTB_ENV) $(SIM_CMD_PREFIX) $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
 
 	$(call check_results)
 
@@ -108,8 +107,6 @@ debug: $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DE
 	$(RM) $(COCOTB_RESULTS_FILE)
 	$(enzan_analyse_libraries)
 
-	$(COCOTB_ENV) $(SIM_CMD_PREFIX) gdb --args $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
+	GPI_EXTRA=$(GPI_EXTRA) $(COCOTB_ENV) $(SIM_CMD_PREFIX) gdb --args $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
 
 	$(call check_results)
-
-endif
