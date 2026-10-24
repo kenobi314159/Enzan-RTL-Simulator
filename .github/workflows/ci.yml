@@ -164,25 +164,6 @@ jobs:
             >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 
-      # M6's exit design (section 14.5): NEORV32 through its own testbench's on-chip debugger
-      # sequence, held to GHDL's reports and to its CPU trace and UART logs. A few minutes, so
-      # on the main branch only, and with the one build that is optimised for GCC.
-      - name: Design regression - NEORV32
-        if: matrix.preset == 'gcc-release' && github.ref == 'refs/heads/main'
-        run: >
-          tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)" \
-            build/designs/neorv32
-
-      - name: Keep the NEORV32 logs
-        if: failure() && matrix.preset == 'gcc-release'
-        uses: actions/upload-artifact@v4
-        with:
-          name: neorv32-logs
-          path: |
-            build/designs/neorv32/differences.txt
-            build/designs/neorv32/enzan/*.txt
-            build/designs/neorv32/ghdl/transcript.txt
-
       - name: Report cache statistics
         if: always()
         run: ccache --show-stats
@@ -345,13 +326,14 @@ jobs:
       # needs the shared library to do it.
       #
       # flex and zstd for NVC's analysis, and Qt 6 and Tcl for the GUI, which the default
-      # configuration builds.
+      # configuration builds. GHDL is NEORV32's reference.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ccache libgtest-dev zlib1g-dev python3 python3-venv \
-            libpython3-dev iverilog gtkwave flex libzstd-dev qt6-base-dev tcl-dev
+            libpython3-dev iverilog gtkwave flex libzstd-dev qt6-base-dev tcl-dev ghdl \
+            ghdl-mcode
 
       # The cocotb version is named once, in requirements.txt (DESIGN_GUIDE.md section 14.6), and
       # so is what sv-tests' driver needs (section 14.4).
@@ -463,6 +445,27 @@ jobs:
           status=0
           tests/designs/taxi/run.sh build/gcc-release/bin/enzan build/designs/taxi || status=1
           exit "$status"
+
+      # The exit designs of M6 and M7 (section 14.5): NEORV32 through its own testbench's
+      # on-chip debugger sequence, and through the same testbench in Verilog around its VHDL,
+      # each held to GHDL's reports of the VHDL testbench and to its CPU trace and UART logs. A
+      # few minutes, so on the main branch only, in the one build with both frontends.
+      - name: Design regression - NEORV32
+        if: github.ref == 'refs/heads/main'
+        run: >
+          tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)" \
+            build/designs/neorv32
+
+      - name: Keep the NEORV32 logs
+        if: failure() && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: neorv32-logs
+          path: |
+            build/designs/neorv32/differences.txt
+            build/designs/neorv32/enzan/*.txt
+            build/designs/neorv32/enzan-verilog/*.txt
+            build/designs/neorv32/ghdl/transcript.txt
 
       - name: Keep the design regression logs
         if: failure()

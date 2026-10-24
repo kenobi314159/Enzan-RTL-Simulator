@@ -2920,7 +2920,8 @@ Start with the small ones and add larger designs as capability grows.
 
 NEORV32's is held to GHDL's reports and to the CPU trace and UART logs its testbench writes, for
 the 160 us its on-chip debugger sequence takes, since those hold every instruction each core
-retired; on the main branch only, as it takes minutes.
+retired, and so is the same testbench in Verilog around its VHDL (M7); on the main branch only,
+as it takes minutes.
 
 Each design is a directory under `tests/designs/` holding the revision it is pinned at and a
 `run.sh` that fetches it there (`tests/fetch-revision.sh`, which every suite shares), runs its
@@ -2937,7 +2938,9 @@ Where a design's own testbenches leave a module out, or reach it only through co
 does not have yet, self-checking testbenches for it sit in the design's `tb/`. Each compares
 the module against a model of what it should do, and exits non-zero on a mismatch. A
 testbench written here can be wrong as easily as the simulator. Before it is committed it is
-run under a second simulator, and it must pass there too.
+run under a second simulator, and it must pass there too; one that none runs, a testbench in one
+language around a design in the other that NVC cannot instantiate, is a translation of the
+design's own, and its transcript must be that one's under the reference.
 
 ### 14.6 cocotb regression
 
@@ -3460,7 +3463,8 @@ with `--vpi` or `--vhpi`, and the other's is named in `GPI_EXTRA`, which `Makefi
 **Reference simulation.** No free simulator takes SystemVerilog and VHDL together. NVC
 simulates Verilog with VHDL, but only its analysis is built here, and CI runs no NVC: its own
 `mixed` regression tests check themselves and run under Enzan alone (14.4), and a mixed testbench
-written for Enzan is run under a locally built NVC before it is committed (14.5). Results are
+written for Enzan is run under a locally built NVC before it is committed, where NVC can run it
+(14.5). Results are
 checked by splitting: the same design with the boundary moved — the DUT in one language driven
 by a testbench in the other, against the DUT in its own language's testbench under iverilog or
 GHDL — matches transcript for transcript, the boundary's delta aside.
