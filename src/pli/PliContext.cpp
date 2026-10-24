@@ -545,7 +545,7 @@ vpiHandle PliContext::intern(const Target& target) {
         for (std::size_t level = depth; level < whole.dimensions.size(); ++level)
             blockWidth *= whole.dimensions[level].size();
 
-        const eir::UnpackedDimension& selectedFrom = whole.dimensions[depth - 1U];
+        const eir::ArrayDimension& selectedFrom = whole.dimensions[depth - 1U];
         const std::uint32_t offset = target.bit % parentSize;
 
         object->kind = Object::Kind::Signal;

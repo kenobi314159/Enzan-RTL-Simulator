@@ -360,7 +360,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.u32(object.resolution.elementBits);
         out.boolean(object.resolution.loneDriverIdentity);
         out.u32(static_cast<std::uint32_t>(object.unpackedDimensions.size()));
-        for (const UnpackedDimension& dimension : object.unpackedDimensions) {
+        for (const ArrayDimension& dimension : object.unpackedDimensions) {
             out.u32(static_cast<std::uint32_t>(dimension.left));
             out.u32(static_cast<std::uint32_t>(dimension.right));
         }
@@ -686,7 +686,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         object.resolution.elementBits = in.u32();
         object.resolution.loneDriverIdentity = in.boolean();
         object.unpackedDimensions.resize(in.count());
-        for (UnpackedDimension& dimension : object.unpackedDimensions) {
+        for (ArrayDimension& dimension : object.unpackedDimensions) {
             dimension.left = static_cast<std::int32_t>(in.u32());
             dimension.right = static_cast<std::int32_t>(in.u32());
         }

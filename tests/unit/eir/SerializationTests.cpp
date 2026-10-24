@@ -27,6 +27,7 @@ namespace {
 using enzan::BufferId;
 using enzan::SourceLocation;
 using enzan::SourceManager;
+using enzan::eir::ArrayDimension;
 using enzan::eir::BasicBlock;
 using enzan::eir::BitVector;
 using enzan::eir::CallSite;
@@ -57,7 +58,6 @@ using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
 using enzan::eir::Type;
-using enzan::eir::UnpackedDimension;
 using enzan::eir::VhdlType;
 using enzan::eir::WriteExtent;
 using enzan::test::literal;
@@ -124,8 +124,8 @@ ModuleDefinition richModule(BufferId buffer) {
                                 .kind = ObjectKind::Net,
                                 .netKind = NetKind::Tri1,
                                 .location = SourceLocation(buffer, 11),
-                                .unpackedDimensions = {UnpackedDimension{.left = 0, .right = 3},
-                                                       UnpackedDimension{.left = 7, .right = -1}},
+                                .unpackedDimensions = {ArrayDimension{.left = 0, .right = 3},
+                                                       ArrayDimension{.left = 7, .right = -1}},
                                 .elementWidth = 1,
                                 .elementSigned = true,
                                 .subroutineStatic = true});
@@ -280,8 +280,8 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     EXPECT_EQ(definition.objects[0].kind, ObjectKind::Net);
     EXPECT_EQ(definition.objects[0].netKind, NetKind::Tri1);
     EXPECT_EQ(definition.objects[0].unpackedDimensions,
-              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 0, .right = 3},
-                                              UnpackedDimension{.left = 7, .right = -1}}));
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 0, .right = 3},
+                                           ArrayDimension{.left = 7, .right = -1}}));
     EXPECT_EQ(definition.objects[0].elementWidth, 1U);
     EXPECT_TRUE(definition.objects[0].elementSigned);
     EXPECT_TRUE(definition.objects[0].subroutineStatic);

@@ -85,15 +85,15 @@ Design makeDesign() {
     Object memory{.name = "mem",
                   .type = Type::bits(32, false, true),
                   .initialValue = literal("32'h33221100")};
-    memory.unpackedDimensions.push_back(enzan::eir::UnpackedDimension{.left = 3, .right = 0});
+    memory.unpackedDimensions.push_back(enzan::eir::ArrayDimension{.left = 3, .right = 0});
     memory.elementWidth = 8;
     memory.elementSigned = true;
     top.addObject(std::move(memory));
     // `logic [3:0] grid [0:1][2:0]`: grid[0][2] highest, then grid[0][1], ... grid[1][0].
     Object grid{
         .name = "grid", .type = Type::bits(24, false, true), .initialValue = literal("24'h012345")};
-    grid.unpackedDimensions.push_back(enzan::eir::UnpackedDimension{.left = 0, .right = 1});
-    grid.unpackedDimensions.push_back(enzan::eir::UnpackedDimension{.left = 2, .right = 0});
+    grid.unpackedDimensions.push_back(enzan::eir::ArrayDimension{.left = 0, .right = 1});
+    grid.unpackedDimensions.push_back(enzan::eir::ArrayDimension{.left = 2, .right = 0});
     grid.elementWidth = 4;
     top.addObject(std::move(grid));
     // A package's variable, so that the package has an instance at the root beside `tb`.

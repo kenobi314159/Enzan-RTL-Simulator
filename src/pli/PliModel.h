@@ -67,7 +67,7 @@ struct PliContext::Object {
     /// are the first one's. An array has elements and no value of its own: arrays themselves
     /// while dimensions remain below them, vectors `elementWidth` wide at the last.
     bool isArray = false;
-    std::vector<eir::UnpackedDimension> dimensions;
+    std::vector<eir::ArrayDimension> dimensions;
     std::int64_t left = 0;
     std::int64_t right = 0;
     std::uint32_t elementWidth = 0;

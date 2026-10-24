@@ -49,7 +49,7 @@ struct Slot {
 
     /// The unpacked dimensions and element width of the object that declared this slot, when
     /// it is an unpacked array; see `eir::Object`.
-    std::vector<eir::UnpackedDimension> unpackedDimensions;
+    std::vector<eir::ArrayDimension> unpackedDimensions;
     std::uint32_t elementWidth = 0;
 
     /// True when the object that declared this slot holds nothing (eir::Object::holdsNothing),

@@ -761,7 +761,7 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
          level->kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType;) {
         const auto& array = level->as<ast::FixedSizeUnpackedArrayType>();
         object.unpackedDimensions.push_back(
-            eir::UnpackedDimension{.left = array.range.left, .right = array.range.right});
+            eir::ArrayDimension{.left = array.range.left, .right = array.range.right});
         level = &array.elementType.getCanonicalType();
         if (level->kind != slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
             if (const std::optional<eir::Type> element = convertType(*level)) {
