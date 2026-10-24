@@ -442,6 +442,11 @@ public:
 
     [[nodiscard]] std::span<const std::string> waveformScopes() const noexcept { return scopes; }
 
+    /// Records no signal wider than `bits` in a waveform file opened from now on, or one of any
+    /// width when `bits` is 0, rather than the writer's default (section 7.1). Opening a file
+    /// that leaves one out warns, naming it.
+    void setWaveformWidthLimit(std::uint32_t bits) noexcept { widthLimit = bits; }
+
     /// Opens a VCD file and records into it from now on. Returns false having reported.
     bool openVcd(const std::filesystem::path& path);
 
@@ -532,6 +537,9 @@ private:
 
     /// What waveform files record, or empty for the whole design.
     std::vector<std::string> scopes;
+
+    /// The widest signal a waveform file records, or nothing for the writer's default.
+    std::optional<std::uint32_t> widthLimit;
 
     /// The run's unit, which every delay of the design counts.
     runtime::TimeScale scale;

@@ -74,6 +74,7 @@ public:
 
     /// Exposed for the tests: a real writer reaches this from inside its own hooks, where it is
     /// protected, and a test asserting that two names share one record has to ask from outside.
+    using WaveformWriter::NotRecorded;
     using WaveformWriter::recordIndexOf;
 
     // The hooks keep the visibility they have in the base class, as in the real writers.
@@ -241,6 +242,26 @@ Design hierarchicalDesign() {
     Design design;
     design.addModule(std::move(child));
     design.addModule(std::move(parent));
+    return design;
+}
+
+/// A flat module with a memory, `logic [7:0] memory [0:3]`, and vectors of 100 and 200 bits
+/// beside a one-bit object.
+Design wideDesign() {
+    ModuleDefinition definition;
+    definition.name = "tb";
+    definition.sourceName = "tb";
+    definition.addObject(Object{.name = "clk", .type = Type::logic()});
+    definition.addObject(
+        Object{.name = "memory",
+               .type = Type::bits(32, false, true),
+               .unpackedDimensions = {enzan::eir::ArrayDimension{.left = 0, .right = 3}},
+               .elementWidth = 8});
+    definition.addObject(Object{.name = "wide", .type = Type::bits(100, false, true)});
+    definition.addObject(Object{.name = "wider", .type = Type::bits(200, false, true)});
+
+    Design design;
+    design.addModule(std::move(definition));
     return design;
 }
 
@@ -570,6 +591,62 @@ TEST_F(WaveformWriterTest, ADesignWithNoChangesStillProducesAValidHeader) {
     EXPECT_NE(indexOf("header"), writer->events.size());
     EXPECT_NE(indexOf("enddecl"), writer->events.size());
     EXPECT_EQ(countOf("close"), 1U);
+}
+
+// ---------------------------------------------------------------------------
+// What is left out
+// ---------------------------------------------------------------------------
+
+TEST_F(WaveformWriterTest, AFileLeavesAMemoryOut) {
+    build(wideDesign(), "tb");
+    ASSERT_TRUE(opened());
+
+    EXPECT_EQ(writer->recordIndexOf(signalIndex("/tb/memory")), RecordingWriter::NotRecorded);
+    EXPECT_EQ(writer->recordedSignals(), 3U);
+    EXPECT_TRUE(writer->tooWide().empty()) << "a memory is left out for what it is, not its width";
+}
+
+TEST_F(WaveformWriterTest, ASignalWiderThanTheLimitIsLeftOutAndNamed) {
+    build(wideDesign(), "tb");
+    writer->setWidthLimit(100);
+    ASSERT_TRUE(opened());
+
+    EXPECT_NE(writer->recordIndexOf(signalIndex("/tb/wide")), RecordingWriter::NotRecorded)
+        << "a signal as wide as the limit is within it";
+    EXPECT_EQ(writer->recordIndexOf(signalIndex("/tb/wider")), RecordingWriter::NotRecorded);
+    EXPECT_EQ(countOf("declare:wider"), 0U);
+    ASSERT_EQ(writer->tooWide().size(), 1U);
+    EXPECT_EQ(writer->tooWide()[0], signalIndex("/tb/wider"));
+    EXPECT_EQ(writer->describeTooWide(), "/tb/wider of 200 bits");
+}
+
+TEST_F(WaveformWriterTest, ThreeSignalsAreNamedAndMoreAreCounted) {
+    build(wideDesign(), "tb");
+    writer->setWidthLimit(1);
+    ASSERT_TRUE(opened());
+    EXPECT_EQ(writer->describeTooWide(),
+              "2 signals, /tb/wide of 100 bits and /tb/wider of 200 bits");
+
+    ModuleDefinition definition;
+    definition.name = "tb";
+    definition.sourceName = "tb";
+    for (const char* name : {"a", "b", "c", "d"})
+        definition.addObject(Object{.name = name, .type = Type::bits(2, false, true)});
+    Design design;
+    design.addModule(std::move(definition));
+    build(std::move(design), "tb");
+    writer->setWidthLimit(1);
+    ASSERT_TRUE(opened());
+    EXPECT_EQ(writer->describeTooWide(),
+              "4 signals, among them /tb/a of 2 bits, /tb/b of 2 bits and /tb/c of 2 bits");
+}
+
+TEST_F(WaveformWriterTest, ALimitOfZeroRecordsAnyWidth) {
+    build(wideDesign(), "tb");
+    writer->setWidthLimit(0);
+    ASSERT_TRUE(opened());
+    EXPECT_NE(writer->recordIndexOf(signalIndex("/tb/wider")), RecordingWriter::NotRecorded);
+    EXPECT_TRUE(writer->tooWide().empty());
 }
 
 } // namespace

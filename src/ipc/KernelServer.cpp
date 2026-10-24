@@ -9,6 +9,7 @@
 #include <array>
 #include <format>
 #include <iostream>
+#include <span>
 #include <string_view>
 #include <utility>
 
@@ -222,8 +223,17 @@ void KernelServer::start() {
     recorder = std::make_unique<wavedb::WaveformRecorder>(*image, simulationKernel->arena(),
                                                           options.timeScale, *database);
     recorder->setScope(options.waveformScope);
+    recorder->setWidthLimit(options.waveformWidthLimit);
     recorder->start();
     simulationKernel->addListener(*recorder);
+
+    // Said once for what it leaves out, not again at every restart, which leaves out the same.
+    const std::span<const std::uint32_t> tooWide = recorder->tooWide();
+    if (!tooWide.empty() && !std::ranges::equal(tooWide, reportedTooWide)) {
+        diagnostics->report(DiagCode::SignalsTooWideToRecord, SourceLocation(), "the wave window",
+                            recorder->maximumWidth(), recorder->describeTooWide());
+    }
+    reportedTooWide.assign(tooWide.begin(), tooWide.end());
 
     publisher =
         std::make_unique<ChangePublisher>(*image, simulationKernel->arena(), options.timeScale);

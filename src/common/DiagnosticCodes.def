@@ -200,6 +200,12 @@ ENZAN_DIAG(RestartWithVpiApplication, 6026, Error,
            "would still hold the state of the simulation being discarded, and nothing in the "
            "standard tells it so")
 
+// --- 7000-7999: waveform database -------------------------------------------
+
+ENZAN_DIAG(SignalsTooWideToRecord, 7001, Warning,
+           "{} records no signal wider than {} bits, and leaves out {}; --wave-max-bits changes "
+           "the limit")
+
 // --- 8000-8999: VPI, VHPI and plugin loading --------------------------------
 
 ENZAN_DIAG(LibraryTimeUnitsDiffer, 6027, Error,

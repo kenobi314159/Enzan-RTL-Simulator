@@ -1272,11 +1272,17 @@ bool Session::addWriter(std::unique_ptr<wavedb::WaveformWriter> writer,
     }
 
     for (const std::string& selected : scopes) writer->addScope(selected);
+    if (widthLimit.has_value()) writer->setWidthLimit(*widthLimit);
 
     std::string error;
     if (!writer->open(path, error)) {
         diagnostics.report(DiagCode::CannotOpenFile, SourceLocation(), path.string(), error);
         return false;
+    }
+    if (!writer->tooWide().empty()) {
+        diagnostics.report(DiagCode::SignalsTooWideToRecord, SourceLocation(),
+                           std::format("waveform file '{}'", path.string()), writer->maximumWidth(),
+                           writer->describeTooWide());
     }
 
     kernel->addListener(*writer);

@@ -7,6 +7,7 @@
 #include "elab/ElaboratedDesign.h"
 
 #include <algorithm>
+#include <format>
 #include <map>
 
 namespace enzan::wavedb {
@@ -80,6 +81,24 @@ std::uint32_t WaveformWriter::widthOf(std::uint32_t signalIndex) const noexcept 
     return eir::presentedWidth(signal.encoding, signal.bitWidth);
 }
 
+std::string WaveformWriter::describeTooWide() const {
+    constexpr std::size_t Named = 3;
+    const std::size_t named = std::min(leftOutForWidth.size(), Named);
+
+    std::string names;
+    for (std::size_t index = 0; index < named; ++index) {
+        if (index > 0) names += index + 1 == named ? " and " : ", ";
+        const std::uint32_t signalIndex = leftOutForWidth[index];
+        names += std::format("{} of {} bits", designImage->signals()[signalIndex].path,
+                             widthOf(signalIndex));
+    }
+
+    if (leftOutForWidth.size() <= 1) return names;
+    if (leftOutForWidth.size() <= Named)
+        return std::format("{} signals, {}", leftOutForWidth.size(), names);
+    return std::format("{} signals, among them {}", leftOutForWidth.size(), names);
+}
+
 eir::ConstBitRef WaveformWriter::valueOf(std::uint32_t signalIndex) const {
     const runtime::Signal& signal = designImage->signals()[signalIndex];
     const eir::ConstBitRef stored = stateArena->at(signal.wordOffset, signal.bitWidth);
@@ -98,19 +117,24 @@ double WaveformWriter::realValueOf(std::uint32_t signalIndex) const {
 
 void WaveformWriter::selectSignals() {
     recordIndex.assign(designImage->signals().size(), NotRecorded);
+    leftOutForWidth.clear();
 
     for (std::uint32_t signalIndex = 0; signalIndex < designImage->signals().size();
          ++signalIndex) {
         if (!isRecorded(designImage->signals()[signalIndex].path)) continue;
 
-        // A memory is not recorded, as IEEE 1364 section 18 leaves memories out of a VCD: one
-        // of any size would dominate the file and the database with a value nobody reads as a
-        // waveform.
+        // A file records no memory, as IEEE 1364 section 18 leaves memories out of a VCD.
         const elab::Slot& slot = designImage->elaboratedDesign().slots()[signalIndex];
-        if (!slot.unpackedDimensions.empty()) continue;
+        if (!slot.unpackedDimensions.empty() && !recordsArrays()) continue;
 
-        // Nor is a VHDL signal of a null range, whose one bit is no value of it.
+        // Nor is a VHDL signal of a null range recorded, whose one bit is no value of it.
         if (slot.holdsNothing) continue;
+
+        // Nor one wider than the limit, whose every change would cost the whole of it.
+        if (widthLimit != 0 && widthOf(signalIndex) > widthLimit) {
+            leftOutForWidth.push_back(signalIndex);
+            continue;
+        }
 
         recordIndex[signalIndex] = static_cast<std::uint32_t>(recorded.size());
         recorded.push_back(signalIndex);

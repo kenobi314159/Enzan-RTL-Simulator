@@ -49,6 +49,9 @@ private:
     // Protected, matching the base class. Narrowing an override's visibility is legal and
     // confusing: a caller holding a `WaveformWriter&` can reach them either way.
 protected:
+    /// True: the window shows an array as an array, and what a file leaves out it has to have.
+    [[nodiscard]] bool recordsArrays() const noexcept override { return true; }
+
     bool openOutput(const std::filesystem::path& path, std::string& error) override;
     void writeHeader() override;
     void enterScope(std::string_view name) override;

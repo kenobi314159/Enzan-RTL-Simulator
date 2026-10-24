@@ -20,6 +20,7 @@
 #include <iosfwd>
 #include <memory>
 #include <ostream>
+#include <span>
 #include <streambuf>
 #include <string>
 #include <vector>
@@ -37,6 +38,9 @@ struct ServerOptions {
 
     /// Hierarchical prefix the waveform database records, empty for the whole design.
     std::string waveformScope;
+
+    /// The widest signal the waveform database records, or 0 for any width.
+    std::uint32_t waveformWidthLimit = wavedb::WaveformWriter::DefaultWidthLimit;
 
     wavedb::DatabaseOptions database;
 
@@ -291,6 +295,9 @@ private:
     std::unique_ptr<wavedb::WaveformDatabase> database;
     std::unique_ptr<wavedb::WaveformRecorder> recorder;
     std::unique_ptr<ChangePublisher> publisher;
+
+    /// The signals the recorder last left out for their width, as they were reported.
+    std::vector<std::uint32_t> reportedTooWide;
 
     Listener listener;
     Connection connection;

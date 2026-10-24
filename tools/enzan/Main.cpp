@@ -150,6 +150,8 @@ Simulation:
       --fst <file>        Write an FST waveform to this file. Far smaller on a
                           real design, and seekable. Both may be given at once.
       --wave-scope <path> Record only this subtree, for example /tb/u_dut.
+      --wave-max-bits <n> Record no signal wider than n bits, an array's elements
+                          counted together. Default 65536; 0 records any width.
       --timescale <unit>  The run's time unit, which --run and reported times
                           count, and the unit of a module that states none: s,
                           ms, us, ns, ps or fs. The default is the unit the
@@ -234,6 +236,8 @@ struct Invocation {
     std::filesystem::path vcdPath;
     std::filesystem::path fstPath;
     std::string waveformScope;
+    /// Given with `--wave-max-bits`; otherwise the waveform writers' default.
+    std::optional<std::uint32_t> waveformWidthLimit;
     std::filesystem::path listenPath;
     /// Given with `--timescale`; otherwise the libraries' unit, or the session's default.
     std::optional<std::int8_t> timeExponent;
@@ -433,6 +437,18 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             invocation.waveformScope = value;
+            continue;
+        }
+
+        if (argument == "--wave-max-bits") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            const std::optional<std::uint64_t> parsed = parseUnsigned(value);
+            if (!parsed.has_value() || *parsed > 0xFFFF'FFFFU) {
+                std::cerr << "enzan: '" << value << "' is not a number of bits\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.waveformWidthLimit = static_cast<std::uint32_t>(*parsed);
             continue;
         }
 
@@ -913,6 +929,8 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
 
     if (!invocation.waveformScope.empty() && !session.addWaveformScope(invocation.waveformScope))
         return false;
+    if (invocation.waveformWidthLimit.has_value())
+        session.setWaveformWidthLimit(*invocation.waveformWidthLimit);
 
     return session.elaborate(invocation.topModule);
 }
@@ -945,6 +963,8 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
     serverOptions.timeScale = session.timeScale();
     serverOptions.deltaLimit = invocation.deltaLimit;
     serverOptions.waveformScope = invocation.waveformScope;
+    if (invocation.waveformWidthLimit.has_value())
+        serverOptions.waveformWidthLimit = *invocation.waveformWidthLimit;
 
     enzan::ipc::KernelServer server(session, diagnostics, serverOptions);
     server.start();

@@ -59,6 +59,35 @@ public:
     /// Must be called before `open`.
     void addScope(std::string_view pathPrefix);
 
+    /// The widest signal recorded unless `setWidthLimit` says otherwise, in bits as it is shown.
+    ///
+    /// A waveform keeps a signal's whole value at each of its changes, so what a change costs
+    /// is the signal's width however few of its bits moved: a memory written a word at a time is
+    /// recorded whole every time. Sixty-four thousand bits are sixteen kilobytes a change, which
+    /// a testbench's arrays and the widest buses stay under and a real memory does not.
+    static constexpr std::uint32_t DefaultWidthLimit = 65536;
+
+    /// Records no signal wider than `bits`, or one of any width when `bits` is 0.
+    ///
+    /// Must be called before `open`.
+    void setWidthLimit(std::uint32_t bits) noexcept { widthLimit = bits; }
+
+    [[nodiscard]] std::uint32_t maximumWidth() const noexcept { return widthLimit; }
+
+    /// The signals in scope left out for being wider than the limit, in signal order, once
+    /// `open` has chosen what to record.
+    ///
+    /// For whoever opened the writer to tell the reader about: a signal missing from a waveform
+    /// looks exactly like one nobody asked for.
+    [[nodiscard]] std::span<const std::uint32_t> tooWide() const noexcept {
+        return leftOutForWidth;
+    }
+
+    /// `tooWide` in words, for a diagnostic: the signal and its width, or how many there are and
+    /// the first few of them, so that a warning names what is missing without listing every
+    /// memory in a design.
+    [[nodiscard]] std::string describeTooWide() const;
+
     /// Opens `path`, declares the recorded signals, and dumps their values at time zero.
     ///
     /// Call after the kernel's `initialize`, so that the initial values recorded are the ones the
@@ -126,6 +155,11 @@ protected:
 
     static constexpr std::uint32_t NotRecorded = 0xFFFF'FFFFU;
 
+    /// True when an unpacked array is recorded. A file leaves one out, as IEEE 1364 section 18
+    /// leaves memories out of a VCD; the database a wave window reads records it, so that the
+    /// window can show an array as one (DESIGN_GUIDE.md section 7.1).
+    [[nodiscard]] virtual bool recordsArrays() const noexcept { return false; }
+
     // --- format hooks ------------------------------------------------------
 
     /// Opens the output. Returns false having filled `error`.
@@ -185,6 +219,9 @@ private:
     std::vector<std::string> scopePrefixes;
 
     std::vector<std::uint32_t> recorded;
+
+    std::uint32_t widthLimit = DefaultWidthLimit;
+    std::vector<std::uint32_t> leftOutForWidth;
 
     /// Recorded position for each signal in the image, or `NotRecorded`.
     std::vector<std::uint32_t> recordIndex;

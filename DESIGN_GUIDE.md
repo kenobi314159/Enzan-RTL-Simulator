@@ -681,8 +681,9 @@ to it unchanged, and an element is read in place rather than by copying the arra
 flat vector loses, the declared dimensions, is kept beside it for VPI and the waveform
 database, which present an array as an array. A packed array's dimensions are kept the same
 way, down to the element they are dimensions of, so that a wave window shows `logic
-[3:0][7:0]` as four bytes rather than as 32 bits (10.7). A memory is not recorded in a
-waveform, as a VCD leaves memories out.
+[3:0][7:0]` as four bytes rather than as 32 bits (10.7). A waveform file leaves memories
+out, as a VCD does; the database a wave window reads records an unpacked array as it does any
+other signal, up to the width limit of 7.1.
 
 A driver occupies the arena only where 3.7 gives it a value of its own: on a signal
 with a bit driven more than once, each of its drivers holds both planes over its
@@ -1249,6 +1250,13 @@ not to justify threading the kernel now.
   replaying from the start.
 - **A configurable memory budget**, with spill to disk when exceeded rather than
   unbounded growth.
+- **A width limit.** A change is recorded as the signal's whole value however few of its
+  bits moved, so a memory written a word at a time costs its whole width at every write. No
+  signal wider than a limit is recorded, 65536 bits unless `--wave-max-bits` says otherwise
+  (0 records any width), and whatever opened the file or the database warns of what it left
+  out (ENZ7001), naming the first few. A signal missing from a waveform looks exactly like one
+  nobody asked for, so leaving one out silently would send the reader looking for a mistake
+  of their own. The wave window says it too, beside the signal (10.7).
 - **Edge navigation.** Given a signal and a time, the next and the previous
   transition. Snapping a cursor to an edge and stepping it from edge to edge
   (10.7) are the two things a reader does most in a wave window, and both have
