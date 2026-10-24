@@ -3,6 +3,7 @@
 #include "ipc/KernelServer.h"
 
 #include "common/SourceManager.h"
+#include "eir/Module.h"
 #include "elab/ElaboratedDesign.h"
 
 #include <algorithm>
@@ -467,6 +468,7 @@ void KernelServer::onHello(const Frame& frame) {
     welcome.currentTime = simulationKernel->time();
     welcome.latestRecordedTime = latestRecordedTime();
     welcome.state = simulationState;
+    welcome.widthLimit = options.waveformWidthLimit;
     connection.send(MessageType::Welcome, welcome);
 
     transcriptStream << "-- " << (hello.clientName.empty() ? "a client" : hello.clientName)
@@ -611,6 +613,40 @@ void KernelServer::onQueryObjects(const Frame& frame) {
         return static_cast<std::uint32_t>(message.enums.size() - 1);
     };
 
+    // NOLINTBEGIN(bugprone-unchecked-optional-access)
+    const std::uint32_t instanceIndex = *elaborated.findInstance(request.instancePath);
+    // NOLINTEND(bugprone-unchecked-optional-access)
+    const elab::Instance& instance = elaborated.instances()[instanceIndex];
+    const eir::ModuleDefinition& definition =
+        image->analysedDesign().module(instance.definitionIndex);
+
+    // The dimensions a name is declared with, by the definition declaring it here: a port
+    // collapsed onto its actual is one slot under two names, and each may have a shape of its
+    // own. None for a name that is no object of this definition's own, a hierarchical
+    // reference's, or whose dimensions do not divide the bits sent for it.
+    const auto dimensionsOf = [&definition, &instance](std::string_view leaf,
+                                                       std::uint32_t signalIndex,
+                                                       std::uint32_t width) {
+        const std::optional<std::uint32_t> objectIndex = definition.findObject(leaf);
+        if (!objectIndex.has_value() || instance.objectSlots[*objectIndex] != signalIndex)
+            return std::vector<eir::ArrayDimension>{};
+        std::vector<eir::ArrayDimension> dimensions =
+            eir::declaredDimensions(definition, definition.objects[*objectIndex]);
+        std::uint64_t elements = 1;
+        for (const eir::ArrayDimension& dimension : dimensions) elements *= dimension.size();
+        if (width == 0 || width % elements != 0) dimensions.clear();
+        return dimensions;
+    };
+
+    const auto recordingOf = [this](std::uint32_t signalIndex) {
+        if (database != nullptr
+            && database->recordIndexOf(signalIndex) != wavedb::WaveformDatabase::NotRecorded)
+            return Recording::Recorded;
+        if (recorder != nullptr && std::ranges::binary_search(recorder->tooWide(), signalIndex))
+            return Recording::TooWide;
+        return Recording::OutsideScope;
+    };
+
     // Every name a slot has is offered, not only its canonical one. A collapsed port makes one
     // slot visible in two scopes and both names are real, so a user looking inside a DUT finds
     // its ports where they expect them.
@@ -618,9 +654,6 @@ void KernelServer::onQueryObjects(const Frame& frame) {
         // As the values sent for it are, shown rather than stored: a std_logic is one bit, not
         // the byte of its code.
         const std::uint32_t width = publisher->widthOf(signalIndex);
-        const bool recorded =
-            database != nullptr
-            && database->recordIndexOf(signalIndex) != wavedb::WaveformDatabase::NotRecorded;
 
         for (const std::string& name : elaborated.slotNames(signalIndex)) {
             if (scopeOf(name) != request.instancePath) continue;
@@ -629,7 +662,8 @@ void KernelServer::onQueryObjects(const Frame& frame) {
                             .name = std::string(leafOf(name)),
                             .path = name,
                             .width = width,
-                            .recorded = recorded,
+                            .recording = recordingOf(signalIndex),
+                            .dimensions = dimensionsOf(leafOf(name), signalIndex, width),
                             .enumIndex = enumEntryFor(elaborated.slots()[signalIndex].enumIndex)});
         }
     }
@@ -638,11 +672,6 @@ void KernelServer::onQueryObjects(const Frame& frame) {
     // storage, and their value is the same at every time. Which definition matters — a module
     // instantiated three times at three settings is three definitions, and each carries what
     // its own parameters were resolved to.
-    // NOLINTBEGIN(bugprone-unchecked-optional-access)
-    const std::uint32_t instanceIndex = *elaborated.findInstance(request.instancePath);
-    // NOLINTEND(bugprone-unchecked-optional-access)
-    const eir::ModuleDefinition& definition =
-        image->analysedDesign().module(elaborated.instances()[instanceIndex].definitionIndex);
 
     for (const eir::Parameter& parameter : definition.parameters) {
         message.parameters.push_back(

@@ -13,7 +13,8 @@ enzan_add_component(
           Type.cpp
           UnitRequest.cpp
           Verifier.cpp
-  HEADERS BitOps.h
+  HEADERS ArrayDimension.h
+          BitOps.h
           BitVector.h
           Design.h
           Instruction.h

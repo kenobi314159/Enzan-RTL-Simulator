@@ -3,6 +3,7 @@
 #pragma once
 
 #include "common/SourceLocation.h"
+#include "eir/ArrayDimension.h"
 #include "eir/BitVector.h"
 #include "eir/Process.h"
 #include "eir/Type.h"
@@ -198,24 +199,6 @@ struct VhdlType {
     std::vector<Field> fields;
 
     friend bool operator==(const VhdlType&, const VhdlType&) noexcept = default;
-};
-
-/// One dimension of an array, packed or unpacked, as declared: `[0:15]` is a left of 0 and a
-/// right of 15.
-///
-/// Kept for what reads the array as an array — VPI's `vpiRegArray`, the waveform database's
-/// choice not to record memories — and not for simulating it. Storage is flat: the array's
-/// elements are one vector of its bits, left element highest, as a packed array's are
-/// (DESIGN_GUIDE.md section 4.3), so every operation on it is an operation on bits.
-struct ArrayDimension {
-    std::int32_t left = 0;
-    std::int32_t right = 0;
-
-    [[nodiscard]] std::uint32_t size() const noexcept {
-        return static_cast<std::uint32_t>(left > right ? left - right : right - left) + 1U;
-    }
-
-    friend bool operator==(ArrayDimension, ArrayDimension) noexcept = default;
 };
 
 /// What a VHDL resolved signal's drivers resolve with (IEEE 1076 section 4.6): a resolution

@@ -229,6 +229,7 @@ void KernelSession::onWelcome(const ipc::Frame& frame) {
     top = QString::fromStdString(message.topModule);
     version = QString::fromStdString(message.kernelVersion);
     scale = runtime::TimeScale(message.timeExponent);
+    recordedWidthLimit = message.widthLimit;
     kernelTime = message.currentTime;
     recordedTime = message.latestRecordedTime;
     simulationState = message.state;
@@ -283,7 +284,8 @@ void KernelSession::onObjects(const ipc::Frame& frame) {
         info.name = QString::fromStdString(entry.name);
         info.path = QString::fromStdString(entry.path);
         info.width = entry.width;
-        info.recorded = entry.recorded;
+        info.recording = entry.recording;
+        info.dimensions = entry.dimensions;
         if (entry.enumIndex < enums.size()) info.enumeration = enums[entry.enumIndex];
 
         knownSignals[entry.signalIndex] = info;

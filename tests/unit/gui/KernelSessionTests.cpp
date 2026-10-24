@@ -16,7 +16,10 @@
 
 #include <QSignalSpy>
 
+#include <cstdint>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include "eir/BitVector.h"
 
@@ -50,7 +53,7 @@ TEST_F(SessionFixture, AScopeListsItsObjects) {
     ASSERT_EQ(objects.size(), 3);
     EXPECT_EQ(objects[0].name, QStringLiteral("clk"));
     EXPECT_EQ(objects[0].width, 1U);
-    EXPECT_TRUE(objects[0].recorded);
+    EXPECT_EQ(objects[0].recording, enzan::ipc::Recording::Recorded);
     EXPECT_EQ(objects[1].name, QStringLiteral("count"));
     EXPECT_EQ(objects[1].width, 8U);
     EXPECT_EQ(objects[2].name, QStringLiteral("state"));
@@ -117,7 +120,7 @@ TEST_F(SessionFixture, ANullArrayIsShownAsOneWithNoValue) {
     nothing.name = QStringLiteral("nothing");
     nothing.path = QStringLiteral("/tb/nothing");
     nothing.width = 0;
-    nothing.recorded = true;
+    nothing.recording = enzan::ipc::Recording::Recorded;
     model.setObjects(QStringLiteral("/tb"), {nothing});
 
     ASSERT_EQ(model.rowCount(), 1);
@@ -126,6 +129,56 @@ TEST_F(SessionFixture, ANullArrayIsShownAsOneWithNoValue) {
     EXPECT_TRUE(model.data(model.index(0, ObjectsModel::ValueColumn), Qt::DisplayRole)
                     .toString()
                     .isEmpty());
+}
+
+TEST_F(SessionFixture, AnArrayIsTypedByItsDimensions) {
+    ObjectsModel model(*session);
+    const auto shaped = [](const char* name, std::uint32_t width,
+                           std::vector<enzan::eir::ArrayDimension> dimensions) {
+        SignalInfo info;
+        info.name = QString::fromUtf8(name);
+        info.path = QStringLiteral("/tb/") + info.name;
+        info.width = width;
+        info.dimensions = std::move(dimensions);
+        return info;
+    };
+    model.setObjects(QStringLiteral("/tb"),
+                     {shaped("lanes", 32, {{.left = 3, .right = 0}, {.left = 7, .right = 0}}),
+                      shaped("words", 128, {{.left = 0, .right = 3}}),
+                      shaped("up", 8, {{.left = 0, .right = 7}}), shaped("bit", 1, {}),
+                      shaped("plain", 8, {})});
+
+    const auto type = [&model](int row) {
+        return model.data(model.index(row, ObjectsModel::TypeColumn), Qt::DisplayRole).toString();
+    };
+    EXPECT_EQ(type(0), QStringLiteral("logic [3:0][7:0]"));
+    EXPECT_EQ(type(1), QStringLiteral("logic [0:3][31:0]")) << "an int is an element of 32 bits";
+    EXPECT_EQ(type(2), QStringLiteral("logic [0:7]"));
+    EXPECT_EQ(type(3), QStringLiteral("logic"));
+    EXPECT_EQ(type(4), QStringLiteral("logic [7:0]"));
+}
+
+TEST_F(SessionFixture, ASignalTooWideToLogSaysSo) {
+    // Not the "not logged" of a signal outside the scope: widening the scope would not help.
+    ObjectsModel model(*session);
+    SignalInfo memory;
+    memory.signalIndex = 99;
+    memory.name = QStringLiteral("memory");
+    memory.path = QStringLiteral("/tb/memory");
+    memory.width = 1U << 20U;
+    memory.recording = enzan::ipc::Recording::TooWide;
+    SignalInfo outside = memory;
+    outside.signalIndex = 98;
+    outside.recording = enzan::ipc::Recording::OutsideScope;
+    model.setObjects(QStringLiteral("/tb"), {memory, outside});
+
+    EXPECT_EQ(model.data(model.index(0, ObjectsModel::ValueColumn), Qt::DisplayRole).toString(),
+              QStringLiteral("too wide to log"));
+    EXPECT_TRUE(model.data(model.index(0, ObjectsModel::NameColumn), Qt::ToolTipRole)
+                    .toString()
+                    .contains(QStringLiteral("--wave-max-bits")));
+    EXPECT_EQ(model.data(model.index(1, ObjectsModel::ValueColumn), Qt::DisplayRole).toString(),
+              QStringLiteral("not logged"));
 }
 
 TEST_F(SessionFixture, SubscribingBringsTheSignalsPastWithIt) {

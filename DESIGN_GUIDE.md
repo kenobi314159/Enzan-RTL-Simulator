@@ -1256,7 +1256,8 @@ not to justify threading the kernel now.
   (0 records any width), and whatever opened the file or the database warns of what it left
   out (ENZ7001), naming the first few. A signal missing from a waveform looks exactly like one
   nobody asked for, so leaving one out silently would send the reader looking for a mistake
-  of their own. The wave window says it too, beside the signal (10.7).
+  of their own. The Objects window says it too, showing such a signal as *too wide to log*
+  rather than *not logged*, because widening the logging scope would not bring it back.
 - **Edge navigation.** Given a signal and a time, the next and the previous
   transition. Snapping a cursor to an edge and stepping it from edge to edge
   (10.7) are the two things a reader does most in a wave window, and both have

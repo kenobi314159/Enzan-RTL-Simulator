@@ -23,6 +23,7 @@
 
 namespace {
 
+using enzan::eir::ArrayDimension;
 using enzan::eir::BitVector;
 using enzan::eir::Logic;
 using enzan::ipc::ByeMessage;
@@ -42,6 +43,7 @@ using enzan::ipc::ObjectEntry;
 using enzan::ipc::ObjectsMessage;
 using enzan::ipc::ProtocolVersion;
 using enzan::ipc::QueryHistoryMessage;
+using enzan::ipc::Recording;
 using enzan::ipc::RunMessage;
 using enzan::ipc::RunStateMessage;
 using enzan::ipc::SimulationState;
@@ -86,6 +88,7 @@ TEST(Protocol, WelcomeSurvivesTheRoundTrip) {
     sent.currentTime = 1'234'567'890'123ULL;
     sent.latestRecordedTime = 2'000'000ULL;
     sent.state = SimulationState::Running;
+    sent.widthLimit = 65536;
 
     const WelcomeMessage got = roundTrip(MessageType::Welcome, sent);
 
@@ -96,6 +99,7 @@ TEST(Protocol, WelcomeSurvivesTheRoundTrip) {
     EXPECT_EQ(got.currentTime, sent.currentTime);
     EXPECT_EQ(got.latestRecordedTime, sent.latestRecordedTime);
     EXPECT_EQ(got.state, SimulationState::Running);
+    EXPECT_EQ(got.widthLimit, 65536U);
 }
 
 TEST(Protocol, TheDesignTreeSurvivesTheRoundTrip) {
@@ -125,19 +129,37 @@ TEST(Protocol, TheDesignTreeSurvivesTheRoundTrip) {
 TEST(Protocol, ObjectsSurviveTheRoundTrip) {
     ObjectsMessage sent;
     sent.instancePath = "/tb";
-    sent.objects.push_back(ObjectEntry{
-        .signalIndex = 4, .name = "clk", .path = "/tb/clk", .width = 1, .recorded = true});
-    sent.objects.push_back(ObjectEntry{
-        .signalIndex = 9, .name = "count", .path = "/tb/count", .width = 32, .recorded = false});
+    sent.objects.push_back(ObjectEntry{.signalIndex = 4,
+                                       .name = "clk",
+                                       .path = "/tb/clk",
+                                       .width = 1,
+                                       .recording = Recording::Recorded});
+    sent.objects.push_back(ObjectEntry{.signalIndex = 9,
+                                       .name = "count",
+                                       .path = "/tb/count",
+                                       .width = 32,
+                                       .recording = Recording::OutsideScope});
+    // logic [7:0] grid [0:1][-1:-2], whose bounds may be negative
+    sent.objects.push_back(ObjectEntry{.signalIndex = 11,
+                                       .name = "grid",
+                                       .path = "/tb/grid",
+                                       .width = 32,
+                                       .recording = Recording::TooWide,
+                                       .dimensions = {ArrayDimension{.left = 0, .right = 1},
+                                                      ArrayDimension{.left = -1, .right = -2},
+                                                      ArrayDimension{.left = 7, .right = 0}}});
 
     const ObjectsMessage got = roundTrip(MessageType::Objects, sent);
 
     EXPECT_EQ(got.instancePath, "/tb");
-    ASSERT_EQ(got.objects.size(), 2U);
+    ASSERT_EQ(got.objects.size(), 3U);
     EXPECT_EQ(got.objects[0].name, "clk");
-    EXPECT_TRUE(got.objects[0].recorded);
+    EXPECT_EQ(got.objects[0].recording, Recording::Recorded);
+    EXPECT_TRUE(got.objects[0].dimensions.empty());
     EXPECT_EQ(got.objects[1].width, 32U);
-    EXPECT_FALSE(got.objects[1].recorded);
+    EXPECT_EQ(got.objects[1].recording, Recording::OutsideScope);
+    EXPECT_EQ(got.objects[2].recording, Recording::TooWide);
+    EXPECT_EQ(got.objects[2].dimensions, sent.objects[2].dimensions);
 }
 
 TEST(Protocol, FourStateValuesSurviveTheRoundTrip) {

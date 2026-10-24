@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <vector>
 
 class QSocketNotifier;
 
@@ -48,7 +49,7 @@ struct EnumInfo {
 /// and the only difference is where the value comes from. Carrying that difference as a field
 /// means the two places that actually read a value have to know about it and nothing else
 /// does. `constantValue` is the discriminator: a parameter has one, a signal never does, and
-/// `signalIndex` and `recorded` mean nothing on a parameter.
+/// `signalIndex` and `recording` mean nothing on a parameter.
 struct SignalInfo {
     std::uint32_t signalIndex = 0;
     QString name;
@@ -68,9 +69,14 @@ struct SignalInfo {
     /// True when this describes a parameter rather than a signal.
     [[nodiscard]] bool isParameter() const noexcept { return constantValue.has_value(); }
 
-    /// False when the kernel is not recording this signal, so that "nothing has happened yet"
-    /// and "nothing is being kept" can be told apart on screen.
-    bool recorded = false;
+    /// Whether the kernel is recording this signal, so that "nothing has happened yet",
+    /// "nothing is being kept" and "too wide to keep" can be told apart on screen.
+    ipc::Recording recording = ipc::Recording::OutsideScope;
+
+    /// The dimensions the signal is declared with, outermost first, dividing `width` into
+    /// equal elements, the left one highest; empty for one that is no array (DESIGN_GUIDE.md
+    /// section 10.7).
+    std::vector<eir::ArrayDimension> dimensions;
 
     /// The names this signal's type gives its values, or nothing when its type is not an
     /// enumeration.
@@ -147,6 +153,9 @@ public:
     [[nodiscard]] runtime::SimTime latestTime() const noexcept { return recordedTime; }
 
     [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
+
+    /// The widest signal the kernel records, or 0 for any width.
+    [[nodiscard]] std::uint32_t widthLimit() const noexcept { return recordedWidthLimit; }
 
     [[nodiscard]] const QString& topModule() const noexcept { return top; }
 
@@ -239,6 +248,7 @@ private:
     QString top;
     QString version;
     runtime::TimeScale scale;
+    std::uint32_t recordedWidthLimit = 0;
     runtime::SimTime kernelTime = 0;
     runtime::SimTime recordedTime = 0;
     ipc::SimulationState simulationState = ipc::SimulationState::Idle;

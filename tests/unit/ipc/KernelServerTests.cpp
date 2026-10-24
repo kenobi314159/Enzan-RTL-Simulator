@@ -23,6 +23,7 @@
 #include "runtime/Image.h"
 #include "runtime/Time.h"
 #include "session/Session.h"
+#include "wavedb/WaveformWriter.h"
 
 #include "support/Literals.h"
 #include "support/ProcessBuilder.h"
@@ -272,6 +273,73 @@ Design debuggableDesign(enzan::BufferId buffer) {
     return design;
 }
 
+/// Objects of several shapes, as the frontends describe them: SystemVerilog's packed and unpacked
+/// arrays, a VHDL array of vectors and a vector of 200 bits, with a child whose port, declared
+/// flat, is collapsed onto the packed array.
+Design shapedDesign() {
+    using enzan::eir::ArrayDimension;
+    using enzan::eir::VhdlType;
+
+    ModuleDefinition child;
+    child.name = "child";
+    child.sourceName = "child";
+    child.addObject(Object{.name = "flat",
+                           .type = Type::bits(32, false, true),
+                           .packedDimensions = {ArrayDimension{.left = 31, .right = 0}}});
+    child.ports.push_back(enzan::eir::Port{
+        .name = "flat", .direction = enzan::eir::PortDirection::Input, .objectIndex = 0});
+
+    ModuleDefinition top;
+    top.name = "tb";
+    top.sourceName = "tb";
+    // logic [3:0][7:0] lanes
+    top.addObject(Object{.name = "lanes",
+                         .type = Type::bits(32, false, true),
+                         .packedDimensions = {ArrayDimension{.left = 3, .right = 0},
+                                              ArrayDimension{.left = 7, .right = 0}}});
+    // logic [7:0] memory [0:3]
+    top.addObject(Object{.name = "memory",
+                         .type = Type::bits(32, false, true),
+                         .unpackedDimensions = {ArrayDimension{.left = 0, .right = 3}},
+                         .packedDimensions = {ArrayDimension{.left = 7, .right = 0}},
+                         .elementWidth = 8});
+    // array (0 to 1) of std_logic_vector(3 downto 0), eight codes of a byte each
+    top.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Enumeration,
+                                     .name = "STD_ULOGIC",
+                                     .width = 8,
+                                     .encoding = enzan::eir::Encoding::VhdlLogic});
+    top.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Array,
+                                     .name = "STD_LOGIC_VECTOR",
+                                     .width = 32,
+                                     .ranges = {{.left = 3, .right = 0, .ascending = false}},
+                                     .element = 0});
+    top.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Array,
+                                     .name = "NIBBLES",
+                                     .width = 64,
+                                     .ranges = {{.left = 0, .right = 1, .ascending = true}},
+                                     .element = 1});
+    top.addObject(Object{.name = "nibbles",
+                         .type = Type::bits(64, false, false),
+                         .initialValue = enzan::eir::BitVector::parse("64'h0203020302030203"),
+                         .encoding = enzan::eir::Encoding::VhdlLogic,
+                         .vhdlType = 2});
+    // logic [199:0] wide
+    top.addObject(Object{.name = "wide",
+                         .type = Type::bits(200, false, true),
+                         .packedDimensions = {ArrayDimension{.left = 199, .right = 0}}});
+
+    enzan::eir::Instance instance;
+    instance.name = "u_dut";
+    instance.definitionName = "child";
+    instance.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0});
+    top.instances.push_back(std::move(instance));
+
+    Design design;
+    design.addModule(std::move(child));
+    design.addModule(std::move(top));
+    return design;
+}
+
 /// A server with a client attached over a socket pair, and the helpers to talk to it.
 class ServerFixture : public ::testing::Test {
 protected:
@@ -307,6 +375,7 @@ protected:
         options.kernelVersion = "enzan test";
         options.timeScale = TimeScale(-9);
         options.localTranscript = &localTranscript;
+        options.waveformWidthLimit = waveformWidthLimit;
         server = std::make_unique<KernelServer>(*session, engine, options);
         server->start();
     }
@@ -422,6 +491,9 @@ protected:
     std::unique_ptr<Session> session;
     std::unique_ptr<KernelServer> server;
 
+    /// The widest signal the served database records, read by `rebuild`.
+    std::uint32_t waveformWidthLimit = enzan::wavedb::WaveformWriter::DefaultWidthLimit;
+
     Connection client;
     std::vector<Captured> received;
 };
@@ -507,7 +579,72 @@ TEST_F(ServerFixture, AScopeListsItsOwnObjects) {
     EXPECT_EQ(objects.objects[0].name, "clk");
     EXPECT_EQ(objects.objects[0].path, "/tb/clk");
     EXPECT_EQ(objects.objects[0].width, 1U);
-    EXPECT_TRUE(objects.objects[0].recorded) << "the whole design is in the logging scope";
+    EXPECT_EQ(objects.objects[0].recording, enzan::ipc::Recording::Recorded)
+        << "the whole design is in the logging scope";
+}
+
+TEST_F(ServerFixture, AnObjectIsListedWithTheDimensionsItsNameIsDeclaredWith) {
+    using enzan::eir::ArrayDimension;
+    using enzan::ipc::Recording;
+    using Dimensions = std::vector<ArrayDimension>;
+
+    waveformWidthLimit = 100;
+    rebuild(shapedDesign());
+    EXPECT_EQ(connectClient().widthLimit, 100U);
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    const auto named = [&objects](std::string_view name) -> const enzan::ipc::ObjectEntry& {
+        const auto found = std::ranges::find(objects.objects, name, &enzan::ipc::ObjectEntry::name);
+        EXPECT_NE(found, objects.objects.end()) << name;
+        return *found;
+    };
+
+    EXPECT_EQ(named("lanes").dimensions, (Dimensions{ArrayDimension{.left = 3, .right = 0},
+                                                     ArrayDimension{.left = 7, .right = 0}}));
+    EXPECT_EQ(named("lanes").recording, Recording::Recorded);
+
+    // An unpacked array is recorded for the window, though a file leaves it out.
+    EXPECT_EQ(named("memory").dimensions, (Dimensions{ArrayDimension{.left = 0, .right = 3},
+                                                      ArrayDimension{.left = 7, .right = 0}}));
+    EXPECT_EQ(named("memory").recording, Recording::Recorded);
+
+    // A VHDL array divides the bits it shows as, one for each std_logic, not their codes.
+    EXPECT_EQ(named("nibbles").width, 8U);
+    EXPECT_EQ(named("nibbles").dimensions, (Dimensions{ArrayDimension{.left = 0, .right = 1},
+                                                       ArrayDimension{.left = 3, .right = 0}}));
+
+    EXPECT_EQ(named("wide").recording, Recording::TooWide);
+    EXPECT_EQ(named("wide").dimensions, (Dimensions{ArrayDimension{.left = 199, .right = 0}}));
+
+    // The child's port is the same signal, declared flat there, and listed as it is declared.
+    query.instancePath = "/tb/u_dut";
+    request(MessageType::QueryObjects, query);
+    const auto inside = expect<ObjectsMessage>(MessageType::Objects);
+    ASSERT_EQ(inside.objects.size(), 1U);
+    EXPECT_EQ(inside.objects[0].signalIndex, named("lanes").signalIndex);
+    EXPECT_EQ(inside.objects[0].dimensions, (Dimensions{ArrayDimension{.left = 31, .right = 0}}));
+}
+
+TEST_F(ServerFixture, WhatTheWindowLeavesOutForItsWidthIsReportedOnce) {
+    waveformWidthLimit = 100;
+    rebuild(shapedDesign());
+    const auto warnings = [this] {
+        return std::ranges::count_if(consumer.messages, [](const std::string& message) {
+            return message.starts_with("the wave window records no signal wider than 100 bits");
+        });
+    };
+    ASSERT_EQ(warnings(), 1) << (consumer.messages.empty() ? "" : consumer.messages.back());
+    EXPECT_NE(consumer.messages.back().find("/tb/wide of 200 bits"), std::string::npos)
+        << consumer.messages.back();
+
+    // A restart leaves out the same, and is not told again.
+    connectClient();
+    enzan::ipc::RestartMessage restart;
+    request(MessageType::Restart, restart);
+    EXPECT_EQ(warnings(), 1);
 }
 
 TEST_F(ServerFixture, AnUnknownScopeIsAFailureRatherThanAnEmptyAnswer) {

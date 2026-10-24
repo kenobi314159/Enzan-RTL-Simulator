@@ -4,9 +4,28 @@
 
 #include "wavedb/WaveformDatabase.h"
 
+#include <cstdint>
 #include <optional>
 
 namespace enzan::gui {
+
+namespace {
+
+/// What the type column writes after `logic`: the signal's dimensions, `[63:0][17:0]`, then the
+/// bits of an element wider than one, which has no dimension of its own, `int` or a record.
+QString declaredRanges(const SignalInfo& info) {
+    QString ranges;
+    std::uint64_t elements = 1;
+    for (const eir::ArrayDimension& dimension : info.dimensions) {
+        ranges += QStringLiteral("[%1:%2]").arg(dimension.left).arg(dimension.right);
+        elements *= dimension.size();
+    }
+    if (const std::uint64_t element = info.width / elements; element > 1)
+        ranges += QStringLiteral("[%1:0]").arg(element - 1);
+    return ranges.isEmpty() ? ranges : u' ' + ranges;
+}
+
+} // namespace
 
 ObjectsModel::ObjectsModel(const KernelSession& session, QObject* parent)
     : QAbstractTableModel(parent), kernelSession(&session) {}
@@ -65,7 +84,12 @@ QString ObjectsModel::valueOf(const SignalInfo& info) const {
         // Told apart on purpose. A signal nobody has asked for has no trace here yet; one the
         // kernel is not logging never will, and showing the same blank for both would have the
         // user waiting for a value that is not coming.
-        return info.recorded ? tr("—") : tr("not logged");
+        switch (info.recording) {
+        case ipc::Recording::Recorded: return tr("—");
+        case ipc::Recording::TooWide: return tr("too wide to log");
+        case ipc::Recording::OutsideScope: break;
+        }
+        return tr("not logged");
     }
 
     const std::optional<eir::BitVector> value = database.valueAt(record, cursorTime);
@@ -81,7 +105,12 @@ QVariant ObjectsModel::data(const QModelIndex& index, int role) const {
 
     if (role == SignalIndexRole) return info.signalIndex;
 
-    if (role == Qt::ToolTipRole) return info.path;
+    if (role == Qt::ToolTipRole) {
+        if (info.isParameter() || info.recording != ipc::Recording::TooWide) return info.path;
+        return tr("%1\nWider than the %2 bits the kernel records; --wave-max-bits raises the limit")
+            .arg(info.path)
+            .arg(kernelSession->widthLimit());
+    }
 
     if (role != Qt::DisplayRole) return {};
 
@@ -93,7 +122,7 @@ QVariant ObjectsModel::data(const QModelIndex& index, int role) const {
         // value needed, which is not something the reader wrote and not worth showing them.
         if (info.isParameter()) return info.isLocalParameter ? tr("localparam") : tr("parameter");
         if (info.width == 0) return tr("null array");
-        return info.width == 1 ? tr("logic") : tr("logic [%1:0]").arg(info.width - 1);
+        return tr("logic%1").arg(declaredRanges(info));
     default: return {};
     }
 }

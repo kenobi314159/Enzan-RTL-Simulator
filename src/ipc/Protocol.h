@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "eir/ArrayDimension.h"
 #include "eir/BitVector.h"
 #include "ipc/Codec.h"
 
@@ -18,7 +19,7 @@ namespace enzan::ipc {
 /// handshake compares it and refuses rather than negotiating: a GUI and a kernel from
 /// different builds that half-understand each other would show wrong values, and section 1.2
 /// puts correctness above convenience.
-constexpr std::uint32_t ProtocolVersion = 6;
+constexpr std::uint32_t ProtocolVersion = 7;
 
 /// What a message is.
 ///
@@ -73,6 +74,15 @@ enum class SimulationState : std::uint8_t {
 };
 
 std::string_view toString(SimulationState state);
+
+/// Whether the kernel's waveform database records a signal, and why not when it does not.
+enum class Recording : std::uint8_t {
+    Recorded,
+    /// Outside the logging scope.
+    OutsideScope,
+    /// Wider than the database records (DESIGN_GUIDE.md section 7.1).
+    TooWide,
+};
 
 // ---------------------------------------------------------------------------
 // Requests
@@ -184,6 +194,10 @@ struct WelcomeMessage {
     std::uint64_t currentTime = 0;
     std::uint64_t latestRecordedTime = 0;
     SimulationState state = SimulationState::Idle;
+
+    /// The widest signal the kernel's waveform database records, or 0 for any width, so that a
+    /// window can say why one it is not recording is not (DESIGN_GUIDE.md section 7.1).
+    std::uint32_t widthLimit = 0;
 };
 
 /// One instance in the design hierarchy.
@@ -228,10 +242,16 @@ struct ObjectEntry {
     std::string path;
     std::uint32_t width = 1;
 
-    /// True when the kernel's waveform database is recording this signal, so the client can
-    /// tell "no history yet" from "outside the logging scope" instead of showing an empty
-    /// trace for both.
-    bool recorded = false;
+    /// Whether the kernel's waveform database is recording this signal, so the client can tell
+    /// "no history yet" from "outside the logging scope" and from "too wide to record" instead
+    /// of showing an empty trace for all three.
+    Recording recording = Recording::OutsideScope;
+
+    /// The dimensions the object is declared with under this name, outermost first, dividing
+    /// `width` into equal elements, the left one highest (`eir::declaredDimensions`). Empty for
+    /// an object that is no array. Per name rather than per signal, because a port collapsed
+    /// onto its actual may be declared with a shape of its own.
+    std::vector<eir::ArrayDimension> dimensions;
 
     /// Index into the message's `enums`, or `NoEnum` when the object's type is not one.
     std::uint32_t enumIndex = NoEnum;
@@ -457,6 +477,29 @@ void serializeState(Archive& archive, SimulationState& state) {
 }
 
 template<typename Archive>
+void serializeRecording(Archive& archive, Recording& recording) {
+    auto raw = static_cast<std::uint8_t>(recording);
+    archive.u8(raw);
+    if constexpr (Archive::IsReading) {
+        recording = raw > static_cast<std::uint8_t>(Recording::TooWide)
+                        ? Recording::OutsideScope
+                        : static_cast<Recording>(raw);
+    }
+}
+
+template<typename Archive>
+void serialize(Archive& archive, eir::ArrayDimension& dimension) {
+    auto left = static_cast<std::uint32_t>(dimension.left);
+    auto right = static_cast<std::uint32_t>(dimension.right);
+    archive.u32(left);
+    archive.u32(right);
+    if constexpr (Archive::IsReading) {
+        dimension.left = static_cast<std::int32_t>(left);
+        dimension.right = static_cast<std::int32_t>(right);
+    }
+}
+
+template<typename Archive>
 void serialize(Archive& archive, WelcomeMessage& message) {
     archive.u32(message.protocolVersion);
     archive.str(message.kernelVersion);
@@ -465,6 +508,7 @@ void serialize(Archive& archive, WelcomeMessage& message) {
     archive.u64(message.currentTime);
     archive.u64(message.latestRecordedTime);
     serializeState(archive, message.state);
+    archive.u32(message.widthLimit);
 }
 
 template<typename Archive>
@@ -488,8 +532,9 @@ void serialize(Archive& archive, ObjectEntry& entry) {
     archive.str(entry.name);
     archive.str(entry.path);
     archive.u32(entry.width);
-    archive.boolean(entry.recorded);
+    serializeRecording(archive, entry.recording);
     archive.u32(entry.enumIndex);
+    archive.list(entry.dimensions);
 }
 
 template<typename Archive>
