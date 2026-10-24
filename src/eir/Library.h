@@ -215,6 +215,11 @@ public:
     /// The primary units, in lower case, this library's VHDL sources declare.
     [[nodiscard]] std::vector<std::string> vhdlUnits() const;
 
+    /// True when NVC's units hold the primary unit `name` though no entry records it: an analysis
+    /// into this library stopped after NVC had written what it analysed before, and a run from
+    /// the library would find nothing of the unit.
+    [[nodiscard]] bool holdsUnrecordedVhdl(std::string_view name) const;
+
     /// True when each of `sources` has a VHDL entry whose key is current: its text and `options`,
     /// everything else that changes what NVC's analysis of it produces.
     [[nodiscard]] bool vhdlCurrent(std::span<const LibrarySource> sources,

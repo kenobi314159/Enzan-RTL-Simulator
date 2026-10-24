@@ -45,11 +45,12 @@ unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources
 /// returning the number of errors either reported.
 ///
 /// `encoded` receives the translated definitions as `eir::encodeModules` writes them, when there
-/// were no errors, `libraries` the library of each in order, which that encoding leaves out, and
-/// `exchange` what the design exchanges with SystemVerilog (`translateDesign`).
+/// were no errors, `libraries` the library of each in order, which that encoding leaves out,
+/// `exchange` what the design exchanges with SystemVerilog (`translateDesign`), and `analysed`
+/// whether the analysis succeeded, whatever the translation then did.
 unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources,
                       DiagnosticSink& sink, std::string& encoded,
-                      std::vector<std::string>& libraries, Exchange& exchange);
+                      std::vector<std::string>& libraries, Exchange& exchange, bool& analysed);
 
 /// Analyses as `runNvcAnalysis` does and translates each of `requests`, filling `encoded` and
 /// `libraries` as `runNvcDesign` does and `answers` with where each request's function is.

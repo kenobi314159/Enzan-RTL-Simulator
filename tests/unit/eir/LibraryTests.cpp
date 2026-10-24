@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -579,6 +580,13 @@ void analysedByNvc(const Library& library) {
     std::filesystem::create_directories(library.vhdlDirectory());
 }
 
+/// `text` in upper case, as NVC names a unit's file.
+std::string upper(std::string text) {
+    for (char& character : text)
+        character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    return text;
+}
+
 TEST_F(StoredLibraryTest, AVhdlSourceStoredIsCurrentAndDeclaresItsUnits) {
     const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
     analysedByNvc(library);
@@ -608,6 +616,21 @@ TEST_F(StoredLibraryTest, VhdlEntriesWithoutNvcsUnitsAreStale) {
     ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
     EXPECT_FALSE(library.vhdlCurrent({&file, 1}, sources, VhdlOptions))
         << "an entry says what NVC analysed; without NVC's units it describes nothing";
+}
+
+TEST_F(StoredLibraryTest, NvcsUnitsNoEntryRecordsAreFound) {
+    // What an analysis stopped part-way leaves: NVC has written the unit, as a file named for the
+    // library and the unit in upper case, and no entry declares it. Once one does, it is recorded.
+    analysedByNvc(library);
+    std::ofstream(library.vhdlDirectory() / (upper(library.name()) + ".COUNTER")) << "unit";
+    EXPECT_TRUE(library.holdsUnrecordedVhdl("counter"));
+    EXPECT_TRUE(library.holdsUnrecordedVhdl("Counter")) << "VHDL names are in any case";
+    EXPECT_FALSE(library.holdsUnrecordedVhdl("other")) << "a unit NVC did not write";
+
+    const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+    EXPECT_FALSE(library.holdsUnrecordedVhdl("counter"));
 }
 
 TEST_F(StoredLibraryTest, VhdlHoldsNoTimeUnit) {

@@ -152,9 +152,12 @@ struct Exchange {
 /// and the session to link, with what the design answers SystemVerilog.
 ///
 /// Returns nothing having reported why, when a source does not analyse or the design uses
-/// something the adapter does not translate yet.
+/// something the adapter does not translate yet. `analysed`, when given, is set to whether the
+/// sources analysed, which leaves their units in the work library even where the translation
+/// after it failed (DESIGN_GUIDE.md section 4.4).
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
-                                     DiagnosticEngine& diagnostics, Exchange* exchange = nullptr);
+                                     DiagnosticEngine& diagnostics, Exchange* exchange = nullptr,
+                                     bool* analysed = nullptr);
 
 /// A resolution function asked for by how many drivers it resolves (DESIGN_GUIDE.md section 3.7):
 /// `function` names it as `eir::Resolution` does.

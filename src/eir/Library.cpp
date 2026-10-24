@@ -10,6 +10,7 @@
 #include "eir/Serialization.h"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdio>
 #include <fstream>
@@ -678,6 +679,24 @@ std::vector<std::string> Library::vhdlUnits() const {
             sorted.insert(entry.units.begin(), entry.units.end());
     }
     return {sorted.begin(), sorted.end()};
+}
+
+bool Library::holdsUnrecordedVhdl(std::string_view name) const {
+    if (!opened || name.empty()) return false;
+    const auto cased = [](std::string text, int (*change)(int)) {
+        for (char& character : text)
+            character = static_cast<char>(change(static_cast<unsigned char>(character)));
+        return text;
+    };
+    // The units are recorded in lower case.
+    const std::vector<std::string> recorded = vhdlUnits();
+    if (std::ranges::find(recorded, cased(std::string(name), &::tolower)) != recorded.end())
+        return false;
+
+    // NVC names a primary unit's file for its library and itself, in upper case.
+    const std::string file = cased(logicalName + '.' + std::string(name), &::toupper);
+    std::error_code failure;
+    return std::filesystem::is_regular_file(vhdlDirectory() / file, failure);
 }
 
 bool Library::vhdlCurrent(std::span<const LibrarySource> sources,

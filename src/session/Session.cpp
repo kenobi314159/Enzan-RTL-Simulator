@@ -420,18 +420,22 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     // the child.
     if (!request.translateVhdl) options.onlyRequested = true;
 
-    std::unique_ptr<eir::Design> analysed = frontend::vhdl::analyse(options, sources, diagnostics);
-    if (analysed == nullptr) return false;
+    bool unitsAnalysed = false;
+    std::unique_ptr<eir::Design> analysed =
+        frontend::vhdl::analyse(options, sources, diagnostics, nullptr, &unitsAnalysed);
 
-    // A failed store is reported and otherwise ignored, as SystemVerilog's is: the design is in
-    // hand either way.
-    if (library.isOpen() && !reused) {
+    // NVC's units are in the library once its analysis succeeds, whatever the translation after
+    // it did, so they are recorded then: units no entry records are units a run from the library
+    // is told are not there (section 4.4). A failed store is reported and otherwise ignored, as
+    // SystemVerilog's is.
+    if (library.isOpen() && !reused && unitsAnalysed) {
         std::vector<std::vector<std::string>> declared;
         declared.reserve(read.size());
         for (const eir::LibrarySource& source : read)
             declared.push_back(frontend::vhdl::declaredUnits(source.buffer, sources));
         static_cast<void>(library.storeVhdl(read, sources, keyOptions, declared, diagnostics));
     }
+    if (analysed == nullptr) return false;
 
     design = std::move(analysed);
     loadedFromLibrary = reused;
@@ -731,6 +735,16 @@ bool Session::hasVhdlLibraries() const {
                                [](const eir::Library& input) { return input.holdsVhdl(); });
 }
 
+bool Session::reportUnrecordedTop(std::string_view top) const {
+    const auto holder = std::ranges::find_if(inputLibraries, [top](const eir::Library& input) {
+        return input.holdsUnrecordedVhdl(top);
+    });
+    if (holder == inputLibraries.end()) return false;
+    diagnostics.report(DiagCode::VhdlUnitUnrecorded, SourceLocation(), std::string(top),
+                       holder->name());
+    return true;
+}
+
 const eir::Library* Session::vhdlLibraryOf(std::string_view top, std::string_view work) const {
     // `lib.entity` names the library; `--work` names it too, for GHDL's spelling of a run.
     std::string_view wanted = work;
@@ -767,6 +781,7 @@ const eir::Library* Session::vhdlLibraryOf(std::string_view top, std::string_vie
         names += input.name();
     }
     if (holders.empty()) {
+        if (reportUnrecordedTop(entity)) return nullptr;
         diagnostics.report(DiagCode::TopModuleNotFound, SourceLocation(), std::string(top),
                            "the VHDL of the libraries " + names);
         return nullptr;
@@ -987,6 +1002,9 @@ bool Session::elaborate(std::string_view topModule) {
         diagnostics.report(DiagCode::NothingAnalysed, SourceLocation());
         return false;
     }
+    if (!topModule.empty() && design->findModule(topModule) == nullptr
+        && design->findSpecialisations(topModule).empty() && reportUnrecordedTop(topModule))
+        return false;
 
     // Two libraries built on one IP each hold the parameterisations they needed, and a design
     // analysed here against a library reproduces the units it reads from that library's

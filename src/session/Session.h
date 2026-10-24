@@ -231,6 +231,11 @@ private:
     [[nodiscard]] const eir::Library* vhdlLibraryOf(std::string_view top,
                                                     std::string_view work) const;
 
+    /// Reports, and returns true, when an input library holds `top` among NVC's units without
+    /// recording it, which a VHDL analysis into the library that stopped part-way leaves: a run
+    /// would otherwise be told the top is not there at all (DESIGN_GUIDE.md section 4.4).
+    [[nodiscard]] bool reportUnrecordedTop(std::string_view top) const;
+
     /// Asks the VHDL frontend for each resolution function `tree` needs and no translation has
     /// given yet, each for the number of drivers elaboration counted, links what comes back into
     /// the design, and records where each is (DESIGN_GUIDE.md section 3.7).

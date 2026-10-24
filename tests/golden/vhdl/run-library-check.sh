@@ -260,6 +260,24 @@ grep -q "ENZ3002" <<<"$refused" && grep -q "'alone', 'wrapper'" <<<"$refused" \
 alone=$("$enzan" alone.vhd 2>&1) || fail "a run of its one root failed: $alone"
 grep -q 'PASS alone' <<<"$alone" || fail "the one root was not taken for the top"
 
+# --- what NVC analysed is recorded, whatever the translation after it did -------------------------
+
+# The wrapper named as the top does not translate, but its sources analysed, and NVC's units are in
+# the library: recorded, so a run of another top from the library finds its own.
+"$enzan" lib create libs/half >/dev/null || fail "libs/half could not be created"
+[[ $(status_of "$enzan" analyse --out-lib libs/half --top wrapper picks.vhd alone.vhd) -eq 2 ]] \
+    || fail "a top whose generic cannot be computed was not refused"
+grep -q 'alone' <<<"$("$enzan" lib list libs/half)" \
+    || fail "the units of an analysis whose translation failed were not recorded"
+alone=$("$enzan" run --in-lib libs/half alone 2>&1) || fail "a run from libs/half failed: $alone"
+grep -q 'PASS alone' <<<"$alone" || fail "the run from libs/half did not reach its check"
+
+# A library whose entries are missing beside NVC's units, as an analysis ended part-way leaves one,
+# says so rather than that the top is not there.
+rm libs/half/*.vhdlentry
+unrecorded=$("$enzan" run --in-lib libs/half alone 2>&1) && fail "a top no entry records ran"
+grep -q 'ENZ6031' <<<"$unrecorded" || fail "a top no entry records was not said to be: $unrecorded"
+
 # --- cleaning a library empties it of VHDL too -----------------------------------------------------
 
 "$enzan" lib clean libs/ip >/dev/null || fail "libs/ip could not be cleaned"

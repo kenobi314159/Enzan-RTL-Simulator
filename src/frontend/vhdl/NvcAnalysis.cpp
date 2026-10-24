@@ -262,9 +262,10 @@ unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources
 
 unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources,
                       DiagnosticSink& sink, std::string& encoded,
-                      std::vector<std::string>& libraries, Exchange& exchange) {
+                      std::vector<std::string>& libraries, Exchange& exchange, bool& analysed) {
     Run run(options.units, sources, sink);
     const unsigned analysisErrors = run.analyse();
+    analysed = analysisErrors == 0;
     if (analysisErrors != 0) return analysisErrors;
 
     DiagnosticEngine engine(sources);

@@ -59,6 +59,9 @@ enum class Record : std::uint8_t {
     /// parameters' count, name, kind, length and value when it has one, and its ports' count,
     /// name, direction, whether four-state, whether signed and whether unpacked.
     Interfaces = 7,
+    /// NVC's analysis of the sources succeeded, so their units are in the work library whatever
+    /// the translation after it did.
+    Analysed = 8,
 };
 
 class Encoder {
@@ -237,6 +240,12 @@ public:
         static_cast<void>(writeAll(output, encoder.view()));
     }
 
+    void analysed() const {
+        Encoder encoder;
+        encoder.byte(static_cast<std::uint8_t>(Record::Analysed));
+        static_cast<void>(writeAll(output, encoder.view()));
+    }
+
     void finish(unsigned errors) const {
         Encoder encoder;
         encoder.byte(static_cast<std::uint8_t>(Record::Finished));
@@ -345,6 +354,9 @@ struct Outcome {
 
     /// What the design exchanges with SystemVerilog.
     Exchange exchange;
+
+    /// True when the child said its analysis succeeded, whatever its translation did.
+    bool analysed = false;
 };
 
 /// One interface of a `Record::Interfaces`; nothing when the stream ends inside it.
@@ -436,11 +448,15 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
             outcome.errors = decoder.u32();
             return outcome;
         }
+        if (kind == static_cast<std::uint8_t>(Record::Analysed)) {
+            outcome.analysed = true;
+            continue;
+        }
         if (kind == static_cast<std::uint8_t>(Record::Design)) {
             outcome.design = decoder.text();
             const std::optional<std::uint32_t> count = decoder.u32();
             if (!outcome.design || !count) return outcome;
-            for (std::uint32_t index = 0; index < *count; ++index) {
+            for (std::uint32_t index = 0; index < count.value_or(0); ++index) {
                 std::optional<std::string> library = decoder.text();
                 if (!library) return outcome;
                 outcome.libraries.push_back(std::move(*library));
@@ -621,14 +637,17 @@ std::optional<std::vector<eir::ModuleDefinition>> definitionsFrom(const Outcome&
 } // namespace
 
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
-                                     DiagnosticEngine& diagnostics, Exchange* exchange) {
+                                     DiagnosticEngine& diagnostics, Exchange* exchange,
+                                     bool* analysed) {
     const std::optional<Outcome> outcome = inChild(
         [&options, &sources](PipeSink& sink) {
             std::string encoded;
             std::vector<std::string> libraries;
             Exchange exchanged;
+            bool unitsAnalysed = false;
             const unsigned errors =
-                runNvcDesign(options, sources, sink, encoded, libraries, exchanged);
+                runNvcDesign(options, sources, sink, encoded, libraries, exchanged, unitsAnalysed);
+            if (unitsAnalysed) sink.analysed();
             if (errors == 0) {
                 sink.design(encoded, libraries);
                 sink.requests(exchanged.asked);
@@ -638,6 +657,7 @@ std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceM
             return errors;
         },
         diagnostics);
+    if (analysed != nullptr) *analysed = outcome && outcome->analysed;
     if (!outcome || outcome->errors != 0U) return nullptr;
     std::optional<std::vector<eir::ModuleDefinition>> modules =
         definitionsFrom(*outcome, options.units, sources, diagnostics);

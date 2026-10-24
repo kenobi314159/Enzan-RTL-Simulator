@@ -783,7 +783,11 @@ standard, the library it went into, the state of the libraries it was analysed a
 Enzan's version, which names the NVC revision — and the units it declares, for `lib list`.
 It holds no delays, so it fixes no time unit (8.2). As NVC's and GHDL's do, the library
 accumulates: analysing a source again replaces its units, and a unit no source declares any
-more stays until `lib clean`.
+more stays until `lib clean`. The entries are written once NVC's analysis of the sources
+succeeds, whatever the translation after it does, because NVC's units are in the library by
+then, and units no entry records would be units a run from the library is told are not there.
+A run naming a unit that only NVC's files hold, as an analysis ended part-way leaves one, says
+so (ENZ6031).
 
 A hit is currently all or nothing, and that is a property of the frontend rather
 than of the store. SystemVerilog analysis hands every source to one slang
