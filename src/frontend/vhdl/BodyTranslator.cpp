@@ -3238,6 +3238,10 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
         std::optional<Place> outer = place(tree_value(name));
         if (!outer) return std::nullopt;
         if (!outer->layout.isArray()) break;
+        if (outer->slides) {
+            fail(name, "selecting within a slice whose bounds are not static");
+            return std::nullopt;
+        }
 
         Layout inner;
         Offset within;
@@ -3257,16 +3261,25 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
                     nothing.layout = *null;
                 return nothing;
             }
-            const std::optional<std::pair<Layout, std::int64_t>> part =
-                sliceOf(outer->layout, tree_range(name, 0));
-            if (!part) return std::nullopt;
-            inner = part->first;
-            within.staticOffset = part->second;
+            if (!bounds) {
+                const std::optional<std::pair<Layout, Offset>> sliding =
+                    slidingSlice(outer->layout, tree_range(name, 0));
+                if (!sliding) return std::nullopt;
+                inner = sliding->first;
+                within = sliding->second;
+            } else {
+                const std::optional<std::pair<Layout, std::int64_t>> part =
+                    sliceOf(outer->layout, tree_range(name, 0));
+                if (!part) return std::nullopt;
+                inner = part->first;
+                within.staticOffset = part->second;
+            }
         }
 
         Place result = *outer;
         result.layout = inner;
         result.whole = false;
+        result.slides = tree_kind(name) == T_ARRAY_SLICE && within.dynamic.has_value();
         result.staticOffset = outer->staticOffset + within.staticOffset;
         if (!outer->offset && within.dynamic && !outer->whole) {
             // A part chosen at run time lies within the static part it is chosen from.
@@ -3498,21 +3511,67 @@ std::optional<std::pair<Layout, std::int64_t>> BodyTranslator::sliceOf(const Lay
         fail(range, "a slice outside the bounds of its array");
         return std::nullopt;
     }
-    // Of the elements the whole has, so that each keeps the bounds it has there.
-    std::optional<Layout> part;
-    if (layout.element) {
-        part = layout;
-        part->index = *bounds;
-        part->storage = eir::Type::bits(
-            static_cast<std::uint32_t>(bounds->length()) * layout.elementBits, false, false);
-    } else {
-        part = arrayLayout(*bounds, layout.elementType, folder());
-    }
+    const std::optional<Layout> part = partLayout(layout, *bounds);
     if (!part) {
         fail(range, "a slice of this array");
         return std::nullopt;
     }
     return std::pair(*part, layout.bitOffset(bounds->right));
+}
+
+std::optional<Layout> BodyTranslator::partLayout(const Layout& layout,
+                                                 const Folder::Range& bounds) const {
+    // Of the elements the whole has, so that each keeps the bounds it has there.
+    if (!layout.element) return arrayLayout(bounds, layout.elementType, folder());
+    Layout part = layout;
+    part.index = bounds;
+    part.storage = eir::Type::bits(static_cast<std::uint32_t>(bounds.length()) * layout.elementBits,
+                                   false, false);
+    return part;
+}
+
+std::optional<std::pair<Layout, BodyTranslator::Offset>>
+BodyTranslator::slidingSlice(const Layout& layout, tree_t range) {
+    const auto kind = static_cast<range_kind_t>(tree_subkind(range));
+    if ((kind != RANGE_TO && kind != RANGE_DOWNTO)
+        || (kind == RANGE_TO) != layout.index.ascending) {
+        fail(range, "a slice whose bounds are not static and run the other way than its array's");
+        return std::nullopt;
+    }
+    tree_t left = tree_left(range);
+    tree_t right = tree_right(range);
+    const std::optional<std::int64_t> span = layout.index.ascending
+                                                 ? folder().difference(right, left)
+                                                 : folder().difference(left, right);
+    if (!span) {
+        fail(range, "a slice whose bounds are not static, and whose length is not either");
+        return std::nullopt;
+    }
+    if (*span < 0) {
+        fail(range, "a null slice whose bounds are not static");
+        return std::nullopt;
+    }
+    if (*span >= layout.index.length()) {
+        fail(range, "a slice longer than its array");
+        return std::nullopt;
+    }
+
+    // Indexed from 0, since where it lies is the run's to say; nothing selects within it.
+    const Folder::Range indices =
+        layout.index.ascending ? Folder::Range{.left = 0, .right = *span, .ascending = true}
+                               : Folder::Range{.left = *span, .right = 0, .ascending = false};
+    const std::optional<Layout> part = partLayout(layout, indices);
+    if (!part) {
+        fail(range, "a slice of this array");
+        return std::nullopt;
+    }
+
+    // Whichever way the array runs, the right element of the slice is its lowest (section 3.6),
+    // at the offset that element has in the whole. Each bound is checked against the array's,
+    // as VHDL checks a slice's (IEEE 1076 section 8.5).
+    const std::optional<Offset> offset = elementOffset(layout, right);
+    if (!offset || !elementOffset(layout, left)) return std::nullopt;
+    return std::pair(*part, *offset);
 }
 
 std::optional<BodyTranslator::Value> BodyTranslator::slice(const Value& array, tree_t range,

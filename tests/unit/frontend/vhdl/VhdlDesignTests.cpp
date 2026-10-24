@@ -2963,6 +2963,143 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
 }
 
+TEST_F(VhdlDesignTest, ASliceThatMovesWithAVariableIsDrivenAndRead) {
+    // As OFM's multiplexer testbench drives one input of its bus: bounds a variable moves, a
+    // length that stays. Each direction, and reads of a signal's and a variable's.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.numeric_bit.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  constant W : integer := 4;
+  signal d : bit_vector(4 * W - 1 downto 0) := (others => '0');
+  signal u : bit_vector(0 to 4 * W - 1) := (others => '0');
+  signal r : bit_vector(W - 1 downto 0);
+begin
+  process
+    variable x : integer;
+    variable packed : bit_vector(4 * W - 1 downto 0) := x"5a3c";
+    variable nibble : bit_vector(W - 1 downto 0);
+  begin
+    for i in 0 to 3 loop
+      x := 3 - i;
+      nibble := packed(x * W + W - 1 downto x * W);
+      assert nibble = packed(15 - 4 * i downto 12 - 4 * i)
+        report "variable " & to_string(nibble) severity failure;
+      d((x + 1) * W - 1 downto x * W) <= bit_vector(to_unsigned(i + 1, W));
+      u(x * W to x * W + W - 1) <= "10" & bit_vector(to_unsigned(i, 2));
+      wait for 1 ns;
+      r <= d((x + 1) * W - 1 downto x * W);
+      wait for 1 ns;
+      assert r = bit_vector(to_unsigned(i + 1, W)) report "read " & to_string(r) severity failure;
+    end loop;
+    assert d = x"1234" report "d " & to_string(d) severity failure;
+    assert u = x"ba98" report "u " & to_string(u) severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, ASliceThatMovesOutsideItsArrayEndsTheRun) {
+    // Both bounds are checked, as VHDL checks a slice's (IEEE 1076 section 8.5): the right one is
+    // inside and the left one is not.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal d : bit_vector(7 downto 0);
+begin
+  process
+    variable x : integer := 1;
+  begin
+    x := x + 4;
+    d(x + 3 downto x) <= "1111";
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages().front(), "index 8 is outside the bounds 7 downto 0");
+}
+
+TEST_F(VhdlDesignTest, ASliceOfASignalWhoseLengthMovesIsRefused) {
+    // Its bits would be a part of a width only the run knows, which a part of a signal is not.
+    // A product of two values that move is not taken for a length that stays, whatever values
+    // the two bounds happen to agree at.
+    for (const char* bounds : {"x downto 0", "x * x + 2 downto x"}) {
+        consumer.received.clear();
+        const std::unique_ptr<enzan::eir::Design> design = translate(std::format(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal d : bit_vector(7 downto 0);
+begin
+  process
+    variable x : integer := 3;
+  begin
+    d({}) <= (others => '1');
+    wait;
+  end process;
+end architecture;
+)",
+                                                                                 bounds),
+                                                                     "tb");
+        EXPECT_EQ(design, nullptr) << bounds;
+        const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+        ASSERT_NE(refused, nullptr) << bounds << transcript();
+        EXPECT_NE(refused->message.find("whose length is not either"), std::string::npos)
+            << refused->message;
+    }
+}
+
+TEST_F(VhdlDesignTest, SelectingWithinASliceThatMovesIsRefused) {
+    // The slice is laid out from 0, not from its bounds, so an index into it would count from
+    // the wrong place.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal d : bit_vector(7 downto 0);
+begin
+  process
+    variable x : integer := 1;
+  begin
+    d(x + 3 downto x)(x + 1) <= '1';
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("selecting within a slice whose bounds are not static"),
+              std::string::npos)
+        << refused->message;
+}
+
 TEST_F(VhdlDesignTest, AnIndexUsedAgainInABlockIsScaledOnce) {
     // `r(i) := a(i) + b(i)`: three arrays of one shape, one index, one offset. An index an
     // impure function moves within a statement is scaled again after it, since the function's

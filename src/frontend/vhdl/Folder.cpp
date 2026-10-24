@@ -5,9 +5,11 @@
 #include "eir/BitOps.h"
 #include "frontend/vhdl/Types.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -477,6 +479,96 @@ std::optional<Folder::Range> Folder::range(tree_t range) const {
             folded->ascending = !folded->ascending;
         }
         return folded;
+    }
+
+    default: return std::nullopt;
+    }
+}
+
+std::optional<std::int64_t> Folder::difference(tree_t minuend, tree_t subtrahend) const {
+    const std::optional<Linear> left = linear(minuend);
+    const std::optional<Linear> right = linear(subtrahend);
+    if (!left || !right) return std::nullopt;
+    // The difference is static when every name that does not fold is there as often in both.
+    std::map<tree_t, std::int64_t> remaining = left->multiples;
+    for (const auto& [name, multiple] : right->multiples) remaining[name] -= multiple;
+    if (std::ranges::any_of(remaining, [](const auto& entry) { return entry.second != 0; }))
+        return std::nullopt;
+    std::int64_t result = 0;
+    if (__builtin_sub_overflow(left->constant, right->constant, &result)) return std::nullopt;
+    return result;
+}
+
+std::optional<Folder::Linear> Folder::linear(tree_t expression) const {
+    if (const std::optional<std::int64_t> folded = integer(expression))
+        return Linear{.constant = *folded, .multiples = {}};
+    if (!tree_has_type(expression) || !type_is_integer(tree_type(expression))) return std::nullopt;
+
+    // Scaled by `factor`, which is how a product by a constant and a negation are taken.
+    const auto scaled = [](Linear form, std::int64_t factor) -> std::optional<Linear> {
+        if (__builtin_mul_overflow(form.constant, factor, &form.constant)) return std::nullopt;
+        for (auto& [name, multiple] : form.multiples) {
+            if (__builtin_mul_overflow(multiple, factor, &multiple)) return std::nullopt;
+        }
+        return form;
+    };
+    const auto added = [](Linear form, const Linear& other) -> std::optional<Linear> {
+        if (__builtin_add_overflow(form.constant, other.constant, &form.constant))
+            return std::nullopt;
+        for (const auto& [name, multiple] : other.multiples) {
+            std::int64_t& sum = form.multiples[name];
+            if (__builtin_add_overflow(sum, multiple, &sum)) return std::nullopt;
+        }
+        return form;
+    };
+
+    switch (tree_kind(expression)) {
+    // A name is the same value wherever a bound of one slice names it: a variable or a signal
+    // does not change while an expression is computed.
+    case T_REF:
+        if (!tree_has_ref(expression)) return std::nullopt;
+        return Linear{.constant = 0, .multiples = {{tree_ref(expression), 1}}};
+
+    // Between integer types a conversion keeps the value.
+    case T_TYPE_CONV:
+    case T_QUALIFIED: return linear(tree_value(expression));
+
+    case T_FCALL: {
+        if (!tree_has_ref(expression)) return std::nullopt;
+        const auto kind = static_cast<subprogram_kind_t>(tree_subkind(tree_ref(expression)));
+        const unsigned count = tree_params(expression);
+        if (count == 1 && (kind == S_IDENTITY || kind == S_NEGATE)) {
+            const std::optional<Linear> operand = linear(tree_value(tree_param(expression, 0)));
+            if (!operand) return std::nullopt;
+            return kind == S_IDENTITY ? operand : scaled(*operand, -1);
+        }
+        if (count != 2) return std::nullopt;
+        tree_t first = tree_value(tree_param(expression, 0));
+        tree_t second = tree_value(tree_param(expression, 1));
+        switch (kind) {
+        case S_ADD:
+        case S_SUB: {
+            const std::optional<Linear> left = linear(first);
+            std::optional<Linear> right = linear(second);
+            if (!left || !right) return std::nullopt;
+            if (kind == S_SUB) right = scaled(*right, -1);
+            if (!right) return std::nullopt;
+            return added(*left, *right);
+        }
+        case S_MUL: {
+            // A product is linear when one side is a constant.
+            if (const std::optional<std::int64_t> factor = integer(first)) {
+                const std::optional<Linear> other = linear(second);
+                return other ? scaled(*other, *factor) : std::nullopt;
+            }
+            if (const std::optional<std::int64_t> factor = integer(second)) {
+                const std::optional<Linear> other = linear(first);
+                return other ? scaled(*other, *factor) : std::nullopt;
+            }
+            return std::nullopt;
+        }
+        default: return std::nullopt;
+        }
     }
 
     default: return std::nullopt;

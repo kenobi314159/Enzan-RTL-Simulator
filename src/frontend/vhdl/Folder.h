@@ -158,6 +158,13 @@ public:
     /// `range`, a T_RANGE, folded, or nothing when either bound is not static.
     [[nodiscard]] std::optional<Range> range(tree_t range) const;
 
+    /// `minuend - subtrahend` where the difference folds though neither does: the bounds of a
+    /// slice that moves with a value only the run knows, `(i + 1) * 8 - 1 downto i * 8`, are eight
+    /// apart whatever `i` is. Each is folded into a sum of a constant and multiples of what does
+    /// not fold, so the difference is static exactly when those multiples cancel, rather than
+    /// when a few values of them happen to agree. Nothing for anything else.
+    [[nodiscard]] std::optional<std::int64_t> difference(tree_t minuend, tree_t subtrahend) const;
+
     /// The range of `type`'s dimension `dimension`: a scalar type's own, or an array's index.
     [[nodiscard]] std::optional<Range> rangeOf(type_t type, unsigned dimension = 0) const;
 
@@ -206,6 +213,17 @@ public:
     }
 
 private:
+    /// An integer expression as a constant plus a multiple of each name in it that does not fold,
+    /// by what the name refers to.
+    struct Linear {
+        std::int64_t constant = 0;
+        std::map<tree_t, std::int64_t> multiples;
+    };
+
+    /// `expression` as a `Linear`: what folds, a name, and sums, differences, negations and
+    /// products by a constant of those. Nothing for anything else, and on overflow.
+    [[nodiscard]] std::optional<Linear> linear(tree_t expression) const;
+
     [[nodiscard]] std::optional<std::int64_t> call(tree_t expression) const;
 
     /// A predefined operator of a real type applied to `operands`, real codes, or an integer's

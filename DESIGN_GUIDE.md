@@ -1030,7 +1030,13 @@ What a VHDL unit becomes in EIR:
   its literals' positions (`'val`, `'succ` and `'pred` check theirs, and VHPI
   refuses any other). A slice is a part of a fixed
   width, so one whose bounds move with a loop's parameter, `d(4*i+3 downto 4*i)`, unrolls
-  that loop, each copy with its value bound. A variable's slice whose length is known only
+  that loop, each copy with its value bound. One whose bounds move with any other value but
+  stay as far apart, `d((x+1)*8-1 downto x*8)`, as a testbench drives one input of a
+  multiplexer, is a part of that width at an offset the run computes, with both bounds
+  checked; the adapter folds each bound into a constant and multiples of what does not fold,
+  so the length is static exactly when the multiples cancel, and a process assigning such a
+  slice drives the static part it lies in (3.7). Nothing is selected within one, since its
+  layout counts from 0 rather than from its bounds. A variable's slice whose length is known only
   at run time, as numeric_std's shifts by a count assign, is its value shifted into place
   and merged under a mask of the slice's bits.
 - An alias of an object is a name of what it names: of a signal or a part of one, a window of
