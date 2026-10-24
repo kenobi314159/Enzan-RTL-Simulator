@@ -410,11 +410,15 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
 
     // Sources the library holds analysed already, with these options, are not analysed again:
     // the design under a named top is translated from NVC's units, parsing nothing (section
-    // 4.4). Without a top, what to translate is every entity the sources declare that none of
+    // 4.4). Without a top, what to translate is the entity the sources declare that none of
     // them instantiates, which only analysing them shows.
     const bool reused =
         library.isOpen() && !top.empty() && library.vhdlCurrent(read, sources, keyOptions);
     if (reused) options.units.sources.clear();
+
+    // Nothing asked for, and nothing else, is what an analysis that translates nothing asks of
+    // the child.
+    if (!request.translateVhdl) options.onlyRequested = true;
 
     std::unique_ptr<eir::Design> analysed = frontend::vhdl::analyse(options, sources, diagnostics);
     if (analysed == nullptr) return false;
@@ -572,6 +576,9 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     } else {
         svOptions.onlyRequested = !request.top.empty();
     }
+    // Without a top, an analysis that translates no VHDL still translates what SystemVerilog
+    // instantiates of it, since SystemVerilog's analysis cannot check an instance without it.
+    if (!request.translateVhdl) options.onlyRequested = true;
     std::vector<std::filesystem::path> svFilesRead;
     svOptions.filesRead = &svFilesRead;
     svOptions.timeUnitExponent = defaultScale.precisionExponent();

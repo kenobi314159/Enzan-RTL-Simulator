@@ -98,8 +98,8 @@ struct DesignOptions {
     /// Analysed first, into `units.work`, as `analyseUnits` would.
     UnitOptions units;
 
-    /// The top entity, in any case. Empty means every entity the sources declare that none of their
-    /// architectures instantiates.
+    /// The top entity, in any case. Empty means the one entity the sources declare that none of
+    /// their architectures instantiates; with several, none is translated and they are reported.
     std::string top;
 
     /// The unit EIR's delays count, as a power of ten of a second.

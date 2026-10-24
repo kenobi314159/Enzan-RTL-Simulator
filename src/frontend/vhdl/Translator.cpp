@@ -1175,7 +1175,8 @@ public:
     [[nodiscard]] std::int8_t timeUnitExponent() const { return request.timeUnitExponent; }
 
 private:
-    /// The entities the design is translated from.
+    /// The entities the design is translated from: the top named, or else the one entity this run
+    /// analysed that nothing instantiates. Nothing, having reported them, when there are several.
     std::vector<tree_t> tops() {
         if (!request.top.empty()) {
             // Left to elaboration, when there is none, which says what the design does have.
@@ -1212,6 +1213,10 @@ private:
         }
         std::set<tree_t>& instantiated = collected.instantiated;
         for (const auto& [instance, unit] : collected.components) {
+            if (tree_t entity = specifiedEntity(instance)) {
+                instantiated.insert(entity);
+                continue;
+            }
             if (tree_t entity = boundEntity(tree_ref(instance), instance, unit))
                 instantiated.insert(entity);
         }
@@ -1227,7 +1232,33 @@ private:
                 continue;
             roots.push_back(unit);
         }
-        return roots;
+        if (roots.size() <= 1) return roots;
+
+        // Choosing among them is safe only when the choice is forced, as elaboration has it of
+        // modules: which one is the top is the user's to say, and an entity nothing instantiates
+        // need not be one at its defaults at all, as a wrapper whose defaults overflow is not.
+        std::vector<std::string> rootNames;
+        rootNames.reserve(roots.size());
+        for (tree_t root : roots) rootNames.push_back(declaredName(root));
+        std::ranges::sort(rootNames);
+        std::string candidates;
+        for (const std::string& name : rootNames)
+            candidates += std::format("{}'{}'", candidates.empty() ? "" : ", ", name);
+        engine.report(DiagCode::NoTopModule, SourceLocation(), roots.size(), candidates);
+        return {};
+    }
+
+    /// The entity a configuration specification binds the component `instance` to, `for u : c
+    /// use entity work.e(a);`, or null when there is none or it binds a configuration.
+    static tree_t specifiedEntity(tree_t instance) {
+        if (!tree_has_spec(instance)) return nullptr;
+        tree_t binding = tree_value(tree_spec(instance));
+        if (binding == nullptr || tree_kind(binding) != T_BINDING || !tree_has_ref(binding))
+            return nullptr;
+        tree_t bound = tree_ref(binding);
+        if (tree_kind(bound) == T_ARCH)
+            return tree_has_primary(bound) ? tree_primary(bound) : nullptr;
+        return tree_kind(bound) == T_ENTITY ? bound : nullptr;
     }
 
     /// The entity called `name`, in any case, in `library`: the last this run analysed, which

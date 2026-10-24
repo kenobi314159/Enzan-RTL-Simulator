@@ -881,6 +881,100 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"1100001"});
 }
 
+TEST_F(VhdlDesignTest, WithoutATopTheOneEntityNothingInstantiatesIsTranslated) {
+    // Two entities nothing instantiates are two candidates, which are named rather than both
+    // translated: the second could not be, at its defaults, and nobody asked for it.
+    constexpr std::string_view Leaf = R"(
+entity leaf is
+end entity;
+
+architecture rtl of leaf is
+begin
+end architecture;
+)";
+    constexpr std::string_view Testbench = R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  u : entity work.leaf;
+end architecture;
+)";
+    constexpr std::string_view Wrapper = R"(
+package picks is
+  function pick return integer;
+end package;
+
+package body picks is
+  procedure choose(x : out integer) is
+  begin
+    x := 3;
+  end procedure;
+
+  function pick return integer is
+    variable x : integer;
+  begin
+    choose(x);
+    return x;
+  end function;
+end package body;
+
+use work.picks.all;
+
+entity wrapper is
+  generic (W : integer := pick);
+end entity;
+
+architecture rtl of wrapper is
+begin
+end architecture;
+)";
+    std::unique_ptr<enzan::eir::Design> design =
+        translate(std::string(Leaf) + std::string(Testbench));
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_NE(design->findModule("tb"), nullptr);
+
+    consumer.received.clear();
+    design = translate(std::string(Leaf) + std::string(Testbench) + std::string(Wrapper));
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::NoTopModule);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("2 candidates: 'tb', 'wrapper'"), std::string::npos)
+        << refused->message;
+    EXPECT_EQ(first(DiagCode::VhdlUnsupported), nullptr) << transcript();
+}
+
+TEST_F(VhdlDesignTest, AnEntityAConfigurationSpecificationBindsIsInstantiated) {
+    // Bound by a specification rather than by its name, as VESTs' clifton-labs cases bind theirs:
+    // the testbench is the one entity nothing instantiates, and the top.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity leaf is
+  port (o : out integer);
+end entity;
+
+architecture rtl of leaf is
+begin
+  o <= 42;
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  component stand_in
+    port (c : out integer);
+  end component;
+  for u : stand_in use entity work.leaf(rtl) port map (o => c);
+  signal s : integer;
+begin
+  u : component stand_in port map (c => s);
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_NE(design->findModule("tb"), nullptr);
+}
+
 TEST_F(VhdlDesignTest, AConstantFunctionRunsTheBranchAStaticConditionChose) {
     // As OFM's pipelined multiplexer sizes its levels: switches that are architecture constants
     // choose between alternatives of several statements each, and NVC leaves the one chosen as a

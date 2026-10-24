@@ -848,6 +848,7 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
 
     request.contextFiles = invocation.contextFiles;
     request.top = invocation.topModule;
+    request.translateVhdl = invocation.command != Command::Analyse || !invocation.topModule.empty();
     request.vhdlWork = invocation.workLibrary;
     request.ieeeWarnings = invocation.ieeeWarnings;
     request.vhdlStandard = invocation.vhdlStandard;

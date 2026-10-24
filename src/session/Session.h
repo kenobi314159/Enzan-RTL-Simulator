@@ -167,9 +167,16 @@ public:
         ///
         /// VHDL's adapter translates the hierarchy under its top rather than every unit analysed,
         /// so that a unit nothing instantiates cannot stop a design for using something the
-        /// adapter lacks (DESIGN_GUIDE.md section 5.2); without one it translates every entity
-        /// that nothing instantiates. SystemVerilog's analysis does not use it.
+        /// adapter lacks (DESIGN_GUIDE.md section 5.2); without one it translates the one entity
+        /// that nothing instantiates, and refuses several. SystemVerilog's analysis does not use
+        /// it.
         std::string top;
+
+        /// Whether VHDL is translated as well as analysed. A library holds VHDL as NVC's
+        /// analysed units rather than as EIR (section 4.4), so an analysis that runs nothing and
+        /// names no top, `enzan analyse` without `--top`, has nothing to translate: which entity
+        /// is the top is for a run to say.
+        bool translateVhdl = true;
 
         /// The library VHDL sources are analysed into, by the name they refer to it by
         /// (`library neorv32;`): the output library's own name, or `work` when there is none and

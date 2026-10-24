@@ -992,9 +992,14 @@ NVC gives it, so what the user sees is what one process would have shown.
 **The child translates as well.** A design to simulate is analysed and translated in
 one child, which sends the parent the result in EIR's own encoding (4.4), so NVC's
 trees, and NVC's memory, never reach the process that runs the simulation. What the
-child translates is the hierarchy under the top, or under every entity of the sources
-that none of them instantiates when no top is named: a unit nothing instantiates cannot
-stop a design for using something the adapter lacks.
+child translates is the hierarchy under the top, so that a unit nothing instantiates cannot
+stop a design for using something the adapter lacks. When no top is named it is the one
+entity of the sources that none of them instantiates, and with several the child translates
+nothing and names them, as elaboration names the candidates for a top among modules: which
+one is the top is the user's to say, and an entity nothing instantiates need not be a top at
+its defaults at all, as a wrapper whose default generics overflow an integer is not.
+`enzan analyse` with no top translates nothing, since a library holds NVC's units rather
+than EIR (4.4).
 
 **Sources are analysed in dependency order.** A unit is analysed against the units
 analysed before it (IEEE 1076 section 13.1), and a file list need not name a package

@@ -201,6 +201,65 @@ grep -q 'PASS library' <<<"$qualified" || fail "the qualified top did not reach 
 [[ $(status_of "$enzan" run --in-lib libs/ip --in-lib libs/tb .tb) -eq 2 ]] \
     || fail "a top of an empty library name was not refused"
 
+# --- without a top, analysis translates nothing and a run takes the one root ----------------------
+
+# A wrapper nothing instantiates, whose default generic the adapter cannot compute, as OFM's MI
+# splitter has one. An analysis that names no top stores it without translating it (5.2), and a
+# run without a top is refused for having two candidates rather than translating both.
+cat >picks.vhd <<'EOF'
+package picks is
+    function pick return integer;
+end package;
+
+package body picks is
+    procedure choose(x : out integer) is
+    begin
+        x := 3;
+    end procedure;
+
+    function pick return integer is
+        variable x : integer;
+    begin
+        choose(x);
+        return x;
+    end function;
+end package body;
+
+use work.picks.all;
+
+entity wrapper is
+    generic (BASE : integer := pick);
+end entity;
+
+architecture rtl of wrapper is
+begin
+end architecture;
+EOF
+
+cat >alone.vhd <<'EOF'
+entity alone is end entity;
+
+architecture test of alone is
+begin
+    process begin
+        report "PASS alone";
+        wait;
+    end process;
+end architecture;
+EOF
+
+"$enzan" lib create libs/roots >/dev/null || fail "libs/roots could not be created"
+"$enzan" analyse --out-lib libs/roots picks.vhd alone.vhd \
+    || fail "an analysis naming no top translated an entity nothing instantiates"
+alone=$("$enzan" run --in-lib libs/roots alone 2>&1) || fail "a run of one root failed: $alone"
+grep -q 'PASS alone' <<<"$alone" || fail "the run of one root did not reach its check"
+
+refused=$("$enzan" picks.vhd alone.vhd 2>&1) && fail "a run of two roots and no top was not refused"
+grep -q "ENZ3002" <<<"$refused" && grep -q "'alone', 'wrapper'" <<<"$refused" \
+    || fail "a run of two roots and no top did not name them: $refused"
+alone=$("$enzan" alone.vhd 2>&1) || fail "a run of its one root failed: $alone"
+grep -q 'PASS alone' <<<"$alone" || fail "the one root was not taken for the top"
+
 # --- cleaning a library empties it of VHDL too -----------------------------------------------------
 
 "$enzan" lib clean libs/ip >/dev/null || fail "libs/ip could not be cleaned"
