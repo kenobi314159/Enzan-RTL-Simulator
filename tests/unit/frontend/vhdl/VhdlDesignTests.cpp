@@ -947,6 +947,88 @@ end architecture;
     EXPECT_EQ(reported, (std::vector<std::string>{"0:1", "1:1", "2:1", "2:2"}));
 }
 
+TEST_F(VhdlDesignTest, AStaticValueThatCannotBeComputedSaysWhereItsCallStopped) {
+    // The range is static by the language, so calling it "not static" would be untrue: what the
+    // reader needs is the statement in the function that the adapter cannot run.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure bump(x : inout integer) is
+  begin
+    x := x + 1;
+  end procedure;
+
+  function count(n : integer) return integer is
+    variable k : integer := n;
+  begin
+    bump(k);
+    return k;
+  end function;
+begin
+  g : for i in 1 to count(2) generate
+  end generate;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("computing the range of this generate loop"), std::string::npos)
+        << refused->message;
+    EXPECT_EQ(refused->message.find("not static"), std::string::npos) << refused->message;
+    ASSERT_EQ(refused->notes.size(), 1U);
+    EXPECT_EQ(refused->notes[0].message,
+              "computing 'count' stopped at this procedure call, which the VHDL frontend does not "
+              "run there yet");
+    EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 14U);
+}
+
+TEST_F(VhdlDesignTest, AGenericsDefaultThatCannotBeComputedSaysWhereItsCallStopped) {
+    // As OFM's splitter wrapper initialises its address bases: a default computed by a function
+    // that calls a procedure for random numbers.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity leaf is
+  generic (BASE : integer := 0);
+end entity;
+
+architecture rtl of leaf is
+begin
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure pick(x : out integer) is
+  begin
+    x := 7;
+  end procedure;
+
+  function base return integer is
+    variable x : integer;
+  begin
+    pick(x);
+    return x;
+  end function;
+begin
+  u : entity work.leaf generic map (BASE => base);
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("computing the value of the generic 'base'"), std::string::npos)
+        << refused->message;
+    ASSERT_EQ(refused->notes.size(), 1U);
+    EXPECT_NE(refused->notes[0].message.find("'base' stopped at this procedure call"),
+              std::string::npos)
+        << refused->notes[0].message;
+    EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 22U);
+}
+
 TEST_F(VhdlDesignTest, AConversionWithinABaseTypeKeepsTheValue) {
     // std_logic is a subtype of std_ulogic, so converting between them, or between vectors of
     // them, changes nothing.

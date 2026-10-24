@@ -1111,7 +1111,10 @@ What a VHDL unit becomes in EIR:
   of all. What it returns is folded where it
   returned, a scalar or an array, so a function choosing between two vectors folds too.
   A call that does anything else, or runs a million statements, does not fold, and its
-  use is refused where a static value is needed. Elements and slices of static arrays
+  use is refused where a static value is needed. The value is static by the language, which
+  NVC's analysis checks, so it is the adapter that could not compute it, and the refusal says
+  so: it names the call and the statement of its body the run stopped at, a procedure call
+  most often, rather than calling the value not static. Elements and slices of static arrays
   fold as well, so a generate statement can be conditioned on a constant list, and so do
   strings built from them and from the `'image` of static scalars: a string generic
   naming a log file, or a report announcing a configuration, which is its text then.

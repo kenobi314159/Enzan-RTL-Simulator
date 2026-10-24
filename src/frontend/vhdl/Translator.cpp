@@ -326,6 +326,9 @@ public:
 
     void unsupported(tree_t where, std::string_view what) override;
 
+    /// Reports that computing `what` is not supported, as `DesignTranslator::uncomputed` does.
+    void uncomputed(tree_t where, std::string_view what, const FoldTrace& trace);
+
     void warn(tree_t where, std::string_view what) override;
 
     void reportNeverWaits(tree_t process) override;
@@ -963,6 +966,7 @@ public:
     /// Binds `generic` to the value of `actual`, folded in `scope`, and returns false having
     /// reported why when it is not one the adapter can fold.
     bool bindGeneric(Folder& bound, tree_t generic, tree_t actual, const Folder& scope) {
+        const FoldTrace trace;
         if (tree_class(generic) != C_CONSTANT) {
             unsupported(generic, "a generic that is not a constant");
             return false;
@@ -1000,6 +1004,14 @@ public:
                 return true;
             }
         }
+        if (actual != nullptr
+            && (type_is_scalar(type) || type_is_array(type) || type_is_record(type))) {
+            uncomputed(
+                generic,
+                std::format("the value of the generic '{}'", simpleName(tree_ident(generic))),
+                trace);
+            return false;
+        }
         unsupported(generic, std::format("the value of the generic '{}', which is not a static "
                                          "value of a scalar, array or record type",
                                          simpleName(tree_ident(generic))));
@@ -1009,6 +1021,75 @@ public:
     [[nodiscard]] SourceLocation locate(tree_t where) const { return locator(tree_loc(where)); }
 
     void unsupported(tree_t where, std::string_view what) {
+        static_cast<void>(refuse(where, what));
+    }
+
+    /// Reports that computing `what`, a value the language requires to be static, is not
+    /// supported at `where`, and where the constant call it depends on stopped when `trace`
+    /// knows. The value is static, which NVC's analysis checks, so it is the adapter that could
+    /// not compute it, and the reader needs to know which call stopped rather than to be told
+    /// the value is not static (`FoldStop`).
+    void uncomputed(tree_t where, std::string_view what, const FoldTrace& trace) {
+        DiagnosticBuilder diagnostic = refuse(where, std::format("computing {}", what));
+        const std::optional<FoldStop>& stop = trace.stop();
+        if (!stop) return;
+        const std::string called =
+            tree_has_ref(stop->call) ? declaredName(tree_ref(stop->call)) : std::string("it");
+        note(diagnostic, stop->at != nullptr ? stop->at : stop->call, stopped(*stop, called));
+    }
+
+    /// What `stop` says of the call of `called`, as the note under a value that did not fold.
+    static std::string stopped(const FoldStop& stop, const std::string& called) {
+        switch (stop.reason) {
+        case FoldStop::Reason::Statement: {
+            const tree_kind_t kind = tree_kind(stop.at);
+            const char* what = "statement";
+            if (kind == T_PCALL || kind == T_PROT_PCALL) {
+                what = "procedure call";
+            } else if (kind == T_REPORT) {
+                what = "report";
+            }
+            return std::format("computing '{}' stopped at this {}, which the VHDL frontend does "
+                               "not run there yet",
+                               called, what);
+        }
+        case FoldStop::Reason::Declaration:
+            return std::format("computing '{}' stopped at this declaration, which the VHDL "
+                               "frontend does not run there yet",
+                               called);
+        case FoldStop::Reason::Value:
+            return std::format("computing '{}' stopped here, at a value the VHDL frontend could "
+                               "not compute",
+                               called);
+        case FoldStop::Reason::Assertion:
+            return std::format("computing '{}' stopped at this assertion, which it could not show "
+                               "to hold",
+                               called);
+        case FoldStop::Reason::VariableType:
+            return std::format("computing '{}' stopped at this variable, whose type the VHDL "
+                               "frontend does not hold there yet",
+                               called);
+        case FoldStop::Reason::TooLong:
+            return std::format("computing '{}' ran a million statements without returning", called);
+        case FoldStop::Reason::Impure:
+            return std::format("'{}' is impure, so it is not computed before the simulation",
+                               called);
+        case FoldStop::Reason::TooDeep:
+            return std::format("computing '{}' nests calls more than 64 deep", called);
+        case FoldStop::Reason::NoBody:
+            return std::format("the body of '{}' has not been analysed", called);
+        case FoldStop::Reason::ParameterType:
+            return std::format("'{}' takes a parameter of a type the VHDL frontend does not hold "
+                               "there yet",
+                               called);
+        case FoldStop::Reason::NoReturn:
+            return std::format("'{}' ends without returning a value", called);
+        }
+        return {};
+    }
+
+    /// Reports `what` as not supported at `where`, and returns the report to add notes to.
+    DiagnosticBuilder refuse(tree_t where, std::string_view what) {
         DiagnosticBuilder diagnostic =
             engine.report(DiagCode::VhdlUnsupported, locate(where), what);
 
@@ -1019,6 +1100,20 @@ public:
             diagnostic.note({},
                             std::format("at {}:{}", loc_file_str(location), location->first_line));
         }
+        return diagnostic;
+    }
+
+    /// Adds `text` to `diagnostic` as a note at `where`, or naming its position where it has no
+    /// buffer here.
+    void note(DiagnosticBuilder& diagnostic, tree_t where, std::string text) const {
+        if (locate(where).valid()) {
+            diagnostic.note(locate(where), std::move(text));
+            return;
+        }
+        const loc_t* location = tree_loc(where);
+        if (location != nullptr && !loc_invalid_p(location))
+            text += std::format(", at {}:{}", loc_file_str(location), location->first_line);
+        diagnostic.note({}, std::move(text));
     }
 
     DiagnosticEngine& diagnostics() { return engine; }
@@ -1529,6 +1624,11 @@ void ArchitectureTranslator::unsupported(tree_t where, std::string_view what) {
     design.unsupported(where, what);
 }
 
+void ArchitectureTranslator::uncomputed(tree_t where, std::string_view what,
+                                        const FoldTrace& trace) {
+    design.uncomputed(where, what, trace);
+}
+
 void ArchitectureTranslator::warn(tree_t where, std::string_view what) {
     design.diagnostics().report(DiagCode::VhdlWarning, locate(where), what);
 }
@@ -1917,9 +2017,10 @@ void ArchitectureTranslator::ifGenerate(tree_t statement) {
     for (unsigned index = 0; index < tree_conds(statement); ++index) {
         tree_t alternative = tree_cond(statement, index);
         if (tree_has_value(alternative)) {
+            const FoldTrace trace;
             const std::optional<std::int64_t> holds = folding.integer(tree_value(alternative));
             if (!holds) {
-                unsupported(tree_value(alternative), "a generate condition that is not static");
+                uncomputed(tree_value(alternative), "this generate condition", trace);
                 return;
             }
             if (*holds == 0) continue;
@@ -1935,9 +2036,10 @@ void ArchitectureTranslator::forGenerate(tree_t statement) {
         if (tree_kind(tree_decl(statement, index)) == T_GENERIC_DECL)
             parameter = tree_decl(statement, index);
     }
+    const FoldTrace trace;
     const std::optional<Folder::Range> folded = folding.range(tree_range(statement, 0));
     if (parameter == nullptr || !folded) {
-        unsupported(statement, "a generate loop whose range is not static");
+        uncomputed(statement, "the range of this generate loop", trace);
         return;
     }
     const Folder::Range range = *folded;
