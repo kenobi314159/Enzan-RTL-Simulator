@@ -157,6 +157,7 @@ void KernelSession::pump() {
         dispatch(frame);
     }
 
+    if (std::exchange(wavesPending, false)) Q_EMIT wavesChanged();
     flush();
 }
 
@@ -367,8 +368,7 @@ void KernelSession::onValueChanges(const ipc::Frame& frame) {
 
     database->setLatestTime(message.time);
     recordedTime = std::max(message.time, recordedTime);
-
-    Q_EMIT wavesChanged();
+    wavesPending = true;
 }
 
 void KernelSession::onHistory(const ipc::Frame& frame) {
@@ -398,8 +398,7 @@ void KernelSession::onHistory(const ipc::Frame& frame) {
         more.toTime = runtime::NoTime;
         send(ipc::MessageType::QueryHistory, more);
     }
-
-    Q_EMIT wavesChanged();
+    wavesPending = true;
 }
 
 void KernelSession::resetDatabase() {

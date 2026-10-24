@@ -22,11 +22,14 @@
 #include <QAction>
 #include <QCoreApplication>
 #include <QDockWidget>
+#include <QElapsedTimer>
 #include <QString>
 #include <QTreeView>
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
+#include <thread>
 
 namespace {
 
@@ -37,6 +40,7 @@ using enzan::gui::SignalInfo;
 using enzan::gui::Theme;
 using enzan::gui::WaveformModel;
 using enzan::gui::WaveRow;
+using enzan::ipc::SimulationState;
 
 /// The two scopes `guiTestDesign` elaborates to, outermost first.
 const QString Top = QStringLiteral("/tb");
@@ -239,6 +243,57 @@ TEST_F(MainWindowTest, NoGroupIsLeftEmpty) {
         EXPECT_FALSE(waves()->row(rowId)->children.isEmpty())
             << waves()->row(rowId)->label.toStdString() << " is an empty group";
     }
+}
+
+TEST_F(MainWindowTest, StopEndsARunTheWindowStarted) {
+    // The kernel serves on a thread of its own, as it does in a process of its own, so the window
+    // keeps its event loop while the design runs, as it does for a reader pressing Stop. The
+    // fixture's clock never stops, so the run ends only because the Stop reached the kernel, and
+    // the window says so only once it has taken in what the run sent before it. With the views
+    // refreshed for each of the clock's time slots, it took in a tenth of what the kernel sent
+    // and fell behind for good, so the end of the run never reached it.
+    const auto action = [this](const QString& text) -> QAction* {
+        for (QAction* candidate : window->findChildren<QAction*>()) {
+            if (candidate->text() == text) return candidate;
+        }
+        return nullptr;
+    };
+    QAction* runAll = action(QStringLiteral("Run All"));
+    QAction* stop = action(QStringLiteral("Stop"));
+    ASSERT_NE(runAll, nullptr);
+    ASSERT_NE(stop, nullptr);
+
+    // Streamed signals are what the window has to keep up with.
+    insert(Top, QStringLiteral("Add to wave recursive"));
+    ASSERT_TRUE(waitForSignals(static_cast<int>((signalsOf(Top) + signalsOf(Child)).size())));
+
+    std::atomic<bool> serving = true;
+    std::thread kernel([this, &serving] {
+        while (serving && server->step(10)) {}
+    });
+    const auto waitFor = [](const auto& done, int milliseconds) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!done() && timer.elapsed() < milliseconds)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        return done();
+    };
+
+    runAll->trigger();
+    EXPECT_TRUE(waitFor([this] { return session->state() == SimulationState::Running; }, 5000))
+        << "the run never started";
+    waitFor([] { return false; }, 500);
+    ASSERT_TRUE(stop->isEnabled()) << "Stop is offered while the design runs";
+    stop->trigger();
+    const bool stopped =
+        waitFor([this] { return session->state() == SimulationState::Idle; }, 20000);
+
+    serving = false;
+    kernel.join();
+    EXPECT_TRUE(stopped) << "the window went on showing a run the Stop had ended";
+    EXPECT_GT(server->kernel().time(), 0U) << "the run had not actually started";
+    EXPECT_EQ(session->latestTime(), server->kernel().time())
+        << "the window has not taken in everything the run sent";
 }
 
 } // namespace

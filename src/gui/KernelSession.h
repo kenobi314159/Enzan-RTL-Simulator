@@ -206,7 +206,14 @@ private:
     void onReadable();
     void onWritable();
 
-    /// Reads whatever has arrived and dispatches it.
+    /// Reads whatever has arrived and dispatches it, then says once that values arrived, if any
+    /// did.
+    ///
+    /// Once per read rather than once per message: the kernel sends a message for each time slot
+    /// that changed something, which for a fast clock is millions a second, and what the views
+    /// do when told, finding every row's value again, is far dearer than appending one. Told
+    /// per message, the window fell behind for good, and a Stop took effect in the kernel while
+    /// the window went on showing a run it had not caught up with.
     void pump();
 
     void dispatch(const ipc::Frame& frame);
@@ -258,6 +265,9 @@ private:
     runtime::SimTime kernelTime = 0;
     runtime::SimTime recordedTime = 0;
     ipc::SimulationState simulationState = ipc::SimulationState::Idle;
+
+    /// Whether values reached the database since `wavesChanged` was last emitted.
+    bool wavesPending = false;
 };
 
 } // namespace enzan::gui
