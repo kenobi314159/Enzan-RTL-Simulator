@@ -127,6 +127,9 @@ ENZAN_DIAG(SubprogramWritesDrivenSignal, 3014, Error,
            "through its drivers")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
+ENZAN_DIAG(UnconnectedVhdlPort, 3019, Warning,
+           "port '{}' of instance '{}' is not connected and keeps its default value, as a VHDL "
+           "port left open does")
 
 // --- 5000-5999: runtime and scheduler ---------------------------------------
 

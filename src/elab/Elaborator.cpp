@@ -318,9 +318,12 @@ private:
 
             if (!connection.connected()) {
                 // Left to read as X rather than tied off. A silently tied-off input is
-                // how a missing connection turns into a design that appears to work.
-                diagnostics.report(DiagCode::UnconnectedPort, port.location, port.name,
-                                   result->instanceList[childIndex].path);
+                // how a missing connection turns into a design that appears to work. A VHDL
+                // port has a default, which its object starts with, and keeps it.
+                diagnostics.report(childDefinition.language == eir::Language::Vhdl
+                                       ? DiagCode::UnconnectedVhdlPort
+                                       : DiagCode::UnconnectedPort,
+                                   port.location, port.name, result->instanceList[childIndex].path);
                 return true;
             }
 
