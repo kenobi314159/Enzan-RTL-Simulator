@@ -51,8 +51,12 @@ function(enzan_add_golden_test name)
   string(JOIN " " unit_string ${unit})
 
   if(arg_DIR_WITH_MAKE)
-      add_test(NAME golden.${name}
-               COMMAND make -C "${source}" SYNTH_ARGS=${unit_string} ENZAN=$<TARGET_FILE:enzan>)
+    # Its libraries go into the build tree, cleaned first: beside the sources they would be left
+    # in the working tree, shared between builds, and taken as up to date by a newer Enzan.
+    add_test(NAME golden.${name}
+             COMMAND sh -c "make \"$@\" clean && make \"$@\"" make -C "${source}"
+                     "LIB_DIR=${CMAKE_CURRENT_BINARY_DIR}/${name}/rtl_libs"
+                     "SYNTH_ARGS=${unit_string}" "ENZAN=$<TARGET_FILE:enzan>")
   else()
     add_test(NAME golden.${name} COMMAND enzan --top tb ${unit} "${source}")
   endif()
