@@ -1216,6 +1216,36 @@ end architecture;
     EXPECT_EQ(tb->objects[tb->instances[1].connections[0].objectIndex].name, "x");
 }
 
+TEST_F(VhdlDesignTest, AnExtendedIdentifierNamesWhatItHoldsToSystemVerilog) {
+    // VHDL names a port whose SystemVerilog name is one of its reserved words, `next` or
+    // `block`, by an extended identifier; SystemVerilog knows it by the name it holds.
+    modules = {"core"};
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  component core is
+    generic (\Width\ : integer := 2);
+    port (\next\ : in bit; \block\ : out bit_vector(1 downto 0));
+  end component;
+  signal go : bit;
+  signal word : bit_vector(1 downto 0);
+begin
+  u : core port map (\next\ => go, \block\ => word);
+end architecture;
+)",
+                                                                 "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+    ASSERT_EQ(exchange.asked.size(), 1U);
+    const enzan::eir::UnitRequest& request = exchange.asked.front();
+    ASSERT_EQ(request.parameters.size(), 1U);
+    EXPECT_EQ(request.parameters[0].name, "Width");
+    ASSERT_EQ(request.ports.size(), 2U);
+    EXPECT_EQ(request.ports[0].name, "next");
+    EXPECT_EQ(request.ports[1].name, "block");
+}
+
 TEST_F(VhdlDesignTest, AComponentTwoModulesMatchOnlyInOtherCasesIsRefused) {
     modules = {"Buf", "BUF"};
     const std::unique_ptr<enzan::eir::Design> design = translate(R"(

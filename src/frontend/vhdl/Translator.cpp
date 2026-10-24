@@ -157,6 +157,19 @@ bool sameName(std::string_view left, std::string_view right) {
     });
 }
 
+/// `name`, a VHDL simple name as `simpleName` gives it, as SystemVerilog names what it names: an
+/// extended identifier, `\next\`, by what it holds, which is how VHDL names a port or a generic
+/// whose SystemVerilog name is one of VHDL's reserved words.
+std::string systemVerilogName(std::string name) {
+    if (name.size() < 2 || !name.starts_with('\\') || !name.ends_with('\\')) return name;
+    std::string held;
+    for (std::size_t at = 1; at + 1 < name.size(); ++at) {
+        held += name[at];
+        if (name[at] == '\\' && name[at + 1] == '\\') ++at;
+    }
+    return held;
+}
+
 /// The integer a literal (`eir::UnitRequest`) is, `-5` or `64'sd5000000000`; nothing when it is not
 /// one.
 std::optional<std::int64_t> integerLiteral(std::string_view text) {
@@ -2075,7 +2088,7 @@ void ArchitectureTranslator::instance(tree_t statement) {
         // nothing in it.
         entity = design.boundEntity(component, statement, specialisation.architecture);
         if (entity == nullptr) {
-            const std::string simple = simpleName(tree_ident(component));
+            const std::string simple = systemVerilogName(simpleName(tree_ident(component)));
             const std::vector<std::string> modules = design.modulesNamed(simple);
             if (modules.size() == 1) {
                 moduleInstance(statement, component, modules.front());
@@ -2232,7 +2245,8 @@ void ArchitectureTranslator::moduleInstance(tree_t statement, tree_t component,
                                     type_pp(tree_type(generic))));
             return;
         }
-        parameters.push_back({.name = simpleName(tree_ident(generic)), .value = std::move(*value)});
+        parameters.push_back({.name = systemVerilogName(simpleName(tree_ident(generic))),
+                              .value = std::move(*value)});
     }
     Folder formals = *local;
 
@@ -2287,7 +2301,7 @@ void ArchitectureTranslator::moduleInstance(tree_t statement, tree_t component,
             associations.size() == 1
             && (tree_subkind(first) == P_POS || tree_kind(tree_name(first)) == T_REF);
         if (whole && tree_kind(tree_value(first)) == T_OPEN) continue;
-        const std::string portName = simpleName(tree_ident(port));
+        const std::string portName = systemVerilogName(simpleName(tree_ident(port)));
         const std::uint32_t portIndex = design.requestPort(request, portName, direction);
         if (whole) {
             tree_t actual = tree_value(first);
