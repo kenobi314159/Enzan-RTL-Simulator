@@ -16,7 +16,9 @@
 
 #include <QSignalSpy>
 
+#include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -179,6 +181,43 @@ TEST_F(SessionFixture, ASignalTooWideToLogSaysSo) {
                     .contains(QStringLiteral("--wave-max-bits")));
     EXPECT_EQ(model.data(model.index(1, ObjectsModel::ValueColumn), Qt::DisplayRole).toString(),
               QStringLiteral("not logged"));
+}
+
+/// The session over arrayTestDesign's arrays.
+class ArraySessionTest : public SessionFixture {
+protected:
+    bool loadDesign(enzan::session::Session& into) override {
+        into.setDesign(std::make_unique<enzan::eir::Design>(enzan::test::arrayTestDesign()));
+        return true;
+    }
+};
+
+TEST_F(ArraySessionTest, AnArrayReadsAsItsElementsInTheObjectsWindowToo) {
+    const QVector<SignalInfo> objects = objectsOf(QStringLiteral("/tb"));
+    ObjectsModel model(*session);
+    model.setObjects(QStringLiteral("/tb"), objects);
+
+    QVector<std::uint32_t> indices;
+    for (const SignalInfo& info : objects) indices.push_back(info.signalIndex);
+    session->subscribe(indices);
+    ASSERT_TRUE(pumpUntil([this, &indices] {
+        return std::ranges::all_of(indices, [this](std::uint32_t index) {
+            return session->waveforms().recordIndexOf(index)
+                   != enzan::wavedb::WaveformDatabase::NotRecorded;
+        });
+    }));
+
+    const auto valueOf = [&model, &objects](const QString& name) {
+        for (int row = 0; row < objects.size(); ++row) {
+            if (objects[row].name == name)
+                return model.data(model.index(row, ObjectsModel::ValueColumn), Qt::DisplayRole)
+                    .toString();
+        }
+        return QString();
+    };
+    EXPECT_EQ(valueOf(QStringLiteral("lanes")), QStringLiteral("{5}{a}"));
+    EXPECT_EQ(valueOf(QStringLiteral("memory")), QStringLiteral("{c}{3}"));
+    EXPECT_EQ(valueOf(QStringLiteral("up")), QStringLiteral("8")) << "a vector is one number";
 }
 
 TEST_F(SessionFixture, SubscribingBringsTheSignalsPastWithIt) {

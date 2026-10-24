@@ -28,9 +28,7 @@ namespace {
 /// window, and a format another application could parse would be a promise to keep it stable.
 constexpr const char* RowMimeType = "application/x-enzan-wave-rows";
 
-/// `value` as an array of `dimensions` reads: the list of its elements along the outermost,
-/// `{11}{22}`, each read by the dimensions below it, or one number once the elements are single
-/// bits or there are no dimensions left (DESIGN_GUIDE.md section 10.7).
+/// `renderArray`, over what is left of the dimensions as it recurses.
 QString renderShaped(const eir::BitVector& value, std::span<const eir::ArrayDimension> dimensions,
                      eir::Radix radix) {
     if (!dimensions.empty() && value.width() % dimensions.front().size() == 0) {
@@ -68,6 +66,11 @@ std::int64_t indexAt(eir::ArrayDimension dimension, std::uint32_t position) {
 }
 
 } // namespace
+
+QString renderArray(const eir::BitVector& value, const std::vector<eir::ArrayDimension>& dimensions,
+                    eir::Radix radix) {
+    return renderShaped(value, dimensions, radix);
+}
 
 WaveformModel::WaveformModel(const KernelSession& session, const Theme& themeToUse, QObject* parent)
     : QAbstractItemModel(parent), kernelSession(&session), theme(&themeToUse) {}
@@ -1038,7 +1041,7 @@ QString WaveformModel::renderValue(int rowId, runtime::SimTime time) const {
     // An array reads as the list of its elements whether it is unpacked or not, as its unpacked
     // rows read joined: one number for an array of vectors would file off exactly the
     // boundaries that are the reason it has that shape.
-    return renderShaped(*value, waveRow->dimensions, waveRow->radix);
+    return renderArray(*value, waveRow->dimensions, waveRow->radix);
 }
 
 const EnumInfo* WaveformModel::enumerationOf(int rowId) const {

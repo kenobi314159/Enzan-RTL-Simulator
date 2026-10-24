@@ -2426,8 +2426,9 @@ it would sit beside is how a tool acquires a number nobody reads.
   value for the widths it happens to contain.
 
   An array reads the same way before it is unpacked as after, as the list of its
-  elements, on its line and in its trace: `count` reads `{00a}{00a}…` whether its
-  rows are open or not, and a vector, whose elements are bits, stays one number.
+  elements, on its line, in its trace and in the Objects window: `count` reads
+  `{00a}{00a}…` whether its rows are open or not, and a vector, whose elements are
+  bits, stays one number.
 
   A multi-bit signal is therefore a group whose children happen to be its own
   bits, and the only thing that distinguishes it is that those children are made

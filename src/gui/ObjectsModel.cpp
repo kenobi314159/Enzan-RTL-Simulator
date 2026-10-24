@@ -2,6 +2,7 @@
 
 #include "gui/ObjectsModel.h"
 
+#include "gui/WaveformModel.h"
 #include "wavedb/WaveformDatabase.h"
 
 #include <optional>
@@ -76,7 +77,8 @@ QString ObjectsModel::valueOf(const SignalInfo& info) const {
     const std::optional<eir::BitVector> value = database.valueAt(record, cursorTime);
     if (!value.has_value()) return tr("—");
 
-    return QString::fromStdString(eir::toString(value->ref(), valueRadix));
+    // An array reads as its elements, as it does in the wave window.
+    return renderArray(*value, info.dimensions, valueRadix);
 }
 
 QVariant ObjectsModel::data(const QModelIndex& index, int role) const {

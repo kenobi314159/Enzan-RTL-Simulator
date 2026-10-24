@@ -31,6 +31,13 @@ struct IndexSelect {
     bool range = false;
 };
 
+/// How `value` reads as an array of `dimensions`, in either window: the list of its elements
+/// along the outermost, `{11}{22}`, each read by the dimensions below it, or one number once
+/// the elements are single bits or there are no dimensions left (DESIGN_GUIDE.md section 10.7).
+[[nodiscard]] QString renderArray(const eir::BitVector& value,
+                                  const std::vector<eir::ArrayDimension>& dimensions,
+                                  eir::Radix radix);
+
 /// One row of the wave window: a trace, or a group holding traces.
 struct WaveRow {
     /// What a row's value comes from.
