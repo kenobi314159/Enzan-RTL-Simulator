@@ -317,8 +317,9 @@ TEST_F(SignalListLoadTest, ASavedListLoadsBackAsItWasAndSavesTheSameBytes) {
 /// = 8'hc3 and `logic [0:3] up` = 4'b1000.
 class ArraySignalListTest : public SignalListLoadTest {
 protected:
-    [[nodiscard]] enzan::eir::Design designToServe() const override {
-        return enzan::test::arrayTestDesign();
+    bool loadDesign(enzan::session::Session& into) override {
+        into.setDesign(std::make_unique<enzan::eir::Design>(enzan::test::arrayTestDesign()));
+        return true;
     }
 
     [[nodiscard]] QString valueOf(int rowId) const { return waves()->renderValue(rowId, 0); }

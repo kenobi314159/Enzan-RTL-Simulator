@@ -27,6 +27,7 @@
 
 #include "support/Literals.h"
 #include "support/ProcessBuilder.h"
+#include "support/Workspace.h"
 
 #include <gtest/gtest.h>
 
@@ -35,6 +36,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -357,6 +359,33 @@ protected:
     ///
     /// `withVpiApplication` loads the test plugin first, as `--vpi` would.
     void rebuild(Design design, bool withVpiApplication = false) {
+        rebuild(
+            [&design](Session& fresh) {
+                fresh.setDesign(std::make_unique<Design>(std::move(design)));
+                return true;
+            },
+            withVpiApplication);
+    }
+
+    /// Analyses `files`, written into the workspace first, and serves what they elaborate to.
+    void rebuildFrom(const std::vector<std::pair<std::string, std::string>>& files) {
+        rebuild([this, &files](Session& fresh) {
+#ifdef ENZAN_WITH_VHDL
+            fresh.setVhdlLibraryDirectory(ENZAN_VHDL_LIBRARY_ROOT);
+#endif
+            Session::AnalysisRequest request;
+            for (const auto& [name, text] : files) {
+                workspace.write(name, text);
+                request.files.push_back(workspace / name);
+            }
+            request.top = "tb";
+            return fresh.analyse(request);
+        });
+    }
+
+    /// Builds a session, has `load` give it a design, and serves what it elaborates to.
+    template<typename Load>
+    void rebuild(Load load, bool withVpiApplication = false) {
         // The old server before the old session: the server borrows the session's kernel, and
         // replacing the session first would leave it pointing at one that has gone.
         server.reset();
@@ -367,7 +396,8 @@ protected:
             const std::vector<std::string> commandLine = {"enzan"};
             ASSERT_TRUE(session->loadVpiApplication(ENZAN_TEST_STARTUP_PLUGIN, commandLine));
         }
-        session->setDesign(std::make_unique<Design>(std::move(design)));
+        ASSERT_TRUE(load(*session))
+            << (consumer.messages.empty() ? "analysis failed" : consumer.messages.front());
         ASSERT_TRUE(session->elaborate("tb"))
             << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.front());
 
@@ -490,6 +520,7 @@ protected:
 
     std::unique_ptr<Session> session;
     std::unique_ptr<KernelServer> server;
+    enzan::test::Workspace workspace;
 
     /// The widest signal the served database records, read by `rebuild`.
     std::uint32_t waveformWidthLimit = enzan::wavedb::WaveformWriter::DefaultWidthLimit;
@@ -627,6 +658,103 @@ TEST_F(ServerFixture, AnObjectIsListedWithTheDimensionsItsNameIsDeclaredWith) {
     EXPECT_EQ(inside.objects[0].signalIndex, named("lanes").signalIndex);
     EXPECT_EQ(inside.objects[0].dimensions, (Dimensions{ArrayDimension{.left = 31, .right = 0}}));
 }
+
+#if defined(ENZAN_WITH_SYSTEMVERILOG) || defined(ENZAN_WITH_VHDL)
+/// The dimensions each object of `/tb` is listed with, by name.
+std::map<std::string, std::vector<enzan::eir::ArrayDimension>, std::less<>>
+dimensionsByName(const ObjectsMessage& objects) {
+    std::map<std::string, std::vector<enzan::eir::ArrayDimension>, std::less<>> found;
+    for (const enzan::ipc::ObjectEntry& entry : objects.objects)
+        found.emplace(entry.name, entry.dimensions);
+    return found;
+}
+#endif
+
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+TEST_F(ServerFixture, ASystemVerilogArrayIsListedWithTheDimensionsItsSourceDeclares) {
+    // The shapes of a testbench's counters, packed and unpacked, as large_design_00 declares
+    // them, and the others an array can take.
+    rebuildFrom({{"tb.sv", R"(
+        module tb;
+            logic [3:0][17:0] count_rec;
+            logic [17:0] count_rec0 [3:0];
+            logic count_rec1 [3:0][17:0];
+            int words [0:1];
+            logic [0:3] up;
+            logic flag;
+            typedef struct packed { logic [3:0] a; logic [3:0] b; } pair_t;
+            pair_t [1:0] pairs;
+        endmodule
+    )"}});
+    connectClient();
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    const auto shapes = dimensionsByName(objects);
+
+    using enzan::eir::ArrayDimension;
+    using Dimensions = std::vector<ArrayDimension>;
+    const Dimensions counters{ArrayDimension{.left = 3, .right = 0},
+                              ArrayDimension{.left = 17, .right = 0}};
+    EXPECT_EQ(shapes.at("count_rec"), counters);
+    EXPECT_EQ(shapes.at("count_rec0"), counters) << "unpacked then packed, as declared";
+    EXPECT_EQ(shapes.at("count_rec1"), counters) << "two unpacked dimensions of bits";
+    EXPECT_EQ(shapes.at("words"), (Dimensions{ArrayDimension{.left = 0, .right = 1}}));
+    EXPECT_EQ(shapes.at("up"), (Dimensions{ArrayDimension{.left = 0, .right = 3}}));
+    EXPECT_TRUE(shapes.at("flag").empty());
+    EXPECT_EQ(shapes.at("pairs"), (Dimensions{ArrayDimension{.left = 1, .right = 0}}));
+
+    // Every one of them is recorded for the window, the unpacked ones too.
+    for (const enzan::ipc::ObjectEntry& entry : objects.objects)
+        EXPECT_EQ(entry.recording, enzan::ipc::Recording::Recorded) << entry.name;
+}
+#endif
+
+#ifdef ENZAN_WITH_VHDL
+TEST_F(ServerFixture, AVhdlArrayIsListedWithTheDimensionsItsTypeDeclares) {
+    rebuildFrom({{"tb.vhd", R"(
+        library ieee;
+        use ieee.std_logic_1164.all;
+        entity tb is
+        end entity;
+        architecture a of tb is
+            type nibbles_t is array (0 to 1) of std_logic_vector(3 downto 0);
+            type grid_t is array (1 to 2, 3 downto 0) of std_logic;
+            type integers_t is array (2 downto 0) of integer;
+            signal nibbles : nibbles_t := (x"a", x"5");
+            signal grid : grid_t;
+            signal integers : integers_t;
+            signal up : std_logic_vector(0 to 7);
+            signal flag : std_logic;
+        begin
+        end architecture;
+    )"}});
+    connectClient();
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    const auto shapes = dimensionsByName(objects);
+
+    using enzan::eir::ArrayDimension;
+    using Dimensions = std::vector<ArrayDimension>;
+    EXPECT_EQ(shapes.at("nibbles"), (Dimensions{ArrayDimension{.left = 0, .right = 1},
+                                                ArrayDimension{.left = 3, .right = 0}}));
+    EXPECT_EQ(shapes.at("grid"), (Dimensions{ArrayDimension{.left = 1, .right = 2},
+                                             ArrayDimension{.left = 3, .right = 0}}));
+    EXPECT_EQ(shapes.at("integers"), (Dimensions{ArrayDimension{.left = 2, .right = 0}}));
+    EXPECT_EQ(shapes.at("up"), (Dimensions{ArrayDimension{.left = 0, .right = 7}}));
+    EXPECT_TRUE(shapes.at("flag").empty());
+
+    const auto nibbles =
+        std::ranges::find(objects.objects, "nibbles", &enzan::ipc::ObjectEntry::name);
+    ASSERT_NE(nibbles, objects.objects.end());
+    EXPECT_EQ(nibbles->width, 8U) << "a bit for each std_logic, not a byte for each code";
+}
+#endif
 
 TEST_F(ServerFixture, AMemoryAndASignalTooWideToRecordStillStreamOnceSubscribed) {
     // The database leaves the wide one out; the reader put it in the window all the same, and

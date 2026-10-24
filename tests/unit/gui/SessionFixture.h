@@ -191,7 +191,8 @@ protected:
         // every surface that drives it.
         kernelSession = std::make_unique<session::Session>(sources, engine);
         kernelSession->setTimeScale(runtime::TimeScale(-9));
-        kernelSession->setDesign(std::make_unique<eir::Design>(designToServe()));
+        ASSERT_TRUE(loadDesign(*kernelSession))
+            << (consumer.messages.empty() ? "analysis failed" : consumer.messages.front());
         ASSERT_TRUE(kernelSession->elaborate("tb"))
             << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.front());
 
@@ -218,8 +219,12 @@ protected:
         ASSERT_FALSE(session->instances().isEmpty()) << "the design never arrived";
     }
 
-    /// The design the kernel serves. A suite that needs another overrides this.
-    [[nodiscard]] virtual eir::Design designToServe() const { return guiTestDesign(); }
+    /// Gives the kernel's session the design it serves, guiTestDesign's unless a suite that
+    /// needs another overrides this. Returns false when that failed.
+    virtual bool loadDesign(session::Session& into) {
+        into.setDesign(std::make_unique<eir::Design>(guiTestDesign()));
+        return true;
+    }
 
     void TearDown() override {
         session.reset();

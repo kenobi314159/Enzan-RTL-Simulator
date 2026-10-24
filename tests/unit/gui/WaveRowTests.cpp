@@ -16,15 +16,19 @@
 
 #include "SessionFixture.h"
 
+#include "support/Workspace.h"
+
 #include <gtest/gtest.h>
 
 #include <QApplication>
 #include <QClipboard>
+#include <QHash>
 #include <QLineEdit>
 #include <QStringList>
 #include <QTableView>
 #include <QTreeView>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -512,6 +516,107 @@ TEST_F(WaveRowTest, AnArrayCopiesWithItsDimensions) {
     model->unpack(element);
     EXPECT_EQ(model->rowCount(model->indexOfRow(element)), 4);
 }
+
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+/// The window over a SystemVerilog testbench whose counters are declared as large_design_00's
+/// are, run for twenty nanoseconds: every element holds its index plus one, and at 10ns
+/// element 2 of each changes.
+class SourceArrayTest : public SessionFixture {
+protected:
+    bool loadDesign(enzan::session::Session& into) override {
+        workspace.write("tb.sv", R"(
+            module tb;
+                logic [3:0][7:0] count_rec;
+                logic [7:0] count_rec0 [3:0];
+                logic count_rec1 [3:0][7:0];
+                initial begin
+                    for (int i = 0; i < 4; i++) begin
+                        count_rec[i] = 8'(i + 1);
+                        count_rec0[i] = 8'(i + 1);
+                        for (int j = 0; j < 8; j++) count_rec1[i][j] = count_rec0[i][j];
+                    end
+                    #10;
+                    count_rec[2] = 8'hff;
+                    count_rec0[2] = 8'hff;
+                    count_rec1[2][1] = 1'b0;
+                    #10;
+                end
+            endmodule
+        )");
+        enzan::session::Session::AnalysisRequest request;
+        request.files.push_back(workspace / "tb.sv");
+        return into.analyse(request);
+    }
+
+    void SetUp() override {
+        SessionFixture::SetUp();
+        theme.loadBuiltIn();
+        model = std::make_unique<WaveformModel>(*session, theme);
+
+        QVector<std::uint32_t> indices;
+        for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+            signals.insert(info.name, info);
+            indices.push_back(info.signalIndex);
+        }
+        session->subscribe(indices);
+        session->run(20);
+        pumpUntil([this] { return session->currentTime() == 20; });
+    }
+
+    void TearDown() override {
+        model = nullptr;
+        SessionFixture::TearDown();
+    }
+
+    [[nodiscard]] int childOf(int parent, int position) const {
+        return model->rowIdOf(model->index(position, 0, model->indexOfRow(parent)));
+    }
+
+    enzan::test::Workspace workspace;
+    Theme theme;
+    std::unique_ptr<WaveformModel> model;
+    QHash<QString, SignalInfo> signals;
+};
+
+TEST_F(SourceArrayTest, EachCounterReadsAsItsElementsHoweverItIsDeclared) {
+    // Packed, unpacked and an unpacked array of bits read alike, element by element, rather
+    // than as one wide number.
+    const int packed = model->addSignal(signals.value(QStringLiteral("count_rec")));
+    const int unpacked = model->addSignal(signals.value(QStringLiteral("count_rec0")));
+    const int bits = model->addSignal(signals.value(QStringLiteral("count_rec1")));
+
+    for (const int row : {packed, unpacked, bits})
+        EXPECT_EQ(model->renderValue(row, 5), QStringLiteral("{04}{03}{02}{01}"))
+            << model->row(row)->label.toStdString();
+    EXPECT_EQ(model->renderValue(packed, 10), QStringLiteral("{04}{ff}{02}{01}"));
+    EXPECT_EQ(model->renderValue(unpacked, 10), QStringLiteral("{04}{ff}{02}{01}"));
+    EXPECT_EQ(model->renderValue(bits, 10), QStringLiteral("{04}{01}{02}{01}"));
+}
+
+TEST_F(SourceArrayTest, EachCounterUnpacksIntoItsElementsAndThenItsBits) {
+    for (const QString& name : {QStringLiteral("count_rec"), QStringLiteral("count_rec0"),
+                                QStringLiteral("count_rec1")}) {
+        const int row = model->addSignal(signals.value(name));
+        model->unpack(row);
+        ASSERT_EQ(model->rowCount(model->indexOfRow(row)), 4) << name.toStdString();
+
+        const int element = childOf(row, 1);
+        EXPECT_EQ(model->row(element)->label, name + QStringLiteral("[2]"));
+        EXPECT_EQ(model->displayedWidth(element), 8U);
+        EXPECT_EQ(model->renderValue(element, 5), QStringLiteral("03"));
+
+        model->unpack(element);
+        ASSERT_EQ(model->rowCount(model->indexOfRow(element)), 8) << name.toStdString();
+        EXPECT_EQ(model->row(childOf(element, 6))->label, name + QStringLiteral("[2][1]"));
+        EXPECT_EQ(model->renderValue(childOf(element, 6), 5), QStringLiteral("1"));
+
+        // Its edges are its own: element 2 changes at 10, and only the bits that moved do.
+        EXPECT_EQ(model->nextEdgeAfter(element, 5), 10U) << name.toStdString();
+        EXPECT_EQ(model->nextEdgeAfter(childOf(row, 0), 5), enzan::runtime::NoTime)
+            << name.toStdString();
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // The clipboard
