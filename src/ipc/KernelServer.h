@@ -145,6 +145,16 @@ public:
     /// Entries a single History message will carry before it is marked incomplete.
     static constexpr std::size_t MaxHistoryEntries = 200'000;
 
+    /// Bytes of entries a single History message will carry before it is marked incomplete:
+    /// half of what a frame may hold. A count alone does not bound a message, because an entry
+    /// is as large as its signal is wide, and a frame larger than `MaxPayloadBytes` is one the
+    /// client refuses as malformed.
+    static constexpr std::size_t MaxHistoryBytes = MaxPayloadBytes / 2;
+
+    /// Entries a History message carries for a signal `width` bits wide: as many as both
+    /// limits allow, and one at least however wide it is.
+    [[nodiscard]] static std::size_t historyEntriesFor(std::uint32_t width) noexcept;
+
     // Public, matching `RunInterrupt`. Narrowing an override's visibility is legal and
     // confusing: the kernel calls it through the base class either way.
     bool shouldInterrupt() override;

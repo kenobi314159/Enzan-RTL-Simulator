@@ -886,11 +886,10 @@ void KernelServer::sendHistory(std::uint32_t signalIndex, runtime::SimTime from,
     std::vector<wavedb::Change> changes;
     database->changesIn(record, from, to, changes);
 
-    if (changes.size() > MaxHistoryEntries) {
+    if (const std::size_t limit = historyEntriesFor(message.width); changes.size() > limit) {
         // Truncated rather than split across an unbounded number of messages. `latestTime`
         // then says where the answer stops, and the client asks again from there.
-        changes.erase(changes.begin() + static_cast<std::ptrdiff_t>(MaxHistoryEntries),
-                      changes.end());
+        changes.erase(changes.begin() + static_cast<std::ptrdiff_t>(limit), changes.end());
         message.complete = false;
         message.latestTime = changes.back().time;
     }
@@ -902,6 +901,13 @@ void KernelServer::sendHistory(std::uint32_t signalIndex, runtime::SimTime from,
     }
 
     connection.send(MessageType::History, message);
+}
+
+std::size_t KernelServer::historyEntriesFor(std::uint32_t width) noexcept {
+    // A time, and a value as the codec writes one: its width, then both planes of its words.
+    const std::size_t entryBytes = sizeof(std::uint64_t) + sizeof(std::uint32_t)
+                                   + (eir::storageWordsFor(width) * sizeof(eir::Word));
+    return std::clamp<std::size_t>(MaxHistoryBytes / entryBytes, 1, MaxHistoryEntries);
 }
 
 runtime::SimTime KernelServer::latestRecordedTime() const noexcept {

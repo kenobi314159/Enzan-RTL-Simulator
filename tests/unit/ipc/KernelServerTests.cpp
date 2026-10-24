@@ -1082,6 +1082,25 @@ TEST_F(ServerFixture, HistoryHonoursTheRequestedRange) {
     }
 }
 
+TEST(KernelServerHistory, AnAnswerStopsWhereItsBytesWouldOutgrowAFrame) {
+    // A count alone bounded it: two hundred thousand changes of a memory four thousand bits wide
+    // are two hundred megabytes, and a client refuses a frame over sixty-four as malformed.
+    const auto bytesFor = [](std::uint32_t width) {
+        const std::size_t entry = sizeof(std::uint64_t) + sizeof(std::uint32_t)
+                                  + (enzan::eir::storageWordsFor(width) * sizeof(enzan::eir::Word));
+        return KernelServer::historyEntriesFor(width) * entry;
+    };
+
+    EXPECT_EQ(KernelServer::historyEntriesFor(1), KernelServer::MaxHistoryEntries)
+        << "a narrow signal is bounded by the count";
+    for (const std::uint32_t width : {1U, 64U, 4096U, 65536U, enzan::ipc::MaxSignalBits}) {
+        EXPECT_LE(bytesFor(width), KernelServer::MaxHistoryBytes) << width << " bits";
+        EXPECT_GE(KernelServer::historyEntriesFor(width), 1U) << width << " bits";
+    }
+    EXPECT_LT(KernelServer::historyEntriesFor(4096), KernelServer::MaxHistoryEntries);
+    EXPECT_LT(KernelServer::MaxHistoryBytes, enzan::ipc::MaxPayloadBytes);
+}
+
 TEST_F(ServerFixture, ASignalOfVhdlCodesIsListedAtTheWidthItsValuesComeAt) {
     // A std_ulogic is held as its code and its values are sent as the bit it stands for. A
     // client told the code's width keeps a trace eight bits wide and drops every one of them as
