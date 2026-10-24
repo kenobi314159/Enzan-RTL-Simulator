@@ -252,7 +252,8 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.parameters.push_back(Parameter{.name = "DEPTH",
                                               .value = literal("32'd16"),
                                               .isLocal = true,
-                                              .location = SourceLocation(buffer, 2)});
+                                              .location = SourceLocation(buffer, 2),
+                                              .fromGenvar = true});
     return definition;
 }
 
@@ -477,8 +478,10 @@ TEST_F(SerializationTest, EnumerationsVhdlTypesAndParametersRoundTrip) {
     ASSERT_EQ(definition.parameters.size(), 2U);
     EXPECT_EQ(definition.parameters[0].name, "WIDTH");
     EXPECT_FALSE(definition.parameters[0].isLocal);
+    EXPECT_FALSE(definition.parameters[0].fromGenvar);
     EXPECT_EQ(definition.parameters[1].value, literal("32'd16"));
     EXPECT_TRUE(definition.parameters[1].isLocal);
+    EXPECT_TRUE(definition.parameters[1].fromGenvar);
 }
 
 TEST_F(SerializationTest, SeveralModulesRoundTripInOrder) {

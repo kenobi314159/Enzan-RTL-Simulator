@@ -449,6 +449,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.boolean(parameter.isLocal);
         writeLocation(out, names, parameter.location);
         out.u32(parameter.vhdlType);
+        out.boolean(parameter.fromGenvar);
     }
 }
 
@@ -791,11 +792,13 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         const bool isLocal = in.boolean();
         const SourceLocation location = readLocation(in, buffers);
         const std::uint32_t vhdlType = in.u32();
+        const bool fromGenvar = in.boolean();
         definition.parameters.push_back(Parameter{.name = std::move(name),
                                                   .value = std::move(value),
                                                   .isLocal = isLocal,
                                                   .location = location,
-                                                  .vhdlType = vhdlType});
+                                                  .vhdlType = vhdlType,
+                                                  .fromGenvar = fromGenvar});
     }
 
     return definition;

@@ -862,7 +862,8 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
                 eir::Parameter{.name = prefix + std::string(parameter.name),
                                .value = toBitVector(value.integer()),
                                .isLocal = parameter.isLocalParam(),
-                               .location = convertLocation(parameter.location)});
+                               .location = convertLocation(parameter.location),
+                               .fromGenvar = parameter.isFromGenvar()});
             break;
         }
 

@@ -331,6 +331,13 @@ struct Parameter {
     /// For a VHDL generic or constant, its type, an index into its definition's `vhdlTypes`, or
     /// VhdlType::None.
     std::uint32_t vhdlType = VhdlType::None;
+
+    /// True for a generate loop's genvar as one iteration of the loop sees it, `gen[3].i`, which
+    /// SystemVerilog makes a localparam of each block the loop generates (IEEE 1800 section 27.4).
+    /// VPI shows it in its block, as other simulators do; the GUI's lists do not, since its value
+    /// is already the index in the block's name and a loop of sixty iterations would put sixty of
+    /// them beside the signals the reader wrote.
+    bool fromGenvar = false;
 };
 
 /// Direction of a module port.

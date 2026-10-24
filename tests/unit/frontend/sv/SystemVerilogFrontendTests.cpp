@@ -316,6 +316,28 @@ TEST_F(FrontendTest, ParametersAreRecordedWithWhatTheyResolvedTo) {
     EXPECT_EQ(byteCounts, (std::vector<int>{1, 2})) << "a localparam derived from the parameter";
 }
 
+TEST_F(FrontendTest, AGenvarAsEachIterationSeesItIsToldApartFromALocalparam) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            genvar I;
+            for (I = 0; I < 2; I++) begin : gen
+                localparam int TWICE = 2 * I;
+                logic q;
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+
+    std::vector<std::string> genvars;
+    std::vector<std::string> others;
+    for (const enzan::eir::Parameter& parameter : found->parameters)
+        (parameter.fromGenvar ? genvars : others).push_back(parameter.name);
+    EXPECT_EQ(genvars, (std::vector<std::string>{"gen[0].I", "gen[1].I"}));
+    EXPECT_EQ(others, (std::vector<std::string>{"gen[0].TWICE", "gen[1].TWICE"}));
+}
+
 TEST_F(FrontendTest, AParameterThatIsNotAnIntegerIsSkippedRatherThanRefused) {
     // Nothing is being translated, so nothing can be mistranslated. Refusing the design over a
     // `parameter string` that only names a log file would fail a design that simulates
