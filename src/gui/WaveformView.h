@@ -125,7 +125,7 @@ public:
 
     /// Pixels a right-button drag must cover before it counts as a gesture at all. Below it a
     /// right-click is a right-click, and must not throw away the reader's zoom.
-    static constexpr int MinimumDragPixels = 5;
+    static constexpr int MinimumDragPixels = 10;
 
 Q_SIGNALS:
     /// A cursor moved, or the active one changed.
