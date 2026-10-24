@@ -14,7 +14,11 @@ namespace enzan::eir {
 // A value crosses between the frontends as a SystemVerilog literal of one of the forms both read
 // (DESIGN_GUIDE.md section 18, M7): an integer in decimal, `-5`, sized and signed beyond 32 bits,
 // `64'sd5000000000`; one bit, `1'b0`, `1'b1`, `1'bx` or `1'bz`; a vector, `4'b01xz`, its left
-// element first; or a string, `"a\"b"`, with `\"`, `\\` and `\ooo` as its escapes.
+// element first; a string, `"a\"b"`, with `\"`, `\\` and `\ooo` as its escapes; or a real, with a
+// point or an exponent, `19200.0` or `1e+08`, its digits enough to give the double it is.
+
+/// `value` as a real literal of that form.
+std::string realLiteral(double value);
 
 /// A unit of the other language that instances of a definition need, as the frontend translating
 /// them asks the other frontend for it (DESIGN_GUIDE.md section 18, M7): which unit, specialised
@@ -67,7 +71,7 @@ struct UnitInterface {
     std::string name;
 
     /// What a parameter holds. A `boolean` is a bit.
-    enum class Kind : std::uint8_t { Integer, Bit, Logic, BitVector, LogicVector, String };
+    enum class Kind : std::uint8_t { Integer, Bit, Logic, BitVector, LogicVector, String, Real };
 
     struct Parameter {
         std::string name;

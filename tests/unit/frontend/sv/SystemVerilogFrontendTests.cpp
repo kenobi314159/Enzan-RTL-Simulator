@@ -1937,4 +1937,24 @@ TEST_F(FrontendTest, AnAnalysisFailingBeforeAnInstancesWidthsAreKnownSaysWhatItA
     EXPECT_EQ(top->objects[top->instances[0].connections[0].objectIndex].name, "words");
 }
 
+TEST_F(FrontendTest, ARealParameterOfAnotherLanguagesUnitIsAskedForAsAReal) {
+    // With a point, so that it reads as a real, whatever the instance wrote.
+    using Kind = enzan::eir::UnitInterface::Kind;
+    interfaces.push_back(
+        {.name = "rx",
+         .parameters = {{.name = "fclk", .kind = Kind::Real, .length = 0, .value = "19200.0"}},
+         .ports = {},
+         .widths = {}});
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            rx #(.fclk(100000000)) u ();
+            rx v ();
+        endmodule
+)");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    ASSERT_EQ(asked.size(), 2U);
+    EXPECT_EQ(asked[0].parameters[0].value, "100000000.0");
+    EXPECT_EQ(asked[1].parameters[0].value, "19200.0");
+}
+
 } // namespace

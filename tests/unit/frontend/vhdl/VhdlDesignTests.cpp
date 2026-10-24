@@ -1397,6 +1397,35 @@ TEST_F(VhdlDesignTest, AnEntitySystemVerilogInstantiatesIsNoTopLevel) {
     EXPECT_EQ(design->findModule("fifo"), nullptr);
 }
 
+TEST_F(VhdlDesignTest, ARealGenericAndAnEmptyStringCrossFromSystemVerilog) {
+    // A real is described with its default and bound from its literal; an empty string, which
+    // holds nothing, by its bounds alone.
+    entityRequests.push_back({.placeholder = "p",
+                              .unit = "rx",
+                              .parameters = {{.name = "fclk", .value = "100000000.0"},
+                                             {.name = "name", .value = R"("")"}},
+                              .ports = {}});
+    described = {"rx"};
+    onlyRequested = true;
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity rx is
+  generic (fclk : real := 19200.0; name : string := "uart");
+  port (clk : in bit);
+end entity;
+architecture a of rx is
+  constant divider : integer := integer(fclk / 19200.0);
+begin
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+    ASSERT_EQ(exchange.interfaces.size(), 1U);
+    ASSERT_EQ(exchange.interfaces[0].parameters.size(), 2U);
+    EXPECT_EQ(exchange.interfaces[0].parameters[0].kind, enzan::eir::UnitInterface::Kind::Real);
+    EXPECT_EQ(exchange.interfaces[0].parameters[0].value, std::optional<std::string>("19200.0"));
+    ASSERT_EQ(exchange.answers.size(), 1U);
+    EXPECT_NE(design->findModule(exchange.answers[0]), nullptr);
+}
+
 TEST_F(VhdlDesignTest, AValueNoValueOfTheGenericsTypeIsRefused) {
     // Three elements for a vector of four.
     entityRequests.push_back({.placeholder = "p",

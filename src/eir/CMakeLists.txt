@@ -11,6 +11,7 @@ enzan_add_component(
           Process.cpp
           Serialization.cpp
           Type.cpp
+          UnitRequest.cpp
           Verifier.cpp
   HEADERS BitOps.h
           BitVector.h

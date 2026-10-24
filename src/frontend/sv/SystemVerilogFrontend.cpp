@@ -1716,6 +1716,11 @@ std::string escapedName(std::string_view name) {
 std::optional<std::string> literalOf(const slang::ConstantValue& value,
                                      eir::UnitInterface::Kind kind) {
     using Kind = eir::UnitInterface::Kind;
+    if (kind == Kind::Real) {
+        if (!value.isReal() && !value.isInteger()) return std::nullopt;
+        return eir::realLiteral(value.isReal() ? static_cast<double>(value.real())
+                                               : value.integer().toDouble());
+    }
     if (kind == Kind::String) {
         if (!value.isString()) return std::nullopt;
         std::string text = "\"";
@@ -1866,6 +1871,7 @@ std::string interfaceText(const std::vector<eir::UnitInterface>& interfaces) {
                 }
                 break;
             case Kind::String: type = "string "; break;
+            case Kind::Real: type = "real "; break;
             }
             declarations.push_back(std::format(
                 "parameter {}{}{}", type, escapedName(parameter.name),
@@ -1880,9 +1886,10 @@ std::string interfaceText(const std::vector<eir::UnitInterface>& interfaces) {
                 if (index >= row.values.size()) break;
                 const eir::UnitInterface::Parameter& parameter = unit.parameters[index];
                 if (!condition.empty()) condition += " && ";
-                condition +=
-                    std::format("{}{} {}", escapedName(parameter.name),
-                                parameter.kind == Kind::String ? "==" : "===", row.values[index]);
+                condition += std::format(
+                    "{}{} {}", escapedName(parameter.name),
+                    parameter.kind == Kind::String || parameter.kind == Kind::Real ? "==" : "===",
+                    row.values[index]);
             }
             conditions.push_back(condition.empty() ? std::string("1") : condition);
         }

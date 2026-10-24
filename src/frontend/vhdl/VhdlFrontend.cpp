@@ -361,7 +361,7 @@ std::optional<eir::UnitInterface> decodeInterface(Decoder& decoder) {
         const std::optional<std::uint32_t> length = decoder.u32();
         const std::optional<std::uint8_t> valued = decoder.byte();
         if (!parameterName || !kind || !length || !valued
-            || *kind > static_cast<std::uint8_t>(eir::UnitInterface::Kind::String))
+            || *kind > static_cast<std::uint8_t>(eir::UnitInterface::Kind::Real))
             return std::nullopt;
         eir::UnitInterface::Parameter parameter{.name = std::move(*parameterName),
                                                 .kind =

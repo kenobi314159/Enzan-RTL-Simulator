@@ -10,6 +10,7 @@
 #include "frontend/vhdl/Types.h"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <charconv>
 #include <deque>
@@ -80,6 +81,15 @@ std::string sanitised(std::string text) {
     return text;
 }
 
+/// The double a real literal is; nothing when the text is no number.
+std::optional<double> realOf(std::string_view text) {
+    double value = 0;
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (error != std::errc() || end != text.data() + text.size() || text.empty())
+        return std::nullopt;
+    return value;
+}
+
 /// The value `generics` binds the generic `generic` to as a SystemVerilog literal, which sets the
 /// parameter of its name of the module its component is bound to: an integer in decimal, a `bit`, a
 /// `boolean` or a `std_ulogic` as one bit by section 3.6's mapping, an array of them as that many
@@ -133,6 +143,7 @@ std::optional<std::string> systemVerilogLiteral(const Folder& generics, tree_t g
 
     const std::optional<std::int64_t> value = generics.boundValue(generic);
     if (!value) return std::nullopt;
+    if (type_is_real(type)) return eir::realLiteral(std::bit_cast<double>(*value));
     if (type_is_integer(type)) {
         // Wider than an unsized literal's 32 bits, sized and signed.
         if (*value >= std::numeric_limits<std::int32_t>::min()
@@ -259,6 +270,7 @@ std::string_view baseName(type_t type) {
 std::optional<eir::UnitInterface::Kind> kindOf(type_t type) {
     using Kind = eir::UnitInterface::Kind;
     if (type_is_integer(type)) return Kind::Integer;
+    if (type_is_real(type) && !type_is_array(type)) return Kind::Real;
     const auto scalar = [](type_t of) -> std::optional<Kind> {
         const std::string_view name = baseName(of);
         if (name == "STD.STANDARD.BIT" || name == "STD.STANDARD.BOOLEAN") return Kind::Bit;
@@ -1244,6 +1256,12 @@ private:
             if (value) bound.bind(generic, *value);
             return value.has_value();
         }
+        if (type_is_real(type) && !type_is_array(type)) {
+            // Folded as the bits of the double, as the folder holds a real.
+            const std::optional<double> value = realOf(text);
+            if (value) bound.bind(generic, std::bit_cast<std::int64_t>(*value));
+            return value.has_value();
+        }
         if (type_is_enum(type)) {
             const std::optional<std::string> bits = bitsLiteral(text);
             if (!bits || bits->size() != 1) return false;
@@ -1280,13 +1298,15 @@ private:
         if (!layout) {
             const std::optional<Folder::Range> index =
                 Folder().rangeOf(type_index(type_base_recur(type), 0));
-            if (!index || positions.empty()) return false;
+            if (!index) return false;
             const auto last = static_cast<std::int64_t>(positions.size()) - 1;
             const Folder::Range bounds{.left = index->left,
                                        .right = index->ascending ? index->left + last
                                                                  : index->left - last,
                                        .ascending = index->ascending};
             bound.bindBounds(generic, bounds);
+            // A null one, `""` most often, holds nothing, and its bounds are all it has.
+            if (positions.empty()) return true;
             layout = arrayLayout(bounds, element, bound);
         }
         if (!layout || !layout->isArray()
