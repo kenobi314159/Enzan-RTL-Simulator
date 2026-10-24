@@ -3041,7 +3041,10 @@ Jobs on every branch and pull request:
 - Sanitiser build (ASan+UBSan) over unit and golden suites.
 - `clang-format` check.
 - cocotb's regression suite (14.6) and sv-tests (14.4), in the job that already builds the
-  SystemVerilog frontend, since a second job would build slang a second time to run them.
+  SystemVerilog frontend, since a second job would build slang a second time to run them; and
+  there, the one build with both frontends, NVC's `mixed` tests and the mixed golden cases.
+- VESTs, GHDL's and NVC's suites and cocotb's with VHDL toplevels (14.4, 14.6), in the build
+  matrix's GCC Release job.
 - The design regression of 14.5 for the designs that run quickly: `aes` and `common_cells`.
 
 Each job builds a configuration chosen so that code compiled only with a component, or only
@@ -3054,7 +3057,8 @@ compiled only without them is compiled nowhere else.
 Jobs on `main` only:
 
 - `clang-tidy`, which analyses every source file.
-- The design regression for `taxi`, whose cocotb testbenches take minutes.
+- The design regression for `taxi`, whose cocotb testbenches take minutes, and for NEORV32,
+  under its VHDL testbench and the Verilog one (14.5).
 
 There is no scheduled job. A nightly run would be a useful addition once there is somewhere to
 publish its results: conformance pass rates over time, the benchmark series of 15.3, and the
@@ -3398,9 +3402,9 @@ module stating no time scale takes `--timescale`'s unit, or picoseconds.
 slang and VHDL through the NVC child into one `eir::Design`. An instance of the other language's
 unit names a placeholder and an `eir::UnitRequest`, which the other frontend answers, slang through
 a module instantiating the one asked for and the adapter by translating the entity for the values;
-the session links the two by port name. A design of both is not stored in a library yet. VHDL goes
-into Enzan's libraries as SystemVerilog does, `--out-lib` and `--in-lib` (8.2), and a design may
-draw on several VHDL libraries at once, not only the one `--work` names, since a mixed design is
+the session links the two by port name. A design of both is not stored in a library yet, nor
+given `-G` overrides. VHDL goes into Enzan's libraries as SystemVerilog does, `--out-lib` and
+`--in-lib` (8.2), and a design may draw on several VHDL libraries at once, not only the one `--work` names, since a mixed design is
 usually built as a testbench in one library and its DUT in another. Both are also what the GHDL suite's multi-library tests and cocotb's VHDL designs in
 their own libraries need (14.4, 14.6).
 
@@ -3413,8 +3417,9 @@ their own libraries need (14.4, 14.6).
   a `config`, which Enzan does not read.
 - *VHDL instantiating a SystemVerilog module.* A component with no VHDL entity to bind is
   bound to the module of its name (the default binding of IEEE 1076 section 7.3.3 extended
-  to the other language, as commercial tools extend it), and `entity work.m` names a module
-  the same way; the component's generics are the module's parameter overrides.
+  to the other language, as commercial tools extend it); the component's generics are the
+  module's parameter overrides. `entity work.m` does not name a module: NVC's analysis looks
+  for an entity of that name and finds none.
 - *Specialisation across the boundary.* VHDL generics are folded by the adapter (5.2) and
   SystemVerilog parameters by slang, so each side's instance asks the other's frontend for
   the specialisation its values make. The session alternates between the frontends until
@@ -3461,18 +3466,18 @@ with `--vpi` or `--vhpi`, and the other's is named in `GPI_EXTRA`, which `Makefi
 (9.7).
 
 **Reference simulation.** No free simulator takes SystemVerilog and VHDL together. NVC
-simulates Verilog with VHDL, but only its analysis is built here, and CI runs no NVC: its own
-`mixed` regression tests check themselves and run under Enzan alone (14.4), and a mixed testbench
-written for Enzan is run under a locally built NVC before it is committed, where NVC can run it
-(14.5). Results are
-checked by splitting: the same design with the boundary moved — the DUT in one language driven
-by a testbench in the other, against the DUT in its own language's testbench under iverilog or
-GHDL — matches transcript for transcript, the boundary's delta aside.
+simulates Verilog beneath VHDL, not VHDL beneath Verilog, and only its analysis is built here, so
+CI runs no NVC: its own `mixed` regression tests check themselves and run under Enzan alone
+(14.4), and a mixed testbench written for Enzan is run under a locally built NVC before it is
+committed, where NVC can run it (14.5). Results are checked by splitting: the same design with
+the boundary moved — the DUT in one language driven by a testbench in the other, against the DUT
+in its own language's testbench under iverilog or GHDL — matches transcript for transcript, the
+boundary's delta aside.
 
 The exit designs need no program compiled for them, for the reason M5 gives:
 
-- **NEORV32** in a SystemVerilog testbench that drives it as its VHDL one does and checks
-  its UART output, against the VHDL testbench's run under GHDL (14.5).
+- **NEORV32** in a testbench in Verilog that drives it as its VHDL one does, its reports and
+  its CPU trace and UART logs against the VHDL testbench's run under GHDL (14.5).
 - **An M5 SystemVerilog design in a VHDL testbench**: secworks' `aes` core, its test vectors
   driven from VHDL, against its own testbench under iverilog.
 - **cocotb's mixed-language test cases**, and its VHDL cases whose designs sit in libraries
@@ -3519,7 +3524,7 @@ parameters (8.1), since VUnit hands each test its `runner_cfg` as one.
 | The predefined and foreign subprograms NVC's runtime resolved are a larger body of work than estimated | High — inflates M6 | Enumerate the set during the M6 spike by walking the analysed tree, before the milestone is planned (5.2) |
 | VHDL generic and subtype elaboration must be reimplemented rather than reused from NVC | Medium — inflates M6 | Sized by the M6 spike, which also decides whether generics are folded by the adapter or by elaboration (5.2); the tree boundary is reconsidered if it proves worse than the alternative (5.2) |
 | A defect inherited from NVC's frontend is invisible to differential testing against NVC | High — silent wrong results | GHDL is the primary VHDL reference and both conformance suites are run (14.3, 14.4) |
-| Mixed-language delta semantics differ from commercial tools | High — silent wrong results | Specify explicitly (3.5); golden tests against references before declaring it working |
+| Mixed-language delta semantics differ from commercial tools | High — silent wrong results | Specify explicitly (3.5) and document it (`docs/mixed-language.md`); golden tests against references before declaring it working, the design split at the boundary since no free simulator runs both (M7) |
 | Event-driven interpretation misses the performance target | Medium | Bytecode VM from the start; JIT-ready EIR; continuous benchmarking from M1 |
 | Waveform memory exhaustion on large designs | Medium | Selective capture and a memory budget with disk spill (7.1) |
 | Waveform rendering does not scale when zoomed out | Medium | Pixel-bounded rendering with downsampling (10.3), specified before implementation |
