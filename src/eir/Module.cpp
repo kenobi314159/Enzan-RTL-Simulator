@@ -196,6 +196,10 @@ std::uint32_t ModuleDefinition::addEnum(EnumDefinition definition) {
     return index;
 }
 
+bool isIntroducedName(std::string_view objectName) noexcept {
+    return objectName.find('$') != std::string_view::npos;
+}
+
 std::vector<ArrayDimension> declaredDimensions(const ModuleDefinition& definition,
                                                const Object& object) {
     if (object.holdsNothing) return {};

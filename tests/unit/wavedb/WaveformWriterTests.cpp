@@ -265,6 +265,35 @@ Design wideDesign() {
     return design;
 }
 
+/// hierarchicalDesign's, with the parent's end of the port the storage a frontend makes for a
+/// port connected to an expression, named with a `$`, and beside it a made-up object that no
+/// name the reader wrote reaches.
+Design introducedDesign() {
+    ModuleDefinition child;
+    child.name = "child";
+    child.sourceName = "child";
+    child.addObject(Object{.name = "in", .type = Type::bits(4, false, true)});
+    child.ports.push_back(enzan::eir::Port{
+        .name = "in", .direction = enzan::eir::PortDirection::Input, .objectIndex = 0});
+
+    ModuleDefinition parent;
+    parent.name = "tb";
+    parent.sourceName = "tb";
+    parent.addObject(Object{.name = "u_dut$in", .type = Type::bits(4, false, true)});
+    parent.addObject(Object{.name = "scratch$1", .type = Type::logic()});
+    parent.addObject(Object{.name = "clk", .type = Type::logic()});
+    enzan::eir::Instance instance;
+    instance.name = "u_dut";
+    instance.definitionName = "child";
+    instance.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0});
+    parent.instances.push_back(std::move(instance));
+
+    Design design;
+    design.addModule(std::move(child));
+    design.addModule(std::move(parent));
+    return design;
+}
+
 // ---------------------------------------------------------------------------
 // Opening
 // ---------------------------------------------------------------------------
@@ -647,6 +676,22 @@ TEST_F(WaveformWriterTest, ALimitOfZeroRecordsAnyWidth) {
     ASSERT_TRUE(opened());
     EXPECT_NE(writer->recordIndexOf(signalIndex("/tb/wider")), RecordingWriter::NotRecorded);
     EXPECT_TRUE(writer->tooWide().empty());
+}
+
+TEST_F(WaveformWriterTest, ANameAFrontendMadeUpIsNotRecorded) {
+    // The storage of a port connected to an expression is recorded under the port's own name,
+    // which the reader wrote, and not under the one the frontend made up for it in the parent.
+    build(introducedDesign(), "tb");
+    ASSERT_TRUE(opened());
+
+    EXPECT_EQ(countOf("declare:u_dut$in"), 0U);
+    EXPECT_EQ(countOf("declare:in@"), 1U);
+    EXPECT_NE(writer->recordIndexOf(signalIndex("/tb/u_dut$in")), RecordingWriter::NotRecorded);
+
+    // Storage with no name of the reader's at all is not recorded.
+    EXPECT_EQ(countOf("declare:scratch$1"), 0U);
+    EXPECT_EQ(writer->recordIndexOf(signalIndex("/tb/scratch$1")), RecordingWriter::NotRecorded);
+    EXPECT_EQ(writer->recordedSignals(), 2U) << "clk and the port";
 }
 
 } // namespace

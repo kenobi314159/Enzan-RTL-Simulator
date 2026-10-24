@@ -498,6 +498,19 @@ struct ModuleDefinition {
     std::uint32_t addEnum(EnumDefinition definition);
 };
 
+/// True for the name of an object a frontend introduced rather than the source declared: the
+/// storage of a port connected to an expression, a hierarchical reference's name here for
+/// another instance's object, the halves of a VHDL inout. A frontend names each with a `$`, which
+/// an identifier the user wrote almost never holds, so that it is not taken for one. A
+/// SystemVerilog identifier may hold a `$` all the same, and one that does is taken for made up:
+/// the price of a rule nothing needs to be told about.
+///
+/// The one rule for it, since nothing that shows the design to its reader shows one: VPI and
+/// VHPI (DESIGN_GUIDE.md section 9.2), a waveform (section 7.1) and the GUI's lists. Such an object
+/// is storage the simulation needs and the reader never wrote, and its value is always also under
+/// a name they did write, the port's or the signal referred to.
+[[nodiscard]] bool isIntroducedName(std::string_view objectName) noexcept;
+
 /// Every dimension `object` is declared with, outermost first, as its source counts them: a
 /// SystemVerilog object's unpacked dimensions and then its packed ones, a VHDL object's arrays'
 /// down to an element that is no array, a scalar or a record. Empty for an object that is no

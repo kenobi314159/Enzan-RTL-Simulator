@@ -3,6 +3,7 @@
 #include "wavedb/WaveformWriter.h"
 
 #include "eir/BitOps.h"
+#include "eir/Module.h"
 
 #include "elab/ElaboratedDesign.h"
 
@@ -119,8 +120,18 @@ void WaveformWriter::selectSignals() {
     recordIndex.assign(designImage->signals().size(), NotRecorded);
     leftOutForWidth.clear();
 
+    // A signal is recorded under the names the reader wrote, and one that has none, being only
+    // storage a frontend introduced, is not recorded at all (eir::isIntroducedName). One pass over
+    // every name rather than a search per signal, which would be quadratic in the design.
+    std::vector<bool> named(designImage->signals().size(), false);
+    for (const auto& [path, slotIndex] : designImage->elaboratedDesign().namesByPath()) {
+        if (slotIndex < named.size() && !eir::isIntroducedName(leafOf(path)))
+            named[slotIndex] = true;
+    }
+
     for (std::uint32_t signalIndex = 0; signalIndex < designImage->signals().size();
          ++signalIndex) {
+        if (!named[signalIndex]) continue;
         if (!isRecorded(designImage->signals()[signalIndex].path)) continue;
 
         // A file records no memory, as IEEE 1364 section 18 leaves memories out of a VCD.
@@ -152,10 +163,12 @@ void WaveformWriter::declareHierarchy() {
 
     // Every name a recorded signal has, grouped by the scope it appears in. A collapsed port has
     // two names for one slot and both are declared, because both are real and a viewer that shows
-    // a DUT's port only under its parent's name is confusing.
+    // a DUT's port only under its parent's name is confusing. A name a frontend made up is no
+    // name of the reader's, and is left out.
     std::map<std::string, std::vector<Entry>, std::less<>> byScope;
     for (const std::uint32_t signalIndex : recorded) {
         for (const std::string& name : designImage->elaboratedDesign().slotNames(signalIndex)) {
+            if (eir::isIntroducedName(leafOf(name))) continue;
             byScope[std::string(scopeOf(name))].push_back(
                 Entry{.signalIndex = signalIndex, .leafName = std::string(leafOf(name))});
         }

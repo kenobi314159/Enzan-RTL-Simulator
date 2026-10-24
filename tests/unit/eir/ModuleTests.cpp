@@ -220,6 +220,15 @@ TEST(DeclaredDimensions, AVhdlArrayIsItsTypesDimensionsDividingTheBitsItShowsAs)
               (Dimensions{ArrayDimension{.left = 2, .right = 0}}));
 }
 
+TEST(IntroducedName, IsOneAFrontendMadeUp) {
+    EXPECT_TRUE(enzan::eir::isIntroducedName("cntr_i$count")) << "a port's connection";
+    EXPECT_TRUE(enzan::eir::isIntroducedName("cntr_i$count$1"));
+    EXPECT_TRUE(enzan::eir::isIntroducedName("ref$dut/q")) << "a hierarchical reference";
+    EXPECT_TRUE(enzan::eir::isIntroducedName("u$port$driving")) << "half of a VHDL inout";
+    EXPECT_FALSE(enzan::eir::isIntroducedName("count"));
+    EXPECT_FALSE(enzan::eir::isIntroducedName("cntr_lin_gen[0].count")) << "hoisted from a block";
+}
+
 TEST(DeclaredDimensions, DimensionsThatDoNotDivideTheBitsAreNone) {
     const ModuleDefinition definition;
     const Object odd{.name = "odd",

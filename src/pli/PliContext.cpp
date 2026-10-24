@@ -359,7 +359,7 @@ void PliContext::buildScopes() {
         for (std::uint32_t objectIndex = 0; objectIndex < definition.objects.size();
              ++objectIndex) {
             const eir::Object& object = definition.objects[objectIndex];
-            if (object.name.find('$') != std::string::npos) continue;
+            if (eir::isIntroducedName(object.name)) continue;
             if (object.vhdlType != eir::VhdlType::None)
                 scopes[scopeFor(scopeIndex, object.name)].vhdlObjects.push_back(objectIndex);
 

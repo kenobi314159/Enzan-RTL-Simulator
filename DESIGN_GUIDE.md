@@ -1250,6 +1250,13 @@ not to justify threading the kernel now.
   replaying from the start.
 - **A configurable memory budget**, with spill to disk when exceeded rather than
   unbounded growth.
+- **Only the names the reader wrote.** A frontend introduces objects of its own — the storage
+  of a port connected to an expression, a hierarchical reference's name here for another
+  instance's object, the halves of a VHDL inout — and names each with a `$` (9.2). A waveform
+  declares none of those names, and records a signal under the names the source gave it: the
+  storage behind `.count(count_lin[I])` is the counter's own `count`, and is found there.
+  Storage that no written name reaches is not recorded at all. A name made up for the
+  simulation's sake is a line in the window the reader cannot place and never asked for.
 - **A width limit.** A change is recorded as the signal's whole value however few of its
   bits moved, so a memory written a word at a time costs its whole width at every write. No
   signal wider than a limit is recorded, 65536 bits unless `--wave-max-bits` says otherwise
@@ -1834,7 +1841,8 @@ from the top, as in `tb.u_dut.count`.
 
 **Objects a frontend introduced are not visible.** A port connected to an expression becomes
 an extra object and a continuous assignment, named with a `$` so that it cannot collide with
-anything the user wrote, and VPI keeps it out of the user's namespace for the same reason.
+anything the user wrote, and VPI keeps it out of the user's namespace for the same reason, as a
+waveform does (7.1): one rule, `eir::isIntroducedName`, serves both.
 
 **One storage may have several names.** A collapsed port is one slot reachable as the child's
 port and as the parent's signal; both names resolve, and a value-change callback on either
