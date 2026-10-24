@@ -9,13 +9,11 @@ The name is Japanese and carries two readings: *distant peaks* (遠山), for the
 mountain-like horizon of a screen full of waveforms, and *calculation* (演算),
 for the computational work the simulator performs.
 
-**Status: milestone M4 complete.** Enzan simulates a subset of SystemVerilog, writes VCD and
-FST waveforms, comes with an interactive graphical debugging environment, and runs cocotb
-testbenches through VPI. A parameterised
-counter, a synchronous FIFO, and a packet router
-three levels deep that pushes four hundred and eighty transfers through three channel instances
-all run, self-check, and agree with Icarus Verilog. See [what works
-today](#what-works-today) and the roadmap below.
+**Status: milestone M7 complete.** Enzan simulates SystemVerilog and VHDL, each alone or both in
+one design, writes VCD and FST waveforms, comes with an interactive graphical debugging
+environment, and runs cocotb testbenches through VPI and VHPI. The NEORV32 RISC-V processor runs
+its own VHDL testbench, and the same testbench rewritten in Verilog, with GHDL's results; secworks'
+AES core, driven from a VHDL testbench, prints what its own testbench prints under Icarus Verilog. See [what works today](#what-works-today) and the roadmap below.
 
 ## Building
 
@@ -73,7 +71,7 @@ install for your distribution rather than with a link error.
 Tcl is needed only for the GUI, whose theme is a Tcl script and whose signal lists are read
 with Tcl's parser.
 
-The VHDL frontend, which is arriving with milestone M6, is built on
+The VHDL frontend is built on
 [NVC](https://github.com/nickg/nvc), which is a git submodule. Clone with `--recursive`, or fetch
 it before configuring:
 
@@ -198,13 +196,14 @@ make SIM=enzan COCOTB_MAKEFILES_DIR=$PWD/build/cocotb-makefiles
 
 run in the directory of an ordinary cocotb testbench, with `TOPLEVEL_LANG=vhdl` for a VHDL
 toplevel, which cocotb reaches through VHPI (`--vhpi`, in a build with the VHDL frontend).
-`ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`. Delays inside the design are counted in the unit
-`COCOTB_HDL_TIMEPRECISION` names, because Enzan does not read `` `timescale `` yet; a testbench
-that drives every event from Python, as most do, does not notice.
+`ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`. The run counts
+time in the unit `COCOTB_HDL_TIMEPRECISION` names, which is also the unit of a module that states
+no `` `timescale ``.
 
 cocotb's own regression suite runs in CI, and `tests/conformance/cocotb/run-suite.sh` runs it
-locally, `run-suite.sh <enzan> <work> vhdl` with VHDL toplevels. Its pass rate is low until M5: most of its cases share one design that uses unpacked
-arrays, `real`, `string` and structs, which Enzan does not analyse yet.
+locally, `run-suite.sh <enzan> <work> vhdl` with VHDL toplevels. With a Verilog toplevel most of
+its cases share one design with `real` and `string` ports, which the SystemVerilog frontend does
+not have yet; with a VHDL toplevel nearly all of them pass.
 
 ## What works today
 
@@ -226,19 +225,20 @@ arrays, `real`, `string` and structs, which Enzan does not analyse yet.
 | Wave window: parameters and localparams as constant rows | yes, listed in Objects beside the signals |
 | Attaching a local GUI to a kernel running elsewhere | yes, over a forwarded socket |
 | `force`, `deposit` and `release` from the Objects window | yes |
-| `casez`, `casex`, unpacked arrays, `real`, `string`, tasks, functions | not yet — reported by name |
-| Driver resolution, multiple drivers per signal | not yet — M5 |
+| `casez`, `casex`, unpacked arrays, tasks, functions | yes |
+| `real` and `string` variables and ports | not yet — reported by name |
+| Driver resolution, multiple drivers per signal | yes — a net resolves its drivers by its type |
 | VPI, and cocotb testbenches through it | yes — modules, generate blocks, nets, variables, bits, parameters; every callback cocotb uses |
 | VHPI, and cocotb testbenches of a VHDL toplevel through it | yes — regions, signals, ports, generics, their elements and fields, their VHDL types; every callback cocotb uses |
-| `` `timescale `` and `timeunit` | not yet — every delay is counted in the `--timescale` unit |
-| VHDL: entities, architectures, processes, scalar and real types, arrays, records, `wait`, `assert`, `report` | yes — M6 is under way |
+| `` `timescale `` and `timeunit` | yes — each module's delays and `$time` in its own unit |
+| VHDL: entities, architectures, processes, scalar and real types, arrays, records, `wait`, `assert`, `report` | yes |
 | VHDL: generics, generate statements, components bound by default, ports associated in parts | yes |
 | VHDL: functions and procedures, `std_logic_1164`, `numeric_std`, `math_real`, `rising_edge` | yes, translated from the IEEE packages' own bodies |
 | VHDL: resolved signals with several drivers, `std.textio` and its files | yes; textio runs natively over a heap of lines |
-| NEORV32, through its own testbench's on-chip debugger sequence | yes — its reports, CPU traces and UART logs are GHDL's |
+| NEORV32, through its own testbench's on-chip debugger sequence | yes — its reports, CPU traces and UART logs are GHDL's, under that testbench and under the same one in Verilog |
 | VHDL: access types beyond `line`, protected types, configurations | not yet — reported by name |
-| A design mixing VHDL and SystemVerilog | not yet — M7 |
-| The Processes and Source windows | not yet — M6 |
+| A design mixing VHDL and SystemVerilog | yes — either instantiating the other, at any depth; see [`docs/mixed-language.md`](docs/mixed-language.md) |
+| The Processes and Source windows | not yet |
 
 Anything unsupported is reported with a source location and the construct named, never
 mistranslated: a partially translated design would simulate and give the wrong answer, which is
@@ -351,17 +351,15 @@ Commit messages carry a category prefix; see section 17.1 of the design guide.
 
 ## Status and roadmap
 
-Development proceeds in gated milestones. M0, the build and test foundation, is complete; so is
-M1 — a SystemVerilog subset simulating to a VCD or FST waveform, with a counter and a FIFO that
-self-check and agree with a reference simulator, and cycles/sec recorded per commit — and so is
-M2, the interactive GUI. Broader language coverage is M5's job rather than a gap in any of them.
+Development proceeds in gated milestones, and M0 to M7 are complete: the build and test
+foundation (M0); a SystemVerilog subset simulating to a VCD or FST waveform (M1); the interactive
+GUI (M2), with the wave window's mouse and keyboard model (M2.1) and signal list files (M2.2); the
+command line, file lists and analysis libraries (M3), with analysis costing one translation per
+parameterisation (M3.1); VPI and cocotb (M4); four-state completion and language breadth (M5);
+VHDL via NVC (M6); and mixed-language simulation (M7).
 
-M2.1, the wave window's mouse and keyboard model, followed, then M3, the command line, file lists
-and analysis libraries, and M4, VPI and cocotb.
-
-Next is M5 four-state completion and language breadth, M6 VHDL via NVC, and M7 mixed-language
-simulation. See [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the
-full roadmap and the exit criteria of each milestone.
+Next is M8, performance. See [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full
+roadmap and the exit criteria of each milestone.
 
 ## License
 
