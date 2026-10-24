@@ -366,6 +366,11 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         }
         out.u32(object.elementWidth);
         out.boolean(object.elementSigned);
+        out.u32(static_cast<std::uint32_t>(object.packedDimensions.size()));
+        for (const ArrayDimension& dimension : object.packedDimensions) {
+            out.u32(static_cast<std::uint32_t>(dimension.left));
+            out.u32(static_cast<std::uint32_t>(dimension.right));
+        }
         out.boolean(object.subroutineStatic);
         out.boolean(object.holdsNothing);
         out.u32(object.vhdlType);
@@ -692,6 +697,11 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         }
         object.elementWidth = in.u32();
         object.elementSigned = in.boolean();
+        object.packedDimensions.resize(in.count());
+        for (ArrayDimension& dimension : object.packedDimensions) {
+            dimension.left = static_cast<std::int32_t>(in.u32());
+            dimension.right = static_cast<std::int32_t>(in.u32());
+        }
         object.subroutineStatic = in.boolean();
         object.holdsNothing = in.boolean();
         object.vhdlType = in.u32();

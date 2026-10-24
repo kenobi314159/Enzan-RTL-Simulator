@@ -763,6 +763,57 @@ TEST_F(FrontendTest, AnUnpackedArrayIsStoredFlatAndKeepsItsDimensions) {
                                            ArrayDimension{.left = 0, .right = 3}}));
 }
 
+TEST_F(FrontendTest, APackedArrayKeepsItsDimensionsDownToItsElement) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            typedef logic [0:3] nibble_t;
+            typedef struct packed { logic [3:0] a; logic [3:0] b; } pair_t;
+            logic [5:0][7:0] lanes;
+            nibble_t [1:2] nibbles;
+            logic [7:0] bytes [0:3][1:0];
+            int words [2];
+            pair_t [2:0] pairs;
+            logic flag;
+            logic [7:0] plain;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+
+    using enzan::eir::ArrayDimension;
+    const auto object = [found](std::string_view name) -> const enzan::eir::Object& {
+        return found->objects[require(found->findObject(name))];
+    };
+
+    EXPECT_EQ(object("lanes").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 5, .right = 0},
+                                           ArrayDimension{.left = 7, .right = 0}}));
+    EXPECT_TRUE(object("lanes").unpackedDimensions.empty());
+
+    // A typedef is looked through, so the element's own range is a dimension like the others.
+    EXPECT_EQ(object("nibbles").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 1, .right = 2},
+                                           ArrayDimension{.left = 0, .right = 3}}));
+
+    // An unpacked array's packed dimensions are its element's.
+    EXPECT_EQ(object("bytes").unpackedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 0, .right = 3},
+                                           ArrayDimension{.left = 1, .right = 0}}));
+    EXPECT_EQ(object("bytes").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 7, .right = 0}}));
+
+    // An `int` or a packed struct is an element with no dimensions of its own.
+    EXPECT_TRUE(object("words").packedDimensions.empty());
+    EXPECT_EQ(object("words").elementWidth, 32U);
+    EXPECT_EQ(object("pairs").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 2, .right = 0}}));
+
+    EXPECT_TRUE(object("flag").packedDimensions.empty());
+    EXPECT_EQ(object("plain").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 7, .right = 0}}));
+}
+
 TEST_F(FrontendTest, AnElementOrMemberWritesItsOwnBitsOfTheFlatStorage) {
     // The left element is highest: element 0 of `[0:3]` is bits [31:24], and `[3:0]` puts
     // element 3 there. A struct's first member is highest too.

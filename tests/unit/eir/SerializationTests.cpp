@@ -126,6 +126,7 @@ ModuleDefinition richModule(BufferId buffer) {
                                 .location = SourceLocation(buffer, 11),
                                 .unpackedDimensions = {ArrayDimension{.left = 0, .right = 3},
                                                        ArrayDimension{.left = 7, .right = -1}},
+                                .packedDimensions = {ArrayDimension{.left = -2, .right = 5}},
                                 .elementWidth = 1,
                                 .elementSigned = true,
                                 .subroutineStatic = true});
@@ -282,6 +283,9 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     EXPECT_EQ(definition.objects[0].unpackedDimensions,
               (std::vector<ArrayDimension>{ArrayDimension{.left = 0, .right = 3},
                                            ArrayDimension{.left = 7, .right = -1}}));
+    EXPECT_EQ(definition.objects[0].packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = -2, .right = 5}}));
+    EXPECT_TRUE(definition.objects[1].packedDimensions.empty());
     EXPECT_EQ(definition.objects[0].elementWidth, 1U);
     EXPECT_TRUE(definition.objects[0].elementSigned);
     EXPECT_TRUE(definition.objects[0].subroutineStatic);

@@ -280,6 +280,14 @@ struct Object {
     /// otherwise. Its type is then the flat vector of all its elements.
     std::vector<ArrayDimension> unpackedDimensions;
 
+    /// A SystemVerilog packed array's dimensions, outermost first, down to the element they
+    /// are dimensions of: a bit, or a vector that is no array, an `int` or a packed struct. Of
+    /// one element when the object is also an unpacked array. Empty when it is no packed array.
+    ///
+    /// Like `unpackedDimensions`, only for what reads the object from outside: a waveform shows
+    /// `logic [3:0][7:0]` as four bytes rather than as 32 bits (DESIGN_GUIDE.md section 10.7).
+    std::vector<ArrayDimension> packedDimensions;
+
     /// For a VHDL object, its type, an index into its definition's `vhdlTypes`, or
     /// VhdlType::None.
     std::uint32_t vhdlType = VhdlType::None;

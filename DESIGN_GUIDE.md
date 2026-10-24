@@ -679,8 +679,10 @@ would be. An element, a field or a select of one is a window of those bits at an
 every rule about bits — drivers per bit range (3.7), part stores, change detection — applies
 to it unchanged, and an element is read in place rather than by copying the array. What the
 flat vector loses, the declared dimensions, is kept beside it for VPI and the waveform
-database, which present an array as an array. A memory is not recorded in a waveform, as a VCD
-leaves memories out.
+database, which present an array as an array. A packed array's dimensions are kept the same
+way, down to the element they are dimensions of, so that a wave window shows `logic
+[3:0][7:0]` as four bytes rather than as 32 bits (10.7). A memory is not recorded in a
+waveform, as a VCD leaves memories out.
 
 A driver occupies the arena only where 3.7 gives it a value of its own: on a signal
 with a bit driven more than once, each of its drivers holds both planes over its

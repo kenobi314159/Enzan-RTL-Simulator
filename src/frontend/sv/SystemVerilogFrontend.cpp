@@ -755,20 +755,27 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     object.enumIndex = enumFor(symbol.getType());
     object.subroutineStatic = subroutine != nullptr;
 
-    // An unpacked array keeps its declared dimensions, outermost first, for what reads it as an
-    // array rather than as the bits it is stored as: VPI, and the waveform database.
-    for (const ast::Type* level = &symbol.getType().getCanonicalType();
-         level->kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType;) {
+    // An array keeps its declared dimensions, outermost first, for what reads it as an array
+    // rather than as the bits it is stored as: VPI, and the waveform database. The unpacked
+    // ones come first, then the packed ones of their element.
+    const ast::Type* level = &symbol.getType().getCanonicalType();
+    while (level->kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
         const auto& array = level->as<ast::FixedSizeUnpackedArrayType>();
         object.unpackedDimensions.push_back(
             eir::ArrayDimension{.left = array.range.left, .right = array.range.right});
         level = &array.elementType.getCanonicalType();
-        if (level->kind != slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
-            if (const std::optional<eir::Type> element = convertType(*level)) {
-                object.elementWidth = element->bitWidth();
-                object.elementSigned = element->isSigned();
-            }
+    }
+    if (!object.unpackedDimensions.empty()) {
+        if (const std::optional<eir::Type> element = convertType(*level)) {
+            object.elementWidth = element->bitWidth();
+            object.elementSigned = element->isSigned();
         }
+    }
+    while (level->kind == slang::ast::SymbolKind::PackedArrayType) {
+        const auto& array = level->as<ast::PackedArrayType>();
+        object.packedDimensions.push_back(
+            eir::ArrayDimension{.left = array.range.left, .right = array.range.right});
+        level = &array.elementType.getCanonicalType();
     }
 
     if (symbol.kind == slang::ast::SymbolKind::Net) {
