@@ -543,12 +543,11 @@ private:
         }
 
         if (entry.expand) {
-            // What unpacking makes, made the same way: each bit takes the radix, the highlight
-            // and the name the signal has by then.
-            const auto [high, low] = WaveformModel::bitRange(pending.row);
-            for (std::uint32_t bit = high + 1; bit-- > low;) {
+            // What unpacking makes, made the same way: each element or bit takes the radix, the
+            // highlight and the name the signal has by then.
+            for (WaveRow& made : WaveformModel::unpackedRows(pending.row)) {
                 WaveformModel::PendingRow child;
-                child.row = WaveformModel::bitOf(pending.row, bit);
+                child.row = std::move(made);
                 pending.children.push_back(std::move(child));
             }
         }

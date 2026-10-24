@@ -21,10 +21,12 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QLineEdit>
+#include <QStringList>
 #include <QTableView>
 #include <QTreeView>
 
 #include <memory>
+#include <vector>
 
 namespace {
 
@@ -359,6 +361,122 @@ TEST_F(WaveRowTest, MovingARowDoesNotResetTheModel) {
 
     EXPECT_EQ(resets, 0);
     EXPECT_EQ(model->row(first)->parent, group);
+}
+
+// ---------------------------------------------------------------------------
+// An array unpacks by its dimensions
+// ---------------------------------------------------------------------------
+
+// The counter holds 40, 0b0010'1000, at 400ns. Given dimensions, as the kernel lists a signal
+// declared as an array, it reads and unpacks as that array.
+
+TEST_F(WaveRowTest, AnArrayReadsAsTheListOfItsElements) {
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 3, .right = 0}};
+    const int array = model->addSignal(nibbles);
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{2}{8}"));
+
+    model->unpack(array);
+    ASSERT_EQ(model->rowCount(model->indexOfRow(array)), 2);
+    const WaveRow* high = model->row(childOf(array, 0));
+    const WaveRow* low = model->row(childOf(array, 1));
+    EXPECT_EQ(high->label, QStringLiteral("count[1]"));
+    EXPECT_EQ(low->label, QStringLiteral("count[0]"));
+    EXPECT_EQ(model->displayedWidth(childOf(array, 0)), 4U);
+    EXPECT_EQ(model->renderValue(childOf(array, 0), 400), QStringLiteral("2"));
+    EXPECT_EQ(model->renderValue(childOf(array, 1), 400), QStringLiteral("8"));
+
+    // Unpacking changes nothing about what the array's own line says.
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{2}{8}"));
+    EXPECT_TRUE(model->childrenReconstituteParent(array));
+}
+
+TEST_F(WaveRowTest, AnElementIsNamedAndUnpackedByTheIndicesItIsDeclaredWith) {
+    // bit [0:1][0:3]: element 0 is the left one, the highest, and bit 0 of it its highest bit.
+    SignalInfo ascending = counter;
+    ascending.dimensions = {{.left = 0, .right = 1}, {.left = 0, .right = 3}};
+    const int array = model->addSignal(ascending);
+    model->unpack(array);
+
+    const int first = childOf(array, 0);
+    EXPECT_EQ(model->row(first)->label, QStringLiteral("count[0]"));
+    EXPECT_EQ(model->renderValue(first, 400), QStringLiteral("2"));
+    ASSERT_TRUE(model->canUnpack(first));
+
+    model->unpack(first);
+    ASSERT_EQ(model->rowCount(model->indexOfRow(first)), 4);
+    QStringList labels;
+    QStringList values;
+    for (int position = 0; position < 4; ++position) {
+        labels << model->row(childOf(first, position))->label;
+        values << model->renderValue(childOf(first, position), 400);
+    }
+    EXPECT_EQ(labels, (QStringList{QStringLiteral("count[0][0]"), QStringLiteral("count[0][1]"),
+                                   QStringLiteral("count[0][2]"), QStringLiteral("count[0][3]")}));
+    EXPECT_EQ(values, (QStringList{QStringLiteral("0"), QStringLiteral("0"), QStringLiteral("1"),
+                                   QStringLiteral("0")}));
+    EXPECT_FALSE(model->canUnpack(childOf(first, 0))) << "a bit has nothing left to unpack";
+
+    // An element taken apart is still the element, and the array still itself.
+    EXPECT_TRUE(model->childrenReconstituteParent(first));
+    EXPECT_TRUE(model->childrenReconstituteParent(array));
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{2}{8}"));
+}
+
+TEST_F(WaveRowTest, AnArrayOfThreeDimensionsNestsItsLists) {
+    SignalInfo cube = counter;
+    cube.dimensions = {{.left = 1, .right = 0}, {.left = 1, .right = 0}, {.left = 1, .right = 0}};
+    const int array = model->addSignal(cube);
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{{0}{2}}{{2}{0}}"));
+
+    model->unpack(array);
+    EXPECT_EQ(model->renderValue(childOf(array, 0), 400), QStringLiteral("{0}{2}"));
+}
+
+TEST_F(WaveRowTest, AVectorDeclaredAscendingUnpacksFromItsLeftIndex) {
+    // logic [0:7]: the bit called 0 is the most significant, so it is the first row.
+    SignalInfo ascending = counter;
+    ascending.dimensions = {{.left = 0, .right = 7}};
+    const int bus = model->addSignal(ascending);
+    EXPECT_EQ(model->renderValue(bus, 400), QStringLiteral("28")) << "a vector is one number";
+
+    model->unpack(bus);
+    EXPECT_EQ(model->row(childOf(bus, 0))->label, QStringLiteral("count[0]"));
+    EXPECT_EQ(model->row(childOf(bus, 2))->label, QStringLiteral("count[2]"));
+    EXPECT_EQ(model->renderValue(childOf(bus, 2), 400), QStringLiteral("1"));
+    EXPECT_EQ(model->renderValue(bus, 400), QStringLiteral("28"));
+}
+
+TEST_F(WaveRowTest, RemovingAnElementLeavesTheListOfTheRest) {
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 3, .right = 0}};
+    const int array = model->addSignal(nibbles);
+    model->unpack(array);
+    model->removeRow(childOf(array, 0));
+
+    EXPECT_FALSE(model->childrenReconstituteParent(array));
+    EXPECT_EQ(model->displayedWidth(array), 4U);
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{8}"));
+}
+
+TEST_F(WaveRowTest, AnArrayCopiesWithItsDimensions) {
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 3, .right = 0}};
+    const int array = model->addSignal(nibbles);
+    model->unpack(array);
+
+    model->copySignalRows({array});
+    const QVector<int> pasted = model->pasteSignalRows(-1, -1);
+    ASSERT_EQ(pasted.size(), 1);
+    EXPECT_EQ(model->row(pasted[0])->dimensions, nibbles.dimensions);
+    EXPECT_EQ(model->renderValue(pasted[0], 400), QStringLiteral("{2}{8}"));
+
+    // Its elements came with their own, and unpack into bits as they did before the copy.
+    const int element = childOf(pasted[0], 1);
+    EXPECT_EQ(model->row(element)->dimensions,
+              (std::vector<enzan::eir::ArrayDimension>{{.left = 3, .right = 0}}));
+    model->unpack(element);
+    EXPECT_EQ(model->rowCount(model->indexOfRow(element)), 4);
 }
 
 // ---------------------------------------------------------------------------

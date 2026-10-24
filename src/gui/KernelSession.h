@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "eir/ArrayDimension.h"
 #include "ipc/Protocol.h"
 #include "ipc/Transport.h"
 #include "runtime/Time.h"

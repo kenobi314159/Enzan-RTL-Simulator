@@ -1257,7 +1257,8 @@ not to justify threading the kernel now.
   out (ENZ7001), naming the first few. A signal missing from a waveform looks exactly like one
   nobody asked for, so leaving one out silently would send the reader looking for a mistake
   of their own. The Objects window says it too, showing such a signal as *too wide to log*
-  rather than *not logged*, because widening the logging scope would not bring it back.
+  rather than *not logged*, because widening the logging scope would not bring it back, and
+  a wave row of one says in its tooltip that its trace begins only where it was added.
 - **Edge navigation.** Given a signal and a time, the next and the previous
   transition. Snapping a cursor to an edge and stepping it from edge to edge
   (10.7) are the two things a reader does most in a wave window, and both have
@@ -2387,9 +2388,20 @@ it would sit beside is how a tool acquires a number nobody reads.
   rows of their own, which then behave like any other row — radix, highlight,
   removal and all. Unpacking is a property of the display and creates no new
   subscription: the kernel streams the signal once however many of its bits are
-  on screen, exactly as it already does for an extracted bit range (10.3). Arrays
-  gain further levels of unpacking later, and the mechanism is built for that now
-  so that it does not have to be built twice.
+  on screen, exactly as it already does for an extracted bit range (10.3).
+
+  **An array unpacks by its dimensions**, outermost first, one level at a time:
+  `logic [63:0][17:0] count` into sixty-four rows of eighteen bits, `count[63]`
+  down to `count[0]`, each of which unpacks into its bits in turn. Packed and
+  unpacked dimensions behave alike in this, and so do a VHDL array's, where an
+  array of arrays and an array of two dimensions are indexed down to the same
+  bits. The dimensions are the ones the source declares (4.3), and the kernel lists
+  each name with its own, since a port collapsed onto its actual may be declared
+  flat where the actual is not. A row is named by the index its source gives it, not
+  by where its bits sit in the flat vector: `logic [0:7] v` unpacks into `v[0]`
+  first, its most significant bit, because that is what `v[0]` means in the code. An
+  element with no dimensions of its own — an `int`, a packed struct, a record —
+  unpacks into its bits.
 - **A row with children shows what its children show, joined together.** One
   rule, and it is doing three jobs. A bus that has been unpacked and had some of
   its bits deleted shows what is left of it, in the order the rows are in. A
@@ -2412,6 +2424,10 @@ it would sit beside is how a tool acquires a number nobody reads.
   it has that shape. The list form also means a group of unlike signals is
   readable rather than being either nonsense or nothing, so no group is refused a
   value for the widths it happens to contain.
+
+  An array reads the same way before it is unpacked as after, as the list of its
+  elements, on its line and in its trace: `count` reads `{00a}{00a}…` whether its
+  rows are open or not, and a vector, whose elements are bits, stays one number.
 
   A multi-bit signal is therefore a group whose children happen to be its own
   bits, and the only thing that distinguishes it is that those children are made

@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "eir/ArrayDimension.h"
 #include "eir/BitVector.h"
 #include "gui/KernelSession.h"
 #include "gui/Theme.h"
@@ -72,8 +73,14 @@ struct WaveRow {
     /// Background slot 1 through `HighlightSlots`, or 0 for the default (section 10.7).
     int highlight = 0;
 
-    /// True once a signal row's bits have been created as children below it.
+    /// True once a signal row's elements, or its bits, have been created as children below it.
     bool unpacked = false;
+
+    /// The dimensions of what the row shows, outermost first, dividing its bits into equal
+    /// elements, the left one highest: a whole signal's as it is declared, an element's those
+    /// below the one it was taken from (DESIGN_GUIDE.md section 10.7). Empty for a row whose bits
+    /// are no array, which unpacks into its bits.
+    std::vector<eir::ArrayDimension> dimensions;
 
     /// A `Parameter` row's value, which is its value at every time. Empty otherwise.
     ///
@@ -157,6 +164,16 @@ public:
     /// The row unpacking `source` makes for bit `bit` of it.
     [[nodiscard]] static WaveRow bitOf(const WaveRow& source, std::uint32_t bit);
 
+    /// The row unpacking an array row makes for its element `position` along its outermost
+    /// dimension, counted from the left element, which is the highest: labelled by the index the
+    /// source declares it at, `count[63]`, and holding the dimensions below.
+    [[nodiscard]] static WaveRow elementOf(const WaveRow& source, std::uint32_t position);
+
+    /// What unpacking `source` makes, first child first: one row per element of an array, or
+    /// one per bit of anything else, most significant first. The one definition of unpacking,
+    /// which the window, a signal list's `-expand` and a saved list's test of it all use.
+    [[nodiscard]] static std::vector<WaveRow> unpackedRows(const WaveRow& source);
+
     // --- editing -----------------------------------------------------------
 
     /// Adds a row for `info`, inside `parentGroup` when it names one. Returns its row number.
@@ -204,12 +221,12 @@ public:
     /// True when a row shows more than one bit and has not been unpacked yet.
     [[nodiscard]] bool canUnpack(int rowId) const;
 
-    /// Creates one child row per bit of `rowId`, most significant first.
+    /// Creates `unpackedRows` of `rowId` as its children: one per element of an array, along
+    /// its outermost dimension, or one per bit of anything else.
     ///
-    /// Unpacking is a property of the display: the bits are rows over the same signal, so the
-    /// kernel still streams it once however many of them are on screen. Arrays gain further
-    /// levels later, which is why this hangs children off a row rather than being a special
-    /// case of the top level.
+    /// Unpacking is a property of the display: the children are rows over the same signal, so
+    /// the kernel still streams it once however many of them are on screen. An element of an
+    /// array of more dimensions unpacks in its turn, down to the bits.
     void unpack(int rowId);
 
     /// Moves rows to `targetGroup` — -1 for the top level — inserting at `position`, or at the
@@ -229,7 +246,8 @@ public:
     /// Bits the row displays: its own, or its children's added up when it shows theirs.
     [[nodiscard]] std::uint32_t displayedWidth(int rowId) const;
 
-    /// True when a row's children are exactly its own bits, all of them, in order.
+    /// True when a row's children are exactly its own bits, all of them, in order: its bits, or
+    /// its elements, which may be unpacked in turn as long as they too are whole.
     ///
     /// The state a bus is in straight after unpacking. Its joined value is then its own value,
     /// so it can be drawn from its own trace instead of by merging every child's — which is
@@ -279,7 +297,8 @@ public:
     /// unpacked bus read as the bus. A row whose children are wider than a bit renders as the
     /// list of them, `{001122}{112233}`, and because that recurses a group of such groups
     /// reads `{{11}{22}}{{22}{33}}` — the shape of the thing rather than a number with the
-    /// boundaries filed off (DESIGN_GUIDE.md section 10.7).
+    /// boundaries filed off (DESIGN_GUIDE.md section 10.7). An array row reads the same way
+    /// whether it is unpacked or not, as the list of its elements.
     [[nodiscard]] QString renderValue(int rowId, runtime::SimTime time) const;
 
     /// The next time after `time` at which anything the row shows changes, or `NoTime`.
