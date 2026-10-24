@@ -628,6 +628,36 @@ TEST_F(ServerFixture, AnObjectIsListedWithTheDimensionsItsNameIsDeclaredWith) {
     EXPECT_EQ(inside.objects[0].dimensions, (Dimensions{ArrayDimension{.left = 31, .right = 0}}));
 }
 
+TEST_F(ServerFixture, AMemoryAndASignalTooWideToRecordStillStreamOnceSubscribed) {
+    // The database leaves the wide one out; the reader put it in the window all the same, and
+    // its trace from then on is all the window can show of it.
+    waveformWidthLimit = 100;
+    rebuild(shapedDesign());
+    connectClient();
+
+    SubscribeMessage subscribe;
+    subscribe.signalIndices = {signalIndex("/tb/memory"), signalIndex("/tb/wide")};
+    request(MessageType::Subscribe, subscribe);
+    received.clear();
+
+    for (const auto& [path, value] :
+         {std::pair{"/tb/memory", "32'h01020304"}, std::pair{"/tb/wide", "200'h5"}}) {
+        DepositMessage deposit;
+        deposit.signalIndex = signalIndex(path);
+        deposit.value = literal(value);
+        request(MessageType::Deposit, deposit);
+    }
+
+    std::vector<std::uint32_t> changed;
+    for (const ValueChangesMessage& batch :
+         expectAll<ValueChangesMessage>(MessageType::ValueChanges)) {
+        for (const enzan::ipc::ValueUpdate& update : batch.updates)
+            changed.push_back(update.signalIndex);
+    }
+    EXPECT_NE(std::ranges::find(changed, signalIndex("/tb/memory")), changed.end());
+    EXPECT_NE(std::ranges::find(changed, signalIndex("/tb/wide")), changed.end());
+}
+
 TEST_F(ServerFixture, WhatTheWindowLeavesOutForItsWidthIsReportedOnce) {
     waveformWidthLimit = 100;
     rebuild(shapedDesign());

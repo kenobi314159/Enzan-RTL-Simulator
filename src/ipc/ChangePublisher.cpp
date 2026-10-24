@@ -9,7 +9,11 @@ namespace enzan::ipc {
 ChangePublisher::ChangePublisher(const runtime::Image& imageToWatch, const runtime::Arena& arena,
                                  runtime::TimeScale timeScaleToUse)
     : WaveformWriter(imageToWatch, arena, timeScaleToUse),
-      subscribed(imageToWatch.signals().size(), false) {}
+      subscribed(imageToWatch.signals().size(), false) {
+    // A signal too wide for the database still streams once it is subscribed: the reader asked
+    // for that one, and its trace from then on is all the window can show of it (section 7.1).
+    setWidthLimit(0);
+}
 
 ChangePublisher::~ChangePublisher() {
     // Every concrete writer's destructor must close; the base class's cannot, because the
