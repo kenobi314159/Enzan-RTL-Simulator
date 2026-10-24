@@ -364,8 +364,8 @@ commercial tools on real designs, this section is what gets updated.
   first delta cycle (IEEE 1076 section 14.7.5.2).
 - A port connection crossing a language boundary is modelled as a zero-delay
   continuous assignment and **consumes one delta cycle**. This MUST be
-  documented in the user manual, because it is observable and will surprise
-  people.
+  documented in the user manual (`docs/mixed-language.md`), because it is
+  observable and will surprise people.
 - Value conversion at the boundary follows the mapping in 3.6.
 
 Mixed-language behaviour MUST be covered by golden tests comparing against a

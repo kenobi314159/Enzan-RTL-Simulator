@@ -344,6 +344,8 @@ Commit messages carry a category prefix; see section 17.1 of the design guide.
   testing strategy and roadmap. Start here.
 - [`docs/third_party.md`](docs/third_party.md) — dependencies, their licenses
   and their pinned revisions.
+- [`docs/mixed-language.md`](docs/mixed-language.md) — simulating a design of
+  both SystemVerilog and VHDL: what crosses between them, and at what cost.
 - `docs/` — human-facing documentation (user manual, tutorials), to be
   derived from the design guide as the project matures.
 
