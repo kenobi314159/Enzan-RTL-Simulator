@@ -196,4 +196,43 @@ std::uint32_t ModuleDefinition::addEnum(EnumDefinition definition) {
     return index;
 }
 
+std::vector<ArrayDimension> declaredDimensions(const ModuleDefinition& definition,
+                                               const Object& object) {
+    if (object.holdsNothing) return {};
+
+    std::vector<ArrayDimension> dimensions;
+    if (object.vhdlType == VhdlType::None) {
+        dimensions = object.unpackedDimensions;
+        dimensions.insert(dimensions.end(), object.packedDimensions.begin(),
+                          object.packedDimensions.end());
+    } else {
+        // An array of arrays is dimensions of the first and then of its element, as an array
+        // of two dimensions is: both are indexed `a(i)(j)` or `a(i, j)` down to the same bits.
+        for (std::uint32_t type = object.vhdlType;
+             type < definition.vhdlTypes.size()
+             && definition.vhdlTypes[type].kind == VhdlType::Kind::Array;
+             type = definition.vhdlTypes[type].element) {
+            for (const VhdlType::Range& range : definition.vhdlTypes[type].ranges) {
+                const bool null =
+                    range.ascending ? range.left > range.right : range.left < range.right;
+                if (null || !std::in_range<std::int32_t>(range.left)
+                    || !std::in_range<std::int32_t>(range.right))
+                    return {};
+                dimensions.push_back(
+                    ArrayDimension{.left = static_cast<std::int32_t>(range.left),
+                                   .right = static_cast<std::int32_t>(range.right)});
+            }
+        }
+    }
+
+    std::uint64_t elements = 1;
+    for (const ArrayDimension& dimension : dimensions) {
+        elements *= dimension.size();
+        if (elements > object.type.bitWidth()) return {};
+    }
+    const std::uint32_t shown = presentedWidth(object.encoding, object.type.bitWidth());
+    if (dimensions.empty() || shown == 0 || shown % elements != 0) return {};
+    return dimensions;
+}
+
 } // namespace enzan::eir

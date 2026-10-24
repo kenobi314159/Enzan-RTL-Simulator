@@ -515,4 +515,19 @@ struct ModuleDefinition {
     std::uint32_t addEnum(EnumDefinition definition);
 };
 
+/// Every dimension `object` is declared with, outermost first, as its source counts them: a
+/// SystemVerilog object's unpacked dimensions and then its packed ones, a VHDL object's arrays'
+/// down to an element that is no array, a scalar or a record. Empty for an object that is no
+/// array.
+///
+/// What a waveform shows the object as (DESIGN_GUIDE.md section 10.7): the dimensions divide
+/// its bits as they are shown, `presentedWidth` of them, into equal elements, the left one
+/// highest, so `std_logic_vector(7 downto 0)` has the one dimension `7 downto 0` and elements
+/// of one bit. They are read from what the frontend already records, the object's dimensions
+/// or its VHDL type, rather than kept a second time. Empty too when they do not divide the bits
+/// evenly or a bound does not fit 32 bits, which a VHDL array of a null range would make: such
+/// an object is shown as the bits it is.
+[[nodiscard]] std::vector<ArrayDimension> declaredDimensions(const ModuleDefinition& definition,
+                                                             const Object& object);
+
 } // namespace enzan::eir
