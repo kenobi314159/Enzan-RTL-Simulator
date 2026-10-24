@@ -1231,8 +1231,11 @@ std::vector<std::string> Session::findSignals(std::string_view pattern) const {
     // Over every *name*, not over the signals: a collapsed port gives one slot two
     // hierarchical names, and `find signals /tb/u_dut/*` asking about the DUT's ports must
     // find them under the DUT even though the storage lives in the parent.
-    for (const auto& [path, slotIndex] : elaborated->namesByPath())
-        if (globMatches(pattern, path)) found.push_back(path);
+    // A name a frontend made up is none the reader wrote (eir::isIntroducedName).
+    for (const auto& [path, slotIndex] : elaborated->namesByPath()) {
+        const std::string_view leaf = std::string_view(path).substr(path.rfind('/') + 1);
+        if (globMatches(pattern, path) && !eir::isIntroducedName(leaf)) found.push_back(path);
+    }
     return found;
 }
 

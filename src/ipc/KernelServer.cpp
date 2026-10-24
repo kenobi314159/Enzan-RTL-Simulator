@@ -656,7 +656,10 @@ void KernelServer::onQueryObjects(const Frame& frame) {
         const std::uint32_t width = publisher->widthOf(signalIndex);
 
         for (const std::string& name : elaborated.slotNames(signalIndex)) {
-            if (scopeOf(name) != request.instancePath) continue;
+            // A name a frontend made up is none the reader wrote (eir::isIntroducedName); the
+            // storage it names is listed under the port's own name in the instance below.
+            if (scopeOf(name) != request.instancePath || eir::isIntroducedName(leafOf(name)))
+                continue;
             message.objects.push_back(
                 ObjectEntry{.signalIndex = signalIndex,
                             .name = std::string(leafOf(name)),
@@ -674,6 +677,7 @@ void KernelServer::onQueryObjects(const Frame& frame) {
     // its own parameters were resolved to.
 
     for (const eir::Parameter& parameter : definition.parameters) {
+        if (parameter.fromGenvar) continue;
         message.parameters.push_back(
             ParameterEntry{.name = parameter.name,
                            .path = request.instancePath + '/' + parameter.name,

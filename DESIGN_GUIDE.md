@@ -2489,6 +2489,15 @@ it would sit beside is how a tool acquires a number nobody reads.
   per parameterisation (4.4), so what each one resolved to is a fact the frontend
   records about that definition and nothing else could reconstruct.
 
+- **What a scope lists is what the reader wrote.** The Objects window, and so every *Add to
+  wave*, leaves out two things a reader did not write. One is the objects a frontend
+  introduced (7.1, 9.2), whose storage it lists under the names the source gave it: the
+  storage behind `.count(count_lin[I])` is the counter's `count`, inside the counter. The
+  other is the copy a generate loop makes of its genvar in each block, `gen[3].I`, whose
+  value is already the index in the block's name; a loop of sixty iterations would bury the
+  signals beside it under sixty of them. VPI still shows a genvar in its block, as other
+  simulators do, since an application may look one up.
+
 - **An unpacked vector is a group in every respect, including what may be put in
   it.** Rows may be dragged out of one and back into it, and rows from elsewhere
   may be dragged in. Half a container — one that lets a bit be taken out but

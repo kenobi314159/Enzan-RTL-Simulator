@@ -342,6 +342,40 @@ Design shapedDesign() {
     return design;
 }
 
+/// A child whose port is connected to an expression, with the storage a frontend makes for that
+/// in the parent, named with a `$`, and a generate loop's genvar as one iteration sees it.
+Design introducedDesign() {
+    ModuleDefinition child;
+    child.name = "child";
+    child.sourceName = "child";
+    child.addObject(Object{.name = "count", .type = Type::bits(4, false, true)});
+    child.ports.push_back(enzan::eir::Port{
+        .name = "count", .direction = enzan::eir::PortDirection::Output, .objectIndex = 0});
+
+    ModuleDefinition top;
+    top.name = "tb";
+    top.sourceName = "tb";
+    top.addObject(Object{.name = "count_lin", .type = Type::bits(8, false, true)});
+    top.addObject(Object{.name = "gen[0].u$count", .type = Type::bits(4, false, true)});
+    top.parameters.push_back(enzan::eir::Parameter{.name = "gen[0].I",
+                                                   .value = enzan::test::literal("32'd0"),
+                                                   .isLocal = true,
+                                                   .fromGenvar = true});
+    top.parameters.push_back(enzan::eir::Parameter{
+        .name = "gen[0].TWICE", .value = enzan::test::literal("32'd0"), .isLocal = true});
+
+    enzan::eir::Instance instance;
+    instance.name = "gen[0].u";
+    instance.definitionName = "child";
+    instance.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 1});
+    top.instances.push_back(std::move(instance));
+
+    Design design;
+    design.addModule(std::move(child));
+    design.addModule(std::move(top));
+    return design;
+}
+
 /// A server with a client attached over a socket pair, and the helpers to talk to it.
 class ServerFixture : public ::testing::Test {
 protected:
@@ -804,6 +838,67 @@ TEST_F(ServerFixture, WhatTheWindowLeavesOutForItsWidthIsReportedOnce) {
     request(MessageType::Restart, restart);
     EXPECT_EQ(warnings(), 1);
 }
+
+TEST_F(ServerFixture, NeitherAMadeUpNameNorAGenvarsCopyIsListed) {
+    rebuild(introducedDesign());
+    connectClient();
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    ASSERT_EQ(objects.objects.size(), 1U);
+    EXPECT_EQ(objects.objects[0].name, "count_lin");
+    ASSERT_EQ(objects.parameters.size(), 1U) << "a localparam of the block is the reader's";
+    EXPECT_EQ(objects.parameters[0].name, "gen[0].TWICE");
+
+    // The storage is the child's port, and is listed, and recorded, as that.
+    query.instancePath = "/tb/gen[0].u";
+    request(MessageType::QueryObjects, query);
+    const auto inside = expect<ObjectsMessage>(MessageType::Objects);
+    ASSERT_EQ(inside.objects.size(), 1U);
+    EXPECT_EQ(inside.objects[0].name, "count");
+    EXPECT_EQ(inside.objects[0].signalIndex, signalIndex("/tb/gen[0].u$count"));
+    EXPECT_EQ(inside.objects[0].recording, enzan::ipc::Recording::Recorded);
+}
+
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+TEST_F(ServerFixture, AGenerateLoopOfCountersListsWhatItsSourceDeclares) {
+    // large_design_00's shape: a counter per iteration, its port connected to an element.
+    rebuildFrom({{"tb.sv", R"(
+        module counter #(parameter int WIDTH = 4) (input logic clk, output logic [WIDTH-1:0] count);
+            always_ff @(posedge clk) count <= count + 1'b1;
+        endmodule
+
+        module tb;
+            logic clk = 1'b0;
+            logic [1:0][3:0] count_lin;
+            genvar I;
+            for (I = 0; I < 2; I++) begin : cntr_lin_gen
+                counter cntr_i (.clk(clk), .count(count_lin[I]));
+            end
+        endmodule
+    )"}});
+    connectClient();
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    std::vector<std::string> names;
+    for (const enzan::ipc::ObjectEntry& entry : objects.objects) names.push_back(entry.name);
+    for (const enzan::ipc::ParameterEntry& entry : objects.parameters) names.push_back(entry.name);
+    std::ranges::sort(names);
+    EXPECT_EQ(names, (std::vector<std::string>{"clk", "count_lin"}));
+
+    query.instancePath = "/tb/cntr_lin_gen[1].cntr_i";
+    request(MessageType::QueryObjects, query);
+    const auto inside = expect<ObjectsMessage>(MessageType::Objects);
+    const auto count = std::ranges::find(inside.objects, "count", &enzan::ipc::ObjectEntry::name);
+    ASSERT_NE(count, inside.objects.end());
+    EXPECT_EQ(count->recording, enzan::ipc::Recording::Recorded);
+}
+#endif
 
 TEST_F(ServerFixture, AnUnknownScopeIsAFailureRatherThanAnEmptyAnswer) {
     // An empty list and a mistyped path must not look the same: the user would conclude the

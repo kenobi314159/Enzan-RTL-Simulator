@@ -730,6 +730,31 @@ TEST_F(SessionTest, ADesignCannotBeRestartedWhileAnApplicationIsLoaded) {
     EXPECT_EQ(session.time(), 50U) << "nothing was put back";
 }
 
+TEST_F(SessionTest, ASearchFindsNoNameAFrontendMadeUp) {
+    // `.count(count_lin[I])` gives the port storage of its own in the parent, named with a `$`.
+    ASSERT_TRUE(analyse("tb.sv", R"(
+        module counter (input logic clk, output logic [3:0] count);
+            always_ff @(posedge clk) count <= count + 1'b1;
+        endmodule
+
+        module tb;
+            logic clk = 1'b0;
+            logic [1:0][3:0] count_lin;
+            genvar I;
+            for (I = 0; I < 2; I++) begin : cntr_lin_gen
+                counter cntr_i (.clk(clk), .count(count_lin[I]));
+            end
+        endmodule
+    )")) << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+
+    const std::vector<std::string> found = session.findSignals("*");
+    EXPECT_FALSE(found.empty());
+    for (const std::string& path : found) EXPECT_EQ(path.find('$'), std::string::npos) << path;
+    EXPECT_EQ(session.findSignals("/tb/cntr_lin_gen[0].cntr_i/count"),
+              (std::vector<std::string>{"/tb/cntr_lin_gen[0].cntr_i/count"}));
+}
+
 TEST_F(SessionTest, AnApplicationThatCannotBeLoadedIsReported) {
     EXPECT_FALSE(session.loadVpiApplication("/nonexistent/libnothing.so", commandLine()));
     EXPECT_TRUE(reported(DiagCode::VpiLibraryUnloadable));
