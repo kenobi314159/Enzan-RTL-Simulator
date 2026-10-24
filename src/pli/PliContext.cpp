@@ -16,6 +16,7 @@
 #include "sv_vpi_user.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <format>
 #include <iostream>
@@ -37,6 +38,14 @@ std::string dottedPath(std::string_view path) {
     std::string dotted(path);
     std::ranges::replace(dotted, '/', '.');
     return dotted;
+}
+
+/// Whether two names are one in any case, as VHDL compares them.
+bool equalsIgnoringCase(std::string_view left, std::string_view right) {
+    return std::ranges::equal(left, right, [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a))
+               == std::tolower(static_cast<unsigned char>(b));
+    });
 }
 
 /// Splits a hierarchical name at the dots that separate scopes, leaving the ones inside an
@@ -330,6 +339,7 @@ void PliContext::buildScopes() {
         Scope scope;
         scope.isModule = true;
         scope.isPackage = definition.isPackage;
+        scope.vhdl = definition.language == eir::Language::Vhdl;
         scope.instance = instanceIndex;
         scope.name = enclosing != NoScope ? instance.name.substr(scopes[enclosing].prefix.size())
                                           : instance.name;
@@ -338,7 +348,9 @@ void PliContext::buildScopes() {
             scope.parent = enclosing;
             scopes[enclosing].children.push_back(scopeIndex);
         }
-        byFullName.emplace(scope.fullName, Target{.kind = TargetKind::Scope, .first = scopeIndex});
+        if (!scope.vhdl)
+            byFullName.emplace(scope.fullName,
+                               Target{.kind = TargetKind::Scope, .first = scopeIndex});
         scopes.push_back(std::move(scope));
         moduleScopeOfInstance[instanceIndex] = scopeIndex;
 
@@ -359,9 +371,12 @@ void PliContext::buildScopes() {
             const std::uint32_t owner = scopeFor(scopeIndex, object.name);
             objectScope[objectIndex] = owner;
             scopes[owner].signals.push_back(objectIndex);
-            byFullName.emplace(
-                scopes[owner].fullName + '.' + object.name.substr(scopes[owner].prefix.size()),
-                Target{.kind = TargetKind::Signal, .first = instanceIndex, .second = objectIndex});
+            if (!scopes[owner].vhdl) {
+                byFullName.emplace(
+                    scopes[owner].fullName + '.' + object.name.substr(scopes[owner].prefix.size()),
+                    Target{
+                        .kind = TargetKind::Signal, .first = instanceIndex, .second = objectIndex});
+            }
         }
 
         std::vector<std::uint32_t>& parameterScope = parameterScopes[instanceIndex];
@@ -372,6 +387,7 @@ void PliContext::buildScopes() {
             const std::uint32_t owner = scopeFor(scopeIndex, parameter.name);
             parameterScope[parameterIndex] = owner;
             scopes[owner].parameters.push_back(parameterIndex);
+            if (scopes[owner].vhdl) continue;
             byFullName.emplace(scopes[owner].fullName + '.'
                                    + parameter.name.substr(scopes[owner].prefix.size()),
                                Target{.kind = TargetKind::Parameter,
@@ -400,12 +416,15 @@ std::uint32_t PliContext::scopeFor(std::uint32_t moduleScope, std::string_view o
             found = static_cast<std::uint32_t>(scopes.size());
             Scope block;
             block.isModule = false;
+            block.vhdl = scopes[current].vhdl;
             block.instance = scopes[current].instance;
             block.parent = current;
             block.prefix = scopes[current].prefix + std::string(part) + '.';
             block.name = std::string(part);
             block.fullName = scopes[current].fullName + '.' + std::string(part);
-            byFullName.emplace(block.fullName, Target{.kind = TargetKind::Scope, .first = found});
+            if (!block.vhdl)
+                byFullName.emplace(block.fullName,
+                                   Target{.kind = TargetKind::Scope, .first = found});
             scopes[current].children.push_back(found);
             scopes.push_back(std::move(block));
         }
@@ -437,6 +456,7 @@ vpiHandle PliContext::intern(const Target& target) {
             image->elaboratedDesign().instances()[scope.instance].definitionIndex);
         object->kind = Object::Kind::Scope;
         object->type = scope.isModule ? vpiModule : vpiGenScope;
+        if (scope.vhdl) object->type = vpiUnknown;
         object->scope = target.first;
         object->name = scope.name;
         object->fullName = scope.fullName;
@@ -663,9 +683,37 @@ vpiHandle PliContext::handleByName(const char* name, vpiHandle scope) {
         wanted = within->fullName + '.' + wanted;
     }
 
-    const auto found = byFullName.find(wanted);
-    if (found == byFullName.end()) return nullptr;
-    return intern(found->second);
+    if (const auto found = byFullName.find(wanted); found != byFullName.end())
+        return intern(found->second);
+
+    // A name another interface made, whose start is the path of a VHDL scope in that interface's
+    // form, `VHDL_TOP.I_SV.sig` as cocotb makes it from VHPI's names: the VHDL scopes matched in
+    // any case, as VHDL names them, and what follows them as VPI names it.
+    const std::vector<std::string_view> parts = splitName(wanted);
+    std::uint32_t current = NoScope;
+    std::size_t next = 0;
+    for (; next < parts.size(); ++next) {
+        std::uint32_t found = NoScope;
+        for (std::uint32_t index = 0; index < scopes.size() && found == NoScope; ++index) {
+            const Scope& candidate = scopes[index];
+            if (candidate.parent != current || candidate.isPackage) continue;
+            if (candidate.vhdl ? equalsIgnoringCase(candidate.name, parts[next])
+                               : candidate.name == parts[next])
+                found = index;
+        }
+        if (found == NoScope || !scopes[found].vhdl) {
+            if (found != NoScope) current = found;
+            if (found != NoScope) ++next;
+            break;
+        }
+        current = found;
+    }
+    if (current == NoScope || scopes[current].vhdl) return nullptr;
+    std::string canonical = scopes[current].fullName;
+    for (; next < parts.size(); ++next) canonical += '.' + std::string(parts[next]);
+    const auto crossing = byFullName.find(canonical);
+    if (crossing == byFullName.end()) return nullptr;
+    return intern(crossing->second);
 }
 
 vpiHandle PliContext::handleByIndex(vpiHandle object, PLI_INT32 index) {
@@ -797,7 +845,7 @@ vpiHandle PliContext::iterate(PLI_INT32 type, vpiHandle reference) {
         // so asking for instances in general gets the same answer.
         if ((type == vpiModule || type == vpiInstance) && image != nullptr) {
             for (std::uint32_t scope = 0; scope < scopes.size(); ++scope) {
-                if (scopes[scope].isModule && !scopes[scope].isPackage
+                if (scopes[scope].isModule && !scopes[scope].isPackage && !scopes[scope].vhdl
                     && scopes[scope].parent == NoScope)
                     items.push_back(intern({.kind = TargetKind::Scope, .first = scope}));
             }
@@ -831,7 +879,7 @@ vpiHandle PliContext::iterate(PLI_INT32 type, vpiHandle reference) {
                                         .bit = bit}));
             }
         }
-    } else if (object->kind == Object::Kind::Scope) {
+    } else if (object->kind == Object::Kind::Scope && !scopes[object->scope].vhdl) {
         const Scope& scope = scopes[object->scope];
         const auto signalType = [&](std::uint32_t objectIndex) {
             const eir::Object& declared =

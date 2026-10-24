@@ -156,6 +156,12 @@ struct PliContext::Scope {
     /// module: iterating the root's modules skips it, so a tool looking for the design's top
     /// does not find a package instead.
     bool isPackage = false;
+
+    /// Whether it is of a VHDL definition. Each interface shows its own language (DESIGN_GUIDE.md
+    /// section 18, M7): VPI finds nothing of VHDL by name, and an iteration of a SystemVerilog
+    /// scope returns a VHDL instance in it as an object of a type VPI does not describe; VHPI shows
+    /// a SystemVerilog instance as a region of class `vhpiVerilog` and nothing in it.
+    bool vhdl = false;
     std::uint32_t instance = 0;
     std::uint32_t parent = NoScope;
 

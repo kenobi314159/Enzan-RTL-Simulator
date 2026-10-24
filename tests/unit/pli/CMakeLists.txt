@@ -3,7 +3,7 @@
 # VHPI is the VHDL frontend's (DESIGN_GUIDE.md section 9.7), and is tested where it is built.
 set(ENZAN_VHPI_TESTS "")
 if(ENZAN_ENABLE_VHDL)
-  set(ENZAN_VHPI_TESTS VhpiTests.cpp)
+  set(ENZAN_VHPI_TESTS VhpiTests.cpp MixedLanguageTests.cpp)
 endif()
 
 enzan_add_unit_test(

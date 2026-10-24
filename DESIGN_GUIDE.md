@@ -3446,11 +3446,12 @@ A port no rule covers is refused by name: a real, until the SystemVerilog fronte
 VHDL port of an unconstrained type instantiated from SystemVerilog, whose bounds nothing there
 gives; and enumeration, time and physical ports other than those above.
 
-**The interfaces across the boundary.** VPI and VHPI share the one PLI context (9.7), and
-each shows its own language. VHPI shows a SystemVerilog region as one of kind `vhpiVerilog`,
-which cocotb leaves to VPI. VPI finds no VHDL object by name, and an iteration that meets a VHDL
-instance returns it as an object VPI does not describe, which cocotb then asks VHPI for by name.
-A name either is asked for may begin in the other's hierarchy. cocotb requires this: for a
+**The interfaces across the boundary.** VPI and VHPI share the one PLI context (9.7), and each
+shows its own language. VHPI shows a SystemVerilog region as one of kind `vhpiVerilog`, cocotb's
+number for it, which cocotb leaves to VPI, and has no root instance under a SystemVerilog top.
+VPI finds no VHDL object by name, and an iteration that meets a VHDL instance returns it as a
+`vpiUnknown`, named, which cocotb then asks VHPI for by name. A name either is asked for may
+begin in the other's hierarchy, the VHDL part of it in any case. cocotb requires this: for a
 Verilog toplevel, its mixed-language test asserts that VPI alone does not find the VHDL instance
 and that VHPI does, and a VHDL region shown through VPI would lose the types 9.7 gives it.
 cocotb runs a mixed design as it does elsewhere: the toplevel's language's library is loaded

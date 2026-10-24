@@ -41,6 +41,7 @@ Design makeDesign() {
     ModuleDefinition top;
     top.name = "tb";
     top.sourceName = "tb";
+    top.language = enzan::eir::Language::Vhdl;
     top.enums.push_back(
         enzan::eir::EnumDefinition{.name = "state_t",
                                    .members = {{.name = "idle", .value = literal("8'd0")},
