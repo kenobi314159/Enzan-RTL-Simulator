@@ -14,6 +14,11 @@
 # tb_aes and tb_aes_core are run. The other three are not valid SystemVerilog at this revision —
 # two dump a scope that does not exist and one reads signals the RTL no longer has — and slang
 # refuses them where Icarus Verilog lets them through.
+#
+# By an Enzan with both frontends, tb/tb_aes_core.vhd, tb_aes_core in VHDL around the same Verilog
+# core, is run as well (the second exit design of M7), and its transcript must be tb_aes_core's
+# under Icarus Verilog but for the lines that testbench prints from inside the core, the key memory
+# and the encipher state, which VHDL cannot name.
 
 set -uo pipefail
 
@@ -71,5 +76,28 @@ for testbench in tb_aes tb_aes_core; do
         printf 'PASS %s\n' "$testbench"
     fi
 done
+
+if "$enzan" --version | grep -q '^Optional components:.*systemverilog.*vhdl'; then
+    testbench=tb_aes_core_vhdl
+    (cd "$work" && "$enzan" --top "$testbench" --timescale ns "$here/tb/tb_aes_core.vhd" \
+        "$source"/src/rtl/*.v) >"$work/$testbench.enzan.txt" 2>"$work/$testbench.enzan.log"
+    enzan_status=$?
+    inside() {
+        transcript "$1" | grep -v -e '^tb: Dumping all variables' -e '^Encipher state::' \
+            -e '^enc_ctrl = ' -e '^State of key memory in DUT:' -e '^key\[[0-9][0-9]\] = '
+    }
+    if [[ $enzan_status -ne 0 ]]; then
+        printf 'FAIL %s: Enzan exited with %d (%s)\n' "$testbench" "$enzan_status" \
+            "$work/$testbench.enzan.log"
+        status=1
+    elif ! diff <(inside "$work/tb_aes_core.iverilog.txt") \
+        <(transcript "$work/$testbench.enzan.txt") >"$work/$testbench.diff"; then
+        printf 'FAIL %s: Enzan and Icarus Verilog disagree (%s)\n' "$testbench" \
+            "$work/$testbench.diff"
+        status=1
+    else
+        printf 'PASS %s\n' "$testbench"
+    fi
+fi
 
 exit "$status"
