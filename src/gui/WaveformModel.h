@@ -21,6 +21,16 @@ class QDataStream;
 
 namespace enzan::gui {
 
+/// One select of a signal list path, `[3]` or `[7:4]`, by the index the design declares
+/// (DESIGN_GUIDE.md section 10.8).
+struct IndexSelect {
+    std::int64_t left = 0;
+    std::int64_t right = 0;
+
+    /// True for a part-select, `[left:right]`; false for one index, `left`.
+    bool range = false;
+};
+
 /// One row of the wave window: a trace, or a group holding traces.
 struct WaveRow {
     /// What a row's value comes from.
@@ -81,6 +91,10 @@ struct WaveRow {
     /// below the one it was taken from (DESIGN_GUIDE.md section 10.7). Empty for a row whose bits
     /// are no array, which unpacks into its bits.
     std::vector<eir::ArrayDimension> dimensions;
+
+    /// The dimensions the whole signal is declared with under `path`, whatever part of it the
+    /// row shows: what a row's own select is counted from when it is written to a signal list.
+    std::vector<eir::ArrayDimension> signalDimensions;
 
     /// A `Parameter` row's value, which is its value at every time. Empty otherwise.
     ///
@@ -173,6 +187,19 @@ public:
     /// one per bit of anything else, most significant first. The one definition of unpacking,
     /// which the window, a signal list's `-expand` and a saved list's test of it all use.
     [[nodiscard]] static std::vector<WaveRow> unpackedRows(const WaveRow& source);
+
+    /// The row `selects` make of `whole`, a row of a whole signal, as the design indexes it:
+    /// each `[n]` an element along the next dimension and a last `[h:l]` a range of them, in the
+    /// direction the dimension is declared. A row with no dimensions left is indexed by its bits
+    /// from 0. Nothing when an index is outside its dimension, or a part-select is not last or
+    /// runs against its dimension.
+    [[nodiscard]] static std::optional<WaveRow> selectOf(const WaveRow& whole,
+                                                         const std::vector<IndexSelect>& selects);
+
+    /// The selects that name `waveRow` within its signal, `[63][7:4]`, as `selectOf` reads
+    /// them: empty for a whole signal, and nothing for a range of bits that no select reaches,
+    /// one that takes part of one element and part of the next.
+    [[nodiscard]] static std::optional<QString> selectsOf(const WaveRow& waveRow);
 
     // --- editing -----------------------------------------------------------
 

@@ -311,6 +311,18 @@ void KernelSession::onObjects(const ipc::Frame& frame) {
     Q_EMIT objectsReceived(QString::fromStdString(message.instancePath), objects);
 }
 
+QString SignalInfo::declaredRanges() const {
+    QString ranges;
+    std::uint64_t elements = 1;
+    for (const eir::ArrayDimension& dimension : dimensions) {
+        ranges += QStringLiteral("[%1:%2]").arg(dimension.left).arg(dimension.right);
+        elements *= dimension.size();
+    }
+    if (const std::uint64_t element = width / elements; element > 1)
+        ranges += QStringLiteral("[%1:0]").arg(element - 1);
+    return ranges;
+}
+
 QString EnumInfo::nameOf(const eir::BitVector& value) const {
     // A linear scan over a handful of members. Two members may share a value, which IEEE 1800
     // allows; the first wins, so the answer is the one the reader wrote first.

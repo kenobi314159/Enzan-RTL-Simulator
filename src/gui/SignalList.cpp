@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <utility>
+#include <vector>
 
 #include <tcl.h>
 
@@ -376,29 +378,38 @@ QString scopeOf(const QString& path) {
     return separator <= 0 ? QString() : path.left(separator);
 }
 
-/// A path that ends in `[h:l]` or `[n]`, split into the signal's path and the range.
-struct RangedPath {
+/// A path split into a signal's path and the selects after it, `[3][7:4]`.
+struct SelectedPath {
     QString path;
-    std::uint32_t high = 0;
-    std::uint32_t low = 0;
+    std::vector<IndexSelect> selects;
 };
 
-std::optional<RangedPath> splitRange(const QString& path) {
-    if (!path.endsWith(u']')) return std::nullopt;
-    const qsizetype open = path.lastIndexOf(u'[');
-    if (open <= 0) return std::nullopt;
+/// Every way `path` splits into a signal's path and selects, the whole path first and then
+/// with one more select taken off its end each time, so that the first a design has is the one
+/// with the fewest: a name that itself ends in brackets is never taken for a select.
+std::vector<SelectedPath> splitSelects(const QString& path) {
+    std::vector<SelectedPath> splits{SelectedPath{.path = path, .selects = {}}};
 
-    const QString inside = path.mid(open + 1, path.size() - open - 2);
-    const QStringList bounds = inside.split(u':');
-    if (bounds.size() > 2) return std::nullopt;
+    QString rest = path;
+    std::vector<IndexSelect> selects;
+    while (rest.endsWith(u']')) {
+        const qsizetype open = rest.lastIndexOf(u'[');
+        if (open <= 0) break;
 
-    bool highOk = false;
-    bool lowOk = false;
-    const std::uint32_t high = bounds.front().trimmed().toUInt(&highOk);
-    const std::uint32_t low = bounds.back().trimmed().toUInt(&lowOk);
-    if (!highOk || !lowOk) return std::nullopt;
+        const QStringList bounds = rest.mid(open + 1, rest.size() - open - 2).split(u':');
+        if (bounds.size() > 2) break;
+        bool leftOk = false;
+        bool rightOk = false;
+        const std::int64_t left = bounds.front().trimmed().toLongLong(&leftOk);
+        const std::int64_t right = bounds.back().trimmed().toLongLong(&rightOk);
+        if (!leftOk || !rightOk) break;
 
-    return RangedPath{.path = path.left(open), .high = high, .low = low};
+        selects.insert(selects.begin(),
+                       IndexSelect{.left = left, .right = right, .range = bounds.size() == 2});
+        rest = rest.left(open);
+        splits.push_back(SelectedPath{.path = rest, .selects = selects});
+    }
+    return splits;
 }
 
 class Resolver {
@@ -507,27 +518,34 @@ private:
 
         WaveformModel::PendingRow pending;
 
-        // The whole path first, so that a name ending in brackets is never taken for a range.
-        if (const SignalInfo* info = find(path)) {
-            pending.row = WaveformModel::rowFor(*info);
-        } else if (const std::optional<RangedPath> ranged = splitRange(path)) {
-            const SignalInfo* signalInfo = find(ranged->path);
-            if (signalInfo == nullptr) {
-                warn(entry.line, QStringLiteral("%1 names nothing in this design").arg(path));
-                return;
-            }
-            const WaveRow whole = WaveformModel::rowFor(*signalInfo);
-            if (whole.kind != WaveRow::Kind::Signal
-                || std::max(ranged->high, ranged->low) >= whole.signalWidth) {
-                warn(entry.line, QStringLiteral("%1 is outside %2, which is %3 bits wide")
-                                     .arg(path, ranged->path)
-                                     .arg(whole.signalWidth));
-                return;
-            }
-            pending.row = WaveformModel::sliceOf(whole, ranged->high, ranged->low);
-        } else {
+        // The fewest selects first, so that a name ending in brackets is never taken for one.
+        const SignalInfo* info = nullptr;
+        std::vector<IndexSelect> selects;
+        for (SelectedPath& split : splitSelects(path)) {
+            info = find(split.path);
+            if (info == nullptr) continue;
+            selects = std::move(split.selects);
+            break;
+        }
+        if (info == nullptr) {
             warn(entry.line, QStringLiteral("%1 names nothing in this design").arg(path));
             return;
+        }
+
+        pending.row = WaveformModel::rowFor(*info);
+        if (!selects.empty()) {
+            // By the indices the design declares, as the source would write the select.
+            std::optional<WaveRow> selected;
+            if (pending.row.kind == WaveRow::Kind::Signal)
+                selected = WaveformModel::selectOf(pending.row, selects);
+            if (!selected.has_value()) {
+                const QString ranges = info->declaredRanges();
+                warn(entry.line, QStringLiteral("%1 selects outside %2, which is declared %3")
+                                     .arg(path, info->path,
+                                          ranges.isEmpty() ? QStringLiteral("one bit") : ranges));
+                return;
+            }
+            pending.row = std::move(*selected);
         }
 
         apply(entry, pending.row);
@@ -576,10 +594,9 @@ void collectScopes(const std::vector<SignalListEntry>& entries,
     for (const SignalListEntry& entry : entries) {
         for (const QString& path : entry.paths) {
             if (!scopes.contains(path)) {
-                // A signal, or a range of one; either way its scope is what holds it.
+                // A signal, or a select of one; either way its scope is what holds it, and a
+                // select has no separator in it to move it.
                 need(scopeOf(path));
-                if (const std::optional<RangedPath> ranged = splitRange(path))
-                    need(scopeOf(ranged->path));
                 continue;
             }
 

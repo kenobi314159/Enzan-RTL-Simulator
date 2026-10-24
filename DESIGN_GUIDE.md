@@ -2560,9 +2560,16 @@ group "Recursive counters" {
 What `add wave` adds depends on what the path names:
 
 - **A signal or a parameter**, by the path the Objects window shows for it, adds one row.
-- **A signal with `[h:l]` or `[n]` after it** adds a row showing that bit range (10.3). The
-  whole path is looked up as a signal first, so a name that itself ends in brackets is never
-  taken for a range.
+- **A signal with selects after it** adds a row showing what they select, by the indices the
+  design declares, as its source would write them (10.7). Of `logic [63:0][17:0] count`,
+  `/tb/count[3]` is element 3, `/tb/count[3][7:4]` four bits of it and `/tb/count[7:4]` four
+  elements, still an array; `/tb/v[0]` is the most significant bit of `logic [0:7] v`. A VHDL
+  array is indexed as it is declared too. A part-select is the last select and runs in its
+  dimension's direction, as the languages require, and what has no dimensions of its own, an
+  `int` or a record, is indexed by its bits from 0. A select outside its dimension is a
+  warning, naming the ranges the signal is declared with. The whole path is looked up as a
+  signal first, then with one select fewer at a time, so a name that itself ends in brackets is
+  never taken for a select.
 - **A scope** adds what *Add to wave* on that scope in the Structure window adds: a group
   named by the scope's path, holding its signals. With `-r` it adds what *Add to wave
   recursive* adds: one such group for each scope of the subtree, side by side, in the
@@ -2579,7 +2586,7 @@ why a group is a block rather than an option on each of the lines inside it.
 | `-symbolic` | an enumeration's names after all; applied after `-radix` wherever it is written |
 | `-label <text>` | the row's name, for a single signal or a non-recursive scope |
 | `-highlight <1–5>` | the row's background (10.7) |
-| `-expand` | unpacked into its bits, exactly as unpacking leaves it |
+| `-expand` | unpacked into its elements or its bits, exactly as unpacking leaves it |
 | `-contents <body>` | unpacked, with exactly the rows `body` describes beneath it |
 | `-r` | for a scope path, the whole subtree |
 
@@ -2596,8 +2603,9 @@ bottom, so that loading the file rebuilds the same list:
 
 - a label only where the row was renamed, `-expand` for a signal exactly as unpacking left
   it and `-contents` for one that has been changed since;
-- signals, ranges and parameters by path, never a scope or `-r`, because by then the rows
-  exist one by one and may have been rearranged;
+- signals, selects and parameters by path, never a scope or `-r`, because by then the rows
+  exist one by one and may have been rearranged; a range of bits no select can name, part of
+  one element and part of the next, is left out rather than written as something else;
 - words quoted as Tcl quotes a list element, and only when they must be;
 - nothing that varies from one save to the next — no date, no time, no user — so that
   saving an unchanged window writes the same bytes, and a list kept in version control

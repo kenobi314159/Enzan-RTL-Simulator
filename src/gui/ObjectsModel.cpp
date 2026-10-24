@@ -4,28 +4,9 @@
 
 #include "wavedb/WaveformDatabase.h"
 
-#include <cstdint>
 #include <optional>
 
 namespace enzan::gui {
-
-namespace {
-
-/// What the type column writes after `logic`: the signal's dimensions, `[63:0][17:0]`, then the
-/// bits of an element wider than one, which has no dimension of its own, `int` or a record.
-QString declaredRanges(const SignalInfo& info) {
-    QString ranges;
-    std::uint64_t elements = 1;
-    for (const eir::ArrayDimension& dimension : info.dimensions) {
-        ranges += QStringLiteral("[%1:%2]").arg(dimension.left).arg(dimension.right);
-        elements *= dimension.size();
-    }
-    if (const std::uint64_t element = info.width / elements; element > 1)
-        ranges += QStringLiteral("[%1:0]").arg(element - 1);
-    return ranges.isEmpty() ? ranges : u' ' + ranges;
-}
-
-} // namespace
 
 ObjectsModel::ObjectsModel(const KernelSession& session, QObject* parent)
     : QAbstractTableModel(parent), kernelSession(&session) {}
@@ -122,7 +103,9 @@ QVariant ObjectsModel::data(const QModelIndex& index, int role) const {
         // value needed, which is not something the reader wrote and not worth showing them.
         if (info.isParameter()) return info.isLocalParameter ? tr("localparam") : tr("parameter");
         if (info.width == 0) return tr("null array");
-        return tr("logic%1").arg(declaredRanges(info));
+        if (const QString ranges = info.declaredRanges(); !ranges.isEmpty())
+            return tr("logic %1").arg(ranges);
+        return tr("logic");
     default: return {};
     }
 }

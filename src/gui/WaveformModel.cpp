@@ -52,6 +52,21 @@ QString renderShaped(const eir::BitVector& value, std::span<const eir::ArrayDime
     return QString::fromStdString(eir::toString(value.ref(), radix));
 }
 
+/// Where `index` falls along `dimension`, counted from its left end, or nothing outside it.
+std::optional<std::uint32_t> positionOf(eir::ArrayDimension dimension, std::int64_t index) {
+    const std::int64_t position = dimension.left >= dimension.right
+                                      ? std::int64_t{dimension.left} - index
+                                      : index - std::int64_t{dimension.left};
+    if (position < 0 || position >= std::int64_t{dimension.size()}) return std::nullopt;
+    return static_cast<std::uint32_t>(position);
+}
+
+/// The index at `position` along `dimension`, counted from its left end.
+std::int64_t indexAt(eir::ArrayDimension dimension, std::uint32_t position) {
+    return dimension.left >= dimension.right ? std::int64_t{dimension.left} - position
+                                             : std::int64_t{dimension.left} + position;
+}
+
 } // namespace
 
 WaveformModel::WaveformModel(const KernelSession& session, const Theme& themeToUse, QObject* parent)
@@ -103,6 +118,7 @@ WaveRow WaveformModel::rowFor(const SignalInfo& info) {
     made.signalIndex = info.signalIndex;
     made.signalWidth = info.width;
     made.dimensions = info.dimensions;
+    made.signalDimensions = info.dimensions;
     made.constantValue = info.constantValue;
     made.localParameter = info.isLocalParameter;
     return made;
@@ -131,6 +147,7 @@ WaveRow WaveformModel::bitOf(const WaveRow& source, std::uint32_t bit) {
     made.path = source.path;
     made.signalIndex = source.signalIndex;
     made.signalWidth = source.signalWidth;
+    made.signalDimensions = source.signalDimensions;
     made.radix = source.radix;
     made.highlight = source.highlight;
     made.sliced = true;
@@ -144,21 +161,20 @@ WaveRow WaveformModel::elementOf(const WaveRow& source, std::uint32_t position) 
     const eir::ArrayDimension outer = source.dimensions.front();
     const auto [high, low] = bitRange(source);
     const std::uint32_t width = (high - low + 1) / outer.size();
-    const std::int64_t index = outer.left >= outer.right ? std::int64_t{outer.left} - position
-                                                         : std::int64_t{outer.left} + position;
 
     WaveRow made;
     made.kind = WaveRow::Kind::Signal;
     made.path = source.path;
     made.signalIndex = source.signalIndex;
     made.signalWidth = source.signalWidth;
+    made.signalDimensions = source.signalDimensions;
     made.radix = source.radix;
     made.highlight = source.highlight;
     made.sliced = true;
     made.highBit = high - (position * width);
     made.lowBit = made.highBit - width + 1;
     made.dimensions.assign(source.dimensions.begin() + 1, source.dimensions.end());
-    made.label = QStringLiteral("%1[%2]").arg(source.label).arg(index);
+    made.label = QStringLiteral("%1[%2]").arg(source.label).arg(indexAt(outer, position));
     return made;
 }
 
@@ -177,6 +193,93 @@ std::vector<WaveRow> WaveformModel::unpackedRows(const WaveRow& source) {
     made.reserve(high - low + 1);
     for (std::uint32_t bit = high + 1; bit-- > low;) made.push_back(bitOf(source, bit));
     return made;
+}
+
+std::optional<WaveRow> WaveformModel::selectOf(const WaveRow& whole,
+                                               const std::vector<IndexSelect>& selects) {
+    WaveRow row = whole;
+    for (std::size_t count = 0; count < selects.size(); ++count) {
+        const IndexSelect& select = selects[count];
+        const auto [high, low] = bitRange(row);
+
+        // What has no dimensions of its own, a vector or an `int`, is indexed by its bits.
+        if (row.dimensions.empty()) {
+            row.dimensions = {
+                eir::ArrayDimension{.left = static_cast<std::int32_t>(high - low), .right = 0}};
+        }
+        const eir::ArrayDimension outer = row.dimensions.front();
+        if ((high - low + 1) % outer.size() != 0) return std::nullopt;
+        const std::uint32_t width = (high - low + 1) / outer.size();
+
+        const std::optional<std::uint32_t> first = positionOf(outer, select.left);
+        if (!first.has_value()) return std::nullopt;
+        if (!select.range) {
+            row = elementOf(row, *first);
+            continue;
+        }
+
+        // A part-select is the last, as in the language, and runs as its dimension does.
+        const std::optional<std::uint32_t> last = positionOf(outer, select.right);
+        if (!last.has_value() || *last < *first || count + 1 != selects.size()) return std::nullopt;
+
+        WaveRow ranged = row;
+        ranged.children.clear();
+        ranged.unpacked = false;
+        ranged.sliced = true;
+        ranged.highBit = high - (*first * width);
+        ranged.lowBit = high - ((*last + 1) * width) + 1;
+        ranged.dimensions.front() =
+            eir::ArrayDimension{.left = static_cast<std::int32_t>(select.left),
+                                .right = static_cast<std::int32_t>(select.right)};
+        ranged.label =
+            QStringLiteral("%1[%2:%3]").arg(row.label).arg(select.left).arg(select.right);
+        return ranged;
+    }
+    return row;
+}
+
+std::optional<QString> WaveformModel::selectsOf(const WaveRow& waveRow) {
+    if (!waveRow.sliced) return QString();
+    if (waveRow.signalWidth == 0 || waveRow.highBit >= waveRow.signalWidth) return std::nullopt;
+
+    std::vector<eir::ArrayDimension> dimensions = waveRow.signalDimensions;
+    std::uint32_t high = waveRow.signalWidth - 1;
+    std::uint32_t low = 0;
+    QString selects;
+
+    while (true) {
+        // A slice of the whole of a single bit is the bit, and needs no select.
+        if (waveRow.highBit == high && waveRow.lowBit == low && (!selects.isEmpty() || high == low))
+            return selects;
+        if (waveRow.highBit > high || waveRow.lowBit < low) return std::nullopt;
+
+        if (dimensions.empty()) {
+            if (high == low) return std::nullopt;
+            dimensions = {
+                eir::ArrayDimension{.left = static_cast<std::int32_t>(high - low), .right = 0}};
+        }
+        const eir::ArrayDimension outer = dimensions.front();
+        if ((high - low + 1) % outer.size() != 0) return std::nullopt;
+        const std::uint32_t width = (high - low + 1) / outer.size();
+
+        // The elements the row reaches into: within one, it is selected and the search goes on
+        // inside it; across several, it is a part-select of them, if it takes each one whole.
+        const std::uint32_t fromTop = high - waveRow.highBit;
+        const std::uint32_t toBottom = high - waveRow.lowBit;
+        const std::uint32_t first = fromTop / width;
+        const std::uint32_t last = toBottom / width;
+
+        if (first != last) {
+            if (fromTop % width != 0 || (toBottom + 1) % width != 0) return std::nullopt;
+            return selects
+                   + QStringLiteral("[%1:%2]").arg(indexAt(outer, first)).arg(indexAt(outer, last));
+        }
+
+        selects += QStringLiteral("[%1]").arg(indexAt(outer, first));
+        high -= first * width;
+        low = high - width + 1;
+        dimensions.erase(dimensions.begin());
+    }
 }
 
 int WaveformModel::addSignal(const SignalInfo& info, int parentGroup) {
@@ -425,9 +528,12 @@ void WaveformModel::writeRow(QDataStream& stream, int rowId) const {
            << static_cast<quint32>(waveRow.highBit) << static_cast<quint32>(waveRow.lowBit)
            << static_cast<qint32>(waveRow.highlight) << waveRow.unpacked << waveRow.localParameter;
 
-    stream << static_cast<quint32>(waveRow.dimensions.size());
-    for (const eir::ArrayDimension& dimension : waveRow.dimensions)
-        stream << static_cast<qint32>(dimension.left) << static_cast<qint32>(dimension.right);
+    for (const std::vector<eir::ArrayDimension>* dimensions :
+         {&waveRow.dimensions, &waveRow.signalDimensions}) {
+        stream << static_cast<quint32>(dimensions->size());
+        for (const eir::ArrayDimension& dimension : *dimensions)
+            stream << static_cast<qint32>(dimension.left) << static_cast<qint32>(dimension.right);
+    }
 
     // A parameter's value travels with it, because there is nowhere for the other end to look
     // it up: it has no signal index, and the scope it came from may not even be the one the
@@ -463,17 +569,20 @@ bool WaveformModel::readPending(QDataStream& stream, PendingRow& pending) {
         >> pending.row.unpacked >> pending.row.localParameter;
     if (stream.status() != QDataStream::Ok) return false;
 
-    quint32 dimensionCount = 0;
-    stream >> dimensionCount;
-    if (stream.status() != QDataStream::Ok
-        || std::cmp_greater(dimensionCount, stream.device()->bytesAvailable()))
-        return false;
-    pending.row.dimensions.resize(dimensionCount);
-    for (eir::ArrayDimension& dimension : pending.row.dimensions) {
-        qint32 left = 0;
-        qint32 right = 0;
-        stream >> left >> right;
-        dimension = eir::ArrayDimension{.left = left, .right = right};
+    for (std::vector<eir::ArrayDimension>* dimensions :
+         {&pending.row.dimensions, &pending.row.signalDimensions}) {
+        quint32 dimensionCount = 0;
+        stream >> dimensionCount;
+        if (stream.status() != QDataStream::Ok
+            || std::cmp_greater(dimensionCount, stream.device()->bytesAvailable()))
+            return false;
+        dimensions->resize(dimensionCount);
+        for (eir::ArrayDimension& dimension : *dimensions) {
+            qint32 left = 0;
+            qint32 right = 0;
+            stream >> left >> right;
+            dimension = eir::ArrayDimension{.left = left, .right = right};
+        }
     }
 
     stream >> hasConstant;
@@ -711,12 +820,12 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
 
     QString leaf = path.mid(path.lastIndexOf(u'/') + 1);
     if (leaf.isEmpty()) leaf = path;
-    QString range;
-    if (waveRow->sliced) {
-        range = waveRow->highBit == waveRow->lowBit
-                    ? QStringLiteral("[%1]").arg(waveRow->highBit)
-                    : QStringLiteral("[%1:%2]").arg(waveRow->highBit).arg(waveRow->lowBit);
-    }
+
+    // By the indices the design declares, as a list is read: a range of bits no select can
+    // name, part of one element and part of the next, cannot be written either.
+    const std::optional<QString> selects = selectsOf(*waveRow);
+    if (!selects.has_value()) return;
+    const QString& range = *selects;
 
     // The label only when the reader changed it: one the window would have made again is not
     // worth a word, and leaving it out is what keeps a hand-written list short.

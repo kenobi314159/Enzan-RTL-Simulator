@@ -70,6 +70,11 @@ struct SignalInfo {
     /// True when this describes a parameter rather than a signal.
     [[nodiscard]] bool isParameter() const noexcept { return constantValue.has_value(); }
 
+    /// The ranges the signal is declared with, as a type is written after `logic`: its
+    /// dimensions, `[63:0][17:0]`, then the bits of an element wider than one, which has no
+    /// dimension of its own, an `int` or a record. Empty for a single bit.
+    [[nodiscard]] QString declaredRanges() const;
+
     /// Whether the kernel is recording this signal, so that "nothing has happened yet",
     /// "nothing is being kept" and "too wide to keep" can be told apart on screen.
     ipc::Recording recording = ipc::Recording::OutsideScope;

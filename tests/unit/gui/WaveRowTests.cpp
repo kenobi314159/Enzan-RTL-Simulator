@@ -26,6 +26,7 @@
 #include <QTreeView>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -457,6 +458,39 @@ TEST_F(WaveRowTest, RemovingAnElementLeavesTheListOfTheRest) {
     EXPECT_FALSE(model->childrenReconstituteParent(array));
     EXPECT_EQ(model->displayedWidth(array), 4U);
     EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{8}"));
+}
+
+TEST_F(WaveRowTest, ARowIsNamedByTheSelectsTheDesignWouldWrite) {
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 0, .right = 3}};
+    const WaveRow whole = WaveformModel::rowFor(nibbles);
+
+    EXPECT_EQ(WaveformModel::selectsOf(whole), QString());
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::elementOf(whole, 0)), QStringLiteral("[1]"));
+    EXPECT_EQ(
+        WaveformModel::selectsOf(WaveformModel::elementOf(WaveformModel::elementOf(whole, 1), 0)),
+        QStringLiteral("[0][0]"));
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::sliceOf(whole, 7, 0)),
+              QStringLiteral("[1:0]"));
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::sliceOf(whole, 2, 1)),
+              QStringLiteral("[0][1:2]"));
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::sliceOf(whole, 5, 2)), std::nullopt)
+        << "part of one element and part of the next is no select";
+
+    // And what they name, `selectOf` makes again.
+    const std::optional<WaveRow> selected = WaveformModel::selectOf(
+        whole, {enzan::gui::IndexSelect{.left = 0},
+                enzan::gui::IndexSelect{.left = 1, .right = 2, .range = true}});
+    ASSERT_TRUE(selected.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — checked by the assertion above
+    const WaveRow& picked = *selected;
+    EXPECT_EQ(picked.highBit, 2U);
+    EXPECT_EQ(picked.lowBit, 1U);
+    EXPECT_EQ(WaveformModel::selectsOf(picked), QStringLiteral("[0][1:2]"));
+
+    // A bit taken as a slice of a signal of one bit is the signal.
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::sliceOf(WaveformModel::rowFor(clock), 0, 0)),
+              QString());
 }
 
 TEST_F(WaveRowTest, AnArrayCopiesWithItsDimensions) {
