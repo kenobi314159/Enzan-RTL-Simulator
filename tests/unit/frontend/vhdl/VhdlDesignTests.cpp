@@ -881,6 +881,72 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"1100001"});
 }
 
+TEST_F(VhdlDesignTest, AConstantFunctionRunsTheBranchAStaticConditionChose) {
+    // As OFM's pipelined multiplexer sizes its levels: switches that are architecture constants
+    // choose between alternatives of several statements each, and NVC leaves the one chosen as a
+    // sequence. The levels' sizes then bound a generate loop indexed by another's parameter.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  constant WIDE : boolean := false;
+  constant TRIM : boolean := true;
+
+  function widths(width : integer) return integer_vector is
+    variable v : integer_vector(2 downto 0) := (others => 0);
+    variable reached : integer := 1;
+    variable zeros : integer;
+  begin
+    for l in 0 to width loop
+      for i in 2 downto 0 loop
+        if reached = width then
+          if TRIM then
+            zeros := 0;
+            for e in 0 to 2 loop
+              exit when v(e) /= 0;
+              zeros := zeros + 1;
+            end loop;
+            v := v(zeros - 1 downto 0) & v(2 downto zeros);
+          end if;
+          return v;
+        end if;
+        if WIDE then
+          v(i) := v(i) + 2;
+          reached := reached * 4;
+        else
+          v(i) := v(i) + 1;
+          reached := reached * 2;
+        end if;
+      end loop;
+    end loop;
+    return v;
+  end function;
+
+  constant LEVELS : integer_vector(2 downto 0) := widths(16);
+begin
+  levels_g : for i in 0 to 2 generate
+    items_g : for e in 1 to LEVELS(i) generate
+      process
+      begin
+        report integer'image(i) & ":" & integer'image(e);
+        wait;
+      end process;
+    end generate;
+  end generate;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    std::vector<std::string> reported = simulation.messages();
+    std::ranges::sort(reported);
+    EXPECT_EQ(reported, (std::vector<std::string>{"0:1", "1:1", "2:1", "2:2"}));
+}
+
 TEST_F(VhdlDesignTest, AConversionWithinABaseTypeKeepsTheValue) {
     // std_logic is a subtype of std_ulogic, so converting between them, or between vectors of
     // them, changes nothing.

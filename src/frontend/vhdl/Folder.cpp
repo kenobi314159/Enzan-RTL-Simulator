@@ -653,6 +653,12 @@ private:
 
         case T_CASE: return caseStatement(statement);
 
+        // A block of statements, VHDL-2019's sequential block, and what NVC leaves of an `if`
+        // whose condition it folded: the alternative taken, when it is more than one statement.
+        case T_SEQUENCE:
+            if (!declare(statement)) return Flow::Failed;
+            return statements(statement);
+
         case T_FOR: {
             const std::optional<Folder::Range> range = frame.range(tree_range(statement, 0));
             if (!range || tree_decls(statement) != 1) return Flow::Failed;
