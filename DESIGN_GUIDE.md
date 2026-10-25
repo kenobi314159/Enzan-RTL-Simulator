@@ -1365,7 +1365,8 @@ time with its own unit, `--run 10ns` or `--run 1.5us`. Which unit a count counts
 design's and its libraries' to settle (3.1), which a reader writing the command line seldom
 knows, so a time with a unit is turned into a count once the run's unit is known, and one that
 is no whole number of that unit is refused rather than rounded: a run that stopped at another
-time than the one asked for would look like the design stopping there.
+time than the one asked for would look like the design stopping there. The wave window's run
+length takes the same spellings, read by the same function in `runtime` (8.5).
 
 **Exit statuses are distinct enough to branch on**, because a Makefile and a CI
 job need to tell a broken invocation from a broken design:
@@ -1783,6 +1784,10 @@ answers to one question, and taking the last of them silently was choosing betwe
 the user; it is refused, as `-G` naming one parameter twice with two values is. The same value
 again is the same answer, as a Makefile appending its own flags to a user's can give it, and is
 accepted. So is a top level given both with `--top` and as `run`'s word, when they agree.
+
+**A value the window and the command line both take is read by one function.** The wave
+window's run length and `--run` are one question asked in two places, so `10ns` means the same
+in each, and an answer one refuses the other refuses too.
 
 **`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` is not a synonym:
 `.f` lists spell a library file that way (8.3), and binding it to something else on

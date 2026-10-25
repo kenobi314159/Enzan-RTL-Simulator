@@ -27,12 +27,14 @@
 #include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QString>
 #include <QTreeView>
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <thread>
 
@@ -336,6 +338,51 @@ TEST_F(MainWindowTest, TheWaveFontIsTheNamesAndTheTraces) {
     ASSERT_NE(text, nullptr);
     EXPECT_EQ(text->font().pointSizeF(), 15.0);
     EXPECT_EQ(text->font().family(), QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
+}
+
+TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
+    // The spellings `--run` takes, read by the same function (section 8.5): a count of the run's
+    // unit, or a time with a unit of its own. The fixture's design runs in nanoseconds, and has an
+    // event every five of them, which is where a run that ends between events leaves the time.
+    QLineEdit* length = nullptr;
+    for (QLineEdit* edit : window->findChildren<QLineEdit*>()) {
+        if (edit->toolTip().startsWith(QStringLiteral("How long"))) length = edit;
+    }
+    QAction* run = nullptr;
+    for (QAction* candidate : window->findChildren<QAction*>()) {
+        if (candidate->text() == QStringLiteral("Run")) run = candidate;
+    }
+    const auto* transcriptView = window->findChild<enzan::gui::TranscriptView*>();
+    ASSERT_NE(length, nullptr);
+    ASSERT_NE(run, nullptr);
+    ASSERT_NE(transcriptView, nullptr);
+    const auto* text = transcriptView->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+
+    const auto runFor = [&](const QString& written, std::uint64_t until) {
+        length->setText(written);
+        run->trigger();
+        return pumpUntil([&] {
+            return session->currentTime() == until
+                   && session->state() != enzan::ipc::SimulationState::Running;
+        });
+    };
+    EXPECT_TRUE(runFor(QStringLiteral("20ns"), 20)) << session->currentTime();
+    EXPECT_TRUE(runFor(QStringLiteral("15"), 35)) << session->currentTime();
+    EXPECT_TRUE(runFor(QStringLiteral("0.005us"), 40)) << session->currentTime();
+
+    // Refused with a note saying why, and nothing run.
+    length->setText(QStringLiteral("1.5"));
+    run->trigger();
+    length->setText(QStringLiteral("1ps"));
+    run->trigger();
+    pump();
+    EXPECT_EQ(session->currentTime(), 40U);
+    EXPECT_TRUE(text->toPlainText().contains(QStringLiteral("'1.5' is not a length of time")))
+        << text->toPlainText().toStdString();
+    EXPECT_TRUE(text->toPlainText().contains(
+        QStringLiteral("'1ps' is not a whole number of the run's time unit, ns")))
+        << text->toPlainText().toStdString();
 }
 
 } // namespace

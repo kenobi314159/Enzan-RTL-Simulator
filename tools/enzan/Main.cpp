@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "eir/Library.h"
+#include "runtime/Time.h"
 #include "session/FileList.h"
 #include "session/Session.h"
 
@@ -43,7 +44,6 @@
 #ifdef ENZAN_WITH_FRONTEND
 #include "ipc/KernelServer.h"
 #include "runtime/Kernel.h"
-#include "runtime/Time.h"
 #endif
 
 namespace {
@@ -83,12 +83,10 @@ struct NamedLibrary {
     std::filesystem::path path;
 };
 
-/// How long `--run` runs: a count of the run's time unit, or a time with a unit of its own,
-/// `mantissa` times ten to `exponent` seconds, which only the run's precision turns into a count.
+/// How long `--run` runs, as the run's precision will count it (`runtime::TimeLength`), and as it
+/// was written, for saying what is wrong with it.
 struct RunLength {
-    std::uint64_t mantissa = 0;
-    int exponent = 0;
-    bool inUnits = false;
+    enzan::runtime::TimeLength length;
     std::string text;
 };
 
@@ -269,17 +267,6 @@ struct Invocation {
     std::vector<std::string_view> simulationOptions;
 };
 
-/// Parses a time unit name into its power-of-ten exponent.
-std::optional<std::int8_t> parseTimeUnit(std::string_view text) {
-    if (text == "s") return 0;
-    if (text == "ms") return -3;
-    if (text == "us") return -6;
-    if (text == "ns") return -9;
-    if (text == "ps") return -12;
-    if (text == "fs") return -15;
-    return std::nullopt;
-}
-
 /// Splits `+incdir+a+b` into its parts, dropping the empty ones a trailing `+` produces.
 std::vector<std::string_view> splitPlusList(std::string_view token) {
     std::vector<std::string_view> parts;
@@ -302,39 +289,6 @@ std::optional<std::uint64_t> parseUnsigned(std::string_view text) {
         value = (value * 10) + static_cast<std::uint64_t>(character - '0');
     }
     return value;
-}
-
-/// Parses `--run`'s value: whole digits, a count of the run's time unit, or digits with a
-/// fraction and a unit, `10ns` or `1.5us`. Nothing for anything else, and on overflow.
-std::optional<RunLength> parseRunLength(std::string_view text) {
-    std::size_t digits = 0;
-    while (digits < text.size() && text[digits] >= '0' && text[digits] <= '9') ++digits;
-    std::size_t fraction = digits;
-    if (fraction < text.size() && text[fraction] == '.') {
-        ++fraction;
-        while (fraction < text.size() && text[fraction] >= '0' && text[fraction] <= '9') ++fraction;
-    }
-    const std::string_view number = text.substr(0, fraction);
-    const std::string_view unit = text.substr(fraction);
-    if (digits == 0 || number.ends_with('.')) return std::nullopt;
-
-    RunLength length{
-        .mantissa = 0, .exponent = 0, .inUnits = unit.empty(), .text = std::string(text)};
-    if (length.inUnits && fraction != digits) return std::nullopt;
-    for (const char character : number) {
-        if (character == '.') continue;
-        if (__builtin_mul_overflow(length.mantissa, 10U, &length.mantissa)
-            || __builtin_add_overflow(length.mantissa, static_cast<unsigned>(character - '0'),
-                                      &length.mantissa))
-            return std::nullopt;
-    }
-    if (!length.inUnits) {
-        const std::optional<std::int8_t> exponent = parseTimeUnit(unit);
-        if (!exponent) return std::nullopt;
-        const int decimals = fraction == digits ? 0 : static_cast<int>(fraction - digits - 1);
-        length.exponent = *exponent - decimals;
-    }
-    return length;
 }
 
 /// Result of parsing the command line.
@@ -501,14 +455,15 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--run", value)) return ParseOutcome::BadUsage;
             simulationOnly("--run");
-            std::optional<RunLength> parsed = parseRunLength(value);
+            const std::optional<enzan::runtime::TimeLength> parsed =
+                enzan::runtime::parseTimeLength(value);
             if (!parsed.has_value()) {
                 std::cerr << "enzan: '" << value
                           << "' is not a length of time: a count of the run's time unit, `100`, "
                              "or a number with its unit, `10ns` or `1.5us`\n";
                 return ParseOutcome::BadUsage;
             }
-            invocation.runUntil = std::move(parsed);
+            invocation.runUntil = RunLength{.length = *parsed, .text = value};
             continue;
         }
 
@@ -559,7 +514,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--timescale", value)) return ParseOutcome::BadUsage;
-            const std::optional<std::int8_t> exponent = parseTimeUnit(value);
+            const std::optional<std::int8_t> exponent = enzan::runtime::parseTimeUnit(value);
             if (!exponent.has_value()) {
                 std::cerr << "enzan: '" << value
                           << "' is not a time unit; expected s, ms, us, ns, ps or fs\n";
@@ -1176,30 +1131,21 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
     return ExitStatus::Success;
 }
 
-/// `length` as a count of the run's time unit, ten to `precision` seconds; nothing, having said
-/// why, when it is no whole number of the unit or more than a run counts.
-std::optional<std::uint64_t> runCount(const RunLength& length, int precision) {
-    if (length.inUnits) return length.mantissa;
-    std::uint64_t count = length.mantissa;
-    for (int step = precision; step < length.exponent; ++step) {
-        if (__builtin_mul_overflow(count, 10U, &count)) {
-            std::cerr << "enzan: '" << length.text << "' is longer than a run counts\n";
-            return std::nullopt;
-        }
+/// `length` as a count of the run's time unit; nothing, having said why, when it is no whole
+/// number of the unit or more than a run counts.
+std::optional<std::uint64_t> runCount(const RunLength& length, enzan::runtime::TimeScale scale) {
+    enzan::runtime::SimTime count = 0;
+    switch (scale.countOf(length.length, count)) {
+    case enzan::runtime::LengthFit::Exact: return count;
+    case enzan::runtime::LengthFit::NotWhole:
+        std::cerr << "enzan: '" << length.text << "' is not a whole number of the run's time unit, "
+                  << scale.unitName() << "\n";
+        return std::nullopt;
+    case enzan::runtime::LengthFit::TooLong:
+        std::cerr << "enzan: '" << length.text << "' is longer than a run counts\n";
+        return std::nullopt;
     }
-    for (int step = length.exponent; step < precision; ++step) {
-        if (count % 10U != 0) {
-            std::cerr << "enzan: '" << length.text
-                      << "' is not a whole number of the run's time unit, "
-                      << enzan::runtime::TimeScale(
-                             static_cast<enzan::runtime::TimeExponent>(precision))
-                             .unitName()
-                      << "\n";
-            return std::nullopt;
-        }
-        count /= 10U;
-    }
-    return count;
+    return std::nullopt;
 }
 
 /// Analyses, elaborates and runs. Returns the process exit status.
@@ -1250,7 +1196,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     // its libraries settle (section 3.1).
     std::optional<std::uint64_t> until;
     if (invocation.runUntil.has_value()) {
-        until = runCount(*invocation.runUntil, session.timeScale().precisionExponent());
+        until = runCount(*invocation.runUntil, session.timeScale());
         if (!until.has_value()) return ExitStatus::Usage;
     }
     const enzan::runtime::RunStatus status = session.run(until);

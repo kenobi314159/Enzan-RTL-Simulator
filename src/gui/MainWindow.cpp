@@ -4,6 +4,7 @@
 
 #include "common/Diagnostics.h"
 #include "eir/BitOps.h"
+#include "runtime/Time.h"
 
 #include <QAction>
 #include <QCloseEvent>
@@ -336,7 +337,9 @@ void MainWindow::buildToolBar() {
 
     runLengthEdit = new QLineEdit(QStringLiteral("100"), bar);
     runLengthEdit->setFixedWidth(80);
-    runLengthEdit->setToolTip(tr("How long each Run advances the simulation, in time units"));
+    runLengthEdit->setToolTip(tr("How long each Run advances the simulation: a count of the "
+                                 "run's time unit, as 100, or a time with its unit, as 10ns or "
+                                 "1.5us"));
     bar->addWidget(runLengthEdit);
 
     runAllAction = bar->addAction(tr("Run All"), this, &MainWindow::runUntilFinished);
@@ -903,10 +906,30 @@ void MainWindow::updateSubscription() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::runForRequestedTime() {
-    bool valid = false;
-    const quint64 duration = runLengthEdit->text().trimmed().toULongLong(&valid);
-    if (!valid || duration == 0) {
-        note(tr("'%1' is not a run length in whole time units").arg(runLengthEdit->text()));
+    // Read as `--run` reads its value, by the same function, so that what the one takes the other
+    // does too (DESIGN_GUIDE.md section 8.5).
+    const QString text = runLengthEdit->text().trimmed();
+    const std::optional<runtime::TimeLength> length = runtime::parseTimeLength(text.toStdString());
+    if (!length) {
+        note(tr("'%1' is not a length of time: a count of the run's time unit, 100, or a number "
+                "with its unit, 10ns or 1.5us")
+                 .arg(text));
+        return;
+    }
+
+    runtime::SimTime duration = 0;
+    switch (session->timeScale().countOf(*length, duration)) {
+    case runtime::LengthFit::Exact: break;
+    case runtime::LengthFit::NotWhole:
+        note(tr("'%1' is not a whole number of the run's time unit, %2")
+                 .arg(text, QString::fromStdString(session->timeScale().unitName())));
+        return;
+    case runtime::LengthFit::TooLong:
+        note(tr("'%1' is longer than a run counts").arg(text));
+        return;
+    }
+    if (duration == 0) {
+        note(tr("'%1' is no time at all, and a run has to advance the simulation").arg(text));
         return;
     }
 
