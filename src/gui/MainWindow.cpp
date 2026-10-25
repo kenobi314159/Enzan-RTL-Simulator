@@ -221,6 +221,13 @@ void MainWindow::buildDocks() {
 
     waveView = new WaveformView(*session, *waveModel, *theme, this);
     waveView->setRowView(waveRowsView);
+
+    // One font for the names and the traces. The tree's sets how tall a row is, and the canvas
+    // measures its labels against its own, so a size given to only one of them would put each
+    // trace beside a row of another height.
+    const QFont waveFont = theme->font(ThemeFont::Wave, waveRowsView->font());
+    waveRowsView->setFont(waveFont);
+    waveView->setFont(waveFont);
     connect(waveView, &WaveformView::cursorsChanged, this, &MainWindow::onCursorsChanged);
 
     // The canvas has no vertical scroll bar of its own; the tree's is the one that matters, so

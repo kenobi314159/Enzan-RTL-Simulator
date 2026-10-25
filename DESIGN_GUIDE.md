@@ -2283,6 +2283,14 @@ palette entry — padding, the dock title, the parts of the scroll bar. A test
 asserts this, because the rule is invisible in the result: a style sheet that
 breaks it looks exactly right and scrolls four times slower.
 
+**Font sizes are the desktop's unless the theme gives one.** A theme sets them beside its
+colours, `font <area> <points>`, for four areas: `window`, everything not named after it;
+`wave`, the signal list and the traces beside it, one size for both so that each name stays
+level with its trace, which sets how tall a row is; `transcript`; and `source`, the Source
+window's. An area left unset takes the window's size, and the window the desktop's. The shipped
+theme sets none, because how large text should be is the reader's screen's and eyes' to say,
+and lists the four commented out.
+
 ### 10.6 Diagnostics as a feature
 
 slang's diagnostics are dramatically better than those of most commercial

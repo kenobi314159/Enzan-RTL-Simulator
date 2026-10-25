@@ -13,7 +13,9 @@
 #include "gui/DesignTreeModel.h"
 #include "gui/ObjectsModel.h"
 #include "gui/Theme.h"
+#include "gui/TranscriptView.h"
 #include "gui/WaveformModel.h"
+#include "gui/WaveformView.h"
 
 #include "SessionFixture.h"
 
@@ -23,6 +25,9 @@
 #include <QCoreApplication>
 #include <QDockWidget>
 #include <QElapsedTimer>
+#include <QFontDatabase>
+#include <QFontMetrics>
+#include <QPlainTextEdit>
 #include <QString>
 #include <QTreeView>
 
@@ -294,6 +299,43 @@ TEST_F(MainWindowTest, StopEndsARunTheWindowStarted) {
     EXPECT_GT(server->kernel().time(), 0U) << "the run had not actually started";
     EXPECT_EQ(session->latestTime(), server->kernel().time())
         << "the window has not taken in everything the run sent";
+}
+
+TEST_F(MainWindowTest, TheWaveFontIsTheNamesAndTheTraces) {
+    // One size for both, so that each name stays level with its trace: the tree's font sets how
+    // tall a row is, and the canvas measures its labels against its own. The transcript has a
+    // size of its own, in its fixed-width font.
+    Theme sized;
+    sized.loadBuiltIn();
+    QString error;
+    ASSERT_TRUE(sized.evaluate(QStringLiteral("font wave 24\nfont transcript 15"), error))
+        << error.toStdString();
+    const MainWindow large(*session, sized);
+
+    const auto rowsOf = [](const MainWindow& of) -> const QTreeView* {
+        for (const QTreeView* view : of.findChildren<QTreeView*>()) {
+            if (qobject_cast<WaveformModel*>(view->model()) != nullptr) return view;
+        }
+        return nullptr;
+    };
+    const QTreeView* rows = rowsOf(large);
+    const QTreeView* plainRows = rowsOf(*window);
+    const auto* canvas = large.findChild<enzan::gui::WaveformView*>();
+    ASSERT_NE(rows, nullptr);
+    ASSERT_NE(plainRows, nullptr);
+    ASSERT_NE(canvas, nullptr);
+
+    EXPECT_EQ(rows->font().pointSizeF(), 24.0);
+    EXPECT_EQ(canvas->font(), rows->font());
+    EXPECT_GT(QFontMetrics(rows->font()).height(), QFontMetrics(plainRows->font()).height())
+        << "a larger size makes taller rows";
+
+    const auto* transcriptView = large.findChild<enzan::gui::TranscriptView*>();
+    ASSERT_NE(transcriptView, nullptr);
+    const auto* text = transcriptView->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+    EXPECT_EQ(text->font().pointSizeF(), 15.0);
+    EXPECT_EQ(text->font().family(), QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
 }
 
 } // namespace

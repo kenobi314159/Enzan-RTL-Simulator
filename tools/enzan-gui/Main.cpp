@@ -170,6 +170,10 @@ int main(int argc, char** argv) {
     QApplication::setPalette(theme.palette());
     application.setStyleSheet(theme.styleSheet());
 
+    // Before any widget exists, so that every one starts with it; the areas with sizes of their
+    // own are given theirs as they are built.
+    QApplication::setFont(theme.font(enzan::gui::ThemeFont::Window, QApplication::font()));
+
     // --- the session -------------------------------------------------------
 
     enzan::gui::KernelSession session;

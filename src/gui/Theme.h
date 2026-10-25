@@ -3,11 +3,13 @@
 #pragma once
 
 #include <QColor>
+#include <QFont>
 #include <QPalette>
 #include <QString>
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace enzan::gui {
 
@@ -34,7 +36,21 @@ constexpr int HighlightSlots = 5;
 /// requires the five to stay adjacent and in order.
 [[nodiscard]] ThemeColor highlightColor(int slot) noexcept;
 
-/// The colours the GUI paints with, loaded from a Tcl script.
+/// The parts of the window a theme may give a font size of their own.
+enum class ThemeFont : std::uint8_t {
+    /// Everything not named below: the menus, the docks, the Structure and Objects windows.
+    Window,
+    /// The signal list and the traces beside it. One size for both keeps each name level with
+    /// its trace, and it is what sets how tall a row is.
+    Wave,
+    /// The transcript.
+    Transcript,
+    /// The Source window (DESIGN_GUIDE.md section 10.2).
+    Source,
+    Count,
+};
+
+/// The colours the GUI paints with, and the sizes of its fonts, loaded from a Tcl script.
 ///
 /// **No colour literal appears in widget code** (DESIGN_GUIDE.md section 10.5), and none
 /// appears in C++ at all: the defaults live in the shipped `themes/dark.tcl`, which is compiled
@@ -42,16 +58,22 @@ constexpr int HighlightSlots = 5;
 /// the literal the rule forbids, and it would let a half-applied theme go unnoticed.
 ///
 /// Tcl rather than a settings format of its own, because section 10.5 commits to Tcl as *the*
-/// configuration language with no second format anywhere in the tool. The script gets one
-/// command:
+/// configuration language with no second format anywhere in the tool. The script gets two
+/// commands:
 ///
 /// ```tcl
 /// theme wave.background #000000
 /// theme wave.trace      #7ee787
+/// font  wave            11
 /// ```
 ///
 /// A user theme is layered over the shipped one, so a script that sets three colours changes
 /// three colours rather than leaving the rest undefined.
+///
+/// **A font size is the desktop's unless a theme says otherwise.** The shipped theme sets none,
+/// because how large text should be is the reader's screen's and eyes' to say, which a
+/// default written down here would only guess at. An area a theme leaves unset takes the
+/// window's size, and the window the desktop's.
 class Theme {
 public:
     Theme();
@@ -87,6 +109,13 @@ public:
     /// The shipped theme's text, for a user who wants to copy it and change a colour.
     [[nodiscard]] static QString builtInScript();
 
+    /// The size in points `area`'s text is set to: its own, or else the window's. Nothing when
+    /// neither is set, which leaves the desktop's.
+    [[nodiscard]] std::optional<double> fontSize(ThemeFont area) const noexcept;
+
+    /// `base` at `area`'s size, or `base` itself when the theme sets none.
+    [[nodiscard]] QFont font(ThemeFont area, QFont base) const;
+
     /// The loaded colours as a palette, which is how nearly all of them reach the widgets.
     ///
     /// A palette rather than a style sheet wherever a palette can say it, because the two cost
@@ -112,8 +141,13 @@ private:
     /// Records one key, or reports an unknown one. Called by the Tcl command.
     bool set(const QString& key, const QString& value, QString& error);
 
+    /// Records one area's font size, or reports an unknown area or a size that is not one.
+    /// Called by the Tcl command.
+    bool setFont(const QString& area, const QString& size, QString& error);
+
     std::array<QColor, static_cast<std::size_t>(ThemeColor::Count)> colors;
     std::array<bool, static_cast<std::size_t>(ThemeColor::Count)> assigned{};
+    std::array<std::optional<double>, static_cast<std::size_t>(ThemeFont::Count)> fontSizes{};
 };
 
 } // namespace enzan::gui

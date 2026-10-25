@@ -8,11 +8,13 @@
 # widget asking for it gets nothing.
 #
 # Section 10.5 makes Tcl the theme language, so this is a Tcl script rather than an ini file. It
-# gets one command:
+# gets two commands:
 #
 #     theme <key> <colour>
+#     font <area> <points>
 #
-# where the colour is anything Qt accepts — `#rrggbb`, `#aarrggbb` or an SVG colour name.
+# where the colour is anything Qt accepts — `#rrggbb`, `#aarrggbb` or an SVG colour name — and
+# the size is in points, at the end of this file.
 #
 # To change a colour, copy this file, edit it, and pass it with `enzan-gui --theme <file>`. A
 # user theme is layered over this one, so a file that sets three colours changes three colours.
@@ -106,3 +108,17 @@ theme wave.highlight.2             #2c5428
 theme wave.highlight.3             #5a4b28
 theme wave.highlight.4             #512a48
 theme wave.highlight.5             #26455a
+
+# --- Fonts -------------------------------------------------------------------
+#
+# Sizes in points. None is set here: how large text should be is for the reader's screen and eyes
+# to say, so it is the desktop's until a theme says otherwise. An area left unset takes the
+# window's size, and the window the desktop's.
+#
+# `wave` is the signal list and the traces beside it, which share a size so that each name stays
+# level with its trace; it is what sets how tall a row is. `source` is the Source window's.
+#
+# font window      10
+# font wave        11
+# font transcript  9
+# font source      10
