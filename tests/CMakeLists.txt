@@ -29,6 +29,12 @@ if(NOT ENZAN_HAVE_COCOTB)
   message(STATUS "cocotb not found; the cocotb golden tests are skipped")
 endif()
 
+# Command lines that are wrong, and what Enzan says of them (DESIGN_GUIDE.md section 8). Every
+# build runs it, since a command line is checked before any frontend is reached.
+add_test(NAME golden.cli COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/golden/run-cli-check.sh"
+                                 $<TARGET_FILE:enzan>)
+set_tests_properties(golden.cli PROPERTIES PASS_REGULAR_EXPRESSION "PASS cli" TIMEOUT 120)
+
 # Golden tests need the simulator, so they exist only when a frontend does.
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   add_subdirectory(golden)

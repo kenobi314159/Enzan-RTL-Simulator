@@ -1592,7 +1592,11 @@ incremental build is wrong in the one way that is both silent and expensive.
 compiler can default this to the object file it is writing; analysis has no single
 output file, so the target has to be given. When it is omitted the `--out-lib`
 directory is used, which is right for a build that treats the library as its output
-and wrong for one that uses a stamp file, so a Makefile should say.
+and wrong for one that uses a stamp file, so a Makefile should say. With neither there is
+no target, and a rule for none is one `make` refuses to read, so `--depfile` is refused
+then, as `--depfile-target` is without a `--depfile` and `--depfile` is where no sources
+are analysed. The file is written by whatever analyses sources, the one-shot form and `run`
+as well as `analyse`.
 
 #### A design driven from `make`
 
