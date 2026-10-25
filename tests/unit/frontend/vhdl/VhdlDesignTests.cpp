@@ -1123,6 +1123,31 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 22U);
 }
 
+TEST_F(VhdlDesignTest, APredefinedFunctionNotTranslatedIsNamedByWhatItIsAppliedTo) {
+    // Every `to_string` returns a string, so naming the result would not tell one overload from
+    // another; what it is applied to does.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal r : real := 1.5;
+begin
+  process
+  begin
+    report to_string(r, "%.3f");
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("the predefined TO_STRING of REAL, STRING"), std::string::npos)
+        << refused->message;
+}
+
 TEST_F(VhdlDesignTest, AConversionWithinABaseTypeKeepsTheValue) {
     // std_logic is a subtype of std_ulogic, so converting between them, or between vectors of
     // them, changes nothing.

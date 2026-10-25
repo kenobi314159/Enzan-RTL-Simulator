@@ -453,6 +453,11 @@ private:
     /// characters its elements are.
     std::optional<Value> characterString(tree_t expression);
 
+    /// `to_hstring` or `to_ostring` of a `bit_vector`, `expression`, for `bitsPerDigit` 4 or 3:
+    /// the vector padded on the left with '0' to a whole number of digits, and each group of bits
+    /// one digit, in upper case (IEEE 1076 section 5.3.2.4).
+    std::optional<Value> digitString(tree_t expression, unsigned bitsPerDigit);
+
     /// The image of `operand`, a value of an enumeration known only at run time, as a part of a
     /// message; or with `quoted` false its string representation, which `to_string` gives, a
     /// character literal without its quotes (IEEE 1076 section 5.7).
