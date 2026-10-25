@@ -253,6 +253,10 @@ struct Invocation {
 
     /// The command line as it was given, which is what `vpi_get_vlog_info` reports.
     std::vector<std::string> commandLine;
+
+    /// The options given that apply to a simulation alone, each once, for a command that runs
+    /// none to refuse rather than drop.
+    std::vector<std::string_view> simulationOptions;
 };
 
 /// Parses a time unit name into its power-of-ten exponent.
@@ -344,6 +348,12 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         return false;
     };
 
+    const auto simulationOnly = [&invocation](std::string_view option) {
+        if (std::ranges::find(invocation.simulationOptions, option)
+            == invocation.simulationOptions.end())
+            invocation.simulationOptions.push_back(option);
+    };
+
     // `-G` takes one value for each parameter it names.
     std::map<std::string, std::string, std::less<>> overrides;
     const auto parameter = [&overrides, &invocation](std::string_view text) {
@@ -430,6 +440,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--assert-level", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--assert-level");
             static constexpr std::array<std::string_view, 5> Severities{"note", "warning", "error",
                                                                         "failure", "none"};
             const auto* const found = std::ranges::find(Severities, std::string_view(value));
@@ -446,6 +457,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--run", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--run");
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value()) {
                 std::cerr << "enzan: '" << value << "' is not a time in whole units\n";
@@ -459,6 +471,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--vcd", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--vcd");
             invocation.vcdPath = value;
             continue;
         }
@@ -467,6 +480,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--fst", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--fst");
             invocation.fstPath = value;
             continue;
         }
@@ -477,6 +491,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--wave-scope", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--wave-scope");
             invocation.waveformScope = value;
             continue;
         }
@@ -485,6 +500,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--wave-max-bits", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--wave-max-bits");
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value() || *parsed > 0xFFFF'FFFFU) {
                 std::cerr << "enzan: '" << value << "' is not a number of bits\n";
@@ -512,6 +528,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--listen", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--listen");
             invocation.listenPath = value;
             continue;
         }
@@ -520,6 +537,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--delta-limit", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--delta-limit");
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value() || *parsed == 0 || *parsed > 0xFFFF'FFFFU) {
                 std::cerr << "enzan: '" << value << "' is not a usable delta limit\n";
@@ -533,6 +551,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--seed", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--seed");
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value() || *parsed > 0xFFFF'FFFFU) {
                 std::cerr << "enzan: '" << value << "' is not a seed from 0 to 4294967295\n";
@@ -571,6 +590,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 
         if (argument == "--dump-stats") {
             invocation.dumpStatistics = true;
+            simulationOnly("--dump-stats");
             continue;
         }
 
@@ -697,6 +717,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 
         if (argument == "--gui") {
             invocation.useGui = true;
+            simulationOnly("--gui");
             continue;
         }
 
@@ -1293,6 +1314,23 @@ int main(int argc, char** argv) {
         && invocation.command != Command::Run && invocation.command != Command::OneShot) {
         std::cerr << "enzan: '--vpi' and '--vhpi' need a simulation to load into; give them to "
                      "`run` or to the one-shot form\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
+    // The same for a simulation's own options: a waveform, a run length or a seed given where
+    // nothing is simulated would change nothing and say nothing.
+    if ((invocation.command == Command::Analyse || invocation.command == Command::Elaborate)
+        && !invocation.simulationOptions.empty()) {
+        const std::vector<std::string_view>& options = invocation.simulationOptions;
+        std::cerr << "enzan: ";
+        for (std::size_t index = 0; index < options.size(); ++index) {
+            if (index != 0) std::cerr << (index + 1 == options.size() ? " and " : ", ");
+            std::cerr << '\'' << options[index] << '\'';
+        }
+        std::cerr << (options.size() == 1 ? " applies" : " apply") << " to a simulation, and `"
+                  << (invocation.command == Command::Analyse ? "analyse" : "elaborate")
+                  << "` runs none; give " << (options.size() == 1 ? "it" : "them")
+                  << " to `run` or to the one-shot form\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 

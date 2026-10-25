@@ -1342,6 +1342,12 @@ which is what a CI job and a `make check` want, and it MUST NOT be a prerequisit
 of `run`: an elaboration on disk would be a second serialised format to version
 and a second thing to invalidate, and elaboration is not the expensive phase.
 
+**A simulation's options are refused where nothing is simulated.** `analyse` and `elaborate`
+run nothing, so `--run`, `--vcd`, `--fst`, `--seed`, `--wave-scope`, `--wave-max-bits`,
+`--delta-limit`, `--assert-level`, `--gui`, `--listen` and `--dump-stats` given to them are
+a usage error, as `--vpi` is (9.1), rather than taken and dropped: a waveform asked for and
+never written looks exactly like one written somewhere else.
+
 **A top level's parameters are set with `-G NAME=VALUE`**, or `-GNAME=VALUE` as Verilator and
 cocotb's makefiles spell it. slang applies an override while analysing, so it is in a library
 entry's key as a define is (4.4). One that names no parameter of a top level changes nothing,

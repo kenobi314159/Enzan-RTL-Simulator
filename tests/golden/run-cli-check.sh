@@ -92,6 +92,16 @@ printf 'module tb; endmodule\n' >slip.sv
 expect 1 "'slip.sv' is a source" "$enzan" run --in-lib libs/none slip.sv
 expect 1 "'slip.sv' is a source" "$enzan" elaborate --in-lib libs/none slip.sv
 
+# --- a simulation's options where nothing is simulated (8.1) --------------------------------------
+
+# A waveform `analyse` never writes, a run length `elaborate` never runs: refused, as `--vpi` is,
+# rather than taken and dropped.
+expect 1 "'--vcd' applies to a simulation, and \`analyse\` runs none" "$enzan" analyse --vcd a.vcd tb.sv
+expect 1 "'--run' and '--seed' apply" "$enzan" analyse --run 10 --seed 3 tb.sv
+expect 1 "\`elaborate\` runs none" "$enzan" elaborate --in-lib libs/none --fst a.fst tb
+expect 1 "'--gui' applies" "$enzan" elaborate --in-lib libs/none --gui tb
+expect 1 "'--listen' applies" "$enzan" analyse --listen k.sock tb.sv
+
 # --- an option given twice (8.5) -----------------------------------------------------------------
 
 # Two values for one are two answers to one question, which the last no longer settles; the same
