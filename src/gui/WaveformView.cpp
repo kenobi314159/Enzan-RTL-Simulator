@@ -203,14 +203,14 @@ std::vector<WaveformView::RowGeometry> WaveformView::visibleRows() const {
 // ---------------------------------------------------------------------------
 
 void WaveformView::extentChanged() {
-    timeAxis.setExtent(kernelSession->latestTime());
+    timeAxis.setExtent(kernelSession->extentTime());
     if (following) timeAxis.followTail();
     syncScrollBar();
     update();
 }
 
 void WaveformView::zoomFit() {
-    timeAxis.setExtent(kernelSession->latestTime());
+    timeAxis.setExtent(kernelSession->extentTime());
     timeAxis.fit();
     following = false;
     syncScrollBar();
@@ -526,13 +526,14 @@ void WaveformView::paintEvent(QPaintEvent* event) {
 
     timeAxis.setWidth(traceArea().width());
 
-    // A summary is only reusable for the range, the width and the amount of recorded history
-    // it was made against. Checking all four here, rather than asking every place that could
-    // change one of them to remember to say so, is what keeps the cache from ever being
-    // subtly stale: zooming, scrolling sideways, resizing and a kernel that has run all land
-    // in exactly one of these four.
+    // A summary is only reusable for the range, the width and the time the traces stop at that
+    // it was made against: a change arrives at that time or after it, never before, so what is
+    // drawn short of it is settled. Checking all four here, rather than asking every place that
+    // could change one of them to remember to say so, is what keeps the cache from ever being
+    // subtly stale: zooming, scrolling sideways, resizing and changes arriving all land in
+    // exactly one of these four.
     const int columns = traceArea().width();
-    const runtime::SimTime extent = kernelSession->latestTime();
+    const runtime::SimTime extent = kernelSession->heldTime();
     if (timeAxis.start() != cachedStart || timeAxis.end() != cachedEnd || columns != cachedColumns
         || extent != cachedExtent) {
         invalidateSamples();
@@ -547,12 +548,12 @@ void WaveformView::paintEvent(QPaintEvent* event) {
     paintBeyondExtent(painter);
     paintRuler(painter);
 
-    // Traces are clipped at the point the kernel has simulated to. The value in effect at the
-    // end of a run would otherwise be drawn straight across the part of the window the design
-    // has not reached, which reads as "this signal is flat here" rather than "nothing has
-    // happened here yet" — a distinction that matters while a run is in progress.
+    // Traces are clipped where the window stops holding every change of what it shows: where the
+    // kernel has simulated to, or short of it while a signal is still being fetched. The value
+    // last known would otherwise be drawn straight across the part of the window it is not known
+    // for, which reads as "this signal is flat here" rather than "nothing is known here yet".
     QRect drawable = traceArea();
-    const double extentX = timeAxis.xOf(kernelSession->latestTime());
+    const double extentX = timeAxis.xOf(kernelSession->heldTime());
     if (extentX < drawable.right()) {
         drawable.setRight(std::max(drawable.left(), static_cast<int>(std::ceil(extentX))));
     }
@@ -653,11 +654,11 @@ void WaveformView::paintZoomBand(QPainter& painter) {
 }
 
 void WaveformView::paintBeyondExtent(QPainter& painter) {
-    const runtime::SimTime extent = kernelSession->latestTime();
+    const runtime::SimTime extent = kernelSession->heldTime();
     if (extent >= timeAxis.end()) return;
 
-    // Where the design has not been simulated to yet, shaded so that "nothing here" does not
-    // read as "this signal is flat here".
+    // Where the traces stop, shaded so that "nothing is known here" does not read as "this
+    // signal is flat here".
     const double x = std::max(0.0, timeAxis.xOf(extent));
     const QRect area(static_cast<int>(x), 0, width() - static_cast<int>(x), height());
     painter.fillRect(area, theme->color(ThemeColor::WaveBeyondRecorded));

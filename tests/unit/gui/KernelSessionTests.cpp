@@ -224,7 +224,7 @@ TEST_F(SessionFixture, SubscribingBringsTheSignalsPastWithIt) {
     // A signal dragged into the wave window halfway through a run has to show what it has been
     // doing, not start from a blank trace.
     session->run(100);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 100; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(100));
 
     const std::uint32_t clock = signalIndex("/tb/clk");
     session->subscribe({clock});
@@ -254,7 +254,7 @@ TEST_F(SessionFixture, TheWaveformProgressesWhileTheDesignRuns) {
     const std::uint64_t before = session->waveforms().changeCount(record);
 
     session->run(200);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 200; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(200));
 
     EXPECT_GT(session->waveforms().changeCount(record), before);
     EXPECT_GE(session->latestTime(), 200U);
@@ -265,9 +265,52 @@ TEST_F(SessionFixture, TheWaveformProgressesWhileTheDesignRuns) {
               std::optional(enzan::eir::BitVector::fromUInt64(20, 8)));
 }
 
+TEST_F(SessionFixture, ATraceIsHeldOnlyAsFarAsItsChangesHaveArrived) {
+    // How far the wave window draws: a signal whose changes are still on their way would be drawn
+    // flat at a value it may not hold.
+    session->run(100);
+    ASSERT_TRUE(pumpUntilCaughtUp(100));
+    EXPECT_EQ(session->heldTime(), 100U) << "with nothing shown there is nothing to wait for";
+
+    const std::uint32_t clock = signalIndex("/tb/clk");
+    session->subscribe({clock});
+    EXPECT_EQ(session->heldTime(), 0U) << "none of the clock's changes has arrived";
+    EXPECT_EQ(session->extentTime(), 100U) << "the axis moved back under the reader";
+
+    ASSERT_TRUE(pumpUntil([this] { return session->heldTime() == 100; }));
+    EXPECT_GE(session->waveforms().changeCount(session->waveforms().recordIndexOf(clock)), 20U);
+}
+
+/// A kernel answering five changes at a time, far fewer than a run records.
+class SmallAnswersTest : public SessionFixture {
+protected:
+    SmallAnswersTest() { changesBytes = 5 * enzan::ipc::KernelServer::changeBytes(8); }
+};
+
+TEST_F(SmallAnswersTest, AShownSignalIsFetchedWholeHoweverManyAnswersItTakes) {
+    // The session asks again for as long as the kernel holds more, during the run and after it.
+    const std::uint32_t clock = signalIndex("/tb/clk");
+    const std::uint32_t counter = signalIndex("/tb/count");
+    session->subscribe({clock, counter});
+    session->run(200);
+
+    // And the axis reaches as far as the traces do as they come, not as far as the kernel.
+    enzan::runtime::SimTime furthest = 0;
+    ASSERT_TRUE(pumpUntil([&] {
+        furthest = std::max(furthest, session->heldTime());
+        EXPECT_EQ(session->extentTime(), furthest);
+        return session->currentTime() == 200 && session->heldTime() == session->latestTime();
+    }));
+
+    const enzan::wavedb::WaveformDatabase& waves = session->waveforms();
+    EXPECT_GE(waves.changeCount(waves.recordIndexOf(clock)), 40U);
+    EXPECT_EQ(waves.valueAt(waves.recordIndexOf(counter), 200),
+              std::optional(enzan::eir::BitVector::fromUInt64(20, 8)));
+}
+
 TEST_F(SessionFixture, AnUnsubscribedSignalDoesNotArrive) {
     session->run(100);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 100; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(100));
 
     EXPECT_EQ(session->waveforms().recordIndexOf(signalIndex("/tb/count")),
               enzan::wavedb::WaveformDatabase::NotRecorded);
@@ -277,7 +320,7 @@ TEST_F(SessionFixture, RunStateReachesTheClientAtBothEndsOfARun) {
     const QSignalSpy states(session.get(), &KernelSession::runStateChanged);
 
     session->run(50);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 50; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(50));
 
     EXPECT_GE(states.count(), 2) << "a client must learn when a run starts, not only when it ends";
     EXPECT_EQ(session->state(), enzan::ipc::SimulationState::Idle);
@@ -297,7 +340,7 @@ TEST_F(SessionFixture, ARestartDiscardsTheTracesAndSaysSo) {
     const std::uint32_t clock = signalIndex("/tb/clk");
     session->subscribe({clock});
     session->run(100);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 100; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(100));
 
     const std::uint32_t before = session->waveforms().recordIndexOf(clock);
     ASSERT_NE(before, enzan::wavedb::WaveformDatabase::NotRecorded);
@@ -310,10 +353,34 @@ TEST_F(SessionFixture, ARestartDiscardsTheTracesAndSaysSo) {
     EXPECT_EQ(session->currentTime(), 0U);
 
     // What the client holds is gone, and the fresh time-zero value takes its place.
+    ASSERT_TRUE(pumpUntil([this, clock] {
+        return session->waveforms().recordIndexOf(clock)
+               != enzan::wavedb::WaveformDatabase::NotRecorded;
+    }));
     const std::uint32_t after = session->waveforms().recordIndexOf(clock);
     ASSERT_NE(after, enzan::wavedb::WaveformDatabase::NotRecorded);
     EXPECT_LE(session->waveforms().changeCount(after), 2U);
     EXPECT_EQ(session->waveforms().timeOfChange(after, 0), 0U);
+}
+
+TEST_F(SessionFixture, ARestartAtTimeZeroDiscardsWhatWasDepositedThere) {
+    // The time does not go back, so it cannot say the design was restarted; the kernel holding
+    // fewer changes than the copy does says it instead.
+    const std::uint32_t clock = signalIndex("/tb/clk");
+    session->subscribe({clock});
+    session->deposit(clock, enzan::eir::BitVector::fromUInt64(1, 1));
+    const auto changes = [this, clock] {
+        const std::uint32_t record = session->waveforms().recordIndexOf(clock);
+        return record == enzan::wavedb::WaveformDatabase::NotRecorded
+                   ? 0
+                   : session->waveforms().changeCount(record);
+    };
+    ASSERT_TRUE(pumpUntil([&] { return changes() == 2; }));
+
+    QSignalSpy cleared(session.get(), &KernelSession::wavesCleared);
+    session->restart();
+    ASSERT_TRUE(pumpUntil([&] { return cleared.count() > 0 && changes() == 1; }));
+    EXPECT_EQ(session->heldTime(), 0U);
 }
 
 TEST_F(SessionFixture, ARefusedRequestIsReportedWithoutDroppingTheConnection) {
@@ -328,7 +395,7 @@ TEST_F(SessionFixture, ARefusedRequestIsReportedWithoutDroppingTheConnection) {
 TEST_F(SessionFixture, DetachingLeavesTheKernelAlive) {
     // Section 2.2's requirement: a front end must be able to leave a long run alone.
     session->run(50);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 50; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(50));
 
     const QSignalSpy detached(session.get(), &KernelSession::detached);
     session->detach();
@@ -342,7 +409,7 @@ TEST_F(SessionFixture, DetachingLeavesTheKernelAlive) {
 
 TEST_F(SessionFixture, ASecondClientCanAttachAfterTheFirstLeaves) {
     session->run(50);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 50; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(50));
     session->detach();
     pump();
 

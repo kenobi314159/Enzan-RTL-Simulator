@@ -200,6 +200,7 @@ protected:
         options.kernelVersion = "enzan test";
         options.timeScale = runtime::TimeScale(-9);
         options.localTranscript = &transcript;
+        options.changesBytes = changesBytes;
         server = std::make_unique<ipc::KernelServer>(*kernelSession, engine, options);
         server->start();
 
@@ -251,6 +252,15 @@ protected:
         return done();
     }
 
+    /// Pumps until the kernel has reached `time` and the session holds every change it recorded
+    /// of the signals shown, which a test that looks at the traces waits for: the changes are
+    /// fetched after the kernel says it recorded them. Returns whether that happened in time.
+    bool pumpUntilCaughtUp(runtime::SimTime time) {
+        return pumpUntil([this, time] {
+            return session->currentTime() == time && session->heldTime() == session->latestTime();
+        });
+    }
+
     /// The kernel's signal index for a hierarchical path.
     [[nodiscard]] std::uint32_t signalIndex(std::string_view path) const {
         return kernelSession->designImage()->findSignal(path);
@@ -286,6 +296,9 @@ protected:
     DiagnosticEngine engine;
     FixtureConsumer consumer;
     std::ostringstream transcript;
+
+    /// The bytes of one answer of changes, read by `SetUp`.
+    std::size_t changesBytes = ipc::ServerOptions{}.changesBytes;
 
     /// The kernel end's session, which owns the simulation the server serves.
     std::unique_ptr<session::Session> kernelSession;

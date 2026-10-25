@@ -140,13 +140,11 @@ void KernelServer::detachFromKernel() {
     // simulation with nothing in the transcript to explain it.
     if (simulationKernel != nullptr) {
         if (recorder != nullptr) simulationKernel->removeListener(*recorder);
-        if (publisher != nullptr) simulationKernel->removeListener(*publisher);
         simulationKernel->setInterrupt(nullptr);
     }
 
     // The recorder flushes into the database as it closes, so the order is spelled out rather
     // than left to the member declarations.
-    publisher.reset();
     recorder.reset();
     database.reset();
 }
@@ -161,14 +159,14 @@ KernelServer::Borrow KernelServer::renewKernelBorrow() {
 
     // The kernel that was being served has been destroyed, and every registration made against
     // it went with it. The pointers are dropped *before* anything else, because `detachFromKernel`
-    // would otherwise take those registrations back through them; and the publisher goes with
-    // them rather than being carried over, because `start` restores what it had subscribed to
-    // and a different elaboration numbers its signals differently.
+    // would otherwise take those registrations back through them; and the signals shown go with
+    // them rather than being carried over, because `start` records them again and a different
+    // elaboration numbers its signals differently.
     simulationKernel = nullptr;
     image = nullptr;
-    publisher.reset();
     recorder.reset();
     database.reset();
+    shown.clear();
 
     if (session->simulationKernel() == nullptr || session->designImage() == nullptr) {
         borrowedGeneration = session->elaborationGeneration();
@@ -195,8 +193,7 @@ void KernelServer::start() {
     // A restart keeps what the user asked to watch. Losing the wave window's contents because
     // the design was reset would make the button useless for the thing it is used for, which
     // is watching the same signals from the beginning again.
-    std::vector<std::uint32_t> keepSubscribed;
-    if (publisher != nullptr) keepSubscribed = publisher->subscribedSignals();
+    const std::vector<bool> keepShown = std::move(shown);
 
     detachFromKernel();
 
@@ -218,8 +215,8 @@ void KernelServer::start() {
     session->setTranscript(&transcriptStream);
     simulationKernel->initialize();
 
-    // Recorder and publisher are both started after `initialize`, so that the values they see
-    // at time zero are the ones the design begins from rather than an empty arena.
+    // The recorder is started after `initialize`, so that the values it sees at time zero are the
+    // ones the design begins from rather than an empty arena.
     database = std::make_unique<wavedb::WaveformDatabase>(options.database);
     recorder = std::make_unique<wavedb::WaveformRecorder>(*image, simulationKernel->arena(),
                                                           options.timeScale, *database);
@@ -236,11 +233,13 @@ void KernelServer::start() {
     }
     reportedTooWide.assign(tooWide.begin(), tooWide.end());
 
-    publisher =
-        std::make_unique<ChangePublisher>(*image, simulationKernel->arena(), options.timeScale);
-    publisher->start();
-    publisher->subscribe(keepSubscribed);
-    simulationKernel->addListener(*publisher);
+    shown.assign(image->signals().size(), false);
+    for (std::uint32_t signalIndex = 0; signalIndex < keepShown.size(); ++signalIndex) {
+        if (!keepShown[signalIndex] || signalIndex >= shown.size()) continue;
+        shown[signalIndex] = true;
+        recorder->recordFromNow(signalIndex, simulationKernel->time());
+    }
+    lastProgress = ProgressMessage{};
 
     simulationState = SimulationState::Idle;
     processExitStatus = 0;
@@ -270,12 +269,9 @@ void KernelServer::attach(Connection client) {
     connection = std::move(client);
     greeted = false;
 
-    // A new client starts from nothing: it has not asked for any signal yet, and it must not
-    // be handed the transcript or the changes the previous one had not collected.
-    if (publisher != nullptr) {
-        publisher->clearSubscriptions();
-        static_cast<void>(publisher->takeBatches());
-    }
+    // A new client starts from nothing: it shows no signal yet, and it must not be handed the
+    // transcript the previous one had not collected.
+    shown.assign(shown.size(), false);
     static_cast<void>(transcriptRelay.take());
     static_cast<void>(capture.take());
     static_cast<void>(diagnosticRelay.take());
@@ -295,7 +291,7 @@ void KernelServer::closeClient(std::string reason) {
 
     connection.close();
     greeted = false;
-    if (publisher != nullptr) publisher->clearSubscriptions();
+    shown.assign(shown.size(), false);
 
     // Nothing else happens here, and that is the point. A kernel with a socket to listen on
     // carries on with its simulation and waits for the next client, which is what `detach`
@@ -410,7 +406,7 @@ void KernelServer::handle(const Frame& frame) {
     case MessageType::QueryObjects: onQueryObjects(frame); return;
     case MessageType::Subscribe: onSubscribe(frame); return;
     case MessageType::Unsubscribe: onUnsubscribe(frame); return;
-    case MessageType::QueryHistory: onQueryHistory(frame); return;
+    case MessageType::FetchChanges: onFetchChanges(frame); return;
     case MessageType::Run: onRun(frame); return;
 
     case MessageType::Stop:
@@ -534,9 +530,10 @@ void KernelServer::onDeposit(const Frame& frame) {
         return;
     }
 
-    // The publisher is told so that the window showing the signal updates, because a deposit
-    // between runs produces no time advance for the change to be batched into.
-    publisher->flush();
+    // Recorded now, because a deposit between runs produces no time advance for the change to be
+    // written at, and said, so that the window showing the signal fetches it.
+    recorder->flush();
+    sendProgress(true);
 }
 
 void KernelServer::onForce(const Frame& frame) {
@@ -567,7 +564,8 @@ void KernelServer::onForce(const Frame& frame) {
         }
     }
 
-    publisher->flush();
+    recorder->flush();
+    sendProgress(true);
 }
 
 void KernelServer::onQueryObjects(const Frame& frame) {
@@ -653,7 +651,7 @@ void KernelServer::onQueryObjects(const Frame& frame) {
     for (std::uint32_t signalIndex = 0; signalIndex < image->signals().size(); ++signalIndex) {
         // As the values sent for it are, shown rather than stored: a std_logic is one bit, not
         // the byte of its code.
-        const std::uint32_t width = publisher->widthOf(signalIndex);
+        const std::uint32_t width = recorder->widthOf(signalIndex);
 
         for (const std::string& name : elaborated.slotNames(signalIndex)) {
             // A name a frontend made up is none the reader wrote (eir::isIntroducedName); the
@@ -695,13 +693,12 @@ void KernelServer::onSubscribe(const Frame& frame) {
         return;
     }
 
-    publisher->subscribe(request.signalIndices);
-
-    // Catching up is part of subscribing. A signal dragged into the wave window halfway
-    // through a run must show what it has been doing, not start from a blank trace.
+    // Recorded from now on, whatever the scope, so that what the window shows is in the database
+    // it fetches from; a signal in scope has been recorded all along, and its past is there too.
     for (const std::uint32_t signalIndex : request.signalIndices) {
-        if (signalIndex >= image->signals().size()) continue;
-        sendHistory(signalIndex, 0, runtime::NoTime);
+        if (signalIndex >= shown.size()) continue;
+        shown[signalIndex] = true;
+        recorder->recordFromNow(signalIndex, simulationKernel->time());
     }
 }
 
@@ -711,22 +708,90 @@ void KernelServer::onUnsubscribe(const Frame& frame) {
         sendFailure("an unsubscribe request could not be decoded");
         return;
     }
-    publisher->unsubscribe(request.signalIndices);
+
+    // Still recorded, since the database is append-only, but not again after a restart.
+    for (const std::uint32_t signalIndex : request.signalIndices) {
+        if (signalIndex < shown.size()) shown[signalIndex] = false;
+    }
 }
 
-void KernelServer::onQueryHistory(const Frame& frame) {
-    QueryHistoryMessage request;
+void KernelServer::onFetchChanges(const Frame& frame) {
+    FetchChangesMessage request;
     if (!decodePayload(frame.payload, request)) {
-        sendFailure("a history request could not be decoded");
+        sendFailure("a request for changes could not be decoded");
         return;
     }
 
-    if (request.signalIndex >= image->signals().size()) {
-        sendFailure(std::format("there is no signal {} in this design", request.signalIndex));
-        return;
+    // What each signal has beyond what the client holds, and what one of its changes costs.
+    struct Wanted {
+        std::uint32_t record = wavedb::WaveformDatabase::NotRecorded;
+        std::uint64_t first = 0;
+        std::uint64_t available = 0;
+        std::size_t bytes = 0;
+        std::uint64_t granted = 0;
+    };
+
+    std::vector<Wanted> wanted(request.signals.size());
+    for (std::size_t index = 0; index < request.signals.size(); ++index) {
+        const ChangeCursor& cursor = request.signals[index];
+        if (cursor.signalIndex >= image->signals().size()) {
+            sendFailure(std::format("there is no signal {} in this design", cursor.signalIndex));
+            return;
+        }
+        Wanted& signal = wanted[index];
+        signal.record = database->recordIndexOf(cursor.signalIndex);
+        signal.bytes = changeBytes(recorder->widthOf(cursor.signalIndex));
+        if (signal.record == wavedb::WaveformDatabase::NotRecorded) continue;
+        const std::uint64_t recorded = database->changeCount(signal.record);
+        signal.first = std::min(cursor.held, recorded);
+        signal.available = recorded - signal.first;
     }
 
-    sendHistory(request.signalIndex, request.fromTime, request.toTime);
+    // An equal share of the bytes for each first, so that none waits on another's long past; then
+    // what is left, in the order asked.
+    std::size_t budget = options.changesBytes;
+    const std::size_t share = budget / std::max<std::size_t>(wanted.size(), 1);
+    for (Wanted& signal : wanted) {
+        signal.granted = std::min<std::uint64_t>(signal.available, share / signal.bytes);
+        budget -= static_cast<std::size_t>(signal.granted) * signal.bytes;
+    }
+    for (Wanted& signal : wanted) {
+        const std::uint64_t more =
+            std::min<std::uint64_t>(signal.available - signal.granted, budget / signal.bytes);
+        signal.granted += more;
+        budget -= static_cast<std::size_t>(more) * signal.bytes;
+    }
+    // A change wider than the whole budget still goes, alone, or a client could never get past it.
+    if (std::ranges::all_of(wanted, [](const Wanted& signal) { return signal.granted == 0; })) {
+        const auto first =
+            std::ranges::find_if(wanted, [](const Wanted& signal) { return signal.available > 0; });
+        if (first != wanted.end()) first->granted = 1;
+    }
+
+    ChangesMessage answer;
+    answer.signals.reserve(wanted.size());
+    const runtime::SimTime latest = latestRecordedTime();
+    for (std::size_t index = 0; index < wanted.size(); ++index) {
+        const Wanted& signal = wanted[index];
+        SignalChanges& changes = answer.signals.emplace_back();
+        changes.signalIndex = request.signals[index].signalIndex;
+        changes.width = recorder->widthOf(changes.signalIndex);
+        changes.first = signal.first;
+        changes.recorded = signal.first + signal.available;
+        changes.completeTo = latest;
+        if (signal.record == wavedb::WaveformDatabase::NotRecorded) continue;
+
+        const std::uint64_t end = signal.first + signal.granted;
+        changes.entries.reserve(static_cast<std::size_t>(signal.granted));
+        for (std::uint64_t change = signal.first; change < end; ++change) {
+            changes.entries.push_back(
+                ChangeEntry{.time = database->timeOfChange(signal.record, change),
+                            .value = database->valueOfChange(signal.record, change)});
+        }
+        // Short of the last, the client's copy is complete only before the first change left out.
+        if (end < changes.recorded) changes.completeTo = database->timeOfChange(signal.record, end);
+    }
+    connection.send(MessageType::Changes, answer);
 }
 
 void KernelServer::onRun(const Frame& frame) {
@@ -769,12 +834,9 @@ void KernelServer::onRestart() {
 
     start();
 
-    // The client learns from the time going backwards that everything it holds is stale, so
-    // the state comes first and the fresh traces follow it.
+    // The client learns from the time going backwards that everything it holds is stale, and
+    // fetches the shown signals again from their first change.
     sendRunState("restarted");
-    for (const std::uint32_t signalIndex : publisher->subscribedSignals()) {
-        sendHistory(signalIndex, 0, runtime::NoTime);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -819,7 +881,6 @@ void KernelServer::performRun() {
     // design did would be missing from the view until it was told to carry on — which looks
     // exactly like the simulator having lost an event.
     recorder->flush();
-    publisher->flush();
 
     // The time axis extends to where the run reached, whether or not anything changed there —
     // and to where it was *asked* to reach when it got there with time to spare. A design whose
@@ -856,13 +917,14 @@ void KernelServer::pump() {
     std::string transcript = transcriptRelay.take();
     if (capture.active()) transcript += capture.take();
     std::vector<DiagnosticMessage> reported = diagnosticRelay.take();
-    std::vector<ValueChangesMessage> batches;
-    if (publisher != nullptr) batches = publisher->takeBatches();
 
     // Everything is drained whether or not anyone is listening, because a kernel running with
     // no client attached must not accumulate a session's worth of output against the chance
     // that one turns up.
     if (!connection.isOpen() || !greeted) return;
+
+    // Asked before anything is queued below: whether the client has read what the last pump sent.
+    const bool unread = connection.hasPendingOutput();
 
     if (!transcript.empty()) {
         TranscriptMessage message;
@@ -874,9 +936,11 @@ void KernelServer::pump() {
         connection.send(MessageType::Diagnostic, message);
     }
 
-    for (ValueChangesMessage& message : batches) {
-        connection.send(MessageType::ValueChanges, message);
-    }
+    // How far a run has got, which is all that is said of its values: the client fetches them.
+    // Only the latest is worth reading, so it is not queued behind output the client has yet to
+    // read but said once that has gone, which keeps a client that stops reading from costing the
+    // socket a queue of them.
+    if (running && !unread) sendProgress(false);
 
     if (!connection.flush()) closeClient(connection.error());
 }
@@ -893,6 +957,19 @@ void KernelServer::sendRunState(std::string reason) {
     connection.send(MessageType::RunState, message);
 }
 
+void KernelServer::sendProgress(bool recorded) {
+    if (!connection.isOpen() || !greeted) return;
+
+    ProgressMessage message;
+    message.time = simulationKernel->time();
+    message.latestRecordedTime = latestRecordedTime();
+    if (!recorded && message.time == lastProgress.time
+        && message.latestRecordedTime == lastProgress.latestRecordedTime)
+        return;
+    lastProgress = message;
+    connection.send(MessageType::Progress, message);
+}
+
 void KernelServer::sendFailure(std::string reason) {
     if (!connection.isOpen()) return;
 
@@ -901,56 +978,10 @@ void KernelServer::sendFailure(std::string reason) {
     connection.send(MessageType::Failure, message);
 }
 
-void KernelServer::sendHistory(std::uint32_t signalIndex, runtime::SimTime from,
-                               runtime::SimTime to) {
-    if (!connection.isOpen() || !greeted) return;
-
-    // A signal of no bits, a VHDL signal of a null range, has neither a past nor a value now.
-    if (publisher->widthOf(signalIndex) == 0) return;
-
-    HistoryMessage message;
-    message.signalIndex = signalIndex;
-    message.width = publisher->widthOf(signalIndex);
-    message.latestTime = latestRecordedTime();
-
-    const std::uint32_t record = database != nullptr ? database->recordIndexOf(signalIndex)
-                                                     : wavedb::WaveformDatabase::NotRecorded;
-
-    if (record == wavedb::WaveformDatabase::NotRecorded) {
-        // Outside the logging scope: there is no past to send, only what the signal holds
-        // right now. The client already knows from the object listing that it is not being
-        // recorded, so an empty trace and an unrecorded one do not look the same.
-        message.entries.push_back(HistoryEntry{.time = simulationKernel->time(),
-                                               .value = publisher->currentValue(signalIndex)});
-        connection.send(MessageType::History, message);
-        return;
-    }
-
-    std::vector<wavedb::Change> changes;
-    database->changesIn(record, from, to, changes);
-
-    if (const std::size_t limit = historyEntriesFor(message.width); changes.size() > limit) {
-        // Truncated rather than split across an unbounded number of messages. `latestTime`
-        // then says where the answer stops, and the client asks again from there.
-        changes.erase(changes.begin() + static_cast<std::ptrdiff_t>(limit), changes.end());
-        message.complete = false;
-        message.latestTime = changes.back().time;
-    }
-
-    message.entries.reserve(changes.size());
-    for (wavedb::Change& change : changes) {
-        message.entries.push_back(
-            HistoryEntry{.time = change.time, .value = std::move(change.value)});
-    }
-
-    connection.send(MessageType::History, message);
-}
-
-std::size_t KernelServer::historyEntriesFor(std::uint32_t width) noexcept {
+std::size_t KernelServer::changeBytes(std::uint32_t width) noexcept {
     // A time, and a value as the codec writes one: its width, then both planes of its words.
-    const std::size_t entryBytes = sizeof(std::uint64_t) + sizeof(std::uint32_t)
-                                   + (eir::storageWordsFor(width) * sizeof(eir::Word));
-    return std::clamp<std::size_t>(MaxHistoryBytes / entryBytes, 1, MaxHistoryEntries);
+    return sizeof(std::uint64_t) + sizeof(std::uint32_t)
+           + (eir::storageWordsFor(width) * sizeof(eir::Word));
 }
 
 runtime::SimTime KernelServer::latestRecordedTime() const noexcept {

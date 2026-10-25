@@ -156,7 +156,20 @@ public:
 
     [[nodiscard]] runtime::SimTime currentTime() const noexcept { return kernelTime; }
 
+    /// How far the kernel has recorded.
     [[nodiscard]] runtime::SimTime latestTime() const noexcept { return recordedTime; }
+
+    /// The time before which the session holds every change of every signal it shows, which is
+    /// as far as a trace may be drawn: past it a signal still catching up would be drawn holding
+    /// a value it may not hold. The kernel's latest time when nothing is shown.
+    [[nodiscard]] runtime::SimTime heldTime() const noexcept;
+
+    /// How far the time axis reaches: the furthest the held time has been, so that following
+    /// the tail follows the traces rather than a kernel they may be far behind. Not back with
+    /// the held time when a signal shown part-way through a run has its past still to fetch,
+    /// which would move the view under the reader; back to zero when a restart empties the
+    /// traces.
+    [[nodiscard]] runtime::SimTime extentTime() const noexcept { return extent; }
 
     [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
 
@@ -207,22 +220,25 @@ private:
     void onWritable();
 
     /// Reads whatever has arrived and dispatches it, then says once that values arrived, if any
-    /// did.
-    ///
-    /// Once per read rather than once per message: the kernel sends a message for each time slot
-    /// that changed something, which for a fast clock is millions a second, and what the views
-    /// do when told, finding every row's value again, is far dearer than appending one. Told
-    /// per message, the window fell behind for good, and a Stop took effect in the kernel while
-    /// the window went on showing a run it had not caught up with.
+    /// did: what the views do when told, finding every row's value again, costs far more than
+    /// appending a change.
     void pump();
 
     void dispatch(const ipc::Frame& frame);
     void onWelcome(const ipc::Frame& frame);
     void onDesign(const ipc::Frame& frame);
     void onObjects(const ipc::Frame& frame);
-    void onValueChanges(const ipc::Frame& frame);
-    void onHistory(const ipc::Frame& frame);
+    void onChanges(const ipc::Frame& frame);
+    void onProgress(const ipc::Frame& frame);
     void onRunState(const ipc::Frame& frame);
+
+    /// Asks the kernel for what it has recorded of the shown signals beyond what the session
+    /// holds, unless an answer is still on its way, in which case it asks once that has come.
+    ///
+    /// One request at a time is the whole of the flow control (ipc::FetchChangesMessage): the
+    /// session takes changes at the pace it can append them, and what it has not taken waits in
+    /// the kernel's database rather than on the socket.
+    void fetchChanges();
 
     /// Sends a request and starts draining the socket.
     template<typename Message>
@@ -245,6 +261,9 @@ private:
     /// Throws away every trace, for a restart.
     void resetDatabase();
 
+    /// Moves `extent` up to the held time, if that has gone further.
+    void advanceExtent();
+
     ipc::Connection connection;
     QSocketNotifier* readNotifier = nullptr;
     QSocketNotifier* writeNotifier = nullptr;
@@ -264,10 +283,23 @@ private:
     std::uint32_t recordedWidthLimit = 0;
     runtime::SimTime kernelTime = 0;
     runtime::SimTime recordedTime = 0;
+    runtime::SimTime extent = 0;
     ipc::SimulationState simulationState = ipc::SimulationState::Idle;
 
     /// Whether values reached the database since `wavesChanged` was last emitted.
     bool wavesPending = false;
+
+    /// The signals shown, in the order first asked for, which is the order they are fetched in.
+    std::vector<std::uint32_t> shownSignals;
+
+    /// For each shown signal fetched at least once, the time before which the session holds every
+    /// change of it (ipc::SignalChanges::completeTo).
+    std::map<std::uint32_t, runtime::SimTime> completeTo;
+
+    /// Whether a FetchChanges is unanswered, and whether to send another once it is: the kernel
+    /// has recorded more since it was sent.
+    bool fetching = false;
+    bool fetchAgain = false;
 };
 
 } // namespace enzan::gui

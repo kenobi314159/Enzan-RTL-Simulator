@@ -20,8 +20,8 @@ harder is a change in the wrong direction.
 - **The messages** (`Protocol.h`) — every request and event, with one `serialize` function each.
 - **The transport** (`Transport.h`) — the listening Unix domain socket, the connection, and the
   buffering in both directions.
-- **The kernel end** (`KernelServer.h`, `ChangePublisher.h`) — the session that owns a kernel, a
-  live waveform database and the recorder filling it, and answers a client's requests about them.
+- **The kernel end** (`KernelServer.h`) — the session that owns a kernel, a live waveform
+  database and the recorder filling it, and answers a client's requests about them.
 
 ## Allowed dependencies
 
@@ -63,10 +63,15 @@ checked against the bytes actually remaining before anything is resized, and a d
 sticky so that a caller never receives a half-filled message that looks usable. A payload with
 trailing bytes is a failure too: it means the two ends disagree about the message.
 
-**Value changes are batched per settled time slot**, never per change. Section 14.3 warns that
-two correct simulators may legitimately differ at delta level; a GUI shown delta-level
-intermediate values would draw transitions that no waveform file contains, and users would
-report them as bugs.
+**The client pulls values; the kernel never pushes one.** While a run goes the kernel says how far
+it has got (Progress), and the client asks for the changes it lacks of the signals it shows
+(FetchChanges), and asks again only once the answer has come. So one answer at most is on its way,
+an answer is bounded in bytes, and what a client has not taken yet waits in the kernel's database,
+which spills to disk past its budget, rather than in a queue on the socket that grows for as long
+as the client lags. A client asks by change number, not by time, because a signal can change twice
+at one time and a range of times would repeat or lose one of the two. The changes are the
+database's, recorded per settled time slot: a GUI shown delta-level intermediate values would draw
+transitions that no waveform file contains (section 14.3).
 
 **Nothing blocks.** A blocking write is precisely how a slow GUI stalls a kernel: a client that
 stops reading fills the socket buffer and the kernel sits in `write` until it comes back. Output
@@ -80,10 +85,10 @@ killed has to be reusable or the user is stranded, and a path a running kernel i
 not be unlinked or the next kernel silently steals the session. The two look identical on disk,
 so the listener tells them apart by trying to connect.
 
-**Subscription is per signal.** A design has far more signals than a wave window shows, and
-streaming the ones nobody is looking at would spend the socket on data the client discards. A
-signal added to the wave window mid-run asks for its history separately, which is what makes its
-past appear rather than only its future.
+**A shown signal is recorded.** Subscribing tells the kernel which signals the client shows, and
+the kernel records each from then on whatever its logging scope, so that everything the client
+fetches is in the database. A signal in scope has been recorded all along, so one added to the wave
+window mid-run brings its past with it.
 
 ## The kernel end
 

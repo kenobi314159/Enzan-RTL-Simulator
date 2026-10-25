@@ -187,6 +187,19 @@ feature users of commercial tools rely on daily and will expect.
 The GUI MUST be able to attach to an already-running kernel and to detach
 without terminating it.
 
+**The front end pulls what it shows; the kernel never pushes a value.** A design
+whose clock toggles every few nanoseconds records changes faster than any window
+draws them. A kernel sending every change would either queue them on the socket,
+without bound for as long as the window lags, or wait for the window, which is
+the stall forbidden above. So while it runs the kernel only says how far it has
+recorded, and the front end asks for the changes it lacks of the signals it
+shows, one request at a time, each answered with a bounded number of bytes. It
+asks by a change's number in its signal's record rather than by time, because a
+signal can change twice at one time. What the window has not taken yet waits in
+the waveform database, which has a budget and spills to disk (7.1). A window
+that has fallen behind draws its traces only as far as it holds every change of
+every signal it shows (10.7), and catches up when it can.
+
 **The user does not invoke the two separately.** `enzan --gui` starts the front
 end, which is a second process and an implementation detail rather than a second
 program to learn (8.4). Two processes is the architecture; two commands was never
@@ -1261,9 +1274,13 @@ not to justify threading the kernel now.
   equivalents), and is a *list* of paths rather than one: a reader builds a
   selection out of a subtree and a handful of individual signals, which is what
   `log -r` and `add wave` respectively name. A path that is a signal's own path
-  selects that signal, so the two cases need no distinction in the writer.
-- **Live streaming.** The GUI displays a waveform while the simulation
-  progresses, so the database MUST support concurrent append and read.
+  selects that signal, so the two cases need no distinction in the writer. A
+  signal the GUI shows is recorded too, from when it is first shown, whatever the
+  scope, because the GUI reads what it shows from the database (2.2); a signal
+  outside the scope therefore has no trace before it was added.
+- **Live reading.** The GUI displays a waveform while the simulation
+  progresses, so the database MUST support concurrent append and read. It is
+  where a change waits until the GUI takes it (2.2).
 - **Random access by time**, to redraw an arbitrary zoom window without
   replaying from the start.
 - **A configurable memory budget**, with spill to disk when exceeded rather than
@@ -2347,6 +2364,18 @@ quietly swap two of them for the pair that feel more natural to them — both pa
 feel natural, and a tool that changes which is which between releases is worse
 than either choice. They arrive with M2.1 (section 18).
 
+**Where the traces stop.** Every trace stops at the same time, and the time axis
+beyond it is shaded: where the kernel has recorded to, or short of that while
+the window is still fetching a signal's changes (2.2). Drawing a signal's last
+known value on past that point would read as "this signal is flat here" when
+the truth is "nothing is known here yet", and a signal still catching up would
+be drawn holding a value it may already have left. The time axis reaches as far
+as the traces have, so that following the tail follows them, and the status bar
+says how far the kernel has got, which a window behind a fast clock can be well
+short of. A signal added part-way through a run stops the traces where its past
+is still to come, but does not pull the axis back with them, which would move
+the view under the reader.
+
 **The wheel.**
 
 - **Wheel** scrolls the signal list vertically, wherever the pointer is.
@@ -2455,7 +2484,7 @@ it would sit beside is how a tool acquires a number nobody reads.
 - **Unpacking.** A multi-bit signal carries an expander that shows its bits as
   rows of their own, which then behave like any other row — radix, highlight,
   removal and all. Unpacking is a property of the display and creates no new
-  subscription: the kernel streams the signal once however many of its bits are
+  subscription: the window fetches the signal once however many of its bits are
   on screen, exactly as it already does for an extracted bit range (10.3).
 
   **An array unpacks by its dimensions**, outermost first, one level at a time:
@@ -2537,10 +2566,10 @@ it would sit beside is how a tool acquires a number nobody reads.
 
   A parameter is **immutable and constant**, and those are two statements rather
   than one. Constant: its value is the same at every time, so it has no edges to
-  step between and it is *not* clipped at the recorded extent the way a trace is
-  — a trace stopping there says "nothing has happened here yet", which is true of
-  a signal and false of a parameter, and before the first run the clip would hide
-  it altogether. Immutable: it has nothing behind it to unpack into, so it offers
+  step between and it is *not* clipped where the window's traces stop — a trace
+  stopping there says "nothing is known here yet", which is true of a signal and
+  false of a parameter, and before the first run the clip would hide it
+  altogether. Immutable: it has nothing behind it to unpack into, so it offers
   no expander; a `+` that did nothing would be worse than no `+`.
 
   It has no slot, no trace and nothing to subscribe to, so its value travels with

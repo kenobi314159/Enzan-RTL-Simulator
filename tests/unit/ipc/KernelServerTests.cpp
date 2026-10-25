@@ -63,28 +63,30 @@ using enzan::eir::Operand;
 using enzan::eir::ProcessKind;
 using enzan::eir::Type;
 using enzan::ipc::ByeMessage;
+using enzan::ipc::ChangeCursor;
+using enzan::ipc::ChangeEntry;
+using enzan::ipc::ChangesMessage;
 using enzan::ipc::Connection;
 using enzan::ipc::DepositMessage;
 using enzan::ipc::Descriptor;
 using enzan::ipc::DesignMessage;
 using enzan::ipc::FailureMessage;
+using enzan::ipc::FetchChangesMessage;
 using enzan::ipc::ForceMessage;
 using enzan::ipc::Frame;
 using enzan::ipc::HelloMessage;
-using enzan::ipc::HistoryMessage;
 using enzan::ipc::KernelServer;
 using enzan::ipc::MessageType;
 using enzan::ipc::ObjectsMessage;
 using enzan::ipc::ProtocolVersion;
-using enzan::ipc::QueryHistoryMessage;
 using enzan::ipc::ReceiveStatus;
 using enzan::ipc::RunMessage;
 using enzan::ipc::RunStateMessage;
 using enzan::ipc::ServerOptions;
+using enzan::ipc::SignalChanges;
 using enzan::ipc::SimulationState;
 using enzan::ipc::SubscribeMessage;
 using enzan::ipc::TranscriptMessage;
-using enzan::ipc::ValueChangesMessage;
 using enzan::ipc::WelcomeMessage;
 using enzan::runtime::TimeScale;
 using enzan::session::Session;
@@ -439,7 +441,9 @@ protected:
         options.kernelVersion = "enzan test";
         options.timeScale = TimeScale(-9);
         options.localTranscript = &localTranscript;
+        options.waveformScope = waveformScope;
         options.waveformWidthLimit = waveformWidthLimit;
+        options.changesBytes = changesBytes;
         server = std::make_unique<KernelServer>(*session, engine, options);
         server->start();
     }
@@ -537,6 +541,33 @@ protected:
         });
     }
 
+    /// Asks for the changes of `signals` beyond what the client holds of each, as a client fetches
+    /// them, keeps what comes in `held`, and returns the answer.
+    ChangesMessage fetch(const std::vector<std::uint32_t>& signals) {
+        FetchChangesMessage message;
+        for (const std::uint32_t signal : signals)
+            message.signals.push_back(
+                ChangeCursor{.signalIndex = signal, .held = held[signal].size()});
+        request(MessageType::FetchChanges, message);
+        auto answer = expect<ChangesMessage>(MessageType::Changes);
+        for (const SignalChanges& changes : answer.signals) {
+            std::vector<ChangeEntry>& copy = held[changes.signalIndex];
+            if (changes.first == copy.size())
+                copy.insert(copy.end(), changes.entries.begin(), changes.entries.end());
+        }
+        return answer;
+    }
+
+    /// Everything the kernel holds of `signal`, fetched until the client has caught up.
+    const std::vector<ChangeEntry>& fetchAll(std::uint32_t signal) {
+        for (int round = 0; round < 1000; ++round) {
+            const ChangesMessage answer = fetch({signal});
+            if (answer.signals.size() != 1 || held[signal].size() >= answer.signals[0].recorded)
+                break;
+        }
+        return held[signal];
+    }
+
     /// The kernel signal index for a hierarchical path.
     [[nodiscard]] std::uint32_t signalIndex(std::string_view path) const {
         return session->designImage()->findSignal(path);
@@ -556,8 +587,17 @@ protected:
     std::unique_ptr<KernelServer> server;
     enzan::test::Workspace workspace;
 
+    /// The scope the served database records, read by `rebuild`.
+    std::string waveformScope;
+
     /// The widest signal the served database records, read by `rebuild`.
     std::uint32_t waveformWidthLimit = enzan::wavedb::WaveformWriter::DefaultWidthLimit;
+
+    /// The bytes of one answer of changes, read by `rebuild`.
+    std::size_t changesBytes = ServerOptions{}.changesBytes;
+
+    /// The client's copy of each signal's recorded changes, as `fetch` builds it.
+    std::map<std::uint32_t, std::vector<ChangeEntry>> held;
 
     Connection client;
     std::vector<Captured> received;
@@ -790,9 +830,9 @@ TEST_F(ServerFixture, AVhdlArrayIsListedWithTheDimensionsItsTypeDeclares) {
 }
 #endif
 
-TEST_F(ServerFixture, AMemoryAndASignalTooWideToRecordStillStreamOnceSubscribed) {
-    // The database leaves the wide one out; the reader put it in the window all the same, and
-    // its trace from then on is all the window can show of it.
+TEST_F(ServerFixture, AMemoryAndASignalTooWideToRecordAreRecordedOnceShown) {
+    // The database leaves the wide one out of what it records of its own accord; the reader put
+    // it in the window all the same, and its trace from then on is all the window can show of it.
     waveformWidthLimit = 100;
     rebuild(shapedDesign());
     connectClient();
@@ -800,7 +840,6 @@ TEST_F(ServerFixture, AMemoryAndASignalTooWideToRecordStillStreamOnceSubscribed)
     SubscribeMessage subscribe;
     subscribe.signalIndices = {signalIndex("/tb/memory"), signalIndex("/tb/wide")};
     request(MessageType::Subscribe, subscribe);
-    received.clear();
 
     for (const auto& [path, value] :
          {std::pair{"/tb/memory", "32'h01020304"}, std::pair{"/tb/wide", "200'h5"}}) {
@@ -810,14 +849,12 @@ TEST_F(ServerFixture, AMemoryAndASignalTooWideToRecordStillStreamOnceSubscribed)
         request(MessageType::Deposit, deposit);
     }
 
-    std::vector<std::uint32_t> changed;
-    for (const ValueChangesMessage& batch :
-         expectAll<ValueChangesMessage>(MessageType::ValueChanges)) {
-        for (const enzan::ipc::ValueUpdate& update : batch.updates)
-            changed.push_back(update.signalIndex);
-    }
-    EXPECT_NE(std::ranges::find(changed, signalIndex("/tb/memory")), changed.end());
-    EXPECT_NE(std::ranges::find(changed, signalIndex("/tb/wide")), changed.end());
+    const std::vector<ChangeEntry>& memory = fetchAll(signalIndex("/tb/memory"));
+    ASSERT_FALSE(memory.empty());
+    EXPECT_EQ(memory.back().value, literal("32'h01020304"));
+    const std::vector<ChangeEntry>& wide = fetchAll(signalIndex("/tb/wide"));
+    ASSERT_FALSE(wide.empty());
+    EXPECT_EQ(wide.back().value, literal("200'h5"));
 }
 
 TEST_F(ServerFixture, WhatTheWindowLeavesOutForItsWidthIsReportedOnce) {
@@ -933,48 +970,46 @@ TEST_F(ServerFixture, ARunAdvancesTimeAndIsAnnouncedAtBothEnds) {
     EXPECT_EQ(server->kernel().time(), 100U);
 }
 
-TEST_F(ServerFixture, SubscribedSignalsStreamAsTheRunProgresses) {
+TEST_F(ServerFixture, AShownSignalsChangesAreFetchedAsTheyWereRecorded) {
     connectClient();
 
     SubscribeMessage subscribe;
     subscribe.signalIndices = {signalIndex("/tb/clk")};
     request(MessageType::Subscribe, subscribe);
 
-    // Subscribing catches the client up, so the history arrives before anything is run.
-    const auto caughtUp = expect<HistoryMessage>(MessageType::History);
-    EXPECT_EQ(caughtUp.signalIndex, signalIndex("/tb/clk"));
-    ASSERT_FALSE(caughtUp.entries.empty());
-    EXPECT_EQ(caughtUp.entries.front().time, 0U);
-
     RunMessage run;
     run.duration = 100;
     request(MessageType::Run, run);
+    EXPECT_FALSE(sawAny(MessageType::Changes)) << "the kernel sends no value it is not asked for";
 
-    const std::vector<ValueChangesMessage> batches =
-        expectAll<ValueChangesMessage>(MessageType::ValueChanges);
-    ASSERT_FALSE(batches.empty()) << "a subscribed signal that changed twenty times sent nothing";
-
-    // Every batch is one settled time slot, in increasing time, and carries only what was
-    // subscribed. Delta-level intermediate values must never reach the view (section 14.3).
-    std::uint64_t previous = 0;
-    for (const ValueChangesMessage& batch : batches) {
-        EXPECT_GE(batch.time, previous);
-        previous = batch.time;
-        ASSERT_EQ(batch.updates.size(), 1U);
-        EXPECT_EQ(batch.updates[0].signalIndex, signalIndex("/tb/clk"));
+    // One settled time slot a change, in increasing time: delta-level intermediate values must
+    // never reach the view (section 14.3). And caught up, the copy is complete to the end.
+    const std::vector<ChangeEntry>& clock = fetchAll(signalIndex("/tb/clk"));
+    ASSERT_GE(clock.size(), 20U) << "a clock that toggled twenty times has a past";
+    EXPECT_EQ(clock.front().time, 0U);
+    for (std::size_t index = 1; index < clock.size(); ++index) {
+        EXPECT_GT(clock[index].time, clock[index - 1].time);
+        EXPECT_NE(clock[index].value, clock[index - 1].value);
     }
-    EXPECT_EQ(previous, 100U);
+    const ChangesMessage settled = fetch({signalIndex("/tb/clk")});
+    ASSERT_EQ(settled.signals.size(), 1U);
+    EXPECT_TRUE(settled.signals[0].entries.empty());
+    EXPECT_EQ(settled.signals[0].completeTo, 100U);
 }
 
-TEST_F(ServerFixture, AnUnsubscribedSignalDoesNotStream) {
+TEST_F(ServerFixture, ARunSaysHowFarItHasGotAndSendsNoValues) {
+    // The client pulls what it shows; a run tells it there is more and nothing else, which is
+    // what keeps a client that has fallen behind from costing the kernel a queue on the socket.
     connectClient();
 
     RunMessage run;
     run.duration = 100;
     request(MessageType::Run, run);
 
-    EXPECT_FALSE(sawAny(MessageType::ValueChanges))
-        << "streaming a signal nobody asked for spends the socket on data the client discards";
+    EXPECT_FALSE(sawAny(MessageType::Changes));
+    const auto states = expectAll<RunStateMessage>(MessageType::RunState);
+    ASSERT_FALSE(states.empty());
+    EXPECT_EQ(states.back().latestRecordedTime, 100U);
 }
 
 TEST_F(ServerFixture, StopEndsARunThatIsAlreadyInProgress) {
@@ -1102,8 +1137,8 @@ TEST_F(ServerFixture, ARunPastTheEndOfTimeIsRefused) {
 // ---------------------------------------------------------------------------
 
 TEST_F(ServerFixture, AClientAttachingMidRunSeesWhatItMissed) {
-    // The reason the kernel keeps a waveform database rather than only streaming: a GUI that
-    // attaches to a simulation already in progress must show its past, not a blank window.
+    // The reason the kernel keeps a waveform database: a GUI that attaches to a simulation
+    // already in progress must show its past, not a blank window.
     connectClient();
 
     RunMessage run;
@@ -1122,11 +1157,10 @@ TEST_F(ServerFixture, AClientAttachingMidRunSeesWhatItMissed) {
     subscribe.signalIndices = {signalIndex("/tb/clk")};
     request(MessageType::Subscribe, subscribe);
 
-    const auto history = expect<HistoryMessage>(MessageType::History);
-    EXPECT_TRUE(history.complete);
-    EXPECT_GE(history.entries.size(), 20U) << "a clock that toggled twenty times has a past";
-    EXPECT_EQ(history.entries.front().time, 0U);
-    EXPECT_EQ(history.latestTime, 100U);
+    const std::vector<ChangeEntry>& clock = fetchAll(signalIndex("/tb/clk"));
+    EXPECT_GE(clock.size(), 20U) << "a clock that toggled twenty times has a past";
+    ASSERT_FALSE(clock.empty());
+    EXPECT_EQ(clock.front().time, 0U);
 }
 
 TEST_F(ServerFixture, DetachingReleasesTheClientAndLeavesTheSimulationIntact) {
@@ -1164,6 +1198,10 @@ TEST_F(ServerFixture, QuitStopsTheServer) {
 // ---------------------------------------------------------------------------
 
 TEST_F(ServerFixture, RestartReturnsToTimeZeroAndKeepsTheSubscriptions) {
+    // A signal outside the logging scope, recorded only because it is shown, so that what is kept
+    // across the restart is the showing and not the scope.
+    waveformScope = "/tb/u_dut";
+    rebuild(tickingDesign());
     connectClient();
 
     SubscribeMessage subscribe;
@@ -1184,18 +1222,19 @@ TEST_F(ServerFixture, RestartReturnsToTimeZeroAndKeepsTheSubscriptions) {
     EXPECT_EQ(state.state, SimulationState::Idle);
     EXPECT_EQ(server->kernel().time(), 0U);
 
-    // The subscription survives, and the fresh trace is sent without being asked for: losing
-    // the wave window's contents would make the button useless for what it is used for.
-    const auto history = expect<HistoryMessage>(MessageType::History);
-    EXPECT_EQ(history.signalIndex, signalIndex("/tb/clk"));
-    ASSERT_EQ(history.entries.size(), 1U);
-    EXPECT_EQ(history.entries.front().time, 0U);
+    // The signal is recorded again from time zero, for the client to fetch afresh: losing the
+    // wave window's contents would make the button useless for what it is used for.
+    held.clear();
+    const std::vector<ChangeEntry>& clock = fetchAll(signalIndex("/tb/clk"));
+    ASSERT_EQ(clock.size(), 1U);
+    EXPECT_EQ(clock.front().time, 0U);
 
     // And the design runs again from the beginning.
     RunMessage again;
     again.duration = 40;
     request(MessageType::Run, again);
     EXPECT_EQ(server->kernel().time(), 40U);
+    EXPECT_GE(fetchAll(signalIndex("/tb/clk")).size(), 8U);
 }
 
 TEST_F(ServerFixture, RestartIsRefusedWhileAVpiApplicationIsLoaded) {
@@ -1450,7 +1489,12 @@ TEST_F(CaptureFixture, StoppingPutsTheDescriptorsBack) {
 // History
 // ---------------------------------------------------------------------------
 
-TEST_F(ServerFixture, HistoryHonoursTheRequestedRange) {
+TEST_F(ServerFixture, AnAnswerSharesItsBytesAndSaysWhereEachCopyIsComplete) {
+    // Room for five changes, fewer than the clock's past: had the first signal asked for taken all
+    // it could, the one after it would wait on it. And the clock's copy is complete up to the first
+    // change left out, which is as far as the client may draw it.
+    changesBytes = 5 * KernelServer::changeBytes(1);
+    rebuild(tickingDesign());
     connectClient();
 
     RunMessage run;
@@ -1458,37 +1502,75 @@ TEST_F(ServerFixture, HistoryHonoursTheRequestedRange) {
     request(MessageType::Run, run);
     received.clear();
 
-    QueryHistoryMessage query;
-    query.signalIndex = signalIndex("/tb/clk");
-    query.fromTime = 30;
-    query.toTime = 60;
-    request(MessageType::QueryHistory, query);
+    const std::uint32_t clk = signalIndex("/tb/clk");
+    const std::uint32_t q = signalIndex("/tb/u_dut/q");
+    const ChangesMessage first = fetch({clk, q});
+    ASSERT_EQ(first.signals.size(), 2U);
+    const SignalChanges& clock = first.signals[0];
+    ASSERT_FALSE(clock.entries.empty());
+    ASSERT_LT(clock.entries.size(), clock.recorded);
+    EXPECT_EQ(clock.completeTo, clock.entries.back().time + 5);
+    const SignalChanges& counter = first.signals[1];
+    EXPECT_EQ(counter.entries.size(), counter.recorded)
+        << "a share for each, not all for the first";
+    EXPECT_EQ(counter.completeTo, 100U);
 
-    const auto history = expect<HistoryMessage>(MessageType::History);
-    ASSERT_FALSE(history.entries.empty());
-    for (const enzan::ipc::HistoryEntry& entry : history.entries) {
-        EXPECT_GE(entry.time, 30U);
-        EXPECT_LT(entry.time, 60U);
+    // Asking again goes on from where the copy ends, until it is caught up and complete.
+    for (int round = 0; round < 100 && held[clk].size() < clock.recorded; ++round)
+        static_cast<void>(fetch({clk, q}));
+    const ChangesMessage last = fetch({clk, q});
+    for (const SignalChanges& changes : last.signals) {
+        EXPECT_TRUE(changes.entries.empty());
+        EXPECT_EQ(held[changes.signalIndex].size(), changes.recorded);
+        EXPECT_EQ(changes.completeTo, 100U);
     }
 }
 
-TEST(KernelServerHistory, AnAnswerStopsWhereItsBytesWouldOutgrowAFrame) {
-    // A count alone bounded it: two hundred thousand changes of a memory four thousand bits wide
-    // are two hundred megabytes, and a client refuses a frame over sixty-four as malformed.
-    const auto bytesFor = [](std::uint32_t width) {
-        const std::size_t entry = sizeof(std::uint64_t) + sizeof(std::uint32_t)
-                                  + (enzan::eir::storageWordsFor(width) * sizeof(enzan::eir::Word));
-        return KernelServer::historyEntriesFor(width) * entry;
-    };
+TEST_F(ServerFixture, ARunSaysNothingOfItsProgressToAClientThatHasNotRead) {
+    // Only the latest progress is worth reading, so none is queued behind output the client has
+    // not read: a client that stops reading costs the socket no more however long a run goes on.
+    connectClient();
+    RunMessage before;
+    before.duration = 1'000'000;
+    request(MessageType::Run, before);
+    received.clear();
 
-    EXPECT_EQ(KernelServer::historyEntriesFor(1), KernelServer::MaxHistoryEntries)
-        << "a narrow signal is bounded by the count";
-    for (const std::uint32_t width : {1U, 64U, 4096U, 65536U, enzan::ipc::MaxSignalBits}) {
-        EXPECT_LE(bytesFor(width), KernelServer::MaxHistoryBytes) << width << " bits";
-        EXPECT_GE(KernelServer::historyEntriesFor(width), 1U) << width << " bits";
+    // An answer of the clock's whole past, megabytes, far more than the socket holds, and a run
+    // asked for behind it, with the client reading none of it until the run is over.
+    FetchChangesMessage everything;
+    everything.signals = {ChangeCursor{.signalIndex = signalIndex("/tb/clk"), .held = 0}};
+    client.send(MessageType::FetchChanges, everything);
+    RunMessage run;
+    run.duration = 2'000'000;
+    client.send(MessageType::Run, run);
+    ASSERT_TRUE(client.flushBlocking()) << client.error();
+    for (int round = 0; round < 8; ++round) static_cast<void>(server->step(5));
+    ASSERT_EQ(server->kernel().time(), 3'000'000U);
+
+    const auto ended = [this] {
+        return std::ranges::any_of(received, [](const Captured& captured) {
+            RunStateMessage state;
+            return captured.type == static_cast<std::uint16_t>(MessageType::RunState)
+                   && enzan::ipc::decodePayload(captured.payload, state)
+                   && state.state != SimulationState::Running;
+        });
+    };
+    for (int round = 0; round < 10'000 && !ended(); ++round) {
+        static_cast<void>(server->step(1));
+        collect();
     }
-    EXPECT_LT(KernelServer::historyEntriesFor(4096), KernelServer::MaxHistoryEntries);
-    EXPECT_LT(KernelServer::MaxHistoryBytes, enzan::ipc::MaxPayloadBytes);
+    ASSERT_TRUE(ended());
+    EXPECT_FALSE(sawAny(MessageType::Progress));
+    EXPECT_EQ(expect<ChangesMessage>(MessageType::Changes).signals.at(0).entries.size(),
+              ServerOptions{}.changesBytes / KernelServer::changeBytes(1));
+}
+
+TEST(KernelServerChanges, AnAnswerFitsAFrameWhateverItsSignalsWidths) {
+    // An answer carries its budget's worth, or one change when one alone is larger; either has
+    // to be a frame the client accepts.
+    const std::size_t widest = KernelServer::changeBytes(enzan::ipc::MaxSignalBits);
+    EXPECT_LT(ServerOptions{}.changesBytes + widest, enzan::ipc::MaxPayloadBytes);
+    EXPECT_GT(KernelServer::changeBytes(4096), KernelServer::changeBytes(1));
 }
 
 TEST_F(ServerFixture, ASignalOfVhdlCodesIsListedAtTheWidthItsValuesComeAt) {
@@ -1508,26 +1590,26 @@ TEST_F(ServerFixture, ASignalOfVhdlCodesIsListedAtTheWidthItsValuesComeAt) {
     SubscribeMessage subscribe;
     subscribe.signalIndices = {signalIndex("/tb/ready")};
     request(MessageType::Subscribe, subscribe);
-    const auto history = expect<HistoryMessage>(MessageType::History);
-    EXPECT_EQ(history.width, 1U);
-    ASSERT_EQ(history.entries.size(), 1U);
-    EXPECT_EQ(history.entries[0].value.width(), history.width);
-    EXPECT_EQ(enzan::eir::toString(history.entries[0].value.ref(), enzan::eir::Radix::Binary), "1");
+    const ChangesMessage first = fetch({signalIndex("/tb/ready")});
+    ASSERT_EQ(first.signals.size(), 1U);
+    EXPECT_EQ(first.signals[0].width, 1U);
+    ASSERT_EQ(first.signals[0].entries.size(), 1U);
+    EXPECT_EQ(first.signals[0].entries[0].value.width(), 1U);
+    EXPECT_EQ(
+        enzan::eir::toString(first.signals[0].entries[0].value.ref(), enzan::eir::Radix::Binary),
+        "1");
 
     RunMessage run;
     run.duration = 100;
     request(MessageType::Run, run);
-    const std::vector<ValueChangesMessage> batches =
-        expectAll<ValueChangesMessage>(MessageType::ValueChanges);
-    ASSERT_EQ(batches.size(), 1U);
-    ASSERT_EQ(batches[0].updates.size(), 1U);
-    EXPECT_EQ(batches[0].updates[0].value.width(), history.width);
-    EXPECT_EQ(enzan::eir::toString(batches[0].updates[0].value.ref(), enzan::eir::Radix::Binary),
-              "0");
+    const std::vector<ChangeEntry>& ready = fetchAll(signalIndex("/tb/ready"));
+    ASSERT_EQ(ready.size(), 2U);
+    EXPECT_EQ(ready.back().value.width(), 1U);
+    EXPECT_EQ(enzan::eir::toString(ready.back().value.ref(), enzan::eir::Radix::Binary), "0");
 }
 
 TEST_F(ServerFixture, ASignalOfANullRangeIsListedWithNoBitsAndSendsNothing) {
-    // Its one bit is a placeholder, shown as no bits at all; a history of it was a value of no
+    // Its one bit is a placeholder, shown as no bits at all; a value of it would be one of no
     // bits, which no bit vector can be, and the kernel stopped on it.
     rebuild(nullDesign());
     connectClient();
@@ -1543,9 +1625,12 @@ TEST_F(ServerFixture, ASignalOfANullRangeIsListedWithNoBitsAndSendsNothing) {
     SubscribeMessage subscribe;
     subscribe.signalIndices = {signalIndex("/tb/ready"), signalIndex("/tb/nothing")};
     request(MessageType::Subscribe, subscribe);
-    const std::vector<HistoryMessage> histories = expectAll<HistoryMessage>(MessageType::History);
-    ASSERT_EQ(histories.size(), 1U);
-    EXPECT_EQ(histories[0].signalIndex, signalIndex("/tb/ready"));
+    const ChangesMessage answer = fetch({signalIndex("/tb/ready"), signalIndex("/tb/nothing")});
+    ASSERT_EQ(answer.signals.size(), 2U);
+    EXPECT_FALSE(answer.signals[0].entries.empty());
+    EXPECT_EQ(answer.signals[1].width, 0U);
+    EXPECT_TRUE(answer.signals[1].entries.empty());
+    EXPECT_EQ(answer.signals[1].recorded, 0U);
 
     // And the kernel is still there to run.
     RunMessage run;
@@ -1580,9 +1665,9 @@ TEST_F(ServerFixture, ADepositIntoAVhdlSignalIsTheBitsItShowsAs) {
 TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {
     connectClient();
 
-    QueryHistoryMessage query;
-    query.signalIndex = 9999;
-    request(MessageType::QueryHistory, query);
+    FetchChangesMessage fetchNothing;
+    fetchNothing.signals = {ChangeCursor{.signalIndex = 9999, .held = 0}};
+    request(MessageType::FetchChanges, fetchNothing);
 
     const auto failure = expect<FailureMessage>(MessageType::Failure);
     EXPECT_NE(failure.reason.find("no signal"), std::string::npos) << failure.reason;
@@ -1601,16 +1686,11 @@ protected:
         connectClient();
     }
 
-    /// The value the client last saw for `/tb/q`, as a binary string.
+    /// The value the client last fetched for `/tb/q`, in decimal.
     [[nodiscard]] std::string lastSeenQ() {
-        const std::vector<ValueChangesMessage> changes =
-            expectAll<ValueChangesMessage>(MessageType::ValueChanges);
-        std::string latest;
-        for (const ValueChangesMessage& change : changes)
-            for (const auto& update : change.updates)
-                if (update.signalIndex == signalIndex("/tb/q"))
-                    latest = enzan::eir::toString(update.value.ref(), enzan::eir::Radix::Decimal);
-        return latest;
+        const std::vector<ChangeEntry>& changes = fetchAll(signalIndex("/tb/q"));
+        if (changes.empty()) return {};
+        return enzan::eir::toString(changes.back().value.ref(), enzan::eir::Radix::Decimal);
     }
 
     enzan::BufferId sourceBuffer;
@@ -1631,15 +1711,16 @@ TEST_F(DebugFixture, ADepositIsWrittenAndTheClientSeesIt) {
     SubscribeMessage subscribe;
     subscribe.signalIndices = {signalIndex("/tb/q")};
     request(MessageType::Subscribe, subscribe);
-    static_cast<void>(expectAll<ValueChangesMessage>(MessageType::ValueChanges));
+    static_cast<void>(lastSeenQ());
 
     DepositMessage deposit;
     deposit.signalIndex = signalIndex("/tb/q");
     deposit.value = literal("4'd9");
     request(MessageType::Deposit, deposit);
 
-    // A deposit between runs produces no time advance, so the change has to be flushed for the
-    // window showing the signal to move at all.
+    // A deposit between runs produces no time advance, so the change has to be recorded then,
+    // and the client told that there is more to fetch, for the window showing it to move at all.
+    EXPECT_TRUE(sawAny(MessageType::Progress));
     EXPECT_EQ(lastSeenQ(), "9");
 }
 
@@ -1655,14 +1736,7 @@ TEST_F(DebugFixture, AForceHoldsAValueAgainstTheDesignAndAReleaseLetsItGo) {
     static_cast<void>(expectAll<RunStateMessage>(MessageType::RunState));
 
     // The design wrote 3 and then 5; the force outranks both.
-    enzan::ipc::QueryHistoryMessage query;
-    query.signalIndex = signalIndex("/tb/q");
-    query.toTime = enzan::runtime::NoTime;
-    request(MessageType::QueryHistory, query);
-    const auto history = expect<HistoryMessage>(MessageType::History);
-    ASSERT_FALSE(history.entries.empty());
-    EXPECT_EQ(enzan::eir::toString(history.entries.back().value.ref(), enzan::eir::Radix::Decimal),
-              "1");
+    EXPECT_EQ(lastSeenQ(), "1");
 
     ForceMessage release;
     release.signalIndex = signalIndex("/tb/q");

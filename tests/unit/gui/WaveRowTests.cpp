@@ -56,7 +56,7 @@ protected:
         counter = infoFor(QStringLiteral("count"));
         session->subscribe({clock.signalIndex, counter.signalIndex});
         session->run(400);
-        pumpUntil([this] { return session->currentTime() == 400; });
+        pumpUntilCaughtUp(400);
     }
 
     void TearDown() override {
@@ -560,7 +560,7 @@ protected:
         }
         session->subscribe(indices);
         session->run(20);
-        pumpUntil([this] { return session->currentTime() == 20; });
+        pumpUntilCaughtUp(20);
     }
 
     void TearDown() override {

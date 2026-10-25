@@ -3,7 +3,6 @@
 #pragma once
 
 #include "common/Diagnostics.h"
-#include "ipc/ChangePublisher.h"
 #include "ipc/OutputCapture.h"
 #include "ipc/Protocol.h"
 #include "ipc/Transport.h"
@@ -44,6 +43,12 @@ struct ServerOptions {
 
     wavedb::DatabaseOptions database;
 
+    /// Bytes of entries one Changes answer carries at most, though one change always goes when
+    /// there is one to send, however wide. Small enough that an answer is soon on its way and a
+    /// client asking again finds the newest changes; one change of the widest signal is far
+    /// below what a frame may hold, so no answer outgrows one.
+    std::size_t changesBytes = std::size_t{4} << 20U;
+
     /// Where transcript output is echoed in addition to being sent to the client. Null means
     /// the standard output: a kernel serving a socket is still a program in a terminal, and
     /// swallowing its `$display` output because nothing had attached would be surprising.
@@ -64,6 +69,12 @@ struct ServerOptions {
 /// Everything that makes the split worth having lives here: the kernel runs perfectly well with
 /// nobody attached, a client may attach and detach while a simulation is in progress, and a
 /// client that stops reading is left behind rather than allowed to stall the run.
+///
+/// **The client pulls what it shows.** The server sends no values of its own accord: while a
+/// run goes it says how far it has got (Progress), and the client asks for the changes it lacks
+/// (FetchChanges), from the database the recorder fills, one bounded answer at a time. So what a
+/// client has not taken yet is in the database, whose values spill to disk past its budget,
+/// rather than in a queue on the socket that grows for as long as the client lags.
 ///
 /// **A run is interruptible, not chopped up.** `run` is called once for the whole requested
 /// span and the server answers the kernel's interrupt poll from inside it, servicing the socket
@@ -146,18 +157,8 @@ public:
     /// The status `$finish` or `$fatal` asked for, or 2 when a run failed.
     [[nodiscard]] int exitStatus() const noexcept { return processExitStatus; }
 
-    /// Entries a single History message will carry before it is marked incomplete.
-    static constexpr std::size_t MaxHistoryEntries = 200'000;
-
-    /// Bytes of entries a single History message will carry before it is marked incomplete:
-    /// half of what a frame may hold. A count alone does not bound a message, because an entry
-    /// is as large as its signal is wide, and a frame larger than `MaxPayloadBytes` is one the
-    /// client refuses as malformed.
-    static constexpr std::size_t MaxHistoryBytes = MaxPayloadBytes / 2;
-
-    /// Entries a History message carries for a signal `width` bits wide: as many as both
-    /// limits allow, and one at least however wide it is.
-    [[nodiscard]] static std::size_t historyEntriesFor(std::uint32_t width) noexcept;
+    /// The bytes one change of a signal `width` bits wide takes in a Changes answer.
+    [[nodiscard]] static std::size_t changeBytes(std::uint32_t width) noexcept;
 
     // Public, matching `RunInterrupt`. Narrowing an override's visibility is legal and
     // confusing: the kernel calls it through the base class either way.
@@ -220,14 +221,14 @@ private:
     void onQueryObjects(const Frame& frame);
     void onSubscribe(const Frame& frame);
     void onUnsubscribe(const Frame& frame);
-    void onQueryHistory(const Frame& frame);
+    void onFetchChanges(const Frame& frame);
     void onRun(const Frame& frame);
     void onRestart();
     void onDeposit(const Frame& frame);
     void onForce(const Frame& frame);
 
     /// Takes back every registration made against the session's kernel, then drops the
-    /// database, the recorder and the publisher.
+    /// database and the recorder.
     void detachFromKernel();
 
     /// What `renewKernelBorrow` found.
@@ -260,11 +261,12 @@ private:
     void performRun();
 
     void sendRunState(std::string reason);
+
+    /// Says how far the kernel has got, when that has moved since it was last said, or always
+    /// when `recorded` says a change was recorded without time moving.
+    void sendProgress(bool recorded);
     void sendFailure(std::string reason);
     void closeClient(std::string reason);
-
-    /// Sends a signal's recorded past, or its current value when it is not being recorded.
-    void sendHistory(std::uint32_t signalIndex, runtime::SimTime from, runtime::SimTime to);
 
     [[nodiscard]] runtime::SimTime latestRecordedTime() const noexcept;
 
@@ -294,7 +296,13 @@ private:
     // the database is where "nothing recorded" lives.
     std::unique_ptr<wavedb::WaveformDatabase> database;
     std::unique_ptr<wavedb::WaveformRecorder> recorder;
-    std::unique_ptr<ChangePublisher> publisher;
+
+    /// The signals the client shows, which the recorder records whatever its scope. Kept across a
+    /// restart, which records them again from time zero, and forgotten when the client leaves.
+    std::vector<bool> shown;
+
+    /// What the last Progress said, so that one is sent only when it would say something new.
+    ProgressMessage lastProgress;
 
     /// The signals the recorder last left out for their width, as they were reported.
     std::vector<std::uint32_t> reportedTooWide;
