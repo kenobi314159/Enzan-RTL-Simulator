@@ -16,9 +16,9 @@
 # where the colour is anything Qt accepts — `#rrggbb`, `#aarrggbb` or an SVG colour name — and
 # the size is in points, at the end of this file.
 #
-# To change a colour, copy this file, edit it, and pass it with `enzan-gui --theme <file>`. A
+# To change a colour, copy this file, edit it, and pass it with `enzan --theme <file>`. A
 # user theme is layered over this one, so a file that sets three colours changes three colours.
-# `enzan-gui --write-theme <file>` writes this text out for you.
+# `enzan --write-theme <file>` writes this text out for you.
 
 # --- Chrome ------------------------------------------------------------------
 #
