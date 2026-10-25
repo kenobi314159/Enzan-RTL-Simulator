@@ -57,6 +57,22 @@ if has vhdl; then
     [[ ${#sources[@]} -eq 0 ]] && sources+=(tb.vhd)
 fi
 
+# --- what every invocation can count on -----------------------------------------------------------
+
+[[ $("$enzan" --version | head -1) =~ ^enzan\ [0-9]+\.[0-9]+\.[0-9]+ ]] \
+    || fail "--version does not begin with the version: $("$enzan" --version 2>&1 | head -1)"
+expect 0 "Usage: enzan" "$enzan" --help
+expect 0 "--listen <socket>" "$enzan" --help
+expect 1 "unrecognised option '--no-such-option'" "$enzan" --no-such-option
+expect 1 "Usage: enzan" "$enzan"
+expect 1 "no source files were given" "$enzan" --top tb
+expect 1 "option '--top' needs a value" "$enzan" --top
+
+# A served session is driven by its client (8.4), and a signal list fills a window a headless run
+# does not have (10.8): each refused rather than dropped.
+expect 1 "cannot be combined" "$enzan" --listen k.sock --run 10 tb.sv
+expect 1 "'--wave-list' needs '--gui'" "$enzan" run --wave-list signals.tcl tb
+
 # --- the shape of the command (8.1) ---------------------------------------------------------------
 
 # `lib` is a command whatever follows it, rather than a source to read.
