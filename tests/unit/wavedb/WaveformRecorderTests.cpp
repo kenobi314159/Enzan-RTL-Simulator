@@ -236,6 +236,32 @@ TEST_F(WaveformRecorderTest, TheScopeFilterReachesTheDatabase) {
     EXPECT_EQ(database.signalCount(), 1U);
 }
 
+TEST_F(WaveformRecorderTest, ASignalOutsideTheScopeIsRecordedFromWhenItIsAsked) {
+    // As a wave window asks for a signal it shows: from the value it holds then, and every change
+    // after, as though it had been in scope from that moment.
+    build(twoScopeDesign(), "tb");
+    recorder->setScope("/tb/u_dut");
+    recorder->start();
+
+    recorder->onTimeAdvance(10);
+    set("/tb/count", "8'h01");
+    recorder->onTimeAdvance(20);
+    recorder->recordFromNow(signalIndex("/tb/count"), 20);
+    recorder->recordFromNow(signalIndex("/tb/count"), 20);
+    set("/tb/count", "8'h02");
+    recorder->onTimeAdvance(30);
+    set("/tb/count", "8'h03");
+    recorder->onTimeAdvance(40);
+
+    const std::uint32_t count = recordOf("/tb/count");
+    ASSERT_NE(count, WaveformDatabase::NotRecorded);
+    ASSERT_EQ(database.changeCount(count), 3U) << "the value then, and the two changes after";
+    EXPECT_EQ(database.timeOfChange(count, 0), 20U);
+    EXPECT_EQ(database.valueAt(count, 20), std::optional(literal("8'h02")));
+    EXPECT_EQ(database.valueAt(count, 30), std::optional(literal("8'h03")));
+    EXPECT_FALSE(database.valueAt(count, 10).has_value()) << "nothing before it was asked for";
+}
+
 TEST_F(WaveformRecorderTest, ClosingFlushesThePendingSlot) {
     build(twoScopeDesign(), "tb");
     recorder->start();

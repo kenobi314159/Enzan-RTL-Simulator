@@ -22,6 +22,13 @@ void WaveformRecorder::start() {
     static_cast<void>(WaveformWriter::open(std::filesystem::path(), ignored));
 }
 
+void WaveformRecorder::recordFromNow(std::uint32_t signalIndex, runtime::SimTime now) {
+    if (!addRecorded(signalIndex)) return;
+    const std::uint32_t entry =
+        database->addSignal(signalIndex, image().signals()[signalIndex].path, widthOf(signalIndex));
+    database->append(entry, now, valueOf(signalIndex));
+}
+
 bool WaveformRecorder::openOutput(const std::filesystem::path& /*path*/, std::string& /*error*/) {
     return true;
 }

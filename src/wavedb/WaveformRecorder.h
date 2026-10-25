@@ -40,6 +40,15 @@ public:
     /// started recording at construction would capture an arena that had not been initialised.
     void start();
 
+    /// Records `signalIndex` from now on as well, beginning with the value it holds at `now`,
+    /// whatever the scope and the width limit chose: what a reader puts in a wave window is
+    /// recorded from the moment they do (DESIGN_GUIDE.md section 7.1). Nothing for a signal
+    /// recorded already or one with no value, a VHDL signal of a null range.
+    ///
+    /// Between time slots only, as the kernel's listeners are called: `now` is the slot being
+    /// recorded.
+    void recordFromNow(std::uint32_t signalIndex, runtime::SimTime now);
+
 private:
     // The database is the output, so there is no file to name and no failure to report. The
     // base class's file-shaped entry point is hidden rather than left callable, so that a

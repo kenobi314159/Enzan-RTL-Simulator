@@ -75,6 +75,18 @@ std::uint32_t WaveformWriter::recordIndexOf(std::uint32_t signalIndex) const noe
     return signalIndex < recordIndex.size() ? recordIndex[signalIndex] : NotRecorded;
 }
 
+bool WaveformWriter::addRecorded(std::uint32_t signalIndex) {
+    if (!opened || signalIndex >= recordIndex.size() || recordIndex[signalIndex] != NotRecorded)
+        return false;
+    if (designImage->elaboratedDesign().slots()[signalIndex].holdsNothing) return false;
+    recordIndex[signalIndex] = static_cast<std::uint32_t>(recorded.size());
+    recorded.push_back(signalIndex);
+    isDirty.push_back(false);
+    // Room for every recorded signal to be dirty at once, so that a slot never grows it.
+    dirty.reserve(recorded.size());
+    return true;
+}
+
 std::uint32_t WaveformWriter::widthOf(std::uint32_t signalIndex) const noexcept {
     // Its one bit is a placeholder, a bit vector having at least one, which is no value of it.
     if (designImage->elaboratedDesign().slots()[signalIndex].holdsNothing) return 0;

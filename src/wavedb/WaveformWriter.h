@@ -137,6 +137,14 @@ protected:
     /// Position of `signalIndex` among the recorded signals, or `NotRecorded`.
     [[nodiscard]] std::uint32_t recordIndexOf(std::uint32_t signalIndex) const noexcept;
 
+    /// Adds `signalIndex` to the recorded signals once the writer is open, whatever the scope and
+    /// the width limit chose, so that its changes are written from the next one on. False when
+    /// it is recorded already, or has no value to record, a VHDL signal of a null range.
+    ///
+    /// For a format that can declare a signal part-way through, which a file whose declarations
+    /// precede every value cannot.
+    bool addRecorded(std::uint32_t signalIndex);
+
     /// Reads a signal's current value out of the state arena, as it is shown: a VHDL signal's
     /// codes converted to the bits they stand for (DESIGN_GUIDE.md section 3.6), and anything else
     /// as it is.
