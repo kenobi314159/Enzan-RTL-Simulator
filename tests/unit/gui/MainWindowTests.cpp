@@ -183,7 +183,7 @@ TEST_F(MainWindowTest, AGroupedInsertNamesTheGroupAfterTheScopesPath) {
     EXPECT_EQ(signalsUnder(rows.front()), expected);
 }
 
-TEST_F(MainWindowTest, AGroupedRecursiveInsertPutsTheGroupsSideBySide) {
+TEST_F(MainWindowTest, AGroupedRecursiveInsertNestsTheGroupsAsTheDesignIs) {
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
@@ -191,24 +191,28 @@ TEST_F(MainWindowTest, AGroupedRecursiveInsertPutsTheGroupsSideBySide) {
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
-    ASSERT_EQ(rows.size(), 2) << "one group per scope, both at the top level";
+    ASSERT_EQ(rows.size(), 1) << "one group for the subtree";
 
-    // Siblings, not nested: the hierarchy is what the Structure window is for, and a reader
-    // comparing a subtree's modules should not have to open a group per level to see them.
-    for (const int rowId : rows) {
-        const WaveRow* row = waves()->row(rowId);
-        ASSERT_NE(row, nullptr);
-        EXPECT_EQ(row->kind, WaveRow::Kind::Group);
-        EXPECT_EQ(row->parent, -1);
-    }
+    const WaveRow* top = waves()->row(rows.front());
+    ASSERT_NE(top, nullptr);
+    EXPECT_EQ(top->kind, WaveRow::Kind::Group);
+    EXPECT_EQ(top->label, Top);
+    ASSERT_EQ(top->children.size(), 2) << "the scope's own signals, then its instance";
 
     // In the order the Structure window shows them, which is the order the tree arrived in —
-    // not the order the kernel happened to answer the queries in.
-    EXPECT_EQ(waves()->row(rows[0])->label, Top);
-    EXPECT_EQ(waves()->row(rows[1])->label, Child);
+    // not the order the kernel happened to answer the queries in. Inside the subtree's group an
+    // instance is named by its name: the group around it already says where it is.
+    const WaveRow* own = waves()->row(top->children[0]);
+    const WaveRow* child = waves()->row(top->children[1]);
+    ASSERT_NE(own, nullptr);
+    ASSERT_NE(child, nullptr);
+    EXPECT_EQ(own->kind, WaveRow::Kind::Group);
+    EXPECT_EQ(own->label, QStringLiteral("$top"));
+    EXPECT_EQ(child->kind, WaveRow::Kind::Group);
+    EXPECT_EQ(child->label, QStringLiteral("u_dut"));
 
-    EXPECT_EQ(signalsUnder(rows[0]), signalsOf(Top));
-    EXPECT_EQ(signalsUnder(rows[1]), signalsOf(Child));
+    EXPECT_EQ(signalsUnder(top->children[0]), signalsOf(Top));
+    EXPECT_EQ(signalsUnder(top->children[1]), signalsOf(Child));
 }
 
 // ---------------------------------------------------------------------------
@@ -235,21 +239,28 @@ TEST_F(MainWindowTest, AnInsertLeavesTheObjectsWindowOnTheScopeTheReaderClicked)
 
 TEST_F(MainWindowTest, NoGroupIsLeftEmpty) {
     // A group named after a scope with nothing in it says only that the scope was asked about,
-    // so an insert drops it. Both of the fixture's scopes declare signals, so what this pins is
-    // the other half of that rule: a group that *was* filled must survive. An over-eager removal
-    // — checking before the reply arrived, say — would take every group with it.
+    // so an insert drops it; SignalListTests pins that on a hierarchy with empty scopes in it.
+    // Both of the fixture's scopes declare signals, so what this pins is the other half of that
+    // rule: a group that *was* filled must survive. An over-eager removal — checking before the
+    // reply arrived, say — would take every group with it.
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
     insert(Top, QStringLiteral("Add to wave recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
-    const QVector<int> rows = topRows();
-    EXPECT_EQ(rows.size(), 2);
-    for (const int rowId : rows) {
-        EXPECT_FALSE(waves()->row(rowId)->children.isEmpty())
-            << waves()->row(rowId)->label.toStdString() << " is an empty group";
+    QVector<int> rows = topRows();
+    EXPECT_EQ(rows.size(), 1);
+    int groups = 0;
+    while (!rows.isEmpty()) {
+        const WaveRow* row = waves()->row(rows.takeLast());
+        ASSERT_NE(row, nullptr);
+        if (row->kind != WaveRow::Kind::Group) continue;
+        ++groups;
+        EXPECT_FALSE(row->children.isEmpty()) << row->label.toStdString() << " is an empty group";
+        rows += row->children;
     }
+    EXPECT_EQ(groups, 3) << "the subtree's, its own signals' and its instance's";
 }
 
 TEST_F(MainWindowTest, StopEndsARunTheWindowStarted) {

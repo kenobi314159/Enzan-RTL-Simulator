@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -25,7 +26,10 @@ constexpr std::array ListedRadixes{eir::Radix::Binary, eir::Radix::Octal, eir::R
 
 /// How deeply groups may nest. Each level is a recursion here, and a file is untrusted input:
 /// without a limit, a few kilobytes of opening braces would take the window down.
-constexpr int MaximumDepth = 32;
+///
+/// Well past what a window saves, so that the list loads back: a recursive add nests a group
+/// for each level of the design, and slang refuses a hierarchy more than 128 instances deep.
+constexpr int MaximumDepth = 256;
 
 /// Where the text being parsed lies in the file, so that a message can name a line.
 struct Origin {
@@ -412,14 +416,55 @@ std::vector<SelectedPath> splitSelects(const QString& path) {
     return splits;
 }
 
+/// The design's scopes as the Structure window arranges them, indexed once so that a subtree
+/// is walked without searching the whole list at every level of it.
+class ScopeTree {
+public:
+    explicit ScopeTree(const QVector<ipc::InstanceEntry>& instances) {
+        paths.reserve(instances.size());
+        names.reserve(instances.size());
+        children.resize(instances.size());
+        for (qsizetype scope = 0; scope < instances.size(); ++scope) {
+            const ipc::InstanceEntry& instance = instances[scope];
+            paths.push_back(QString::fromStdString(instance.path));
+            names.push_back(QString::fromStdString(instance.name));
+            indices.insert(paths.back(), scope);
+
+            // The list is a depth-first walk, so a parent comes before its children and they
+            // come in the Structure window's order. A parent anywhere else would be a cycle.
+            if (std::cmp_less(instance.parent, scope)) children[instance.parent].push_back(scope);
+        }
+    }
+
+    /// The scope `path` names, or -1 when it names none.
+    [[nodiscard]] qsizetype find(const QString& path) const { return indices.value(path, -1); }
+
+    [[nodiscard]] const QString& pathOf(qsizetype scope) const { return paths[scope]; }
+
+    /// The instance's own name, the last part of its path.
+    [[nodiscard]] const QString& nameOf(qsizetype scope) const { return names[scope]; }
+
+    [[nodiscard]] const QVector<qsizetype>& childrenOf(qsizetype scope) const {
+        return children[scope];
+    }
+
+private:
+    QVector<QString> paths;
+    QVector<QString> names;
+    QHash<QString, qsizetype> indices;
+    QVector<QVector<qsizetype>> children;
+};
+
+/// The name a recursive add gives the group of a scope's own signals, which it puts first
+/// among the groups of the scopes below it. An instance name begins with `$` only as an
+/// escaped identifier, so this one is not taken for a child scope.
+constexpr QStringView OwnSignalsLabel = u"$top";
+
 class Resolver {
 public:
-    Resolver(const QVector<ipc::InstanceEntry>& instanceList,
+    Resolver(const QVector<ipc::InstanceEntry>& instances,
              const QHash<QString, QVector<SignalInfo>>& scopeObjects, ResolvedSignalList& output)
-        : instances(instanceList), objects(scopeObjects), result(output) {
-        for (const ipc::InstanceEntry& instance : instances)
-            scopes.insert(QString::fromStdString(instance.path));
-    }
+        : tree(instances), objects(scopeObjects), result(output) {}
 
     void entries(const std::vector<SignalListEntry>& list,
                  std::vector<WaveformModel::PendingRow>& out) {
@@ -435,8 +480,9 @@ public:
             }
 
             for (const QString& path : entry.paths) {
-                if (scopes.contains(path)) {
-                    scope(entry, path, out);
+                const qsizetype found = tree.find(path);
+                if (found >= 0) {
+                    scope(entry, found, out);
                 } else {
                     signal(entry, path, out);
                 }
@@ -465,8 +511,57 @@ private:
         if (entry.highlight != 0) row.highlight = entry.highlight;
     }
 
-    void scope(const SignalListEntry& entry, const QString& path,
+    /// A group called `label` holding the objects of `scope`, with the options of `entry`.
+    [[nodiscard]] WaveformModel::PendingRow groupOf(const SignalListEntry& entry, qsizetype scope,
+                                                    const QString& label) const {
+        WaveformModel::PendingRow made;
+        made.row.kind = WaveRow::Kind::Group;
+        made.row.label = label;
+        apply(entry, made.row);
+        for (const SignalInfo& info : objects.value(tree.pathOf(scope))) {
+            WaveformModel::PendingRow child;
+            child.row = WaveformModel::rowFor(info);
+            apply(entry, child.row);
+            made.children.push_back(std::move(child));
+        }
+        return made;
+    }
+
+    /// The groups of `scope`'s subtree under `label`, nested as the design nests them.
+    ///
+    /// A scope with scopes below it is a group of their groups, after its own signals in a
+    /// group of their own; one without is the group of its signals. Below the top, each group
+    /// is named by its instance's name, since the group around it already says where it is. A
+    /// group that would hold nothing is left out, so a subtree with no signals adds nothing.
+    void subtree(const SignalListEntry& entry, qsizetype scope, const QString& label,
+                 std::vector<WaveformModel::PendingRow>& out) const {
+        WaveformModel::PendingRow own = groupOf(entry, scope, label);
+
+        std::vector<WaveformModel::PendingRow> below;
+        for (const qsizetype child : tree.childrenOf(scope))
+            subtree(entry, child, tree.nameOf(child), below);
+
+        if (below.empty()) {
+            if (!own.children.empty()) out.push_back(std::move(own));
+            return;
+        }
+
+        WaveformModel::PendingRow nested;
+        nested.row.kind = WaveRow::Kind::Group;
+        nested.row.label = label;
+        apply(entry, nested.row);
+        nested.children.reserve(below.size() + 1);
+        if (!own.children.empty()) {
+            own.row.label = OwnSignalsLabel.toString();
+            nested.children.push_back(std::move(own));
+        }
+        std::ranges::move(below, std::back_inserter(nested.children));
+        out.push_back(std::move(nested));
+    }
+
+    void scope(const SignalListEntry& entry, qsizetype index,
                std::vector<WaveformModel::PendingRow>& out) {
+        const QString& path = tree.pathOf(index);
         if (entry.expand || entry.contents) {
             error(entry.line, QStringLiteral("%1 is a scope; -expand and -contents apply "
                                              "to a signal")
@@ -474,29 +569,17 @@ private:
             return;
         }
 
-        // The subtree in the Structure window's order, as *Add to wave recursive* takes it.
-        const QString prefix = path + u'/';
-        for (const ipc::InstanceEntry& instance : instances) {
-            const QString candidate = QString::fromStdString(instance.path);
-            if (candidate != path && !(entry.recursive && candidate.startsWith(prefix))) continue;
-
-            const QVector<SignalInfo> found = objects.value(candidate);
-
-            // A scope with nothing in it leaves no group behind, as the menu entry does.
-            if (found.isEmpty()) continue;
-
-            WaveformModel::PendingRow group;
-            group.row.kind = WaveRow::Kind::Group;
-            group.row.label = (entry.label.has_value()) ? *entry.label : candidate;
-            apply(entry, group.row);
-            for (const SignalInfo& info : found) {
-                WaveformModel::PendingRow child;
-                child.row = WaveformModel::rowFor(info);
-                apply(entry, child.row);
-                group.children.push_back(std::move(child));
-            }
-            out.push_back(std::move(group));
+        // The scope's group is named by its path, not its name: two instances of one module
+        // would otherwise give two groups called the same thing, which is the case grouping
+        // exists to tell apart.
+        if (entry.recursive) {
+            subtree(entry, index, path, out);
+            return;
         }
+
+        // A scope with nothing in it leaves no group behind.
+        WaveformModel::PendingRow own = groupOf(entry, index, entry.label.value_or(path));
+        if (!own.children.empty()) out.push_back(std::move(own));
     }
 
     [[nodiscard]] const SignalInfo* find(const QString& path) const {
@@ -575,39 +658,42 @@ private:
         out.push_back(std::move(pending));
     }
 
-    const QVector<ipc::InstanceEntry>& instances;
+    ScopeTree tree;
     const QHash<QString, QVector<SignalInfo>>& objects;
     ResolvedSignalList& result;
-    QSet<QString> scopes;
 };
 
-void collectScopes(const std::vector<SignalListEntry>& entries,
-                   const QVector<ipc::InstanceEntry>& instances, const QSet<QString>& scopes,
-                   QStringList& needed) {
+/// Adds `scope` to `needed` unless it is there already, and with `recursive` every scope below
+/// it, in the Structure window's order.
+void need(const ScopeTree& tree, qsizetype scope, bool recursive, QSet<qsizetype>& seen,
+          QStringList& needed) {
+    if (!seen.contains(scope)) {
+        seen.insert(scope);
+        needed << tree.pathOf(scope);
+    }
+    if (!recursive) return;
+    for (const qsizetype child : tree.childrenOf(scope)) need(tree, child, true, seen, needed);
+}
+
+void collectScopes(const std::vector<SignalListEntry>& entries, const ScopeTree& tree,
+                   QSet<qsizetype>& seen, QStringList& needed) {
     // Only real scopes. The kernel answers a query for anything else with a failure rather
     // than with objects, and a load waiting for that answer would wait for ever; a path whose
     // scope does not exist is reported when the list is resolved, like any other missing path.
-    const auto need = [&needed, &scopes](const QString& scope) {
-        if (scopes.contains(scope) && !needed.contains(scope)) needed << scope;
-    };
-
     for (const SignalListEntry& entry : entries) {
         for (const QString& path : entry.paths) {
-            if (!scopes.contains(path)) {
-                // A signal, or a select of one; either way its scope is what holds it, and a
-                // select has no separator in it to move it.
-                need(scopeOf(path));
+            const qsizetype scope = tree.find(path);
+            if (scope >= 0) {
+                need(tree, scope, entry.recursive, seen, needed);
                 continue;
             }
 
-            const QString prefix = path + u'/';
-            for (const ipc::InstanceEntry& instance : instances) {
-                const QString candidate = QString::fromStdString(instance.path);
-                if (candidate == path || (entry.recursive && candidate.startsWith(prefix)))
-                    need(candidate);
-            }
+            // A signal, or a select of one; either way its scope is what holds it, and a
+            // select has no separator in it to move it.
+            const qsizetype holder = tree.find(scopeOf(path));
+            if (holder >= 0) need(tree, holder, false, seen, needed);
         }
-        collectScopes(entry.body, instances, scopes, needed);
+        collectScopes(entry.body, tree, seen, needed);
     }
 }
 
@@ -695,12 +781,10 @@ std::optional<eir::Radix> radixFromWord(const QString& word) {
 
 QStringList scopesNeededBy(const std::vector<SignalListEntry>& entries,
                            const QVector<ipc::InstanceEntry>& instances) {
-    QSet<QString> scopes;
-    for (const ipc::InstanceEntry& instance : instances)
-        scopes.insert(QString::fromStdString(instance.path));
-
+    const ScopeTree tree(instances);
+    QSet<qsizetype> seen;
     QStringList needed;
-    collectScopes(entries, instances, scopes, needed);
+    collectScopes(entries, tree, seen, needed);
     return needed;
 }
 

@@ -2679,9 +2679,12 @@ What `add wave` adds depends on what the path names:
   never taken for a select.
 - **A scope** adds what *Add to wave* on that scope in the Structure window adds: a group
   named by the scope's path, holding its signals. With `-r` it adds what *Add to wave
-  recursive* adds: one such group for each scope of the subtree, side by side, in the
-  Structure window's order. Both are defined as those menu entries rather than beside them,
-  so that the two cannot come to disagree.
+  recursive* adds: the subtree's groups, nested as its instances are, in the Structure
+  window's order. A scope with instances below it becomes a group holding its own signals in
+  a group called `$top`, then a group for each instance below it, named by the instance's
+  name; one without is the group of its signals. A group that would hold nothing is left out,
+  so a subtree with no signals adds nothing. Both are defined as those menu entries rather
+  than beside them, so that the two cannot come to disagree.
 
 `group` adds a group named `name` holding the rows its body describes. The body is a
 signal list of its own — `add wave` and `group` commands — and it may be empty, which is

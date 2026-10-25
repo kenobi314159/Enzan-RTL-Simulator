@@ -181,7 +181,7 @@ TEST_F(SignalListLoadTest, ALoadedListHasTheRowsItDescribes) {
 
 TEST_F(SignalListLoadTest, AScopeAddsWhatTheMenuEntryAdds) {
     insert(QStringLiteral("/tb"), QStringLiteral("Add to wave recursive"));
-    ASSERT_TRUE(pumpUntil([this] { return topRows().size() == 2; }))
+    ASSERT_TRUE(pumpUntil([this] { return topRows().size() == 1; }))
         << topRows().size() << " rows; the transcript says:\n"
         << transcript().toStdString();
     const QString byMenu = waves()->writeSignalList();

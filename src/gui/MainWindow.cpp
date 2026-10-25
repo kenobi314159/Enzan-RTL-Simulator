@@ -471,7 +471,7 @@ void MainWindow::onObjectsReceived(const QString& instancePath,
     // ask for a subtree twice — so each is given the answer rather than only the first.
     bool served = false;
     for (PendingLoad& load : pendingLoads) {
-        if (load.waiting.removeAll(instancePath) == 0) continue;
+        if (!load.waiting.remove(instancePath)) continue;
         load.objects.insert(instancePath, objects);
         served = true;
     }
@@ -656,8 +656,8 @@ void MainWindow::chooseSignalListToSave() {
 }
 
 void MainWindow::startLoad(PendingLoad load) {
-    load.waiting = scopesNeededBy(load.entries, session->instances());
-    const QStringList scopes = load.waiting;
+    const QStringList scopes = scopesNeededBy(load.entries, session->instances());
+    load.waiting = QSet<QString>(scopes.cbegin(), scopes.cend());
     pendingLoads.push_back(std::move(load));
 
     for (const QString& scope : scopes) session->queryObjects(scope);
