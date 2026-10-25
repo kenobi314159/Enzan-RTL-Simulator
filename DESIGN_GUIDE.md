@@ -1368,6 +1368,12 @@ Conflating the last two is the mistake to avoid: a regression script that cannot
 distinguish "the tool could not compile this" from "the testbench reported an
 error" reports both as the same red square.
 
+**A command line that gives nothing to work on is wrong, not a design that failed**: `lib`
+with no subcommand of its own, `run` or `elaborate` given neither a library nor a file list,
+and a source file where `run` or `elaborate` takes the name of a top level are each status 1,
+with a message saying which. Read as a design, each was reported as one that analysed nothing
+or lacked a top, which sends the reader looking at the sources.
+
 ### 8.2 Analysis libraries
 
 A library is a directory of serialised design units, as section 4.4 describes.

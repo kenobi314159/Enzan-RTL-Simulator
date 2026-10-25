@@ -292,11 +292,13 @@ std::optional<std::uint64_t> parseUnsigned(std::string_view text) {
 /// Result of parsing the command line.
 enum class ParseOutcome : std::uint8_t { Run, PrintedHelp, BadUsage };
 
-/// Recognises a leading subcommand, consuming it and any word it takes.
+/// Recognises a leading subcommand, consuming it and any word it takes, and returns how many
+/// words that was; nothing, having said why, for `lib` without one of its own.
 ///
 /// The first word is a subcommand only when it is one of these names, so a source file called
-/// `run.sv` is still a source file (8.1).
-std::size_t readCommand(std::span<char*> arguments, Invocation& invocation) {
+/// `run.sv` is still a source file (8.1). `lib` is one, whatever follows it: reading it as a
+/// source when what follows is not `create`, `list` or `clean` reported a file nobody named.
+std::optional<std::size_t> readCommand(std::span<char*> arguments, Invocation& invocation) {
     if (arguments.empty()) return 0;
 
     const std::string_view first(arguments[0]);
@@ -322,9 +324,8 @@ std::size_t readCommand(std::span<char*> arguments, Invocation& invocation) {
     } else if (second == "clean") {
         invocation.command = Command::LibClean;
     } else {
-        std::cerr << "enzan: `lib` takes create, list or clean\n";
-        invocation.command = Command::OneShot;
-        return 0;
+        std::cerr << "enzan: `lib` takes create, list or clean, and a library directory\n";
+        return std::nullopt;
     }
     return 2;
 }
@@ -1188,8 +1189,9 @@ int main(int argc, char** argv) {
 
     Invocation invocation;
     invocation.commandLine.assign(rawArguments.begin(), rawArguments.end());
-    const std::size_t consumed = readCommand(arguments, invocation);
-    switch (parseCommandLine(arguments.subspan(consumed), invocation)) {
+    const std::optional<std::size_t> consumed = readCommand(arguments, invocation);
+    if (!consumed) return static_cast<int>(ExitStatus::Usage);
+    switch (parseCommandLine(arguments.subspan(*consumed), invocation)) {
     case ParseOutcome::PrintedHelp: return static_cast<int>(ExitStatus::Success);
     case ParseOutcome::BadUsage: return static_cast<int>(ExitStatus::Usage);
     case ParseOutcome::Run: break;
@@ -1205,7 +1207,23 @@ int main(int argc, char** argv) {
             return static_cast<int>(ExitStatus::Usage);
         }
         if (!invocation.files.empty()) {
-            invocation.topModule = invocation.files.front().string();
+            // A source named where a top level goes is a slip of the one-shot form, and read as a
+            // top it is reported as a design that lacks one.
+            const std::filesystem::path& word = invocation.files.front();
+            static constexpr std::array<std::string_view, 6> SourceExtensions{
+                ".sv", ".svh", ".v", ".vh", ".vhd", ".vhdl"};
+            std::error_code failure;
+            if (std::ranges::find(SourceExtensions, word.extension().string())
+                    != SourceExtensions.end()
+                && std::filesystem::is_regular_file(word, failure)) {
+                std::cerr << "enzan: `"
+                          << (invocation.command == Command::Run ? "run" : "elaborate")
+                          << "` takes the name of a top level, and '" << word.string()
+                          << "' is a source; give sources to the one-shot form, `enzan "
+                          << word.string() << "`, or analyse them into a library first\n";
+                return static_cast<int>(ExitStatus::Usage);
+            }
+            invocation.topModule = word.string();
             invocation.files.clear();
         }
     }
@@ -1250,6 +1268,17 @@ int main(int argc, char** argv) {
     if (needsSources && invocation.files.empty() && invocation.fileLists.empty()) {
         std::cerr << "enzan: no source files were given\n"
                   << "Try 'enzan --help' for the available options.\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
+    // With neither libraries nor sources there is no design to elaborate, which is a command line
+    // that asked for nothing rather than a design that failed (8.1).
+    const bool elaborates =
+        invocation.command == Command::Run || invocation.command == Command::Elaborate;
+    if (elaborates && invocation.fileLists.empty() && invocation.inputLibraries.empty()) {
+        std::cerr << "enzan: `" << (invocation.command == Command::Run ? "run" : "elaborate")
+                  << "` needs a design: the libraries holding it (--in-lib), or its sources in "
+                     "a file list (-f)\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 

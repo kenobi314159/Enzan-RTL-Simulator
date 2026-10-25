@@ -57,6 +57,25 @@ if has vhdl; then
     [[ ${#sources[@]} -eq 0 ]] && sources+=(tb.vhd)
 fi
 
+# --- the shape of the command (8.1) ---------------------------------------------------------------
+
+# `lib` is a command whatever follows it, rather than a source to read.
+expect 1 "\`lib\` takes create, list or clean" "$enzan" lib
+expect 1 "\`lib\` takes create, list or clean" "$enzan" lib frob libs/x
+[[ $("$enzan" lib 2>&1) != *"cannot open"* ]] || fail "a lone \`lib\` was read as a source as well"
+
+# `run` and `elaborate` elaborate a design from libraries or a file list, and with neither have
+# none; that is the command line's mistake, not the design's.
+expect 1 "needs a design" "$enzan" run
+expect 1 "needs a design" "$enzan" run tb
+expect 1 "needs a design" "$enzan" elaborate tb
+
+# A source where the top level goes is a slip of the one-shot form, and said to be one rather
+# than looked for as a top.
+printf 'module tb; endmodule\n' >slip.sv
+expect 1 "'slip.sv' is a source" "$enzan" run --in-lib libs/none slip.sv
+expect 1 "'slip.sv' is a source" "$enzan" elaborate --in-lib libs/none slip.sv
+
 # --- a dependency file (8.3) ---------------------------------------------------------------------
 
 # Its rule needs a target, and a target needs the file to be written; a rule for no target is one
