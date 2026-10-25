@@ -113,6 +113,25 @@ expect 1 "sets the parameter 'W' twice" "$enzan" -G W=1 -GW=2 tb.sv
 expect 1 "the top level was given twice" "$enzan" run --in-lib libs/none --top tb other
 expect 0 "tb.sv" "$enzan" --dry-run -t tb --top tb -G W=1 -GW=1 tb.sv
 
+# --- how long a run runs --------------------------------------------------------------------------
+
+# A count of the run's time unit, or a time with a unit of its own, which has to be a whole number
+# of the run's unit once the design has settled what that is (3.1).
+expect 1 "'1.5' is not a length of time" "$enzan" --run 1.5 tb.sv
+expect 1 "'10xs' is not a length of time" "$enzan" --run 10xs tb.sv
+if has systemverilog; then
+    printf '`timescale 1ns/1ps\nmodule clock;\n  reg c = 0;\n  always #5 c = ~c;\nendmodule\n' \
+        >clock.sv
+    expect 0 "ended at 1500000ps" "$enzan" --dump-stats --run 1.5us clock.sv
+    expect 0 "ended at 100000ps" "$enzan" --dump-stats --run 100000 clock.sv
+    expect 1 "'10fs' is not a whole number of the run's time unit, ps" \
+        "$enzan" --run 10fs clock.sv
+elif has vhdl; then
+    printf 'entity clock is end entity;\narchitecture a of clock is\n  signal c : bit;\n' >clock.vhd
+    printf 'begin\n  c <= not c after 5 ns;\nend architecture;\n' >>clock.vhd
+    expect 0 "ended at 1500000000fs" "$enzan" --dump-stats --run 1.5us clock.vhd
+fi
+
 # --- a dependency file (8.3) ---------------------------------------------------------------------
 
 # Its rule needs a target, and a target needs the file to be written; a rule for no target is one

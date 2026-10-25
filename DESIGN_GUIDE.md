@@ -1360,6 +1360,13 @@ that follow it: Icarus Verilog's `$random` starts from 0 as well. `$urandom` and
 the process's name, so what one process draws does not change when another starts drawing (IEEE
 1800 section 18.14).
 
+**`--run` takes a length of simulated time**: a count of the run's time unit, `--run 100`, or a
+time with its own unit, `--run 10ns` or `--run 1.5us`. Which unit a count counts is the
+design's and its libraries' to settle (3.1), which a reader writing the command line seldom
+knows, so a time with a unit is turned into a count once the run's unit is known, and one that
+is no whole number of that unit is refused rather than rounded: a run that stopped at another
+time than the one asked for would look like the design stopping there.
+
 **Exit statuses are distinct enough to branch on**, because a Makefile and a CI
 job need to tell a broken invocation from a broken design:
 

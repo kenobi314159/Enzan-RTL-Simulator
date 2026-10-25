@@ -83,6 +83,15 @@ struct NamedLibrary {
     std::filesystem::path path;
 };
 
+/// How long `--run` runs: a count of the run's time unit, or a time with a unit of its own,
+/// `mantissa` times ten to `exponent` seconds, which only the run's precision turns into a count.
+struct RunLength {
+    std::uint64_t mantissa = 0;
+    int exponent = 0;
+    bool inUnits = false;
+    std::string text;
+};
+
 /// A file list and the rule its relative paths resolve by (8.3).
 struct FileListRequest {
     std::filesystem::path path;
@@ -143,7 +152,8 @@ Libraries:
 Simulation:
   -t, --top <module>      Module to elaborate as the top level. `elaborate` and
                           `run` take it as their one positional word instead.
-  -r, --run <time>        Stop after this many time units.
+  -r, --run <time>        Stop after this long: a count of the run's time unit,
+                          100, or a time with its unit, 10ns or 1.5us.
       --assert-level <note|warning|error|failure|none>
                           The severity at which a VHDL report or failed assertion
                           ends the run. Default `failure`; `none` never ends it.
@@ -233,7 +243,7 @@ struct Invocation {
     /// never does.
     std::uint8_t stopSeverity = 3;
     std::string topModule;
-    std::optional<std::uint64_t> runUntil;
+    std::optional<RunLength> runUntil;
     std::filesystem::path vcdPath;
     std::filesystem::path fstPath;
     std::string waveformScope;
@@ -292,6 +302,39 @@ std::optional<std::uint64_t> parseUnsigned(std::string_view text) {
         value = (value * 10) + static_cast<std::uint64_t>(character - '0');
     }
     return value;
+}
+
+/// Parses `--run`'s value: whole digits, a count of the run's time unit, or digits with a
+/// fraction and a unit, `10ns` or `1.5us`. Nothing for anything else, and on overflow.
+std::optional<RunLength> parseRunLength(std::string_view text) {
+    std::size_t digits = 0;
+    while (digits < text.size() && text[digits] >= '0' && text[digits] <= '9') ++digits;
+    std::size_t fraction = digits;
+    if (fraction < text.size() && text[fraction] == '.') {
+        ++fraction;
+        while (fraction < text.size() && text[fraction] >= '0' && text[fraction] <= '9') ++fraction;
+    }
+    const std::string_view number = text.substr(0, fraction);
+    const std::string_view unit = text.substr(fraction);
+    if (digits == 0 || number.ends_with('.')) return std::nullopt;
+
+    RunLength length{
+        .mantissa = 0, .exponent = 0, .inUnits = unit.empty(), .text = std::string(text)};
+    if (length.inUnits && fraction != digits) return std::nullopt;
+    for (const char character : number) {
+        if (character == '.') continue;
+        if (__builtin_mul_overflow(length.mantissa, 10U, &length.mantissa)
+            || __builtin_add_overflow(length.mantissa, static_cast<unsigned>(character - '0'),
+                                      &length.mantissa))
+            return std::nullopt;
+    }
+    if (!length.inUnits) {
+        const std::optional<std::int8_t> exponent = parseTimeUnit(unit);
+        if (!exponent) return std::nullopt;
+        const int decimals = fraction == digits ? 0 : static_cast<int>(fraction - digits - 1);
+        length.exponent = *exponent - decimals;
+    }
+    return length;
 }
 
 /// Result of parsing the command line.
@@ -458,12 +501,14 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--run", value)) return ParseOutcome::BadUsage;
             simulationOnly("--run");
-            const std::optional<std::uint64_t> parsed = parseUnsigned(value);
+            std::optional<RunLength> parsed = parseRunLength(value);
             if (!parsed.has_value()) {
-                std::cerr << "enzan: '" << value << "' is not a time in whole units\n";
+                std::cerr << "enzan: '" << value
+                          << "' is not a length of time: a count of the run's time unit, `100`, "
+                             "or a number with its unit, `10ns` or `1.5us`\n";
                 return ParseOutcome::BadUsage;
             }
-            invocation.runUntil = parsed;
+            invocation.runUntil = std::move(parsed);
             continue;
         }
 
@@ -1131,6 +1176,32 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
     return ExitStatus::Success;
 }
 
+/// `length` as a count of the run's time unit, ten to `precision` seconds; nothing, having said
+/// why, when it is no whole number of the unit or more than a run counts.
+std::optional<std::uint64_t> runCount(const RunLength& length, int precision) {
+    if (length.inUnits) return length.mantissa;
+    std::uint64_t count = length.mantissa;
+    for (int step = precision; step < length.exponent; ++step) {
+        if (__builtin_mul_overflow(count, 10U, &count)) {
+            std::cerr << "enzan: '" << length.text << "' is longer than a run counts\n";
+            return std::nullopt;
+        }
+    }
+    for (int step = length.exponent; step < precision; ++step) {
+        if (count % 10U != 0) {
+            std::cerr << "enzan: '" << length.text
+                      << "' is not a whole number of the run's time unit, "
+                      << enzan::runtime::TimeScale(
+                             static_cast<enzan::runtime::TimeExponent>(precision))
+                             .unitName()
+                      << "\n";
+            return std::nullopt;
+        }
+        count /= 10U;
+    }
+    return count;
+}
+
 /// Analyses, elaborates and runs. Returns the process exit status.
 ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                     enzan::DiagnosticEngine& diagnostics) {
@@ -1175,7 +1246,14 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     if (!invocation.listenPath.empty())
         return serve(invocation, invocation.listenPath, session, diagnostics);
 
-    const enzan::runtime::RunStatus status = session.run(invocation.runUntil);
+    // A time with a unit is a count only once the run's precision is known, which the design and
+    // its libraries settle (section 3.1).
+    std::optional<std::uint64_t> until;
+    if (invocation.runUntil.has_value()) {
+        until = runCount(*invocation.runUntil, session.timeScale().precisionExponent());
+        if (!until.has_value()) return ExitStatus::Usage;
+    }
+    const enzan::runtime::RunStatus status = session.run(until);
 
     // Closed before the statistics are printed, so that a writer failing to finish its file says
     // so before the run looks successful.
