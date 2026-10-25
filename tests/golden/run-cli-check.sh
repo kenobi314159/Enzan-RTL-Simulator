@@ -92,6 +92,17 @@ printf 'module tb; endmodule\n' >slip.sv
 expect 1 "'slip.sv' is a source" "$enzan" run --in-lib libs/none slip.sv
 expect 1 "'slip.sv' is a source" "$enzan" elaborate --in-lib libs/none slip.sv
 
+# --- an option given twice (8.5) -----------------------------------------------------------------
+
+# Two values for one are two answers to one question, which the last no longer settles; the same
+# value again is the same answer. `--dry-run` stops before anything is analysed.
+expect 1 "'--top' was given twice" "$enzan" --top tb --top other tb.sv
+expect 1 "'--vcd' was given twice" "$enzan" --vcd a.vcd --vcd b.vcd tb.sv
+expect 1 "'--wave-scope' was given twice" "$enzan" --vcd-scope /tb --wave-scope /tb/u tb.sv
+expect 1 "sets the parameter 'W' twice" "$enzan" -G W=1 -GW=2 tb.sv
+expect 1 "the top level was given twice" "$enzan" run --in-lib libs/none --top tb other
+expect 0 "tb.sv" "$enzan" --dry-run -t tb --top tb -G W=1 -GW=1 tb.sv
+
 # --- a dependency file (8.3) ---------------------------------------------------------------------
 
 # Its rule needs a target, and a target needs the file to be written; a rule for no target is one

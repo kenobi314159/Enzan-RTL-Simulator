@@ -1765,6 +1765,12 @@ included. `--top`, `--timescale` and `--wave-scope` mean one thing whichever is
 given them, and a user who learns `-t` on one and is refused it by the other has
 been taught something untrue about the tool.
 
+**An option that takes one value takes it once.** Given twice with two values, it is two
+answers to one question, and taking the last of them silently was choosing between them for
+the user; it is refused, as `-G` naming one parameter twice with two values is. The same value
+again is the same answer, as a Makefile appending its own flags to a user's can give it, and is
+accepted. So is a top level given both with `--top` and as `run`'s word, when they agree.
+
 **`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` is not a synonym:
 `.f` lists spell a library file that way (8.3), and binding it to something else on
 one command line invites the two meanings to collide.

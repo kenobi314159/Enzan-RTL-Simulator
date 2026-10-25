@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -331,6 +332,36 @@ std::optional<std::size_t> readCommand(std::span<char*> arguments, Invocation& i
 }
 
 ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation) {
+    // An option that takes one value, given two, is two answers to one question, and taking the
+    // last of them silently was choosing between them for the user. The same value again is the
+    // same answer, as a Makefile appending its own flags to a user's can give it.
+    std::map<std::string_view, std::string_view, std::less<>> given;
+    const auto once = [&given](std::string_view option, std::string_view value) {
+        const auto [at, inserted] = given.emplace(option, value);
+        if (inserted || at->second == value) return true;
+        std::cerr << "enzan: '" << option << "' was given twice, as '" << at->second << "' and as '"
+                  << value << "'; it takes one\n";
+        return false;
+    };
+
+    // `-G` takes one value for each parameter it names.
+    std::map<std::string, std::string, std::less<>> overrides;
+    const auto parameter = [&overrides, &invocation](std::string_view text) {
+        const std::size_t equals = text.find('=');
+        if (equals != std::string_view::npos) {
+            const std::string name(text.substr(0, equals));
+            const auto [at, inserted] = overrides.emplace(name, text.substr(equals + 1));
+            if (!inserted && at->second != text.substr(equals + 1)) {
+                std::cerr << "enzan: '-G' sets the parameter '" << name << "' twice, to '"
+                          << at->second << "' and to '" << text.substr(equals + 1)
+                          << "'; it takes one value\n";
+                return false;
+            }
+        }
+        invocation.parameters.emplace_back(text);
+        return true;
+    };
+
     const auto requireValue = [&](std::size_t& index, std::string_view option) -> const char* {
         if (index + 1 >= arguments.size()) {
             std::cerr << "enzan: option '" << option << "' needs a value\n";
@@ -354,6 +385,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "-t" || argument == "--top") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--top", value)) return ParseOutcome::BadUsage;
             invocation.topModule = value;
             continue;
         }
@@ -361,6 +393,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--work") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--work", value)) return ParseOutcome::BadUsage;
             invocation.workLibrary = value;
             continue;
         }
@@ -368,6 +401,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--std") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--std", value)) return ParseOutcome::BadUsage;
             static constexpr std::array<std::string_view, 10> Revisions{
                 "1993", "93", "2000", "00", "2002", "02", "2008", "08", "2019", "19"};
             if (std::ranges::find(Revisions, std::string_view(value)) == Revisions.end()) {
@@ -382,6 +416,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--ieee-asserts") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--ieee-asserts", value)) return ParseOutcome::BadUsage;
             const std::string_view chosen = value;
             if (chosen != "enable" && chosen != "disable") {
                 std::cerr << "enzan: '" << chosen << "' is not `enable` or `disable`\n";
@@ -394,6 +429,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--assert-level") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--assert-level", value)) return ParseOutcome::BadUsage;
             static constexpr std::array<std::string_view, 5> Severities{"note", "warning", "error",
                                                                         "failure", "none"};
             const auto* const found = std::ranges::find(Severities, std::string_view(value));
@@ -409,6 +445,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "-r" || argument == "--run") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--run", value)) return ParseOutcome::BadUsage;
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value()) {
                 std::cerr << "enzan: '" << value << "' is not a time in whole units\n";
@@ -421,6 +458,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--vcd") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--vcd", value)) return ParseOutcome::BadUsage;
             invocation.vcdPath = value;
             continue;
         }
@@ -428,6 +466,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--fst") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--fst", value)) return ParseOutcome::BadUsage;
             invocation.fstPath = value;
             continue;
         }
@@ -437,6 +476,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--wave-scope" || argument == "--vcd-scope") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--wave-scope", value)) return ParseOutcome::BadUsage;
             invocation.waveformScope = value;
             continue;
         }
@@ -444,6 +484,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--wave-max-bits") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--wave-max-bits", value)) return ParseOutcome::BadUsage;
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value() || *parsed > 0xFFFF'FFFFU) {
                 std::cerr << "enzan: '" << value << "' is not a number of bits\n";
@@ -456,6 +497,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--timescale") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--timescale", value)) return ParseOutcome::BadUsage;
             const std::optional<std::int8_t> exponent = parseTimeUnit(value);
             if (!exponent.has_value()) {
                 std::cerr << "enzan: '" << value
@@ -469,6 +511,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--listen") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--listen", value)) return ParseOutcome::BadUsage;
             invocation.listenPath = value;
             continue;
         }
@@ -476,6 +519,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--delta-limit") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--delta-limit", value)) return ParseOutcome::BadUsage;
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value() || *parsed == 0 || *parsed > 0xFFFF'FFFFU) {
                 std::cerr << "enzan: '" << value << "' is not a usable delta limit\n";
@@ -488,6 +532,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--seed") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--seed", value)) return ParseOutcome::BadUsage;
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value() || *parsed > 0xFFFF'FFFFU) {
                 std::cerr << "enzan: '" << value << "' is not a seed from 0 to 4294967295\n";
@@ -509,11 +554,11 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "-G") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
-            invocation.parameters.emplace_back(value);
+            if (!parameter(value)) return ParseOutcome::BadUsage;
             continue;
         }
         if (argument.starts_with("-G") && argument.size() > 2) {
-            invocation.parameters.emplace_back(argument.substr(2));
+            if (!parameter(argument.substr(2))) return ParseOutcome::BadUsage;
             continue;
         }
 
@@ -551,6 +596,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--out-lib") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--out-lib", value)) return ParseOutcome::BadUsage;
             invocation.outputLibrary = value;
             continue;
         }
@@ -591,6 +637,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--depfile") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--depfile", value)) return ParseOutcome::BadUsage;
             invocation.depfilePath = value;
             continue;
         }
@@ -598,6 +645,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--depfile-target") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--depfile-target", value)) return ParseOutcome::BadUsage;
             invocation.depfileTarget = value;
             continue;
         }
@@ -605,6 +653,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--attach") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--attach", value)) return ParseOutcome::BadUsage;
             invocation.attachPath = value;
             continue;
         }
@@ -612,6 +661,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--name") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--name", value)) return ParseOutcome::BadUsage;
             invocation.libraryName = value;
             continue;
         }
@@ -619,6 +669,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--theme") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--theme", value)) return ParseOutcome::BadUsage;
             invocation.themePath = value;
             continue;
         }
@@ -626,6 +677,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--write-theme") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--write-theme", value)) return ParseOutcome::BadUsage;
             invocation.writeThemePath = value;
             continue;
         }
@@ -633,6 +685,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--wave-list") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--wave-list", value)) return ParseOutcome::BadUsage;
             invocation.waveListPath = value;
             continue;
         }
@@ -1221,6 +1274,11 @@ int main(int argc, char** argv) {
                           << "` takes the name of a top level, and '" << word.string()
                           << "' is a source; give sources to the one-shot form, `enzan "
                           << word.string() << "`, or analyse them into a library first\n";
+                return static_cast<int>(ExitStatus::Usage);
+            }
+            if (!invocation.topModule.empty() && invocation.topModule != word.string()) {
+                std::cerr << "enzan: the top level was given twice, as '" << invocation.topModule
+                          << "' with '--top' and as '" << word.string() << "'; it takes one\n";
                 return static_cast<int>(ExitStatus::Usage);
             }
             invocation.topModule = word.string();
