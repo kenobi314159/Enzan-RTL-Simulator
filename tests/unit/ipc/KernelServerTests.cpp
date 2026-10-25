@@ -923,6 +923,7 @@ TEST_F(ServerFixture, AGenerateLoopOfCountersListsWhatItsSourceDeclares) {
     request(MessageType::QueryObjects, query);
     const auto objects = expect<ObjectsMessage>(MessageType::Objects);
     std::vector<std::string> names;
+    names.reserve(objects.objects.size());
     for (const enzan::ipc::ObjectEntry& entry : objects.objects) names.push_back(entry.name);
     for (const enzan::ipc::ParameterEntry& entry : objects.parameters) names.push_back(entry.name);
     std::ranges::sort(names);
