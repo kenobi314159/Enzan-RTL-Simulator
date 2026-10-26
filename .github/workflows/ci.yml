@@ -37,6 +37,7 @@ jobs:
   lint:
     name: Format and license headers
     runs-on: ubuntu-24.04
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -61,6 +62,7 @@ jobs:
   build:
     name: ${{ matrix.preset }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -171,6 +173,7 @@ jobs:
   sanitize:
     name: ASan + UBSan
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -213,6 +216,7 @@ jobs:
     name: clang-tidy
     runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/main'
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -260,6 +264,7 @@ jobs:
   gui:
     name: Graphical front end without the language frontends
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
@@ -307,6 +312,7 @@ jobs:
   systemverilog:
     name: SystemVerilog frontend and golden suite, default configuration
     runs-on: ubuntu-24.04
+    timeout-minutes: ${{ github.ref == 'refs/heads/main' && 30 || 20 }}
     steps:
       # NVC, which the VHDL frontend builds part of, is a submodule.
       - uses: actions/checkout@v4
@@ -438,6 +444,7 @@ jobs:
       # The long running tests only execute on the main branch.
       - name: Design regression - long run
         if: github.ref == 'refs/heads/main'
+        timeout-minutes: 5
         env:
           COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
         run: |
@@ -452,6 +459,7 @@ jobs:
       # few minutes, so on the main branch only, in the one build with both frontends.
       - name: Design regression - NEORV32
         if: github.ref == 'refs/heads/main'
+        timeout-minutes: 5
         run: >
           tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)" \
             build/designs/neorv32
