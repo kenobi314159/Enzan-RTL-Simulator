@@ -2168,7 +2168,9 @@ the point is to see it.
 own menu share it, so a command has one name and one key in all of them; the wave list's menu
 is the window's Edit menu, entry for entry. A pane's keys act while the focus is in that pane
 and nowhere else, so that Delete in the Structure window cannot remove a wave row. The run's
-keys are the window's, a debugger's: F5 runs and Shift+F5 stops.
+keys are the window's, a debugger's: F5 runs and Shift+F5 stops. *Help → Keyboard Shortcuts*,
+F1, lists every key, read from the actions each time it opens so that it cannot disagree with
+them, and the mouse's gestures, which are not actions, from a table beside their handlers.
 
 ### 10.3 Waveform view
 

@@ -128,7 +128,7 @@ read both times off their labels to measure. Right-click a cursor's label to ren
 remove it.
 
 Selecting a signal in the list does the same thing as clicking its trace, so Tab works whichever
-way you picked it — and it works on a group too.
+way you picked it — and it works on a group too. **F1** lists every key and what the mouse does.
 
 Rows drag to reorder, rename in place with **F2**, copy and paste with **Ctrl+C** and **Ctrl+V**,
 and the context menu offers those, a pack/unpack toggle, a radix and one of five highlight

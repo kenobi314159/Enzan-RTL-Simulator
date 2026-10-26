@@ -3,6 +3,7 @@
 #pragma once
 
 #include "gui/KernelSession.h"
+#include "gui/ShortcutSheet.h"
 #include "gui/Theme.h"
 #include "gui/TimeAxis.h"
 #include "gui/WaveformModel.h"
@@ -132,6 +133,13 @@ public:
 
     /// The wave row the signal list has selected, or -1.
     [[nodiscard]] int selectedRow() const;
+
+    /// What the mouse does in the wave window, and the keys the signal list answers to there.
+    ///
+    /// The shortcut sheet lists them beside the window's actions. Neither is an action it could
+    /// read them from, so they are written here, beside the handlers that do them, and follow
+    /// section 10.7.
+    [[nodiscard]] static QVector<ShortcutEntry> gestures();
 
     /// Pixels a click may miss an edge by and still snap to it.
     ///

@@ -15,6 +15,7 @@ enzan_add_component(
           KernelSession.cpp
           MainWindow.cpp
           ObjectsModel.cpp
+          ShortcutSheet.cpp
           SignalList.cpp
           TclLibrary.cpp
           Theme.cpp
@@ -26,6 +27,7 @@ enzan_add_component(
           KernelSession.h
           MainWindow.h
           ObjectsModel.h
+          ShortcutSheet.h
           SignalList.h
           TclLibrary.h
           Theme.h

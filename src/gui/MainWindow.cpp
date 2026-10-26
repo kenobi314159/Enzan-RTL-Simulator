@@ -3,6 +3,7 @@
 #include "gui/MainWindow.h"
 
 #include "common/Diagnostics.h"
+#include "common/Version.h"
 #include "eir/BitOps.h"
 #include "runtime/Time.h"
 
@@ -19,6 +20,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPixmap>
 #include <QSaveFile>
 #include <QSettings>
@@ -522,6 +524,49 @@ void MainWindow::buildMenus() {
     simulation->addAction(runAllAction);
     simulation->addAction(stopAction);
     simulation->addAction(restartAction);
+
+    // --- Help --------------------------------------------------------------
+
+    QMenu* help = menuBar()->addMenu(tr("&Help"));
+    help->addAction(tr("Keyboard Shortcuts…"), this, &MainWindow::showShortcuts)
+        ->setShortcut(QKeySequence::HelpContents);
+    help->addAction(tr("About Enzan"), this, &MainWindow::showAbout);
+}
+
+void MainWindow::showShortcuts() {
+    // Every menu of the window, then the commands only a pane's own menu offers. The wave list's
+    // are the Edit menu's, so they are listed there and not again.
+    QSet<const QAction*> seen;
+    QVector<ShortcutSection> sections;
+    for (const QAction* entry : menuBar()->actions()) {
+        if (entry->menu() == nullptr) continue;
+        QString title = entry->text();
+        sections.append(sectionOf(title.remove(u'&'), entry->menu()->actions(), seen));
+    }
+    sections.append(sectionOf(tr("Structure"), structureView->actions(), seen));
+    sections.append(sectionOf(tr("Objects"), objectsView->actions(), seen));
+    sections.append({.title = tr("Wave window"), .entries = WaveformView::gestures()});
+
+    if (shortcutSheet == nullptr) shortcutSheet = new ShortcutSheet(this);
+    shortcutSheet->setSections(sections);
+    shortcutSheet->show();
+    shortcutSheet->raise();
+    shortcutSheet->activateWindow();
+}
+
+void MainWindow::showAbout() {
+    const QString kernel = session->isAttached() ? session->kernelVersion() : tr("not attached");
+    const QString text =
+        tr("<p><b>Enzan RTL Simulator</b></p><p>Window: %1<br>Kernel: %2</p>"
+           "<p>Licensed under the GNU General Public License, version 3 or later.</p>")
+            .arg(QString::fromStdString(versionLine()).toHtmlEscaped(), kernel.toHtmlEscaped());
+
+    // Opened rather than run, so that no event loop of its own holds up the socket while it is
+    // up, and the traces go on arriving behind it.
+    auto* box =
+        new QMessageBox(QMessageBox::NoIcon, tr("About Enzan"), text, QMessageBox::Ok, this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->open();
 }
 
 // ---------------------------------------------------------------------------

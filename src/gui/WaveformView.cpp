@@ -1326,6 +1326,30 @@ void WaveformView::wheelEvent(QWheelEvent* event) {
     event->accept();
 }
 
+QVector<ShortcutEntry> WaveformView::gestures() {
+    return {
+        {.keys = tr("Wheel"), .meaning = tr("Scroll the signal list")},
+        {.keys = tr("Ctrl+Wheel"), .meaning = tr("Zoom about the pointer")},
+        {.keys = tr("Shift+Wheel"), .meaning = tr("Pan")},
+        {.keys = tr("Middle drag"), .meaning = tr("Pan")},
+        {.keys = tr("Right drag leftwards"), .meaning = tr("Zoom to the range dragged over")},
+        {.keys = tr("Right drag rightwards"), .meaning = tr("Zoom to fit the run")},
+        {.keys = tr("Click a trace"),
+         .meaning = tr("Select its row and move the active cursor to an edge near the click")},
+        {.keys = tr("Click a cursor's label"), .meaning = tr("Make it the active cursor")},
+        {.keys = tr("Double-click a cursor's label"), .meaning = tr("Rename it")},
+        {.keys = tr("Right-click a cursor's label"), .meaning = tr("Rename, lock or remove it")},
+        {.keys = tr("Drag a row"), .meaning = tr("Move it, into or out of a group too")},
+        {.keys = tr("Up, Down"), .meaning = tr("Move between rows")},
+        {.keys = tr("Left, Right"),
+         .meaning = tr("Pack or unpack a row, or move out of or into it")},
+        {.keys = tr("+, -, *"), .meaning = tr("Unpack, pack, unpack everything below")},
+        {.keys = tr("Home, End"), .meaning = tr("First and last row")},
+        {.keys = tr("Type a name"),
+         .meaning = tr("Jump to the next row whose name starts with it")},
+    };
+}
+
 void WaveformView::keyPressEvent(QKeyEvent* event) {
     if (rows == nullptr) {
         QWidget::keyPressEvent(event);

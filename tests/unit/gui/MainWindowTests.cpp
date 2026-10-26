@@ -10,8 +10,10 @@
 
 #include "gui/MainWindow.h"
 
+#include "common/Version.h"
 #include "gui/DesignTreeModel.h"
 #include "gui/ObjectsModel.h"
+#include "gui/ShortcutSheet.h"
 #include "gui/Theme.h"
 #include "gui/TranscriptView.h"
 #include "gui/WaveformModel.h"
@@ -30,9 +32,11 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QString>
 #include <QTest>
+#include <QTextBrowser>
 #include <QTreeView>
 
 #include <algorithm>
@@ -151,6 +155,14 @@ protected:
 
         std::ranges::sort(indices);
         return indices;
+    }
+
+    /// The window's action whose text is `text`, or null.
+    [[nodiscard]] QAction* actionCalled(const QString& text) const {
+        for (QAction* candidate : window->findChildren<QAction*>()) {
+            if (candidate->text() == text) return candidate;
+        }
+        return nullptr;
     }
 
     /// Waits until the wave window holds `count` signals anywhere in it.
@@ -425,6 +437,50 @@ TEST_F(MainWindowTest, TheTranscriptIsClearedByOneCommand) {
 
     transcriptView->clearAction()->trigger();
     EXPECT_TRUE(text->toPlainText().isEmpty());
+}
+
+TEST_F(MainWindowTest, TheShortcutSheetIsReadFromTheActions) {
+    QAction* shortcuts = actionCalled(QStringLiteral("Keyboard Shortcuts…"));
+    ASSERT_NE(shortcuts, nullptr);
+    EXPECT_EQ(shortcuts->shortcut(), QKeySequence(QKeySequence::HelpContents));
+
+    const auto sheetText = [this, shortcuts] {
+        shortcuts->trigger();
+        const auto* sheet = window->findChild<enzan::gui::ShortcutSheet*>();
+        if (sheet == nullptr || !sheet->isVisible()) return QString();
+        const auto* browser = sheet->findChild<QTextBrowser*>();
+        return browser != nullptr ? browser->toPlainText() : QString();
+    };
+
+    const QString text = sheetText();
+    for (const QString& expected :
+         {QStringLiteral("Zoom Fit"), QStringLiteral("Next Edge"),
+          QStringLiteral("Add to Wave Recursive"), QStringLiteral("Ctrl+Shift+W"),
+          QStringLiteral("Ctrl+Wheel"), QStringLiteral("Type a name")}) {
+        EXPECT_TRUE(text.contains(expected)) << expected.toStdString();
+    }
+    EXPECT_EQ(text.count(QStringLiteral("Copy")), 1)
+        << "the wave list's commands are the Edit menu's, and are listed once";
+
+    // Read from the actions, so a key bound differently is listed differently.
+    QAction* fit = actionCalled(QStringLiteral("Zoom Fit"));
+    ASSERT_NE(fit, nullptr);
+    fit->setShortcut(QKeySequence(Qt::Key_F9));
+    EXPECT_TRUE(sheetText().contains(QStringLiteral("F9")));
+}
+
+TEST_F(MainWindowTest, AboutNamesTheVersionOfEachHalf) {
+    // Two programs, which may come from two builds when the kernel is on another machine.
+    QAction* about = actionCalled(QStringLiteral("About Enzan"));
+    ASSERT_NE(about, nullptr);
+    about->trigger();
+
+    const auto* box = window->findChild<QMessageBox*>();
+    ASSERT_NE(box, nullptr);
+    EXPECT_TRUE(box->isVisible());
+    ASSERT_FALSE(session->kernelVersion().isEmpty());
+    EXPECT_TRUE(box->text().contains(QString::fromStdString(enzan::versionLine()).toHtmlEscaped()));
+    EXPECT_TRUE(box->text().contains(session->kernelVersion().toHtmlEscaped()));
 }
 
 } // namespace

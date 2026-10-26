@@ -6,6 +6,7 @@
 #include "gui/DesignTreeModel.h"
 #include "gui/KernelSession.h"
 #include "gui/ObjectsModel.h"
+#include "gui/ShortcutSheet.h"
 #include "gui/SignalList.h"
 #include "gui/Theme.h"
 #include "gui/TranscriptView.h"
@@ -126,6 +127,14 @@ private:
     void addCursor();
     void toggleActiveCursorLock();
 
+    /// Shows the Keyboard Shortcuts window, read afresh from the actions so that it lists what
+    /// the window is bound to now.
+    void showShortcuts();
+
+    /// Shows the versions of both halves, which can come from two builds: a window attached to
+    /// a kernel on another machine is the case section 2.2 exists for.
+    void showAbout();
+
     void runForRequestedTime();
     void runUntilFinished();
     void stopRun();
@@ -210,6 +219,8 @@ private:
     /// The central area's tabs. Each needs the whole width, so they share it in turn rather
     /// than side by side.
     QTabWidget* panes = nullptr;
+
+    ShortcutSheet* shortcutSheet = nullptr;
 
     QLineEdit* runLengthEdit = nullptr;
     QLabel* statusTime = nullptr;
