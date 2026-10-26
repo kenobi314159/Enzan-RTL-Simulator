@@ -4,6 +4,8 @@
 
 #include "gui/SignalList.h"
 
+#include "eir/BitOps.h"
+
 #include "wavedb/WaveformDatabase.h"
 
 #include <QApplication>
@@ -869,12 +871,12 @@ void WaveformModel::moveToGroup(int rowId, int group) {
 eir::BitVector WaveformModel::slice(const WaveRow& waveRow, const eir::BitVector& value) {
     if (!waveRow.sliced) return value;
 
+    // A word at a time, as the runtime reads a part-select, with what lies past the value's end
+    // reading as unknown. A trace prints a value for every segment wide enough to hold one, so
+    // this runs that many times a repaint for every sliced row on screen.
     const std::uint32_t width = waveRow.highBit - waveRow.lowBit + 1;
     eir::BitVector narrowed = eir::BitVector::filled(width, eir::Logic::Zero);
-    for (std::uint32_t bit = 0; bit < width; ++bit) {
-        const std::uint32_t source = waveRow.lowBit + bit;
-        narrowed.set(bit, source < value.width() ? value.get(source) : eir::Logic::Unknown);
-    }
+    eir::bitops::partSelectAt(narrowed.mutableRef(), value.ref(), waveRow.lowBit);
     return narrowed;
 }
 
@@ -959,14 +961,15 @@ std::optional<eir::BitVector> WaveformModel::combinedValueAt(int rowId,
     if (parts.isEmpty()) return std::nullopt;
 
     // The first child is the most significant, which is the order the list shows them in and
-    // the order unpacking creates them in.
+    // the order unpacking creates them in. Copied a word at a time: a group made by adding a
+    // subtree joins every signal in it, for every value its trace prints, and a bit at a time
+    // that was most of what a repaint of a large design cost.
     eir::BitVector joined = eir::BitVector::filled(total, eir::Logic::Zero);
 
-    std::uint32_t bit = total;
+    std::uint32_t top = total;
     for (const eir::BitVector& part : parts) {
-        for (std::uint32_t index = part.width(); index-- > 0;) {
-            joined.set(--bit, part.get(index));
-        }
+        top -= part.width();
+        eir::bitops::assignPartAt(joined.mutableRef(), part.ref(), top);
     }
 
     return joined;

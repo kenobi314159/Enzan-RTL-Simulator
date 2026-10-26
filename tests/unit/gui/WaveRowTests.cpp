@@ -150,6 +150,23 @@ TEST_F(WaveRowTest, AGroupOfOneBitSignalsBehavesAsAVector) {
     EXPECT_EQ(model->renderValue(group, 400), QStringLiteral("0010"));
 }
 
+TEST_F(WaveRowTest, AGroupWiderThanAWordJoinsAcrossIt) {
+    // A group's bits are joined a word at a time, so the bits worth checking are the ones that
+    // straddle a word: nine copies of the counter's bits are seventy-two, and 40 is 0x28.
+    const int group = model->addGroup(QStringLiteral("wide"));
+    for (int copy = 0; copy < 9; ++copy) {
+        const int bus = model->addSignal(counter);
+        model->unpack(bus);
+        while (model->rowCount(model->indexOfRow(bus)) > 0) {
+            ASSERT_TRUE(model->moveRowsTo({childOf(bus, 0)}, group,
+                                          model->rowCount(model->indexOfRow(group))));
+        }
+    }
+
+    EXPECT_EQ(model->displayedWidth(group), 72U);
+    EXPECT_EQ(model->renderValue(group, 400), QStringLiteral("282828282828282828"));
+}
+
 TEST_F(WaveRowTest, AGroupOfDifferingWidthsReadsAsAList) {
     // Joining unlike signals into one number would file off the boundaries that say which bits
     // belong to what. The list keeps them, so a group of a clock and a counter is readable
