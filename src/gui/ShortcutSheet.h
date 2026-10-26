@@ -9,6 +9,7 @@
 #include <QVector>
 
 class QAction;
+class QKeySequence;
 class QTextBrowser;
 
 namespace enzan::gui {
@@ -24,6 +25,12 @@ struct ShortcutSection {
     QString title;
     QVector<ShortcutEntry> entries;
 };
+
+/// `key` as a reader is shown it outside a menu: Qt's text for it, with the names it abbreviates
+/// written out.
+///
+/// "Ins" beside a command, in a tool that measures time, reads as a nanosecond.
+[[nodiscard]] QString keyText(const QKeySequence& key);
 
 /// The key of `action` as a menu shows it, or empty when it has none.
 ///

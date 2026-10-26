@@ -14,8 +14,20 @@
 namespace {
 
 using enzan::gui::keysOf;
+using enzan::gui::keyText;
 using enzan::gui::sectionOf;
 using enzan::gui::ShortcutSection;
+
+TEST(ShortcutSheetTest, AKeyIsWrittenOutRatherThanAbbreviated) {
+    // Qt's "Ins", beside a command in a tool that measures time, reads as a nanosecond.
+    EXPECT_EQ(keyText(QKeySequence(Qt::Key_Insert)), QStringLiteral("Insert"));
+    EXPECT_EQ(keyText(QKeySequence(Qt::CTRL | Qt::Key_Delete)), QStringLiteral("Ctrl+Delete"));
+    EXPECT_EQ(keyText(QKeySequence(Qt::Key_PageDown)), QStringLiteral("Page Down"));
+
+    // And nothing else is touched, a name that merely contains one of them included.
+    EXPECT_EQ(keyText(QKeySequence(Qt::CTRL | Qt::Key_Plus)), QStringLiteral("Ctrl++"));
+    EXPECT_EQ(keyText(QKeySequence(Qt::CTRL | Qt::Key_Home)), QStringLiteral("Ctrl+Home"));
+}
 
 TEST(ShortcutSheetTest, AnActionsKeysAreEveryKeyItIsBoundTo) {
     QAction zoom(QStringLiteral("Zoom In"));

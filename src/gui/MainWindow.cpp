@@ -75,8 +75,8 @@ QAction* scopeTo(QAction* action, QWidget* scope) {
 /// a reader first meets a command, and its key is worth meeting there too.
 void showKeyInToolTip(QAction* action) {
     if (action->shortcut().isEmpty()) return;
-    action->setToolTip(QStringLiteral("%1 (%2)").arg(
-        action->toolTip(), action->shortcut().toString(QKeySequence::NativeText)));
+    action->setToolTip(
+        QStringLiteral("%1 (%2)").arg(action->toolTip(), keyText(action->shortcut())));
 }
 
 } // namespace

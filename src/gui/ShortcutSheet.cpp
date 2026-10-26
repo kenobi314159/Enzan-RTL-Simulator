@@ -6,8 +6,11 @@
 #include <QDialogButtonBox>
 #include <QKeySequence>
 #include <QMenu>
+#include <QRegularExpression>
 #include <QTextBrowser>
 #include <QVBoxLayout>
+
+#include <array>
 
 namespace enzan::gui {
 
@@ -24,11 +27,34 @@ QString meaningOf(const QAction& action) {
 
 } // namespace
 
+QString keyText(const QKeySequence& key) {
+    // The names Qt shortens, each a whole word of the text so that no other name is touched.
+    struct Abbreviation {
+        const char* shortened;
+        const char* written;
+    };
+
+    static constexpr std::array<Abbreviation, 5> Abbreviations{{
+        {.shortened = "Ins", .written = "Insert"},
+        {.shortened = "Del", .written = "Delete"},
+        {.shortened = "Esc", .written = "Escape"},
+        {.shortened = "PgUp", .written = "Page Up"},
+        {.shortened = "PgDown", .written = "Page Down"},
+    }};
+
+    QString text = key.toString(QKeySequence::NativeText);
+    for (const Abbreviation& abbreviation : Abbreviations) {
+        text.replace(QRegularExpression(
+                         QStringLiteral("\\b%1\\b").arg(QLatin1StringView(abbreviation.shortened))),
+                     QString::fromLatin1(abbreviation.written));
+    }
+    return text;
+}
+
 QString keysOf(const QAction& action) {
     if (!action.shortcuts().isEmpty()) {
         QStringList keys;
-        for (const QKeySequence& key : action.shortcuts())
-            keys << key.toString(QKeySequence::NativeText);
+        for (const QKeySequence& key : action.shortcuts()) keys << keyText(key);
         return keys.join(QStringLiteral(" or "));
     }
     return action.text().section(u'\t', 1);

@@ -482,6 +482,13 @@ TEST_F(MainWindowTest, TheShortcutSheetIsReadFromTheActions) {
     EXPECT_FALSE(sheet->isVisible());
 }
 
+TEST_F(MainWindowTest, AToolbarButtonsKeyIsWrittenOut) {
+    // "Add Cursor (Ins)" read as a cursor a nanosecond long.
+    const QAction* add = actionCalled(QStringLiteral("Add Cursor"));
+    ASSERT_NE(add, nullptr);
+    EXPECT_EQ(add->toolTip(), QStringLiteral("Add Cursor (Insert)"));
+}
+
 TEST_F(MainWindowTest, AboutNamesTheVersionOfEachHalf) {
     // Two programs, which may come from two builds when the kernel is on another machine.
     QAction* about = actionCalled(QStringLiteral("About Enzan"));
