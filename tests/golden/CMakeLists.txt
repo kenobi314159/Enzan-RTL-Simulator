@@ -300,6 +300,9 @@ if(ENZAN_HAVE_COCOTB)
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-cocotb-check.sh" $<TARGET_FILE:enzan>
                    "${ENZAN_COCOTB_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/cocotb")
   set_tests_properties(
-    golden.cocotb PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb" FAIL_REGULAR_EXPRESSION
-                             "FAIL=[1-9]" TIMEOUT 300)
+    golden.cocotb
+    PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb"
+               FAIL_REGULAR_EXPRESSION "FAIL=[1-9]"
+               TIMEOUT 300
+               ENVIRONMENT_MODIFICATION "${ENZAN_COCOTB_ENVIRONMENT}")
 endif()
