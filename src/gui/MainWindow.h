@@ -24,6 +24,7 @@ class QAction;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QSplitter;
 class QTabWidget;
 class QTableView;
 class QTreeView;
@@ -193,6 +194,10 @@ private:
     QTreeView* waveRowsView = nullptr;
     WaveformView* waveView = nullptr;
     TranscriptView* transcriptView = nullptr;
+
+    /// The Wave tab: the names and the traces beside them. Its keys are the wave window's,
+    /// whichever of the two has the focus.
+    QSplitter* waveTab = nullptr;
 
     /// The central area's tabs. Each needs the whole width, so they share it in turn rather
     /// than side by side.

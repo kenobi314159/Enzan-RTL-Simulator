@@ -160,6 +160,7 @@ void MainWindow::buildDocks() {
 
     auto* addToWave = new QAction(tr("Add to Wave"), objectsView);
     addToWave->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_W));
+    addToWave->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     connect(addToWave, &QAction::triggered, this, &MainWindow::addSelectedObjectsToWave);
     objectsView->addAction(addToWave);
 
@@ -235,12 +236,12 @@ void MainWindow::buildDocks() {
     // the tree keeps it and the canvas follows.
     waveRowsView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
 
-    auto* waveSplitter = new QSplitter(Qt::Horizontal, this);
-    waveSplitter->addWidget(waveRowsView);
-    waveSplitter->addWidget(waveView);
-    waveSplitter->setStretchFactor(0, 0);
-    waveSplitter->setStretchFactor(1, 1);
-    waveSplitter->setSizes({340, 900});
+    waveTab = new QSplitter(Qt::Horizontal, this);
+    waveTab->addWidget(waveRowsView);
+    waveTab->addWidget(waveView);
+    waveTab->setStretchFactor(0, 0);
+    waveTab->setStretchFactor(1, 1);
+    waveTab->setSizes({340, 900});
 
     // Wave and Source are tabs of the central area rather than a dock beside it, which is what
     // Modelsim does and what the two need: each wants the whole width. A waveform squeezed
@@ -248,15 +249,22 @@ void MainWindow::buildDocks() {
     // looking at one or the other.
     panes = new QTabWidget(this);
     panes->setDocumentMode(true);
-    panes->addTab(waveSplitter, tr("Wave"));
+    panes->addTab(waveTab, tr("Wave"));
     setCentralWidget(panes);
 
+    // Each pane's keys act on that pane, and only while the focus is in it. Qt's default would
+    // make them keys of the whole window, and Delete pressed in the Structure window would then
+    // remove whatever happened to be selected in the wave list. The wave list's keys are the
+    // Wave tab's, names and traces alike, because the two are one window to the reader
+    // (section 10.7).
     const auto addWaveAction = [this](const QString& text, const QKeySequence& shortcut,
                                       auto slot) {
         auto* action = new QAction(text, waveRowsView);
         if (!shortcut.isEmpty()) action->setShortcut(shortcut);
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         connect(action, &QAction::triggered, this, slot);
         waveRowsView->addAction(action);
+        waveTab->addAction(action);
         return action;
     };
 

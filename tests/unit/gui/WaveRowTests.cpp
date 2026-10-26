@@ -22,10 +22,12 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QDockWidget>
 #include <QHash>
 #include <QLineEdit>
 #include <QStringList>
 #include <QTableView>
+#include <QTest>
 #include <QTreeView>
 
 #include <cstdint>
@@ -914,6 +916,45 @@ TEST_F(WaveWindowTest, ASecondBusArrivesPackedWhileTheFirstStaysOpen) {
     EXPECT_FALSE(waveRows->isExpanded(waveModel->indexOfRow(second)));
     EXPECT_FALSE(waveModel->row(second)->unpacked)
         << "the second copy of a bus must not inherit the first one's unpacking";
+}
+
+// ---------------------------------------------------------------------------
+// Whose keys they are
+// ---------------------------------------------------------------------------
+
+TEST_F(WaveWindowTest, TheWaveListsKeysActOnlyInTheWaveWindow) {
+    // Delete in the Structure window removed whatever was selected in the wave list, and Ctrl+C in
+    // the Objects window copied wave rows: a key given to one pane was a key of the whole window.
+    addToWave(QStringLiteral("count"));
+    ASSERT_EQ(waveModel->rowCount(), 1);
+    waveRows->setCurrentIndex(waveModel->index(0, 0));
+
+    window->activateWindow();
+    ASSERT_TRUE(QTest::qWaitForWindowActive(window.get()));
+
+    QTreeView* structure = nullptr;
+    for (QDockWidget* dock : window->findChildren<QDockWidget*>()) {
+        if (dock->objectName() == QStringLiteral("structure"))
+            structure = qobject_cast<QTreeView*>(dock->widget());
+    }
+    ASSERT_NE(structure, nullptr);
+
+    structure->setFocus();
+    QTest::keyClick(structure, Qt::Key_Delete);
+    EXPECT_EQ(waveModel->rowCount(), 1) << "Delete in the Structure window removed a wave row";
+
+    QApplication::clipboard()->clear();
+    objects->setFocus();
+    QTest::keyClick(objects, Qt::Key_C, Qt::ControlModifier);
+    EXPECT_FALSE(WaveformModel::clipboardHasRows())
+        << "Ctrl+C in the Objects window copied wave rows";
+
+    // The traces are as much the wave window as the names are, so there the key does act.
+    auto* canvas = window->findChild<enzan::gui::WaveformView*>();
+    ASSERT_NE(canvas, nullptr);
+    canvas->setFocus();
+    QTest::keyClick(canvas, Qt::Key_Delete);
+    EXPECT_EQ(waveModel->rowCount(), 0) << "Delete on the traces removes the selected row";
 }
 
 } // namespace
