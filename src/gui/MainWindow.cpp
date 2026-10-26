@@ -407,8 +407,10 @@ void MainWindow::buildMenus() {
     QMenu* file = menuBar()->addMenu(tr("&File"));
     file->addAction(tr("Load Signal List…"), this, &MainWindow::chooseSignalListToLoad)
         ->setShortcut(QKeySequence::Open);
-    file->addAction(tr("Save Signal List…"), this, &MainWindow::chooseSignalListToSave)
+    file->addAction(tr("Save Signal List"), this, &MainWindow::saveSignalListToItsFile)
         ->setShortcut(QKeySequence::Save);
+    file->addAction(tr("Save Signal List As…"), this, &MainWindow::chooseSignalListToSave)
+        ->setShortcut(QKeySequence::SaveAs);
     file->addSeparator();
 
     // Closing the window only ever detaches, and is safe to give a key: whether the kernel goes
@@ -760,18 +762,28 @@ bool MainWindow::saveSignalList(const QString& path) {
         return false;
     }
 
+    signalListFile = path;
     note(tr("Saved the signal list to %1").arg(path));
     return true;
 }
 
 void MainWindow::chooseSignalListToLoad() {
-    const QString path = QFileDialog::getOpenFileName(this, tr("Load Signal List"));
+    const QString path = QFileDialog::getOpenFileName(this, tr("Load Signal List"),
+                                                      QFileInfo(signalListFile).path());
     if (!path.isEmpty()) static_cast<void>(loadSignalList(path));
 }
 
 void MainWindow::chooseSignalListToSave() {
-    const QString path = QFileDialog::getSaveFileName(this, tr("Save Signal List"));
+    const QString path = QFileDialog::getSaveFileName(this, tr("Save Signal List"), signalListFile);
     if (!path.isEmpty()) static_cast<void>(saveSignalList(path));
+}
+
+void MainWindow::saveSignalListToItsFile() {
+    if (signalListFile.isEmpty()) {
+        chooseSignalListToSave();
+        return;
+    }
+    static_cast<void>(saveSignalList(signalListFile));
 }
 
 void MainWindow::startLoad(PendingLoad load) {
@@ -811,7 +823,10 @@ void MainWindow::finishLoad(const PendingLoad& load) {
     // signals opened all at once is a wall, and the groups are there to be opened one by one.
     static_cast<void>(waveModel->insertSignalRows(resolved.rows, -1, -1));
 
-    if (!load.file.isEmpty()) note(tr("Loaded the signal list %1").arg(load.file));
+    if (!load.file.isEmpty()) {
+        signalListFile = load.file;
+        note(tr("Loaded the signal list %1").arg(load.file));
+    }
 }
 
 void MainWindow::depositOrForceSelectedObject(bool force) {

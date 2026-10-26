@@ -2726,8 +2726,10 @@ window lets it become: its bits can be deleted and reordered, and other rows can
 into it (10.7). `-contents` describes any of that with the same two commands, each bit with
 its own radix, label and highlight, so nothing the window can show is beyond the file.
 
-**Saving writes what the window shows.** *Save signal list…* writes every row, top to
-bottom, so that loading the file rebuilds the same list:
+**Saving writes what the window shows.** *Save Signal List* writes every row, top to
+bottom, back to the file the list was last loaded from or saved to, asking only when there is
+none, and *Save Signal List As…* to another; arranging, saving and running again is the loop
+the file exists for. Loading the file rebuilds the same list:
 
 - a label only where the row was renamed, `-expand` for a signal exactly as unpacking left
   it and `-contents` for one that has been changed since;
@@ -2752,7 +2754,7 @@ go into the window the way a paste puts them there. So:
 - the whole file is read, and every path looked up, before any row is added, so a file
   with a mistake in it changes nothing rather than half of the window.
 
-*Load signal list…* replaces the window's list. Adding one list to another is what copying
+*Load Signal List…* replaces the window's list. Adding one list to another is what copying
 and pasting are for.
 
 **A mistake in the file is an error; a path the design lacks is not.** An unknown command,

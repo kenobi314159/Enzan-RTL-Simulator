@@ -129,6 +129,20 @@ protected:
         }
     }
 
+    /// File → Save Signal List, the one that writes back rather than asking.
+    [[nodiscard]] QAction* saveAction() const {
+        for (QAction* action : window->findChildren<QAction*>()) {
+            if (action->text() == QStringLiteral("Save Signal List")) return action;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] static QByteArray contentsOf(const QString& path) {
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::ReadOnly)) << path.toStdString();
+        return file.readAll();
+    }
+
     Theme theme;
     std::unique_ptr<MainWindow> window;
     QTemporaryDir files;
@@ -307,6 +321,47 @@ TEST_F(SignalListLoadTest, ASavedListLoadsBackAsItWasAndSavesTheSameBytes) {
     QFile second(saved);
     ASSERT_TRUE(second.open(QIODevice::ReadOnly));
     EXPECT_EQ(second.readAll(), written) << "the same window saves the same bytes";
+}
+
+TEST_F(SignalListLoadTest, SaveWritesBackToTheFileTheListCameFrom) {
+    // Arranging, saving and running again is the loop a signal list is for, so Save asks nothing
+    // once the list has a file: the one it was loaded from, or last saved to.
+    ASSERT_TRUE(load("add wave /tb/clk\n"));
+    const QString loaded = files.filePath(QStringLiteral("list-1.tcl"));
+    waves()->addSignal(info(QStringLiteral("/tb"), QStringLiteral("count")));
+
+    ASSERT_NE(saveAction(), nullptr);
+    saveAction()->trigger();
+    EXPECT_EQ(contentsOf(loaded), waves()->writeSignalList().toUtf8());
+
+    const QString elsewhere = files.filePath(QStringLiteral("elsewhere.tcl"));
+    ASSERT_TRUE(window->saveSignalList(elsewhere));
+    waves()->addSignal(info(QStringLiteral("/tb"), QStringLiteral("state")));
+    saveAction()->trigger();
+    EXPECT_EQ(contentsOf(elsewhere), waves()->writeSignalList().toUtf8())
+        << "after a save to another file, that file is the list's";
+    EXPECT_NE(contentsOf(loaded), contentsOf(elsewhere));
+}
+
+TEST_F(SignalListLoadTest, AFileThatLoadedNothingIsNotWhereSaveWrites) {
+    // Its mistake left the window's list as it was, and that list is not the file's.
+    const QString kept = files.filePath(QStringLiteral("kept.tcl"));
+    waves()->addSignal(info(QStringLiteral("/tb"), QStringLiteral("clk")));
+    ASSERT_TRUE(window->saveSignalList(kept));
+
+    const QByteArray mistaken = "add wave -colour red /tb/clk\n";
+    const QString bad = write(QStringLiteral("bad.tcl"), mistaken);
+    EXPECT_FALSE(window->loadSignalList(bad));
+    const QString scope = write(QStringLiteral("scope.tcl"), "add wave -expand /tb\n");
+    ASSERT_TRUE(window->loadSignalList(scope));
+    ASSERT_TRUE(pumpUntil([this] { return transcript().contains(QStringLiteral("Nothing was")); }));
+
+    waves()->addSignal(info(QStringLiteral("/tb"), QStringLiteral("count")));
+    ASSERT_NE(saveAction(), nullptr);
+    saveAction()->trigger();
+    EXPECT_EQ(contentsOf(bad), mistaken);
+    EXPECT_EQ(contentsOf(scope), QByteArray("add wave -expand /tb\n"));
+    EXPECT_EQ(contentsOf(kept), waves()->writeSignalList().toUtf8());
 }
 
 // ---------------------------------------------------------------------------

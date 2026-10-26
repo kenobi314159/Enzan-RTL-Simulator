@@ -94,6 +94,13 @@ private:
     void chooseSignalListToLoad();
     void chooseSignalListToSave();
 
+    /// Writes the list back to the file it was last loaded from or saved to, and asks for one
+    /// only when there is none yet.
+    ///
+    /// Arranging the window, saving it and running again is the loop a signal list exists for
+    /// (section 10.8), so after the first time saving asks nothing.
+    void saveSignalListToItsFile();
+
     void groupSelectedWaves();
 
     /// Opens the name editor on the row the reader is on.
@@ -235,6 +242,10 @@ private:
 
     /// A signal list asked for before the design arrived, loaded when it does.
     QString deferredSignalList;
+
+    /// The file the wave window's list was last loaded from or saved to, which Save writes back
+    /// to. Empty until there is one; a file that loaded nothing is not it.
+    QString signalListFile;
 
     /// The scopes of the design the window last showed, to tell a new design from the same one
     /// sent again.
