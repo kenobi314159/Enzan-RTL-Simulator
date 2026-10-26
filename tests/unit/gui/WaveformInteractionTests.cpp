@@ -743,4 +743,97 @@ TEST_F(InteractionTest, EveryHighlightSlotHasAColour) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The keyboard
+// ---------------------------------------------------------------------------
+
+TEST_F(InteractionTest, TheTracesHandTheirKeysToTheList) {
+    // A key means one thing across the Wave tab, and the bare keys are the list's: `+` and `-`
+    // unpack and pack, and typing the start of a name finds its row.
+    populate();
+    const int count = rowOf.value(QStringLiteral("count"));
+    treeView->setCurrentIndex(model->indexOfRow(count));
+
+    key(Qt::Key_Plus);
+    EXPECT_TRUE(treeView->isExpanded(model->indexOfRow(count))) << "+ on the traces unpacks";
+    key(Qt::Key_Minus);
+    EXPECT_FALSE(treeView->isExpanded(model->indexOfRow(count))) << "- on the traces packs";
+
+    treeView->setCurrentIndex(model->indexOfRow(rowOf.value(QStringLiteral("clk"))));
+    for (const QString& letter : {QStringLiteral("c"), QStringLiteral("o")}) {
+        QKeyEvent typed(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, letter);
+        QCoreApplication::sendEvent(view.get(), &typed);
+    }
+    EXPECT_EQ(view->selectedRow(), count) << "typing on the traces finds a row by its name";
+}
+
+TEST_F(InteractionTest, APanStepMovesTheViewAndKeepsTheZoom) {
+    populate();
+    view->axis().setRange(100, 100);
+
+    view->panStep(true);
+    EXPECT_GT(view->axis().start(), 100U);
+    EXPECT_EQ(view->axis().span(), 100U);
+
+    view->panStep(false);
+    EXPECT_EQ(view->axis().start(), 100U);
+}
+
+TEST_F(InteractionTest, PlacingTheActiveCursorBringsItIntoView) {
+    populate();
+    view->axis().setRange(0, 100);
+
+    view->placeActiveCursor(300);
+    EXPECT_EQ(view->activeCursorTime(), 300U);
+    EXPECT_LE(view->axis().start(), 300U);
+    EXPECT_GE(view->axis().end(), 300U) << "a cursor sent off the side of the window is lost";
+
+    // Locked means pinned, whichever key would move it.
+    view->setCursorLocked(view->activeCursor(), true);
+    view->placeActiveCursor(0);
+    EXPECT_EQ(view->activeCursorTime(), 300U);
+}
+
+TEST_F(InteractionTest, TheNeighbourCursorIsTheNextOneInTime) {
+    // By where the cursors are on the axis, not by when they were made, and with no going round
+    // at either end.
+    populate();
+    view->axis().setRange(0, 400);
+    view->setCursorTime(0, 100);
+    view->addCursor(QStringLiteral("B"), 300);
+    view->addCursor(QStringLiteral("C"), 200);
+
+    view->activateNeighbourCursor(true);
+    EXPECT_EQ(view->activeCursorTime(), 300U);
+    view->activateNeighbourCursor(true);
+    EXPECT_EQ(view->activeCursorTime(), 300U) << "past the last cursor nothing happens";
+
+    view->activateNeighbourCursor(false);
+    EXPECT_EQ(view->activeCursorTime(), 200U);
+    view->activateNeighbourCursor(false);
+    EXPECT_EQ(view->activeCursorTime(), 100U);
+    view->activateNeighbourCursor(false);
+    EXPECT_EQ(view->activeCursorTime(), 100U) << "past the first cursor nothing happens";
+}
+
+TEST_F(InteractionTest, CursorsAtOneTimeAreOrderedByName) {
+    // A cursor is added at the active one's time, so two at one time is the usual case rather
+    // than a curiosity. Making either active must not change which comes first, or the keys
+    // would swap them back and forth.
+    populate();
+    view->setCursorTime(0, 100);
+    ASSERT_EQ(view->cursors()[0].name, QStringLiteral("Cursor 1"));
+    view->addCursor(QStringLiteral("Cursor 2"), 100);
+
+    const auto activeName = [this] { return view->cursors()[view->activeCursor()].name; };
+    view->activateNeighbourCursor(false);
+    EXPECT_EQ(activeName(), QStringLiteral("Cursor 1"));
+    view->activateNeighbourCursor(false);
+    EXPECT_EQ(activeName(), QStringLiteral("Cursor 1"));
+    view->activateNeighbourCursor(true);
+    EXPECT_EQ(activeName(), QStringLiteral("Cursor 2"));
+    view->activateNeighbourCursor(true);
+    EXPECT_EQ(activeName(), QStringLiteral("Cursor 2"));
+}
+
 } // namespace

@@ -2164,6 +2164,12 @@ reader is looking at one or the other. The Source tab is raised automatically
 when the design stops at a line, because the reader asked to stop somewhere and
 the point is to see it.
 
+**A command is one action wherever it is offered.** The menu bar, the toolbar and a pane's
+own menu share it, so a command has one name and one key in all of them; the wave list's menu
+is the window's Edit menu, entry for entry. A pane's keys act while the focus is in that pane
+and nowhere else, so that Delete in the Structure window cannot remove a wave row. The run's
+keys are the window's, a debugger's: F5 runs and Shift+F5 stops.
+
 ### 10.3 Waveform view
 
 A custom `QWidget` with manual painting.
@@ -2423,11 +2429,14 @@ Which signal is selected is not decoration: it is what Tab steps along below.
 - Clicking a cursor's label makes it the active cursor.
 - Double-clicking a label renames it.
 - Right-clicking a label opens that cursor's own menu: rename, lock or unlock,
-  remove. It is a menu rather than a set of window-level commands because every
-  entry is about *that* cursor, and a command that acted on "the active one"
-  would need the reader to make it active first and then remember that they had.
+  remove. That is the mouse's way, and it names the cursor by pointing at it. A key
+  cannot point, so the keyboard acts on the active cursor, which is drawn heavier
+  than the rest: Ctrl+L locks or unlocks it, `,` and `.` make the cursor to its left
+  or right active, and Ctrl+Home and Ctrl+End move it, unless it is locked, to time
+  zero and to where the traces stop.
 - A cursor is added from the toolbar, beside the zoom controls, because adding
-  one is part of measuring rather than part of configuring the window.
+  one is part of measuring rather than part of configuring the window; or with
+  Insert. The new cursor is the active one, at the active one's time.
 - **Tab** moves the active cursor to the next transition of the selected row,
   **Shift+Tab** to the previous one. It does so wherever the focus is — the
   signal list must not spend the key on its own focus navigation.
@@ -2615,8 +2624,17 @@ it would sit beside is how a tool acquires a number nobody reads.
   to the reader and a highlight that stopped at the splitter would read as a
   rendering fault.
 
-**What this does not change.** Panning with the middle button, the keyboard zoom
-and pan, cursor locking, grouping and per-row radix all stay as they are.
+**The keyboard.** A modifier means what it means on the wheel: Ctrl zooms, Ctrl+`+` and
+Ctrl+`-` by a step, Ctrl+F to fit the run and Ctrl+Shift+F to the cursors; Shift pans, with
+Shift+← and Shift+→. A key without one is the signal list's own, as Qt's tree gives it: the
+arrows move, pack and unpack, `+`, `-` and `*` pack and unpack, and typing the start of a name
+jumps to the row. The traces hand such a key to the list, so it means one thing across the Wave
+tab, and the window's wave keys act only while the focus is there.
+
+**Finding a row by typing its name is kept on purpose.** It is why the keys above carry a
+modifier or are punctuation, and a command MUST NOT take a key that types a letter or a digit in
+the Wave tab: it would take away a way of finding a row that a reader may rely on without
+knowing it has a name.
 
 Panning is the middle button's alone. Ctrl+drag used to pan as well, and no
 longer does: Ctrl means *zoom* on the wheel, and a modifier that meant zoom under
@@ -2677,9 +2695,9 @@ What `add wave` adds depends on what the path names:
   warning, naming the ranges the signal is declared with. The whole path is looked up as a
   signal first, then with one select fewer at a time, so a name that itself ends in brackets is
   never taken for a select.
-- **A scope** adds what *Add to wave* on that scope in the Structure window adds: a group
-  named by the scope's path, holding its signals. With `-r` it adds what *Add to wave
-  recursive* adds: the subtree's groups, nested as its instances are, in the Structure
+- **A scope** adds what *Add to Wave* on that scope in the Structure window adds: a group
+  named by the scope's path, holding its signals. With `-r` it adds what *Add to Wave
+  Recursive* adds: the subtree's groups, nested as its instances are, in the Structure
   window's order. A scope with instances below it becomes a group holding its own signals in
   a group called `$top`, then a group for each instance below it, named by the instance's
   name; one without is the group of its signals. A group that would hold nothing is left out,

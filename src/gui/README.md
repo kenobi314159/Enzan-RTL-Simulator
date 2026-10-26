@@ -48,7 +48,7 @@ write one back out: a program cannot be saved from what it produced, and a list 
 how a row is made from a signal, a range of one, an element of an array or a bit, and
 `unpackedRows` is what unpacking makes of a row. Adding from the Objects window, pasting and
 loading a list all go through them and through `insertSignalRows`. The Structure window's
-*Add to wave* entries go further: they run the signal list command `add wave ?-r? <scope>`, so
+*Add to Wave* entries go further: they run the signal list command `add wave ?-r? <scope>`, so
 the menu and the file cannot come to disagree about what a scope adds.
 
 **Rendering is bounded by pixels, not by transitions** (section 10.3). Each trace is drawn by

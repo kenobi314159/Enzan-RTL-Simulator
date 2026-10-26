@@ -7,6 +7,7 @@
 #include <QString>
 #include <QWidget>
 
+class QAction;
 class QPlainTextEdit;
 
 namespace enzan::gui {
@@ -30,12 +31,17 @@ public:
 
     void clearTranscript();
 
+    /// The command that clears the transcript, for the window's menu as well as the
+    /// transcript's own, so that the two are one command rather than two kept in step.
+    [[nodiscard]] QAction* clearAction() const noexcept { return clear; }
+
 private:
     /// Appends `text` in `colour`, scrolling to the end only when the view was already there.
     void append(const QString& text, const QColor& colour, bool ownLine);
 
     const Theme* theme;
     QPlainTextEdit* output = nullptr;
+    QAction* clear = nullptr;
 
     /// Whatever the kernel wrote without a trailing newline, waiting for the rest of its line.
     QString partialLine;

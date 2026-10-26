@@ -167,7 +167,7 @@ the built-in dark theme out as a starting point, and `enzan --gui --theme mine.t
 `~/.config/enzan-gui/theme.tcl` — loads yours over it, so a file that sets three colours changes
 three colours.
 
-What the wave window shows can be kept. *Wave → Save Signal List…* writes it to a file, and
+What the wave window shows can be kept. *File → Save Signal List…* writes it to a file, and
 *Load Signal List…* or `enzan run --gui --wave-list signals.tcl` puts it back. The file is a short
 list of `add wave` and `group` commands, written in Tcl's syntax but never run as Tcl, and easy
 to write by hand:

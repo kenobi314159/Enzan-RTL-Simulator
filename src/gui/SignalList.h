@@ -98,9 +98,9 @@ struct ResolvedSignalList {
 
 /// Builds the rows `entries` describe, from the objects of every scope `scopesNeededBy` named.
 ///
-/// A scope path produces exactly what the Structure window's *Add to wave* produces: a group
+/// A scope path produces exactly what the Structure window's *Add to Wave* produces: a group
 /// named by the scope's path holding every object of the scope, or nothing for a scope with no
-/// objects. With `-r` it produces what *Add to wave recursive* does: the subtree's groups,
+/// objects. With `-r` it produces what *Add to Wave Recursive* does: the subtree's groups,
 /// nested as its instances are. Section 10.8 defines the command as those menu entries, not
 /// beside them.
 [[nodiscard]] ResolvedSignalList

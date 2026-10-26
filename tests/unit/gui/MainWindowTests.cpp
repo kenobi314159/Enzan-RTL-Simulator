@@ -28,8 +28,11 @@
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QString>
+#include <QTest>
 #include <QTreeView>
 
 #include <algorithm>
@@ -167,7 +170,7 @@ TEST_F(MainWindowTest, AGroupedInsertNamesTheGroupAfterTheScopesPath) {
     const QVector<std::uint32_t> expected = signalsOf(Top);
     ASSERT_FALSE(expected.isEmpty());
 
-    insert(Top, QStringLiteral("Add to wave"));
+    insert(Top, QStringLiteral("Add to Wave"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
@@ -187,7 +190,7 @@ TEST_F(MainWindowTest, AGroupedRecursiveInsertNestsTheGroupsAsTheDesignIs) {
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
-    insert(Top, QStringLiteral("Add to wave recursive"));
+    insert(Top, QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
@@ -231,7 +234,7 @@ TEST_F(MainWindowTest, AnInsertLeavesTheObjectsWindowOnTheScopeTheReaderClicked)
     ASSERT_TRUE(pumpUntil([this] { return objects()->scope() == Top; }));
 
     const QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
-    insert(Top, QStringLiteral("Add to wave recursive"));
+    insert(Top, QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     EXPECT_EQ(objects()->scope(), Top);
@@ -246,7 +249,7 @@ TEST_F(MainWindowTest, NoGroupIsLeftEmpty) {
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
-    insert(Top, QStringLiteral("Add to wave recursive"));
+    insert(Top, QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     QVector<int> rows = topRows();
@@ -282,7 +285,7 @@ TEST_F(MainWindowTest, StopEndsARunTheWindowStarted) {
     ASSERT_NE(stop, nullptr);
 
     // Streamed signals are what the window has to keep up with.
-    insert(Top, QStringLiteral("Add to wave recursive"));
+    insert(Top, QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>((signalsOf(Top) + signalsOf(Child)).size())));
 
     std::atomic<bool> serving = true;
@@ -394,6 +397,34 @@ TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
     EXPECT_TRUE(text->toPlainText().contains(
         QStringLiteral("'1ps' is not a whole number of the run's time unit, ns")))
         << text->toPlainText().toStdString();
+
+    // Enter in the field runs, which is what typing a length is for.
+    length->setText(QStringLiteral("5"));
+    QTest::keyClick(length, Qt::Key_Return);
+    EXPECT_TRUE(pumpUntil([&] {
+        return session->currentTime() == 45
+               && session->state() != enzan::ipc::SimulationState::Running;
+    })) << session->currentTime();
+}
+
+TEST_F(MainWindowTest, TheTranscriptIsClearedByOneCommand) {
+    // The transcript's own menu and the window's View menu offer the same action.
+    auto* transcriptView = window->findChild<enzan::gui::TranscriptView*>();
+    ASSERT_NE(transcriptView, nullptr);
+    const auto* text = transcriptView->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+    window->note(QStringLiteral("something to clear"));
+    ASSERT_FALSE(text->toPlainText().isEmpty());
+
+    bool inViewMenu = false;
+    for (const QAction* entry : window->menuBar()->actions()) {
+        if (entry->menu() != nullptr && entry->text() == QStringLiteral("&View"))
+            inViewMenu = entry->menu()->actions().contains(transcriptView->clearAction());
+    }
+    EXPECT_TRUE(inViewMenu);
+
+    transcriptView->clearAction()->trigger();
+    EXPECT_TRUE(text->toPlainText().isEmpty());
 }
 
 } // namespace

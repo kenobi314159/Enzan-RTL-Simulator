@@ -2,7 +2,9 @@
 
 #include "gui/TranscriptView.h"
 
+#include <QAction>
 #include <QFontDatabase>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QTextCharFormat>
@@ -41,6 +43,19 @@ TranscriptView::TranscriptView(const Theme& themeToUse, QWidget* parent)
     output->setLineWrapMode(QPlainTextEdit::NoWrap);
     output->setFont(
         theme->font(ThemeFont::Transcript, QFontDatabase::systemFont(QFontDatabase::FixedFont)));
+
+    // The text edit's own menu, copying and selecting, with clearing added to it: what a reader
+    // right-clicking a log expects to find there.
+    clear = new QAction(tr("Clear Transcript"), this);
+    connect(clear, &QAction::triggered, this, &TranscriptView::clearTranscript);
+    output->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(output, &QWidget::customContextMenuRequested, this, [this](const QPoint& where) {
+        QMenu* menu = output->createStandardContextMenu();
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        menu->addSeparator();
+        menu->addAction(clear);
+        menu->popup(output->viewport()->mapToGlobal(where));
+    });
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

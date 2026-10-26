@@ -180,7 +180,7 @@ TEST_F(SignalListLoadTest, ALoadedListHasTheRowsItDescribes) {
 }
 
 TEST_F(SignalListLoadTest, AScopeAddsWhatTheMenuEntryAdds) {
-    insert(QStringLiteral("/tb"), QStringLiteral("Add to wave recursive"));
+    insert(QStringLiteral("/tb"), QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(pumpUntil([this] { return topRows().size() == 1; }))
         << topRows().size() << " rows; the transcript says:\n"
         << transcript().toStdString();
@@ -415,8 +415,8 @@ TEST_F(ArraySignalListTest, AnArrayTakenApartIsSavedByItsIndicesAndLoadsBackTheS
 // ---------------------------------------------------------------------------
 
 TEST_F(SignalListLoadTest, TheMenuEntriesEchoTheirCommand) {
-    insert(QStringLiteral("/tb"), QStringLiteral("Add to wave"));
-    insert(QStringLiteral("/tb/u_dut"), QStringLiteral("Add to wave recursive"));
+    insert(QStringLiteral("/tb"), QStringLiteral("Add to Wave"));
+    insert(QStringLiteral("/tb/u_dut"), QStringLiteral("Add to Wave Recursive"));
     pump();
 
     EXPECT_TRUE(transcript().contains(QStringLiteral("add wave /tb\n")))

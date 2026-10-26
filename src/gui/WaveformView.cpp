@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <optional>
 #include <span>
 
@@ -42,6 +43,9 @@ constexpr double MinimumGridPixels = 90.0;
 
 /// How much one wheel notch zooms.
 constexpr double ZoomStep = 1.25;
+
+/// How far one press of a pan key moves the view.
+constexpr double PanStepPixels = 60.0;
 
 /// Positions the scroll bar can take. The time range is 64-bit and a scroll bar is not, so the
 /// bar works in fractions of the scrollable span rather than in time units.
@@ -246,6 +250,14 @@ void WaveformView::zoomToCursors() {
     Q_EMIT rangeChanged();
 }
 
+void WaveformView::panStep(bool later) {
+    timeAxis.pan(later ? PanStepPixels : -PanStepPixels);
+    following = false;
+    syncScrollBar();
+    update();
+    Q_EMIT rangeChanged();
+}
+
 void WaveformView::setFollowTail(bool follow) {
     following = follow;
     if (following) {
@@ -404,18 +416,57 @@ void WaveformView::stepActiveCursorToEdge(bool forward) {
 
     // The reader is stepping towards something they want to look at, so the view goes with
     // them rather than leaving the cursor off the side of the window.
-    if (cursorList[index].time < timeAxis.start() || cursorList[index].time > timeAxis.end()) {
-        timeAxis.setRange(cursorList[index].time > timeAxis.span() / 2
-                              ? cursorList[index].time - (timeAxis.span() / 2)
-                              : 0,
-                          timeAxis.span());
-        following = false;
-        syncScrollBar();
-        Q_EMIT rangeChanged();
-    }
+    bringIntoView(edge);
 
     update();
     Q_EMIT cursorsChanged();
+}
+
+void WaveformView::placeActiveCursor(runtime::SimTime time) {
+    if (cursorList.isEmpty()) return;
+
+    const int index = std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1);
+    if (cursorList[index].locked) return;
+
+    cursorList[index].time = time;
+    bringIntoView(time);
+    update();
+    Q_EMIT cursorsChanged();
+}
+
+void WaveformView::activateNeighbourCursor(bool later) {
+    if (cursorList.size() < 2) return;
+
+    // Ordered by time, and by name where two share one: a cursor just added sits on the active
+    // one's time, and the list itself is reordered whenever a cursor is made active, so without
+    // the names the two would swap places each time either key was pressed.
+    QVector<int> order(cursorList.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::ranges::stable_sort(order, [this](int left, int right) {
+        if (cursorList[left].time != cursorList[right].time)
+            return cursorList[left].time < cursorList[right].time;
+        return cursorList[left].name < cursorList[right].name;
+    });
+
+    const auto position =
+        order.indexOf(std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1));
+    const qsizetype neighbour = later ? position + 1 : position - 1;
+    if (neighbour < 0 || neighbour >= order.size()) return;
+
+    const runtime::SimTime time = cursorList[order[neighbour]].time;
+    setActiveCursor(order[neighbour]);
+    bringIntoView(time);
+}
+
+void WaveformView::bringIntoView(runtime::SimTime time) {
+    if (time >= timeAxis.start() && time <= timeAxis.end()) return;
+
+    timeAxis.setRange(time > timeAxis.span() / 2 ? time - (timeAxis.span() / 2) : 0,
+                      timeAxis.span());
+    following = false;
+    syncScrollBar();
+    update();
+    Q_EMIT rangeChanged();
 }
 
 void WaveformView::pickAt(const QPoint& point) {
@@ -1276,28 +1327,16 @@ void WaveformView::wheelEvent(QWheelEvent* event) {
 }
 
 void WaveformView::keyPressEvent(QKeyEvent* event) {
-    switch (event->key()) {
-    case Qt::Key_Plus:
-    case Qt::Key_Equal: zoomIn(); return;
-    case Qt::Key_Minus: zoomOut(); return;
-    case Qt::Key_F: zoomFit(); return;
-    case Qt::Key_Home: setCursorTime(active, 0); return;
-    case Qt::Key_Left:
-        timeAxis.pan(-60.0);
-        following = false;
-        syncScrollBar();
-        update();
-        Q_EMIT rangeChanged();
+    if (rows == nullptr) {
+        QWidget::keyPressEvent(event);
         return;
-    case Qt::Key_Right:
-        timeAxis.pan(60.0);
-        following = false;
-        syncScrollBar();
-        update();
-        Q_EMIT rangeChanged();
-        return;
-    default: QWidget::keyPressEvent(event); return;
     }
+
+    // Accepted here whatever the list made of it. A key the list ignores has already been
+    // offered to everything above the list, and that is everything above this view too; letting
+    // it go on from here would offer it to all of them a second time.
+    QCoreApplication::sendEvent(rows, event);
+    event->accept();
 }
 
 bool WaveformView::focusNextPrevChild(bool next) {

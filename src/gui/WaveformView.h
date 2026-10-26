@@ -84,6 +84,9 @@ public:
     /// Shows the span between the two most recently used cursors.
     void zoomToCursors();
 
+    /// Moves the view one step along the time axis, towards later times when `later` is set.
+    void panStep(bool later);
+
     /// Keeps the right-hand edge at the latest simulated time while a run is in progress.
     void setFollowTail(bool follow);
 
@@ -114,6 +117,19 @@ public:
     /// previous one. Does nothing without a selected signal, or past its last edge.
     void stepActiveCursorToEdge(bool forward);
 
+    /// Moves the active cursor to `time` and brings it into view. Does nothing to a locked
+    /// cursor, which stays where it was pinned whatever moves it.
+    void placeActiveCursor(runtime::SimTime time);
+
+    /// Makes the cursor to the right of the active one active, or the one to its left, and
+    /// brings it into view.
+    ///
+    /// By time rather than by the order the cursors were made in, because the reader sees them
+    /// on an axis and the keys are named for directions on it. Nothing happens past the last
+    /// one either way: going round would make the key that reaches the leftmost cursor also the
+    /// one that jumps to the rightmost.
+    void activateNeighbourCursor(bool later);
+
     /// The wave row the signal list has selected, or -1.
     [[nodiscard]] int selectedRow() const;
 
@@ -142,6 +158,13 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+
+    /// Hands a key to the signal list beside it.
+    ///
+    /// The names and the traces are one window, so a key means on the traces what it means on
+    /// the names: moving between rows, packing and unpacking, and finding a row by typing the
+    /// start of its name (section 10.7). The window's own keys are actions of the whole Wave
+    /// tab and never arrive here.
     void keyPressEvent(QKeyEvent* event) override;
 
     /// Consumes Tab and Shift+Tab, which Qt would otherwise spend on focus navigation.
@@ -273,6 +296,9 @@ private:
 
     /// Moves the active cursor to the time under `x`, if it is not locked.
     void moveActiveCursorTo(double x);
+
+    /// Scrolls the view so that `time` is in it, centred, unless it already is.
+    void bringIntoView(runtime::SimTime time);
 
     /// Applies a change of selection in the list, which means the same as a click on the row.
     void onRowSelected();

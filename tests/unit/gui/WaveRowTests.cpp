@@ -25,6 +25,8 @@
 #include <QDockWidget>
 #include <QHash>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMenuBar>
 #include <QStringList>
 #include <QTableView>
 #include <QTest>
@@ -933,7 +935,7 @@ TEST_F(WaveWindowTest, TheWaveListsKeysActOnlyInTheWaveWindow) {
     ASSERT_TRUE(QTest::qWaitForWindowActive(window.get()));
 
     QTreeView* structure = nullptr;
-    for (QDockWidget* dock : window->findChildren<QDockWidget*>()) {
+    for (const QDockWidget* dock : window->findChildren<QDockWidget*>()) {
         if (dock->objectName() == QStringLiteral("structure"))
             structure = qobject_cast<QTreeView*>(dock->widget());
     }
@@ -955,6 +957,43 @@ TEST_F(WaveWindowTest, TheWaveListsKeysActOnlyInTheWaveWindow) {
     canvas->setFocus();
     QTest::keyClick(canvas, Qt::Key_Delete);
     EXPECT_EQ(waveModel->rowCount(), 0) << "Delete on the traces removes the selected row";
+}
+
+TEST_F(WaveWindowTest, TheWaveKeysLeaveTheListsTypingAlone) {
+    // The wave window's own keys carry a modifier or are punctuation, so that a letter typed in
+    // the list still finds a row by its name (section 10.7), and they act only in the Wave tab.
+    addToWave(QStringLiteral("clk"));
+    addToWave(QStringLiteral("count"));
+    ASSERT_EQ(waveModel->rowCount(), 2);
+
+    window->activateWindow();
+    ASSERT_TRUE(QTest::qWaitForWindowActive(window.get()));
+    auto* canvas = window->findChild<enzan::gui::WaveformView*>();
+    ASSERT_NE(canvas, nullptr);
+
+    waveRows->setFocus();
+    waveRows->setCurrentIndex(waveModel->index(0, 0));
+    QTest::keyClicks(waveRows, QStringLiteral("co"));
+    EXPECT_EQ(waveRows->currentIndex().data().toString(), QStringLiteral("count"));
+
+    const qsizetype cursors = canvas->cursors().size();
+    objects->setFocus();
+    QTest::keyClick(objects, Qt::Key_Insert);
+    EXPECT_EQ(canvas->cursors().size(), cursors) << "Insert outside the Wave tab added a cursor";
+
+    waveRows->setFocus();
+    QTest::keyClick(waveRows, Qt::Key_Insert);
+    EXPECT_EQ(canvas->cursors().size(), cursors + 1) << "Insert in the wave list adds a cursor";
+}
+
+TEST_F(WaveWindowTest, TheEditMenuIsTheWaveListsMenu) {
+    // One set of actions in one order, so that the two menus cannot come to differ.
+    const QMenu* edit = nullptr;
+    for (const QAction* entry : window->menuBar()->actions()) {
+        if (entry->text() == QStringLiteral("&Edit")) edit = entry->menu();
+    }
+    ASSERT_NE(edit, nullptr);
+    EXPECT_EQ(edit->actions(), waveRows->actions());
 }
 
 } // namespace

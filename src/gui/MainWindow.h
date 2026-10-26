@@ -117,6 +117,7 @@ private:
     void copySelectedWaves();
     void pasteWaves();
     void addCursor();
+    void toggleActiveCursorLock();
 
     void runForRequestedTime();
     void runUntilFinished();
@@ -213,6 +214,9 @@ private:
     QAction* stopAction = nullptr;
     QAction* restartAction = nullptr;
     QAction* followAction = nullptr;
+    QAction* zoomFitAction = nullptr;
+    QAction* zoomCursorsAction = nullptr;
+    QAction* addCursorAction = nullptr;
 
     /// The signals currently subscribed to, so that a change of what is displayed sends only
     /// the difference rather than resubscribing to everything.

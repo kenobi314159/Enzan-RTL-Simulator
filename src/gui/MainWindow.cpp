@@ -58,6 +58,25 @@ constexpr RadixChoice RadixChoices[] = {
     {.name = "ASCII", .radix = eir::Radix::Ascii},
 };
 
+/// Makes `action` one of `scope`'s, its keys acting while the focus is anywhere inside `scope`
+/// and nowhere else.
+///
+/// Qt's default would make them keys of the whole window, and Delete pressed in the Structure
+/// window removed whatever was selected in the wave list.
+QAction* scopeTo(QAction* action, QWidget* scope) {
+    action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    scope->addAction(action);
+    return action;
+}
+
+/// Puts an action's key in its tooltip, which Qt does not do by itself. A toolbar button is where
+/// a reader first meets a command, and its key is worth meeting there too.
+void showKeyInToolTip(QAction* action) {
+    if (action->shortcut().isEmpty()) return;
+    action->setToolTip(QStringLiteral("%1 (%2)").arg(
+        action->toolTip(), action->shortcut().toString(QKeySequence::NativeText)));
+}
+
 } // namespace
 
 MainWindow::MainWindow(KernelSession& kernelSession, const Theme& themeToUse, QWidget* parent)
@@ -125,20 +144,25 @@ void MainWindow::buildDocks() {
     //
     // Two entries rather than one with a modifier, because each is a different question — this
     // module or its subtree — and a menu that hides half of its answers behind a held key is a
-    // menu that only its author knows the whole of.
+    // menu that only its author knows the whole of. Ctrl+W is the Objects window's key for adding
+    // too, so the key means "add what is selected here" in either.
     struct ScopeInsert {
-        const char* label;
-        bool recursive;
+        const char* label = nullptr;
+        QKeyCombination key;
+        bool recursive = false;
     };
 
     for (const ScopeInsert& entry :
-         {ScopeInsert{.label = "Add to wave", .recursive = false},
-          ScopeInsert{.label = "Add to wave recursive", .recursive = true}}) {
+         {ScopeInsert{.label = "Add to Wave", .key = Qt::CTRL | Qt::Key_W, .recursive = false},
+          ScopeInsert{.label = "Add to Wave Recursive",
+                      .key = Qt::CTRL | Qt::SHIFT | Qt::Key_W,
+                      .recursive = true}}) {
         auto* action = new QAction(tr(entry.label), structureView);
+        action->setShortcut(QKeySequence(entry.key));
         const bool recursive = entry.recursive;
         connect(action, &QAction::triggered, this,
                 [this, recursive] { insertScopeSignals(recursive); });
-        structureView->addAction(action);
+        scopeTo(action, structureView);
     }
 
     auto* structureDock = new QDockWidget(tr("Structure"), this);
@@ -160,9 +184,8 @@ void MainWindow::buildDocks() {
 
     auto* addToWave = new QAction(tr("Add to Wave"), objectsView);
     addToWave->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_W));
-    addToWave->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     connect(addToWave, &QAction::triggered, this, &MainWindow::addSelectedObjectsToWave);
-    objectsView->addAction(addToWave);
+    scopeTo(addToWave, objectsView);
 
     // `examine`, `force` and `deposit` are required from the GUI as well as from Tcl (section
     // 10.4). Examining is what the window already does — the value column *is* an examine that
@@ -252,78 +275,67 @@ void MainWindow::buildDocks() {
     panes->addTab(waveTab, tr("Wave"));
     setCentralWidget(panes);
 
-    // Each pane's keys act on that pane, and only while the focus is in it. Qt's default would
-    // make them keys of the whole window, and Delete pressed in the Structure window would then
-    // remove whatever happened to be selected in the wave list. The wave list's keys are the
-    // Wave tab's, names and traces alike, because the two are one window to the reader
-    // (section 10.7).
+    // The wave list's commands, which are both its own menu and the window's Edit menu: one set
+    // of actions in one order, so that the two menus cannot come to differ. Each acts on the
+    // selected rows, and its key works while the focus is anywhere in the Wave tab, because the
+    // names and the traces are one window to the reader (section 10.7).
     const auto addWaveAction = [this](const QString& text, const QKeySequence& shortcut,
                                       auto slot) {
         auto* action = new QAction(text, waveRowsView);
         if (!shortcut.isEmpty()) action->setShortcut(shortcut);
-        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         connect(action, &QAction::triggered, this, slot);
         waveRowsView->addAction(action);
-        waveTab->addAction(action);
-        return action;
+        return scopeTo(action, waveTab);
+    };
+    const auto addWaveSeparator = [this] {
+        auto* separator = new QAction(waveRowsView);
+        separator->setSeparator(true);
+        waveRowsView->addAction(separator);
     };
 
-    addWaveAction(tr("New Group"), QKeySequence(Qt::CTRL | Qt::Key_G),
-                  &MainWindow::groupSelectedWaves);
     addWaveAction(tr("Rename…"), QKeySequence(Qt::Key_F2), &MainWindow::renameCurrentWave);
+    addWaveAction(tr("New Group…"), QKeySequence(Qt::CTRL | Qt::Key_G),
+                  &MainWindow::groupSelectedWaves);
     addWaveAction(tr("Pack/Unpack"), QKeySequence(Qt::CTRL | Qt::Key_U),
                   &MainWindow::togglePackSelectedWaves);
-    addWaveAction(tr("Remove"), QKeySequence(Qt::Key_Delete), &MainWindow::removeSelectedWaves);
+    addWaveSeparator();
 
-    auto* clipboardSeparator = new QAction(waveRowsView);
-    clipboardSeparator->setSeparator(true);
-    waveRowsView->addAction(clipboardSeparator);
-
-    addWaveAction(tr("Copy"), QKeySequence::Copy, &MainWindow::copySelectedWaves);
-    addWaveAction(tr("Paste"), QKeySequence::Paste, &MainWindow::pasteWaves);
-
-    auto* radixSeparator = new QAction(waveRowsView);
-    radixSeparator->setSeparator(true);
-    waveRowsView->addAction(radixSeparator);
-
+    // A submenu each rather than an entry per choice: twelve lines for two decisions made the
+    // row's menu longer than the window's.
+    //
     // Symbolic first, because it is what an enumerated signal shows by default and a reader
     // looking for the way back to it should not have to read past four radixes to find it. It
     // does nothing to a row whose type is not an enumeration, which is the honest answer: there
     // are no names to show.
-    auto* symbolic = new QAction(tr("Radix: Symbolic"), waveRowsView);
-    connect(symbolic, &QAction::triggered, this, [this] {
+    auto* radixMenu = new QMenu(tr("Radix"), waveRowsView);
+    connect(radixMenu->addAction(tr("Symbolic")), &QAction::triggered, this, [this] {
         for (const int rowId : selectedWaveRows()) waveModel->setSymbolicRecursive(rowId, true);
         waveView->update();
     });
-    waveRowsView->addAction(symbolic);
-
     for (const RadixChoice& choice : RadixChoices) {
-        auto* action = new QAction(tr("Radix: %1").arg(tr(choice.name)), waveRowsView);
         const eir::Radix radix = choice.radix;
-        connect(action, &QAction::triggered, this, [this, radix] { setSelectedWaveRadix(radix); });
-        waveRowsView->addAction(action);
+        connect(radixMenu->addAction(tr(choice.name)), &QAction::triggered, this,
+                [this, radix] { setSelectedWaveRadix(radix); });
     }
+    waveRowsView->addAction(radixMenu->menuAction());
 
-    auto* highlightSeparator = new QAction(waveRowsView);
-    highlightSeparator->setSeparator(true);
-    waveRowsView->addAction(highlightSeparator);
-
-    // The palette is the theme's (section 10.5), so each entry carries its actual colour: five
-    // menu items called "Highlight 3" would tell a reader nothing about what they would get.
+    // The palette is the theme's (section 10.5), so each entry carries its actual colour, and is
+    // numbered as `-highlight` numbers it in a signal list file (section 10.8).
+    auto* highlightMenu = new QMenu(tr("Highlight"), waveRowsView);
     for (int slot = 1; slot <= HighlightSlots; ++slot) {
-        auto* action = new QAction(tr("Highlight %1").arg(slot), waveRowsView);
-
         QPixmap swatch(12, 12);
         swatch.fill(theme->color(highlightColor(slot)));
-        action->setIcon(QIcon(swatch));
-
-        connect(action, &QAction::triggered, this, [this, slot] { setSelectedHighlight(slot); });
-        waveRowsView->addAction(action);
+        connect(highlightMenu->addAction(QIcon(swatch), QString::number(slot)), &QAction::triggered,
+                this, [this, slot] { setSelectedHighlight(slot); });
     }
+    connect(highlightMenu->addAction(tr("None")), &QAction::triggered, this,
+            [this] { setSelectedHighlight(0); });
+    waveRowsView->addAction(highlightMenu->menuAction());
+    addWaveSeparator();
 
-    auto* unhighlight = new QAction(tr("Unhighlight"), waveRowsView);
-    connect(unhighlight, &QAction::triggered, this, [this] { setSelectedHighlight(0); });
-    waveRowsView->addAction(unhighlight);
+    addWaveAction(tr("Copy"), QKeySequence::Copy, &MainWindow::copySelectedWaves);
+    addWaveAction(tr("Paste"), QKeySequence::Paste, &MainWindow::pasteWaves);
+    addWaveAction(tr("Remove"), QKeySequence(Qt::Key_Delete), &MainWindow::removeSelectedWaves);
 
     // --- Transcript --------------------------------------------------------
 
@@ -336,10 +348,13 @@ void MainWindow::buildDocks() {
 }
 
 void MainWindow::buildToolBar() {
-    auto* bar = addToolBar(tr("Simulation"));
+    auto* bar = addToolBar(tr("Toolbar"));
     bar->setObjectName(QStringLiteral("simulation"));
     bar->setMovable(true);
 
+    // A debugger's keys, F5 to go and Shift+F5 to stop, and the window's rather than a pane's: a
+    // run is started and stopped from wherever the reader happens to be. Restart is the hardest
+    // of them to press by accident, because it throws away the recorded waveform.
     runAction = bar->addAction(tr("Run"), this, &MainWindow::runForRequestedTime);
     runAction->setShortcut(QKeySequence(Qt::Key_F5));
 
@@ -348,67 +363,163 @@ void MainWindow::buildToolBar() {
     runLengthEdit->setToolTip(tr("How long each Run advances the simulation: a count of the "
                                  "run's time unit, as 100, or a time with its unit, as 10ns or "
                                  "1.5us"));
+    connect(runLengthEdit, &QLineEdit::returnPressed, runAction, &QAction::trigger);
     bar->addWidget(runLengthEdit);
 
     runAllAction = bar->addAction(tr("Run All"), this, &MainWindow::runUntilFinished);
+    runAllAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_F5));
     stopAction = bar->addAction(tr("Stop"), this, &MainWindow::stopRun);
+    stopAction->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
     restartAction = bar->addAction(tr("Restart"), this, &MainWindow::restartRun);
+    restartAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F5));
+
+    // Zooming in and out by steps is left to the wheel and the keys; fitting and zooming to the
+    // cursors are the two a reader reaches for with the mouse already in hand.
+    bar->addSeparator();
+    zoomFitAction =
+        scopeTo(bar->addAction(tr("Zoom Fit"), waveView, &WaveformView::zoomFit), waveTab);
+    zoomFitAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_F));
+    zoomCursorsAction = scopeTo(
+        bar->addAction(tr("Zoom to Cursors"), waveView, &WaveformView::zoomToCursors), waveTab);
+    zoomCursorsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
 
     bar->addSeparator();
-    bar->addAction(tr("Zoom Fit"), waveView, &WaveformView::zoomFit);
-    bar->addAction(tr("Zoom In"), waveView, &WaveformView::zoomIn);
-    bar->addAction(tr("Zoom Out"), waveView, &WaveformView::zoomOut);
-    bar->addAction(tr("Zoom Cursors"), waveView, &WaveformView::zoomToCursors);
+    addCursorAction =
+        scopeTo(bar->addAction(tr("Add Cursor"), this, &MainWindow::addCursor), waveTab);
+    addCursorAction->setShortcut(QKeySequence(Qt::Key_Insert));
 
-    bar->addSeparator();
-    bar->addAction(tr("Add Cursor"), this, &MainWindow::addCursor);
-
-    followAction = bar->addAction(tr("Follow"));
+    followAction = bar->addAction(tr("Follow Tail"));
+    followAction->setIconText(tr("Follow"));
     followAction->setCheckable(true);
     followAction->setChecked(true);
     followAction->setToolTip(tr("Keep the right-hand edge at the latest simulated time"));
     connect(followAction, &QAction::toggled, waveView, &WaveformView::setFollowTail);
+
+    for (QAction* action : {runAction, runAllAction, stopAction, restartAction, zoomFitAction,
+                            zoomCursorsAction, addCursorAction}) {
+        showKeyInToolTip(action);
+    }
 }
 
 void MainWindow::buildMenus() {
+    // --- File --------------------------------------------------------------
+
+    QMenu* file = menuBar()->addMenu(tr("&File"));
+    file->addAction(tr("Load Signal List…"), this, &MainWindow::chooseSignalListToLoad)
+        ->setShortcut(QKeySequence::Open);
+    file->addAction(tr("Save Signal List…"), this, &MainWindow::chooseSignalListToSave)
+        ->setShortcut(QKeySequence::Save);
+    file->addSeparator();
+
+    // Closing the window only ever detaches, and is safe to give a key: whether the kernel goes
+    // with it is decided by how the session was started (section 8.4). Ending the simulation is
+    // an entry of its own with no key, because a kernel found with `--attach` is one somebody
+    // meant to outlive the window.
+    file->addAction(tr("Close Window"), this, [this] { close(); })
+        ->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Q));
+    file->addAction(tr("End Simulation and Close"), this, [this] {
+        session->quitKernel();
+        close();
+    });
+
+    // --- Edit --------------------------------------------------------------
+
+    // The wave list's own menu, the same actions in the same order (buildDocks).
+    QMenu* edit = menuBar()->addMenu(tr("&Edit"));
+    edit->addActions(waveRowsView->actions());
+
+    // --- View --------------------------------------------------------------
+
+    // Ctrl zooms and Shift pans, from the keyboard as on the wheel (section 10.7), which leaves
+    // the bare keys to the signal list: `+` and `-` pack and unpack there, and letters find a row.
+    QMenu* view = menuBar()->addMenu(tr("&View"));
+    scopeTo(view->addAction(tr("Zoom In"), waveView, &WaveformView::zoomIn), waveTab)
+        ->setShortcuts(
+            {QKeySequence(Qt::CTRL | Qt::Key_Plus), QKeySequence(Qt::CTRL | Qt::Key_Equal)});
+    scopeTo(view->addAction(tr("Zoom Out"), waveView, &WaveformView::zoomOut), waveTab)
+        ->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Minus));
+    view->addAction(zoomFitAction);
+    view->addAction(zoomCursorsAction);
+    scopeTo(view->addAction(tr("Pan Left"), waveView, [this] { waveView->panStep(false); }),
+            waveTab)
+        ->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_Left));
+    scopeTo(view->addAction(tr("Pan Right"), waveView, [this] { waveView->panStep(true); }),
+            waveTab)
+        ->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_Right));
+    view->addAction(followAction);
+    view->addSeparator();
+    for (const QDockWidget* dock : findChildren<QDockWidget*>()) {
+        view->addAction(dock->toggleViewAction());
+    }
+    for (const QToolBar* bar : findChildren<QToolBar*>()) view->addAction(bar->toggleViewAction());
+    view->addSeparator();
+    view->addAction(transcriptView->clearAction());
+
+    // --- Cursor ------------------------------------------------------------
+
+    // The keyboard's way to the cursors. A key cannot point at a cursor the way a right-click on
+    // its label does, so these act on the active one, which is drawn heavier than the rest and is
+    // the one Tab is already moving (section 10.7).
+    QMenu* cursor = menuBar()->addMenu(tr("&Cursor"));
+    cursor->addAction(addCursorAction);
+    cursor->addSeparator();
+
+    // Tab is the view's own key rather than these entries', because a shortcut would take it from
+    // the name editor as well, where it finishes the edit. The menu is told the key after a tab
+    // character, which shows it without binding it.
+    cursor->addAction(tr("Next Edge") + u'\t'
+                          + QKeySequence(Qt::Key_Tab).toString(QKeySequence::NativeText),
+                      waveView, [this] { waveView->stepActiveCursorToEdge(true); });
+    cursor->addAction(
+        tr("Previous Edge") + u'\t'
+            + QKeySequence(Qt::SHIFT | Qt::Key_Tab).toString(QKeySequence::NativeText),
+        waveView, [this] { waveView->stepActiveCursorToEdge(false); });
+    scopeTo(cursor->addAction(tr("Cursor to Start"), waveView,
+                              [this] { waveView->placeActiveCursor(0); }),
+            waveTab)
+        ->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Home));
+    scopeTo(cursor->addAction(tr("Cursor to End"), waveView,
+                              [this] { waveView->placeActiveCursor(session->heldTime()); }),
+            waveTab)
+        ->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_End));
+    cursor->addSeparator();
+
+    // `,` and `.` are the only punctuation typed without AltGr or Shift on the common Latin
+    // layouts, and on the US one they carry `<` and `>`, which is the direction each goes.
+    scopeTo(cursor->addAction(tr("Previous Cursor"), waveView,
+                              [this] { waveView->activateNeighbourCursor(false); }),
+            waveTab)
+        ->setShortcut(QKeySequence(Qt::Key_Comma));
+    scopeTo(cursor->addAction(tr("Next Cursor"), waveView,
+                              [this] { waveView->activateNeighbourCursor(true); }),
+            waveTab)
+        ->setShortcut(QKeySequence(Qt::Key_Period));
+
+    QAction* lock = scopeTo(
+        cursor->addAction(tr("Lock Active Cursor"), this, &MainWindow::toggleActiveCursorLock),
+        waveTab);
+    lock->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_L));
+    QAction* remove = cursor->addAction(tr("Remove Active Cursor"), waveView, [this] {
+        waveView->removeCursor(waveView->activeCursor());
+    });
+
+    // Each entry says what it will do, as the label's own menu does, rather than leaving the reader
+    // to work out the active cursor's state from the colour of its line.
+    connect(cursor, &QMenu::aboutToShow, this, [this, lock, remove] {
+        const int index = waveView->activeCursor();
+        const bool locked =
+            index >= 0 && index < waveView->cursors().size() && waveView->cursors()[index].locked;
+        lock->setText(locked ? tr("Unlock Active Cursor") : tr("Lock Active Cursor"));
+        remove->setEnabled(waveView->cursors().size() > 1);
+    });
+
+    // --- Simulation --------------------------------------------------------
+
     QMenu* simulation = menuBar()->addMenu(tr("&Simulation"));
     simulation->addAction(runAction);
     simulation->addAction(runAllAction);
     simulation->addAction(stopAction);
     simulation->addAction(restartAction);
-    simulation->addSeparator();
-
-    // Detaching and quitting are separate on purpose: section 2.2 requires a front end to be
-    // able to leave a kernel running, and a single Quit that always killed it would make a
-    // long run on a compute server impossible to look in on safely.
-    simulation->addAction(tr("Detach from Kernel"), this, [this] {
-        session->detach();
-        close();
-    });
-    simulation->addAction(tr("Quit Kernel and Exit"), this, [this] {
-        session->quitKernel();
-        close();
-    });
-
-    QMenu* wave = menuBar()->addMenu(tr("&Wave"));
-    wave->addAction(tr("Add Cursor"), this, &MainWindow::addCursor);
-    wave->addAction(tr("Lock Active Cursor"), this, [this] {
-        const int index = waveView->activeCursor();
-        if (index < 0 || index >= waveView->cursors().size()) return;
-        waveView->setCursorLocked(index, !waveView->cursors()[index].locked);
-    });
-    wave->addAction(tr("Remove Active Cursor"), this,
-                    [this] { waveView->removeCursor(waveView->activeCursor()); });
-    wave->addSeparator();
-    wave->addAction(tr("Clear Wave Window"), this, [this] { waveModel->clear(); });
-    wave->addSeparator();
-    wave->addAction(tr("Load Signal List…"), this, &MainWindow::chooseSignalListToLoad);
-    wave->addAction(tr("Save Signal List…"), this, &MainWindow::chooseSignalListToSave);
-
-    QMenu* view = menuBar()->addMenu(tr("&View"));
-    for (const QDockWidget* dock : findChildren<QDockWidget*>()) {
-        view->addAction(dock->toggleViewAction());
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -845,6 +956,12 @@ void MainWindow::setSelectedWaveRadix(eir::Radix radix) {
 void MainWindow::addCursor() {
     waveView->addCursor(tr("Cursor %1").arg(waveView->cursors().size() + 1),
                         waveView->activeCursorTime());
+}
+
+void MainWindow::toggleActiveCursorLock() {
+    const int index = waveView->activeCursor();
+    if (index < 0 || index >= waveView->cursors().size()) return;
+    waveView->setCursorLocked(index, !waveView->cursors()[index].locked);
 }
 
 void MainWindow::copySelectedWaves() {
