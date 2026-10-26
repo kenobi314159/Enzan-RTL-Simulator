@@ -106,12 +106,20 @@ void WaveformView::setRowView(QTreeView* rowView) {
         connect(model, &QAbstractItemModel::rowsMoved, this, restructured);
         connect(model, &QAbstractItemModel::modelReset, this, restructured);
         connect(model, &QAbstractItemModel::layoutChanged, this, restructured);
-        // A radix, a highlight, a new value under the cursor: the row is the same shape and
-        // the summary still stands, but the picture drawn from it does not.
-        connect(model, &QAbstractItemModel::dataChanged, this, [this] {
-            invalidateTraces();
-            update();
-        });
+        // A radix, a highlight, a name: the row is the same shape and the summary still stands,
+        // but the picture drawn from it does not. A change confined to the value column is the
+        // cursor moving or values arriving, and redraws nothing: no trace depends on where the
+        // cursor is, and what arrives moves the time the traces stop at, which the paint checks
+        // for itself. Redrawing every trace on every click was what made a large design's
+        // window too slow to answer.
+        connect(model, &QAbstractItemModel::dataChanged, this,
+                [this](const QModelIndex& topLeft, const QModelIndex& bottomRight) {
+                    if (topLeft.column() == WaveformModel::ValueColumn
+                        && bottomRight.column() == WaveformModel::ValueColumn)
+                        return;
+                    invalidateTraces();
+                    update();
+                });
     }
 
     // Selecting a row in the list means the same thing as clicking its trace: it is the row
@@ -934,6 +942,7 @@ void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
         // At the device's own resolution, or the trace would be drawn at one scale and shown
         // at another — which on a high-resolution screen is the difference between a crisp
         // line and a blurred one.
+        ++traceCount;
         const qreal scale = devicePixelRatioF();
         entry.trace = QPixmap(traceRect.size() * scale);
         entry.trace.setDevicePixelRatio(scale);

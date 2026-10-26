@@ -404,10 +404,12 @@ void WaveformModel::setRadixRecursive(int rowId, eir::Radix radix) {
 void WaveformModel::setSymbolicRecursive(int rowId, bool symbolic) {
     if (row(rowId) == nullptr) return;
 
+    // The whole row, as a radix does: naming changes how the trace reads as well as the value
+    // beside it, and a change confined to the value column is one the canvas leaves its traces
+    // alone for.
     rows[rowId].symbolic = symbolic;
     const QModelIndex changed = indexOfRow(rowId);
-    Q_EMIT dataChanged(changed.siblingAtColumn(ValueColumn), changed.siblingAtColumn(ValueColumn),
-                       {Qt::DisplayRole});
+    Q_EMIT dataChanged(changed, changed.siblingAtColumn(ColumnCount - 1), {Qt::DisplayRole});
     notifyValueChangedUpwards(rowId);
 
     for (const int child : rows[rowId].children) setSymbolicRecursive(child, symbolic);

@@ -666,6 +666,32 @@ TEST_F(WaveformViewTest, ScrollingReusesTheSummariesAlreadyComputed) {
         << "scrolling one line must summarise the row that came into view, not every row";
 }
 
+TEST_F(WaveformViewTest, MovingTheCursorDrawsNoTraceAgain) {
+    // A cursor move changes the value beside every row and nothing on any trace. Every trace was
+    // drawn again all the same, and a group made of a whole design joins every value in it for
+    // each segment it labels, which made each click on a large design take most of a second.
+    showEverythingAndRun(2000);
+    view->axis().setRange(0, 200);
+    static_cast<void>(render());
+    const std::uint64_t drawn = view->tracesDrawn();
+    ASSERT_GT(drawn, 0U);
+
+    model->setCursorTime(105);
+    static_cast<void>(render());
+    EXPECT_EQ(view->tracesDrawn(), drawn) << "moving the cursor redrew a trace";
+
+    // What a trace does show is drawn again when it changes: a radix and a name.
+    const int counter = model->rowIdOf(model->index(1, 0));
+    model->setRadixRecursive(counter, enzan::eir::Radix::Binary);
+    static_cast<void>(render());
+    EXPECT_GT(view->tracesDrawn(), drawn) << "a radix changes what a trace prints";
+
+    const std::uint64_t afterRadix = view->tracesDrawn();
+    model->setSymbolicRecursive(counter, true);
+    static_cast<void>(render());
+    EXPECT_GT(view->tracesDrawn(), afterRadix) << "naming changes what a trace prints";
+}
+
 TEST_F(WaveformViewTest, ZoomingSummarisesAgain) {
     showEverythingAndRun(20'000);
     static_cast<void>(render());

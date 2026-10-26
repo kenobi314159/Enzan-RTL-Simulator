@@ -196,6 +196,13 @@ public:
     /// change it is meant to be guarding.
     [[nodiscard]] std::uint64_t summariesComputed() const noexcept { return summaryCount; }
 
+    /// How many row traces have been drawn since the view was made, rather than blitted from the
+    /// picture drawn before.
+    ///
+    /// Drawing is the other half of a repaint's cost, and the half that reads a value for every
+    /// segment it labels; this is what lets a test say a click drew no trace again.
+    [[nodiscard]] std::uint64_t tracesDrawn() const noexcept { return traceCount; }
+
     /// How far the last scroll moved what was already drawn, in pixels.
     ///
     /// Exposed because this is the one thing here that can be *wrong* rather than merely slow:
@@ -362,6 +369,9 @@ private:
 
     /// Counts summaries computed, for `summariesComputed`.
     std::uint64_t summaryCount = 0;
+
+    /// Counts traces drawn, for `tracesDrawn`.
+    std::uint64_t traceCount = 0;
 
     /// A row the canvas has drawn, and where it drew it, so that the next scroll can measure
     /// how far the list has moved by asking where that row is now.

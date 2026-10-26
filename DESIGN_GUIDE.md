@@ -2220,7 +2220,8 @@ a separate cost in the same place:
   picture, and blitted rather than drawn again. Drawing a bus means a segment, a
   value measured against the font and a string laid out for every run of columns
   across the window; that is the expensive half and it was being repeated to put
-  the same traces one line up.
+  the same traces one line up. Nor does a trace depend on the cursor, so moving
+  the cursor draws none of them again.
 - The distance to move by is **measured from the list**, by asking where a row
   the canvas has drawn sits now, rather than worked out from the scroll bar.
   Deriving it would mean assuming whether the bar counts items or pixels and
