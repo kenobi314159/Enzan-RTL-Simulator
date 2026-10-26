@@ -3,6 +3,7 @@
 #include "gui/ShortcutSheet.h"
 
 #include <QAction>
+#include <QDialogButtonBox>
 #include <QKeySequence>
 #include <QMenu>
 #include <QTextBrowser>
@@ -56,8 +57,15 @@ ShortcutSheet::ShortcutSheet(QWidget* parent) : QDialog(parent) {
     setWindowTitle(tr("Keyboard Shortcuts"));
 
     browser = new QTextBrowser(this);
+
+    // A button of its own, because a tiling window manager may draw no title bar to close the
+    // sheet with, and Escape, which also closes it, is not something a reader can see.
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+
     auto* layout = new QVBoxLayout(this);
     layout->addWidget(browser);
+    layout->addWidget(buttons);
     resize(560, 640);
 }
 

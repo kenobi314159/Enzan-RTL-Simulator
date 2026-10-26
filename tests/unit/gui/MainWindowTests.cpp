@@ -25,6 +25,7 @@
 
 #include <QAction>
 #include <QCoreApplication>
+#include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QElapsedTimer>
 #include <QFontDatabase>
@@ -34,6 +35,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QString>
 #include <QTest>
 #include <QTextBrowser>
@@ -467,6 +469,17 @@ TEST_F(MainWindowTest, TheShortcutSheetIsReadFromTheActions) {
     ASSERT_NE(fit, nullptr);
     fit->setShortcut(QKeySequence(Qt::Key_F9));
     EXPECT_TRUE(sheetText().contains(QStringLiteral("F9")));
+
+    // And it can be closed with something on it, since a tiling window manager may draw no title
+    // bar to close it with.
+    auto* sheet = window->findChild<enzan::gui::ShortcutSheet*>();
+    ASSERT_NE(sheet, nullptr);
+    const auto* buttons = sheet->findChild<QDialogButtonBox*>();
+    ASSERT_NE(buttons, nullptr);
+    QPushButton* close = buttons->button(QDialogButtonBox::Close);
+    ASSERT_NE(close, nullptr);
+    close->click();
+    EXPECT_FALSE(sheet->isVisible());
 }
 
 TEST_F(MainWindowTest, AboutNamesTheVersionOfEachHalf) {
