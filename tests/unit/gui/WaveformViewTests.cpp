@@ -608,6 +608,56 @@ TEST_F(WaveformViewTest, RenderingCostDoesNotGrowWithTheTransitionsInView) {
     EXPECT_GT(countOf(wide, theme.color(enzan::gui::ThemeColor::WaveTrace)), 200);
 }
 
+TEST_F(WaveformViewTest, ABusyStretchIsUnknownOnlyWhereTheValueWas) {
+    // Zoomed out, a bus changing in every pixel column is drawn as one filled band, red where its
+    // value was unknown. The band took the colour of its first column, so one unknown column at
+    // the left edge made the whole row red, and one anywhere else was not shown at all.
+    SignalInfo count;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+        if (info.name == QStringLiteral("count")) count = info;
+    }
+    ASSERT_GT(count.width, 1U);
+    model->addSignal(count);
+    session->subscribe({count.signalIndex});
+
+    // Counting, then unknown for a moment, then counting again: the clock ticks every ten units,
+    // so a column fifty units wide holds five changes.
+    session->run(20'000);
+    ASSERT_TRUE(pumpUntilCaughtUp(20'000));
+    session->deposit(count.signalIndex,
+                     enzan::eir::BitVector::filled(count.width, enzan::eir::Logic::Unknown));
+    session->run(100);
+    ASSERT_TRUE(pumpUntilCaughtUp(20'100));
+    session->deposit(count.signalIndex, enzan::eir::BitVector::fromUInt64(0, count.width));
+    session->run(19'900);
+    ASSERT_TRUE(pumpUntilCaughtUp(40'000));
+
+    const QColor fill = theme.color(enzan::gui::ThemeColor::WaveTraceFill);
+    const QColor unknown = theme.color(enzan::gui::ThemeColor::WaveUnknown);
+    const auto columnHas = [](const QImage& image, int x, const QColor& colour) {
+        for (int y = 0; y < image.height(); ++y) {
+            if (image.pixel(x, y) == colour.rgb()) return true;
+        }
+        return false;
+    };
+
+    // The unknown stretch in the middle of the window, and then in the first column, which is
+    // busy and unknown at once: the clock ticks at 19985 and 19995 and the deposit lands at 20000.
+    for (const enzan::runtime::SimTime start :
+         {enzan::runtime::SimTime{10'000}, enzan::runtime::SimTime{19'980}}) {
+        view->axis().setRange(start, 20'000);
+        const QImage image = render();
+        const int right = image.width() - 40;
+
+        EXPECT_TRUE(columnHas(image, right, fill)) << "from " << start
+                                                   << ": far from the unknown "
+                                                      "stretch the band is the trace's fill";
+        EXPECT_FALSE(columnHas(image, right, unknown)) << "from " << start;
+        EXPECT_GT(countOf(colourHistogram(image), unknown), 0)
+            << "from " << start << ": the unknown stretch is shown";
+    }
+}
+
 TEST_F(WaveformViewTest, ZoomingToFitShowsTheWholeRun) {
     showEverythingAndRun(500);
 

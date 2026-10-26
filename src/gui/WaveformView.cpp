@@ -1078,8 +1078,14 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId
         const int x = area.left() + static_cast<int>(column);
 
         if (sample.transitions > 0) {
+            // The run stops where the unknown flag changes, as the one-bit painter's does. Taking
+            // the colour of its first column instead painted a whole zoomed-out row red for one
+            // unknown column at its left edge, and hid one anywhere else.
             std::size_t run = column;
-            while (run < samples.size() && samples[run].transitions > 0) ++run;
+            while (run < samples.size() && samples[run].transitions > 0
+                   && samples[run].anyUnknown == sample.anyUnknown) {
+                ++run;
+            }
 
             const int runWidth = static_cast<int>(run - column);
             painter.fillRect(QRect(x, top, runWidth, bottom - top + 1),
