@@ -13,6 +13,10 @@
 # passes when both run to the end; report the same things, with the same severities, in the same
 # order; and write the same CPU trace and UART logs, which hold every instruction each core
 # retired with the registers and memory it touched.
+#
+# By an Enzan with both frontends, tb/neorv32_tb.v, the testbench in Verilog around the same VHDL
+# (the first exit design of M7), is run as well, and held to the same: its displayed reports and
+# the design's to GHDL's of the VHDL testbench (tb/compare-reports.py), and its logs to GHDL's.
 
 set -uo pipefail
 
@@ -86,4 +90,46 @@ if [[ $status -eq 0 ]]; then
 fi
 [[ $status -eq 0 ]] && printf 'PASS neorv32: %d reports and %d logs as GHDL has them\n' \
     "$(grep -c '(report\|(assertion' "$work/ghdl/transcript.txt")" "${#logs[@]}"
+
+# The Verilog testbench, on the same sources but the VHDL testbench and its JTAG package.
+if [[ $ghdl_status -eq 0 ]] \
+    && "$enzan" --version | grep -q '^Optional components:.*systemverilog.*vhdl'; then
+    mkdir -p "$work/enzan-verilog"
+    (
+        cd "$work/enzan-verilog" && rm -f "${logs[@]}"
+        NEORV32_HOME="$source" "$enzan" --work neorv32 --top neorv32_tb \
+            -f "$source/rtl/file_list_core.f" \
+            "$source"/sim/{sim_uart_rx,xbus_memory,xbus_fmem,xbus_gateway,psram_model}.vhd \
+            "$here/tb/neorv32_tb.v" \
+            --ieee-asserts disable --assert-level error --run "${stop_us}000000000"
+    ) >"$work/enzan-verilog/output.txt" 2>"$work/enzan-verilog/transcript.txt"
+    verilog_status=$?
+    if [[ $verilog_status -ne 0 ]]; then
+        printf 'FAIL neorv32 (Verilog testbench): Enzan exited with %d (%s)\n' "$verilog_status" \
+            "$work/enzan-verilog/transcript.txt"
+        status=1
+    else
+        verilog_passed=yes
+        if ! "$here/tb/compare-reports.py" --ghdl-transcript "$work/ghdl/transcript.txt" \
+            --enzan-transcript "$work/enzan-verilog/transcript.txt" \
+            --enzan-output "$work/enzan-verilog/output.txt" \
+            2>"$work/enzan-verilog/differences.txt"; then
+            printf 'FAIL neorv32 (Verilog testbench): the reports differ (%s)\n' \
+                "$work/enzan-verilog/differences.txt"
+            verilog_passed=no
+        fi
+        for log in "${logs[@]}"; do
+            if ! cmp -s "$work/ghdl/$log" "$work/enzan-verilog/$log"; then
+                printf 'FAIL neorv32 (Verilog testbench): %s differs from GHDL'"'"'s\n' "$log"
+                verilog_passed=no
+            fi
+        done
+        if [[ $verilog_passed == yes ]]; then
+            printf 'PASS neorv32 (Verilog testbench): its reports and %d logs as GHDL has them\n' \
+                "${#logs[@]}"
+        else
+            status=1
+        fi
+    fi
+fi
 exit "$status"

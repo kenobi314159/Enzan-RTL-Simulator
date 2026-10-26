@@ -13,7 +13,6 @@ std::string toString(MessageType type) {
     case MessageType::QueryObjects: return "query-objects";
     case MessageType::Subscribe: return "subscribe";
     case MessageType::Unsubscribe: return "unsubscribe";
-    case MessageType::QueryHistory: return "query-history";
     case MessageType::Run: return "run";
     case MessageType::Stop: return "stop";
     case MessageType::Restart: return "restart";
@@ -21,16 +20,17 @@ std::string toString(MessageType type) {
     case MessageType::Detach: return "detach";
     case MessageType::Deposit: return "deposit";
     case MessageType::Force: return "force";
+    case MessageType::FetchChanges: return "fetch-changes";
     case MessageType::Welcome: return "welcome";
     case MessageType::Design: return "design";
     case MessageType::Objects: return "objects";
-    case MessageType::ValueChanges: return "value-changes";
-    case MessageType::History: return "history";
     case MessageType::Transcript: return "transcript";
     case MessageType::Diagnostic: return "diagnostic";
     case MessageType::RunState: return "run-state";
     case MessageType::Bye: return "bye";
     case MessageType::Failure: return "failure";
+    case MessageType::Changes: return "changes";
+    case MessageType::Progress: return "progress";
     }
 
     // A number this build does not know is reported as the number. Guessing a name for it

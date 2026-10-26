@@ -273,6 +273,7 @@ void writeBody(Writer& out, NameTable& names, const Body& body) {
         out.u32(call.formatIndex);
         out.u32(call.objectIndex);
         writeLocation(out, names, call.location);
+        out.u8(static_cast<std::uint8_t>(call.timeUnit));
         out.u32(static_cast<std::uint32_t>(call.arguments.size()));
         for (const SysTaskArgument& argument : call.arguments) {
             writeOperand(out, argument.value);
@@ -340,6 +341,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
     out.text(definition.name);
     out.text(definition.sourceName);
     out.boolean(definition.isPackage);
+    out.u8(static_cast<std::uint8_t>(definition.language));
     writeLocation(out, names, definition.location);
 
     out.u32(static_cast<std::uint32_t>(definition.objects.size()));
@@ -358,12 +360,17 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.u32(object.resolution.elementBits);
         out.boolean(object.resolution.loneDriverIdentity);
         out.u32(static_cast<std::uint32_t>(object.unpackedDimensions.size()));
-        for (const UnpackedDimension& dimension : object.unpackedDimensions) {
+        for (const ArrayDimension& dimension : object.unpackedDimensions) {
             out.u32(static_cast<std::uint32_t>(dimension.left));
             out.u32(static_cast<std::uint32_t>(dimension.right));
         }
         out.u32(object.elementWidth);
         out.boolean(object.elementSigned);
+        out.u32(static_cast<std::uint32_t>(object.packedDimensions.size()));
+        for (const ArrayDimension& dimension : object.packedDimensions) {
+            out.u32(static_cast<std::uint32_t>(dimension.left));
+            out.u32(static_cast<std::uint32_t>(dimension.right));
+        }
         out.boolean(object.subroutineStatic);
         out.boolean(object.holdsNothing);
         out.u32(object.vhdlType);
@@ -418,6 +425,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.u8(static_cast<std::uint8_t>(type.kind));
         out.text(type.name);
         out.u32(type.width);
+        out.u8(static_cast<std::uint8_t>(type.encoding));
         out.u32(static_cast<std::uint32_t>(type.ranges.size()));
         for (const VhdlType::Range& range : type.ranges) {
             out.u64(static_cast<std::uint64_t>(range.left));
@@ -441,6 +449,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         out.boolean(parameter.isLocal);
         writeLocation(out, names, parameter.location);
         out.u32(parameter.vhdlType);
+        out.boolean(parameter.fromGenvar);
     }
 }
 
@@ -591,6 +600,7 @@ void readBody(Reader& in, BufferResolver& buffers, Body& body) {
         call.formatIndex = in.u32();
         call.objectIndex = in.u32();
         call.location = readLocation(in, buffers);
+        call.timeUnit = static_cast<std::int8_t>(in.u8());
         call.arguments.resize(in.count());
         for (SysTaskArgument& argument : call.arguments) {
             argument.value = readOperand(in);
@@ -664,6 +674,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     definition.name = in.text();
     definition.sourceName = in.text();
     definition.isPackage = in.boolean();
+    definition.language = static_cast<Language>(in.u8());
     definition.location = readLocation(in, buffers);
 
     definition.objects.resize(in.count());
@@ -681,12 +692,17 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         object.resolution.elementBits = in.u32();
         object.resolution.loneDriverIdentity = in.boolean();
         object.unpackedDimensions.resize(in.count());
-        for (UnpackedDimension& dimension : object.unpackedDimensions) {
+        for (ArrayDimension& dimension : object.unpackedDimensions) {
             dimension.left = static_cast<std::int32_t>(in.u32());
             dimension.right = static_cast<std::int32_t>(in.u32());
         }
         object.elementWidth = in.u32();
         object.elementSigned = in.boolean();
+        object.packedDimensions.resize(in.count());
+        for (ArrayDimension& dimension : object.packedDimensions) {
+            dimension.left = static_cast<std::int32_t>(in.u32());
+            dimension.right = static_cast<std::int32_t>(in.u32());
+        }
         object.subroutineStatic = in.boolean();
         object.holdsNothing = in.boolean();
         object.vhdlType = in.u32();
@@ -747,6 +763,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         type.kind = static_cast<VhdlType::Kind>(in.u8());
         type.name = in.text();
         type.width = in.u32();
+        type.encoding = static_cast<Encoding>(in.u8());
         type.ranges.resize(in.count());
         for (VhdlType::Range& range : type.ranges) {
             range.left = static_cast<std::int64_t>(in.u64());
@@ -775,11 +792,13 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         const bool isLocal = in.boolean();
         const SourceLocation location = readLocation(in, buffers);
         const std::uint32_t vhdlType = in.u32();
+        const bool fromGenvar = in.boolean();
         definition.parameters.push_back(Parameter{.name = std::move(name),
                                                   .value = std::move(value),
                                                   .isLocal = isLocal,
                                                   .location = location,
-                                                  .vhdlType = vhdlType});
+                                                  .vhdlType = vhdlType,
+                                                  .fromGenvar = fromGenvar});
     }
 
     return definition;

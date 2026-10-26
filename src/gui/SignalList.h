@@ -100,7 +100,9 @@ struct ResolvedSignalList {
 ///
 /// A scope path produces exactly what the Structure window's *Add to wave* produces: a group
 /// named by the scope's path holding every object of the scope, or nothing for a scope with no
-/// objects. Section 10.8 defines the command as that menu entry, not beside it.
+/// objects. With `-r` it produces what *Add to wave recursive* does: the subtree's groups,
+/// nested as its instances are. Section 10.8 defines the command as those menu entries, not
+/// beside them.
 [[nodiscard]] ResolvedSignalList
 resolveSignalList(const std::vector<SignalListEntry>& entries,
                   const QVector<ipc::InstanceEntry>& instances,

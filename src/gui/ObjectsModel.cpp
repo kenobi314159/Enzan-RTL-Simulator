@@ -2,6 +2,7 @@
 
 #include "gui/ObjectsModel.h"
 
+#include "gui/WaveformModel.h"
 #include "wavedb/WaveformDatabase.h"
 
 #include <optional>
@@ -65,13 +66,19 @@ QString ObjectsModel::valueOf(const SignalInfo& info) const {
         // Told apart on purpose. A signal nobody has asked for has no trace here yet; one the
         // kernel is not logging never will, and showing the same blank for both would have the
         // user waiting for a value that is not coming.
-        return info.recorded ? tr("—") : tr("not logged");
+        switch (info.recording) {
+        case ipc::Recording::Recorded: return tr("—");
+        case ipc::Recording::TooWide: return tr("too wide to log");
+        case ipc::Recording::OutsideScope: break;
+        }
+        return tr("not logged");
     }
 
     const std::optional<eir::BitVector> value = database.valueAt(record, cursorTime);
     if (!value.has_value()) return tr("—");
 
-    return QString::fromStdString(eir::toString(value->ref(), valueRadix));
+    // An array reads as its elements, as it does in the wave window.
+    return renderArray(*value, info.dimensions, valueRadix);
 }
 
 QVariant ObjectsModel::data(const QModelIndex& index, int role) const {
@@ -81,7 +88,12 @@ QVariant ObjectsModel::data(const QModelIndex& index, int role) const {
 
     if (role == SignalIndexRole) return info.signalIndex;
 
-    if (role == Qt::ToolTipRole) return info.path;
+    if (role == Qt::ToolTipRole) {
+        if (info.isParameter() || info.recording != ipc::Recording::TooWide) return info.path;
+        return tr("%1\nWider than the %2 bits the kernel records; --wave-max-bits raises the limit")
+            .arg(info.path)
+            .arg(kernelSession->widthLimit());
+    }
 
     if (role != Qt::DisplayRole) return {};
 
@@ -93,7 +105,9 @@ QVariant ObjectsModel::data(const QModelIndex& index, int role) const {
         // value needed, which is not something the reader wrote and not worth showing them.
         if (info.isParameter()) return info.isLocalParameter ? tr("localparam") : tr("parameter");
         if (info.width == 0) return tr("null array");
-        return info.width == 1 ? tr("logic") : tr("logic [%1:0]").arg(info.width - 1);
+        if (const QString ranges = info.declaredRanges(); !ranges.isEmpty())
+            return tr("logic %1").arg(ranges);
+        return tr("logic");
     default: return {};
     }
 }

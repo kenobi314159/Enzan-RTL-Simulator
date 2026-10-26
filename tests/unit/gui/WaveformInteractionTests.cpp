@@ -85,7 +85,7 @@ protected:
         session->subscribe(wanted);
 
         session->run(duration);
-        ASSERT_TRUE(pumpUntil([this, duration] { return session->currentTime() == duration; }));
+        ASSERT_TRUE(pumpUntilCaughtUp(duration));
 
         view->axis().setExtent(session->latestTime());
         view->axis().setRange(0, duration);

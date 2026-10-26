@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "eir/ArrayDimension.h"
 #include "eir/BitVector.h"
 #include "ipc/Codec.h"
 
@@ -18,7 +19,7 @@ namespace enzan::ipc {
 /// handshake compares it and refuses rather than negotiating: a GUI and a kernel from
 /// different builds that half-understand each other would show wrong values, and section 1.2
 /// puts correctness above convenience.
-constexpr std::uint32_t ProtocolVersion = 6;
+constexpr std::uint32_t ProtocolVersion = 8;
 
 /// What a message is.
 ///
@@ -34,7 +35,6 @@ enum class MessageType : std::uint16_t {
     QueryObjects = 3,
     Subscribe = 4,
     Unsubscribe = 5,
-    QueryHistory = 6,
     Run = 7,
     Stop = 8,
     Restart = 9,
@@ -42,18 +42,19 @@ enum class MessageType : std::uint16_t {
     Detach = 11,
     Deposit = 12,
     Force = 13,
+    FetchChanges = 20,
 
     // --- kernel to client ---------------------------------------------------
     Welcome = 128,
     Design = 129,
     Objects = 130,
-    ValueChanges = 131,
-    History = 132,
     Transcript = 133,
     Diagnostic = 134,
     RunState = 135,
     Bye = 136,
     Failure = 137,
+    Changes = 140,
+    Progress = 141,
 };
 
 /// Returns the message's name, for traces and diagnostics. Unknown numbers render as
@@ -73,6 +74,15 @@ enum class SimulationState : std::uint8_t {
 };
 
 std::string_view toString(SimulationState state);
+
+/// Whether the kernel's waveform database records a signal, and why not when it does not.
+enum class Recording : std::uint8_t {
+    Recorded,
+    /// Outside the logging scope.
+    OutsideScope,
+    /// Wider than the database records (DESIGN_GUIDE.md section 7.1).
+    TooWide,
+};
 
 // ---------------------------------------------------------------------------
 // Requests
@@ -94,29 +104,19 @@ struct QueryObjectsMessage {
     std::string instancePath;
 };
 
-/// Asks for live value changes on these signals, in addition to any already subscribed.
+/// Says the client shows these signals, in addition to any it already does, so that the kernel
+/// records each from now on whatever its logging scope, for the client to fetch (FetchChanges).
 ///
-/// Subscription is per signal rather than all-or-nothing because a design has far more
-/// signals than a wave window shows, and streaming the ones nobody is looking at would spend
-/// the socket's bandwidth on data the client throws away.
+/// Per signal rather than all-or-nothing because a design has far more signals than a wave
+/// window shows, and recording the ones nobody looks at costs memory for nothing. The kernel goes
+/// on recording a signal once shown, and records the ones shown again from time zero when the
+/// design is restarted.
 struct SubscribeMessage {
     std::vector<std::uint32_t> signalIndices;
 };
 
 struct UnsubscribeMessage {
     std::vector<std::uint32_t> signalIndices;
-};
-
-/// Asks for what the kernel already recorded for a signal. Answered with History.
-///
-/// This is what makes adding a signal to the wave window mid-run show its past rather than
-/// only its future: the kernel's database has it, and the client's copy does not yet.
-struct QueryHistoryMessage {
-    std::uint32_t signalIndex = 0;
-    std::uint64_t fromTime = 0;
-
-    /// Exclusive. `NoTime` means "everything recorded so far".
-    std::uint64_t toTime = 0;
 };
 
 /// Asks the kernel to run.
@@ -161,6 +161,31 @@ struct ForceMessage {
     bool release = false;
 };
 
+/// How many of one signal's recorded changes a client holds, which are the first that many: the
+/// kernel's database numbers a signal's changes in the order it records them, and a client's copy
+/// is always a prefix of it.
+struct ChangeCursor {
+    std::uint32_t signalIndex = 0;
+    std::uint64_t held = 0;
+};
+
+/// Asks for the changes the kernel has recorded of each signal beyond those the client holds.
+/// Answered with Changes.
+///
+/// **The client pulls, and the kernel never pushes a value.** The client asks again only once
+/// the answer to its last request has come, so at most one answer is ever on its way, and an
+/// answer is bounded in bytes. What a client has not fetched yet stays in the kernel's database,
+/// which spills to disk past its budget (DESIGN_GUIDE.md section 7.1), rather than in a queue on
+/// the socket; a client that falls behind costs the kernel nothing it would not spend recording
+/// anyway, and the kernel never waits for it (section 2.2).
+///
+/// By number rather than by time, because a signal can change twice at one time, as a deposit
+/// between runs and the next run's first slot do, and a range of times would either repeat or
+/// lose one of them.
+struct FetchChangesMessage {
+    std::vector<ChangeCursor> signals;
+};
+
 /// Says the client is leaving and the kernel should keep running.
 ///
 /// The counterpart of Quit, and the reason both exist: section 2.2 requires the GUI to detach
@@ -184,6 +209,10 @@ struct WelcomeMessage {
     std::uint64_t currentTime = 0;
     std::uint64_t latestRecordedTime = 0;
     SimulationState state = SimulationState::Idle;
+
+    /// The widest signal the kernel's waveform database records, or 0 for any width, so that a
+    /// window can say why one it is not recording is not (DESIGN_GUIDE.md section 7.1).
+    std::uint32_t widthLimit = 0;
 };
 
 /// One instance in the design hierarchy.
@@ -228,10 +257,16 @@ struct ObjectEntry {
     std::string path;
     std::uint32_t width = 1;
 
-    /// True when the kernel's waveform database is recording this signal, so the client can
-    /// tell "no history yet" from "outside the logging scope" instead of showing an empty
-    /// trace for both.
-    bool recorded = false;
+    /// Whether the kernel's waveform database is recording this signal, so the client can tell
+    /// "no history yet" from "outside the logging scope" and from "too wide to record" instead
+    /// of showing an empty trace for all three.
+    Recording recording = Recording::OutsideScope;
+
+    /// The dimensions the object is declared with under this name, outermost first, dividing
+    /// `width` into equal elements, the left one highest (`eir::declaredDimensions`). Empty for
+    /// an object that is no array. Per name rather than per signal, because a port collapsed
+    /// onto its actual may be declared with a shape of its own.
+    std::vector<eir::ArrayDimension> dimensions;
 
     /// Index into the message's `enums`, or `NoEnum` when the object's type is not one.
     std::uint32_t enumIndex = NoEnum;
@@ -244,7 +279,7 @@ struct EnumMemberEntry {
     std::string name;
 
     /// Not default-constructible without a width, so an unknown single bit stands in until the
-    /// decoder reads the real one — the same stand-in `HistoryEntry` uses.
+    /// decoder reads the real one — the same stand-in `ChangeEntry` uses.
     eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
 };
 
@@ -289,41 +324,50 @@ struct ObjectsMessage {
     std::vector<EnumEntry> enums;
 };
 
-/// One signal's new value.
-struct ValueUpdate {
-    std::uint32_t signalIndex = 0;
-    eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
-};
-
-/// Every subscribed signal that changed in one settled time slot.
-///
-/// Batched per slot rather than sent per change, and sent only once the slot has settled.
-/// Section 14.3 warns that two correct simulators may differ at delta level; a GUI shown
-/// delta-level intermediate values would display transitions that no waveform file contains.
-struct ValueChangesMessage {
-    std::uint64_t time = 0;
-    std::vector<ValueUpdate> updates;
-};
-
-struct HistoryEntry {
+/// One recorded change: the time it was recorded at and the value it set.
+struct ChangeEntry {
     std::uint64_t time = 0;
     eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
 };
 
-/// Answers QueryHistory.
-struct HistoryMessage {
+/// One signal's part of a Changes answer.
+struct SignalChanges {
     std::uint32_t signalIndex = 0;
+
+    /// As the values are shown: a std_logic is one bit, not the byte of its code.
     std::uint32_t width = 1;
 
-    /// Highest time the answer covers, so the client knows where its copy of the trace ends
-    /// even when the last change was long before it.
-    std::uint64_t latestTime = 0;
+    /// The number of the first entry, which is the cursor this answers.
+    std::uint64_t first = 0;
 
-    std::vector<HistoryEntry> entries;
+    /// How many changes of the signal the kernel holds, so that the client knows whether it is
+    /// caught up or has more to ask for.
+    std::uint64_t recorded = 0;
 
-    /// False when the answer was truncated because the range held more changes than one
-    /// message may carry; the client asks again from the last entry's time.
-    bool complete = true;
+    /// The time before which the client holds every change of the signal once it has appended
+    /// these: where the kernel has recorded to when they are the last it holds, and otherwise the
+    /// time of the first one left out. A view draws a trace no further than this, since past it
+    /// the value is not known to be the one drawn.
+    std::uint64_t completeTo = 0;
+
+    std::vector<ChangeEntry> entries;
+};
+
+/// Answers FetchChanges, for every signal it asked about and in its order.
+///
+/// Shared out between the signals rather than filled from the first, so that one with a long
+/// past to catch up on does not hold the others back.
+struct ChangesMessage {
+    std::vector<SignalChanges> signals;
+};
+
+/// How far the kernel has got: sent as a run goes, and after a write between runs, which
+/// records a change without time moving. Carries no values; a client fetches what it wants of
+/// them. Only the latest is worth reading, so a run's is not sent while the client has yet to
+/// read what was sent before it.
+struct ProgressMessage {
+    std::uint64_t time = 0;
+    std::uint64_t latestRecordedTime = 0;
 };
 
 /// `$display` and the severity tasks, forwarded as the kernel writes them.
@@ -404,13 +448,6 @@ void serialize(Archive& archive, UnsubscribeMessage& message) {
 }
 
 template<typename Archive>
-void serialize(Archive& archive, QueryHistoryMessage& message) {
-    archive.u32(message.signalIndex);
-    archive.u64(message.fromTime);
-    archive.u64(message.toTime);
-}
-
-template<typename Archive>
 void serialize(Archive& archive, RunMessage& message) {
     archive.u64(message.duration);
     archive.boolean(message.untilFinished);
@@ -457,6 +494,29 @@ void serializeState(Archive& archive, SimulationState& state) {
 }
 
 template<typename Archive>
+void serializeRecording(Archive& archive, Recording& recording) {
+    auto raw = static_cast<std::uint8_t>(recording);
+    archive.u8(raw);
+    if constexpr (Archive::IsReading) {
+        recording = raw > static_cast<std::uint8_t>(Recording::TooWide)
+                        ? Recording::OutsideScope
+                        : static_cast<Recording>(raw);
+    }
+}
+
+template<typename Archive>
+void serialize(Archive& archive, eir::ArrayDimension& dimension) {
+    auto left = static_cast<std::uint32_t>(dimension.left);
+    auto right = static_cast<std::uint32_t>(dimension.right);
+    archive.u32(left);
+    archive.u32(right);
+    if constexpr (Archive::IsReading) {
+        dimension.left = static_cast<std::int32_t>(left);
+        dimension.right = static_cast<std::int32_t>(right);
+    }
+}
+
+template<typename Archive>
 void serialize(Archive& archive, WelcomeMessage& message) {
     archive.u32(message.protocolVersion);
     archive.str(message.kernelVersion);
@@ -465,6 +525,7 @@ void serialize(Archive& archive, WelcomeMessage& message) {
     archive.u64(message.currentTime);
     archive.u64(message.latestRecordedTime);
     serializeState(archive, message.state);
+    archive.u32(message.widthLimit);
 }
 
 template<typename Archive>
@@ -488,8 +549,9 @@ void serialize(Archive& archive, ObjectEntry& entry) {
     archive.str(entry.name);
     archive.str(entry.path);
     archive.u32(entry.width);
-    archive.boolean(entry.recorded);
+    serializeRecording(archive, entry.recording);
     archive.u32(entry.enumIndex);
+    archive.list(entry.dimensions);
 }
 
 template<typename Archive>
@@ -521,30 +583,41 @@ void serialize(Archive& archive, ObjectsMessage& message) {
 }
 
 template<typename Archive>
-void serialize(Archive& archive, ValueUpdate& update) {
-    archive.u32(update.signalIndex);
-    archive.bits(update.value);
+void serialize(Archive& archive, ChangeCursor& cursor) {
+    archive.u32(cursor.signalIndex);
+    archive.u64(cursor.held);
 }
 
 template<typename Archive>
-void serialize(Archive& archive, ValueChangesMessage& message) {
-    archive.u64(message.time);
-    archive.list(message.updates);
+void serialize(Archive& archive, FetchChangesMessage& message) {
+    archive.list(message.signals);
 }
 
 template<typename Archive>
-void serialize(Archive& archive, HistoryEntry& entry) {
+void serialize(Archive& archive, ChangeEntry& entry) {
     archive.u64(entry.time);
     archive.bits(entry.value);
 }
 
 template<typename Archive>
-void serialize(Archive& archive, HistoryMessage& message) {
-    archive.u32(message.signalIndex);
-    archive.u32(message.width);
-    archive.u64(message.latestTime);
-    archive.list(message.entries);
-    archive.boolean(message.complete);
+void serialize(Archive& archive, SignalChanges& changes) {
+    archive.u32(changes.signalIndex);
+    archive.u32(changes.width);
+    archive.u64(changes.first);
+    archive.u64(changes.recorded);
+    archive.u64(changes.completeTo);
+    archive.list(changes.entries);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, ChangesMessage& message) {
+    archive.list(message.signals);
+}
+
+template<typename Archive>
+void serialize(Archive& archive, ProgressMessage& message) {
+    archive.u64(message.time);
+    archive.u64(message.latestRecordedTime);
 }
 
 template<typename Archive>

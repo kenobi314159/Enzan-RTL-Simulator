@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -28,6 +29,7 @@
 #include <vector>
 
 #include "eir/Library.h"
+#include "runtime/Time.h"
 #include "session/FileList.h"
 #include "session/Session.h"
 
@@ -42,7 +44,6 @@
 #ifdef ENZAN_WITH_FRONTEND
 #include "ipc/KernelServer.h"
 #include "runtime/Kernel.h"
-#include "runtime/Time.h"
 #endif
 
 namespace {
@@ -80,6 +81,13 @@ enum class Command : std::uint8_t {
 struct NamedLibrary {
     std::string name;
     std::filesystem::path path;
+};
+
+/// How long `--run` runs, as the run's precision will count it (`runtime::TimeLength`), and as it
+/// was written, for saying what is wrong with it.
+struct RunLength {
+    enzan::runtime::TimeLength length;
+    std::string text;
 };
 
 /// A file list and the rule its relative paths resolve by (8.3).
@@ -129,30 +137,35 @@ Libraries:
                           The same, overriding the name the library carries.
       --name <n>          The name `lib create` gives a library.
       --work <name>       The library VHDL sources are analysed into, which they
-                          name it by: `library neorv32;`. Default `work`.
+                          name it by: `library myLib;`. Default the name of the
+                          library --out-lib writes, or `work`.
       --std <1993|2000|2002|2008|2019>
                           The revision of IEEE 1076 VHDL sources are analysed
                           against, or its last two digits. Default 2008.
       --ieee-asserts <enable|disable>
                           Whether the IEEE packages' own warnings, numeric_std's
-                          of metavalues and truncation, are reported. As GHDL's
-                          option of the name; enabled by default.
+                          of metavalues and truncation, are reported. Enabled by
+                          default.
 
 Simulation:
   -t, --top <module>      Module to elaborate as the top level. `elaborate` and
                           `run` take it as their one positional word instead.
-  -r, --run <time>        Stop after this many time units.
+  -r, --run <time>        Stop after this long: a count of the run's time unit,
+                          100, or a time with its unit, 10ns or 1.5us.
       --assert-level <note|warning|error|failure|none>
                           The severity at which a VHDL report or failed assertion
-                          ends the run, as GHDL's option of the name. Default
-                          `failure`; `none` never ends it.
+                          ends the run. Default `failure`; `none` never ends it.
       --vcd <file>        Write a VCD waveform to this file.
       --fst <file>        Write an FST waveform to this file. Far smaller on a
                           real design, and seekable. Both may be given at once.
       --wave-scope <path> Record only this subtree, for example /tb/u_dut.
-      --timescale <unit>  Time unit for delays and reported times: s, ms, us, ns,
-                          ps or fs. The default is the unit the libraries were
-                          analysed in, and ps without any.
+      --wave-max-bits <n> Record no signal wider than n bits, an array's elements
+                          counted together. Default 65536; 0 records any width.
+      --timescale <unit>  The run's time unit, which --run and reported times
+                          count, and the unit of a module that states none: s,
+                          ms, us, ns, ps or fs. The default is the unit the
+                          libraries were analysed in; without any, ps, or a
+                          finer precision the design asks for.
       --delta-limit <n>   Delta cycles allowed at one timestamp. Default 10000.
       --seed <n>          The seed random numbers are drawn from. Default 0.
       --dump-stats        Print instruction and delta counts when the run ends.
@@ -184,8 +197,6 @@ Graphical front end:
 
 Exit statuses: 0 success, 1 the command line was wrong, 2 analysis or elaboration
 failed, 3 the simulation ran and the design failed.
-
-The normative specification is DESIGN_GUIDE.md in the source tree.
 )";
 
 void printVersion() {
@@ -221,7 +232,8 @@ struct Invocation {
     std::vector<std::string> parameters;
 
     /// The library VHDL sources are analysed into, by the name they refer to it by.
-    std::string workLibrary = "work";
+    /// Given with `--work`; otherwise the output library's name, or `work`.
+    std::string workLibrary;
     std::string vhdlStandard = "2008";
     bool ieeeWarnings = true;
 
@@ -229,10 +241,12 @@ struct Invocation {
     /// never does.
     std::uint8_t stopSeverity = 3;
     std::string topModule;
-    std::optional<std::uint64_t> runUntil;
+    std::optional<RunLength> runUntil;
     std::filesystem::path vcdPath;
     std::filesystem::path fstPath;
     std::string waveformScope;
+    /// Given with `--wave-max-bits`; otherwise the waveform writers' default.
+    std::optional<std::uint32_t> waveformWidthLimit;
     std::filesystem::path listenPath;
     /// Given with `--timescale`; otherwise the libraries' unit, or the session's default.
     std::optional<std::int8_t> timeExponent;
@@ -247,18 +261,11 @@ struct Invocation {
 
     /// The command line as it was given, which is what `vpi_get_vlog_info` reports.
     std::vector<std::string> commandLine;
-};
 
-/// Parses a time unit name into its power-of-ten exponent.
-std::optional<std::int8_t> parseTimeUnit(std::string_view text) {
-    if (text == "s") return 0;
-    if (text == "ms") return -3;
-    if (text == "us") return -6;
-    if (text == "ns") return -9;
-    if (text == "ps") return -12;
-    if (text == "fs") return -15;
-    return std::nullopt;
-}
+    /// The options given that apply to a simulation alone, each once, for a command that runs
+    /// none to refuse rather than drop.
+    std::vector<std::string_view> simulationOptions;
+};
 
 /// Splits `+incdir+a+b` into its parts, dropping the empty ones a trailing `+` produces.
 std::vector<std::string_view> splitPlusList(std::string_view token) {
@@ -287,11 +294,13 @@ std::optional<std::uint64_t> parseUnsigned(std::string_view text) {
 /// Result of parsing the command line.
 enum class ParseOutcome : std::uint8_t { Run, PrintedHelp, BadUsage };
 
-/// Recognises a leading subcommand, consuming it and any word it takes.
+/// Recognises a leading subcommand, consuming it and any word it takes, and returns how many
+/// words that was; nothing, having said why, for `lib` without one of its own.
 ///
 /// The first word is a subcommand only when it is one of these names, so a source file called
-/// `run.sv` is still a source file (8.1).
-std::size_t readCommand(std::span<char*> arguments, Invocation& invocation) {
+/// `run.sv` is still a source file (8.1). `lib` is one, whatever follows it: reading it as a
+/// source when what follows is not `create`, `list` or `clean` reported a file nobody named.
+std::optional<std::size_t> readCommand(std::span<char*> arguments, Invocation& invocation) {
     if (arguments.empty()) return 0;
 
     const std::string_view first(arguments[0]);
@@ -317,14 +326,49 @@ std::size_t readCommand(std::span<char*> arguments, Invocation& invocation) {
     } else if (second == "clean") {
         invocation.command = Command::LibClean;
     } else {
-        std::cerr << "enzan: `lib` takes create, list or clean\n";
-        invocation.command = Command::OneShot;
-        return 0;
+        std::cerr << "enzan: `lib` takes create, list or clean, and a library directory\n";
+        return std::nullopt;
     }
     return 2;
 }
 
 ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation) {
+    // An option that takes one value, given two, is two answers to one question, and taking the
+    // last of them silently was choosing between them for the user. The same value again is the
+    // same answer, as a Makefile appending its own flags to a user's can give it.
+    std::map<std::string_view, std::string_view, std::less<>> given;
+    const auto once = [&given](std::string_view option, std::string_view value) {
+        const auto [at, inserted] = given.emplace(option, value);
+        if (inserted || at->second == value) return true;
+        std::cerr << "enzan: '" << option << "' was given twice, as '" << at->second << "' and as '"
+                  << value << "'; it takes one\n";
+        return false;
+    };
+
+    const auto simulationOnly = [&invocation](std::string_view option) {
+        if (std::ranges::find(invocation.simulationOptions, option)
+            == invocation.simulationOptions.end())
+            invocation.simulationOptions.push_back(option);
+    };
+
+    // `-G` takes one value for each parameter it names.
+    std::map<std::string, std::string, std::less<>> overrides;
+    const auto parameter = [&overrides, &invocation](std::string_view text) {
+        const std::size_t equals = text.find('=');
+        if (equals != std::string_view::npos) {
+            const std::string name(text.substr(0, equals));
+            const auto [at, inserted] = overrides.emplace(name, text.substr(equals + 1));
+            if (!inserted && at->second != text.substr(equals + 1)) {
+                std::cerr << "enzan: '-G' sets the parameter '" << name << "' twice, to '"
+                          << at->second << "' and to '" << text.substr(equals + 1)
+                          << "'; it takes one value\n";
+                return false;
+            }
+        }
+        invocation.parameters.emplace_back(text);
+        return true;
+    };
+
     const auto requireValue = [&](std::size_t& index, std::string_view option) -> const char* {
         if (index + 1 >= arguments.size()) {
             std::cerr << "enzan: option '" << option << "' needs a value\n";
@@ -348,6 +392,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "-t" || argument == "--top") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--top", value)) return ParseOutcome::BadUsage;
             invocation.topModule = value;
             continue;
         }
@@ -355,6 +400,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--work") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--work", value)) return ParseOutcome::BadUsage;
             invocation.workLibrary = value;
             continue;
         }
@@ -362,6 +408,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--std") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--std", value)) return ParseOutcome::BadUsage;
             static constexpr std::array<std::string_view, 10> Revisions{
                 "1993", "93", "2000", "00", "2002", "02", "2008", "08", "2019", "19"};
             if (std::ranges::find(Revisions, std::string_view(value)) == Revisions.end()) {
@@ -376,6 +423,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--ieee-asserts") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--ieee-asserts", value)) return ParseOutcome::BadUsage;
             const std::string_view chosen = value;
             if (chosen != "enable" && chosen != "disable") {
                 std::cerr << "enzan: '" << chosen << "' is not `enable` or `disable`\n";
@@ -388,6 +436,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--assert-level") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--assert-level", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--assert-level");
             static constexpr std::array<std::string_view, 5> Severities{"note", "warning", "error",
                                                                         "failure", "none"};
             const auto* const found = std::ranges::find(Severities, std::string_view(value));
@@ -403,18 +453,25 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "-r" || argument == "--run") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
-            const std::optional<std::uint64_t> parsed = parseUnsigned(value);
+            if (!once("--run", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--run");
+            const std::optional<enzan::runtime::TimeLength> parsed =
+                enzan::runtime::parseTimeLength(value);
             if (!parsed.has_value()) {
-                std::cerr << "enzan: '" << value << "' is not a time in whole units\n";
+                std::cerr << "enzan: '" << value
+                          << "' is not a length of time: a count of the run's time unit, `100`, "
+                             "or a number with its unit, `10ns` or `1.5us`\n";
                 return ParseOutcome::BadUsage;
             }
-            invocation.runUntil = parsed;
+            invocation.runUntil = RunLength{.length = *parsed, .text = value};
             continue;
         }
 
         if (argument == "--vcd") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--vcd", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--vcd");
             invocation.vcdPath = value;
             continue;
         }
@@ -422,6 +479,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--fst") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--fst", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--fst");
             invocation.fstPath = value;
             continue;
         }
@@ -431,14 +490,31 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--wave-scope" || argument == "--vcd-scope") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--wave-scope", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--wave-scope");
             invocation.waveformScope = value;
+            continue;
+        }
+
+        if (argument == "--wave-max-bits") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--wave-max-bits", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--wave-max-bits");
+            const std::optional<std::uint64_t> parsed = parseUnsigned(value);
+            if (!parsed.has_value() || *parsed > 0xFFFF'FFFFU) {
+                std::cerr << "enzan: '" << value << "' is not a number of bits\n";
+                return ParseOutcome::BadUsage;
+            }
+            invocation.waveformWidthLimit = static_cast<std::uint32_t>(*parsed);
             continue;
         }
 
         if (argument == "--timescale") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
-            const std::optional<std::int8_t> exponent = parseTimeUnit(value);
+            if (!once("--timescale", value)) return ParseOutcome::BadUsage;
+            const std::optional<std::int8_t> exponent = enzan::runtime::parseTimeUnit(value);
             if (!exponent.has_value()) {
                 std::cerr << "enzan: '" << value
                           << "' is not a time unit; expected s, ms, us, ns, ps or fs\n";
@@ -451,6 +527,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--listen") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--listen", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--listen");
             invocation.listenPath = value;
             continue;
         }
@@ -458,6 +536,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--delta-limit") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--delta-limit", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--delta-limit");
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value() || *parsed == 0 || *parsed > 0xFFFF'FFFFU) {
                 std::cerr << "enzan: '" << value << "' is not a usable delta limit\n";
@@ -470,6 +550,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--seed") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--seed", value)) return ParseOutcome::BadUsage;
+            simulationOnly("--seed");
             const std::optional<std::uint64_t> parsed = parseUnsigned(value);
             if (!parsed.has_value() || *parsed > 0xFFFF'FFFFU) {
                 std::cerr << "enzan: '" << value << "' is not a seed from 0 to 4294967295\n";
@@ -491,11 +573,11 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "-G") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
-            invocation.parameters.emplace_back(value);
+            if (!parameter(value)) return ParseOutcome::BadUsage;
             continue;
         }
         if (argument.starts_with("-G") && argument.size() > 2) {
-            invocation.parameters.emplace_back(argument.substr(2));
+            if (!parameter(argument.substr(2))) return ParseOutcome::BadUsage;
             continue;
         }
 
@@ -508,6 +590,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 
         if (argument == "--dump-stats") {
             invocation.dumpStatistics = true;
+            simulationOnly("--dump-stats");
             continue;
         }
 
@@ -533,6 +616,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--out-lib") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--out-lib", value)) return ParseOutcome::BadUsage;
             invocation.outputLibrary = value;
             continue;
         }
@@ -573,6 +657,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--depfile") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--depfile", value)) return ParseOutcome::BadUsage;
             invocation.depfilePath = value;
             continue;
         }
@@ -580,6 +665,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--depfile-target") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--depfile-target", value)) return ParseOutcome::BadUsage;
             invocation.depfileTarget = value;
             continue;
         }
@@ -587,6 +673,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--attach") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--attach", value)) return ParseOutcome::BadUsage;
             invocation.attachPath = value;
             continue;
         }
@@ -594,6 +681,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--name") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--name", value)) return ParseOutcome::BadUsage;
             invocation.libraryName = value;
             continue;
         }
@@ -601,6 +689,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--theme") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--theme", value)) return ParseOutcome::BadUsage;
             invocation.themePath = value;
             continue;
         }
@@ -608,6 +697,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--write-theme") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--write-theme", value)) return ParseOutcome::BadUsage;
             invocation.writeThemePath = value;
             continue;
         }
@@ -615,6 +705,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--wave-list") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--wave-list", value)) return ParseOutcome::BadUsage;
             invocation.waveListPath = value;
             continue;
         }
@@ -626,6 +717,7 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
 
         if (argument == "--gui") {
             invocation.useGui = true;
+            simulationOnly("--gui");
             continue;
         }
 
@@ -831,6 +923,7 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
 
     request.contextFiles = invocation.contextFiles;
     request.top = invocation.topModule;
+    request.translateVhdl = invocation.command != Command::Analyse || !invocation.topModule.empty();
     request.vhdlWork = invocation.workLibrary;
     request.ieeeWarnings = invocation.ieeeWarnings;
     request.vhdlStandard = invocation.vhdlStandard;
@@ -860,7 +953,48 @@ bool openLibraries(const Invocation& invocation, enzan::session::Session& sessio
     return session.chooseTimeScale(requested);
 }
 
-/// Analyses, without elaborating. Returns false having reported.
+/// Writes a `make`-style dependency file naming every file the analysis read (8.3).
+///
+/// One target and its prerequisites, continued across lines the way a compiler writes them.
+/// Nothing is written when the analysis came from the library: see `Session::filesRead`.
+bool writeDependencyFile(const Invocation& invocation, const enzan::session::Session& session,
+                         enzan::DiagnosticEngine& diagnostics) {
+    const std::span<const std::filesystem::path> read = session.filesRead();
+    if (read.empty()) return true;
+
+    // The target has to be given, because analysis has no single output file for it to be
+    // inferred from; the output library stands in when it is not.
+    std::string target = invocation.depfileTarget;
+    if (target.empty()) target = invocation.outputLibrary.string();
+
+    std::string contents = target;
+    contents += ':';
+    for (const std::filesystem::path& file : read) {
+        contents += " \\\n  ";
+        contents += file.string();
+    }
+    contents += '\n';
+
+    // A phony target per prerequisite, so that deleting a header does not stop the build with
+    // "no rule to make target" — the same trick a compiler's `-MP` plays, and for the same
+    // reason: the build should rebuild, not refuse to run.
+    for (const std::filesystem::path& file : read) {
+        contents += '\n';
+        contents += file.string();
+        contents += ":\n";
+    }
+
+    std::ofstream out(invocation.depfilePath, std::ios::trunc);
+    out << contents;
+    if (out) return true;
+
+    diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
+                       invocation.depfilePath.string(), "the dependency file could not be written");
+    return false;
+}
+
+/// Analyses, without elaborating, and writes the dependency file `--depfile` asks for. Returns
+/// false having reported.
 bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
                  enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
     if (!openLibraries(invocation, session)) return false;
@@ -884,7 +1018,12 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
     for (const std::string& define : request.defines) defines.push_back(define);
     request.defines = std::move(defines);
 
-    return session.analyse(request);
+    // Written even when the analysis failed, so that fixing the header it failed on rebuilds
+    // rather than being invisible to the build.
+    const bool analysed = session.analyse(request);
+    if (!invocation.depfilePath.empty() && !writeDependencyFile(invocation, session, diagnostics))
+        return false;
+    return analysed;
 }
 
 bool prepare(const Invocation& invocation, enzan::session::Session& session,
@@ -902,8 +1041,18 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
     if (hasSources && !analyseOnly(invocation, session, sources, diagnostics)) return false;
     if (!hasSources && !openLibraries(invocation, session)) return false;
 
+    // A VHDL design is translated for the run that needs it (section 5.2), so a run given only
+    // libraries holding VHDL translates its top from them.
+    if (!hasSources && session.hasVhdlLibraries()) {
+        enzan::session::Session::AnalysisRequest request;
+        if (!collectSources(invocation, sources, diagnostics, request)) return false;
+        if (!session.analyse(request)) return false;
+    }
+
     if (!invocation.waveformScope.empty() && !session.addWaveformScope(invocation.waveformScope))
         return false;
+    if (invocation.waveformWidthLimit.has_value())
+        session.setWaveformWidthLimit(*invocation.waveformWidthLimit);
 
     return session.elaborate(invocation.topModule);
 }
@@ -936,6 +1085,8 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
     serverOptions.timeScale = session.timeScale();
     serverOptions.deltaLimit = invocation.deltaLimit;
     serverOptions.waveformScope = invocation.waveformScope;
+    if (invocation.waveformWidthLimit.has_value())
+        serverOptions.waveformWidthLimit = *invocation.waveformWidthLimit;
 
     enzan::ipc::KernelServer server(session, diagnostics, serverOptions);
     server.start();
@@ -978,6 +1129,23 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
     if (status != 0) return ExitStatus::SimulationFailed;
     if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;
     return ExitStatus::Success;
+}
+
+/// `length` as a count of the run's time unit; nothing, having said why, when it is no whole
+/// number of the unit or more than a run counts.
+std::optional<std::uint64_t> runCount(const RunLength& length, enzan::runtime::TimeScale scale) {
+    enzan::runtime::SimTime count = 0;
+    switch (scale.countOf(length.length, count)) {
+    case enzan::runtime::LengthFit::Exact: return count;
+    case enzan::runtime::LengthFit::NotWhole:
+        std::cerr << "enzan: '" << length.text << "' is not a whole number of the run's time unit, "
+                  << scale.unitName() << "\n";
+        return std::nullopt;
+    case enzan::runtime::LengthFit::TooLong:
+        std::cerr << "enzan: '" << length.text << "' is longer than a run counts\n";
+        return std::nullopt;
+    }
+    return std::nullopt;
 }
 
 /// Analyses, elaborates and runs. Returns the process exit status.
@@ -1024,7 +1192,14 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     if (!invocation.listenPath.empty())
         return serve(invocation, invocation.listenPath, session, diagnostics);
 
-    const enzan::runtime::RunStatus status = session.run(invocation.runUntil);
+    // A time with a unit is a count only once the run's precision is known, which the design and
+    // its libraries settle (section 3.1).
+    std::optional<std::uint64_t> until;
+    if (invocation.runUntil.has_value()) {
+        until = runCount(*invocation.runUntil, session.timeScale());
+        if (!until.has_value()) return ExitStatus::Usage;
+    }
+    const enzan::runtime::RunStatus status = session.run(until);
 
     // Closed before the statistics are printed, so that a writer failing to finish its file says
     // so before the run looks successful.
@@ -1044,50 +1219,6 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
         || diagnostics.hasErrors())
         return ExitStatus::SimulationFailed;
     return ExitStatus::Success;
-}
-
-#endif // ENZAN_WITH_FRONTEND
-
-#ifdef ENZAN_WITH_FRONTEND
-
-/// Writes a `make`-style dependency file naming every file the analysis read (8.3).
-///
-/// One target and its prerequisites, continued across lines the way a compiler writes them.
-/// Nothing is written when the analysis came from the library: see `Session::filesRead`.
-bool writeDependencyFile(const Invocation& invocation, const enzan::session::Session& session,
-                         enzan::DiagnosticEngine& diagnostics) {
-    const std::span<const std::filesystem::path> read = session.filesRead();
-    if (read.empty()) return true;
-
-    // The target has to be given, because analysis has no single output file for it to be
-    // inferred from; the output library stands in when it is not.
-    std::string target = invocation.depfileTarget;
-    if (target.empty()) target = invocation.outputLibrary.string();
-
-    std::string contents = target;
-    contents += ':';
-    for (const std::filesystem::path& file : read) {
-        contents += " \\\n  ";
-        contents += file.string();
-    }
-    contents += '\n';
-
-    // A phony target per prerequisite, so that deleting a header does not stop the build with
-    // "no rule to make target" — the same trick a compiler's `-MP` plays, and for the same
-    // reason: the build should rebuild, not refuse to run.
-    for (const std::filesystem::path& file : read) {
-        contents += '\n';
-        contents += file.string();
-        contents += ":\n";
-    }
-
-    std::ofstream out(invocation.depfilePath, std::ios::trunc);
-    out << contents;
-    if (out) return true;
-
-    diagnostics.report(enzan::DiagCode::CannotOpenFile, enzan::SourceLocation(),
-                       invocation.depfilePath.string(), "the dependency file could not be written");
-    return false;
 }
 
 #endif // ENZAN_WITH_FRONTEND
@@ -1122,12 +1253,7 @@ ExitStatus runLibCommand(const Invocation& invocation, enzan::DiagnosticEngine& 
 
     // Clean: the entries go, the library and its name stay, so a Makefile that created it once
     // does not have to create it again.
-    std::error_code failure;
-    std::size_t removed = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(path, failure)) {
-        if (entry.path().extension() != ".eirlib") continue;
-        if (std::filesystem::remove(entry.path(), failure)) ++removed;
-    }
+    const std::size_t removed = library.clean();
     std::cout << "-- removed " << removed << (removed == 1 ? " entry\n" : " entries\n");
     return ExitStatus::Success;
 }
@@ -1161,8 +1287,9 @@ int main(int argc, char** argv) {
 
     Invocation invocation;
     invocation.commandLine.assign(rawArguments.begin(), rawArguments.end());
-    const std::size_t consumed = readCommand(arguments, invocation);
-    switch (parseCommandLine(arguments.subspan(consumed), invocation)) {
+    const std::optional<std::size_t> consumed = readCommand(arguments, invocation);
+    if (!consumed) return static_cast<int>(ExitStatus::Usage);
+    switch (parseCommandLine(arguments.subspan(*consumed), invocation)) {
     case ParseOutcome::PrintedHelp: return static_cast<int>(ExitStatus::Success);
     case ParseOutcome::BadUsage: return static_cast<int>(ExitStatus::Usage);
     case ParseOutcome::Run: break;
@@ -1178,7 +1305,28 @@ int main(int argc, char** argv) {
             return static_cast<int>(ExitStatus::Usage);
         }
         if (!invocation.files.empty()) {
-            invocation.topModule = invocation.files.front().string();
+            // A source named where a top level goes is a slip of the one-shot form, and read as a
+            // top it is reported as a design that lacks one.
+            const std::filesystem::path& word = invocation.files.front();
+            static constexpr std::array<std::string_view, 6> SourceExtensions{
+                ".sv", ".svh", ".v", ".vh", ".vhd", ".vhdl"};
+            std::error_code failure;
+            if (std::ranges::find(SourceExtensions, word.extension().string())
+                    != SourceExtensions.end()
+                && std::filesystem::is_regular_file(word, failure)) {
+                std::cerr << "enzan: `"
+                          << (invocation.command == Command::Run ? "run" : "elaborate")
+                          << "` takes the name of a top level, and '" << word.string()
+                          << "' is a source; give sources to the one-shot form, `enzan "
+                          << word.string() << "`, or analyse them into a library first\n";
+                return static_cast<int>(ExitStatus::Usage);
+            }
+            if (!invocation.topModule.empty() && invocation.topModule != word.string()) {
+                std::cerr << "enzan: the top level was given twice, as '" << invocation.topModule
+                          << "' with '--top' and as '" << word.string() << "'; it takes one\n";
+                return static_cast<int>(ExitStatus::Usage);
+            }
+            invocation.topModule = word.string();
             invocation.files.clear();
         }
     }
@@ -1190,6 +1338,23 @@ int main(int argc, char** argv) {
         && invocation.command != Command::Run && invocation.command != Command::OneShot) {
         std::cerr << "enzan: '--vpi' and '--vhpi' need a simulation to load into; give them to "
                      "`run` or to the one-shot form\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
+    // The same for a simulation's own options: a waveform, a run length or a seed given where
+    // nothing is simulated would change nothing and say nothing.
+    if ((invocation.command == Command::Analyse || invocation.command == Command::Elaborate)
+        && !invocation.simulationOptions.empty()) {
+        const std::vector<std::string_view>& options = invocation.simulationOptions;
+        std::cerr << "enzan: ";
+        for (std::size_t index = 0; index < options.size(); ++index) {
+            if (index != 0) std::cerr << (index + 1 == options.size() ? " and " : ", ");
+            std::cerr << '\'' << options[index] << '\'';
+        }
+        std::cerr << (options.size() == 1 ? " applies" : " apply") << " to a simulation, and `"
+                  << (invocation.command == Command::Analyse ? "analyse" : "elaborate")
+                  << "` runs none; give " << (options.size() == 1 ? "it" : "them")
+                  << " to `run` or to the one-shot form\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 
@@ -1226,6 +1391,17 @@ int main(int argc, char** argv) {
         return static_cast<int>(ExitStatus::Usage);
     }
 
+    // With neither libraries nor sources there is no design to elaborate, which is a command line
+    // that asked for nothing rather than a design that failed (8.1).
+    const bool elaborates =
+        invocation.command == Command::Run || invocation.command == Command::Elaborate;
+    if (elaborates && invocation.fileLists.empty() && invocation.inputLibraries.empty()) {
+        std::cerr << "enzan: `" << (invocation.command == Command::Run ? "run" : "elaborate")
+                  << "` needs a design: the libraries holding it (--in-lib), or its sources in "
+                     "a file list (-f)\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
     // A macro, an include directory and a parameter override apply while sources are analysed
     // (8.2). A run from libraries alone analyses nothing, so it would run what the libraries hold
     // as if the option had been taken.
@@ -1234,6 +1410,7 @@ int main(int argc, char** argv) {
         if (!invocation.defines.empty()) analysisOptions.emplace_back("'-D'");
         if (!invocation.includeDirectories.empty()) analysisOptions.emplace_back("'-I'");
         if (!invocation.parameters.empty()) analysisOptions.emplace_back("'-G'");
+        if (!invocation.depfilePath.empty()) analysisOptions.emplace_back("'--depfile'");
         if (!analysisOptions.empty()) {
             std::cerr << "enzan: ";
             for (std::size_t index = 0; index < analysisOptions.size(); ++index) {
@@ -1246,6 +1423,20 @@ int main(int argc, char** argv) {
                       << " to the analysis that stores the top level\n";
             return static_cast<int>(ExitStatus::Usage);
         }
+    }
+
+    // The rule a dependency file holds is for its target, the one named or the output library
+    // (8.3): with neither it would be a rule for nothing, which make refuses to read.
+    if (!invocation.depfileTarget.empty() && invocation.depfilePath.empty()) {
+        std::cerr << "enzan: '--depfile-target' names the target of the file '--depfile' "
+                     "writes, and no '--depfile' was given\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+    if (!invocation.depfilePath.empty() && invocation.depfileTarget.empty()
+        && invocation.outputLibrary.empty()) {
+        std::cerr << "enzan: '--depfile' needs a target for its rule: name one with "
+                     "'--depfile-target', or give '--out-lib', whose directory it is otherwise\n";
+        return static_cast<int>(ExitStatus::Usage);
     }
 
     if (invocation.useGui && !invocation.listenPath.empty()) {
@@ -1290,15 +1481,8 @@ int main(int argc, char** argv) {
 #ifdef ENZAN_WITH_FRONTEND
     if (invocation.command == Command::Analyse) {
         enzan::session::Session session(sources, diagnostics);
-        const bool analysed = analyseOnly(invocation, session, sources, diagnostics);
-
-        // Written even when the analysis failed, so that fixing the header it failed on
-        // rebuilds rather than being invisible to the build.
-        if (!invocation.depfilePath.empty()
-            && !writeDependencyFile(invocation, session, diagnostics)) {
+        if (!analyseOnly(invocation, session, sources, diagnostics))
             return static_cast<int>(ExitStatus::AnalysisFailed);
-        }
-        if (!analysed) return static_cast<int>(ExitStatus::AnalysisFailed);
         return static_cast<int>(ExitStatus::Success);
     }
 

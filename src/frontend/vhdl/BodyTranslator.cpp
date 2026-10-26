@@ -1861,6 +1861,92 @@ std::optional<BodyTranslator::Value> BodyTranslator::characterString(tree_t expr
     return result;
 }
 
+std::optional<BodyTranslator::Value> BodyTranslator::digitString(tree_t expression,
+                                                                 unsigned bitsPerDigit) {
+    tree_t operand = tree_value(tree_param(expression, 0));
+    const std::optional<Value> array = this->expression(operand);
+    if (!array) return std::nullopt;
+    const Layout& layout = array->layout;
+    if (!layout.isArray() || !layout.inner.empty()) {
+        fail(expression, "a to_hstring or to_ostring of this array");
+        return std::nullopt;
+    }
+    const auto bits = static_cast<std::uint32_t>(layout.isNull() ? 0 : layout.index.length());
+    const std::uint32_t length = (bits + bitsPerDigit - 1) / bitsPerDigit;
+
+    // A null vector's is the null string.
+    if (length == 0) {
+        const std::optional<Layout> none =
+            nullLayout(Folder::Range{.left = 1, .right = 0, .ascending = true},
+                       type_elem(tree_type(expression)), folder());
+        if (!none) {
+            fail(expression, "a to_hstring or to_ostring of this array");
+            return std::nullopt;
+        }
+        return constantArray(eir::BitVector::filled(1, eir::Logic::Zero), *none,
+                             tree_type(expression));
+    }
+    const std::optional<Layout> string =
+        arrayLayout(Folder::Range{.left = 1, .right = length, .ascending = true},
+                    type_elem(tree_type(expression)), folder());
+    if (!string) {
+        fail(expression, "a to_hstring or to_ostring of this array");
+        return std::nullopt;
+    }
+
+    // The digits' characters, the one for a value at that value's byte.
+    constexpr std::string_view Digits = "0123456789ABCDEF";
+    eir::BitVector table = eir::BitVector::filled(Digits.size() * 8, eir::Logic::Zero);
+    for (std::size_t value = 0; value < Digits.size(); ++value) {
+        eir::bitops::assignPartAt(
+            table.mutableRef(),
+            eir::BitVector::fromUInt64(static_cast<unsigned char>(Digits[value]), 8).ref(),
+            static_cast<std::uint64_t>(value) * 8);
+    }
+    const Value characters = constantArray(
+        table, Layout{.storage = eir::Type::bits(table.width(), false, false)}, nullptr);
+
+    Value result = constantArray(eir::BitVector::filled(length * 8, eir::Logic::Zero), *string,
+                                 tree_type(expression));
+    const eir::Type offsetType = eir::Type::bits(32, false, false);
+    const eir::Type digitType = eir::Type::bits(bitsPerDigit, false, false);
+    const std::uint32_t pad = (bitsPerDigit - bits % bitsPerDigit) % bitsPerDigit;
+    for (std::uint32_t position = 0; position < length; ++position) {
+        // The digit's bits, the first of them highest; a bit before the vector's left end is a
+        // '0' of the padding. A `bit` is its code, so an element's lowest bit is its value.
+        const Value digit = constantArray(eir::BitVector::filled(bitsPerDigit, eir::Logic::Zero),
+                                          Layout{.storage = digitType}, nullptr);
+        for (std::uint32_t place = 0; place < bitsPerDigit; ++place) {
+            const std::uint32_t padded = position * bitsPerDigit + place;
+            if (padded < pad) continue;
+            const std::uint32_t element = padded - pad;
+            const std::int64_t from =
+                static_cast<std::int64_t>(bits - 1 - element) * layout.elementBits;
+            const std::uint32_t bit = newRegister(eir::Type::bits(1, false, false));
+            emit(eir::Instruction::make(
+                eir::Opcode::PartSelect, eir::Operand::reg(bit), eir::Operand::reg(array->reg),
+                eir::Operand::reg(constant(from, offsetType, nullptr).reg)));
+            emit(eir::Instruction::make(
+                eir::Opcode::SplicePart, eir::Operand::reg(digit.reg), eir::Operand::reg(bit),
+                eir::Operand::reg(constant(bitsPerDigit - 1 - place, offsetType, nullptr).reg)));
+        }
+        const Value at = resize(digit, 32);
+        const std::uint32_t scaled = newRegister(offsetType);
+        emit(eir::Instruction::make(eir::Opcode::Multiply, eir::Operand::reg(scaled),
+                                    eir::Operand::reg(at.reg),
+                                    eir::Operand::reg(constant(8, offsetType, nullptr).reg)));
+        const std::uint32_t character = newRegister(eir::Type::bits(8, false, false));
+        emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(character),
+                                    eir::Operand::reg(characters.reg), eir::Operand::reg(scaled)));
+        const std::int64_t to = static_cast<std::int64_t>(length - 1 - position) * 8;
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result.reg),
+                                    eir::Operand::reg(character),
+                                    eir::Operand::reg(constant(to, offsetType, nullptr).reg)));
+    }
+    result.layout = *string;
+    return result;
+}
+
 bool BodyTranslator::enumerationImage(tree_t operand, std::string& format,
                                       std::vector<eir::SysTaskArgument>& arguments, bool quoted) {
     // A table of the literals' images, each in as many bytes as the longest and right-aligned
@@ -2980,6 +3066,15 @@ std::optional<BodyTranslator::Value> BodyTranslator::predefined(tree_t expressio
         }
         break;
 
+    // `to_hstring` and `to_ostring` of a `bit_vector`, which std.standard predefines; those of a
+    // `std_ulogic_vector` are std_logic_1164's own functions.
+    case S_TO_HSTRING_BITVEC:
+        if (tree_params(expression) == 1) return digitString(expression, 4);
+        break;
+    case S_TO_OSTRING_BITVEC:
+        if (tree_params(expression) == 1) return digitString(expression, 3);
+        break;
+
     // Records are equal when every field is, and a field's bits are its value.
     case S_RECORD_EQ:
     case S_RECORD_NEQ: {
@@ -3150,8 +3245,16 @@ std::optional<BodyTranslator::Value> BodyTranslator::predefined(tree_t expressio
     }
 
     if (!result) {
-        fail(expression, std::string("the operator ") + istr(tree_ident(expression)) + " on "
-                             + type_pp(resultType));
+        // Named by what it is applied to, which tells one overload from another, rather than by
+        // what it returns, which for every `to_string` is a string.
+        std::string appliedTo;
+        for (unsigned index = 0; index < tree_params(expression); ++index) {
+            if (!appliedTo.empty()) appliedTo += ", ";
+            appliedTo += type_pp(tree_type(tree_value(tree_param(expression, index))));
+        }
+        fail(expression, std::string("the predefined ") + istr(tree_ident(expression))
+                             + (appliedTo.empty() ? " returning " + std::string(type_pp(resultType))
+                                                  : " of " + appliedTo));
     }
     return result;
 }
@@ -3238,6 +3341,10 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
         std::optional<Place> outer = place(tree_value(name));
         if (!outer) return std::nullopt;
         if (!outer->layout.isArray()) break;
+        if (outer->slides) {
+            fail(name, "selecting within a slice whose bounds are not static");
+            return std::nullopt;
+        }
 
         Layout inner;
         Offset within;
@@ -3257,16 +3364,25 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
                     nothing.layout = *null;
                 return nothing;
             }
-            const std::optional<std::pair<Layout, std::int64_t>> part =
-                sliceOf(outer->layout, tree_range(name, 0));
-            if (!part) return std::nullopt;
-            inner = part->first;
-            within.staticOffset = part->second;
+            if (!bounds) {
+                const std::optional<std::pair<Layout, Offset>> sliding =
+                    slidingSlice(outer->layout, tree_range(name, 0));
+                if (!sliding) return std::nullopt;
+                inner = sliding->first;
+                within = sliding->second;
+            } else {
+                const std::optional<std::pair<Layout, std::int64_t>> part =
+                    sliceOf(outer->layout, tree_range(name, 0));
+                if (!part) return std::nullopt;
+                inner = part->first;
+                within.staticOffset = part->second;
+            }
         }
 
         Place result = *outer;
         result.layout = inner;
         result.whole = false;
+        result.slides = tree_kind(name) == T_ARRAY_SLICE && within.dynamic.has_value();
         result.staticOffset = outer->staticOffset + within.staticOffset;
         if (!outer->offset && within.dynamic && !outer->whole) {
             // A part chosen at run time lies within the static part it is chosen from.
@@ -3498,21 +3614,67 @@ std::optional<std::pair<Layout, std::int64_t>> BodyTranslator::sliceOf(const Lay
         fail(range, "a slice outside the bounds of its array");
         return std::nullopt;
     }
-    // Of the elements the whole has, so that each keeps the bounds it has there.
-    std::optional<Layout> part;
-    if (layout.element) {
-        part = layout;
-        part->index = *bounds;
-        part->storage = eir::Type::bits(
-            static_cast<std::uint32_t>(bounds->length()) * layout.elementBits, false, false);
-    } else {
-        part = arrayLayout(*bounds, layout.elementType, folder());
-    }
+    const std::optional<Layout> part = partLayout(layout, *bounds);
     if (!part) {
         fail(range, "a slice of this array");
         return std::nullopt;
     }
     return std::pair(*part, layout.bitOffset(bounds->right));
+}
+
+std::optional<Layout> BodyTranslator::partLayout(const Layout& layout,
+                                                 const Folder::Range& bounds) const {
+    // Of the elements the whole has, so that each keeps the bounds it has there.
+    if (!layout.element) return arrayLayout(bounds, layout.elementType, folder());
+    Layout part = layout;
+    part.index = bounds;
+    part.storage = eir::Type::bits(static_cast<std::uint32_t>(bounds.length()) * layout.elementBits,
+                                   false, false);
+    return part;
+}
+
+std::optional<std::pair<Layout, BodyTranslator::Offset>>
+BodyTranslator::slidingSlice(const Layout& layout, tree_t range) {
+    const auto kind = static_cast<range_kind_t>(tree_subkind(range));
+    if ((kind != RANGE_TO && kind != RANGE_DOWNTO)
+        || (kind == RANGE_TO) != layout.index.ascending) {
+        fail(range, "a slice whose bounds are not static and run the other way than its array's");
+        return std::nullopt;
+    }
+    tree_t left = tree_left(range);
+    tree_t right = tree_right(range);
+    const std::optional<std::int64_t> span = layout.index.ascending
+                                                 ? folder().difference(right, left)
+                                                 : folder().difference(left, right);
+    if (!span) {
+        fail(range, "a slice whose bounds are not static, and whose length is not either");
+        return std::nullopt;
+    }
+    if (*span < 0) {
+        fail(range, "a null slice whose bounds are not static");
+        return std::nullopt;
+    }
+    if (*span >= layout.index.length()) {
+        fail(range, "a slice longer than its array");
+        return std::nullopt;
+    }
+
+    // Indexed from 0, since where it lies is the run's to say; nothing selects within it.
+    const Folder::Range indices =
+        layout.index.ascending ? Folder::Range{.left = 0, .right = *span, .ascending = true}
+                               : Folder::Range{.left = *span, .right = 0, .ascending = false};
+    const std::optional<Layout> part = partLayout(layout, indices);
+    if (!part) {
+        fail(range, "a slice of this array");
+        return std::nullopt;
+    }
+
+    // Whichever way the array runs, the right element of the slice is its lowest (section 3.6),
+    // at the offset that element has in the whole. Each bound is checked against the array's,
+    // as VHDL checks a slice's (IEEE 1076 section 8.5).
+    const std::optional<Offset> offset = elementOffset(layout, right);
+    if (!offset || !elementOffset(layout, left)) return std::nullopt;
+    return std::pair(*part, *offset);
 }
 
 std::optional<BodyTranslator::Value> BodyTranslator::slice(const Value& array, tree_t range,

@@ -9,9 +9,12 @@
 #include "eir/Design.h"
 #include "eir/Module.h"
 #include "eir/Serialization.h"
+#include "eir/UnitRequest.h"
 #include "eir/Verifier.h"
+#include "elab/Boundary.h"
 #include "elab/ElaboratedDesign.h"
 #include "elab/Elaborator.h"
+#include "elab/Link.h"
 #include "pli/PliContext.h"
 #include "runtime/Image.h"
 #include "wavedb/FstWriter.h"
@@ -26,6 +29,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <format>
 #include <iostream>
 #include <map>
 #include <set>
@@ -42,6 +46,120 @@ bool isVhdlSource(const std::filesystem::path& file) {
         character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
     return extension == ".vhd" || extension == ".vhdl";
 }
+
+/// True when `left` and `right` are one name of a library or a VHDL unit, which VHDL compares
+/// without its case.
+bool sameName(std::string_view left, std::string_view right) {
+    return std::ranges::equal(left, right, [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a))
+               == std::tolower(static_cast<unsigned char>(b));
+    });
+}
+
+#if defined(ENZAN_WITH_SYSTEMVERILOG) && defined(ENZAN_WITH_VHDL)
+/// Diagnostics held back, for an analysis that may be repeated and only its last run reported: a
+/// design of both languages is analysed in rounds (`Session::analyseMixed`).
+class BufferedDiagnostics {
+public:
+    explicit BufferedDiagnostics(const SourceManager& sources) : engine(sources) {
+        engine.addConsumer(collected);
+    }
+
+    /// Reports to `into` what was held, as it was reported here: only the errors, when `errors`.
+    void replay(DiagnosticEngine& into, bool errors = false) const {
+        for (const Diagnostic& held : collected.received) {
+            if (errors && held.severity != DiagnosticSeverity::Error
+                && held.severity != DiagnosticSeverity::Fatal)
+                continue;
+            DiagnosticBuilder again = into.reportFormatted(held.code, held.location, held.message);
+            if (held.range.valid()) again.highlight(held.range);
+            for (const DiagnosticNote& note : held.notes) again.note(note.location, note.message);
+        }
+    }
+
+private:
+    class Collector final : public DiagnosticConsumer {
+    public:
+        void consume(const Diagnostic& diagnostic) override { received.push_back(diagnostic); }
+
+        std::vector<Diagnostic> received;
+    };
+
+    Collector collected;
+
+public:
+    DiagnosticEngine engine;
+};
+
+/// The interface named as `request` asks for its unit, or null when none is.
+eir::UnitInterface* interfaceOf(std::vector<eir::UnitInterface>& interfaces,
+                                const eir::UnitRequest& request) {
+    const auto found = std::ranges::find(interfaces, request.unit, &eir::UnitInterface::name);
+    return found == interfaces.end() ? nullptr : &*found;
+}
+
+/// The values `request` asks for, in order.
+std::vector<std::string> valuesOf(const eir::UnitRequest& request) {
+    std::vector<std::string> values;
+    values.reserve(request.parameters.size());
+    for (const eir::UnitRequest::Parameter& parameter : request.parameters)
+        values.push_back(parameter.value);
+    return values;
+}
+
+/// True when the interface `request` asks for its unit through has a row of widths for its values,
+/// or there is none: what the instances asking were checked against is then exact.
+bool hasWidths(std::vector<eir::UnitInterface>& interfaces, const eir::UnitRequest& request) {
+    const eir::UnitInterface* unit = interfaceOf(interfaces, request);
+    return unit == nullptr
+           || std::ranges::find(unit->widths, valuesOf(request),
+                                &eir::UnitInterface::Widths::values)
+                  != unit->widths.end();
+}
+
+/// Adds to the interface each of `requests` asks for its entity through a row of the widths its
+/// ports have in SystemVerilog in the definition `answers` names for it in `translated`, unless it
+/// has one for those values. A port the definition does not convert is one bit wide, which
+/// bridging refuses by name.
+void addWidths(std::vector<eir::UnitInterface>& interfaces,
+               const std::vector<eir::UnitRequest>& requests,
+               const std::vector<std::string>& answers, const eir::Design& translated) {
+    for (std::size_t index = 0; index < requests.size() && index < answers.size(); ++index) {
+        eir::UnitInterface* unit = interfaceOf(interfaces, requests[index]);
+        const eir::ModuleDefinition* definition = translated.findModule(answers[index]);
+        if (unit == nullptr || definition == nullptr || hasWidths(interfaces, requests[index]))
+            continue;
+        eir::UnitInterface::Widths row{.values = valuesOf(requests[index]), .ports = {}};
+        for (const eir::UnitInterface::Port& port : unit->ports) {
+            const auto inside = std::ranges::find_if(definition->ports, [&](const eir::Port& one) {
+                return sameName(one.name, port.name);
+            });
+            eir::UnitInterface::PortWidth width;
+            if (inside != definition->ports.end()) {
+                const eir::Object& object = definition->objects[inside->objectIndex];
+                width.bits = elab::shownWidth(*definition, object).value_or(1);
+
+                // An unpacked one's element is as wide as the whole over the elements.
+                if (port.unpacked && object.vhdlType < definition->vhdlTypes.size()) {
+                    const eir::VhdlType& type = definition->vhdlTypes[object.vhdlType];
+                    if (type.kind == eir::VhdlType::Kind::Array && !type.ranges.empty()) {
+                        const eir::VhdlType::Range& range = type.ranges.front();
+                        width.left = static_cast<std::int32_t>(range.left);
+                        width.right = static_cast<std::int32_t>(range.right);
+                        const std::int64_t count =
+                            (range.left > range.right ? range.left - range.right
+                                                      : range.right - range.left)
+                            + 1;
+                        width.bits = static_cast<std::uint32_t>(width.bits / count);
+                    }
+                }
+            }
+            row.ports.push_back(width);
+        }
+        unit->widths.push_back(std::move(row));
+    }
+}
+#endif
 
 /// Matches `text` against a glob of `*` and `?`.
 ///
@@ -118,12 +236,19 @@ bool Session::analyse(const AnalysisRequest& request) {
         includeDirectories.push_back(directory);
     for (const std::string& parameter : request.parameters) parameters.push_back(parameter);
 
+    // A run given only libraries whose VHDL declares its top translates it from them.
+    if (files.empty() && hasVhdlLibraries() && !request.top.empty()) return analyseVhdl(request);
+
     if (files.empty()) {
         diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
         return false;
     }
 
-    if (std::ranges::any_of(files, isVhdlSource)) return analyseVhdl(request);
+    if (std::ranges::any_of(files, isVhdlSource)) {
+        const bool onlyVhdl = std::ranges::all_of(files, isVhdlSource) && contextFiles.empty()
+                              && libraryFiles.empty();
+        return onlyVhdl ? analyseVhdl(request) : analyseMixed(request);
+    }
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
     // Read here rather than by the frontend, so that each file has exactly one buffer: the
@@ -204,18 +329,26 @@ bool Session::analyse(const AnalysisRequest& request) {
         }
     }
 
+    // A design asking for a finer precision than the unit is run in that precision, unless
+    // `--timescale` or a library fixed the unit (section 3.1). A library being written is one:
+    // what it stores counts its unit, and a later analysis into it takes that unit as the one a
+    // module with no time scale of its own is in, which has to be the one this analysis used.
+    std::int8_t runTimeUnit = defaultScale.precisionExponent();
     frontend::sv::Options options;
     options.filesRead = &lastFilesRead;
     options.files = ordered;
     options.buffers = buffers;
     options.defines = defines;
     options.includeDirectories = includeDirectories;
-    options.timeUnitExponent = scale.precisionExponent();
+    options.timeUnitExponent = defaultScale.precisionExponent();
+    options.refineTimeUnit = !scaleChosen && !library.isOpen();
+    options.runTimeUnit = &runTimeUnit;
     options.parameterOverrides = parameters;
 
     std::unique_ptr<eir::Design> analysed = frontend::sv::analyse(options, sources, diagnostics);
     if (analysed == nullptr) return false;
 
+    scale = runtime::TimeScale(runTimeUnit);
     design = std::move(analysed);
 #ifdef ENZAN_WITH_VHDL
     vhdlOptions.reset();
@@ -248,9 +381,8 @@ bool Session::analyse(const AnalysisRequest& request) {
 
 bool Session::analyseVhdl(const AnalysisRequest& request) {
 #ifdef ENZAN_WITH_VHDL
-    // Every source is read first, so that one that cannot be is reported as that, whatever its
-    // name says it holds, rather than as a design of two languages.
     frontend::vhdl::DesignOptions options;
+    std::vector<eir::LibrarySource> read;
     std::set<std::filesystem::path> seen;
     for (const std::filesystem::path& file : files) {
         std::error_code failure;
@@ -264,17 +396,7 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
             return false;
         }
         options.units.sources.push_back(result.buffer);
-    }
-    if (!std::ranges::all_of(files, isVhdlSource) || !contextFiles.empty()
-        || !libraryFiles.empty()) {
-        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                           "a design mixing VHDL and SystemVerilog sources");
-        return false;
-    }
-    if (library.isOpen() || !inputLibraries.empty()) {
-        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                           "analysing VHDL into an Enzan library, or against one");
-        return false;
+        read.push_back({.path = file, .buffer = result.buffer});
     }
     if (!parameters.empty()) {
         diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
@@ -282,28 +404,41 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
         return false;
     }
 
-    // VHDL counts time in femtoseconds, its resolution limit, and a design is simulated in the
-    // finest unit anything in it asks for (section 3.1), unless `--timescale` said otherwise.
-    if (!scaleChosen) scale = runtime::TimeScale(runtime::FinestTimeExponent);
+    std::string keyOptions;
+    if (!setVhdlOptions(request, !read.empty(), options, keyOptions)) return false;
+    const std::string& top = options.top;
 
-    options.units.work = frontend::vhdl::UnitLibrary{.name = request.vhdlWork, .directory = {}};
-    options.units.searchDirectories.push_back(
-        vhdlLibraries.empty() ? frontend::vhdl::standardLibraryDirectory() : vhdlLibraries);
-    options.top = request.top;
-    options.timeUnitExponent = scale.precisionExponent();
-    options.ieeeWarnings = request.ieeeWarnings;
-    const std::string_view year = request.vhdlStandard;
-    if (year.ends_with("93")) options.units.standard = frontend::vhdl::Standard::Vhdl1993;
-    if (year.ends_with("00")) options.units.standard = frontend::vhdl::Standard::Vhdl2000;
-    if (year.ends_with("02")) options.units.standard = frontend::vhdl::Standard::Vhdl2002;
-    if (year.ends_with("08")) options.units.standard = frontend::vhdl::Standard::Vhdl2008;
-    if (year.ends_with("19")) options.units.standard = frontend::vhdl::Standard::Vhdl2019;
+    // Sources the library holds analysed already, with these options, are not analysed again:
+    // the design under a named top is translated from NVC's units, parsing nothing (section
+    // 4.4). Without a top, what to translate is the entity the sources declare that none of
+    // them instantiates, which only analysing them shows.
+    const bool reused =
+        library.isOpen() && !top.empty() && library.vhdlCurrent(read, sources, keyOptions);
+    if (reused) options.units.sources.clear();
 
-    std::unique_ptr<eir::Design> analysed = frontend::vhdl::analyse(options, sources, diagnostics);
+    // Nothing asked for, and nothing else, is what an analysis that translates nothing asks of
+    // the child.
+    if (!request.translateVhdl) options.onlyRequested = true;
+
+    bool unitsAnalysed = false;
+    std::unique_ptr<eir::Design> analysed =
+        frontend::vhdl::analyse(options, sources, diagnostics, nullptr, &unitsAnalysed);
+
+    // NVC's units are in the library once its analysis succeeds, whatever the translation after
+    // it did, so they are recorded then: units no entry records are units a run from the library
+    // is told are not there (section 4.4). A failed store is reported and otherwise ignored, as
+    // SystemVerilog's is.
+    if (library.isOpen() && !reused && unitsAnalysed) {
+        std::vector<std::vector<std::string>> declared;
+        declared.reserve(read.size());
+        for (const eir::LibrarySource& source : read)
+            declared.push_back(frontend::vhdl::declaredUnits(source.buffer, sources));
+        static_cast<void>(library.storeVhdl(read, sources, keyOptions, declared, diagnostics));
+    }
     if (analysed == nullptr) return false;
 
     design = std::move(analysed);
-    loadedFromLibrary = false;
+    loadedFromLibrary = reused;
     vhdlOptions = std::make_unique<frontend::vhdl::DesignOptions>(std::move(options));
     resolutionAnswers.clear();
     lastFilesRead.assign(files.begin(), files.end());
@@ -316,6 +451,349 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
                        "VHDL analysis in a build configured with -DENZAN_ENABLE_VHDL=OFF");
     return false;
 #endif
+}
+
+#ifdef ENZAN_WITH_VHDL
+bool Session::setVhdlOptions(const AnalysisRequest& request, bool sourcesGiven,
+                             frontend::vhdl::DesignOptions& options, std::string& keyOptions) {
+    // VHDL counts time in femtoseconds, its resolution limit, and a design is simulated in the
+    // finest unit anything in it asks for (section 3.1), unless `--timescale` said otherwise.
+    if (!scaleChosen) scale = runtime::TimeScale(runtime::FinestTimeExponent);
+
+    // The work library is the one analysis writes into, whose name is its own (section 8.2): a
+    // `--work` naming another would analyse a design that refers to itself by a name the
+    // library does not answer to.
+    std::string work = request.vhdlWork;
+    if (library.isOpen()) {
+        if (!work.empty() && !sameName(work, library.name())) {
+            diagnostics.report(DiagCode::WorkLibraryNamedOtherwise, SourceLocation(), work,
+                               library.name());
+            return false;
+        }
+        work = library.name();
+    }
+    if (work.empty()) work = "work";
+    options.units.work = frontend::vhdl::UnitLibrary{
+        .name = work,
+        .directory = library.isOpen() ? library.vhdlDirectory() : std::filesystem::path()};
+
+    // A run given only libraries translates its top from the one whose VHDL declares it.
+    std::string top = request.top;
+    if (!sourcesGiven && !library.isOpen()) {
+        const eir::Library* holder = vhdlLibraryOf(top, request.vhdlWork);
+        if (holder == nullptr) return false;
+        options.units.work = {.name = holder->name(), .directory = holder->vhdlDirectory()};
+        if (const std::size_t dot = top.find('.'); dot != std::string::npos)
+            top = top.substr(dot + 1);
+    }
+
+    // The VHDL of every library this design is analysed against, by the names it carries.
+    keyOptions = "std " + request.vhdlStandard + "\nwork " + work;
+    for (const eir::Library& input : inputLibraries) {
+        if (!input.holdsVhdl() || sameName(input.name(), options.units.work.name)) continue;
+        options.units.libraries.push_back(
+            {.name = input.name(), .directory = input.vhdlDirectory()});
+        keyOptions += "\nagainst " + input.name() + " " + input.vhdlStamp();
+    }
+
+    options.units.searchDirectories.push_back(
+        vhdlLibraries.empty() ? frontend::vhdl::standardLibraryDirectory() : vhdlLibraries);
+    options.top = top;
+    options.timeUnitExponent = scale.precisionExponent();
+    options.ieeeWarnings = request.ieeeWarnings;
+    const std::string_view year = request.vhdlStandard;
+    if (year.ends_with("93")) options.units.standard = frontend::vhdl::Standard::Vhdl1993;
+    if (year.ends_with("00")) options.units.standard = frontend::vhdl::Standard::Vhdl2000;
+    if (year.ends_with("02")) options.units.standard = frontend::vhdl::Standard::Vhdl2002;
+    if (year.ends_with("08")) options.units.standard = frontend::vhdl::Standard::Vhdl2008;
+    if (year.ends_with("19")) options.units.standard = frontend::vhdl::Standard::Vhdl2019;
+    return true;
+}
+#endif
+
+bool Session::analyseMixed(const AnalysisRequest& request) {
+    // Every source is read first, so that one that cannot be is reported as that, whatever its
+    // name says it holds, rather than as a design of two languages. A context or library source is
+    // SystemVerilog, as only SystemVerilog has them.
+    std::vector<std::pair<std::filesystem::path, BufferId>> read;
+    std::set<std::filesystem::path> seen;
+    for (const std::vector<std::filesystem::path>* list : {&contextFiles, &libraryFiles, &files}) {
+        for (const std::filesystem::path& file : *list) {
+            std::error_code failure;
+            std::filesystem::path key = std::filesystem::weakly_canonical(file, failure);
+            if (failure) key = file;
+            if (!seen.insert(std::move(key)).second) continue;
+
+            const FileReadResult result = sources.readFile(file);
+            if (!result.ok()) {
+                reportFileReadFailure(diagnostics, file, result);
+                return false;
+            }
+            read.emplace_back(file, result.buffer);
+        }
+    }
+
+#if defined(ENZAN_WITH_SYSTEMVERILOG) && defined(ENZAN_WITH_VHDL)
+    frontend::vhdl::DesignOptions options;
+    frontend::sv::Options svOptions;
+    for (const auto& [file, buffer] : read) {
+        if (isVhdlSource(file)) {
+            options.units.sources.push_back(buffer);
+        } else {
+            svOptions.files.push_back(file);
+            svOptions.buffers.push_back(buffer);
+        }
+    }
+
+    if (library.isOpen()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "storing a design of both VHDL and SystemVerilog in a library");
+        return false;
+    }
+    if (!parameters.empty()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "-G for a design of both VHDL and SystemVerilog");
+        return false;
+    }
+
+    // The modules the SystemVerilog declares are what a component no entity is bound to may be
+    // bound to, and the names it instantiates and declares nowhere what may be entities.
+    svOptions.defines = defines;
+    svOptions.includeDirectories = includeDirectories;
+    const unsigned errorsBefore = diagnostics.errorCount();
+    const frontend::sv::ModuleNames names =
+        frontend::sv::moduleNames(svOptions, sources, diagnostics);
+    if (diagnostics.errorCount() != errorsBefore) return false;
+    const bool svTop =
+        !request.top.empty() && std::ranges::any_of(names.declared, [&](const std::string& name) {
+            return sameName(name, request.top);
+        });
+
+    std::string keyOptions;
+    if (!setVhdlOptions(request, true, options, keyOptions)) return false;
+    options.modules = names.declared;
+    options.described = names.undeclared;
+    if (svTop) {
+        options.top.clear();
+        options.onlyRequested = true;
+        svOptions.topModules = {request.top};
+    } else {
+        svOptions.onlyRequested = !request.top.empty();
+    }
+    // Without a top, an analysis that translates no VHDL still translates what SystemVerilog
+    // instantiates of it, since SystemVerilog's analysis cannot check an instance without it.
+    if (!request.translateVhdl) options.onlyRequested = true;
+    std::vector<std::filesystem::path> svFilesRead;
+    svOptions.filesRead = &svFilesRead;
+    svOptions.timeUnitExponent = defaultScale.precisionExponent();
+    svOptions.fixedRunTimeUnit = scale.precisionExponent();
+
+    // Each frontend in turn, with every unit the other has asked for so far, until neither asks for
+    // one the other has not given, and every instance of an entity was checked against ports as
+    // wide as the entity's translation for its values makes them (DESIGN_GUIDE.md section 18, M7).
+    // What the rounds before the last reported is said again by the last, so only its diagnostics
+    // are reported.
+    const auto sameRequest = [](const eir::UnitRequest& left, const eir::UnitRequest& right) {
+        return left.unit == right.unit && left.parameters == right.parameters;
+    };
+    std::vector<eir::UnitRequest> forSystemVerilog;
+    std::vector<eir::UnitRequest> forVhdl;
+    std::vector<eir::UnitInterface> interfaces;
+    constexpr int Rounds = 8;
+    for (int round = 1;; ++round) {
+        options.requests = forVhdl;
+        BufferedDiagnostics vhdlReports(sources);
+        frontend::vhdl::Exchange exchange;
+        std::unique_ptr<eir::Design> vhdlDesign =
+            frontend::vhdl::analyse(options, sources, vhdlReports.engine, &exchange);
+        if (vhdlDesign == nullptr || exchange.answers.size() != forVhdl.size()) {
+            vhdlReports.replay(diagnostics);
+            return false;
+        }
+        if (round == 1) interfaces = exchange.interfaces;
+        addWidths(interfaces, forVhdl, exchange.answers, *vhdlDesign);
+        for (const eir::UnitRequest& asked : exchange.asked) {
+            if (std::ranges::none_of(forSystemVerilog, [&](const eir::UnitRequest& known) {
+                    return sameRequest(known, asked);
+                }))
+                forSystemVerilog.push_back(asked);
+        }
+
+        // Under a VHDL top that instantiates no module, there is no SystemVerilog to analyse.
+        BufferedDiagnostics svReports(sources);
+        std::unique_ptr<eir::Design> svDesign;
+        std::vector<std::string> svAnswers;
+        std::vector<eir::UnitRequest> asked;
+        bool settled = true;
+        std::string newlyAsked;
+        if (svTop || request.top.empty() || !forSystemVerilog.empty()) {
+            svOptions.requests = forSystemVerilog;
+            svOptions.requestAnswers = &svAnswers;
+            svOptions.interfaces = interfaces;
+            svOptions.asked = &asked;
+            bool unsettled = false;
+            svOptions.unsettled = &unsettled;
+            svDesign = frontend::sv::analyse(svOptions, sources, svReports.engine);
+            if (svDesign == nullptr && unsettled && round < Rounds) {
+                // Analysed again with the widths of what it asked for.
+                for (const eir::UnitRequest& entity : asked) {
+                    if (std::ranges::none_of(forVhdl, [&](const eir::UnitRequest& was) {
+                            return sameRequest(was, entity);
+                        }))
+                        forVhdl.push_back(entity);
+                }
+                continue;
+            }
+            if (svDesign == nullptr) {
+                // Its warnings may be of ports whose widths were not known yet, which would
+                // mislead: only its errors are said.
+                vhdlReports.replay(diagnostics);
+                svReports.replay(diagnostics, !interfaces.empty());
+                return false;
+            }
+            for (const eir::UnitRequest& entity : asked) {
+                const auto known = std::ranges::find_if(
+                    forVhdl, [&](const eir::UnitRequest& was) { return sameRequest(was, entity); });
+                if (known == forVhdl.end()) {
+                    newlyAsked +=
+                        std::format("{}'{}'", newlyAsked.empty() ? "" : ", ", entity.placeholder);
+                    forVhdl.push_back(entity);
+                    settled = false;
+                } else if (!hasWidths(interfaces, entity)) {
+                    settled = false;
+                }
+            }
+        }
+        if (!settled && round == Rounds) {
+            vhdlReports.replay(diagnostics);
+            svReports.replay(diagnostics);
+            diagnostics.report(DiagCode::MixedAnalysisUnsettled, SourceLocation(), Rounds,
+                               newlyAsked.empty() ? std::string("the widths of its ports")
+                                                  : newlyAsked);
+            return false;
+        }
+        if (!settled) continue;
+
+        // The last round's designs are one, each side's instances of the other's units linked to
+        // the definitions their requests became.
+        vhdlReports.replay(diagnostics);
+        svReports.replay(diagnostics);
+        if (svDesign != nullptr) {
+            for (const eir::ModuleDefinition& definition : svDesign->modules())
+                vhdlDesign->addModule(definition);
+        }
+        const auto answersFor = [&](const std::vector<eir::UnitRequest>& requests,
+                                    const std::vector<eir::UnitRequest>& given,
+                                    const std::vector<std::string>& answered) {
+            std::vector<std::string> answers;
+            for (const eir::UnitRequest& wanted : requests) {
+                const auto at = std::ranges::find_if(
+                    given, [&](const eir::UnitRequest& one) { return sameRequest(one, wanted); });
+                const auto index = static_cast<std::size_t>(at - given.begin());
+                answers.push_back(index < answered.size() ? answered[index] : std::string());
+            }
+            return answers;
+        };
+        if (!elab::linkRequests(*vhdlDesign, exchange.asked,
+                                answersFor(exchange.asked, forSystemVerilog, svAnswers),
+                                diagnostics)
+            || !elab::linkRequests(*vhdlDesign, asked, answersFor(asked, forVhdl, exchange.answers),
+                                   diagnostics)
+            || !eir::verify(*vhdlDesign, diagnostics))
+            return false;
+
+        design = std::move(vhdlDesign);
+        break;
+    }
+
+    loadedFromLibrary = false;
+    vhdlOptions = std::make_unique<frontend::vhdl::DesignOptions>(std::move(options));
+    resolutionAnswers.clear();
+    lastFilesRead.assign(files.begin(), files.end());
+    lastFilesRead.insert(lastFilesRead.end(), svFilesRead.begin(), svFilesRead.end());
+    std::ranges::sort(lastFilesRead);
+    lastFilesRead.erase(std::ranges::unique(lastFilesRead).begin(), lastFilesRead.end());
+    return true;
+#else
+    static_cast<void>(request);
+    static_cast<void>(read);
+#ifdef ENZAN_WITH_VHDL
+    const char* missing = "SYSTEMVERILOG";
+#else
+    const char* missing = "VHDL";
+#endif
+    diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                       std::format("a design of both VHDL and SystemVerilog in a build configured "
+                                   "with -DENZAN_ENABLE_{}=OFF",
+                                   missing));
+    return false;
+#endif
+}
+
+bool Session::hasVhdlLibraries() const {
+    return std::ranges::any_of(inputLibraries,
+                               [](const eir::Library& input) { return input.holdsVhdl(); });
+}
+
+bool Session::reportUnrecordedTop(std::string_view top) const {
+    const auto holder = std::ranges::find_if(inputLibraries, [top](const eir::Library& input) {
+        return input.holdsUnrecordedVhdl(top);
+    });
+    if (holder == inputLibraries.end()) return false;
+    diagnostics.report(DiagCode::VhdlUnitUnrecorded, SourceLocation(), std::string(top),
+                       holder->name());
+    return true;
+}
+
+const eir::Library* Session::vhdlLibraryOf(std::string_view top, std::string_view work) const {
+    // `lib.entity` names the library; `--work` names it too, for GHDL's spelling of a run.
+    std::string_view wanted = work;
+    std::string_view entity = top;
+    if (const std::size_t dot = top.find('.'); dot != std::string_view::npos) {
+        wanted = top.substr(0, dot);
+        entity = top.substr(dot + 1);
+        if (wanted.empty() || entity.empty()) {
+            diagnostics.report(DiagCode::TopModuleNotFound, SourceLocation(), std::string(top),
+                               "no unit of an empty name");
+            return nullptr;
+        }
+    }
+
+    std::vector<const eir::Library*> holders;
+    for (const eir::Library& input : inputLibraries) {
+        if (!input.holdsVhdl()) continue;
+        if (!wanted.empty()) {
+            if (sameName(input.name(), wanted)) return &input;
+            continue;
+        }
+        const std::vector<std::string> units = input.vhdlUnits();
+        if (std::ranges::any_of(
+                units, [entity](const std::string& unit) { return sameName(unit, entity); }))
+            holders.push_back(&input);
+    }
+
+    if (holders.size() == 1) return holders.front();
+
+    std::string names;
+    for (const eir::Library& input : inputLibraries) {
+        if (!input.holdsVhdl()) continue;
+        if (!names.empty()) names += ", ";
+        names += input.name();
+    }
+    if (holders.empty()) {
+        if (reportUnrecordedTop(entity)) return nullptr;
+        diagnostics.report(DiagCode::TopModuleNotFound, SourceLocation(), std::string(top),
+                           "the VHDL of the libraries " + names);
+        return nullptr;
+    }
+    names.clear();
+    for (const eir::Library* holder : holders) {
+        if (!names.empty()) names += ", ";
+        names += holder->name();
+    }
+    diagnostics.report(DiagCode::AmbiguousModule, SourceLocation(), std::string(entity), names,
+                       std::string(entity));
+    return nullptr;
 }
 
 bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
@@ -341,6 +819,7 @@ bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
 
     if (holding.empty()) {
         scale = requested.value_or(runtime::TimeScale());
+        defaultScale = scale;
         scaleChosen = requested.has_value();
         return true;
     }
@@ -353,6 +832,7 @@ bool Session::chooseTimeScale(std::optional<runtime::TimeScale> requested) {
         return false;
     }
     scale = unit;
+    defaultScale = unit;
     scaleChosen = true;
     return true;
 }
@@ -522,13 +1002,22 @@ bool Session::elaborate(std::string_view topModule) {
         diagnostics.report(DiagCode::NothingAnalysed, SourceLocation());
         return false;
     }
+    if (!topModule.empty() && design->findModule(topModule) == nullptr
+        && design->findSpecialisations(topModule).empty() && reportUnrecordedTop(topModule))
+        return false;
 
     // Two libraries built on one IP each hold the parameterisations they needed, and a design
     // analysed here against a library reproduces the units it reads from that library's
     // sources. Copies that are the same unit are one; any that differ stay ambiguous (8.2).
-    design->mergeIdenticalDefinitions([this](const eir::ModuleDefinition& definition) {
+    const auto contentOf = [this](const eir::ModuleDefinition& definition) {
         return eir::encodeContent(definition, sources);
-    });
+    };
+    design->mergeIdenticalDefinitions(contentOf);
+
+    // A port crossing between languages is connected through conversions before anything is
+    // elaborated (section 3.5). Copies of one unit are converted alike, and so merged again.
+    if (!elab::bridgeLanguages(*design, diagnostics)) return false;
+    design->mergeIdenticalDefinitions(contentOf);
 
     // Before anything new is built, so that a failed elaboration on a running design leaves nothing
     // half-replaced for the next command to find.
@@ -767,8 +1256,11 @@ std::vector<std::string> Session::findSignals(std::string_view pattern) const {
     // Over every *name*, not over the signals: a collapsed port gives one slot two
     // hierarchical names, and `find signals /tb/u_dut/*` asking about the DUT's ports must
     // find them under the DUT even though the storage lives in the parent.
-    for (const auto& [path, slotIndex] : elaborated->namesByPath())
-        if (globMatches(pattern, path)) found.push_back(path);
+    // A name a frontend made up is none the reader wrote (eir::isIntroducedName).
+    for (const auto& [path, slotIndex] : elaborated->namesByPath()) {
+        const std::string_view leaf = std::string_view(path).substr(path.rfind('/') + 1);
+        if (globMatches(pattern, path) && !eir::isIntroducedName(leaf)) found.push_back(path);
+    }
     return found;
 }
 
@@ -808,11 +1300,17 @@ bool Session::addWriter(std::unique_ptr<wavedb::WaveformWriter> writer,
     }
 
     for (const std::string& selected : scopes) writer->addScope(selected);
+    if (widthLimit.has_value()) writer->setWidthLimit(*widthLimit);
 
     std::string error;
     if (!writer->open(path, error)) {
         diagnostics.report(DiagCode::CannotOpenFile, SourceLocation(), path.string(), error);
         return false;
+    }
+    if (!writer->tooWide().empty()) {
+        diagnostics.report(DiagCode::SignalsTooWideToRecord, SourceLocation(),
+                           std::format("waveform file '{}'", path.string()), writer->maximumWidth(),
+                           writer->describeTooWide());
     }
 
     kernel->addListener(*writer);

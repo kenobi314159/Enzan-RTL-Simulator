@@ -16,13 +16,17 @@
 #include <QColor>
 #include <QDir>
 #include <QFile>
+#include <QFont>
 #include <QString>
 #include <QTemporaryDir>
+
+#include <utility>
 
 namespace {
 
 using enzan::gui::Theme;
 using enzan::gui::ThemeColor;
+using enzan::gui::ThemeFont;
 
 TEST(ThemeTests, TheShippedThemeDefinesEveryColour) {
     Theme theme;
@@ -95,6 +99,56 @@ TEST(ThemeTests, AColourThatIsNotAColourIsReported) {
     QString error;
     EXPECT_FALSE(theme.evaluate(QStringLiteral("theme accent bananas"), error));
     EXPECT_TRUE(error.contains(QStringLiteral("bananas"))) << error.toStdString();
+}
+
+TEST(ThemeTests, TheShippedThemeLeavesEveryFontAtTheDesktopsSize) {
+    // How large text should be is the reader's screen's to say, so nothing is set until a theme
+    // sets it, and a font is given back as it came.
+    Theme theme;
+    theme.loadBuiltIn();
+
+    for (const ThemeFont area :
+         {ThemeFont::Window, ThemeFont::Wave, ThemeFont::Transcript, ThemeFont::Source}) {
+        EXPECT_FALSE(theme.fontSize(area).has_value()) << static_cast<int>(area);
+    }
+    QFont desktop;
+    desktop.setPointSizeF(9.5);
+    EXPECT_EQ(theme.font(ThemeFont::Wave, desktop).pointSizeF(), 9.5);
+}
+
+TEST(ThemeTests, AnAreaLeftUnsetTakesTheWindowsFontSize) {
+    Theme theme;
+    theme.loadBuiltIn();
+
+    QString error;
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("font window 12\nfont wave 14.5"), error))
+        << error.toStdString();
+
+    EXPECT_EQ(theme.fontSize(ThemeFont::Wave), 14.5);
+    EXPECT_EQ(theme.fontSize(ThemeFont::Transcript), 12.0);
+    EXPECT_EQ(theme.fontSize(ThemeFont::Source), 12.0);
+    EXPECT_EQ(theme.font(ThemeFont::Transcript, QFont()).pointSizeF(), 12.0);
+}
+
+TEST(ThemeTests, AFontSizeThatIsNotOneIsReported) {
+    // As a colour that is not one is: named, with nothing set.
+    const std::pair<const char*, const char*> cases[] = {
+        {"font wave big", "'big' is not a font size"},
+        {"font wave 0", "'0' is not a font size"},
+        {"font wave -3", "'-3' is not a font size"},
+        {"font wave 500", "'500' is not a font size"},
+        {"font margins 10", "'margins' is not an area of the window"},
+        {"font wave", "wrong # args"},
+    };
+    for (const auto& [script, expected] : cases) {
+        Theme theme;
+        theme.loadBuiltIn();
+        QString error;
+        EXPECT_FALSE(theme.evaluate(QString::fromUtf8(script), error)) << script;
+        EXPECT_TRUE(error.contains(QString::fromUtf8(expected)))
+            << script << ": " << error.toStdString();
+        EXPECT_FALSE(theme.fontSize(ThemeFont::Wave).has_value()) << script;
+    }
 }
 
 TEST(ThemeTests, ASyntaxErrorCarriesItsLineNumber) {

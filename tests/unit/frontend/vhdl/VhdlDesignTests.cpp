@@ -113,7 +113,11 @@ protected:
         options.units.work = {.name = std::move(work), .directory = {}};
         options.units.searchDirectories = {libraries()};
         options.top = std::move(top);
-        return enzan::frontend::vhdl::analyse(options, sources, engine);
+        options.modules = modules;
+        options.requests = entityRequests;
+        options.described = described;
+        options.onlyRequested = onlyRequested;
+        return enzan::frontend::vhdl::analyse(options, sources, engine, &exchange);
     }
 
     [[nodiscard]] const Diagnostic* first(DiagCode code) const {
@@ -130,7 +134,52 @@ protected:
     SourceManager sources;
     DiagnosticEngine engine;
     CollectingConsumer consumer;
+
+    /// The SystemVerilog modules a component may be bound to, and what the last translation asked
+    /// of them.
+    std::vector<std::string> modules;
+
+    /// What SystemVerilog asks of the design, and what the last translation exchanged with it.
+    std::vector<enzan::eir::UnitRequest> entityRequests;
+    std::vector<std::string> described;
+    bool onlyRequested = false;
+    enzan::frontend::vhdl::Exchange exchange;
 };
+
+TEST_F(VhdlDesignTest, ATopAnalysedTwiceIsTheOneAnalysedLast) {
+    // Analysing an entity again replaces it and makes what was analysed of it before obsolete
+    // (IEEE 1076 section 13.5), so the design is the one analysed last, its architecture with it.
+    DesignOptions options;
+    options.units.sources = {sources.addBuffer("first.vhd", R"(
+entity e is
+end entity;
+
+architecture a of e is
+  signal first_signal : bit;
+begin
+end architecture;
+)"),
+                             sources.addBuffer("second.vhd", R"(
+entity e is
+end entity;
+
+architecture a of e is
+  signal second_signal : bit;
+begin
+end architecture;
+)")};
+    options.units.work = {.name = "work", .directory = {}};
+    options.units.searchDirectories = {libraries()};
+    options.top = "e";
+
+    const std::unique_ptr<enzan::eir::Design> design =
+        enzan::frontend::vhdl::analyse(options, sources, engine);
+    ASSERT_NE(design, nullptr) << transcript();
+    const enzan::eir::ModuleDefinition* top = design->findModule("e");
+    ASSERT_NE(top, nullptr) << transcript();
+    EXPECT_TRUE(top->findObject("second_signal").has_value());
+    EXPECT_FALSE(top->findObject("first_signal").has_value());
+}
 
 TEST_F(VhdlDesignTest, SourcesAreAnalysedAfterThoseDeclaringWhatTheyUse) {
     // The testbench is given first, and uses the package and instantiates the entity given after
@@ -832,6 +881,273 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"1100001"});
 }
 
+TEST_F(VhdlDesignTest, WithoutATopTheOneEntityNothingInstantiatesIsTranslated) {
+    // Two entities nothing instantiates are two candidates, which are named rather than both
+    // translated: the second could not be, at its defaults, and nobody asked for it.
+    constexpr std::string_view Leaf = R"(
+entity leaf is
+end entity;
+
+architecture rtl of leaf is
+begin
+end architecture;
+)";
+    constexpr std::string_view Testbench = R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  u : entity work.leaf;
+end architecture;
+)";
+    constexpr std::string_view Wrapper = R"(
+package picks is
+  function pick return integer;
+end package;
+
+package body picks is
+  procedure choose(x : out integer) is
+  begin
+    x := 3;
+  end procedure;
+
+  function pick return integer is
+    variable x : integer;
+  begin
+    choose(x);
+    return x;
+  end function;
+end package body;
+
+use work.picks.all;
+
+entity wrapper is
+  generic (W : integer := pick);
+end entity;
+
+architecture rtl of wrapper is
+begin
+end architecture;
+)";
+    std::unique_ptr<enzan::eir::Design> design =
+        translate(std::string(Leaf) + std::string(Testbench));
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_NE(design->findModule("tb"), nullptr);
+
+    consumer.received.clear();
+    design = translate(std::string(Leaf) + std::string(Testbench) + std::string(Wrapper));
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::NoTopModule);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("2 candidates: 'tb', 'wrapper'"), std::string::npos)
+        << refused->message;
+    EXPECT_EQ(first(DiagCode::VhdlUnsupported), nullptr) << transcript();
+}
+
+TEST_F(VhdlDesignTest, AnEntityAConfigurationSpecificationBindsIsInstantiated) {
+    // Bound by a specification rather than by its name, as VESTs' clifton-labs cases bind theirs:
+    // the testbench is the one entity nothing instantiates, and the top.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity leaf is
+  port (o : out integer);
+end entity;
+
+architecture rtl of leaf is
+begin
+  o <= 42;
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  component stand_in
+    port (c : out integer);
+  end component;
+  for u : stand_in use entity work.leaf(rtl) port map (o => c);
+  signal s : integer;
+begin
+  u : component stand_in port map (c => s);
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_NE(design->findModule("tb"), nullptr);
+}
+
+TEST_F(VhdlDesignTest, AConstantFunctionRunsTheBranchAStaticConditionChose) {
+    // As OFM's pipelined multiplexer sizes its levels: switches that are architecture constants
+    // choose between alternatives of several statements each, and NVC leaves the one chosen as a
+    // sequence. The levels' sizes then bound a generate loop indexed by another's parameter.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  constant WIDE : boolean := false;
+  constant TRIM : boolean := true;
+
+  function widths(width : integer) return integer_vector is
+    variable v : integer_vector(2 downto 0) := (others => 0);
+    variable reached : integer := 1;
+    variable zeros : integer;
+  begin
+    for l in 0 to width loop
+      for i in 2 downto 0 loop
+        if reached = width then
+          if TRIM then
+            zeros := 0;
+            for e in 0 to 2 loop
+              exit when v(e) /= 0;
+              zeros := zeros + 1;
+            end loop;
+            v := v(zeros - 1 downto 0) & v(2 downto zeros);
+          end if;
+          return v;
+        end if;
+        if WIDE then
+          v(i) := v(i) + 2;
+          reached := reached * 4;
+        else
+          v(i) := v(i) + 1;
+          reached := reached * 2;
+        end if;
+      end loop;
+    end loop;
+    return v;
+  end function;
+
+  constant LEVELS : integer_vector(2 downto 0) := widths(16);
+begin
+  levels_g : for i in 0 to 2 generate
+    items_g : for e in 1 to LEVELS(i) generate
+      process
+      begin
+        report integer'image(i) & ":" & integer'image(e);
+        wait;
+      end process;
+    end generate;
+  end generate;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    std::vector<std::string> reported = simulation.messages();
+    std::ranges::sort(reported);
+    EXPECT_EQ(reported, (std::vector<std::string>{"0:1", "1:1", "2:1", "2:2"}));
+}
+
+TEST_F(VhdlDesignTest, AStaticValueThatCannotBeComputedSaysWhereItsCallStopped) {
+    // The range is static by the language, so calling it "not static" would be untrue: what the
+    // reader needs is the statement in the function that the adapter cannot run.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure bump(x : inout integer) is
+  begin
+    x := x + 1;
+  end procedure;
+
+  function count(n : integer) return integer is
+    variable k : integer := n;
+  begin
+    bump(k);
+    return k;
+  end function;
+begin
+  g : for i in 1 to count(2) generate
+  end generate;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("computing the range of this generate loop"), std::string::npos)
+        << refused->message;
+    EXPECT_EQ(refused->message.find("not static"), std::string::npos) << refused->message;
+    ASSERT_EQ(refused->notes.size(), 1U);
+    EXPECT_EQ(refused->notes[0].message,
+              "computing 'count' stopped at this procedure call, which the VHDL frontend does not "
+              "run there yet");
+    EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 14U);
+}
+
+TEST_F(VhdlDesignTest, AGenericsDefaultThatCannotBeComputedSaysWhereItsCallStopped) {
+    // As OFM's splitter wrapper initialises its address bases: a default computed by a function
+    // that calls a procedure for random numbers.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity leaf is
+  generic (BASE : integer := 0);
+end entity;
+
+architecture rtl of leaf is
+begin
+end architecture;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure pick(x : out integer) is
+  begin
+    x := 7;
+  end procedure;
+
+  function base return integer is
+    variable x : integer;
+  begin
+    pick(x);
+    return x;
+  end function;
+begin
+  u : entity work.leaf generic map (BASE => base);
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("computing the value of the generic 'base'"), std::string::npos)
+        << refused->message;
+    ASSERT_EQ(refused->notes.size(), 1U);
+    EXPECT_NE(refused->notes[0].message.find("'base' stopped at this procedure call"),
+              std::string::npos)
+        << refused->notes[0].message;
+    EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 22U);
+}
+
+TEST_F(VhdlDesignTest, APredefinedFunctionNotTranslatedIsNamedByWhatItIsAppliedTo) {
+    // Every `to_string` returns a string, so naming the result would not tell one overload from
+    // another; what it is applied to does.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal r : real := 1.5;
+begin
+  process
+  begin
+    report to_string(r, "%.3f");
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("the predefined TO_STRING of REAL, STRING"), std::string::npos)
+        << refused->message;
+}
+
 TEST_F(VhdlDesignTest, AConversionWithinABaseTypeKeepsTheValue) {
     // std_logic is a subtype of std_ulogic, so converting between them, or between vectors of
     // them, changes nothing.
@@ -1096,6 +1412,333 @@ end architecture;
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     simulation.run();
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AComponentWithNoEntityIsBoundToTheModuleOfItsNameInAnyCase) {
+    // The instance names a placeholder and asks for the module, its generics' values as
+    // SystemVerilog literals, the ports it connects in the order met (DESIGN_GUIDE.md section 18,
+    // M7). Two instances asking for the same are one request.
+    modules = {"other", "ClkBuf"};
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  component clkbuf is
+    generic (w : integer := 4;
+             flag : boolean := true;
+             name : string := "a""b\c";
+             init : std_logic_vector(3 downto 0) := "01ZW";
+             neg : integer := -3;
+             level : std_logic := 'H';
+             b : bit := '0');
+    port (o : out std_logic_vector(w - 1 downto 0);
+          i : in std_logic;
+          io : inout std_logic);
+  end component;
+
+  signal a : std_logic := '0';
+  signal v : std_logic_vector(5 downto 0);
+  signal x : std_logic_vector(5 downto 0);
+begin
+  u : clkbuf generic map (w => 6) port map (i => a, o => v, io => open);
+  w : clkbuf generic map (w => 6) port map (o => x, i => a, io => open);
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_EQ(first(DiagCode::VhdlUnboundComponent), nullptr);
+
+    ASSERT_EQ(exchange.asked.size(), 1U);
+    const enzan::eir::UnitRequest& request = exchange.asked.front();
+    EXPECT_EQ(request.unit, "ClkBuf");
+    using Parameter = enzan::eir::UnitRequest::Parameter;
+    EXPECT_EQ(request.parameters,
+              (std::vector<Parameter>{{.name = "w", .value = "6"},
+                                      {.name = "flag", .value = "1'b1"},
+                                      {.name = "name", .value = "\"a\\\"b\\\\c\""},
+                                      {.name = "init", .value = "4'b01zx"},
+                                      {.name = "neg", .value = "-3"},
+                                      {.name = "level", .value = "1'b1"},
+                                      {.name = "b", .value = "1'b0"}}));
+    using enzan::eir::PortDirection;
+    using PortUse = enzan::eir::UnitRequest::PortUse;
+    EXPECT_EQ(request.ports,
+              (std::vector<PortUse>{{.name = "o", .direction = PortDirection::Output},
+                                    {.name = "i", .direction = PortDirection::Input}}));
+
+    const enzan::eir::ModuleDefinition* tb = design->findModule("tb");
+    ASSERT_NE(tb, nullptr);
+    ASSERT_EQ(tb->instances.size(), 2U);
+    for (const enzan::eir::Instance& instance : tb->instances) {
+        EXPECT_EQ(instance.definitionName, request.placeholder);
+        ASSERT_EQ(instance.connections.size(), 2U) << "the open inout is not connected";
+        EXPECT_EQ(instance.connections[0].portIndex, 0U) << "o";
+        EXPECT_EQ(instance.connections[1].portIndex, 1U) << "i";
+    }
+    EXPECT_EQ(tb->objects[tb->instances[0].connections[0].objectIndex].name, "v");
+    EXPECT_EQ(tb->objects[tb->instances[1].connections[0].objectIndex].name, "x");
+}
+
+TEST_F(VhdlDesignTest, AnExtendedIdentifierNamesWhatItHoldsToSystemVerilog) {
+    // VHDL names a port whose SystemVerilog name is one of its reserved words, `next` or
+    // `block`, by an extended identifier; SystemVerilog knows it by the name it holds.
+    modules = {"core"};
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  component core is
+    generic (\Width\ : integer := 2);
+    port (\next\ : in bit; \block\ : out bit_vector(1 downto 0));
+  end component;
+  signal go : bit;
+  signal word : bit_vector(1 downto 0);
+begin
+  u : core port map (\next\ => go, \block\ => word);
+end architecture;
+)",
+                                                                 "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+    ASSERT_EQ(exchange.asked.size(), 1U);
+    const enzan::eir::UnitRequest& request = exchange.asked.front();
+    ASSERT_EQ(request.parameters.size(), 1U);
+    EXPECT_EQ(request.parameters[0].name, "Width");
+    ASSERT_EQ(request.ports.size(), 2U);
+    EXPECT_EQ(request.ports[0].name, "next");
+    EXPECT_EQ(request.ports[1].name, "block");
+}
+
+TEST_F(VhdlDesignTest, AComponentTwoModulesMatchOnlyInOtherCasesIsRefused) {
+    modules = {"Buf", "BUF"};
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  component buf is
+    port (o : out bit);
+  end component;
+  signal s : bit;
+begin
+  u : buf port map (o => s);
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlError);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'Buf', 'BUF'"), std::string::npos) << refused->message;
+}
+
+TEST_F(VhdlDesignTest, AGenericOfATypeNoParameterHasCannotSetOne) {
+    modules = {"buf"};
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  component buf is
+    generic (period : time := 1 ns);
+    port (o : out bit);
+  end component;
+  signal s : bit;
+begin
+  u : buf port map (o => s);
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'period'"), std::string::npos) << refused->message;
+}
+
+/// An entity SystemVerilog instantiates, with a generic of each kind a parameter can set it to.
+constexpr std::string_view InstantiatedFromSystemVerilog = R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+package fifo_types is
+  type words is array (0 to 1) of std_logic_vector(7 downto 0);
+end package;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use work.fifo_types.all;
+
+entity Fifo is
+  generic (Width : integer := 4;
+           Name : string := "f";
+           Init : std_logic_vector(3 downto 0) := "01ZX";
+           Flag : boolean := false;
+           Level : std_logic := 'H';
+           Period : time := 1 ns);
+  port (Clk : in std_logic;
+        Data : out std_logic_vector(Width - 1 downto 0);
+        Count : out integer;
+        Pair : inout words);
+end entity;
+
+architecture rtl of Fifo is
+begin
+  Data <= (others => '0');
+  Count <= Width;
+end architecture;
+)";
+
+TEST_F(VhdlDesignTest, AnEntitySystemVerilogInstantiatesIsDescribedWithItsNamesAsDeclared) {
+    // Its generics and ports in the case written, which SystemVerilog names them in; a generic no
+    // parameter can hold is left out.
+    described = {"FIFO"};
+    onlyRequested = true;
+    const std::unique_ptr<enzan::eir::Design> design = translate(InstantiatedFromSystemVerilog);
+    ASSERT_NE(design, nullptr) << transcript();
+
+    ASSERT_EQ(exchange.interfaces.size(), 1U);
+    const enzan::eir::UnitInterface& unit = exchange.interfaces.front();
+    EXPECT_EQ(unit.name, "FIFO");
+    using Kind = enzan::eir::UnitInterface::Kind;
+    using Parameter = enzan::eir::UnitInterface::Parameter;
+    EXPECT_EQ(unit.parameters,
+              (std::vector<Parameter>{
+                  {.name = "Width", .kind = Kind::Integer, .length = 0, .value = "4"},
+                  {.name = "Name", .kind = Kind::String, .length = 0, .value = "\"f\""},
+                  {.name = "Init", .kind = Kind::LogicVector, .length = 4, .value = "4'b01zx"},
+                  {.name = "Flag", .kind = Kind::Bit, .length = 0, .value = "1'b0"},
+                  {.name = "Level", .kind = Kind::Logic, .length = 0, .value = "1'b1"}}));
+    using enzan::eir::PortDirection;
+    using Port = enzan::eir::UnitInterface::Port;
+    EXPECT_EQ(unit.ports, (std::vector<Port>{{.name = "Clk",
+                                              .direction = PortDirection::Input,
+                                              .fourState = true,
+                                              .isSigned = false,
+                                              .unpacked = false},
+                                             {.name = "Data",
+                                              .direction = PortDirection::Output,
+                                              .fourState = true,
+                                              .isSigned = false,
+                                              .unpacked = false},
+                                             {.name = "Count",
+                                              .direction = PortDirection::Output,
+                                              .fourState = false,
+                                              .isSigned = true,
+                                              .unpacked = false},
+                                             {.name = "Pair",
+                                              .direction = PortDirection::InOut,
+                                              .fourState = true,
+                                              .isSigned = false,
+                                              .unpacked = true}}));
+    EXPECT_TRUE(design->empty()) << "nothing was asked to be translated";
+}
+
+TEST_F(VhdlDesignTest, AnEntitySystemVerilogAsksForIsTranslatedWithItsValues) {
+    // Each value by its generic's name in any case, the rest their defaults.
+    entityRequests.push_back({.placeholder = "fifo generic map (...)",
+                              .unit = "fifo",
+                              .parameters = {{.name = "WIDTH", .value = "6"},
+                                             {.name = "init", .value = "4'b1100"},
+                                             {.name = "Name", .value = R"("a\"b")"},
+                                             {.name = "flag", .value = "1'b1"}},
+                              .ports = {}});
+    onlyRequested = true;
+    const std::unique_ptr<enzan::eir::Design> design = translate(InstantiatedFromSystemVerilog);
+    ASSERT_NE(design, nullptr) << transcript();
+
+    ASSERT_EQ(exchange.answers.size(), 1U);
+    const enzan::eir::ModuleDefinition* fifo = design->findModule(exchange.answers.front());
+    ASSERT_NE(fifo, nullptr) << exchange.answers.front();
+    ASSERT_EQ(fifo->ports.size(), 4U);
+    EXPECT_EQ(fifo->objects[fifo->ports[1].objectIndex].type.bitWidth(), 6U * 8U)
+        << "six std_ulogic codes for the width 6";
+}
+
+TEST_F(VhdlDesignTest, AnEntitySystemVerilogInstantiatesIsNoTopLevel) {
+    described = {"fifo"};
+    const std::unique_ptr<enzan::eir::Design> design = translate(InstantiatedFromSystemVerilog);
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_EQ(design->findModule("fifo"), nullptr);
+}
+
+TEST_F(VhdlDesignTest, ARealGenericAndAnEmptyStringCrossFromSystemVerilog) {
+    // A real is described with its default and bound from its literal; an empty string, which
+    // holds nothing, by its bounds alone.
+    entityRequests.push_back({.placeholder = "p",
+                              .unit = "rx",
+                              .parameters = {{.name = "fclk", .value = "100000000.0"},
+                                             {.name = "name", .value = R"("")"}},
+                              .ports = {}});
+    described = {"rx"};
+    onlyRequested = true;
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity rx is
+  generic (fclk : real := 19200.0; name : string := "uart");
+  port (clk : in bit);
+end entity;
+architecture a of rx is
+  constant divider : integer := integer(fclk / 19200.0);
+begin
+end architecture;
+)");
+    ASSERT_NE(design, nullptr) << transcript();
+    ASSERT_EQ(exchange.interfaces.size(), 1U);
+    ASSERT_EQ(exchange.interfaces[0].parameters.size(), 2U);
+    EXPECT_EQ(exchange.interfaces[0].parameters[0].kind, enzan::eir::UnitInterface::Kind::Real);
+    EXPECT_EQ(exchange.interfaces[0].parameters[0].value, std::optional<std::string>("19200.0"));
+    ASSERT_EQ(exchange.answers.size(), 1U);
+    EXPECT_NE(design->findModule(exchange.answers[0]), nullptr);
+}
+
+TEST_F(VhdlDesignTest, AValueNoValueOfTheGenericsTypeIsRefused) {
+    // Three elements for a vector of four.
+    entityRequests.push_back({.placeholder = "p",
+                              .unit = "fifo",
+                              .parameters = {{.name = "init", .value = "3'b110"}},
+                              .ports = {}});
+    onlyRequested = true;
+    EXPECT_EQ(translate(InstantiatedFromSystemVerilog), nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'init'"), std::string::npos) << refused->message;
+}
+
+TEST_F(VhdlDesignTest, AGenericSystemVerilogLeavesWithoutADefaultIsRefused) {
+    entityRequests.push_back({.placeholder = "p", .unit = "needs", .parameters = {}, .ports = {}});
+    onlyRequested = true;
+    EXPECT_EQ(translate(R"(
+entity needs is
+  generic (n : integer);
+end entity;
+architecture a of needs is
+begin
+end architecture;
+)"),
+              nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlError);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("no default"), std::string::npos) << refused->message;
+}
+
+TEST_F(VhdlDesignTest, AnEntityWhosePortHasNoBoundsCannotBeInstantiatedFromSystemVerilog) {
+    entityRequests.push_back(
+        {.placeholder = "p", .unit = "open_bounds", .parameters = {}, .ports = {}});
+    onlyRequested = true;
+    EXPECT_EQ(translate(R"(
+entity open_bounds is
+  port (d : in bit_vector);
+end entity;
+architecture a of open_bounds is
+begin
+end architecture;
+)"),
+              nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("unconstrained"), std::string::npos) << refused->message;
 }
 
 TEST_F(VhdlDesignTest, AnUnconstrainedPortTakesItsActualsBounds) {
@@ -2437,6 +3080,143 @@ end architecture;
     EXPECT_EQ(simulation.run(), RunStatus::Error);
     EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
+}
+
+TEST_F(VhdlDesignTest, ASliceThatMovesWithAVariableIsDrivenAndRead) {
+    // As OFM's multiplexer testbench drives one input of its bus: bounds a variable moves, a
+    // length that stays. Each direction, and reads of a signal's and a variable's.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.numeric_bit.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  constant W : integer := 4;
+  signal d : bit_vector(4 * W - 1 downto 0) := (others => '0');
+  signal u : bit_vector(0 to 4 * W - 1) := (others => '0');
+  signal r : bit_vector(W - 1 downto 0);
+begin
+  process
+    variable x : integer;
+    variable packed : bit_vector(4 * W - 1 downto 0) := x"5a3c";
+    variable nibble : bit_vector(W - 1 downto 0);
+  begin
+    for i in 0 to 3 loop
+      x := 3 - i;
+      nibble := packed(x * W + W - 1 downto x * W);
+      assert nibble = packed(15 - 4 * i downto 12 - 4 * i)
+        report "variable " & to_string(nibble) severity failure;
+      d((x + 1) * W - 1 downto x * W) <= bit_vector(to_unsigned(i + 1, W));
+      u(x * W to x * W + W - 1) <= "10" & bit_vector(to_unsigned(i, 2));
+      wait for 1 ns;
+      r <= d((x + 1) * W - 1 downto x * W);
+      wait for 1 ns;
+      assert r = bit_vector(to_unsigned(i + 1, W)) report "read " & to_string(r) severity failure;
+    end loop;
+    assert d = x"1234" report "d " & to_string(d) severity failure;
+    assert u = x"ba98" report "u " & to_string(u) severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, ASliceThatMovesOutsideItsArrayEndsTheRun) {
+    // Both bounds are checked, as VHDL checks a slice's (IEEE 1076 section 8.5): the right one is
+    // inside and the left one is not.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal d : bit_vector(7 downto 0);
+begin
+  process
+    variable x : integer := 1;
+  begin
+    x := x + 4;
+    d(x + 3 downto x) <= "1111";
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages().front(), "index 8 is outside the bounds 7 downto 0");
+}
+
+TEST_F(VhdlDesignTest, ASliceOfASignalWhoseLengthMovesIsRefused) {
+    // Its bits would be a part of a width only the run knows, which a part of a signal is not.
+    // A product of two values that move is not taken for a length that stays, whatever values
+    // the two bounds happen to agree at.
+    for (const char* bounds : {"x downto 0", "x * x + 2 downto x"}) {
+        consumer.received.clear();
+        const std::unique_ptr<enzan::eir::Design> design = translate(std::format(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal d : bit_vector(7 downto 0);
+begin
+  process
+    variable x : integer := 3;
+  begin
+    d({}) <= (others => '1');
+    wait;
+  end process;
+end architecture;
+)",
+                                                                                 bounds),
+                                                                     "tb");
+        EXPECT_EQ(design, nullptr) << bounds;
+        const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+        ASSERT_NE(refused, nullptr) << bounds << transcript();
+        EXPECT_NE(refused->message.find("whose length is not either"), std::string::npos)
+            << refused->message;
+    }
+}
+
+TEST_F(VhdlDesignTest, SelectingWithinASliceThatMovesIsRefused) {
+    // The slice is laid out from 0, not from its bounds, so an index into it would count from
+    // the wrong place.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  signal d : bit_vector(7 downto 0);
+begin
+  process
+    variable x : integer := 1;
+  begin
+    d(x + 3 downto x)(x + 1) <= '1';
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("selecting within a slice whose bounds are not static"),
+              std::string::npos)
+        << refused->message;
 }
 
 TEST_F(VhdlDesignTest, AnIndexUsedAgainInABlockIsScaledOnce) {

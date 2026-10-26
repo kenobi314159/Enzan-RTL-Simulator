@@ -4,6 +4,7 @@
 
 #include "common/SourceLocation.h"
 #include "eir/Module.h"
+#include "eir/UnitRequest.h"
 #include "frontend/vhdl/NvcApi.h"
 #include "frontend/vhdl/VhdlFrontend.h"
 
@@ -40,6 +41,19 @@ struct DesignRequest {
 
     /// Whether the IEEE packages' own warnings are reported (`DesignOptions::ieeeWarnings`).
     bool ieeeWarnings = true;
+
+    /// The SystemVerilog modules a component may be bound to (`DesignOptions::modules`).
+    std::vector<std::string> modules;
+
+    /// What SystemVerilog asks for and instantiates (`DesignOptions`).
+    std::vector<eir::UnitRequest> requests;
+    std::vector<std::string> described;
+    bool onlyRequested = false;
+
+    /// The libraries other than work an entity SystemVerilog names is looked for in, by name, and
+    /// the sources' text, which names a generic or a port as declared.
+    std::vector<std::string> libraries;
+    const SourceManager* sources = nullptr;
 };
 
 /// Translates the design under `request.top` from NVC's analysed units into EIR (DESIGN_GUIDE.md
@@ -50,11 +64,17 @@ struct DesignRequest {
 /// What is translated is what the hierarchy under the top reaches, not every unit analysed, so a
 /// unit nothing instantiates cannot stop a design for using something the adapter lacks.
 ///
+/// An instance bound to one of `request.modules` names a placeholder as its definition, and
+/// `exchange` receives what each asks for, in the order first met, with what is answered to
+/// SystemVerilog.
+///
 /// Reports what it cannot translate to `diagnostics` and returns what it could. A caller checks
 /// the error count: a design with a construct left out simulates and gives a wrong answer, which
 /// section 1.2 ranks worst, so nothing partial may be run.
-std::vector<eir::ModuleDefinition>
-translateDesign(const DesignRequest& request, const Locate& locate, DiagnosticEngine& diagnostics);
+std::vector<eir::ModuleDefinition> translateDesign(const DesignRequest& request,
+                                                   const Locate& locate,
+                                                   DiagnosticEngine& diagnostics,
+                                                   Exchange& exchange);
 
 /// Translates each of `requests`, a resolution function specialised to an array of as many values
 /// as it has drivers, indexed from 0 (DESIGN_GUIDE.md section 3.7), into the definitions of the

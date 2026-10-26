@@ -142,6 +142,37 @@ inline eir::Design guiTestDesign() {
     return design;
 }
 
+/// guiTestDesign with arrays beside its signals in `/tb`, as the SystemVerilog frontend describes
+/// them: `logic [1:0][3:0] lanes` holding 8'h5a, `logic [3:0] memory [0:1]` holding 8'hc3, and
+/// `logic [0:3] up` holding 4'b1000.
+inline eir::Design arrayTestDesign() {
+    const eir::Design plain = guiTestDesign();
+    eir::Design design;
+    for (eir::ModuleDefinition module : plain.modules()) {
+        if (module.name == "tb") {
+            // NOLINTBEGIN(bugprone-unchecked-optional-access)
+            module.addObject(eir::Object{
+                .name = "lanes",
+                .type = eir::Type::bits(8, false, true),
+                .initialValue = eir::BitVector::parse("8'h5a"),
+                .packedDimensions = {{.left = 1, .right = 0}, {.left = 3, .right = 0}}});
+            module.addObject(eir::Object{.name = "memory",
+                                         .type = eir::Type::bits(8, false, true),
+                                         .initialValue = eir::BitVector::parse("8'hc3"),
+                                         .unpackedDimensions = {{.left = 0, .right = 1}},
+                                         .packedDimensions = {{.left = 3, .right = 0}},
+                                         .elementWidth = 4});
+            module.addObject(eir::Object{.name = "up",
+                                         .type = eir::Type::bits(4, false, true),
+                                         .initialValue = eir::BitVector::parse("4'b1000"),
+                                         .packedDimensions = {{.left = 0, .right = 3}}});
+            // NOLINTEND(bugprone-unchecked-optional-access)
+        }
+        design.addModule(std::move(module));
+    }
+    return design;
+}
+
 /// Collects diagnostics so that a failure in the fixture says what went wrong.
 class FixtureConsumer final : public DiagnosticConsumer {
 public:
@@ -160,7 +191,8 @@ protected:
         // every surface that drives it.
         kernelSession = std::make_unique<session::Session>(sources, engine);
         kernelSession->setTimeScale(runtime::TimeScale(-9));
-        kernelSession->setDesign(std::make_unique<eir::Design>(guiTestDesign()));
+        ASSERT_TRUE(loadDesign(*kernelSession))
+            << (consumer.messages.empty() ? "analysis failed" : consumer.messages.front());
         ASSERT_TRUE(kernelSession->elaborate("tb"))
             << (consumer.messages.empty() ? "elaboration failed" : consumer.messages.front());
 
@@ -168,6 +200,7 @@ protected:
         options.kernelVersion = "enzan test";
         options.timeScale = runtime::TimeScale(-9);
         options.localTranscript = &transcript;
+        options.changesBytes = changesBytes;
         server = std::make_unique<ipc::KernelServer>(*kernelSession, engine, options);
         server->start();
 
@@ -185,6 +218,13 @@ protected:
         // The handshake and the hierarchy are a round trip each, and every test needs both.
         pumpUntil([this] { return !session->instances().isEmpty(); });
         ASSERT_FALSE(session->instances().isEmpty()) << "the design never arrived";
+    }
+
+    /// Gives the kernel's session the design it serves, guiTestDesign's unless a suite that
+    /// needs another overrides this. Returns false when that failed.
+    virtual bool loadDesign(session::Session& into) {
+        into.setDesign(std::make_unique<eir::Design>(guiTestDesign()));
+        return true;
     }
 
     void TearDown() override {
@@ -210,6 +250,15 @@ protected:
         timer.start();
         while (!done() && timer.elapsed() < milliseconds) pump(4);
         return done();
+    }
+
+    /// Pumps until the kernel has reached `time` and the session holds every change it recorded
+    /// of the signals shown, which a test that looks at the traces waits for: the changes are
+    /// fetched after the kernel says it recorded them. Returns whether that happened in time.
+    bool pumpUntilCaughtUp(runtime::SimTime time) {
+        return pumpUntil([this, time] {
+            return session->currentTime() == time && session->heldTime() == session->latestTime();
+        });
     }
 
     /// The kernel's signal index for a hierarchical path.
@@ -247,6 +296,9 @@ protected:
     DiagnosticEngine engine;
     FixtureConsumer consumer;
     std::ostringstream transcript;
+
+    /// The bytes of one answer of changes, read by `SetUp`.
+    std::size_t changesBytes = ipc::ServerOptions{}.changesBytes;
 
     /// The kernel end's session, which owns the simulation the server serves.
     std::unique_ptr<session::Session> kernelSession;

@@ -25,7 +25,7 @@ find_package(Threads REQUIRED)
 
 enzan_add_component(
   ipc_server
-  SOURCES ChangePublisher.cpp KernelServer.cpp OutputCapture.cpp
-  HEADERS ChangePublisher.h KernelServer.h OutputCapture.h
+  SOURCES KernelServer.cpp OutputCapture.cpp
+  HEADERS KernelServer.h OutputCapture.h
   DEPENDS enzan::session enzan::ipc enzan::runtime enzan::wavedb
   PRIVATE_DEPENDS enzan::elab Threads::Threads)

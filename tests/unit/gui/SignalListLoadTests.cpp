@@ -181,7 +181,7 @@ TEST_F(SignalListLoadTest, ALoadedListHasTheRowsItDescribes) {
 
 TEST_F(SignalListLoadTest, AScopeAddsWhatTheMenuEntryAdds) {
     insert(QStringLiteral("/tb"), QStringLiteral("Add to wave recursive"));
-    ASSERT_TRUE(pumpUntil([this] { return topRows().size() == 2; }))
+    ASSERT_TRUE(pumpUntil([this] { return topRows().size() == 1; }))
         << topRows().size() << " rows; the transcript says:\n"
         << transcript().toStdString();
     const QString byMenu = waves()->writeSignalList();
@@ -307,6 +307,107 @@ TEST_F(SignalListLoadTest, ASavedListLoadsBackAsItWasAndSavesTheSameBytes) {
     QFile second(saved);
     ASSERT_TRUE(second.open(QIODevice::ReadOnly));
     EXPECT_EQ(second.readAll(), written) << "the same window saves the same bytes";
+}
+
+// ---------------------------------------------------------------------------
+// Selects are the design's indices
+// ---------------------------------------------------------------------------
+
+/// The window over arrayTestDesign: `logic [1:0][3:0] lanes` = 8'h5a, `logic [3:0] memory [0:1]`
+/// = 8'hc3 and `logic [0:3] up` = 4'b1000.
+class ArraySignalListTest : public SignalListLoadTest {
+protected:
+    bool loadDesign(enzan::session::Session& into) override {
+        into.setDesign(std::make_unique<enzan::eir::Design>(enzan::test::arrayTestDesign()));
+        return true;
+    }
+
+    [[nodiscard]] QString valueOf(int rowId) const { return waves()->renderValue(rowId, 0); }
+};
+
+TEST_F(ArraySignalListTest, ASelectNamesAnElementOrABitAsTheSourceIndexesIt) {
+    ASSERT_TRUE(load(R"(
+        add wave /tb/lanes[1] /tb/lanes[0][3] /tb/memory[1] /tb/memory[0][2:1] /tb/up[0]
+        add wave /tb/lanes[1:0] /tb/count[3:0]
+    )"));
+
+    const QVector<int> rows = topRows();
+    ASSERT_EQ(rows.size(), 7);
+
+    // lanes[1] is the left element, the high nibble of 8'h5a.
+    EXPECT_EQ(rowAt(rows[0]).label, QStringLiteral("lanes[1]"));
+    EXPECT_EQ(valueOf(rows[0]), QStringLiteral("5"));
+    EXPECT_EQ(rowAt(rows[1]).label, QStringLiteral("lanes[0][3]"));
+    EXPECT_EQ(valueOf(rows[1]), QStringLiteral("1"));
+
+    // memory[1] is the right element of [0:1], the low nibble of 8'hc3.
+    EXPECT_EQ(valueOf(rows[2]), QStringLiteral("3"));
+    EXPECT_EQ(rowAt(rows[3]).label, QStringLiteral("memory[0][2:1]"));
+    EXPECT_EQ(valueOf(rows[3]), QStringLiteral("2")) << "bits 2 and 1 of 4'hc";
+
+    // up[0] is the most significant bit of logic [0:3].
+    EXPECT_EQ(valueOf(rows[4]), QStringLiteral("1"));
+
+    // A part-select of an array keeps it an array, of the elements selected.
+    EXPECT_EQ(valueOf(rows[5]), QStringLiteral("{5}{a}"));
+    ASSERT_TRUE(waves()->canUnpack(rows[5]));
+    waves()->unpack(rows[5]);
+    EXPECT_EQ(rowAt(rowAt(rows[5]).children[0]).label, QStringLiteral("lanes[1:0][1]"));
+
+    // A vector with no declared range is indexed by its bits, as before.
+    EXPECT_EQ(rowAt(rows[6]).highBit, 3U);
+    EXPECT_EQ(rowAt(rows[6]).lowBit, 0U);
+}
+
+TEST_F(ArraySignalListTest, ASelectOutsideTheDeclaredRangeIsAWarning) {
+    ASSERT_TRUE(load(R"(
+        add wave /tb/lanes[2] /tb/up[3:0] /tb/lanes[1:0][3] /tb/memory[0]
+    )"));
+
+    EXPECT_TRUE(transcript().contains(
+        QStringLiteral("/tb/lanes[2] selects outside /tb/lanes, which is declared [1:0][3:0]")))
+        << transcript().toStdString();
+    EXPECT_TRUE(transcript().contains(QStringLiteral("/tb/up[3:0] selects outside")))
+        << "a part-select runs as its dimension is declared";
+    EXPECT_TRUE(transcript().contains(QStringLiteral("/tb/lanes[1:0][3] selects outside")))
+        << "a part-select is the last select";
+    ASSERT_EQ(topRows().size(), 1) << "and the rest of the list still loads";
+    EXPECT_EQ(rowAt(topRows()[0]).label, QStringLiteral("memory[0]"));
+}
+
+TEST_F(ArraySignalListTest, AnArrayTakenApartIsSavedByItsIndicesAndLoadsBackTheSame) {
+    WaveformModel* model = waves();
+    const int lanes = model->addSignal(info(QStringLiteral("/tb"), QStringLiteral("lanes")));
+    model->unpack(lanes);
+    const int high = model->row(lanes)->children[0];
+    const int low = model->row(lanes)->children[1];
+    model->unpack(low);
+    model->removeRow(model->row(low)->children[0]);
+    model->setRadixRecursive(high, Radix::Binary);
+
+    const int memory = model->addSignal(info(QStringLiteral("/tb"), QStringLiteral("memory")));
+    model->unpack(memory);
+
+    const QString before = model->writeSignalList();
+    EXPECT_TRUE(before.contains(QStringLiteral("add wave -radix bin /tb/lanes[1]")))
+        << before.toStdString();
+    EXPECT_TRUE(before.contains(QStringLiteral("add wave /tb/lanes[0][2]")))
+        << before.toStdString();
+    EXPECT_TRUE(before.contains(QStringLiteral("add wave -expand /tb/memory")))
+        << before.toStdString();
+
+    ASSERT_TRUE(load(before.toUtf8()));
+    EXPECT_EQ(model->writeSignalList(), before);
+
+    // What came back is an element again, that unpacks into its bits.
+    const QVector<int> rows = topRows();
+    ASSERT_EQ(rows.size(), 2);
+    const int reloaded = rowAt(rows[0]).children[0];
+    EXPECT_EQ(valueOf(reloaded), QStringLiteral("0101"));
+    EXPECT_EQ(valueOf(rows[1]), QStringLiteral("{c}{3}"));
+    ASSERT_TRUE(model->canUnpack(reloaded));
+    model->unpack(reloaded);
+    EXPECT_EQ(rowAt(rowAt(reloaded).children[0]).label, QStringLiteral("lanes[1][3]"));
 }
 
 // ---------------------------------------------------------------------------

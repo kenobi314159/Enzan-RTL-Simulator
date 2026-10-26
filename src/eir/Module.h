@@ -3,6 +3,7 @@
 #pragma once
 
 #include "common/SourceLocation.h"
+#include "eir/ArrayDimension.h"
 #include "eir/BitVector.h"
 #include "eir/Process.h"
 #include "eir/Type.h"
@@ -58,6 +59,22 @@ void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept;
 /// 'X' and a high-impedance one 'Z'. False, `stored` left as it was, when a bit has no code: an
 /// unknown or high-impedance `bit` or `boolean`.
 [[nodiscard]] bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
+
+/// As `storeShown`, for a value that has to arrive whatever it holds, as one crossing from
+/// SystemVerilog into VHDL does (section 3.5): an unknown or high-impedance bit becomes a `bit`'s
+/// or a `boolean`'s 0, as assigning one to a two-state variable makes it.
+void encode(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
+
+/// What an object stored as `encoding` holds, for a diagnostic: `std_ulogic codes`.
+[[nodiscard]] std::string_view toString(Encoding encoding) noexcept;
+
+/// The language a definition was written in.
+///
+/// Nothing about simulating a definition depends on it: what its bits mean is its objects'
+/// encodings. It says where a port crosses from one language into the other, which is connected by
+/// a conversion that consumes a delta cycle (DESIGN_GUIDE.md section 3.5), and which procedural
+/// interface shows the definition (section 9.7).
+enum class Language : std::uint8_t { SystemVerilog, Vhdl };
 
 /// Which kind of net a net is, which decides how a bit with several drivers resolves and what
 /// a bit with none holds (DESIGN_GUIDE.md section 3.7).
@@ -164,6 +181,11 @@ struct VhdlType {
 
     std::uint32_t width = 0;
 
+    /// What a scalar's bits mean, as an object's encoding says (section 3.6): std_ulogic codes, a
+    /// bit's or a boolean's, or the value itself. `Bits` for an array or a record, whose elements
+    /// and fields say for themselves.
+    Encoding encoding = Encoding::Bits;
+
     /// A scalar's range, or each dimension of an array, the first first.
     std::vector<Range> ranges;
 
@@ -177,23 +199,6 @@ struct VhdlType {
     std::vector<Field> fields;
 
     friend bool operator==(const VhdlType&, const VhdlType&) noexcept = default;
-};
-
-/// One unpacked dimension of an array, as declared: `[0:15]` is a left of 0 and a right of 15.
-///
-/// Kept for what reads the array as an array — VPI's `vpiRegArray`, the waveform database's
-/// choice not to record memories — and not for simulating it. Storage is flat: the array's
-/// elements are one vector of its bits, left element highest, as a packed array's are
-/// (DESIGN_GUIDE.md section 4.3), so every operation on it is an operation on bits.
-struct UnpackedDimension {
-    std::int32_t left = 0;
-    std::int32_t right = 0;
-
-    [[nodiscard]] std::uint32_t size() const noexcept {
-        return static_cast<std::uint32_t>(left > right ? left - right : right - left) + 1U;
-    }
-
-    friend bool operator==(UnpackedDimension, UnpackedDimension) noexcept = default;
 };
 
 /// What a VHDL resolved signal's drivers resolve with (IEEE 1076 section 4.6): a resolution
@@ -256,7 +261,15 @@ struct Object {
 
     /// The unpacked dimensions, outermost first, when the object is an unpacked array; empty
     /// otherwise. Its type is then the flat vector of all its elements.
-    std::vector<UnpackedDimension> unpackedDimensions;
+    std::vector<ArrayDimension> unpackedDimensions;
+
+    /// A SystemVerilog packed array's dimensions, outermost first, down to the element they
+    /// are dimensions of: a bit, or a vector that is no array, an `int` or a packed struct. Of
+    /// one element when the object is also an unpacked array. Empty when it is no packed array.
+    ///
+    /// Like `unpackedDimensions`, only for what reads the object from outside: a waveform shows
+    /// `logic [3:0][7:0]` as four bytes rather than as 32 bits (DESIGN_GUIDE.md section 10.7).
+    std::vector<ArrayDimension> packedDimensions;
 
     /// For a VHDL object, its type, an index into its definition's `vhdlTypes`, or
     /// VhdlType::None.
@@ -318,6 +331,13 @@ struct Parameter {
     /// For a VHDL generic or constant, its type, an index into its definition's `vhdlTypes`, or
     /// VhdlType::None.
     std::uint32_t vhdlType = VhdlType::None;
+
+    /// True for a generate loop's genvar as one iteration of the loop sees it, `gen[3].i`, which
+    /// SystemVerilog makes a localparam of each block the loop generates (IEEE 1800 section 27.4).
+    /// VPI shows it in its block, as other simulators do; the GUI's lists do not, since its value
+    /// is already the index in the block's name and a loop of sixty iterations would put sixty of
+    /// them beside the signals the reader wrote.
+    bool fromGenvar = false;
 };
 
 /// Direction of a module port.
@@ -441,6 +461,9 @@ struct ModuleDefinition {
     /// them, and it is never a top level. Named `<package>::`, which no module can be.
     bool isPackage = false;
 
+    /// The language the definition was written in.
+    Language language = Language::SystemVerilog;
+
     SourceLocation location;
 
     std::vector<Object> objects;
@@ -481,5 +504,33 @@ struct ModuleDefinition {
     /// a copy per signal would send the same members over the wire once per object.
     std::uint32_t addEnum(EnumDefinition definition);
 };
+
+/// True for the name of an object a frontend introduced rather than the source declared: the
+/// storage of a port connected to an expression, a hierarchical reference's name here for
+/// another instance's object, the halves of a VHDL inout. A frontend names each with a `$`, which
+/// an identifier the user wrote almost never holds, so that it is not taken for one. A
+/// SystemVerilog identifier may hold a `$` all the same, and one that does is taken for made up:
+/// the price of a rule nothing needs to be told about.
+///
+/// The one rule for it, since nothing that shows the design to its reader shows one: VPI and
+/// VHPI (DESIGN_GUIDE.md section 9.2), a waveform (section 7.1) and the GUI's lists. Such an object
+/// is storage the simulation needs and the reader never wrote, and its value is always also under
+/// a name they did write, the port's or the signal referred to.
+[[nodiscard]] bool isIntroducedName(std::string_view objectName) noexcept;
+
+/// Every dimension `object` is declared with, outermost first, as its source counts them: a
+/// SystemVerilog object's unpacked dimensions and then its packed ones, a VHDL object's arrays'
+/// down to an element that is no array, a scalar or a record. Empty for an object that is no
+/// array.
+///
+/// What a waveform shows the object as (DESIGN_GUIDE.md section 10.7): the dimensions divide
+/// its bits as they are shown, `presentedWidth` of them, into equal elements, the left one
+/// highest, so `std_logic_vector(7 downto 0)` has the one dimension `7 downto 0` and elements
+/// of one bit. They are read from what the frontend already records, the object's dimensions
+/// or its VHDL type, rather than kept a second time. Empty too when they do not divide the bits
+/// evenly or a bound does not fit 32 bits, which a VHDL array of a null range would make: such
+/// an object is shown as the bits it is.
+[[nodiscard]] std::vector<ArrayDimension> declaredDimensions(const ModuleDefinition& definition,
+                                                             const Object& object);
 
 } // namespace enzan::eir

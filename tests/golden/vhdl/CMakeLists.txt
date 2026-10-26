@@ -122,12 +122,12 @@ set_tests_properties(golden.vhdl.options.assert_level_error
                                 "PASS options")
 
 # A source that cannot be opened is reported as that, whatever its name says it holds, rather than
-# as a design mixing VHDL and SystemVerilog.
+# as a design of both languages, which a build without SystemVerilog cannot analyse.
 add_test(NAME golden.vhdl.missing_source COMMAND enzan --top tb
                                                  "${CMAKE_CURRENT_SOURCE_DIR}/counter.vhd" missing.sv)
 set_tests_properties(golden.vhdl.missing_source
                      PROPERTIES PASS_REGULAR_EXPRESSION "cannot open file 'missing.sv'"
-                                FAIL_REGULAR_EXPRESSION "mixing")
+                                FAIL_REGULAR_EXPRESSION "both VHDL and SystemVerilog")
 
 # Delays rounded to a coarser unit than VHDL's femtoseconds, the static one with a warning.
 add_test(NAME golden.vhdl.coarse_timescale
@@ -194,6 +194,15 @@ enzan_add_vhdl_golden_test(deferred)
 # Generics of record types, and their fields folded.
 enzan_add_vhdl_golden_test(record_generics)
 
+# VHDL analysed into libraries and run from them, as a Makefile drives it (sections 4.4 and 8.2).
+add_test(NAME golden.vhdl.library COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh"
+                                          $<TARGET_FILE:enzan>)
+set_tests_properties(
+  golden.vhdl.library
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS library"
+             FAIL_REGULAR_EXPRESSION "FAIL vhdl library"
+             TIMEOUT 120)
+
 # cocotb driving a VHDL toplevel through VHPI (DESIGN_GUIDE.md section 9.7), as the golden test
 # beside the SystemVerilog cases drives one through VPI, when a Python has cocotb.
 if(ENZAN_HAVE_COCOTB)
@@ -201,6 +210,9 @@ if(ENZAN_HAVE_COCOTB)
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../run-cocotb-check.sh" $<TARGET_FILE:enzan>
                    "${ENZAN_COCOTB_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/cocotb" vhdl)
   set_tests_properties(
-    golden.cocotb.vhdl PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb" FAIL_REGULAR_EXPRESSION
-                                  "FAIL=[1-9]" TIMEOUT 300)
+    golden.cocotb.vhdl
+    PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb"
+               FAIL_REGULAR_EXPRESSION "FAIL=[1-9]"
+               TIMEOUT 300
+               ENVIRONMENT_MODIFICATION "${ENZAN_COCOTB_ENVIRONMENT}")
 endif()

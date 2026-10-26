@@ -28,6 +28,7 @@
 
 namespace {
 
+using enzan::ipc::ChangesMessage;
 using enzan::ipc::Connection;
 using enzan::ipc::Descriptor;
 using enzan::ipc::Frame;
@@ -35,7 +36,6 @@ using enzan::ipc::Listener;
 using enzan::ipc::MessageType;
 using enzan::ipc::ReceiveStatus;
 using enzan::ipc::TranscriptMessage;
-using enzan::ipc::ValueChangesMessage;
 
 /// A pair of connected sockets, which is a connection without a listener in the way.
 struct SocketPair {
@@ -180,15 +180,15 @@ TEST(Connection, AMessageSplitAcrossReadsIsReassembled) {
     // that assumed otherwise would pass every small test and fail on a real design.
     SocketPair pair;
 
-    ValueChangesMessage sent;
-    sent.time = 100;
+    ChangesMessage sent;
+    sent.signals.emplace_back().signalIndex = 4;
     for (std::uint32_t index = 0; index < 500; ++index) {
-        sent.updates.push_back(enzan::ipc::ValueUpdate{
-            .signalIndex = index, .value = enzan::eir::BitVector::fromUInt64(index, 64)});
+        sent.signals.front().entries.push_back(enzan::ipc::ChangeEntry{
+            .time = index, .value = enzan::eir::BitVector::fromUInt64(index, 64)});
     }
 
     std::vector<std::byte> encoded;
-    enzan::ipc::encode(MessageType::ValueChanges, sent, encoded);
+    enzan::ipc::encode(MessageType::Changes, sent, encoded);
     ASSERT_GT(encoded.size(), 1000U);
 
     // Written by hand in small pieces, because the connection's own writer hands the socket
@@ -213,12 +213,13 @@ TEST(Connection, AMessageSplitAcrossReadsIsReassembled) {
 
     ASSERT_EQ(pair.right.next(frame), ReceiveStatus::Message);
 
-    ValueChangesMessage got;
+    ChangesMessage got;
     ASSERT_TRUE(enzan::ipc::decodePayload(frame.payload, got));
-    EXPECT_EQ(got.time, 100U);
-    ASSERT_EQ(got.updates.size(), 500U);
-    EXPECT_EQ(got.updates[499].signalIndex, 499U);
-    EXPECT_EQ(got.updates[499].value, enzan::eir::BitVector::fromUInt64(499, 64));
+    ASSERT_EQ(got.signals.size(), 1U);
+    EXPECT_EQ(got.signals[0].signalIndex, 4U);
+    ASSERT_EQ(got.signals[0].entries.size(), 500U);
+    EXPECT_EQ(got.signals[0].entries[499].time, 499U);
+    EXPECT_EQ(got.signals[0].entries[499].value, enzan::eir::BitVector::fromUInt64(499, 64));
 }
 
 TEST(Connection, AFullSocketQueuesRatherThanBlocking) {

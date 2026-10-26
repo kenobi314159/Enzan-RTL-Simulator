@@ -1462,6 +1462,7 @@ clifton-labs/compliant/functional/components/integer-default-binding.vhdl
 clifton-labs/compliant/functional/components/integer-with-config-spec.vhdl
 clifton-labs/compliant/functional/components/integer-with-port-map.vhdl
 clifton-labs/compliant/functional/components/simple-array-example.vhdl
+clifton-labs/compliant/functional/components/unconstrained-array-example.vhdl
 clifton-labs/compliant/functional/constants/simple-string-constant.vhdl
 clifton-labs/compliant/functional/entities/pass-array-type-through-inout-port.vhdl
 clifton-labs/compliant/functional/entities/pass-integer-through-inout-port.vhdl

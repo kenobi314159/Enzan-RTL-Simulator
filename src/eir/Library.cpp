@@ -10,6 +10,7 @@
 #include "eir/Serialization.h"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdio>
 #include <fstream>
@@ -113,6 +114,66 @@ constexpr std::string_view EntryMagic = "enzan-entry\n";
 
 /// Characters in a key, which is a 128-bit digest in hex.
 constexpr std::size_t DigestHexLength = 32;
+
+/// The extension of an entry of EIR units.
+constexpr std::string_view EntryExtension = ".eirlib";
+
+/// Prefixes a VHDL source's entry, which holds its key and the primary units it declares, one to
+/// a line; NVC's analysis of them is in the library's VHDL directory (`Library::vhdlDirectory`).
+constexpr std::string_view VhdlEntryMagic = "enzan-vhdl-entry\n";
+
+/// The extension of a VHDL source's entry, kept apart from those of EIR, which hold units and
+/// whose presence says the library holds delays counted in its time unit.
+constexpr std::string_view VhdlEntryExtension = ".vhdlentry";
+
+/// A VHDL source's entry: its key and the units it declares.
+struct VhdlEntry {
+    std::string key;
+    std::vector<std::string> units;
+};
+
+/// Parses a VHDL entry, or nothing when it is not one this build wrote.
+std::optional<VhdlEntry> readVhdlEntry(std::string_view contents) {
+    if (!contents.starts_with(VhdlEntryMagic)) return std::nullopt;
+    contents.remove_prefix(VhdlEntryMagic.size());
+
+    VhdlEntry entry;
+    for (bool first = true; !contents.empty(); first = false) {
+        const std::size_t end = contents.find('\n');
+        if (end == std::string_view::npos) return std::nullopt;
+        const std::string_view line = contents.substr(0, end);
+        contents.remove_prefix(end + 1);
+        if (first) {
+            if (line.size() != DigestHexLength) return std::nullopt;
+            entry.key = std::string(line);
+        } else {
+            entry.units.emplace_back(line);
+        }
+    }
+    if (entry.key.empty()) return std::nullopt;
+    return entry;
+}
+
+/// Every VHDL entry of the library at `directory` that can be read, in the order of their paths
+/// (section 3.8 keeps a directory's order out of anything observable).
+std::vector<VhdlEntry> readVhdlEntries(const std::filesystem::path& directory) {
+    std::vector<std::filesystem::path> paths;
+    std::error_code failure;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
+        if (failure) break;
+        if (entry.path().extension() == VhdlEntryExtension) paths.push_back(entry.path());
+    }
+    std::ranges::sort(paths);
+
+    std::vector<VhdlEntry> entries;
+    for (const std::filesystem::path& path : paths) {
+        const std::optional<std::string> contents = readWholeFile(path);
+        if (!contents.has_value()) continue;
+        if (std::optional<VhdlEntry> entry = readVhdlEntry(*contents))
+            entries.push_back(std::move(*entry));
+    }
+    return entries;
+}
 
 /// One entry's header: the files it depended on, and where its units begin.
 struct EntryHeader {
@@ -345,7 +406,7 @@ std::filesystem::path Library::entryPath(const LibrarySource& source) const {
     Digest digest;
     digest.add(source.path.string());
 
-    return directory / (readable + "-" + digest.hex().substr(0, 8) + ".eirlib");
+    return directory / (readable + "-" + digest.hex().substr(0, 8) + std::string(EntryExtension));
 }
 
 std::string Library::entryKey(const LibrarySource& source, const SourceManager& sourceManager,
@@ -485,7 +546,7 @@ std::optional<std::int8_t> Library::timeUnit() const {
     // no units in it any more, so it can be filled in another.
     std::error_code failure;
     for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
-        if (entry.path().extension() == ".eirlib") return recordedTimeUnit;
+        if (entry.path().extension() == EntryExtension) return recordedTimeUnit;
     }
     return std::nullopt;
 }
@@ -505,7 +566,7 @@ bool Library::loadAll(Design& design, DiagnosticEngine& diagnostics) const {
     std::error_code failure;
     for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
         if (failure) break;
-        if (entry.path().extension() == ".eirlib") entries.push_back(entry.path());
+        if (entry.path().extension() == EntryExtension) entries.push_back(entry.path());
     }
     std::ranges::sort(entries);
 
@@ -554,7 +615,7 @@ std::vector<std::string> Library::unitNames() const {
     std::error_code failure;
     for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
         if (failure) break;
-        if (entry.path().extension() != ".eirlib") continue;
+        if (entry.path().extension() != EntryExtension) continue;
 
         const std::optional<std::string> contents = readWholeFile(entry.path());
         if (!contents.has_value()) continue;
@@ -573,9 +634,136 @@ std::vector<std::string> Library::unitNames() const {
 
         for (const ModuleDefinition& definition : decoded) sorted.insert(definition.name);
     }
+    for (const std::string& unit : vhdlUnits()) sorted.insert(unit);
 
     names.assign(sorted.begin(), sorted.end());
     return names;
+}
+
+// ---------------------------------------------------------------------------
+// VHDL
+// ---------------------------------------------------------------------------
+
+std::filesystem::path Library::vhdlEntryPath(const LibrarySource& source) const {
+    std::filesystem::path path = entryPath(source);
+    path.replace_extension(VhdlEntryExtension);
+    return path;
+}
+
+std::string Library::vhdlEntryKey(const LibrarySource& source, const SourceManager& sourceManager,
+                                  std::string_view options) {
+    // Enzan's version names the revision of NVC it was built with, whose analysis the entry
+    // records, as it names the translator in an entry of EIR.
+    Digest digest;
+    digest.add(versionLine());
+    digest.add(options);
+    digest.add(source.path.string());
+    digest.add(sourceManager.bufferText(source.buffer));
+    return digest.hex();
+}
+
+bool Library::holdsVhdl() const {
+    if (!opened) return false;
+    std::error_code failure;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
+        if (failure) break;
+        if (entry.path().extension() == VhdlEntryExtension) return true;
+    }
+    return false;
+}
+
+std::vector<std::string> Library::vhdlUnits() const {
+    std::set<std::string, std::less<>> sorted;
+    if (opened) {
+        for (const VhdlEntry& entry : readVhdlEntries(directory))
+            sorted.insert(entry.units.begin(), entry.units.end());
+    }
+    return {sorted.begin(), sorted.end()};
+}
+
+bool Library::holdsUnrecordedVhdl(std::string_view name) const {
+    if (!opened || name.empty()) return false;
+    const auto cased = [](std::string text, int (*change)(int)) {
+        for (char& character : text)
+            character = static_cast<char>(change(static_cast<unsigned char>(character)));
+        return text;
+    };
+    // The units are recorded in lower case.
+    const std::vector<std::string> recorded = vhdlUnits();
+    if (std::ranges::find(recorded, cased(std::string(name), &::tolower)) != recorded.end())
+        return false;
+
+    // NVC names a primary unit's file for its library and itself, in upper case.
+    const std::string file = cased(logicalName + '.' + std::string(name), &::toupper);
+    std::error_code failure;
+    return std::filesystem::is_regular_file(vhdlDirectory() / file, failure);
+}
+
+bool Library::vhdlCurrent(std::span<const LibrarySource> sources,
+                          const SourceManager& sourceManager, std::string_view options) const {
+    if (!opened || sources.empty()) return false;
+
+    // An entry says what NVC analysed, and NVC's units are what a run translates from: without
+    // them the entries describe nothing.
+    std::error_code failure;
+    if (!std::filesystem::is_directory(vhdlDirectory(), failure)) return false;
+
+    return std::ranges::all_of(sources, [&](const LibrarySource& source) {
+        const std::optional<std::string> contents = readWholeFile(vhdlEntryPath(source));
+        if (!contents.has_value()) return false;
+        const std::optional<VhdlEntry> entry = readVhdlEntry(*contents);
+        return entry.has_value() && entry->key == vhdlEntryKey(source, sourceManager, options);
+    });
+}
+
+bool Library::storeVhdl(std::span<const LibrarySource> sources, const SourceManager& sourceManager,
+                        std::string_view options, std::span<const std::vector<std::string>> units,
+                        DiagnosticEngine& diagnostics) const {
+    if (!opened) return false;
+
+    bool allWritten = true;
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        std::string payload(VhdlEntryMagic);
+        payload += vhdlEntryKey(sources[index], sourceManager, options);
+        payload += '\n';
+        if (index < units.size()) {
+            for (const std::string& unit : units[index]) {
+                payload += unit;
+                payload += '\n';
+            }
+        }
+        const std::filesystem::path target = vhdlEntryPath(sources[index]);
+        if (writeWholeFile(target, payload)) continue;
+
+        diagnostics.report(DiagCode::LibraryWriteFailed, SourceLocation(), target.string());
+        allWritten = false;
+    }
+    return allWritten;
+}
+
+std::string Library::vhdlStamp() const {
+    if (!opened) return {};
+    const std::vector<VhdlEntry> entries = readVhdlEntries(directory);
+    if (entries.empty()) return {};
+
+    Digest digest;
+    for (const VhdlEntry& entry : entries) digest.add(entry.key);
+    return digest.hex();
+}
+
+std::size_t Library::clean() {
+    std::size_t removed = 0;
+    if (!opened) return removed;
+
+    std::error_code failure;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
+        if (failure) break;
+        const std::filesystem::path extension = entry.path().extension();
+        if (extension != EntryExtension && extension != VhdlEntryExtension) continue;
+        if (std::filesystem::remove(entry.path(), failure)) ++removed;
+    }
+    std::filesystem::remove_all(vhdlDirectory(), failure);
+    return removed;
 }
 
 } // namespace enzan::eir

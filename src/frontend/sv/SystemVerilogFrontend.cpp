@@ -11,6 +11,7 @@
 #include "frontend/sv/ProcessTranslator.h"
 #include "frontend/sv/SvIntConversion.h"
 
+#include "slang/ast/ASTVisitor.h"
 #include "slang/ast/Compilation.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/Expression.h"
@@ -36,11 +37,14 @@
 #include "slang/diagnostics/Diagnostics.h"
 #include "slang/numeric/Time.h"
 #include "slang/parsing/Preprocessor.h"
+#include "slang/syntax/AllSyntax.h"
 #include "slang/syntax/SyntaxTree.h"
+#include "slang/syntax/SyntaxVisitor.h"
 #include "slang/text/SourceManager.h"
 #include "slang/util/Bag.h"
 
 #include <algorithm>
+#include <cctype>
 #include <format>
 #include <limits>
 #include <map>
@@ -69,16 +73,17 @@ const ast::Expression& withoutConversions(const ast::Expression& expression) {
 /// Returns the *external* side of a port connection.
 ///
 /// slang models a connection as an assignment between the port and what it is attached to,
-/// and which side is which depends on the direction: an input flows into the port, an
-/// output out of it. Picking the wrong side binds the instance to its own port, and the
-/// design then behaves as though the connection were not there at all.
+/// and which side is which depends on the direction: an input flows into the port, and what an
+/// output or an inout is attached to is bound as an lvalue, the assignment's left. Picking the
+/// wrong side binds the instance to its own port, and the design then behaves as though the
+/// connection were not there at all.
 const ast::Expression& externalSideOf(const ast::Expression& expression,
                                       slang::ast::ArgumentDirection direction) {
     if (expression.kind != ast::ExpressionKind::Assignment) return withoutConversions(expression);
 
     const auto& assignment = expression.as<ast::AssignmentExpression>();
     const ast::Expression& external =
-        direction == slang::ast::ArgumentDirection::Out ? assignment.left() : assignment.right();
+        direction == slang::ast::ArgumentDirection::In ? assignment.right() : assignment.left();
     return withoutConversions(external);
 }
 
@@ -94,6 +99,34 @@ std::optional<slang::TimeUnit> timeUnitOf(std::int8_t exponent) {
     default: return std::nullopt;
     }
 }
+
+/// The finest precision a time scale of the design declares, as a power of ten of a second: of
+/// the bodies it instantiates, and of its packages and compilation units, whose subroutines'
+/// delays count theirs.
+class FinestPrecision : public ast::ASTVisitor<FinestPrecision, ast::VisitFlags::Symbols> {
+public:
+    explicit FinestPrecision(std::int8_t start) noexcept : finest(start) {}
+
+    // An instance whose body duplicates another's is walked where that body is.
+    void handle(const ast::InstanceSymbol& instance) {
+        if (instance.getCanonicalBody() != nullptr) return;
+        visitDefault(instance);
+    }
+
+    void handle(const ast::InstanceBodySymbol& body) {
+        consider(body.getTimeScale());
+        visitDefault(body);
+    }
+
+    void consider(const std::optional<slang::TimeScale>& scale) {
+        if (scale.has_value()) finest = std::min(finest, timeExponentOf(scale->precision));
+    }
+
+    [[nodiscard]] std::int8_t value() const noexcept { return finest; }
+
+private:
+    std::int8_t finest;
+};
 
 /// The index part of an instance's name when it is an element of an instance array, `[2]` or
 /// `[1][0]`, as IEEE 1800 section 23.3.3.5 names it; empty for an instance of its own.
@@ -257,6 +290,9 @@ public:
         /// the package definitions that hold them. Only those: a package may declare variables
         /// of types Enzan does not have, and one nothing uses should not stop a design.
         std::vector<const ast::ValueSymbol*>* packageVariables = nullptr;
+
+        /// The run's time unit, as a power of ten of a second, which every delay counts.
+        std::int8_t runTimeUnit = -12;
     };
 
     ModuleBuilder(Shared& sharedState, std::string name, const ast::InstanceBodySymbol& bodySymbol)
@@ -324,6 +360,11 @@ public:
     }
 
     [[nodiscard]] const ast::Symbol& evaluationScope() const override { return *body; }
+
+    [[nodiscard]] std::int8_t runTimeUnit() const override { return shared->runTimeUnit; }
+
+    void reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
+                            std::string_view rounded) override;
 
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
@@ -619,6 +660,11 @@ void ModuleBuilder::reportUnsupported(slang::SourceLocation location, std::strin
     shared->diagnostics.report(DiagCode::UnsupportedConstruct, convertLocation(location), what);
 }
 
+void ModuleBuilder::reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
+                                       std::string_view rounded) {
+    shared->diagnostics.report(DiagCode::DelayRounded, convertLocation(location), delay, rounded);
+}
+
 const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {
     const ast::Scope* scope = symbol.getParentScope();
     if (staticSubroutineOf(symbol) != nullptr) {
@@ -709,20 +755,27 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     object.enumIndex = enumFor(symbol.getType());
     object.subroutineStatic = subroutine != nullptr;
 
-    // An unpacked array keeps its declared dimensions, outermost first, for what reads it as an
-    // array rather than as the bits it is stored as: VPI, and the waveform database.
-    for (const ast::Type* level = &symbol.getType().getCanonicalType();
-         level->kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType;) {
+    // An array keeps its declared dimensions, outermost first, for what reads it as an array
+    // rather than as the bits it is stored as: VPI, and the waveform database. The unpacked
+    // ones come first, then the packed ones of their element.
+    const ast::Type* level = &symbol.getType().getCanonicalType();
+    while (level->kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
         const auto& array = level->as<ast::FixedSizeUnpackedArrayType>();
         object.unpackedDimensions.push_back(
-            eir::UnpackedDimension{.left = array.range.left, .right = array.range.right});
+            eir::ArrayDimension{.left = array.range.left, .right = array.range.right});
         level = &array.elementType.getCanonicalType();
-        if (level->kind != slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
-            if (const std::optional<eir::Type> element = convertType(*level)) {
-                object.elementWidth = element->bitWidth();
-                object.elementSigned = element->isSigned();
-            }
+    }
+    if (!object.unpackedDimensions.empty()) {
+        if (const std::optional<eir::Type> element = convertType(*level)) {
+            object.elementWidth = element->bitWidth();
+            object.elementSigned = element->isSigned();
         }
+    }
+    while (level->kind == slang::ast::SymbolKind::PackedArrayType) {
+        const auto& array = level->as<ast::PackedArrayType>();
+        object.packedDimensions.push_back(
+            eir::ArrayDimension{.left = array.range.left, .right = array.range.right});
+        level = &array.elementType.getCanonicalType();
     }
 
     if (symbol.kind == slang::ast::SymbolKind::Net) {
@@ -809,7 +862,8 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
                 eir::Parameter{.name = prefix + std::string(parameter.name),
                                .value = toBitVector(value.integer()),
                                .isLocal = parameter.isLocalParam(),
-                               .location = convertLocation(parameter.location)});
+                               .location = convertLocation(parameter.location),
+                               .fromGenvar = parameter.isFromGenvar()});
             break;
         }
 
@@ -1321,6 +1375,13 @@ public:
     /// Translates `instance`'s body if it has not been seen, and returns its EIR name.
     std::optional<std::string> translate(const ast::InstanceSymbol& instance);
 
+    /// Makes an instance of one of `units` ask for it into `requests` rather than be translated.
+    void standIn(const std::vector<eir::UnitInterface>& units,
+                 std::vector<eir::UnitRequest>& requests) {
+        interfaces = &units;
+        asked = &requests;
+    }
+
     /// Adds a definition for each package whose variables the translated modules refer to.
     bool translatePackages();
 
@@ -1367,6 +1428,13 @@ private:
     std::map<std::string, BodyInfo, std::less<>> bodies;
     std::vector<const ast::ValueSymbol*> packageVariables;
     bool succeeded = true;
+
+    /// The request `instance` of `unit` makes, as its placeholder.
+    std::optional<std::string> askFor(const ast::InstanceSymbol& instance,
+                                      const eir::UnitInterface& unit);
+
+    const std::vector<eir::UnitInterface>* interfaces = nullptr;
+    std::vector<eir::UnitRequest>* asked = nullptr;
 };
 
 bool Walker::translatePackages() {
@@ -1489,6 +1557,13 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
         return std::nullopt;
     }
 
+    // A unit of the other language is asked for, not translated.
+    if (interfaces != nullptr) {
+        const auto unit =
+            std::ranges::find(*interfaces, body.getDefinition().name, &eir::UnitInterface::name);
+        if (unit != interfaces->end()) return askFor(instance, *unit);
+    }
+
     std::string name = specialisedModuleName(body);
 
     const auto existing = bodies.find(name);
@@ -1535,22 +1610,16 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
     return name;
 }
 
-} // namespace
-
-std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sources,
-                                     DiagnosticEngine& diagnostics) {
-    if (options.files.empty()) {
-        diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
-        return nullptr;
-    }
-
-    // Every file is read through Enzan's source manager and the text is then handed to
-    // slang, so that a diagnostic from slang and one from elaboration quote the same bytes
-    // and the same snippet. Reading each file twice would be slower and could disagree.
-    slang::SourceManager slangSources;
-    std::map<slang::BufferID, BufferId> buffers;
-    std::vector<slang::SourceBuffer> slangBuffers;
-
+/// slang's buffers of `options.files`, each mapped to the buffer of Enzan's holding its text;
+/// false, having reported why, when a file cannot be read.
+///
+/// Every file is read through Enzan's source manager and the text is then handed to slang, so that
+/// a diagnostic from slang and one from elaboration quote the same bytes and the same snippet.
+/// Reading each file twice would be slower and could disagree.
+bool slangBuffersOf(const Options& options, SourceManager& sources, DiagnosticEngine& diagnostics,
+                    slang::SourceManager& slangSources,
+                    std::map<slang::BufferID, BufferId>& buffers,
+                    std::vector<slang::SourceBuffer>& slangBuffers) {
     for (std::size_t index = 0; index < options.files.size(); ++index) {
         const std::filesystem::path& path = options.files[index];
 
@@ -1559,7 +1628,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             const FileReadResult result = sources.readFile(path);
             if (!result.ok()) {
                 reportFileReadFailure(diagnostics, path, result);
-                return nullptr;
+                return false;
             }
             text = result.buffer;
         }
@@ -1569,15 +1638,481 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         buffers.emplace(buffer.id, text);
         slangBuffers.push_back(buffer);
     }
+    return true;
+}
 
-    slang::Bag bag;
+slang::parsing::PreprocessorOptions preprocessorOptionsOf(const Options& options) {
     slang::parsing::PreprocessorOptions preprocessorOptions;
     preprocessorOptions.predefines = options.defines;
     preprocessorOptions.additionalIncludePaths = options.includeDirectories;
-    bag.set(preprocessorOptions);
+    return preprocessorOptions;
+}
+
+/// A module a source declares, and the parameters an instance of it may set.
+struct DeclaredModule {
+    std::string_view name;
+    std::vector<std::string_view> parameters;
+};
+
+/// The modules `tree` declares outside any other, in order.
+void collectModules(const slang::syntax::SyntaxTree& tree, std::vector<DeclaredModule>& found) {
+    namespace syntax = slang::syntax;
+    if (tree.root().kind != syntax::SyntaxKind::CompilationUnit) return;
+
+    // The value parameters a declaration declares, unless they are local.
+    const auto values = [](const syntax::ParameterDeclarationBaseSyntax& declaration,
+                           std::vector<std::string_view>& names) {
+        if (declaration.kind != syntax::SyntaxKind::ParameterDeclaration
+            || declaration.keyword.kind == slang::parsing::TokenKind::LocalParamKeyword)
+            return;
+        for (const syntax::DeclaratorSyntax* declarator :
+             declaration.as<syntax::ParameterDeclarationSyntax>().declarators)
+            names.push_back(declarator->name.valueText());
+    };
+
+    for (const syntax::MemberSyntax* member :
+         tree.root().as<syntax::CompilationUnitSyntax>().members) {
+        if (member->kind != syntax::SyntaxKind::ModuleDeclaration) continue;
+        const auto& module = member->as<syntax::ModuleDeclarationSyntax>();
+        DeclaredModule declared{.name = module.header->name.valueText(), .parameters = {}};
+
+        // With a parameter port list, a parameter of the body is local (IEEE 1800 section 6.20.1).
+        if (module.header->parameters != nullptr) {
+            for (const syntax::ParameterDeclarationBaseSyntax* declaration :
+                 module.header->parameters->declarations)
+                values(*declaration, declared.parameters);
+        } else {
+            for (const syntax::MemberSyntax* item : module.members) {
+                if (item->kind == syntax::SyntaxKind::ParameterDeclarationStatement)
+                    values(*item->as<syntax::ParameterDeclarationStatementSyntax>().parameter,
+                           declared.parameters);
+            }
+        }
+        if (!declared.name.empty()) found.push_back(std::move(declared));
+    }
+}
+
+/// Whether two names are one in any case.
+bool sameName(std::string_view left, std::string_view right) {
+    return std::ranges::equal(left, right, [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a))
+               == std::tolower(static_cast<unsigned char>(b));
+    });
+}
+
+/// The one of `names` that is `wanted` exactly, or else the one that is in some case; nothing when
+/// there is none, or several in other cases.
+std::optional<std::string_view> nameMatching(std::span<const std::string_view> names,
+                                             std::string_view wanted) {
+    if (const auto exact = std::ranges::find(names, wanted); exact != names.end()) return *exact;
+    std::optional<std::string_view> found;
+    for (const std::string_view name : names) {
+        if (!sameName(name, wanted)) continue;
+        if (found) return std::nullopt;
+        found = name;
+    }
+    return found;
+}
+
+/// `name` escaped, which names what it names as its plain spelling does whatever characters it
+/// holds (IEEE 1800 section 5.6.1).
+std::string escapedName(std::string_view name) {
+    return std::format("\\{} ", name);
+}
+
+/// `value` as a literal of the kind `kind` (`eir::UnitRequest`); nothing when it is not one.
+std::optional<std::string> literalOf(const slang::ConstantValue& value,
+                                     eir::UnitInterface::Kind kind) {
+    using Kind = eir::UnitInterface::Kind;
+    if (kind == Kind::Real) {
+        if (!value.isReal() && !value.isInteger()) return std::nullopt;
+        return eir::realLiteral(value.isReal() ? static_cast<double>(value.real())
+                                               : value.integer().toDouble());
+    }
+    if (kind == Kind::String) {
+        if (!value.isString()) return std::nullopt;
+        std::string text = "\"";
+        for (const char character : value.str()) {
+            const auto code = static_cast<unsigned char>(character);
+            if (character == '"' || character == '\\') {
+                text += '\\';
+                text += character;
+            } else if (code >= 0x20 && code < 0x7f) {
+                text += character;
+            } else {
+                text += std::format("\\{:03o}", code);
+            }
+        }
+        return text + '"';
+    }
+    if (!value.isInteger()) return std::nullopt;
+    const slang::SVInt& bits = value.integer();
+    if (kind == Kind::Integer) {
+        const std::optional<std::int64_t> number = bits.as<std::int64_t>();
+        if (!number) return std::nullopt;
+        if (*number >= std::numeric_limits<std::int32_t>::min()
+            && *number <= std::numeric_limits<std::int32_t>::max())
+            return std::to_string(*number);
+        const std::uint64_t magnitude = *number < 0 ? 0 - static_cast<std::uint64_t>(*number)
+                                                    : static_cast<std::uint64_t>(*number);
+        return std::format("{}64'sd{}", *number < 0 ? "-" : "", magnitude);
+    }
+    const bool vector = kind == Kind::BitVector || kind == Kind::LogicVector;
+    if (!vector && bits.getBitWidth() != 1) return std::nullopt;
+    std::string text = std::format("{}'b", bits.getBitWidth());
+    for (auto bit = static_cast<std::int32_t>(bits.getBitWidth()) - 1; bit >= 0; --bit) {
+        const slang::logic_t one = bits[bit];
+        if (one.value == slang::logic_t::z.value) {
+            text += 'z';
+        } else if (one.isUnknown()) {
+            text += 'x';
+        } else {
+            text += one.value == 0 ? '0' : '1';
+        }
+    }
+    return text;
+}
+
+/// What `instance`, an instance of `unit`, asks for: its unit with each parameter's value, and its
+/// ports, which are the unit's in order. Nothing when a value is no literal of its parameter's
+/// kind, `refused` receiving that parameter's name.
+std::optional<eir::UnitRequest> requestOf(const ast::InstanceSymbol& instance,
+                                          const eir::UnitInterface& unit, std::string& refused) {
+    eir::UnitRequest request{.placeholder = {}, .unit = unit.name, .parameters = {}, .ports = {}};
+    std::string values;
+    for (const eir::UnitInterface::Parameter& parameter : unit.parameters) {
+        const ast::Symbol* found = instance.body.find(parameter.name);
+        std::optional<std::string> value;
+        if (found != nullptr && found->kind == ast::SymbolKind::Parameter)
+            value = literalOf(found->as<ast::ParameterSymbol>().getValue(), parameter.kind);
+        if (!value) {
+            refused = parameter.name;
+            return std::nullopt;
+        }
+        values += std::format("{}{} => {}", values.empty() ? "" : ", ", parameter.name, *value);
+        request.parameters.push_back({.name = parameter.name, .value = std::move(*value)});
+    }
+    for (const eir::UnitInterface::Port& port : unit.ports)
+        request.ports.push_back({.name = port.name, .direction = port.direction});
+    request.placeholder = std::format("{} generic map ({})", unit.name, values);
+    return request;
+}
+
+/// Whether a row of `unit`'s widths is for the values `request` asks for.
+bool hasRow(const eir::UnitInterface& unit, const eir::UnitRequest& request) {
+    std::vector<std::string> values;
+    values.reserve(request.parameters.size());
+    for (const eir::UnitRequest::Parameter& parameter : request.parameters)
+        values.push_back(parameter.value);
+    return std::ranges::find(unit.widths, values, &eir::UnitInterface::Widths::values)
+           != unit.widths.end();
+}
+
+/// Adds `request` to `asked` unless one asks for the same unit with the same values: once for each
+/// set of values, in the order first met.
+void addRequest(std::vector<eir::UnitRequest>& asked, eir::UnitRequest request) {
+    const bool known = std::ranges::any_of(asked, [&request](const eir::UnitRequest& one) {
+        return one.unit == request.unit && one.parameters == request.parameters;
+    });
+    if (!known) asked.push_back(std::move(request));
+}
+
+/// What every instance of one of `interfaces` in a design asks for, found without translating it.
+class StandInInstances : public ast::ASTVisitor<StandInInstances, ast::VisitFlags::Symbols> {
+public:
+    explicit StandInInstances(const std::vector<eir::UnitInterface>& units) : interfaces(&units) {}
+
+    void handle(const ast::InstanceSymbol& instance) {
+        const auto unit = std::ranges::find(*interfaces, instance.body.getDefinition().name,
+                                            &eir::UnitInterface::name);
+        if (unit != interfaces->end()) {
+            std::string refused;
+            if (std::optional<eir::UnitRequest> request = requestOf(instance, *unit, refused)) {
+                guessed = guessed || !hasRow(*unit, *request);
+                addRequest(asked, std::move(*request));
+            }
+            return;
+        }
+        visitDefault(instance);
+    }
+
+    std::vector<eir::UnitRequest> asked;
+
+    /// Whether an instance's values have no row of its unit's widths.
+    bool guessed = false;
+
+private:
+    const std::vector<eir::UnitInterface>* interfaces;
+};
+
+/// The name of the local parameter of a unit's module that is its port `port`'s width.
+std::string widthParameterName(std::size_t port) {
+    return std::format("enzan$width${}", port);
+}
+
+/// The name of the local parameter of a unit's module that is its unpacked port `port`'s `which`
+/// bound, `left` or `right`.
+std::string boundParameterName(std::size_t port, std::string_view which) {
+    return std::format("enzan${}${}", which, port);
+}
+
+/// A module standing for each of `interfaces`, with its parameters and its ports, each port as wide
+/// as the row of its width table the instance's values select, or one bit wide when none does: what
+/// instances of the unit are checked against, which is never translated (`eir::UnitInterface`).
+std::string interfaceText(const std::vector<eir::UnitInterface>& interfaces) {
+    using Kind = eir::UnitInterface::Kind;
+    std::string text;
+    for (const eir::UnitInterface& unit : interfaces) {
+        std::vector<std::string> declarations;
+        for (const eir::UnitInterface::Parameter& parameter : unit.parameters) {
+            std::string type;
+            switch (parameter.kind) {
+            case Kind::Integer: type = "int "; break;
+            case Kind::Bit: type = "bit "; break;
+            case Kind::Logic: type = "logic "; break;
+            case Kind::BitVector:
+            case Kind::LogicVector:
+                if (parameter.length != 0) {
+                    type = std::format("{} [{}:0] ",
+                                       parameter.kind == Kind::BitVector ? "bit" : "logic",
+                                       parameter.length - 1);
+                }
+                break;
+            case Kind::String: type = "string "; break;
+            case Kind::Real: type = "real "; break;
+            }
+            declarations.push_back(std::format(
+                "parameter {}{}{}", type, escapedName(parameter.name),
+                parameter.value ? std::format("= {}", *parameter.value) : std::string()));
+        }
+
+        // Each row's values against the parameters', exactly: x and z as themselves.
+        std::vector<std::string> conditions;
+        for (const eir::UnitInterface::Widths& row : unit.widths) {
+            std::string condition;
+            for (std::size_t index = 0; index < unit.parameters.size(); ++index) {
+                if (index >= row.values.size()) break;
+                const eir::UnitInterface::Parameter& parameter = unit.parameters[index];
+                if (!condition.empty()) condition += " && ";
+                condition += std::format(
+                    "{}{} {}", escapedName(parameter.name),
+                    parameter.kind == Kind::String || parameter.kind == Kind::Real ? "==" : "===",
+                    row.values[index]);
+            }
+            conditions.push_back(condition.empty() ? std::string("1") : condition);
+        }
+        // Each port's width, an unpacked one's element's, and an unpacked one's bounds.
+        for (std::size_t port = 0; port < unit.ports.size(); ++port) {
+            std::string bits;
+            std::string left;
+            std::string right;
+            for (std::size_t row = 0; row < unit.widths.size(); ++row) {
+                if (port >= unit.widths[row].ports.size()) continue;
+                const eir::UnitInterface::PortWidth& width = unit.widths[row].ports[port];
+                bits += std::format("({}) ? {} : ", conditions[row], width.bits);
+                left += std::format("({}) ? {} : ", conditions[row], width.left);
+                right += std::format("({}) ? {} : ", conditions[row], width.right);
+            }
+            declarations.push_back(
+                std::format("localparam int {}= {}1", escapedName(widthParameterName(port)), bits));
+            if (unit.ports[port].unpacked) {
+                declarations.push_back(std::format(
+                    "localparam int {}= {}0", escapedName(boundParameterName(port, "left")), left));
+                declarations.push_back(std::format("localparam int {}= {}0",
+                                                   escapedName(boundParameterName(port, "right")),
+                                                   right));
+            }
+        }
+
+        std::vector<std::string> ports;
+        for (std::size_t index = 0; index < unit.ports.size(); ++index) {
+            const eir::UnitInterface::Port& port = unit.ports[index];
+            const char* direction = "input";
+            if (port.direction == eir::PortDirection::Output) direction = "output";
+            if (port.direction == eir::PortDirection::InOut) direction = "inout";
+            const std::string dimension =
+                port.unpacked
+                    ? std::format(" [{}:{}]", escapedName(boundParameterName(index, "left")),
+                                  escapedName(boundParameterName(index, "right")))
+                    : std::string();
+            ports.push_back(
+                std::format("{} {}{}[{}- 1:0] {}{}", direction, port.fourState ? "logic " : "bit ",
+                            port.isSigned ? "signed " : "", escapedName(widthParameterName(index)),
+                            escapedName(port.name), dimension));
+        }
+
+        const auto joined = [](const std::vector<std::string>& parts) {
+            std::string result;
+            for (const std::string& part : parts)
+                result += std::format("{}\n    {}", result.empty() ? "" : ",", part);
+            return result;
+        };
+        text += std::format("module {}#({}\n) ({}\n);\nendmodule\n", escapedName(unit.name),
+                            joined(declarations), joined(ports));
+    }
+    return text;
+}
+
+/// The names the sources declare and instantiate, from their syntax.
+class NameCollector : public slang::syntax::SyntaxVisitor<NameCollector> {
+public:
+    void handle(const slang::syntax::ModuleDeclarationSyntax& declaration) {
+        const std::string_view name = declaration.header->name.valueText();
+        if (declaration.kind == slang::syntax::SyntaxKind::ModuleDeclaration) add(modules, name);
+        add(declared, name);
+        visitDefault(declaration);
+    }
+
+    void handle(const slang::syntax::UdpDeclarationSyntax& declaration) {
+        add(declared, declaration.name.valueText());
+    }
+
+    void handle(const slang::syntax::HierarchyInstantiationSyntax& instantiation) {
+        add(instantiated, instantiation.type.valueText());
+        visitDefault(instantiation);
+    }
+
+    /// Modules, and modules, interfaces, programs and primitives, by their names, in order.
+    std::vector<std::string> modules;
+    std::vector<std::string> declared;
+    std::vector<std::string> instantiated;
+
+private:
+    static void add(std::vector<std::string>& names, std::string_view name) {
+        if (!name.empty() && std::ranges::find(names, name) == names.end())
+            names.emplace_back(name);
+    }
+};
+
+/// The module through which the request at `index` is specialised: one instantiating the module it
+/// asks for, as `u`, with the values it asks for.
+std::string requestModuleName(std::size_t index) {
+    return std::format("enzan$request${}", index);
+}
+
+/// The text of each request's module (`requestModuleName`); nothing, having reported why, when one
+/// asks for what no module of `declared` has.
+std::optional<std::string> requestText(const std::vector<eir::UnitRequest>& requests,
+                                       const std::vector<DeclaredModule>& declared,
+                                       DiagnosticEngine& diagnostics) {
+    std::vector<std::string_view> moduleNames;
+    moduleNames.reserve(declared.size());
+    for (const DeclaredModule& module : declared) moduleNames.push_back(module.name);
+
+    std::string text;
+    for (std::size_t index = 0; index < requests.size(); ++index) {
+        const eir::UnitRequest& request = requests[index];
+        const std::optional<std::string_view> name = nameMatching(moduleNames, request.unit);
+        if (!name) {
+            diagnostics.report(DiagCode::RequestedModuleMissing, SourceLocation(), request.unit);
+            return std::nullopt;
+        }
+        const DeclaredModule& module = declared[static_cast<std::size_t>(
+            std::ranges::find(moduleNames, *name) - moduleNames.begin())];
+
+        std::string values;
+        for (const eir::UnitRequest::Parameter& parameter : request.parameters) {
+            const std::optional<std::string_view> parameterName =
+                nameMatching(module.parameters, parameter.name);
+            if (!parameterName) {
+                diagnostics.report(DiagCode::RequestedParameterMissing, SourceLocation(), *name,
+                                   parameter.name);
+                return std::nullopt;
+            }
+            if (!values.empty()) values += ", ";
+            values += std::format(".{}({})", escapedName(*parameterName), parameter.value);
+        }
+        text +=
+            std::format("module {};\n  {}{} u ();\nendmodule\n", requestModuleName(index),
+                        escapedName(*name), values.empty() ? "" : std::format(" #({})", values));
+    }
+    return text;
+}
+
+std::optional<std::string> Walker::askFor(const ast::InstanceSymbol& instance,
+                                          const eir::UnitInterface& unit) {
+    std::string refused;
+    std::optional<eir::UnitRequest> request = requestOf(instance, unit, refused);
+    if (!request) {
+        shared.diagnostics.report(
+            DiagCode::UnsupportedConstruct, SourceLocation(),
+            std::format("the value of the parameter '{}' of '{}', which sets a generic of VHDL,",
+                        refused, unit.name));
+        succeeded = false;
+        return std::nullopt;
+    }
+    std::string placeholder = request->placeholder;
+    const bool known = hasRow(unit, *request);
+    addRequest(*asked, std::move(*request));
+
+    // Its connections index the request's ports, which are the unit's, in order. Until a row of
+    // the unit's widths is for its values, its ports are one bit wide only to be checked against,
+    // and connecting them would refuse what is right once they are as wide as they will be: it
+    // connects nothing then, and is analysed again with the widths.
+    if (!bodies.contains(placeholder)) {
+        std::map<std::string, std::uint32_t, std::less<>> ports;
+        for (std::uint32_t index = 0; known && index < unit.ports.size(); ++index)
+            ports.emplace(unit.ports[index].name, index);
+        bodies.emplace(placeholder, BodyInfo{.name = placeholder, .portIndices = std::move(ports)});
+    }
+    return placeholder;
+}
+
+} // namespace
+
+ModuleNames moduleNames(const Options& options, SourceManager& sources,
+                        DiagnosticEngine& diagnostics) {
+    slang::SourceManager slangSources;
+    std::map<slang::BufferID, BufferId> buffers;
+    std::vector<slang::SourceBuffer> slangBuffers;
+    if (!slangBuffersOf(options, sources, diagnostics, slangSources, buffers, slangBuffers))
+        return {};
+
+    slang::Bag bag;
+    bag.set(preprocessorOptionsOf(options));
+    NameCollector collector;
+    for (const slang::SourceBuffer& buffer : slangBuffers) {
+        const std::shared_ptr<slang::syntax::SyntaxTree> tree =
+            slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag);
+        tree->root().visit(collector);
+    }
+
+    ModuleNames names{.declared = std::move(collector.modules), .undeclared = {}};
+    for (std::string& name : collector.instantiated) {
+        if (std::ranges::find(collector.declared, name) == collector.declared.end())
+            names.undeclared.push_back(std::move(name));
+    }
+    return names;
+}
+
+std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sources,
+                                     DiagnosticEngine& diagnostics) {
+    if (options.files.empty()) {
+        diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
+        return nullptr;
+    }
+
+    slang::SourceManager slangSources;
+    std::map<slang::BufferID, BufferId> buffers;
+    std::vector<slang::SourceBuffer> slangBuffers;
+    if (!slangBuffersOf(options, sources, diagnostics, slangSources, buffers, slangBuffers))
+        return nullptr;
+
+    slang::Bag bag;
+    bag.set(preprocessorOptionsOf(options));
+
+    // A module another language's units instantiate is specialised through a top level of its own
+    // instantiating it, which makes it no top level itself, as an instance from the other
+    // language would (DESIGN_GUIDE.md section 18, M7).
+    std::vector<std::string> requestModules;
+    for (std::size_t index = 0; index < options.requests.size(); ++index)
+        requestModules.push_back(requestModuleName(index));
 
     slang::ast::CompilationOptions compilationOptions;
     for (const std::string& top : options.topModules) compilationOptions.topModules.insert(top);
+    if (!options.topModules.empty() || options.onlyRequested) {
+        for (const std::string& top : requestModules) compilationOptions.topModules.insert(top);
+    }
     compilationOptions.paramOverrides = options.parameterOverrides;
     if (const std::optional<slang::TimeUnit> unit = timeUnitOf(options.timeUnitExponent)) {
         const slang::TimeScaleValue value(*unit, slang::TimeScaleMagnitude::One);
@@ -1586,8 +2121,28 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     bag.set(compilationOptions);
 
     slang::ast::Compilation compilation(bag);
+    std::vector<std::shared_ptr<slang::syntax::SyntaxTree>> trees;
+    trees.reserve(slangBuffers.size() + 1);
     for (const slang::SourceBuffer& buffer : slangBuffers)
-        compilation.addSyntaxTree(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+        trees.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+
+    slang::BufferID requestBuffer;
+    if (!options.requests.empty() || !options.interfaces.empty()) {
+        std::vector<DeclaredModule> declared;
+        for (const std::shared_ptr<slang::syntax::SyntaxTree>& tree : trees)
+            collectModules(*tree, declared);
+        std::optional<std::string> text = requestText(options.requests, declared, diagnostics);
+        if (!text) return nullptr;
+        *text += interfaceText(options.interfaces);
+        const std::string name = "<modules another language instantiates>";
+        const BufferId held = sources.addBuffer(name, *text);
+        const slang::SourceBuffer buffer = slangSources.assignText(name, sources.bufferText(held));
+        buffers.emplace(buffer.id, held);
+        requestBuffer = buffer.id;
+        trees.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+    }
+    for (const std::shared_ptr<slang::syntax::SyntaxTree>& tree : trees)
+        compilation.addSyntaxTree(tree);
 
     // slang's diagnostics are dramatically better than most commercial tools', and
     // preserving that quality end to end is a genuine selling point rather than polish
@@ -1603,6 +2158,13 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
         const slang::DiagnosticSeverity severity = slang::getDefaultSeverity(diagnostic.code);
         if (severity == slang::DiagnosticSeverity::Ignored) continue;
+
+        // A request's module leaves the ports of what it instantiates open, which the instances
+        // asking for it connect.
+        if (diagnostic.location && diagnostic.location.buffer() == requestBuffer
+            && severity != slang::DiagnosticSeverity::Error
+            && severity != slang::DiagnosticSeverity::Fatal)
+            continue;
 
         const std::string message = slangEngine.formatMessage(diagnostic);
         const SourceLocation location = [&] {
@@ -1652,6 +2214,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         // that no file will ever satisfy makes `make` rebuild on every run.
         std::set<std::filesystem::path> opened;
         for (const slang::BufferID buffer : slangSources.getAllBuffers()) {
+            if (buffer == requestBuffer) continue;
             if (!buffers.contains(buffer) && !slangSources.getIncludedFrom(buffer).valid())
                 continue;
             const std::filesystem::path& path = slangSources.getFullPath(buffer);
@@ -1660,7 +2223,21 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         options.filesRead->assign(opened.begin(), opened.end());
     }
 
-    if (hasError) return nullptr;
+    // What failed may be only that an instance of another language's unit was checked against
+    // ports one bit wide, its values having no row of widths yet: what each such instance asks for
+    // is still said, for the caller to translate and analyse again.
+    if (hasError) {
+        if (!options.interfaces.empty() && options.asked != nullptr
+            && options.unsettled != nullptr) {
+            StandInInstances instances(options.interfaces);
+            compilation.getRoot().visit(instances);
+            if (instances.guessed) {
+                *options.unsettled = true;
+                *options.asked = std::move(instances.asked);
+            }
+        }
+        return nullptr;
+    }
 
     const slang::ast::RootSymbol& root = compilation.getRoot();
 
@@ -1682,19 +2259,57 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         return nullptr;
     }
 
+    // Every delay counts the run's unit, which a design asking for a finer precision than the
+    // default refines unless something fixed it (DESIGN_GUIDE.md section 3.1).
+    std::int8_t runTimeUnit = options.fixedRunTimeUnit.value_or(options.timeUnitExponent);
+    if (options.refineTimeUnit && !options.fixedRunTimeUnit) {
+        FinestPrecision finest(runTimeUnit);
+        root.visit(finest);
+        for (const ast::PackageSymbol* package : compilation.getPackages())
+            finest.consider(package->timeScale);
+        for (const ast::CompilationUnitSymbol* unit : compilation.getCompilationUnits())
+            finest.consider(unit->timeScale);
+        runTimeUnit = finest.value();
+    }
+    if (options.runTimeUnit != nullptr) *options.runTimeUnit = runTimeUnit;
+
     auto design = std::make_unique<eir::Design>();
     const ModuleBuilder::Shared shared{.design = *design,
                                        .diagnostics = diagnostics,
                                        .sources = sources,
                                        .slangSources = slangSources,
-                                       .buffers = buffers};
+                                       .buffers = buffers,
+                                       .runTimeUnit = runTimeUnit};
 
     Walker walker(*design, shared);
+    std::vector<eir::UnitRequest> asked;
+    walker.standIn(options.interfaces, asked);
     for (const slang::ast::InstanceSymbol* instance : root.topInstances) {
         if (!walker.translate(*instance).has_value()) return nullptr;
     }
 
     if (!walker.ok() || !walker.translatePackages()) return nullptr;
+    if (options.asked != nullptr) *options.asked = std::move(asked);
+
+    // Each request is answered by the definition its module's instance became, and its module,
+    // which is no part of the design, is dropped.
+    if (!requestModules.empty()) {
+        if (options.requestAnswers != nullptr) {
+            options.requestAnswers->clear();
+            for (const std::string& name : requestModules) {
+                const eir::ModuleDefinition* found = design->findModule(name);
+                options.requestAnswers->push_back(found == nullptr || found->instances.empty()
+                                                      ? std::string()
+                                                      : found->instances.front().definitionName);
+            }
+        }
+        auto kept = std::make_unique<eir::Design>();
+        for (const eir::ModuleDefinition& definition : design->modules()) {
+            if (std::ranges::find(requestModules, definition.name) == requestModules.end())
+                kept->addModule(definition);
+        }
+        design = std::move(kept);
+    }
 
     // A frontend's output is verified before it is accepted. Section 4.2's core invariant —
     // a process is a pure function over a declared slice of the arena — is exactly the kind

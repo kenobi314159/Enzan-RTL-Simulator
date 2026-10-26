@@ -364,6 +364,7 @@ bool Compiler::compileSysTaskCalls(const eir::ModuleDefinition& definition, cons
         descriptor.kind = call.kind;
         descriptor.formatIndex = call.formatIndex;
         descriptor.objectIndex = call.objectIndex;
+        descriptor.timeUnit = call.timeUnit;
         descriptor.location = call.location;
 
         if (call.hasFormat() && call.formatIndex >= body.strings.size()) {

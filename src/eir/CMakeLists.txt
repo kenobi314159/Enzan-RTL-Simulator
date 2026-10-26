@@ -11,8 +11,10 @@ enzan_add_component(
           Process.cpp
           Serialization.cpp
           Type.cpp
+          UnitRequest.cpp
           Verifier.cpp
-  HEADERS BitOps.h
+  HEADERS ArrayDimension.h
+          BitOps.h
           BitVector.h
           Design.h
           Instruction.h
@@ -22,5 +24,6 @@ enzan_add_component(
           Process.h
           Serialization.h
           Type.h
+          UnitRequest.h
           Verifier.h
   DEPENDS enzan::common)

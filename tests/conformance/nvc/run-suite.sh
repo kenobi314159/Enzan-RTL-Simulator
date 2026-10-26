@@ -4,7 +4,7 @@
 # Runs NVC's own regression tests (DESIGN_GUIDE.md section 14.4) under Enzan, from the NVC the
 # VHDL frontend is built on, at the revision it is vendored at.
 #
-#   run-suite.sh <enzan> <work-directory>
+#   run-suite.sh <enzan> <work-directory> [mixed]
 #
 # Every test test/regress/testlist.txt lists is run by its options as NVC's run_regr.c reads them:
 # the test's own file, its entity as the top, VHDL-1993 unless an option names another revision,
@@ -15,13 +15,23 @@
 # waveform dumps, Verilog or its relaxed rules, is in neither count; nor is one setting generics or
 # environment variables, which Enzan's command line does not give a VHDL top yet.
 #
+# With `mixed`, only the tests of VHDL and Verilog together are run instead, each with the Verilog
+# file beside its VHDL, by an Enzan built with both frontends (DESIGN_GUIDE.md section 18, M7).
+# Their pass list is passing-mixed.txt, since the build the other tests run in lacks SystemVerilog.
+#
 # Prints PASS or FAIL for each test, then the counts, and writes the tests that passed to
-# <work-directory>/passed.txt, for ratchet.sh to hold to passing.txt.
+# <work-directory>/passed.txt, for ratchet.sh to hold to the pass list.
 
 set -uo pipefail
 
-if [[ $# -ne 2 ]]; then
-    printf 'usage: %s <enzan> <work-directory>\n' "$0" >&2
+if [[ $# -lt 2 || $# -gt 3 || ($# -eq 3 && "$3" != mixed) ]]; then
+    printf 'usage: %s <enzan> <work-directory> [mixed]\n' "$0" >&2
+    exit 2
+fi
+readonly only="${3:-}"
+if [[ "$only" == mixed ]] \
+    && ! "$1" --version | grep -q '^Optional components:.*systemverilog.*vhdl'; then
+    printf '%s: the mixed tests need an Enzan built with both frontends\n' "$0" >&2
     exit 2
 fi
 
@@ -41,19 +51,28 @@ while read -r name options || [[ -n "$name" ]]; do
     fail=no
     gold=no
     applicable=yes
+    mixed=no
     IFS=',' read -r -a flags <<<"$options"
     for flag in "${flags[@]}"; do
         case "$flag" in
         normal | slow | '!windows' | '!freebsd' | shuffle | per-file | no-collapse | O*) ;;
         gold) gold=yes ;;
         fail) fail=yes ;;
+        mixed) mixed=yes ;;
         2000 | 2002 | 2008 | 2019) arguments="${arguments/1993/$flag}" ;;
         stop=*) arguments+=" --stop ${flag#stop=}" ;;
         *) applicable=no ;;
         esac
     done
     [[ "$applicable" == yes && -f "$regress/$name.vhd" ]] || continue
-    printf '%s\t%s\t%s\t%s\n' "$name" "$arguments" "$fail" "$gold" >>"$tests"
+    [[ "$mixed" == "$([[ "$only" == mixed ]] && echo yes || echo no)" ]] || continue
+    sources="$name.vhd"
+    if [[ "$mixed" == yes ]]; then
+        for verilog in "$name.v" "$name.sv"; do
+            [[ -f "$regress/$verilog" ]] && sources+=" $verilog"
+        done
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$arguments" "$fail" "$gold" "$sources" >>"$tests"
 done <"$regress/testlist.txt"
 
 # A stop time in Enzan's femtoseconds, which a VHDL run counts in.
@@ -71,8 +90,8 @@ femtoseconds() {
 export -f femtoseconds
 
 run_test() {
-    local name options fail gold
-    IFS=$'\t' read -r name options fail gold <<<"$1"
+    local name options fail gold sources
+    IFS=$'\t' read -r name options fail gold sources <<<"$1"
     local directory="$WORK/run/$name"
     rm -rf "$directory" && mkdir -p "$directory"
     local arguments=()
@@ -89,9 +108,11 @@ run_test() {
         arguments+=("${words[$index]}")
         index=$((index + 1))
     done
+    local files=() source
+    for source in $sources; do files+=("$REGRESS/$source"); done
     local log="$directory/output.txt"
-    (cd "$directory" && timeout 60 "$ENZAN" "${arguments[@]}" --top "$name" \
-        "$REGRESS/$name.vhd") >"$log" 2>&1
+    (cd "$directory" && timeout 60 "$ENZAN" "${arguments[@]}" --top "$name" "${files[@]}") \
+        >"$log" 2>&1
     local status=$?
     local passed=yes
     if [[ "$fail" == yes ]]; then
@@ -125,7 +146,8 @@ cat "$work/results.txt"
 grep '^PASS ' "$work/results.txt" | cut -d' ' -f2 >"$work/passed.txt"
 passed="$(wc -l <"$work/passed.txt")"
 total="$(wc -l <"$work/results.txt")"
-printf '\nNVC regression: %d of %d tests pass (%d.%d%%)\n' "$passed" "$total" \
+printf '\nNVC regression%s: %d of %d tests pass (%d.%d%%)\n' \
+    "$([[ "$only" == mixed ]] && echo ', VHDL with Verilog')" "$passed" "$total" \
     "$((passed * 100 / total))" "$((passed * 1000 / total % 10))"
 
-"$here/../ratchet.sh" "$here/passing.txt" "$work/passed.txt"
+"$here/../ratchet.sh" "$here/passing${only:+-$only}.txt" "$work/passed.txt"

@@ -39,7 +39,8 @@ TranscriptView::TranscriptView(const Theme& themeToUse, QWidget* parent)
     output->setUndoRedoEnabled(false);
     output->setMaximumBlockCount(MaximumLines);
     output->setLineWrapMode(QPlainTextEdit::NoWrap);
-    output->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    output->setFont(
+        theme->font(ThemeFont::Transcript, QFontDatabase::systemFont(QFontDatabase::FixedFont)));
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

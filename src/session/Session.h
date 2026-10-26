@@ -101,7 +101,10 @@ public:
     [[nodiscard]] DiagnosticEngine& diagnosticEngine() const noexcept { return diagnostics; }
 
     /// Sets the time unit delays are counted in. Takes effect at the next elaboration.
-    void setTimeScale(runtime::TimeScale unit) noexcept { scale = unit; }
+    void setTimeScale(runtime::TimeScale unit) noexcept {
+        scale = unit;
+        defaultScale = unit;
+    }
 
     /// Sets the time unit from the open libraries, or from `requested`, `--timescale`, when they
     /// hold no units; with neither, it is picoseconds.
@@ -164,13 +167,21 @@ public:
         ///
         /// VHDL's adapter translates the hierarchy under its top rather than every unit analysed,
         /// so that a unit nothing instantiates cannot stop a design for using something the
-        /// adapter lacks (DESIGN_GUIDE.md section 5.2); without one it translates every entity
-        /// that nothing instantiates. SystemVerilog's analysis does not use it.
+        /// adapter lacks (DESIGN_GUIDE.md section 5.2); without one it translates the one entity
+        /// that nothing instantiates, and refuses several. SystemVerilog's analysis does not use
+        /// it.
         std::string top;
 
+        /// Whether VHDL is translated as well as analysed. A library holds VHDL as NVC's
+        /// analysed units rather than as EIR (section 4.4), so an analysis that runs nothing and
+        /// names no top, `enzan analyse` without `--top`, has nothing to translate: which entity
+        /// is the top is for a run to say.
+        bool translateVhdl = true;
+
         /// The library VHDL sources are analysed into, by the name they refer to it by
-        /// (`library neorv32;`). SystemVerilog's analysis does not use it.
-        std::string vhdlWork = "work";
+        /// (`library neorv32;`): the output library's own name, or `work` when there is none and
+        /// this is empty. SystemVerilog's analysis does not use it.
+        std::string vhdlWork;
 
         /// Whether the IEEE packages' own warnings are reported, as GHDL's `--ieee-asserts`.
         bool ieeeWarnings = true;
@@ -192,9 +203,38 @@ public:
     /// is analysed and every entry rewritten.
     bool analyse(const AnalysisRequest& request);
 
+    /// True when a library this session resolves against holds analysed VHDL, from which a run
+    /// given no sources translates its top (DESIGN_GUIDE.md section 8.2).
+    [[nodiscard]] bool hasVhdlLibraries() const;
+
 private:
-    /// `analyse` for a design whose sources are VHDL.
+    /// `analyse` for a design whose sources are VHDL, or that has none and libraries of VHDL.
     bool analyseVhdl(const AnalysisRequest& request);
+
+    /// `analyse` for a design whose sources are of both languages (DESIGN_GUIDE.md section 18,
+    /// M7): the VHDL translated under its top, each SystemVerilog module it instantiates
+    /// specialised as it asks, and the two linked into one design.
+    bool analyseMixed(const AnalysisRequest& request);
+
+#ifdef ENZAN_WITH_VHDL
+    /// Sets what of `options` is not the sources: the work library, the libraries analysed
+    /// against, the standard, the top and the time unit. Without `sourcesGiven`, the work library
+    /// is the input library whose VHDL declares the top. `keyOptions` receives what of them a
+    /// library entry's key holds. False having reported when the work library is named otherwise
+    /// than the library being written, or no input library declares the top.
+    bool setVhdlOptions(const AnalysisRequest& request, bool sourcesGiven,
+                        frontend::vhdl::DesignOptions& options, std::string& keyOptions);
+#endif
+
+    /// The input library whose VHDL declares `top`: the one `lib.top` or `work` names, or the one
+    /// declaring it. Null having reported when none does, or several do.
+    [[nodiscard]] const eir::Library* vhdlLibraryOf(std::string_view top,
+                                                    std::string_view work) const;
+
+    /// Reports, and returns true, when an input library holds `top` among NVC's units without
+    /// recording it, which a VHDL analysis into the library that stopped part-way leaves: a run
+    /// would otherwise be told the top is not there at all (DESIGN_GUIDE.md section 4.4).
+    [[nodiscard]] bool reportUnrecordedTop(std::string_view top) const;
 
     /// Asks the VHDL frontend for each resolution function `tree` needs and no translation has
     /// given yet, each for the number of drivers elaboration counted, links what comes back into
@@ -414,6 +454,11 @@ public:
 
     [[nodiscard]] std::span<const std::string> waveformScopes() const noexcept { return scopes; }
 
+    /// Records no signal wider than `bits` in a waveform file opened from now on, or one of any
+    /// width when `bits` is 0, rather than the writer's default (section 7.1). Opening a file
+    /// that leaves one out warns, naming it.
+    void setWaveformWidthLimit(std::uint32_t bits) noexcept { widthLimit = bits; }
+
     /// Opens a VCD file and records into it from now on. Returns false having reported.
     bool openVcd(const std::filesystem::path& path);
 
@@ -505,7 +550,15 @@ private:
     /// What waveform files record, or empty for the whole design.
     std::vector<std::string> scopes;
 
+    /// The widest signal a waveform file records, or nothing for the writer's default.
+    std::optional<std::uint32_t> widthLimit;
+
+    /// The run's unit, which every delay of the design counts.
     runtime::TimeScale scale;
+
+    /// The unit a SystemVerilog design element with no time scale of its own is in, as `scale`
+    /// was chosen; `scale` is finer where the design asks for a finer precision (section 3.1).
+    runtime::TimeScale defaultScale;
 
     /// True when the unit was chosen, by `--timescale` or by a library holding units, rather than
     /// left at its default: a VHDL design then counts in it instead of in femtoseconds.

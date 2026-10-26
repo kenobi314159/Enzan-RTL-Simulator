@@ -20,6 +20,10 @@ public:
     static bool apply(Theme& theme, const QString& key, const QString& value, QString& error) {
         return theme.set(key, value, error);
     }
+
+    static bool applyFont(Theme& theme, const QString& area, const QString& size, QString& error) {
+        return theme.setFont(area, size, error);
+    }
 };
 
 namespace {
@@ -33,6 +37,17 @@ constexpr const char* KeyNames[] = {
 constexpr std::size_t ColorCount = static_cast<std::size_t>(ThemeColor::Count);
 
 static_assert(std::size(KeyNames) == ColorCount, "every ThemeColor needs a key");
+
+/// The name a theme script gives each `ThemeFont`, in its order.
+constexpr const char* FontAreaNames[] = {"window", "wave", "transcript", "source"};
+
+constexpr std::size_t FontAreaCount = static_cast<std::size_t>(ThemeFont::Count);
+
+static_assert(std::size(FontAreaNames) == FontAreaCount, "every ThemeFont needs a name");
+
+/// The largest size a theme may give, in points: past it a mistyped size is far likelier than a
+/// reader who wants it.
+constexpr double LargestFontSize = 200.0;
 
 /// The `theme` command a theme script is given.
 ///
@@ -51,6 +66,25 @@ int themeCommandProc(ClientData data, Tcl_Interp* interp, int objc, Tcl_Obj* con
 
     QString error;
     if (!ThemeCommand::apply(*theme, key, value, error)) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(error.toUtf8().constData(), -1));
+        return TCL_ERROR;
+    }
+    return TCL_OK;
+}
+
+/// The `font` command a theme script is given: an area of the window and its size in points.
+int fontCommandProc(ClientData data, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "area points");
+        return TCL_ERROR;
+    }
+
+    auto* theme = static_cast<Theme*>(data);
+    const QString area = QString::fromUtf8(Tcl_GetString(objv[1]));
+    const QString size = QString::fromUtf8(Tcl_GetString(objv[2]));
+
+    QString error;
+    if (!ThemeCommand::applyFont(*theme, area, size, error)) {
         Tcl_SetObjResult(interp, Tcl_NewStringObj(error.toUtf8().constData(), -1));
         return TCL_ERROR;
     }
@@ -106,6 +140,7 @@ QString Theme::builtInScript() {
 void Theme::loadBuiltIn() {
     colors.fill(QColor());
     assigned.fill(false);
+    fontSizes.fill(std::nullopt);
 
     QString error;
     const bool loaded = evaluate(builtInScript(), error);
@@ -128,6 +163,7 @@ bool Theme::evaluate(const QString& script, QString& error) {
     }
 
     Tcl_CreateObjCommand(interpreter.get(), "theme", &themeCommandProc, this, nullptr);
+    Tcl_CreateObjCommand(interpreter.get(), "font", &fontCommandProc, this, nullptr);
 
     const QByteArray text = script.toUtf8();
     if (Tcl_EvalEx(interpreter.get(), text.constData(), static_cast<int>(text.size()), 0)
@@ -178,6 +214,47 @@ bool Theme::set(const QString& key, const QString& value, QString& error) {
     colors[index] = parsed;
     assigned[index] = true;
     return true;
+}
+
+bool Theme::setFont(const QString& area, const QString& size, QString& error) {
+    std::size_t index = FontAreaCount;
+    for (std::size_t candidate = 0; candidate < FontAreaCount; ++candidate) {
+        if (area == QLatin1StringView(FontAreaNames[candidate])) {
+            index = candidate;
+            break;
+        }
+    }
+    if (index == FontAreaCount) {
+        error = QStringLiteral("'%1' is not an area of the window this build knows: window, wave, "
+                               "transcript or source")
+                    .arg(area);
+        return false;
+    }
+
+    bool parsed = false;
+    const double points = size.toDouble(&parsed);
+    if (!parsed || !(points > 0.0) || points > LargestFontSize) {
+        error = QStringLiteral("'%1' is not a font size; expected a number of points, as 10 or "
+                               "10.5, up to %2")
+                    .arg(size)
+                    .arg(LargestFontSize);
+        return false;
+    }
+
+    fontSizes[index] = points;
+    return true;
+}
+
+std::optional<double> Theme::fontSize(ThemeFont area) const noexcept {
+    const auto index = static_cast<std::size_t>(area);
+    ENZAN_ASSERT(index < FontAreaCount, "no such font area");
+    if (fontSizes[index]) return fontSizes[index];
+    return fontSizes[static_cast<std::size_t>(ThemeFont::Window)];
+}
+
+QFont Theme::font(ThemeFont area, QFont base) const {
+    if (const std::optional<double> points = fontSize(area)) base.setPointSizeF(*points);
+    return base;
 }
 
 bool Theme::isComplete() const noexcept {

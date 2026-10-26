@@ -9,6 +9,12 @@ Turns SystemVerilog source text into EIR, and nothing else (DESIGN_GUIDE.md sect
 - Walk slang's elaborated AST and emit one EIR module definition per distinct instance
   body.
 - Translate procedural blocks, continuous assignments and expressions into EIR-B.
+- Specialise the modules another language's units instantiate, as each `eir::UnitRequest` asks,
+  through a module of its own instantiating the one asked for, which is dropped after
+  (DESIGN_GUIDE.md section 18, M7); and list the modules the sources declare, and the names they
+  instantiate and declare nowhere, from their syntax alone, for the other frontend.
+- Check an instance of another language's unit against a module standing for it, built from its
+  `eir::UnitInterface`, and make it ask for the unit with its values rather than translate it.
 
 ## What a frontend must not do
 
@@ -34,6 +40,12 @@ re-evaluating anything. The suffixes are assigned in hierarchy-walk order, so th
 same on every run (section 3.8).
 
 ## Deliberate translation decisions
+
+**A delay counts the time unit of the scope stating it** and is translated into a count of
+the run's unit (DESIGN_GUIDE.md section 3.1): the module's `` `timescale `` or `timeunit`, or a
+task's package's, rounded to that scope's precision and then, where the run's unit is fixed and
+coarser, to the run's with a warning (ENZ1009). `$time` is divided back into the calling
+module's unit, and a system task call carries that unit for `%t`.
 
 **A block header's event control becomes the process's sensitivity list**, not a statement
 inside its body. The scheduler re-arms a process, so the body has to begin after the wait.

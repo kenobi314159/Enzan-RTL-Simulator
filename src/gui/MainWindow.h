@@ -14,6 +14,7 @@
 
 #include <QHash>
 #include <QMainWindow>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -79,18 +80,13 @@ private:
 
     void addSelectedObjectsToWave();
 
-    /// Adds the signals of the scope the reader right-clicked in the Structure window, each
-    /// scope's in a group of its own named by the scope's path. `recursive` takes everything
-    /// below it as well.
+    /// Adds the signals of the scope the reader right-clicked in the Structure window, in a
+    /// group named by the scope's path. `recursive` takes everything below it as well, in
+    /// groups nested the way the design nests its instances.
     ///
     /// Performed as the signal list command `add wave ?-r? <scope>`, which section 10.8 defines
     /// as this menu entry: the command is what runs, so the two cannot come to disagree, and it
     /// is what the transcript shows.
-    ///
-    /// Recursion is deliberately *flat*: one group per module, siblings of each other, rather
-    /// than groups nested the way the design is. The hierarchy is what the Structure window is
-    /// for, and a reader who asks a subtree into the wave window is asking to compare its
-    /// modules side by side — which nesting would put behind a disclosure arrow each.
     void insertScopeSignals(bool recursive);
 
     /// Asks for a signal list file to load or a place to save one.
@@ -145,7 +141,7 @@ private:
         std::vector<SignalListEntry> entries;
 
         /// Scopes asked about and not yet answered.
-        QStringList waiting;
+        QSet<QString> waiting;
 
         QHash<QString, QVector<SignalInfo>> objects;
 

@@ -504,6 +504,19 @@ TEST_F(ElaboratorTest, RejectsADrivenObjectOfAnotherWidthThanItsPort) {
     EXPECT_TRUE(reportedCode(enzan::DiagCode::PortWidthMismatch));
 }
 
+TEST_F(ElaboratorTest, RejectsAPortOfAnotherEncodingThanItsObject) {
+    // Eight std_ulogic codes and 64 four-state bits are as wide, and joined, one side would read
+    // the other's codes as bits: a connection between languages has to convert its values
+    // (DESIGN_GUIDE.md section 3.5), and EIR asking for one that does not is refused.
+    buildPortedPair(design, 64, 64);
+    ModuleDefinition child = *design.findModule("child");
+    child.objects[0].encoding = enzan::eir::Encoding::VhdlLogic;
+    design.addModule(std::move(child));
+
+    EXPECT_EQ(elaborate("parent"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::PortEncodingMismatch));
+}
+
 TEST_F(ElaboratorTest, RejectsAPortWidthMismatch) {
     // A port is collapsed onto the signal it is connected to, and collapsing a mismatched
     // pair onto one slot would silently read or write the wrong bits. A frontend converts the
@@ -539,6 +552,29 @@ TEST_F(ElaboratorTest, WarnsAboutAnUnconnectedPortButContinues) {
 
     // The port keeps its own storage, so the design still elaborates.
     EXPECT_TRUE(elaborated->findSlot("/parent/u_child/in").has_value());
+}
+
+TEST_F(ElaboratorTest, AnUnconnectedVhdlPortKeepsItsDefault) {
+    // Which its object starts with, rather than X: a VHDL port left open from SystemVerilog.
+    ModuleDefinition child;
+    child.name = "child";
+    child.language = enzan::eir::Language::Vhdl;
+    child.addObject(Object{.name = "in", .type = Type::logic()});
+    child.ports.push_back(Port{.name = "in", .direction = PortDirection::Input, .objectIndex = 0});
+    design.addModule(std::move(child));
+
+    ModuleDefinition parent;
+    parent.name = "parent";
+    enzan::eir::Instance instance;
+    instance.name = "u_child";
+    instance.definitionName = "child";
+    instance.connections.push_back(PortConnection{.portIndex = 0});
+    parent.instances.push_back(std::move(instance));
+    design.addModule(std::move(parent));
+
+    ASSERT_NE(elaborate("parent"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::UnconnectedVhdlPort));
+    EXPECT_FALSE(reportedCode(enzan::DiagCode::UnconnectedPort));
 }
 
 // ---------------------------------------------------------------------------

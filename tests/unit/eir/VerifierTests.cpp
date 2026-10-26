@@ -53,6 +53,10 @@ public:
 /// the other. Tests break exactly one property of it and check that the verifier
 /// notices, which keeps each test's intent obvious.
 class VerifierTest : public ::testing::Test {
+public:
+    /// The valid module every test breaks one property of.
+    static ModuleDefinition validModule() { return makeValidModule(); }
+
 protected:
     VerifierTest() : engine(sources) { engine.addConsumer(consumer); }
 
@@ -451,6 +455,41 @@ TEST_F(VerifierTest, RejectsAConversionWithARealOnNeitherSide) {
     EXPECT_FALSE(check(definition));
     EXPECT_TRUE(reported("converts between two bits"));
     EXPECT_EQ(consumer.messages.size(), 1U);
+}
+
+/// The valid module with a register of 64 bits of codes and one of their 8 bits, and `opcode`
+/// converting between them with `encoding` as its second operand.
+ModuleDefinition withConversion(Opcode opcode, Operand encoding, std::uint32_t bits) {
+    ModuleDefinition definition = VerifierTest::validModule();
+    Process& process = definition.processes[0];
+    process.registerTypes.push_back(Type::bits(64, false, false));
+    process.registerTypes.push_back(Type::bits(bits, false, true));
+    const bool present = opcode == Opcode::Present;
+    auto& instructions = process.blocks[0].instructions;
+    instructions.insert(instructions.begin() + 1,
+                        Instruction::make(opcode, Operand::reg(present ? 2 : 1),
+                                          Operand::reg(present ? 1 : 2), encoding));
+    return definition;
+}
+
+TEST_F(VerifierTest, AcceptsCodesPresentedAsBitsAndBitsEncodedAsCodes) {
+    const Operand logic =
+        Operand::immediate(static_cast<std::uint32_t>(enzan::eir::Encoding::VhdlLogic));
+    EXPECT_TRUE(check(withConversion(Opcode::Present, logic, 8))) << consumer.messages.front();
+    EXPECT_TRUE(check(withConversion(Opcode::Encode, logic, 8))) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, RejectsCodesThatAreNotAByteForEachBit) {
+    const Operand logic =
+        Operand::immediate(static_cast<std::uint32_t>(enzan::eir::Encoding::VhdlLogic));
+    EXPECT_FALSE(check(withConversion(Opcode::Present, logic, 4)));
+    EXPECT_TRUE(reported("eight times as wide"));
+}
+
+TEST_F(VerifierTest, RejectsAConversionNamingNoEncodingOfCodes) {
+    const Operand bits = Operand::immediate(static_cast<std::uint32_t>(enzan::eir::Encoding::Bits));
+    EXPECT_FALSE(check(withConversion(Opcode::Encode, bits, 8)));
+    EXPECT_TRUE(reported("names no encoding of codes"));
 }
 
 TEST_F(VerifierTest, RejectsAWidePredicateDestination) {

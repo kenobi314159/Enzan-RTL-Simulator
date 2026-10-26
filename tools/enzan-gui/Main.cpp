@@ -61,8 +61,6 @@ Options:
       --write-theme <file>
                           Write the built-in theme to this file and exit.
       --wave-list <file>  Open the wave window with this signal list in it.
-
-The normative specification is DESIGN_GUIDE.md in the source tree.
 )";
 
 /// Answers `--help` and `--version` before Qt's parser sees the command line.
@@ -171,6 +169,10 @@ int main(int argc, char** argv) {
     // it all again (DESIGN_GUIDE.md section 10.5).
     QApplication::setPalette(theme.palette());
     application.setStyleSheet(theme.styleSheet());
+
+    // Before any widget exists, so that every one starts with it; the areas with sizes of their
+    // own are given theirs as they are built.
+    QApplication::setFont(theme.font(enzan::gui::ThemeFont::Window, QApplication::font()));
 
     // --- the session -------------------------------------------------------
 

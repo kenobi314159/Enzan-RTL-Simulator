@@ -11,12 +11,16 @@
 # the design has settled — whereas a VCD diff compares every delta and produces constant false
 # failures until somebody switches the suite off.
 #
-# Usage: run-differential.sh <enzan> <reference> <source.sv> <top>
+# Usage: run-differential.sh <enzan> <reference> <source.sv> <top> [<enzan option>...]
+#
+# The options are Enzan's time unit, `--timescale ns`, or none for a design whose every module
+# states its own time scale.
 
 set -euo pipefail
 
-if [[ $# -ne 4 ]]; then
-    printf 'usage: %s <enzan> <reference-simulator> <source.sv> <top>\n' "$0" >&2
+if [[ $# -lt 4 ]]; then
+    printf 'usage: %s <enzan> <reference-simulator> <source.sv> <top> [<enzan option>...]\n' \
+        "$0" >&2
     exit 2
 fi
 
@@ -24,6 +28,7 @@ readonly enzan="$1"
 readonly reference="$2"
 readonly source_file="$3"
 readonly top="$4"
+shift 4
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
@@ -35,8 +40,8 @@ trap 'rm -rf "$workdir"' EXIT
 # against Icarus's, and the two tools warn about different things by design — Enzan inherits
 # slang's diagnostics, which are deliberately better than most (DESIGN_GUIDE.md section 10.6).
 #
-# Both are run with the same time unit so that a `%t` in the transcript compares.
-"$enzan" --top "$top" --timescale ns "$source_file" >"$workdir/enzan.txt" \
+# `$time` counts each module's own unit in both, so a transcript compares whatever the run's is.
+"$enzan" --top "$top" "$@" "$source_file" >"$workdir/enzan.txt" \
     2>"$workdir/enzan-diagnostics.txt" || {
     printf 'Enzan failed:\n' >&2
     cat "$workdir/enzan.txt" "$workdir/enzan-diagnostics.txt" >&2

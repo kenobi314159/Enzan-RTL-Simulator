@@ -16,15 +16,22 @@
 
 #include "SessionFixture.h"
 
+#include "support/Workspace.h"
+
 #include <gtest/gtest.h>
 
 #include <QApplication>
 #include <QClipboard>
+#include <QHash>
 #include <QLineEdit>
+#include <QStringList>
 #include <QTableView>
 #include <QTreeView>
 
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <vector>
 
 namespace {
 
@@ -49,7 +56,7 @@ protected:
         counter = infoFor(QStringLiteral("count"));
         session->subscribe({clock.signalIndex, counter.signalIndex});
         session->run(400);
-        pumpUntil([this] { return session->currentTime() == 400; });
+        pumpUntilCaughtUp(400);
     }
 
     void TearDown() override {
@@ -360,6 +367,256 @@ TEST_F(WaveRowTest, MovingARowDoesNotResetTheModel) {
     EXPECT_EQ(resets, 0);
     EXPECT_EQ(model->row(first)->parent, group);
 }
+
+// ---------------------------------------------------------------------------
+// An array unpacks by its dimensions
+// ---------------------------------------------------------------------------
+
+// The counter holds 40, 0b0010'1000, at 400ns. Given dimensions, as the kernel lists a signal
+// declared as an array, it reads and unpacks as that array.
+
+TEST_F(WaveRowTest, AnArrayReadsAsTheListOfItsElements) {
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 3, .right = 0}};
+    const int array = model->addSignal(nibbles);
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{2}{8}"));
+
+    model->unpack(array);
+    ASSERT_EQ(model->rowCount(model->indexOfRow(array)), 2);
+    const WaveRow* high = model->row(childOf(array, 0));
+    const WaveRow* low = model->row(childOf(array, 1));
+    EXPECT_EQ(high->label, QStringLiteral("count[1]"));
+    EXPECT_EQ(low->label, QStringLiteral("count[0]"));
+    EXPECT_EQ(model->displayedWidth(childOf(array, 0)), 4U);
+    EXPECT_EQ(model->renderValue(childOf(array, 0), 400), QStringLiteral("2"));
+    EXPECT_EQ(model->renderValue(childOf(array, 1), 400), QStringLiteral("8"));
+
+    // Unpacking changes nothing about what the array's own line says.
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{2}{8}"));
+    EXPECT_TRUE(model->childrenReconstituteParent(array));
+}
+
+TEST_F(WaveRowTest, AnElementIsNamedAndUnpackedByTheIndicesItIsDeclaredWith) {
+    // bit [0:1][0:3]: element 0 is the left one, the highest, and bit 0 of it its highest bit.
+    SignalInfo ascending = counter;
+    ascending.dimensions = {{.left = 0, .right = 1}, {.left = 0, .right = 3}};
+    const int array = model->addSignal(ascending);
+    model->unpack(array);
+
+    const int first = childOf(array, 0);
+    EXPECT_EQ(model->row(first)->label, QStringLiteral("count[0]"));
+    EXPECT_EQ(model->renderValue(first, 400), QStringLiteral("2"));
+    ASSERT_TRUE(model->canUnpack(first));
+
+    model->unpack(first);
+    ASSERT_EQ(model->rowCount(model->indexOfRow(first)), 4);
+    QStringList labels;
+    QStringList values;
+    for (int position = 0; position < 4; ++position) {
+        labels << model->row(childOf(first, position))->label;
+        values << model->renderValue(childOf(first, position), 400);
+    }
+    EXPECT_EQ(labels, (QStringList{QStringLiteral("count[0][0]"), QStringLiteral("count[0][1]"),
+                                   QStringLiteral("count[0][2]"), QStringLiteral("count[0][3]")}));
+    EXPECT_EQ(values, (QStringList{QStringLiteral("0"), QStringLiteral("0"), QStringLiteral("1"),
+                                   QStringLiteral("0")}));
+    EXPECT_FALSE(model->canUnpack(childOf(first, 0))) << "a bit has nothing left to unpack";
+
+    // An element taken apart is still the element, and the array still itself.
+    EXPECT_TRUE(model->childrenReconstituteParent(first));
+    EXPECT_TRUE(model->childrenReconstituteParent(array));
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{2}{8}"));
+}
+
+TEST_F(WaveRowTest, AnArrayOfThreeDimensionsNestsItsLists) {
+    SignalInfo cube = counter;
+    cube.dimensions = {{.left = 1, .right = 0}, {.left = 1, .right = 0}, {.left = 1, .right = 0}};
+    const int array = model->addSignal(cube);
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{{0}{2}}{{2}{0}}"));
+
+    model->unpack(array);
+    EXPECT_EQ(model->renderValue(childOf(array, 0), 400), QStringLiteral("{0}{2}"));
+}
+
+TEST_F(WaveRowTest, AVectorDeclaredAscendingUnpacksFromItsLeftIndex) {
+    // logic [0:7]: the bit called 0 is the most significant, so it is the first row.
+    SignalInfo ascending = counter;
+    ascending.dimensions = {{.left = 0, .right = 7}};
+    const int bus = model->addSignal(ascending);
+    EXPECT_EQ(model->renderValue(bus, 400), QStringLiteral("28")) << "a vector is one number";
+
+    model->unpack(bus);
+    EXPECT_EQ(model->row(childOf(bus, 0))->label, QStringLiteral("count[0]"));
+    EXPECT_EQ(model->row(childOf(bus, 2))->label, QStringLiteral("count[2]"));
+    EXPECT_EQ(model->renderValue(childOf(bus, 2), 400), QStringLiteral("1"));
+    EXPECT_EQ(model->renderValue(bus, 400), QStringLiteral("28"));
+}
+
+TEST_F(WaveRowTest, RemovingAnElementLeavesTheListOfTheRest) {
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 3, .right = 0}};
+    const int array = model->addSignal(nibbles);
+    model->unpack(array);
+    model->removeRow(childOf(array, 0));
+
+    EXPECT_FALSE(model->childrenReconstituteParent(array));
+    EXPECT_EQ(model->displayedWidth(array), 4U);
+    EXPECT_EQ(model->renderValue(array, 400), QStringLiteral("{8}"));
+}
+
+TEST_F(WaveRowTest, ARowIsNamedByTheSelectsTheDesignWouldWrite) {
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 0, .right = 3}};
+    const WaveRow whole = WaveformModel::rowFor(nibbles);
+
+    EXPECT_EQ(WaveformModel::selectsOf(whole), QString());
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::elementOf(whole, 0)), QStringLiteral("[1]"));
+    EXPECT_EQ(
+        WaveformModel::selectsOf(WaveformModel::elementOf(WaveformModel::elementOf(whole, 1), 0)),
+        QStringLiteral("[0][0]"));
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::sliceOf(whole, 7, 0)),
+              QStringLiteral("[1:0]"));
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::sliceOf(whole, 2, 1)),
+              QStringLiteral("[0][1:2]"));
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::sliceOf(whole, 5, 2)), std::nullopt)
+        << "part of one element and part of the next is no select";
+
+    // And what they name, `selectOf` makes again.
+    const std::optional<WaveRow> selected = WaveformModel::selectOf(
+        whole, {enzan::gui::IndexSelect{.left = 0},
+                enzan::gui::IndexSelect{.left = 1, .right = 2, .range = true}});
+    ASSERT_TRUE(selected.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — checked by the assertion above
+    const WaveRow& picked = *selected;
+    EXPECT_EQ(picked.highBit, 2U);
+    EXPECT_EQ(picked.lowBit, 1U);
+    EXPECT_EQ(WaveformModel::selectsOf(picked), QStringLiteral("[0][1:2]"));
+
+    // A bit taken as a slice of a signal of one bit is the signal.
+    EXPECT_EQ(WaveformModel::selectsOf(WaveformModel::sliceOf(WaveformModel::rowFor(clock), 0, 0)),
+              QString());
+}
+
+TEST_F(WaveRowTest, AnArrayCopiesWithItsDimensions) {
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 3, .right = 0}};
+    const int array = model->addSignal(nibbles);
+    model->unpack(array);
+
+    model->copySignalRows({array});
+    const QVector<int> pasted = model->pasteSignalRows(-1, -1);
+    ASSERT_EQ(pasted.size(), 1);
+    EXPECT_EQ(model->row(pasted[0])->dimensions, nibbles.dimensions);
+    EXPECT_EQ(model->renderValue(pasted[0], 400), QStringLiteral("{2}{8}"));
+
+    // Its elements came with their own, and unpack into bits as they did before the copy.
+    const int element = childOf(pasted[0], 1);
+    EXPECT_EQ(model->row(element)->dimensions,
+              (std::vector<enzan::eir::ArrayDimension>{{.left = 3, .right = 0}}));
+    model->unpack(element);
+    EXPECT_EQ(model->rowCount(model->indexOfRow(element)), 4);
+}
+
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+/// The window over a SystemVerilog testbench whose counters are declared as large_design_00's
+/// are, run for twenty nanoseconds: every element holds its index plus one, and at 10ns
+/// element 2 of each changes.
+class SourceArrayTest : public SessionFixture {
+protected:
+    bool loadDesign(enzan::session::Session& into) override {
+        workspace.write("tb.sv", R"(
+            module tb;
+                logic [3:0][7:0] count_rec;
+                logic [7:0] count_rec0 [3:0];
+                logic count_rec1 [3:0][7:0];
+                initial begin
+                    for (int i = 0; i < 4; i++) begin
+                        count_rec[i] = 8'(i + 1);
+                        count_rec0[i] = 8'(i + 1);
+                        for (int j = 0; j < 8; j++) count_rec1[i][j] = count_rec0[i][j];
+                    end
+                    #10;
+                    count_rec[2] = 8'hff;
+                    count_rec0[2] = 8'hff;
+                    count_rec1[2][1] = 1'b0;
+                    #10;
+                end
+            endmodule
+        )");
+        enzan::session::Session::AnalysisRequest request;
+        request.files.push_back(workspace / "tb.sv");
+        return into.analyse(request);
+    }
+
+    void SetUp() override {
+        SessionFixture::SetUp();
+        theme.loadBuiltIn();
+        model = std::make_unique<WaveformModel>(*session, theme);
+
+        QVector<std::uint32_t> indices;
+        for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+            signals.insert(info.name, info);
+            indices.push_back(info.signalIndex);
+        }
+        session->subscribe(indices);
+        session->run(20);
+        pumpUntilCaughtUp(20);
+    }
+
+    void TearDown() override {
+        model = nullptr;
+        SessionFixture::TearDown();
+    }
+
+    [[nodiscard]] int childOf(int parent, int position) const {
+        return model->rowIdOf(model->index(position, 0, model->indexOfRow(parent)));
+    }
+
+    enzan::test::Workspace workspace;
+    Theme theme;
+    std::unique_ptr<WaveformModel> model;
+    QHash<QString, SignalInfo> signals;
+};
+
+TEST_F(SourceArrayTest, EachCounterReadsAsItsElementsHoweverItIsDeclared) {
+    // Packed, unpacked and an unpacked array of bits read alike, element by element, rather
+    // than as one wide number.
+    const int packed = model->addSignal(signals.value(QStringLiteral("count_rec")));
+    const int unpacked = model->addSignal(signals.value(QStringLiteral("count_rec0")));
+    const int bits = model->addSignal(signals.value(QStringLiteral("count_rec1")));
+
+    for (const int row : {packed, unpacked, bits})
+        EXPECT_EQ(model->renderValue(row, 5), QStringLiteral("{04}{03}{02}{01}"))
+            << model->row(row)->label.toStdString();
+    EXPECT_EQ(model->renderValue(packed, 10), QStringLiteral("{04}{ff}{02}{01}"));
+    EXPECT_EQ(model->renderValue(unpacked, 10), QStringLiteral("{04}{ff}{02}{01}"));
+    EXPECT_EQ(model->renderValue(bits, 10), QStringLiteral("{04}{01}{02}{01}"));
+}
+
+TEST_F(SourceArrayTest, EachCounterUnpacksIntoItsElementsAndThenItsBits) {
+    for (const QString& name : {QStringLiteral("count_rec"), QStringLiteral("count_rec0"),
+                                QStringLiteral("count_rec1")}) {
+        const int row = model->addSignal(signals.value(name));
+        model->unpack(row);
+        ASSERT_EQ(model->rowCount(model->indexOfRow(row)), 4) << name.toStdString();
+
+        const int element = childOf(row, 1);
+        EXPECT_EQ(model->row(element)->label, name + QStringLiteral("[2]"));
+        EXPECT_EQ(model->displayedWidth(element), 8U);
+        EXPECT_EQ(model->renderValue(element, 5), QStringLiteral("03"));
+
+        model->unpack(element);
+        ASSERT_EQ(model->rowCount(model->indexOfRow(element)), 8) << name.toStdString();
+        EXPECT_EQ(model->row(childOf(element, 6))->label, name + QStringLiteral("[2][1]"));
+        EXPECT_EQ(model->renderValue(childOf(element, 6), 5), QStringLiteral("1"));
+
+        // Its edges are its own: element 2 changes at 10, and only the bits that moved do.
+        EXPECT_EQ(model->nextEdgeAfter(element, 5), 10U) << name.toStdString();
+        EXPECT_EQ(model->nextEdgeAfter(childOf(row, 0), 5), enzan::runtime::NoTime)
+            << name.toStdString();
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // The clipboard

@@ -74,6 +74,7 @@ public:
 
     /// Exposed for the tests: a real writer reaches this from inside its own hooks, where it is
     /// protected, and a test asserting that two names share one record has to ask from outside.
+    using WaveformWriter::NotRecorded;
     using WaveformWriter::recordIndexOf;
 
     // The hooks keep the visibility they have in the base class, as in the real writers.
@@ -232,6 +233,55 @@ Design hierarchicalDesign() {
     parent.name = "tb";
     parent.sourceName = "tb";
     parent.addObject(Object{.name = "drive", .type = Type::bits(4, false, true)});
+    enzan::eir::Instance instance;
+    instance.name = "u_dut";
+    instance.definitionName = "child";
+    instance.connections.push_back(enzan::eir::PortConnection{.portIndex = 0, .objectIndex = 0});
+    parent.instances.push_back(std::move(instance));
+
+    Design design;
+    design.addModule(std::move(child));
+    design.addModule(std::move(parent));
+    return design;
+}
+
+/// A flat module with a memory, `logic [7:0] memory [0:3]`, and vectors of 100 and 200 bits
+/// beside a one-bit object.
+Design wideDesign() {
+    ModuleDefinition definition;
+    definition.name = "tb";
+    definition.sourceName = "tb";
+    definition.addObject(Object{.name = "clk", .type = Type::logic()});
+    definition.addObject(
+        Object{.name = "memory",
+               .type = Type::bits(32, false, true),
+               .unpackedDimensions = {enzan::eir::ArrayDimension{.left = 0, .right = 3}},
+               .elementWidth = 8});
+    definition.addObject(Object{.name = "wide", .type = Type::bits(100, false, true)});
+    definition.addObject(Object{.name = "wider", .type = Type::bits(200, false, true)});
+
+    Design design;
+    design.addModule(std::move(definition));
+    return design;
+}
+
+/// hierarchicalDesign's, with the parent's end of the port the storage a frontend makes for a
+/// port connected to an expression, named with a `$`, and beside it a made-up object that no
+/// name the reader wrote reaches.
+Design introducedDesign() {
+    ModuleDefinition child;
+    child.name = "child";
+    child.sourceName = "child";
+    child.addObject(Object{.name = "in", .type = Type::bits(4, false, true)});
+    child.ports.push_back(enzan::eir::Port{
+        .name = "in", .direction = enzan::eir::PortDirection::Input, .objectIndex = 0});
+
+    ModuleDefinition parent;
+    parent.name = "tb";
+    parent.sourceName = "tb";
+    parent.addObject(Object{.name = "u_dut$in", .type = Type::bits(4, false, true)});
+    parent.addObject(Object{.name = "scratch$1", .type = Type::logic()});
+    parent.addObject(Object{.name = "clk", .type = Type::logic()});
     enzan::eir::Instance instance;
     instance.name = "u_dut";
     instance.definitionName = "child";
@@ -570,6 +620,78 @@ TEST_F(WaveformWriterTest, ADesignWithNoChangesStillProducesAValidHeader) {
     EXPECT_NE(indexOf("header"), writer->events.size());
     EXPECT_NE(indexOf("enddecl"), writer->events.size());
     EXPECT_EQ(countOf("close"), 1U);
+}
+
+// ---------------------------------------------------------------------------
+// What is left out
+// ---------------------------------------------------------------------------
+
+TEST_F(WaveformWriterTest, AFileLeavesAMemoryOut) {
+    build(wideDesign(), "tb");
+    ASSERT_TRUE(opened());
+
+    EXPECT_EQ(writer->recordIndexOf(signalIndex("/tb/memory")), RecordingWriter::NotRecorded);
+    EXPECT_EQ(writer->recordedSignals(), 3U);
+    EXPECT_TRUE(writer->tooWide().empty()) << "a memory is left out for what it is, not its width";
+}
+
+TEST_F(WaveformWriterTest, ASignalWiderThanTheLimitIsLeftOutAndNamed) {
+    build(wideDesign(), "tb");
+    writer->setWidthLimit(100);
+    ASSERT_TRUE(opened());
+
+    EXPECT_NE(writer->recordIndexOf(signalIndex("/tb/wide")), RecordingWriter::NotRecorded)
+        << "a signal as wide as the limit is within it";
+    EXPECT_EQ(writer->recordIndexOf(signalIndex("/tb/wider")), RecordingWriter::NotRecorded);
+    EXPECT_EQ(countOf("declare:wider"), 0U);
+    ASSERT_EQ(writer->tooWide().size(), 1U);
+    EXPECT_EQ(writer->tooWide()[0], signalIndex("/tb/wider"));
+    EXPECT_EQ(writer->describeTooWide(), "/tb/wider of 200 bits");
+}
+
+TEST_F(WaveformWriterTest, ThreeSignalsAreNamedAndMoreAreCounted) {
+    build(wideDesign(), "tb");
+    writer->setWidthLimit(1);
+    ASSERT_TRUE(opened());
+    EXPECT_EQ(writer->describeTooWide(),
+              "2 signals, /tb/wide of 100 bits and /tb/wider of 200 bits");
+
+    ModuleDefinition definition;
+    definition.name = "tb";
+    definition.sourceName = "tb";
+    for (const char* name : {"a", "b", "c", "d"})
+        definition.addObject(Object{.name = name, .type = Type::bits(2, false, true)});
+    Design design;
+    design.addModule(std::move(definition));
+    build(std::move(design), "tb");
+    writer->setWidthLimit(1);
+    ASSERT_TRUE(opened());
+    EXPECT_EQ(writer->describeTooWide(),
+              "4 signals, among them /tb/a of 2 bits, /tb/b of 2 bits and /tb/c of 2 bits");
+}
+
+TEST_F(WaveformWriterTest, ALimitOfZeroRecordsAnyWidth) {
+    build(wideDesign(), "tb");
+    writer->setWidthLimit(0);
+    ASSERT_TRUE(opened());
+    EXPECT_NE(writer->recordIndexOf(signalIndex("/tb/wider")), RecordingWriter::NotRecorded);
+    EXPECT_TRUE(writer->tooWide().empty());
+}
+
+TEST_F(WaveformWriterTest, ANameAFrontendMadeUpIsNotRecorded) {
+    // The storage of a port connected to an expression is recorded under the port's own name,
+    // which the reader wrote, and not under the one the frontend made up for it in the parent.
+    build(introducedDesign(), "tb");
+    ASSERT_TRUE(opened());
+
+    EXPECT_EQ(countOf("declare:u_dut$in"), 0U);
+    EXPECT_EQ(countOf("declare:in@"), 1U);
+    EXPECT_NE(writer->recordIndexOf(signalIndex("/tb/u_dut$in")), RecordingWriter::NotRecorded);
+
+    // Storage with no name of the reader's at all is not recorded.
+    EXPECT_EQ(countOf("declare:scratch$1"), 0U);
+    EXPECT_EQ(writer->recordIndexOf(signalIndex("/tb/scratch$1")), RecordingWriter::NotRecorded);
+    EXPECT_EQ(writer->recordedSignals(), 2U) << "clk and the port";
 }
 
 } // namespace

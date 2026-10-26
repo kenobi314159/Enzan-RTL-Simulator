@@ -57,8 +57,15 @@ std::string lowerOutsideExtended(std::string_view text) {
     return result;
 }
 
+/// The class of a SystemVerilog instance in VHPI, which shows nothing in it (DESIGN_GUIDE.md
+/// section 18, M7): what cocotb's VHPI header names a private vendor extension, `vhpiVerilog`,
+/// and leaves to VPI. The header Enzan is built with gives the number to `vhpiConcAssertStmtK`, a
+/// class Enzan shows nothing of.
+constexpr std::int32_t VerilogRegion = 1117;
+
 const char* className(std::int32_t kind) {
     switch (kind) {
+    case VerilogRegion: return "vhpiVerilog";
     case vhpiRootInstK: return "vhpiRootInstK";
     case vhpiCompInstStmtK: return "vhpiCompInstStmtK";
     case vhpiBlockStmtK: return "vhpiBlockStmtK";
@@ -236,7 +243,9 @@ std::unique_ptr<PliContext::Object> PliContext::vhpiRegion(std::uint32_t scopeIn
     region->kind = Object::Kind::Vhpi;
     region->scope = scopeIndex;
     region->instance = scope.instance;
-    if (scope.isModule) {
+    if (!scope.vhdl) {
+        region->vhpiClass = VerilogRegion;
+    } else if (scope.isModule) {
         region->vhpiClass = scope.parent == NoScope ? vhpiRootInstK : vhpiCompInstStmtK;
     } else {
         region->vhpiClass = scope.name.ends_with(')') ? vhpiForGenerateK : vhpiBlockStmtK;
@@ -499,10 +508,11 @@ vhpiHandleT PliContext::vhpiHandle(vhpiOneToOneT type, vhpiHandleT reference) {
             tool->text = versionText;
             return vhpiKeep(std::move(tool));
         }
+        // The root is a VHDL top level's; a design whose top is SystemVerilog's has none.
         if (type == vhpiRootInst && image != nullptr) {
             for (std::uint32_t index = 0; index < scopes.size(); ++index) {
                 if (scopes[index].isModule && scopes[index].parent == NoScope
-                    && !scopes[index].isPackage)
+                    && !scopes[index].isPackage && scopes[index].vhdl)
                     return vhpiKeep(vhpiRegion(index));
             }
         }
@@ -618,28 +628,42 @@ vhpiHandleT PliContext::vhpiHandleByName(const char* name, vhpiHandleT scope) {
     }
     parts.push_back(part);
 
+    // From `scope`, or from a top level of either language: a name another interface made begins
+    // with its path, `VERILOG_TOP.I_VHDL` as cocotb makes it from VPI's names.
     std::unique_ptr<Object> current;
     std::size_t next = 0;
     if (scope != nullptr) {
         const Object* found = vhpiResolve(scope, "vhpi_handle_by_name");
-        if (found == nullptr || !isRegion(found->vhpiClass)) return nullptr;
+        if (found == nullptr || (!isRegion(found->vhpiClass) && found->vhpiClass != VerilogRegion))
+            return nullptr;
         current = vhpiRegion(found->scope);
     } else {
-        vhpiHandleT root = vhpiHandle(vhpiRootInst, nullptr);
-        if (root == nullptr) return nullptr;
-        const auto owned = objects.find(static_cast<const void*>(root));
-        current = std::move(owned->second);
-        objects.erase(owned);
-        if (parts.empty() || parts.front() != lowerOutsideExtended(current->name)) return nullptr;
+        for (std::uint32_t index = 0; index < scopes.size() && current == nullptr; ++index) {
+            const Scope& top = scopes[index];
+            if (!top.isModule || top.isPackage || top.parent != NoScope) continue;
+            std::unique_ptr<Object> region = vhpiRegion(index);
+            if (!parts.empty() && parts.front() == lowerOutsideExtended(region->name))
+                current = std::move(region);
+        }
+        if (current == nullptr) return nullptr;
         next = 1;
     }
 
     for (; next < parts.size() && current != nullptr; ++next) {
         const std::string& wanted = parts[next];
         std::unique_ptr<Object> found;
-        if (isRegion(current->vhpiClass)) {
-            for (const vhpiOneToManyT relation : {vhpiInternalRegions, vhpiPortDecls, vhpiSigDecls,
-                                                  vhpiGenericDecls, vhpiConstDecls}) {
+        if (isRegion(current->vhpiClass) || current->vhpiClass == VerilogRegion) {
+            // A region inside, of either language, which a path may go through.
+            for (const std::uint32_t child : scopes[current->scope].children) {
+                if (scopes[child].isPackage || lowerOutsideExtended(scopes[child].name) != wanted)
+                    continue;
+                found = vhpiRegion(child);
+                break;
+            }
+        }
+        if (found == nullptr && isRegion(current->vhpiClass)) {
+            for (const vhpiOneToManyT relation :
+                 {vhpiPortDecls, vhpiSigDecls, vhpiGenericDecls, vhpiConstDecls}) {
                 for (std::unique_ptr<Object>& child : vhpiChildren(relation, *current)) {
                     if (child != nullptr && child->name == wanted) found = std::move(child);
                     if (found != nullptr) break;
@@ -727,7 +751,9 @@ const vhpiCharT* PliContext::vhpiGetStr(vhpiStrPropertyT property, vhpiHandleT o
     // A declared object's CaseName is its name as its declaration spells it (section 9.7).
     case vhpiNameP:
     case vhpiCaseNameP:
-        if (found->vhpiClass == vhpiToolK || found->vhpiClass == vhpiArgvK)
+        // A SystemVerilog instance is named as SystemVerilog names it, which VPI finds it by.
+        if (found->vhpiClass == vhpiToolK || found->vhpiClass == vhpiArgvK
+            || found->vhpiClass == VerilogRegion)
             return text(found->name);
         if (found->vhpiName.empty()) found->vhpiName = upper(found->name);
         if (property == vhpiNameP) return text(found->vhpiName);

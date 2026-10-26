@@ -210,6 +210,10 @@ private:
         /// True for a null slice, which designates nothing: assigning it does nothing, as VHDL has
         /// it, and the adapter has no value to read from it.
         bool empty = false;
+
+        /// True for a slice whose bounds only the run knows (`slidingSlice`). Its layout is
+        /// indexed from 0 rather than by its bounds, so nothing may be selected within it.
+        bool slides = false;
     };
 
     /// A subprogram translated into this body rather than called: where its `return` goes, and the
@@ -449,6 +453,11 @@ private:
     /// characters its elements are.
     std::optional<Value> characterString(tree_t expression);
 
+    /// `to_hstring` or `to_ostring` of a `bit_vector`, `expression`, for `bitsPerDigit` 4 or 3:
+    /// the vector padded on the left with '0' to a whole number of digits, and each group of bits
+    /// one digit, in upper case (IEEE 1076 section 5.3.2.4).
+    std::optional<Value> digitString(tree_t expression, unsigned bitsPerDigit);
+
     /// The image of `operand`, a value of an enumeration known only at run time, as a part of a
     /// message; or with `quoted` false its string representation, which `to_string` gives, a
     /// character literal without its quotes (IEEE 1076 section 5.7).
@@ -509,6 +518,18 @@ private:
     /// The layout of a slice by `range` of an array laid out as `layout`, and the offset of its
     /// bits, or nothing having reported why.
     std::optional<std::pair<Layout, std::int64_t>> sliceOf(const Layout& layout, tree_t range);
+
+    /// The layout of the part of an array laid out as `layout` that `bounds` span, its elements
+    /// keeping the bounds they have in the whole.
+    [[nodiscard]] std::optional<Layout> partLayout(const Layout& layout,
+                                                   const Folder::Range& bounds) const;
+
+    /// The slice by `range` of an array laid out as `layout`, where the bounds are known only at
+    /// run time but are always as far apart, as in `d((i + 1) * 8 - 1 downto i * 8)`: its layout,
+    /// of that length and indexed from 0, and the offset of its bits, a register computed with
+    /// both bounds checked against the array's. Nothing, having reported why, when the length is
+    /// not static (`Folder::difference`) or the slice runs the other way than its array.
+    std::optional<std::pair<Layout, Offset>> slidingSlice(const Layout& layout, tree_t range);
 
     /// A register holding `delay`, a value of `time` in femtoseconds, as a count of EIR's unit.
     std::optional<Value> delay(tree_t delay);

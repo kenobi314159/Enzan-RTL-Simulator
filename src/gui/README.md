@@ -44,9 +44,10 @@ from the internet" a more exciting decision than it should be.
 evaluated, so there is no interpreter for a list to reach. That is also what lets the window
 write one back out: a program cannot be saved from what it produced, and a list can.
 
-**Every row is made one way.** `WaveformModel::rowFor`, `sliceOf` and `bitOf` are how a row is
-made from a signal, a range of one or a bit of one, and adding from the Objects window, pasting
-and loading a list all go through them and through `insertSignalRows`. The Structure window's
+**Every row is made one way.** `WaveformModel::rowFor`, `sliceOf`, `elementOf` and `bitOf` are
+how a row is made from a signal, a range of one, an element of an array or a bit, and
+`unpackedRows` is what unpacking makes of a row. Adding from the Objects window, pasting and
+loading a list all go through them and through `insertSignalRows`. The Structure window's
 *Add to wave* entries go further: they run the signal list command `add wave ?-r? <scope>`, so
 the menu and the file cannot come to disagree about what a scope adds.
 

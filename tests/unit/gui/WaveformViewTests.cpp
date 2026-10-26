@@ -180,7 +180,7 @@ TEST_F(WaveformModelTest, ASlicedRowShowsOnlyItsBits) {
 
     session->subscribe({count.signalIndex});
     session->run(400);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 400; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(400));
 
     // Forty rising edges have passed, so the counter holds 40 — 0x28. The sliced row shows
     // only its top four bits, which is 2.
@@ -197,7 +197,7 @@ TEST_F(WaveformModelTest, RadixIsPerRowAndDefaultsToHexadecimal) {
 
     session->subscribe({count.signalIndex});
     session->run(100);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 100; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(100));
 
     EXPECT_EQ(model->renderValue(rowId, 100), QStringLiteral("0a"));
 
@@ -242,7 +242,7 @@ protected:
         const int rowId = model->addSignal(state);
         session->subscribe({state.signalIndex});
         session->run(200);
-        EXPECT_TRUE(pumpUntil([this] { return session->currentTime() == 200; }));
+        EXPECT_TRUE(pumpUntilCaughtUp(200));
         return rowId;
     }
 };
@@ -452,7 +452,7 @@ protected:
         session->subscribe(wanted);
 
         session->run(duration);
-        ASSERT_TRUE(pumpUntil([this, duration] { return session->currentTime() == duration; }));
+        ASSERT_TRUE(pumpUntilCaughtUp(duration));
 
         view->zoomFit();
         treeView->expandAll();
@@ -520,7 +520,7 @@ TEST_F(WaveformViewTest, AConstantBitOfABusyBusIsDrawnAsALevelAndNotAsABusyBar) 
     // every one of them.
     constexpr std::uint64_t Duration = 1200;
     session->run(Duration);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == Duration; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(Duration));
 
     /// Draws one row showing bits [high:low] of the counter, and counts the trace-coloured
     /// pixels. One row at a time so that the two answers are measured at the same geometry.
@@ -623,7 +623,7 @@ TEST_F(WaveformViewTest, FollowingTheTailKeepsTheEndInView) {
     view->setFollowTail(true);
 
     session->run(300);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 500; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(500));
     view->extentChanged();
 
     EXPECT_EQ(view->axis().span(), 50U) << "following must not change the zoom";
@@ -694,7 +694,7 @@ TEST_F(WaveformViewTest, RunningFurtherSummarisesAgain) {
     const auto rangeEnd = view->axis().end();
 
     session->run(1800);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 2000; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(2000));
     view->extentChanged();
     static_cast<void>(render());
 
@@ -717,7 +717,7 @@ TEST_F(WaveformViewTest, RemovingABitSummarisesItsBusAgain) {
     session->subscribe({count.signalIndex});
 
     session->run(2000);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 2000; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(2000));
 
     model->unpack(bus);
     treeView->expandAll();
@@ -767,7 +767,7 @@ protected:
         session->subscribe(wanted);
 
         session->run(2000);
-        ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 2000; }));
+        ASSERT_TRUE(pumpUntilCaughtUp(2000));
 
         treeView->resize(200, 300);
         view->resize(600, 300);

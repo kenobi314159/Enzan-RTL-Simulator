@@ -5,6 +5,7 @@
 #include "codegen/Bytecode.h"
 #include "common/Assert.h"
 #include "eir/BitOps.h"
+#include "eir/Module.h"
 #include "runtime/Kernel.h"
 
 #include <cmath>
@@ -319,6 +320,19 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
         case eir::Opcode::Convert:
             bitops::integerToReal(reg(instruction.dst, instruction.dstWidth),
                                   reg(instruction.a, instruction.aWidth), instruction.isSigned);
+            break;
+
+        // Across a language boundary (DESIGN_GUIDE.md section 3.5).
+        case eir::Opcode::Present:
+            eir::present(static_cast<eir::Encoding>(instruction.b),
+                         reg(instruction.a, instruction.aWidth),
+                         reg(instruction.dst, instruction.dstWidth));
+            break;
+
+        case eir::Opcode::Encode:
+            eir::encode(static_cast<eir::Encoding>(instruction.b),
+                        reg(instruction.a, instruction.aWidth),
+                        reg(instruction.dst, instruction.dstWidth));
             break;
 
         case eir::Opcode::Extend:

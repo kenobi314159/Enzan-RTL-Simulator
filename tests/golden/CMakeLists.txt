@@ -9,7 +9,7 @@
 # than passing quietly.
 
 # ---------------------------------------------------------------------------
-# enzan_add_golden_test(<name> [NO_DIFFERENTIAL])
+# enzan_add_golden_test(<name> [NO_DIFFERENTIAL] [OWN_TIME_SCALES])
 # ---------------------------------------------------------------------------
 #
 # Registers `golden.<name>`, which runs sv/<name>.sv and requires the PASS line, and
@@ -18,6 +18,9 @@
 # NO_DIFFERENTIAL marks a case where simulators legitimately differ, which section 14.3
 # warns about. Such a case still runs under Enzan; it simply is not held to another tool's
 # behaviour.
+#
+# A case runs in nanoseconds, `--timescale ns`, unless OWN_TIME_SCALES says that every module
+# states its own time scale, when it runs in the unit the design asks for (section 3.1).
 
 # A failure line, anchored to the start of one.
 #
@@ -29,14 +32,34 @@
 set(ENZAN_GOLDEN_FAILURE_PATTERN "\nFAIL")
 
 function(enzan_add_golden_test name)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL" "" "")
+  cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL;OWN_TIME_SCALES;DIR_WITH_MAKE" "" "")
 
-  set(source "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}.sv")
+  if(arg_DIR_WITH_MAKE)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}")
+  else()
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}.sv")
+  endif()
+
   if(NOT EXISTS "${source}")
     message(FATAL_ERROR "golden test '${name}' has no source at ${source}")
   endif()
 
-  add_test(NAME golden.${name} COMMAND enzan --top tb --timescale ns "${source}")
+  set(unit --timescale ns)
+  if(arg_OWN_TIME_SCALES)
+    set(unit)
+  endif()
+  string(JOIN " " unit_string ${unit})
+
+  if(arg_DIR_WITH_MAKE)
+    # Its libraries go into the build tree, cleaned first: beside the sources they would be left
+    # in the working tree, shared between builds, and taken as up to date by a newer Enzan.
+    add_test(NAME golden.${name}
+             COMMAND sh -c "make \"$@\" clean && make \"$@\"" make -C "${source}"
+                     "LIB_DIR=${CMAKE_CURRENT_BINARY_DIR}/${name}/rtl_libs"
+                     "SYNTH_ARGS=${unit_string}" "ENZAN=$<TARGET_FILE:enzan>")
+  else()
+    add_test(NAME golden.${name} COMMAND enzan --top tb ${unit} "${source}")
+  endif()
   set_tests_properties(
     golden.${name}
     PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}"
@@ -50,7 +73,7 @@ function(enzan_add_golden_test name)
   add_test(
     NAME golden.${name}.differential
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-differential.sh" $<TARGET_FILE:enzan>
-            "${ENZAN_REFERENCE_SIMULATOR}" "${source}" tb)
+            "${ENZAN_REFERENCE_SIMULATOR}" "${source}" tb ${unit})
   set_tests_properties(golden.${name}.differential PROPERTIES TIMEOUT 120)
 endfunction()
 
@@ -140,6 +163,9 @@ enzan_add_golden_test(events)
 # Intra-assignment delays, and inertial delays on continuous assignments.
 enzan_add_golden_test(delays)
 
+# Delays and `$time` in each module's own time unit, rounded to its precision.
+enzan_add_golden_test(timescales OWN_TIME_SCALES)
+
 # `wait (condition)`.
 enzan_add_golden_test(wait)
 
@@ -165,6 +191,12 @@ enzan_add_golden_test(dead_code NO_DIFFERENTIAL)
 
 # Ports connected to signals wider or narrower than themselves.
 enzan_add_golden_test(port_widths)
+
+# A bus shared through inout ports of the signal's own width, connected as the signal itself.
+enzan_add_golden_test(inout)
+
+# A complex design with many module instances and many levels of hierarchy.
+enzan_add_golden_test(large_design_00 DIR_WITH_MAKE NO_DIFFERENTIAL)
 
 # File output, and memories loaded from files the design writes first: compared file by file
 # with what Icarus Verilog does, each in an empty directory, so they need it.
@@ -268,6 +300,9 @@ if(ENZAN_HAVE_COCOTB)
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-cocotb-check.sh" $<TARGET_FILE:enzan>
                    "${ENZAN_COCOTB_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/cocotb")
   set_tests_properties(
-    golden.cocotb PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb" FAIL_REGULAR_EXPRESSION
-                             "FAIL=[1-9]" TIMEOUT 300)
+    golden.cocotb
+    PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb"
+               FAIL_REGULAR_EXPRESSION "FAIL=[1-9]"
+               TIMEOUT 300
+               ENVIRONMENT_MODIFICATION "${ENZAN_COCOTB_ENVIRONMENT}")
 endif()

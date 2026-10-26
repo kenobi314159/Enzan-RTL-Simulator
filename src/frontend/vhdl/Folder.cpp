@@ -5,9 +5,11 @@
 #include "eir/BitOps.h"
 #include "frontend/vhdl/Types.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -483,6 +485,96 @@ std::optional<Folder::Range> Folder::range(tree_t range) const {
     }
 }
 
+std::optional<std::int64_t> Folder::difference(tree_t minuend, tree_t subtrahend) const {
+    const std::optional<Linear> left = linear(minuend);
+    const std::optional<Linear> right = linear(subtrahend);
+    if (!left || !right) return std::nullopt;
+    // The difference is static when every name that does not fold is there as often in both.
+    std::map<tree_t, std::int64_t> remaining = left->multiples;
+    for (const auto& [name, multiple] : right->multiples) remaining[name] -= multiple;
+    if (std::ranges::any_of(remaining, [](const auto& entry) { return entry.second != 0; }))
+        return std::nullopt;
+    std::int64_t result = 0;
+    if (__builtin_sub_overflow(left->constant, right->constant, &result)) return std::nullopt;
+    return result;
+}
+
+std::optional<Folder::Linear> Folder::linear(tree_t expression) const {
+    if (const std::optional<std::int64_t> folded = integer(expression))
+        return Linear{.constant = *folded, .multiples = {}};
+    if (!tree_has_type(expression) || !type_is_integer(tree_type(expression))) return std::nullopt;
+
+    // Scaled by `factor`, which is how a product by a constant and a negation are taken.
+    const auto scaled = [](Linear form, std::int64_t factor) -> std::optional<Linear> {
+        if (__builtin_mul_overflow(form.constant, factor, &form.constant)) return std::nullopt;
+        for (auto& [name, multiple] : form.multiples) {
+            if (__builtin_mul_overflow(multiple, factor, &multiple)) return std::nullopt;
+        }
+        return form;
+    };
+    const auto added = [](Linear form, const Linear& other) -> std::optional<Linear> {
+        if (__builtin_add_overflow(form.constant, other.constant, &form.constant))
+            return std::nullopt;
+        for (const auto& [name, multiple] : other.multiples) {
+            std::int64_t& sum = form.multiples[name];
+            if (__builtin_add_overflow(sum, multiple, &sum)) return std::nullopt;
+        }
+        return form;
+    };
+
+    switch (tree_kind(expression)) {
+    // A name is the same value wherever a bound of one slice names it: a variable or a signal
+    // does not change while an expression is computed.
+    case T_REF:
+        if (!tree_has_ref(expression)) return std::nullopt;
+        return Linear{.constant = 0, .multiples = {{tree_ref(expression), 1}}};
+
+    // Between integer types a conversion keeps the value.
+    case T_TYPE_CONV:
+    case T_QUALIFIED: return linear(tree_value(expression));
+
+    case T_FCALL: {
+        if (!tree_has_ref(expression)) return std::nullopt;
+        const auto kind = static_cast<subprogram_kind_t>(tree_subkind(tree_ref(expression)));
+        const unsigned count = tree_params(expression);
+        if (count == 1 && (kind == S_IDENTITY || kind == S_NEGATE)) {
+            const std::optional<Linear> operand = linear(tree_value(tree_param(expression, 0)));
+            if (!operand) return std::nullopt;
+            return kind == S_IDENTITY ? operand : scaled(*operand, -1);
+        }
+        if (count != 2) return std::nullopt;
+        tree_t first = tree_value(tree_param(expression, 0));
+        tree_t second = tree_value(tree_param(expression, 1));
+        switch (kind) {
+        case S_ADD:
+        case S_SUB: {
+            const std::optional<Linear> left = linear(first);
+            std::optional<Linear> right = linear(second);
+            if (!left || !right) return std::nullopt;
+            if (kind == S_SUB) right = scaled(*right, -1);
+            if (!right) return std::nullopt;
+            return added(*left, *right);
+        }
+        case S_MUL: {
+            // A product is linear when one side is a constant.
+            if (const std::optional<std::int64_t> factor = integer(first)) {
+                const std::optional<Linear> other = linear(second);
+                return other ? scaled(*other, *factor) : std::nullopt;
+            }
+            if (const std::optional<std::int64_t> factor = integer(second)) {
+                const std::optional<Linear> other = linear(first);
+                return other ? scaled(*other, *factor) : std::nullopt;
+            }
+            return std::nullopt;
+        }
+        default: return std::nullopt;
+        }
+    }
+
+    default: return std::nullopt;
+    }
+}
+
 std::optional<Folder::Range> Folder::boundsOf(tree_t name, unsigned dimension) const {
     if (dimension == 0 && tree_kind(name) == T_REF && tree_has_ref(name)) {
         const auto bound = objectBounds.find(tree_ref(name));
@@ -558,11 +650,33 @@ constexpr int MaxDepth = 64;
 /// How deep constant calls are nested now.
 thread_local int depth = 0;
 
+/// The trace listening, the innermost one living.
+thread_local FoldTrace* listening = nullptr;
+
+/// Why a run stops at `statement`, which failed with nothing it calls having said more: a value it
+/// needs did not fold, or it is a statement a run does not run.
+FoldStop::Reason stoppedAt(tree_t statement) {
+    switch (tree_kind(statement)) {
+    case T_RETURN:
+    case T_VAR_ASSIGN:
+    case T_IF:
+    case T_CASE:
+    case T_FOR:
+    case T_WHILE:
+    case T_EXIT:
+    case T_NEXT:
+    case T_SEQUENCE: return FoldStop::Reason::Value;
+    case T_ASSERT: return FoldStop::Reason::Assertion;
+    default: return FoldStop::Reason::Statement;
+    }
+}
+
 /// Runs the body of a function whose value folds: its statements over its parameters' and its
 /// variables' values, held as a Folder's bindings, which is how its expressions fold too.
 class ConstantRun {
 public:
-    explicit ConstantRun(Folder bound) : frame(std::move(bound)) {}
+    /// Runs `call`'s body over `bound`; `call` is what a trace is told stopped (`FoldTrace`).
+    ConstantRun(tree_t call, Folder bound) : frame(std::move(bound)), running(call) {}
 
     /// Runs the statements of `container` in order.
     Flow statements(tree_t container) {
@@ -584,20 +698,22 @@ public:
                 if (type_is_array(type) || type_is_record(type)) {
                     // A composite variable is its bits, bound as an array generic's are.
                     const std::optional<Layout> layout = layoutOf(type, frame);
-                    if (!layout) return false;
+                    if (!layout) return stopsAt(declaration, FoldStop::Reason::Value);
                     std::optional<eir::BitVector> initial =
                         tree_has_value(declaration)
                             ? constantBits(tree_value(declaration), *layout, frame)
                             : defaultBits(type, *layout, frame);
-                    if (!initial) return false;
+                    if (!initial) return stopsAt(declaration, FoldStop::Reason::Value);
                     frame.bindComposite(declaration, std::move(*initial));
                     break;
                 }
-                if (!type_is_scalar(type)) return false;
+                if (!type_is_scalar(type)) {
+                    return stopsAt(declaration, FoldStop::Reason::VariableType);
+                }
                 const std::optional<std::int64_t> initial =
                     tree_has_value(declaration) ? frame.integer(tree_value(declaration))
                                                 : frame.left(type);
-                if (!initial) return false;
+                if (!initial) return stopsAt(declaration, FoldStop::Reason::Value);
                 frame.bind(declaration, *initial);
                 break;
             }
@@ -605,7 +721,9 @@ public:
             // A file not opened where it is declared does nothing until something opens it, which
             // does not fold.
             case T_FILE_DECL:
-                if (tree_has_value(declaration)) return false;
+                if (tree_has_value(declaration)) {
+                    return stopsAt(declaration, FoldStop::Reason::Declaration);
+                }
                 break;
             case T_CONST_DECL:
             case T_TYPE_DECL:
@@ -614,7 +732,7 @@ public:
             case T_ATTR_SPEC:
             case T_FUNC_DECL:
             case T_FUNC_BODY: break;
-            default: return false;
+            default: return stopsAt(declaration, FoldStop::Reason::Declaration);
             }
         }
         return true;
@@ -626,8 +744,25 @@ public:
     [[nodiscard]] const Folder& bindings() const noexcept { return frame; }
 
 private:
+    /// Tells a trace listening that the run stopped at `where` for `reason`, and returns false.
+    bool stopsAt(tree_t where, FoldStop::Reason reason) const noexcept {
+        FoldTrace::record(running, where, reason);
+        return false;
+    }
+
+    /// Runs `statement`, telling a trace listening where the run stopped when it does: at the
+    /// innermost statement, which is the first to fail.
     Flow statement(tree_t statement) {
-        if (++steps > MaxSteps) return Flow::Failed;
+        if (++steps > MaxSteps) {
+            stopsAt(statement, FoldStop::Reason::TooLong);
+            return Flow::Failed;
+        }
+        const Flow flow = run(statement);
+        if (flow == Flow::Failed) FoldTrace::record(running, statement, stoppedAt(statement));
+        return flow;
+    }
+
+    Flow run(tree_t statement) {
         switch (tree_kind(statement)) {
         case T_NULL: return Flow::Continue;
 
@@ -653,6 +788,12 @@ private:
 
         case T_CASE: return caseStatement(statement);
 
+        // A block of statements, VHDL-2019's sequential block, and what NVC leaves of an `if`
+        // whose condition it folded: the alternative taken, when it is more than one statement.
+        case T_SEQUENCE:
+            if (!declare(statement)) return Flow::Failed;
+            return statements(statement);
+
         case T_FOR: {
             const std::optional<Folder::Range> range = frame.range(tree_range(statement, 0));
             if (!range || tree_decls(statement) != 1) return Flow::Failed;
@@ -669,7 +810,10 @@ private:
 
         case T_WHILE:
             for (;;) {
-                if (++steps > MaxSteps) return Flow::Failed;
+                if (++steps > MaxSteps) {
+                    stopsAt(statement, FoldStop::Reason::TooLong);
+                    return Flow::Failed;
+                }
                 if (tree_has_value(statement)) {
                     const std::optional<std::int64_t> holds = frame.integer(tree_value(statement));
                     if (!holds) return Flow::Failed;
@@ -803,6 +947,7 @@ private:
     }
 
     Folder frame;
+    tree_t running;
     tree_t result = nullptr;
     ident_t label = nullptr;
     std::uint64_t steps = 0;
@@ -841,12 +986,20 @@ bool Folder::returned(tree_t call,
     const tree_kind_t kind = tree_kind(declaration);
     if (kind != T_FUNC_DECL && kind != T_FUNC_BODY) return false;
     if (!hasVhdlBody(static_cast<subprogram_kind_t>(tree_subkind(declaration)))) return false;
+    // Each refusal below tells a trace listening why (`FoldTrace`).
+    const auto stops = [call](FoldStop::Reason reason) {
+        FoldTrace::record(call, nullptr, reason);
+        return false;
+    };
     // At elaboration an impure function folds too when what it runs is static: one that would read
     // a file only when given a name, and is given none. Opening the file does not fold.
-    if (((tree_flags(declaration) & TREE_F_IMPURE) != 0 && !impureAllowed) || depth >= MaxDepth)
-        return false;
+    if ((tree_flags(declaration) & TREE_F_IMPURE) != 0 && !impureAllowed)
+        return stops(FoldStop::Reason::Impure);
+    if (depth >= MaxDepth) return stops(FoldStop::Reason::TooDeep);
     tree_t body = subprogramBody(declaration);
-    if (body == nullptr || tree_ports(body) != tree_ports(declaration)) return false;
+    if (body == nullptr || tree_ports(body) != tree_ports(declaration))
+        return stops(FoldStop::Reason::NoBody);
+    const bool outermost = depth == 0;
 
     // The body sees what the caller sees, an architecture's generics among it, and its own
     // parameters, each its actual's value or its default. The declaration's parameters are what
@@ -886,14 +1039,22 @@ bool Folder::returned(tree_t call,
                 frame.bindComposite(parameter, std::move(*bits));
             }
         } else {
-            return false;
+            return stops(FoldStop::Reason::ParameterType);
         }
     }
 
     const Nested nested;
-    ConstantRun run(std::move(frame));
-    if (!run.declare(body) || run.statements(body) != Flow::Return) return false;
-    return use(run.value(), run.bindings());
+    ConstantRun run(call, std::move(frame));
+    if (!run.declare(body)) return false;
+    if (const Flow flow = run.statements(body); flow != Flow::Return) {
+        return flow == Flow::Failed ? false : stops(FoldStop::Reason::NoReturn);
+    }
+    if (!use(run.value(), run.bindings())) return false;
+
+    // What an earlier call left is no reason for a fold that goes on to fail, since this one
+    // folded where it was tried instead.
+    if (outermost) FoldTrace::forget();
+    return true;
 }
 
 std::optional<std::int64_t> Folder::applyToArray(tree_t declaration, const eir::BitVector& elements,
@@ -908,7 +1069,7 @@ std::optional<std::int64_t> Folder::applyToArray(tree_t declaration, const eir::
     frame.bindComposite(parameter, elements);
 
     const Nested nested;
-    ConstantRun run(std::move(frame));
+    ConstantRun run(nullptr, std::move(frame));
     if (!run.declare(body) || run.statements(body) != Flow::Return) return std::nullopt;
     return run.bindings().integer(run.value());
 }
@@ -951,6 +1112,25 @@ std::optional<std::int64_t> Folder::element(tree_t expression) const {
         return static_cast<std::int64_t>(raw);
     const std::uint64_t sign = std::uint64_t{1} << (elementBits - 1);
     return static_cast<std::int64_t>((raw ^ sign) - sign);
+}
+
+// --- why a constant call did not fold ------------------------------------------
+
+FoldTrace::FoldTrace() noexcept : outer(listening) {
+    listening = this;
+}
+
+FoldTrace::~FoldTrace() {
+    listening = outer;
+}
+
+void FoldTrace::record(tree_t call, tree_t at, FoldStop::Reason reason) noexcept {
+    if (listening == nullptr || listening->stopped || call == nullptr) return;
+    listening->stopped = FoldStop{.call = call, .at = at, .reason = reason};
+}
+
+void FoldTrace::forget() noexcept {
+    if (listening != nullptr) listening->stopped.reset();
 }
 
 } // namespace enzan::frontend::vhdl

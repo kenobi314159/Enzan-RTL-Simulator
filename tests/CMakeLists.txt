@@ -29,11 +29,28 @@ if(NOT ENZAN_HAVE_COCOTB)
   message(STATUS "cocotb not found; the cocotb golden tests are skipped")
 endif()
 
+# What the cocotb golden tests change in a sanitiser run's environment. Each runs CPython inside
+# Enzan, and neither CPython nor cocotb frees everything it allocated before the process exits,
+# so leak checking is off for those runs alone; ASan and UBSan still check everything else. A
+# leak suppression could not be narrower: it matches any frame of a stack, and whatever Enzan
+# allocates for cocotb has Python's frames above it. Appended, so that it overrides the
+# `detect_leaks=1` the run sets.
+set(ENZAN_COCOTB_ENVIRONMENT "ASAN_OPTIONS=path_list_append:detect_leaks=0")
+
+# Command lines that are wrong, and what Enzan says of them (DESIGN_GUIDE.md section 8). Every
+# build runs it, since a command line is checked before any frontend is reached.
+add_test(NAME golden.cli COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/golden/run-cli-check.sh"
+                                 $<TARGET_FILE:enzan>)
+set_tests_properties(golden.cli PROPERTIES PASS_REGULAR_EXPRESSION "PASS cli" TIMEOUT 120)
+
 # Golden tests need the simulator, so they exist only when a frontend does.
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   add_subdirectory(golden)
 endif()
 if(ENZAN_ENABLE_VHDL)
   add_subdirectory(golden/vhdl)
+endif()
+if(ENZAN_ENABLE_SYSTEMVERILOG AND ENZAN_ENABLE_VHDL)
+  add_subdirectory(golden/mixed)
 endif()
 # add_subdirectory(conformance)  # M5 — sv-tests, ivtest harnesses

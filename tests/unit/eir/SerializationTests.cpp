@@ -27,6 +27,7 @@ namespace {
 using enzan::BufferId;
 using enzan::SourceLocation;
 using enzan::SourceManager;
+using enzan::eir::ArrayDimension;
 using enzan::eir::BasicBlock;
 using enzan::eir::BitVector;
 using enzan::eir::CallSite;
@@ -36,6 +37,7 @@ using enzan::eir::EnumDefinition;
 using enzan::eir::EnumMember;
 using enzan::eir::Instance;
 using enzan::eir::Instruction;
+using enzan::eir::Language;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::NetKind;
 using enzan::eir::Object;
@@ -56,7 +58,6 @@ using enzan::eir::SysTaskArgument;
 using enzan::eir::SysTaskCall;
 using enzan::eir::SysTaskKind;
 using enzan::eir::Type;
-using enzan::eir::UnpackedDimension;
 using enzan::eir::VhdlType;
 using enzan::eir::WriteExtent;
 using enzan::test::literal;
@@ -91,6 +92,7 @@ ModuleDefinition richModule(BufferId buffer) {
     ModuleDefinition definition;
     definition.name = "counter$WIDTH=8";
     definition.sourceName = "counter";
+    definition.language = Language::Vhdl;
     definition.location = SourceLocation(buffer, 3);
 
     EnumDefinition states;
@@ -103,6 +105,7 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Enumeration,
                                             .name = "BIT",
                                             .width = 1,
+                                            .encoding = Encoding::VhdlBit,
                                             .ranges = {{.left = 0, .right = 1, .ascending = true}},
                                             .enumIndex = 0});
     definition.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Array,
@@ -121,8 +124,9 @@ ModuleDefinition richModule(BufferId buffer) {
                                 .kind = ObjectKind::Net,
                                 .netKind = NetKind::Tri1,
                                 .location = SourceLocation(buffer, 11),
-                                .unpackedDimensions = {UnpackedDimension{.left = 0, .right = 3},
-                                                       UnpackedDimension{.left = 7, .right = -1}},
+                                .unpackedDimensions = {ArrayDimension{.left = 0, .right = 3},
+                                                       ArrayDimension{.left = 7, .right = -1}},
+                                .packedDimensions = {ArrayDimension{.left = -2, .right = 5}},
                                 .elementWidth = 1,
                                 .elementSigned = true,
                                 .subroutineStatic = true});
@@ -194,6 +198,7 @@ ModuleDefinition richModule(BufferId buffer) {
     call.kind = SysTaskKind::Display;
     call.formatIndex = 0;
     call.location = SourceLocation(buffer, 15);
+    call.timeUnit = -9;
     call.arguments.push_back(
         SysTaskArgument{.value = Operand::reg(1), .type = Type::bits(8, true, true)});
     process.sysCalls.push_back(std::move(call));
@@ -247,7 +252,8 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.parameters.push_back(Parameter{.name = "DEPTH",
                                               .value = literal("32'd16"),
                                               .isLocal = true,
-                                              .location = SourceLocation(buffer, 2)});
+                                              .location = SourceLocation(buffer, 2),
+                                              .fromGenvar = true});
     return definition;
 }
 
@@ -262,6 +268,7 @@ TEST_F(SerializationTest, ModuleIdentityRoundTrips) {
 
     EXPECT_EQ(decoded.front().name, "counter$WIDTH=8");
     EXPECT_EQ(decoded.front().sourceName, "counter");
+    EXPECT_EQ(decoded.front().language, Language::Vhdl);
     EXPECT_EQ(decoded.front().location, SourceLocation(buffer, 3));
 }
 
@@ -275,8 +282,11 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     EXPECT_EQ(definition.objects[0].kind, ObjectKind::Net);
     EXPECT_EQ(definition.objects[0].netKind, NetKind::Tri1);
     EXPECT_EQ(definition.objects[0].unpackedDimensions,
-              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 0, .right = 3},
-                                              UnpackedDimension{.left = 7, .right = -1}}));
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 0, .right = 3},
+                                           ArrayDimension{.left = 7, .right = -1}}));
+    EXPECT_EQ(definition.objects[0].packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = -2, .right = 5}}));
+    EXPECT_TRUE(definition.objects[1].packedDimensions.empty());
     EXPECT_EQ(definition.objects[0].elementWidth, 1U);
     EXPECT_TRUE(definition.objects[0].elementSigned);
     EXPECT_TRUE(definition.objects[0].subroutineStatic);
@@ -357,6 +367,8 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     EXPECT_EQ(process.sysCalls[0].arguments[0].value, Operand::reg(1));
     EXPECT_TRUE(process.sysCalls[0].arguments[0].type.isSigned());
     EXPECT_FALSE(process.sysCalls[1].hasFormat());
+    EXPECT_EQ(process.sysCalls[0].timeUnit, -9);
+    EXPECT_EQ(process.sysCalls[1].timeUnit, SysTaskCall::RunUnit);
 
     ASSERT_EQ(process.sensitivity.size(), 1U);
     EXPECT_EQ(process.sensitivity[0].edge, EdgeKind::Posedge);
@@ -466,8 +478,10 @@ TEST_F(SerializationTest, EnumerationsVhdlTypesAndParametersRoundTrip) {
     ASSERT_EQ(definition.parameters.size(), 2U);
     EXPECT_EQ(definition.parameters[0].name, "WIDTH");
     EXPECT_FALSE(definition.parameters[0].isLocal);
+    EXPECT_FALSE(definition.parameters[0].fromGenvar);
     EXPECT_EQ(definition.parameters[1].value, literal("32'd16"));
     EXPECT_TRUE(definition.parameters[1].isLocal);
+    EXPECT_TRUE(definition.parameters[1].fromGenvar);
 }
 
 TEST_F(SerializationTest, SeveralModulesRoundTripInOrder) {

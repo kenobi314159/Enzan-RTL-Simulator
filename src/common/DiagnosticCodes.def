@@ -54,6 +54,13 @@ ENZAN_DIAG(ErrorInDeadCode, 1008, Warning,
            "the simulation.")
 ENZAN_DIAG(UnusedParameterOverride, 1007, Warning,
            "-G {} names no parameter of a top level, and changes nothing")
+ENZAN_DIAG(DelayRounded, 1009, Warning,
+           "a delay of {} is no whole number of the run's time unit, and is rounded to {}")
+ENZAN_DIAG(RequestedModuleMissing, 1010, Error,
+           "VHDL instantiates the module '{}', which no SystemVerilog source declares")
+ENZAN_DIAG(RequestedParameterMissing, 1011, Error,
+           "module '{}' has no parameter '{}' for the VHDL instantiating it to set; a component's "
+           "generic sets the module's parameter of its name")
 
 // --- 2000-2999: VHDL frontend -----------------------------------------------
 
@@ -90,6 +97,17 @@ ENZAN_DIAG(PortWidthMismatch, 3005, Error,
            "port '{}' of '{}' is {} bits but is connected to a {}-bit object; a port is joined "
            "only to a signal as wide as it, and a frontend converts any other width with an "
            "assignment")
+ENZAN_DIAG(UnconvertiblePort, 3016, Error,
+           "port '{}' of '{}' crosses between SystemVerilog and VHDL, and {}; a port no "
+           "conversion covers is refused")
+ENZAN_DIAG(RequestedPortMissing, 3017, Error,
+           "module '{}' has no port '{}' for the instance '{}' of another language to connect")
+ENZAN_DIAG(RequestedPortDirection, 3018, Error,
+           "port '{}' of '{}' is an {}, but the instance '{}' of another language connects it as an "
+           "{}")
+ENZAN_DIAG(PortEncodingMismatch, 3015, Error,
+           "port '{}' of '{}' holds {} but is connected to an object holding {}; a connection "
+           "between languages converts its values, and nothing converted this one")
 ENZAN_DIAG(MultipleContinuousDrivers, 3006, Error,
            "{} '{}' has {} driven by both {} and {}; a {} may have one continuous driver for "
            "each bit, so overlapping drivers are an error rather than something to resolve")
@@ -109,6 +127,9 @@ ENZAN_DIAG(SubprogramWritesDrivenSignal, 3014, Error,
            "through its drivers")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
+ENZAN_DIAG(UnconnectedVhdlPort, 3019, Warning,
+           "port '{}' of instance '{}' is not connected and keeps its default value, as a VHDL "
+           "port left open does")
 
 // --- 5000-5999: runtime and scheduler ---------------------------------------
 
@@ -179,11 +200,29 @@ ENZAN_DIAG(RestartWithVpiApplication, 6026, Error,
            "would still hold the state of the simulation being discarded, and nothing in the "
            "standard tells it so")
 
+// --- 7000-7999: waveform database -------------------------------------------
+
+ENZAN_DIAG(SignalsTooWideToRecord, 7001, Warning,
+           "{} records no signal wider than {} bits, and leaves out {}; --wave-max-bits changes "
+           "the limit")
+
 // --- 8000-8999: VPI, VHPI and plugin loading --------------------------------
 
 ENZAN_DIAG(LibraryTimeUnitsDiffer, 6027, Error,
            "library '{}' was analysed in units of {} and library '{}' in units of {}; a design "
            "is simulated in one time unit, so its libraries have to be analysed in the same one")
+ENZAN_DIAG(WorkLibraryNamedOtherwise, 6029, Error,
+           "`--work {}` names another library than the one analysis writes into, which is called "
+           "'{}'; leave `--work` out, or create the library with that name (`enzan lib create "
+           "--name`)")
+ENZAN_DIAG(MixedAnalysisUnsettled, 6030, Error,
+           "the design's VHDL and SystemVerilog still ask each other for units after {} rounds of "
+           "analysis, the last asking for {}; a hierarchy recursing through both languages is not "
+           "followed for ever")
+ENZAN_DIAG(VhdlUnitUnrecorded, 6031, Error,
+           "'{}' is among the VHDL NVC analysed into library '{}', but the analysis that put it "
+           "there did not finish, so the library does not record it; analyse its sources into "
+           "the library again")
 ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
            "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
            "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "

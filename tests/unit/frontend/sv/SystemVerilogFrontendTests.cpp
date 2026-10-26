@@ -11,6 +11,7 @@
 #include "common/SourceManager.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
+#include "eir/Instruction.h"
 #include "eir/Module.h"
 #include "eir/Process.h"
 #include "eir/Verifier.h"
@@ -20,9 +21,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -108,6 +111,16 @@ protected:
         options.files.push_back(path);
         if (!top.empty()) options.topModules.emplace_back(top);
         options.parameterOverrides = std::move(parameters);
+        options.timeUnitExponent = timeUnit;
+        options.refineTimeUnit = refineTimeUnit;
+        options.runTimeUnit = &runTimeUnit;
+        options.fixedRunTimeUnit = fixedRunTimeUnit;
+        options.requests = requests;
+        options.requestAnswers = &answers;
+        options.onlyRequested = onlyRequested;
+        options.interfaces = interfaces;
+        options.asked = &asked;
+        options.unsettled = &unsettled;
 
         return enzan::frontend::sv::analyse(options, sources, engine);
     }
@@ -126,7 +139,41 @@ protected:
     DiagnosticEngine engine;
     CollectingConsumer consumer;
     std::filesystem::path directory;
+
+    /// The unit a module with no time scale is in, whether a finer precision may replace it as
+    /// the run's, and the run's unit the last analysis chose.
+    std::int8_t timeUnit = -12;
+    bool refineTimeUnit = false;
+    std::int8_t runTimeUnit = 0;
+    std::optional<std::int8_t> fixedRunTimeUnit;
+
+    /// What another language's units ask for, whether they are the only tops, and the
+    /// definitions the last analysis answered with.
+    std::vector<enzan::eir::UnitRequest> requests;
+    bool onlyRequested = false;
+    std::vector<std::string> answers;
+
+    /// The other language's units the sources instantiate, and what the last analysis asked of
+    /// them.
+    std::vector<enzan::eir::UnitInterface> interfaces;
+    std::vector<enzan::eir::UnitRequest> asked;
+    bool unsettled = false;
 };
+
+/// The values of the constants `process` loads.
+std::vector<std::uint64_t> constantsOf(const enzan::eir::Process& process) {
+    std::vector<std::uint64_t> values;
+    values.reserve(process.constants.size());
+    for (const enzan::eir::BitVector& constant : process.constants)
+        values.push_back(constant.ref().toUInt64());
+    return values;
+}
+
+/// True when `process` loads a constant of `value`.
+bool loads(const enzan::eir::Process& process, std::uint64_t value) {
+    const std::vector<std::uint64_t> values = constantsOf(process);
+    return std::ranges::find(values, value) != values.end();
+}
 
 // ---------------------------------------------------------------------------
 // Well-formed input
@@ -267,6 +314,28 @@ TEST_F(FrontendTest, ParametersAreRecordedWithWhatTheyResolvedTo) {
     std::ranges::sort(byteCounts);
     EXPECT_EQ(widths, (std::vector<int>{8, 16}));
     EXPECT_EQ(byteCounts, (std::vector<int>{1, 2})) << "a localparam derived from the parameter";
+}
+
+TEST_F(FrontendTest, AGenvarAsEachIterationSeesItIsToldApartFromALocalparam) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            genvar I;
+            for (I = 0; I < 2; I++) begin : gen
+                localparam int TWICE = 2 * I;
+                logic q;
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+
+    std::vector<std::string> genvars;
+    std::vector<std::string> others;
+    for (const enzan::eir::Parameter& parameter : found->parameters)
+        (parameter.fromGenvar ? genvars : others).push_back(parameter.name);
+    EXPECT_EQ(genvars, (std::vector<std::string>{"gen[0].I", "gen[1].I"}));
+    EXPECT_EQ(others, (std::vector<std::string>{"gen[0].TWICE", "gen[1].TWICE"}));
 }
 
 TEST_F(FrontendTest, AParameterThatIsNotAnIntegerIsSkippedRatherThanRefused) {
@@ -699,21 +768,72 @@ TEST_F(FrontendTest, AnUnpackedArrayIsStoredFlatAndKeepsItsDimensions) {
     const ModuleDefinition* found = design->findModule("top");
     ASSERT_NE(found, nullptr);
 
-    using enzan::eir::UnpackedDimension;
+    using enzan::eir::ArrayDimension;
     const enzan::eir::Object& memory = found->objects[require(found->findObject("memory"))];
     EXPECT_EQ(memory.type.bitWidth(), 128U);
     EXPECT_EQ(memory.elementWidth, 8U);
     EXPECT_FALSE(memory.elementSigned);
     EXPECT_EQ(memory.unpackedDimensions,
-              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 0, .right = 15}}));
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 0, .right = 15}}));
 
     const enzan::eir::Object& grid = found->objects[require(found->findObject("grid"))];
     EXPECT_EQ(grid.type.bitWidth(), 48U);
     EXPECT_EQ(grid.elementWidth, 4U);
     EXPECT_TRUE(grid.elementSigned) << "the flat vector is unsigned, and the element is not";
     EXPECT_EQ(grid.unpackedDimensions,
-              (std::vector<UnpackedDimension>{UnpackedDimension{.left = 2, .right = 0},
-                                              UnpackedDimension{.left = 0, .right = 3}}));
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 2, .right = 0},
+                                           ArrayDimension{.left = 0, .right = 3}}));
+}
+
+TEST_F(FrontendTest, APackedArrayKeepsItsDimensionsDownToItsElement) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            typedef logic [0:3] nibble_t;
+            typedef struct packed { logic [3:0] a; logic [3:0] b; } pair_t;
+            logic [5:0][7:0] lanes;
+            nibble_t [1:2] nibbles;
+            logic [7:0] bytes [0:3][1:0];
+            int words [2];
+            pair_t [2:0] pairs;
+            logic flag;
+            logic [7:0] plain;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("top");
+    ASSERT_NE(found, nullptr);
+
+    using enzan::eir::ArrayDimension;
+    const auto object = [found](std::string_view name) -> const enzan::eir::Object& {
+        return found->objects[require(found->findObject(name))];
+    };
+
+    EXPECT_EQ(object("lanes").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 5, .right = 0},
+                                           ArrayDimension{.left = 7, .right = 0}}));
+    EXPECT_TRUE(object("lanes").unpackedDimensions.empty());
+
+    // A typedef is looked through, so the element's own range is a dimension like the others.
+    EXPECT_EQ(object("nibbles").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 1, .right = 2},
+                                           ArrayDimension{.left = 0, .right = 3}}));
+
+    // An unpacked array's packed dimensions are its element's.
+    EXPECT_EQ(object("bytes").unpackedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 0, .right = 3},
+                                           ArrayDimension{.left = 1, .right = 0}}));
+    EXPECT_EQ(object("bytes").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 7, .right = 0}}));
+
+    // An `int` or a packed struct is an element with no dimensions of its own.
+    EXPECT_TRUE(object("words").packedDimensions.empty());
+    EXPECT_EQ(object("words").elementWidth, 32U);
+    EXPECT_EQ(object("pairs").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 2, .right = 0}}));
+
+    EXPECT_TRUE(object("flag").packedDimensions.empty());
+    EXPECT_EQ(object("plain").packedDimensions,
+              (std::vector<ArrayDimension>{ArrayDimension{.left = 7, .right = 0}}));
 }
 
 TEST_F(FrontendTest, AnElementOrMemberWritesItsOwnBitsOfTheFlatStorage) {
@@ -1517,6 +1637,397 @@ TEST_F(FrontendTest, EveryInstanceOfOneParameterisationSharesOneDefinitionAndIsW
         for (const auto& connection : instance.connections) objects.insert(connection.objectIndex);
     }
     EXPECT_EQ(objects.size(), 6U) << "instances are sharing port storage";
+}
+
+// ---------------------------------------------------------------------------
+// Time units (DESIGN_GUIDE.md section 3.1)
+// ---------------------------------------------------------------------------
+
+TEST_F(FrontendTest, ADelayCountsItsModulesUnitAndIsGivenInTheRuns) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ps
+        module m;
+            logic a;
+            initial #2.5 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+    ASSERT_EQ(module->processes.size(), 1U);
+    EXPECT_TRUE(loads(module->processes[0], 2500)) << "2.5 ns is 2500 ps";
+    EXPECT_EQ(runTimeUnit, -12);
+}
+
+TEST_F(FrontendTest, ARunWhoseUnitNothingFixedCountsTheFinestPrecisionAskedFor) {
+    refineTimeUnit = true;
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1fs
+        module m;
+            logic a;
+            initial #1 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_EQ(runTimeUnit, -15);
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 1'000'000)) << "1 ns in fs";
+}
+
+TEST_F(FrontendTest, ARunWhoseUnitIsFixedKeepsItAndADelayFinerIsRoundedAndReported) {
+    timeUnit = -9;
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ps
+        module m;
+            logic a;
+            initial #1.6 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_EQ(runTimeUnit, -9);
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 2)) << "1600 ps is 2 ns, rounded";
+    EXPECT_TRUE(reportedCode(DiagCode::DelayRounded));
+    EXPECT_TRUE(reported("1600ps")) << consumer.messages.front();
+    EXPECT_TRUE(reported("2ns")) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, ADelayIsRoundedToItsModulesPrecisionFirst) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1us / 1ns
+        module m;
+            logic a;
+            initial #0.0036 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 4000)) << "3.6 ns is 4 ns";
+    EXPECT_FALSE(reportedCode(DiagCode::DelayRounded)) << "the language rounds it, not the run";
+}
+
+TEST_F(FrontendTest, ADelayInAPackageTaskCountsThePackagesUnit) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ns
+        package waits;
+            task automatic one;
+                #1;
+            endtask
+        endpackage
+`timescale 1ps / 1ps
+        module m;
+            initial waits::one();
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 1000)) << "1 ns, not 1 ps";
+}
+
+TEST_F(FrontendTest, ADelayKnownOnlyAsTheProcessRunsIsScaledAsItRuns) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ps
+        module m;
+            int amount = 3;
+            logic a;
+            initial #amount a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const enzan::eir::Process& process = design->findModule("m")->processes[0];
+    EXPECT_TRUE(loads(process, 1000)) << "the count is multiplied by the ps in a ns";
+    EXPECT_TRUE(std::ranges::any_of(process.blocks, [](const enzan::eir::BasicBlock& block) {
+        return std::ranges::any_of(block.instructions, [](const enzan::eir::Instruction& op) {
+            return op.opcode == enzan::eir::Opcode::Multiply;
+        });
+    }));
+}
+
+TEST_F(FrontendTest, ANegativeDelayIsRefused) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            initial #(-1) a = 1'b1;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a negative delay"));
+}
+
+TEST_F(FrontendTest, ASystemTaskCallCarriesTheTimeUnitOfItsScope) {
+    const std::unique_ptr<Design> design = analyse(R"(
+`timescale 1ns / 1ps
+        module m;
+            initial $display("%t", $time);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const enzan::eir::Process& process = design->findModule("m")->processes[0];
+    ASSERT_EQ(process.sysCalls.size(), 1U);
+    EXPECT_EQ(process.sysCalls[0].timeUnit, -9);
+}
+
+// ---------------------------------------------------------------------------
+// Modules another language instantiates (DESIGN_GUIDE.md section 18, M7)
+// ---------------------------------------------------------------------------
+
+/// A module VHDL instantiates, whose width has no default, and one nothing instantiates whose
+/// parameter has none either, which as a top level could not be elaborated.
+constexpr std::string_view RequestedModules = R"(
+    module Adder #(parameter int Width, parameter int Step = 1) (
+        input logic [Width-1:0] a,
+        output logic [Width-1:0] y
+    );
+        assign y = Step > 0 ? a : ~a;
+    endmodule
+
+    module unused #(parameter int P) ();
+    endmodule
+)";
+
+TEST_F(FrontendTest, AModuleAnotherLanguageAsksForIsSpecialisedAsItAsks) {
+    requests.push_back({.placeholder = "adder #(.width(5))",
+                        .unit = "adder",
+                        .parameters = {{.name = "width", .value = "5"}},
+                        .ports = {}});
+    onlyRequested = true;
+    const std::unique_ptr<Design> design = analyse(RequestedModules);
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    ASSERT_EQ(answers.size(), 1U);
+    const ModuleDefinition* adder = design->findModule(answers[0]);
+    ASSERT_NE(adder, nullptr) << answers[0];
+    ASSERT_EQ(adder->ports.size(), 2U);
+    EXPECT_EQ(adder->objects[adder->ports[0].objectIndex].type.bitWidth(), 5U);
+
+    // Nothing but what was asked for: the module asking is no part of the design, and a module
+    // nothing asked for is not a top level.
+    EXPECT_EQ(design->size(), 1U);
+    EXPECT_TRUE(consumer.codes.empty()) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, TwoRequestsOfOneModuleWithOtherValuesAreTwoSpecialisations) {
+    requests.push_back({.placeholder = "a",
+                        .unit = "Adder",
+                        .parameters = {{.name = "WIDTH", .value = "5"}},
+                        .ports = {}});
+    requests.push_back(
+        {.placeholder = "b",
+         .unit = "Adder",
+         .parameters = {{.name = "width", .value = "7"}, {.name = "step", .value = "-2"}},
+         .ports = {}});
+    onlyRequested = true;
+    const std::unique_ptr<Design> design = analyse(RequestedModules);
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    ASSERT_EQ(answers.size(), 2U);
+    EXPECT_NE(answers[0], answers[1]);
+    EXPECT_NE(design->findModule(answers[0]), nullptr);
+    EXPECT_NE(design->findModule(answers[1]), nullptr);
+}
+
+TEST_F(FrontendTest, WithoutATopAModuleNothingInstantiatesIsATopAsWell) {
+    requests.push_back({.placeholder = "a",
+                        .unit = "adder",
+                        .parameters = {{.name = "width", .value = "5"}},
+                        .ports = {}});
+    const std::unique_ptr<Design> design = analyse(R"(
+        module Adder #(parameter int Width) (input logic [Width-1:0] a);
+        endmodule
+
+        module checker_top;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_EQ(design->candidateTopModules(), (std::vector<std::string>{answers[0], "checker_top"}));
+}
+
+TEST_F(FrontendTest, ARequestSettingAParameterTheModuleLacksIsRefusedByName) {
+    requests.push_back({.placeholder = "a",
+                        .unit = "adder",
+                        .parameters = {{.name = "depth", .value = "5"}},
+                        .ports = {}});
+    onlyRequested = true;
+    EXPECT_EQ(analyse(RequestedModules), nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::RequestedParameterMissing));
+    EXPECT_TRUE(reported("'depth'")) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, TheNamesSourcesDeclareAndInstantiateAreListedWithoutElaborating) {
+    // `missing` is no module of the sources, and so may be another language's unit; an interface
+    // and a primitive are declared as modules are, and a gate is no instance of anything.
+    const std::filesystem::path path = directory / "design.sv";
+    std::ofstream(path) << RequestedModules << R"(
+        interface Bus;
+        endinterface
+
+        primitive inverter(output o, input i);
+            table 0 : 1; 1 : 0; endtable
+        endprimitive
+
+        module top;
+            wire a, b;
+            Bus bus ();
+            inverter i1 (b, a);
+            and g1 (b, a, a);
+            Adder #(.Width(4)) u1 (.a(), .y());
+            if (1) begin : g
+                Missing m ();
+            end
+            Missing n ();
+        endmodule
+    )";
+
+    enzan::frontend::sv::Options options;
+    options.files.push_back(path);
+    const enzan::frontend::sv::ModuleNames names =
+        enzan::frontend::sv::moduleNames(options, sources, engine);
+    EXPECT_EQ(names.declared, (std::vector<std::string>{"Adder", "unused", "top"}));
+    EXPECT_EQ(names.undeclared, std::vector<std::string>{"Missing"});
+    EXPECT_TRUE(consumer.codes.empty());
+}
+
+TEST_F(FrontendTest, ARunUnitAnotherLanguageFixedIsTheOneDelaysCount) {
+    fixedRunTimeUnit = -15;
+    refineTimeUnit = true;
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic a;
+            initial #2 a = 1'b1;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    EXPECT_EQ(runTimeUnit, -15);
+    EXPECT_TRUE(loads(design->findModule("m")->processes[0], 2000)) << "2 ps in fs";
+}
+
+TEST_F(FrontendTest, AnInstanceOfAnotherLanguagesUnitAsksForItWithItsValues) {
+    // A VHDL entity `fifo` with a width generic and a name, whose ports are as wide as its one
+    // translation so far says for the width 8, and one bit wide for any other.
+    using Kind = enzan::eir::UnitInterface::Kind;
+    using enzan::eir::PortDirection;
+    interfaces.push_back(
+        {.name = "Fifo",
+         .parameters = {{.name = "Width", .kind = Kind::Integer, .length = 0, .value = "8"},
+                        {.name = "Name", .kind = Kind::String, .length = 0, .value = "\"f\""}},
+         .ports = {{.name = "Clk",
+                    .direction = PortDirection::Input,
+                    .fourState = true,
+                    .isSigned = false},
+                   {.name = "Din",
+                    .direction = PortDirection::Input,
+                    .fourState = true,
+                    .isSigned = false},
+                   {.name = "Count",
+                    .direction = PortDirection::Output,
+                    .fourState = false,
+                    .isSigned = true}},
+         .widths = {
+             {.values = {"8", "\"f\""}, .ports = {{.bits = 1}, {.bits = 8}, {.bits = 32}}}}});
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            logic clk;
+            logic [7:0] d;
+            int n, m, k;
+            Fifo u (.Clk(clk), .Din(d), .Count(n));
+            Fifo #(.Width(8)) v (.Clk(clk), .Din(d), .Count(m));
+            Fifo #(.Width(4), .Name("g")) w (.Clk(clk), .Din(d[3:0]), .Count(k));
+        endmodule
+)");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    ASSERT_EQ(asked.size(), 2U) << "u and v ask for the same";
+    EXPECT_EQ(asked[0].unit, "Fifo");
+    using Parameter = enzan::eir::UnitRequest::Parameter;
+    EXPECT_EQ(asked[0].parameters, (std::vector<Parameter>{{.name = "Width", .value = "8"},
+                                                           {.name = "Name", .value = "\"f\""}}));
+    EXPECT_EQ(asked[1].parameters, (std::vector<Parameter>{{.name = "Width", .value = "4"},
+                                                           {.name = "Name", .value = "\"g\""}}));
+    ASSERT_EQ(asked[0].ports.size(), 3U);
+    EXPECT_EQ(asked[0].ports[2].name, "Count");
+    EXPECT_EQ(asked[0].ports[2].direction, PortDirection::Output);
+
+    // The unit is not translated; its instances name the requests, and connect by its ports.
+    EXPECT_EQ(design->size(), 1U);
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+    ASSERT_EQ(top->instances.size(), 3U);
+    EXPECT_EQ(top->instances[0].definitionName, asked[0].placeholder);
+    EXPECT_EQ(top->instances[1].definitionName, asked[0].placeholder);
+    EXPECT_EQ(top->instances[2].definitionName, asked[1].placeholder);
+    const Instance& u = top->instances[0];
+    ASSERT_EQ(u.connections.size(), 3U);
+    EXPECT_EQ(u.connections[1].portIndex, 1U);
+    EXPECT_EQ(top->objects[u.connections[1].objectIndex].name, "d")
+        << "the row for the width 8 makes Din as wide as d";
+
+    // No row is for the width 4 yet, so w's ports are one bit until an analysis with one.
+    EXPECT_EQ(consumer.messages,
+              (std::vector<std::string>{
+                  "implicit conversion of port connection truncates from 4 to 1 bits",
+                  "implicit conversion of port connection expands from 1 to 32 bits"}));
+}
+
+TEST_F(FrontendTest, AnAnalysisFailingBeforeAnInstancesWidthsAreKnownSaysWhatItAsks) {
+    // An unpacked port is an unpacked array of one one-bit element until a row says otherwise,
+    // which no array of four bytes can be connected to; what the instance asks for is said, so that
+    // it can be translated and the analysis made again with its widths.
+    using enzan::eir::PortDirection;
+    interfaces.push_back({.name = "Lanes",
+                          .parameters = {},
+                          .ports = {{.name = "Words",
+                                     .direction = PortDirection::Input,
+                                     .fourState = true,
+                                     .isSigned = false,
+                                     .unpacked = true}},
+                          .widths = {}});
+    const std::string source = R"(
+        module top;
+            logic [7:0] words [0:3];
+            Lanes u (.Words(words));
+        endmodule
+)";
+    EXPECT_EQ(analyse(source), nullptr);
+    EXPECT_TRUE(unsettled);
+    ASSERT_EQ(asked.size(), 1U);
+    EXPECT_EQ(asked[0].unit, "Lanes");
+
+    // With the row its translation gives, the same analysis succeeds.
+    interfaces[0].widths.push_back({.values = {}, .ports = {{.bits = 8, .left = 0, .right = 3}}});
+    unsettled = false;
+    consumer.messages.clear();
+    const std::unique_ptr<Design> design = analyse(source);
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(unsettled);
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+    ASSERT_EQ(top->instances.size(), 1U);
+    ASSERT_EQ(top->instances[0].connections.size(), 1U);
+    EXPECT_EQ(top->objects[top->instances[0].connections[0].objectIndex].name, "words");
+}
+
+TEST_F(FrontendTest, ARealParameterOfAnotherLanguagesUnitIsAskedForAsAReal) {
+    // With a point, so that it reads as a real, whatever the instance wrote.
+    using Kind = enzan::eir::UnitInterface::Kind;
+    interfaces.push_back(
+        {.name = "rx",
+         .parameters = {{.name = "fclk", .kind = Kind::Real, .length = 0, .value = "19200.0"}},
+         .ports = {},
+         .widths = {}});
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            rx #(.fclk(100000000)) u ();
+            rx v ();
+        endmodule
+)");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    ASSERT_EQ(asked.size(), 2U);
+    EXPECT_EQ(asked[0].parameters[0].value, "100000000.0");
+    EXPECT_EQ(asked[1].parameters[0].value, "19200.0");
 }
 
 } // namespace

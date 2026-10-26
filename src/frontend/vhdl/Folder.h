@@ -158,6 +158,13 @@ public:
     /// `range`, a T_RANGE, folded, or nothing when either bound is not static.
     [[nodiscard]] std::optional<Range> range(tree_t range) const;
 
+    /// `minuend - subtrahend` where the difference folds though neither does: the bounds of a
+    /// slice that moves with a value only the run knows, `(i + 1) * 8 - 1 downto i * 8`, are eight
+    /// apart whatever `i` is. Each is folded into a sum of a constant and multiples of what does
+    /// not fold, so the difference is static exactly when those multiples cancel, rather than
+    /// when a few values of them happen to agree. Nothing for anything else.
+    [[nodiscard]] std::optional<std::int64_t> difference(tree_t minuend, tree_t subtrahend) const;
+
     /// The range of `type`'s dimension `dimension`: a scalar type's own, or an array's index.
     [[nodiscard]] std::optional<Range> rangeOf(type_t type, unsigned dimension = 0) const;
 
@@ -206,6 +213,17 @@ public:
     }
 
 private:
+    /// An integer expression as a constant plus a multiple of each name in it that does not fold,
+    /// by what the name refers to.
+    struct Linear {
+        std::int64_t constant = 0;
+        std::map<tree_t, std::int64_t> multiples;
+    };
+
+    /// `expression` as a `Linear`: what folds, a name, and sums, differences, negations and
+    /// products by a constant of those. Nothing for anything else, and on overflow.
+    [[nodiscard]] std::optional<Linear> linear(tree_t expression) const;
+
     [[nodiscard]] std::optional<std::int64_t> call(tree_t expression) const;
 
     /// A predefined operator of a real type applied to `operands`, real codes, or an integer's
@@ -229,6 +247,79 @@ private:
     std::map<tree_t, Range> objectBounds;
     std::map<tree_t, Range> elementBounds;
     bool impureAllowed = false;
+};
+
+/// Where a constant call that did not fold stopped.
+///
+/// A generate statement's range, a generic's value and the bounds of a port are static by the
+/// language, which NVC's analysis checks, so when one does not fold here it is because a call in
+/// it ran into something the adapter does not run yet (DESIGN_GUIDE.md section 5.2). Calling such
+/// a value "not static" would send the reader looking for a mistake of their own; what they need
+/// is which call stopped, and where in it.
+struct FoldStop {
+    /// What stopped the call.
+    enum class Reason : std::uint8_t {
+        /// `at` is a statement the run does not run: a procedure call, a report.
+        Statement,
+        /// `at` is a declaration the run does not run.
+        Declaration,
+        /// `at`, a statement or a declaration, needs a value that did not fold.
+        Value,
+        /// `at` is an assertion that did not fold to holding.
+        Assertion,
+        /// `at` is a variable of a type the run does not hold.
+        VariableType,
+        /// The run reached its bound on statements at `at`.
+        TooLong,
+        /// The function is impure, and the value is not an object's initial value.
+        Impure,
+        /// Calls nest deeper than the run's bound.
+        TooDeep,
+        /// The function's body has not been analysed.
+        NoBody,
+        /// The function takes a parameter of a type the run does not hold.
+        ParameterType,
+        /// The body ended without a `return`.
+        NoReturn,
+    };
+
+    /// The call that did not fold.
+    tree_t call = nullptr;
+
+    /// The statement or declaration of its body it stopped at, or null when it never ran.
+    tree_t at = nullptr;
+
+    Reason reason = Reason::Value;
+};
+
+/// Keeps, while it lives, where the last constant call that did not fold stopped.
+///
+/// One is made around a fold whose failure is reported, and the report reads `stop`. Nothing is
+/// kept while none lives, so a fold whose failure only means another way is tried costs nothing
+/// more. A call that folds forgets what an earlier one left, so what remains describes a call that
+/// the failing fold depends on. One made while another lives keeps its own, and the outer one sees
+/// nothing of it.
+class FoldTrace {
+public:
+    FoldTrace() noexcept;
+    FoldTrace(const FoldTrace&) = delete;
+    FoldTrace& operator=(const FoldTrace&) = delete;
+    FoldTrace(FoldTrace&&) = delete;
+    FoldTrace& operator=(FoldTrace&&) = delete;
+    ~FoldTrace();
+
+    [[nodiscard]] const std::optional<FoldStop>& stop() const noexcept { return stopped; }
+
+    /// Records why `call` stopped, unless the trace listening holds a reason already: the first is
+    /// the innermost, since a call that stops makes everything running it stop after it.
+    static void record(tree_t call, tree_t at, FoldStop::Reason reason) noexcept;
+
+    /// Forgets what the trace listening holds: a call has folded after all.
+    static void forget() noexcept;
+
+private:
+    FoldTrace* outer = nullptr;
+    std::optional<FoldStop> stopped;
 };
 
 } // namespace enzan::frontend::vhdl

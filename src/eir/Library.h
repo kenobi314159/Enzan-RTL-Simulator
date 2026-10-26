@@ -188,12 +188,57 @@ public:
     /// run from this library takes its unit from here (DESIGN_GUIDE.md section 8.2).
     [[nodiscard]] std::optional<std::int8_t> timeUnit() const;
 
-    /// The units this library holds, by the source each came from, for `lib list`.
+    /// The units this library holds, by the source each came from, for `lib list`: its units of
+    /// EIR and the VHDL units it holds analysed.
     ///
     /// Reads every entry, which is what makes it a reporting call rather than one anything
     /// hot depends on. Entries that cannot be decoded are skipped rather than failing the
     /// listing: being told what is readable is more use than being told nothing.
     [[nodiscard]] std::vector<std::string> unitNames() const;
+
+    // -----------------------------------------------------------------------
+    // VHDL (DESIGN_GUIDE.md section 4.4)
+    // -----------------------------------------------------------------------
+
+    /// Where NVC's analysed units of this library's VHDL are, in NVC's own format, which NVC
+    /// reads and writes itself.
+    ///
+    /// A VHDL design is translated into EIR for the generic values each run gives it (section
+    /// 5.2), so what a library keeps of a VHDL source is NVC's analysis of it rather than EIR:
+    /// the units a later analysis is analysed against and a run translates from, parsing nothing
+    /// again.
+    [[nodiscard]] std::filesystem::path vhdlDirectory() const { return directory / "vhdl"; }
+
+    /// True when this library holds analysed VHDL.
+    [[nodiscard]] bool holdsVhdl() const;
+
+    /// The primary units, in lower case, this library's VHDL sources declare.
+    [[nodiscard]] std::vector<std::string> vhdlUnits() const;
+
+    /// True when NVC's units hold the primary unit `name` though no entry records it: an analysis
+    /// into this library stopped after NVC had written what it analysed before, and a run from
+    /// the library would find nothing of the unit.
+    [[nodiscard]] bool holdsUnrecordedVhdl(std::string_view name) const;
+
+    /// True when each of `sources` has a VHDL entry whose key is current: its text and `options`,
+    /// everything else that changes what NVC's analysis of it produces.
+    [[nodiscard]] bool vhdlCurrent(std::span<const LibrarySource> sources,
+                                   const SourceManager& sourceManager,
+                                   std::string_view options) const;
+
+    /// Records each of `sources` as analysed with `options`, declaring the primary units of the
+    /// same position in `units`. NVC has written the units themselves into `vhdlDirectory`.
+    bool storeVhdl(std::span<const LibrarySource> sources, const SourceManager& sourceManager,
+                   std::string_view options, std::span<const std::vector<std::string>> units,
+                   DiagnosticEngine& diagnostics) const;
+
+    /// What this library's VHDL is as of now, which an analysis against it puts in its own keys:
+    /// a unit analysed against a package is stale once the package is analysed again.
+    [[nodiscard]] std::string vhdlStamp() const;
+
+    /// Removes every entry and NVC's units, keeping the library and its name (`lib clean`).
+    /// Returns how many entries went.
+    std::size_t clean();
 
 private:
     /// The file an entry for `source` lives in.
@@ -210,6 +255,15 @@ private:
     [[nodiscard]] std::string entryKey(const LibrarySource& source,
                                        const SourceManager& sourceManager,
                                        std::span<const std::filesystem::path> dependencies);
+
+    /// The file `source`'s VHDL entry lives in: named as its EIR one would be, and kept apart
+    /// from those, since it holds no units of EIR and no time unit.
+    [[nodiscard]] std::filesystem::path vhdlEntryPath(const LibrarySource& source) const;
+
+    /// The staleness key for `source`'s VHDL entry.
+    [[nodiscard]] static std::string vhdlEntryKey(const LibrarySource& source,
+                                                  const SourceManager& sourceManager,
+                                                  std::string_view options);
 
     /// Writes the index, which carries the logical name and the recorded sources.
     [[nodiscard]] bool writeIndex(DiagnosticEngine& diagnostics) const;

@@ -174,6 +174,8 @@ public:
 
         set_standard(nvcStandard(options.standard));
         if (options.bootstrap) opt_set_int(OPT_BOOTSTRAP, 1);
+        for (const UnitLibrary& library : options.libraries)
+            lib_add_map(library.name.c_str(), library.directory.c_str());
         for (const std::filesystem::path& directory : options.searchDirectories)
             lib_add_search_path(directory.c_str());
 
@@ -227,7 +229,10 @@ public:
             }
         }
 
-        if (error_count() == 0 && !options.work.directory.empty()) lib_save(work);
+        // A run that analysed nothing, translating from a library's units, leaves the library as
+        // it found it: it may be one the user only reads.
+        if (error_count() == 0 && !options.work.directory.empty() && !options.sources.empty())
+            lib_save(work);
         return error_count();
     }
 
@@ -257,22 +262,31 @@ unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources
 
 unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources,
                       DiagnosticSink& sink, std::string& encoded,
-                      std::vector<std::string>& libraries) {
+                      std::vector<std::string>& libraries, Exchange& exchange, bool& analysed) {
     Run run(options.units, sources, sink);
     const unsigned analysisErrors = run.analyse();
+    analysed = analysisErrors == 0;
     if (analysisErrors != 0) return analysisErrors;
 
     DiagnosticEngine engine(sources);
     SinkConsumer consumer(sink);
     engine.addConsumer(consumer);
 
-    const DesignRequest request{.top = options.top,
-                                .timeUnitExponent = options.timeUnitExponent,
-                                .work = run.workLibrary(),
-                                .analysed = run.analysed(),
-                                .ieeeWarnings = options.ieeeWarnings};
+    DesignRequest request{.top = options.top,
+                          .timeUnitExponent = options.timeUnitExponent,
+                          .work = run.workLibrary(),
+                          .analysed = run.analysed(),
+                          .ieeeWarnings = options.ieeeWarnings,
+                          .modules = options.modules,
+                          .requests = options.requests,
+                          .described = options.described,
+                          .onlyRequested = options.onlyRequested,
+                          .libraries = {},
+                          .sources = &sources};
+    for (const UnitLibrary& library : options.units.libraries)
+        request.libraries.push_back(library.name);
     const std::vector<eir::ModuleDefinition> modules = translateDesign(
-        request, [&run](const loc_t* location) { return run.locate(location); }, engine);
+        request, [&run](const loc_t* location) { return run.locate(location); }, engine, exchange);
 
     const unsigned errors = engine.errorCount() + error_count();
     if (errors == 0) {

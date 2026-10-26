@@ -73,6 +73,8 @@ void KernelSession::teardown(const QString& reason) {
 
     const bool wasOpen = connection.isOpen();
     connection.close();
+    fetching = false;
+    fetchAgain = false;
 
     if (wasOpen) Q_EMIT detached(reason);
 }
@@ -157,6 +159,7 @@ void KernelSession::pump() {
         dispatch(frame);
     }
 
+    if (std::exchange(wavesPending, false)) Q_EMIT wavesChanged();
     flush();
 }
 
@@ -165,8 +168,8 @@ void KernelSession::dispatch(const ipc::Frame& frame) {
     case ipc::MessageType::Welcome: onWelcome(frame); return;
     case ipc::MessageType::Design: onDesign(frame); return;
     case ipc::MessageType::Objects: onObjects(frame); return;
-    case ipc::MessageType::ValueChanges: onValueChanges(frame); return;
-    case ipc::MessageType::History: onHistory(frame); return;
+    case ipc::MessageType::Changes: onChanges(frame); return;
+    case ipc::MessageType::Progress: onProgress(frame); return;
     case ipc::MessageType::RunState: onRunState(frame); return;
 
     case ipc::MessageType::Transcript: {
@@ -229,6 +232,7 @@ void KernelSession::onWelcome(const ipc::Frame& frame) {
     top = QString::fromStdString(message.topModule);
     version = QString::fromStdString(message.kernelVersion);
     scale = runtime::TimeScale(message.timeExponent);
+    recordedWidthLimit = message.widthLimit;
     kernelTime = message.currentTime;
     recordedTime = message.latestRecordedTime;
     simulationState = message.state;
@@ -283,7 +287,8 @@ void KernelSession::onObjects(const ipc::Frame& frame) {
         info.name = QString::fromStdString(entry.name);
         info.path = QString::fromStdString(entry.path);
         info.width = entry.width;
-        info.recorded = entry.recorded;
+        info.recording = entry.recording;
+        info.dimensions = entry.dimensions;
         if (entry.enumIndex < enums.size()) info.enumeration = enums[entry.enumIndex];
 
         knownSignals[entry.signalIndex] = info;
@@ -309,6 +314,18 @@ void KernelSession::onObjects(const ipc::Frame& frame) {
     Q_EMIT objectsReceived(QString::fromStdString(message.instancePath), objects);
 }
 
+QString SignalInfo::declaredRanges() const {
+    QString ranges;
+    std::uint64_t elements = 1;
+    for (const eir::ArrayDimension& dimension : dimensions) {
+        ranges += QStringLiteral("[%1:%2]").arg(dimension.left).arg(dimension.right);
+        elements *= dimension.size();
+    }
+    if (const std::uint64_t element = width / elements; element > 1)
+        ranges += QStringLiteral("[%1:0]").arg(element - 1);
+    return ranges;
+}
+
 QString EnumInfo::nameOf(const eir::BitVector& value) const {
     // A linear scan over a handful of members. Two members may share a value, which IEEE 1800
     // allows; the first wins, so the answer is the one the reader wrote first.
@@ -332,66 +349,111 @@ std::uint32_t KernelSession::recordFor(std::uint32_t signalIndex, std::uint32_t 
     return database->addSignal(signalIndex, path, width);
 }
 
-void KernelSession::onValueChanges(const ipc::Frame& frame) {
-    ipc::ValueChangesMessage message;
+void KernelSession::onChanges(const ipc::Frame& frame) {
+    fetching = false;
+    ipc::ChangesMessage message;
     if (!ipc::decodePayload(frame.payload, message)) return;
 
-    for (const ipc::ValueUpdate& update : message.updates) {
-        const std::uint32_t record = recordFor(update.signalIndex, update.value.width());
-
-        // A value that arrives out of order, or at a width the database was not told about,
-        // would violate what the database is allowed to assume, so it is dropped rather than
-        // appended. It means the two ends disagree, which shows up elsewhere as well.
-        if (database->signal(record).width != update.value.width()) continue;
-        if (database->changeCount(record) > 0
-            && database->timeOfChange(record, database->changeCount(record) - 1) > message.time) {
+    bool behind = false;
+    bool diverged = false;
+    for (const ipc::SignalChanges& changes : message.signals) {
+        // Not shown any more, or shown again since and asked for afresh.
+        if (std::ranges::find(shownSignals, changes.signalIndex) == shownSignals.end()) continue;
+        if (changes.width == 0) {
+            completeTo[changes.signalIndex] = changes.completeTo;
             continue;
         }
 
-        database->append(record, message.time, update.value);
+        const std::uint32_t record = recordFor(changes.signalIndex, changes.width);
+
+        // A value at a width the database was not told about would violate what the database is
+        // allowed to assume. It means the two ends disagree, so the signal is left as it is, and
+        // counted complete rather than holding every other trace back with it.
+        const auto agrees = [&changes](const ipc::ChangeEntry& entry) {
+            return entry.value.width() == changes.width;
+        };
+        if (database->signal(record).width != changes.width
+            || !std::ranges::all_of(changes.entries, agrees)) {
+            completeTo[changes.signalIndex] = changes.completeTo;
+            continue;
+        }
+
+        // An answer to a cursor this copy no longer has, sent before a restart emptied it, is
+        // dropped and the signal asked for again. A kernel holding fewer changes than this copy
+        // has started again without the time saying so, and the copy starts again with it.
+        if (changes.first != database->changeCount(record)) {
+            diverged = diverged || changes.first < database->changeCount(record);
+            behind = true;
+            continue;
+        }
+        for (const ipc::ChangeEntry& entry : changes.entries)
+            database->append(record, entry.time, entry.value);
+        completeTo[changes.signalIndex] = changes.completeTo;
+        if (database->changeCount(record) < changes.recorded) behind = true;
+        wavesPending = true;
     }
 
-    database->setLatestTime(message.time);
-    recordedTime = std::max(message.time, recordedTime);
-
-    Q_EMIT wavesChanged();
+    if (diverged) {
+        resetDatabase();
+        Q_EMIT wavesCleared();
+    }
+    advanceExtent();
+    if (behind || std::exchange(fetchAgain, false)) fetchChanges();
 }
 
-void KernelSession::onHistory(const ipc::Frame& frame) {
-    ipc::HistoryMessage message;
+void KernelSession::onProgress(const ipc::Frame& frame) {
+    ipc::ProgressMessage message;
     if (!ipc::decodePayload(frame.payload, message)) return;
 
-    const std::uint32_t record = recordFor(message.signalIndex, message.width);
+    kernelTime = message.time;
+    recordedTime = message.latestRecordedTime;
+    database->setLatestTime(recordedTime);
+    advanceExtent();
+    Q_EMIT runStateChanged();
+    fetchChanges();
+}
 
-    for (const ipc::HistoryEntry& entry : message.entries) {
-        if (entry.value.width() != database->signal(record).width) continue;
-        if (database->changeCount(record) > 0
-            && database->timeOfChange(record, database->changeCount(record) - 1) > entry.time) {
-            continue;
-        }
-        database->append(record, entry.time, entry.value);
+void KernelSession::fetchChanges() {
+    if (!connection.isOpen() || shownSignals.empty()) return;
+    if (fetching) {
+        fetchAgain = true;
+        return;
     }
 
-    database->setLatestTime(message.latestTime);
-    recordedTime = std::max(message.latestTime, recordedTime);
-
-    // A truncated answer says where it stopped, so the rest is asked for from there rather
-    // than leaving a hole in the middle of the trace.
-    if (!message.complete) {
-        ipc::QueryHistoryMessage more;
-        more.signalIndex = message.signalIndex;
-        more.fromTime = message.latestTime;
-        more.toTime = runtime::NoTime;
-        send(ipc::MessageType::QueryHistory, more);
+    ipc::FetchChangesMessage message;
+    message.signals.reserve(shownSignals.size());
+    for (const std::uint32_t signalIndex : shownSignals) {
+        const std::uint32_t record = database->recordIndexOf(signalIndex);
+        message.signals.push_back(
+            ipc::ChangeCursor{.signalIndex = signalIndex,
+                              .held = record == wavedb::WaveformDatabase::NotRecorded
+                                          ? 0
+                                          : database->changeCount(record)});
     }
+    fetching = true;
+    send(ipc::MessageType::FetchChanges, message);
+}
 
-    Q_EMIT wavesChanged();
+void KernelSession::advanceExtent() {
+    extent = std::max(extent, heldTime());
+}
+
+runtime::SimTime KernelSession::heldTime() const noexcept {
+    if (shownSignals.empty()) return recordedTime;
+    runtime::SimTime held = recordedTime;
+    for (const std::uint32_t signalIndex : shownSignals) {
+        const auto found = completeTo.find(signalIndex);
+        held = std::min(held, found == completeTo.end() ? 0 : found->second);
+    }
+    return held;
 }
 
 void KernelSession::resetDatabase() {
     // Rebuilt rather than cleared: the database is append-only by design, which is what makes
     // it cheap, and a restart is the one event that invalidates everything in it.
     database = std::make_unique<wavedb::WaveformDatabase>();
+    completeTo.clear();
+    extent = 0;
 }
 
 void KernelSession::onRunState(const ipc::Frame& frame) {
@@ -411,8 +473,13 @@ void KernelSession::onRunState(const ipc::Frame& frame) {
         resetDatabase();
         Q_EMIT wavesCleared();
     }
+    database->setLatestTime(recordedTime);
+    advanceExtent();
 
     Q_EMIT runStateChanged();
+
+    // What the run recorded last, or after a restart everything again from the start.
+    fetchChanges();
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +503,13 @@ void KernelSession::subscribe(const QVector<std::uint32_t>& signalIndices) {
     ipc::SubscribeMessage message;
     message.signalIndices.assign(signalIndices.begin(), signalIndices.end());
     send(ipc::MessageType::Subscribe, message);
+
+    for (const std::uint32_t signalIndex : signalIndices) {
+        if (std::ranges::find(shownSignals, signalIndex) == shownSignals.end())
+            shownSignals.push_back(signalIndex);
+    }
+    // After the subscription, which the kernel answers first: by then it records them all.
+    fetchChanges();
 }
 
 void KernelSession::unsubscribe(const QVector<std::uint32_t>& signalIndices) {
@@ -444,6 +518,13 @@ void KernelSession::unsubscribe(const QVector<std::uint32_t>& signalIndices) {
     ipc::UnsubscribeMessage message;
     message.signalIndices.assign(signalIndices.begin(), signalIndices.end());
     send(ipc::MessageType::Unsubscribe, message);
+
+    for (const std::uint32_t signalIndex : signalIndices) {
+        std::erase(shownSignals, signalIndex);
+        completeTo.erase(signalIndex);
+    }
+    // The one holding the others back may have gone.
+    advanceExtent();
 }
 
 void KernelSession::run(std::uint64_t duration) {

@@ -16,7 +16,12 @@
 
 #include <QSignalSpy>
 
+#include <algorithm>
+#include <cstdint>
+#include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include "eir/BitVector.h"
 
@@ -50,7 +55,7 @@ TEST_F(SessionFixture, AScopeListsItsObjects) {
     ASSERT_EQ(objects.size(), 3);
     EXPECT_EQ(objects[0].name, QStringLiteral("clk"));
     EXPECT_EQ(objects[0].width, 1U);
-    EXPECT_TRUE(objects[0].recorded);
+    EXPECT_EQ(objects[0].recording, enzan::ipc::Recording::Recorded);
     EXPECT_EQ(objects[1].name, QStringLiteral("count"));
     EXPECT_EQ(objects[1].width, 8U);
     EXPECT_EQ(objects[2].name, QStringLiteral("state"));
@@ -117,7 +122,7 @@ TEST_F(SessionFixture, ANullArrayIsShownAsOneWithNoValue) {
     nothing.name = QStringLiteral("nothing");
     nothing.path = QStringLiteral("/tb/nothing");
     nothing.width = 0;
-    nothing.recorded = true;
+    nothing.recording = enzan::ipc::Recording::Recorded;
     model.setObjects(QStringLiteral("/tb"), {nothing});
 
     ASSERT_EQ(model.rowCount(), 1);
@@ -128,11 +133,98 @@ TEST_F(SessionFixture, ANullArrayIsShownAsOneWithNoValue) {
                     .isEmpty());
 }
 
+TEST_F(SessionFixture, AnArrayIsTypedByItsDimensions) {
+    ObjectsModel model(*session);
+    const auto shaped = [](const char* name, std::uint32_t width,
+                           std::vector<enzan::eir::ArrayDimension> dimensions) {
+        SignalInfo info;
+        info.name = QString::fromUtf8(name);
+        info.path = QStringLiteral("/tb/") + info.name;
+        info.width = width;
+        info.dimensions = std::move(dimensions);
+        return info;
+    };
+    model.setObjects(QStringLiteral("/tb"),
+                     {shaped("lanes", 32, {{.left = 3, .right = 0}, {.left = 7, .right = 0}}),
+                      shaped("words", 128, {{.left = 0, .right = 3}}),
+                      shaped("up", 8, {{.left = 0, .right = 7}}), shaped("bit", 1, {}),
+                      shaped("plain", 8, {})});
+
+    const auto type = [&model](int row) {
+        return model.data(model.index(row, ObjectsModel::TypeColumn), Qt::DisplayRole).toString();
+    };
+    EXPECT_EQ(type(0), QStringLiteral("logic [3:0][7:0]"));
+    EXPECT_EQ(type(1), QStringLiteral("logic [0:3][31:0]")) << "an int is an element of 32 bits";
+    EXPECT_EQ(type(2), QStringLiteral("logic [0:7]"));
+    EXPECT_EQ(type(3), QStringLiteral("logic"));
+    EXPECT_EQ(type(4), QStringLiteral("logic [7:0]"));
+}
+
+TEST_F(SessionFixture, ASignalTooWideToLogSaysSo) {
+    // Not the "not logged" of a signal outside the scope: widening the scope would not help.
+    ObjectsModel model(*session);
+    SignalInfo memory;
+    memory.signalIndex = 99;
+    memory.name = QStringLiteral("memory");
+    memory.path = QStringLiteral("/tb/memory");
+    memory.width = 1U << 20U;
+    memory.recording = enzan::ipc::Recording::TooWide;
+    SignalInfo outside = memory;
+    outside.signalIndex = 98;
+    outside.recording = enzan::ipc::Recording::OutsideScope;
+    model.setObjects(QStringLiteral("/tb"), {memory, outside});
+
+    EXPECT_EQ(model.data(model.index(0, ObjectsModel::ValueColumn), Qt::DisplayRole).toString(),
+              QStringLiteral("too wide to log"));
+    EXPECT_TRUE(model.data(model.index(0, ObjectsModel::NameColumn), Qt::ToolTipRole)
+                    .toString()
+                    .contains(QStringLiteral("--wave-max-bits")));
+    EXPECT_EQ(model.data(model.index(1, ObjectsModel::ValueColumn), Qt::DisplayRole).toString(),
+              QStringLiteral("not logged"));
+}
+
+/// The session over arrayTestDesign's arrays.
+class ArraySessionTest : public SessionFixture {
+protected:
+    bool loadDesign(enzan::session::Session& into) override {
+        into.setDesign(std::make_unique<enzan::eir::Design>(enzan::test::arrayTestDesign()));
+        return true;
+    }
+};
+
+TEST_F(ArraySessionTest, AnArrayReadsAsItsElementsInTheObjectsWindowToo) {
+    const QVector<SignalInfo> objects = objectsOf(QStringLiteral("/tb"));
+    ObjectsModel model(*session);
+    model.setObjects(QStringLiteral("/tb"), objects);
+
+    QVector<std::uint32_t> indices;
+    for (const SignalInfo& info : objects) indices.push_back(info.signalIndex);
+    session->subscribe(indices);
+    ASSERT_TRUE(pumpUntil([this, &indices] {
+        return std::ranges::all_of(indices, [this](std::uint32_t index) {
+            return session->waveforms().recordIndexOf(index)
+                   != enzan::wavedb::WaveformDatabase::NotRecorded;
+        });
+    }));
+
+    const auto valueOf = [&model, &objects](const QString& name) {
+        for (int row = 0; row < objects.size(); ++row) {
+            if (objects[row].name == name)
+                return model.data(model.index(row, ObjectsModel::ValueColumn), Qt::DisplayRole)
+                    .toString();
+        }
+        return QString();
+    };
+    EXPECT_EQ(valueOf(QStringLiteral("lanes")), QStringLiteral("{5}{a}"));
+    EXPECT_EQ(valueOf(QStringLiteral("memory")), QStringLiteral("{c}{3}"));
+    EXPECT_EQ(valueOf(QStringLiteral("up")), QStringLiteral("8")) << "a vector is one number";
+}
+
 TEST_F(SessionFixture, SubscribingBringsTheSignalsPastWithIt) {
     // A signal dragged into the wave window halfway through a run has to show what it has been
     // doing, not start from a blank trace.
     session->run(100);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 100; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(100));
 
     const std::uint32_t clock = signalIndex("/tb/clk");
     session->subscribe({clock});
@@ -162,7 +254,7 @@ TEST_F(SessionFixture, TheWaveformProgressesWhileTheDesignRuns) {
     const std::uint64_t before = session->waveforms().changeCount(record);
 
     session->run(200);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 200; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(200));
 
     EXPECT_GT(session->waveforms().changeCount(record), before);
     EXPECT_GE(session->latestTime(), 200U);
@@ -173,9 +265,52 @@ TEST_F(SessionFixture, TheWaveformProgressesWhileTheDesignRuns) {
               std::optional(enzan::eir::BitVector::fromUInt64(20, 8)));
 }
 
+TEST_F(SessionFixture, ATraceIsHeldOnlyAsFarAsItsChangesHaveArrived) {
+    // How far the wave window draws: a signal whose changes are still on their way would be drawn
+    // flat at a value it may not hold.
+    session->run(100);
+    ASSERT_TRUE(pumpUntilCaughtUp(100));
+    EXPECT_EQ(session->heldTime(), 100U) << "with nothing shown there is nothing to wait for";
+
+    const std::uint32_t clock = signalIndex("/tb/clk");
+    session->subscribe({clock});
+    EXPECT_EQ(session->heldTime(), 0U) << "none of the clock's changes has arrived";
+    EXPECT_EQ(session->extentTime(), 100U) << "the axis moved back under the reader";
+
+    ASSERT_TRUE(pumpUntil([this] { return session->heldTime() == 100; }));
+    EXPECT_GE(session->waveforms().changeCount(session->waveforms().recordIndexOf(clock)), 20U);
+}
+
+/// A kernel answering five changes at a time, far fewer than a run records.
+class SmallAnswersTest : public SessionFixture {
+protected:
+    SmallAnswersTest() { changesBytes = 5 * enzan::ipc::KernelServer::changeBytes(8); }
+};
+
+TEST_F(SmallAnswersTest, AShownSignalIsFetchedWholeHoweverManyAnswersItTakes) {
+    // The session asks again for as long as the kernel holds more, during the run and after it.
+    const std::uint32_t clock = signalIndex("/tb/clk");
+    const std::uint32_t counter = signalIndex("/tb/count");
+    session->subscribe({clock, counter});
+    session->run(200);
+
+    // And the axis reaches as far as the traces do as they come, not as far as the kernel.
+    enzan::runtime::SimTime furthest = 0;
+    ASSERT_TRUE(pumpUntil([&] {
+        furthest = std::max(furthest, session->heldTime());
+        EXPECT_EQ(session->extentTime(), furthest);
+        return session->currentTime() == 200 && session->heldTime() == session->latestTime();
+    }));
+
+    const enzan::wavedb::WaveformDatabase& waves = session->waveforms();
+    EXPECT_GE(waves.changeCount(waves.recordIndexOf(clock)), 40U);
+    EXPECT_EQ(waves.valueAt(waves.recordIndexOf(counter), 200),
+              std::optional(enzan::eir::BitVector::fromUInt64(20, 8)));
+}
+
 TEST_F(SessionFixture, AnUnsubscribedSignalDoesNotArrive) {
     session->run(100);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 100; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(100));
 
     EXPECT_EQ(session->waveforms().recordIndexOf(signalIndex("/tb/count")),
               enzan::wavedb::WaveformDatabase::NotRecorded);
@@ -185,7 +320,7 @@ TEST_F(SessionFixture, RunStateReachesTheClientAtBothEndsOfARun) {
     const QSignalSpy states(session.get(), &KernelSession::runStateChanged);
 
     session->run(50);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 50; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(50));
 
     EXPECT_GE(states.count(), 2) << "a client must learn when a run starts, not only when it ends";
     EXPECT_EQ(session->state(), enzan::ipc::SimulationState::Idle);
@@ -205,7 +340,7 @@ TEST_F(SessionFixture, ARestartDiscardsTheTracesAndSaysSo) {
     const std::uint32_t clock = signalIndex("/tb/clk");
     session->subscribe({clock});
     session->run(100);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 100; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(100));
 
     const std::uint32_t before = session->waveforms().recordIndexOf(clock);
     ASSERT_NE(before, enzan::wavedb::WaveformDatabase::NotRecorded);
@@ -218,10 +353,34 @@ TEST_F(SessionFixture, ARestartDiscardsTheTracesAndSaysSo) {
     EXPECT_EQ(session->currentTime(), 0U);
 
     // What the client holds is gone, and the fresh time-zero value takes its place.
+    ASSERT_TRUE(pumpUntil([this, clock] {
+        return session->waveforms().recordIndexOf(clock)
+               != enzan::wavedb::WaveformDatabase::NotRecorded;
+    }));
     const std::uint32_t after = session->waveforms().recordIndexOf(clock);
     ASSERT_NE(after, enzan::wavedb::WaveformDatabase::NotRecorded);
     EXPECT_LE(session->waveforms().changeCount(after), 2U);
     EXPECT_EQ(session->waveforms().timeOfChange(after, 0), 0U);
+}
+
+TEST_F(SessionFixture, ARestartAtTimeZeroDiscardsWhatWasDepositedThere) {
+    // The time does not go back, so it cannot say the design was restarted; the kernel holding
+    // fewer changes than the copy does says it instead.
+    const std::uint32_t clock = signalIndex("/tb/clk");
+    session->subscribe({clock});
+    session->deposit(clock, enzan::eir::BitVector::fromUInt64(1, 1));
+    const auto changes = [this, clock] {
+        const std::uint32_t record = session->waveforms().recordIndexOf(clock);
+        return record == enzan::wavedb::WaveformDatabase::NotRecorded
+                   ? 0
+                   : session->waveforms().changeCount(record);
+    };
+    ASSERT_TRUE(pumpUntil([&] { return changes() == 2; }));
+
+    QSignalSpy cleared(session.get(), &KernelSession::wavesCleared);
+    session->restart();
+    ASSERT_TRUE(pumpUntil([&] { return cleared.count() > 0 && changes() == 1; }));
+    EXPECT_EQ(session->heldTime(), 0U);
 }
 
 TEST_F(SessionFixture, ARefusedRequestIsReportedWithoutDroppingTheConnection) {
@@ -236,7 +395,7 @@ TEST_F(SessionFixture, ARefusedRequestIsReportedWithoutDroppingTheConnection) {
 TEST_F(SessionFixture, DetachingLeavesTheKernelAlive) {
     // Section 2.2's requirement: a front end must be able to leave a long run alone.
     session->run(50);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 50; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(50));
 
     const QSignalSpy detached(session.get(), &KernelSession::detached);
     session->detach();
@@ -250,7 +409,7 @@ TEST_F(SessionFixture, DetachingLeavesTheKernelAlive) {
 
 TEST_F(SessionFixture, ASecondClientCanAttachAfterTheFirstLeaves) {
     session->run(50);
-    ASSERT_TRUE(pumpUntil([this] { return session->currentTime() == 50; }));
+    ASSERT_TRUE(pumpUntilCaughtUp(50));
     session->detach();
     pump();
 

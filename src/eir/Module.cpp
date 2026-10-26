@@ -41,28 +41,43 @@ void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept {
 }
 
 bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept {
-    if (encoding == Encoding::Bits || encoding == Encoding::Real) {
-        bitops::copy(stored, shown);
-        return true;
-    }
     for (std::uint32_t element = 0; element < shown.width(); ++element) {
         const Logic value = shown.get(element);
         if (encoding == Encoding::VhdlBit && value != Logic::Zero && value != Logic::One)
             return false;
     }
+    encode(encoding, shown, stored);
+    return true;
+}
+
+void encode(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept {
+    if (encoding == Encoding::Bits || encoding == Encoding::Real) {
+        bitops::copy(stored, shown);
+        return;
+    }
+    const bool logic = encoding == Encoding::VhdlLogic;
     for (std::uint32_t element = 0; element < shown.width(); ++element) {
         // The positions of std_ulogic's '0', '1', 'Z' and 'X', or a bit's.
         std::uint32_t code = 0;
         switch (shown.get(element)) {
-        case Logic::Zero: code = encoding == Encoding::VhdlLogic ? 2 : 0; break;
-        case Logic::One: code = encoding == Encoding::VhdlLogic ? 3 : 1; break;
-        case Logic::HighZ: code = 4; break;
-        case Logic::Unknown: code = 1; break;
+        case Logic::Zero: code = logic ? 2 : 0; break;
+        case Logic::One: code = logic ? 3 : 1; break;
+        case Logic::HighZ: code = logic ? 4 : 0; break;
+        case Logic::Unknown: code = logic ? 1 : 0; break;
         }
         for (std::uint32_t bit = 0; bit < 8; ++bit)
             stored.set((element * 8) + bit, ((code >> bit) & 1U) != 0 ? Logic::One : Logic::Zero);
     }
-    return true;
+}
+
+std::string_view toString(Encoding encoding) noexcept {
+    switch (encoding) {
+    case Encoding::Bits: return "four-state bits";
+    case Encoding::VhdlLogic: return "std_ulogic codes";
+    case Encoding::VhdlBit: return "bit or boolean codes";
+    case Encoding::Real: return "a real";
+    }
+    return "bits";
 }
 
 std::string_view toString(ObjectKind kind) noexcept {
@@ -179,6 +194,49 @@ std::uint32_t ModuleDefinition::addEnum(EnumDefinition definition) {
     const auto index = static_cast<std::uint32_t>(enums.size());
     enums.push_back(std::move(definition));
     return index;
+}
+
+bool isIntroducedName(std::string_view objectName) noexcept {
+    return objectName.find('$') != std::string_view::npos;
+}
+
+std::vector<ArrayDimension> declaredDimensions(const ModuleDefinition& definition,
+                                               const Object& object) {
+    if (object.holdsNothing) return {};
+
+    std::vector<ArrayDimension> dimensions;
+    if (object.vhdlType == VhdlType::None) {
+        dimensions = object.unpackedDimensions;
+        dimensions.insert(dimensions.end(), object.packedDimensions.begin(),
+                          object.packedDimensions.end());
+    } else {
+        // An array of arrays is dimensions of the first and then of its element, as an array
+        // of two dimensions is: both are indexed `a(i)(j)` or `a(i, j)` down to the same bits.
+        for (std::uint32_t type = object.vhdlType;
+             type < definition.vhdlTypes.size()
+             && definition.vhdlTypes[type].kind == VhdlType::Kind::Array;
+             type = definition.vhdlTypes[type].element) {
+            for (const VhdlType::Range& range : definition.vhdlTypes[type].ranges) {
+                const bool null =
+                    range.ascending ? range.left > range.right : range.left < range.right;
+                if (null || !std::in_range<std::int32_t>(range.left)
+                    || !std::in_range<std::int32_t>(range.right))
+                    return {};
+                dimensions.push_back(
+                    ArrayDimension{.left = static_cast<std::int32_t>(range.left),
+                                   .right = static_cast<std::int32_t>(range.right)});
+            }
+        }
+    }
+
+    std::uint64_t elements = 1;
+    for (const ArrayDimension& dimension : dimensions) {
+        elements *= dimension.size();
+        if (elements > object.type.bitWidth()) return {};
+    }
+    const std::uint32_t shown = presentedWidth(object.encoding, object.type.bitWidth());
+    if (dimensions.empty() || shown == 0 || shown % elements != 0) return {};
+    return dimensions;
 }
 
 } // namespace enzan::eir

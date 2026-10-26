@@ -51,6 +51,16 @@ ENZAN_OPCODE(Convert, "conv", true, 1,
              "the source's signedness into a real, and llvm.round, halfway away from zero as "
              "IEEE 1076 section 9.3.6 and IEEE 1800 section 6.12.2 both round, then fptosi "
              "out of one; an unknown bit of an integer source converts as zero")
+ENZAN_OPCODE(Present, "present", true, 2,
+             "the codes of the encoding the immediate second operand names, a byte each, to "
+             "the four-state bits they stand for, one each (DESIGN_GUIDE.md section 3.6): a "
+             "load from a 256-entry table of aval and bval pairs per byte, a shufflevector to "
+             "gather each byte's pair, then a pack of the bits; a runtime helper call when wide")
+ENZAN_OPCODE(Encode, "encode", true, 2,
+             "the inverse of Present, four-state bits to the codes standing for them, an "
+             "unknown or high-impedance bit becoming a bit's or a boolean's 0: a select per "
+             "bit over aval and bval of the four codes, a broadcast of each into its byte; a "
+             "runtime helper call when wide")
 
 // --- State access ----------------------------------------------------------
 //

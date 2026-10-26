@@ -16,6 +16,10 @@ every golden case, and GHDL is M6's reference for VHDL. Three things are compare
   processes in within a step (section 14.3). A generate block is a scope of GHDL's, `g(0)`, and part
   of a name of Enzan's, `g(0).u`, so both are paths `g(0)/u`.
 
+With `--scope`, only the signals declared directly in that scope are compared: a design of two
+languages is compared with the same design all in VHDL, whose units inside hold signals of their own
+names, so only what the testbench sees of them is the same design.
+
 GHDL writes `std_logic` as its nine values and Enzan as the four-state bits they stand for, L as 0,
 H as 1, and U, W and - unknown (section 3.6), so GHDL's are mapped the same way before comparing.
 GHDL also shortens a vector whose leading bits are 0, which VCD allows; both are padded back to the
@@ -152,6 +156,7 @@ def main() -> int:
     parser.add_argument("--enzan-transcript", type=Path, required=True)
     parser.add_argument("--ghdl-transcript", type=Path, required=True)
     parser.add_argument("--enzan-output", type=Path, required=True)
+    parser.add_argument("--scope", help="compare only the signals declared directly in this scope")
     arguments = parser.parse_args()
 
     differences: list[str] = []
@@ -179,6 +184,10 @@ def main() -> int:
 
     reference = read_vcd(arguments.ghdl_vcd)
     candidate = read_vcd(arguments.enzan_vcd)
+    if arguments.scope is not None:
+        scope = arguments.scope.lower()
+        reference = {path: history for path, history in reference.items()
+                     if path.rpartition("/")[0] == scope}
     finished = finish_time(arguments.ghdl_transcript.read_text())
     if finished is not None:
         for histories in (reference, candidate):

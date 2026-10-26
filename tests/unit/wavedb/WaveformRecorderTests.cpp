@@ -86,6 +86,22 @@ Design twoScopeDesign() {
     return design;
 }
 
+/// A module with a memory, `logic [7:0] memory [0:3]`, and a vector of 200 bits.
+Design arrayDesign() {
+    ModuleDefinition top;
+    top.name = "tb";
+    top.sourceName = "tb";
+    top.addObject(Object{.name = "memory",
+                         .type = Type::bits(32, false, true),
+                         .unpackedDimensions = {enzan::eir::ArrayDimension{.left = 0, .right = 3}},
+                         .elementWidth = 8});
+    top.addObject(Object{.name = "wide", .type = Type::bits(200, false, true)});
+
+    Design design;
+    design.addModule(std::move(top));
+    return design;
+}
+
 class WaveformRecorderTest : public ::testing::Test {
 protected:
     WaveformRecorderTest() : engine(sources) { engine.addConsumer(consumer); }
@@ -220,6 +236,32 @@ TEST_F(WaveformRecorderTest, TheScopeFilterReachesTheDatabase) {
     EXPECT_EQ(database.signalCount(), 1U);
 }
 
+TEST_F(WaveformRecorderTest, ASignalOutsideTheScopeIsRecordedFromWhenItIsAsked) {
+    // As a wave window asks for a signal it shows: from the value it holds then, and every change
+    // after, as though it had been in scope from that moment.
+    build(twoScopeDesign(), "tb");
+    recorder->setScope("/tb/u_dut");
+    recorder->start();
+
+    recorder->onTimeAdvance(10);
+    set("/tb/count", "8'h01");
+    recorder->onTimeAdvance(20);
+    recorder->recordFromNow(signalIndex("/tb/count"), 20);
+    recorder->recordFromNow(signalIndex("/tb/count"), 20);
+    set("/tb/count", "8'h02");
+    recorder->onTimeAdvance(30);
+    set("/tb/count", "8'h03");
+    recorder->onTimeAdvance(40);
+
+    const std::uint32_t count = recordOf("/tb/count");
+    ASSERT_NE(count, WaveformDatabase::NotRecorded);
+    ASSERT_EQ(database.changeCount(count), 3U) << "the value then, and the two changes after";
+    EXPECT_EQ(database.timeOfChange(count, 0), 20U);
+    EXPECT_EQ(database.valueAt(count, 20), std::optional(literal("8'h02")));
+    EXPECT_EQ(database.valueAt(count, 30), std::optional(literal("8'h03")));
+    EXPECT_FALSE(database.valueAt(count, 10).has_value()) << "nothing before it was asked for";
+}
+
 TEST_F(WaveformRecorderTest, ClosingFlushesThePendingSlot) {
     build(twoScopeDesign(), "tb");
     recorder->start();
@@ -242,6 +284,30 @@ TEST_F(WaveformRecorderTest, RecordsEveryScopeWhenNoFilterIsSet) {
     EXPECT_NE(recordOf("/tb/clk"), WaveformDatabase::NotRecorded);
     EXPECT_NE(recordOf("/tb/count"), WaveformDatabase::NotRecorded);
     EXPECT_NE(recordOf("/tb/u_dut/q"), WaveformDatabase::NotRecorded);
+}
+
+TEST_F(WaveformRecorderTest, TheDatabaseRecordsAMemory) {
+    // A file leaves one out; the wave window shows it as the array it is, so it has to be here.
+    build(arrayDesign(), "tb");
+    recorder->start();
+
+    const std::uint32_t memory = recordOf("/tb/memory");
+    ASSERT_NE(memory, WaveformDatabase::NotRecorded);
+    recorder->onTimeAdvance(10);
+    set("/tb/memory", "32'h01020304");
+    recorder->onTimeAdvance(20);
+    EXPECT_EQ(database.valueAt(memory, 10), std::optional(literal("32'h01020304")));
+}
+
+TEST_F(WaveformRecorderTest, TheDatabaseLeavesOutWhatIsTooWideAndSaysSo) {
+    build(arrayDesign(), "tb");
+    recorder->setWidthLimit(32);
+    recorder->start();
+
+    EXPECT_NE(recordOf("/tb/memory"), WaveformDatabase::NotRecorded);
+    EXPECT_EQ(recordOf("/tb/wide"), WaveformDatabase::NotRecorded);
+    ASSERT_EQ(recorder->tooWide().size(), 1U);
+    EXPECT_EQ(recorder->tooWide()[0], signalIndex("/tb/wide"));
 }
 
 } // namespace

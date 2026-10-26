@@ -10,6 +10,7 @@
 #include "slang/ast/ASTVisitor.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/Expression.h"
+#include "slang/ast/Scope.h"
 #include "slang/ast/SemanticFacts.h"
 #include "slang/ast/Statement.h"
 #include "slang/ast/TimingControl.h"
@@ -25,6 +26,7 @@
 #include "slang/ast/statements/LoopStatements.h"
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
@@ -32,10 +34,15 @@
 #include "slang/ast/types/AllTypes.h"
 #include "slang/ast/types/Type.h"
 #include "slang/numeric/SVInt.h"
+#include "slang/numeric/Time.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <format>
+#include <limits>
 #include <map>
+#include <string>
 #include <tuple>
 #include <utility>
 
@@ -44,6 +51,41 @@ namespace enzan::frontend::sv {
 namespace ast = slang::ast;
 
 namespace {
+
+/// Ten to the `exponent`, which no difference between two time units Enzan counts takes past 64
+/// bits.
+std::uint64_t powerOfTen(int exponent) {
+    std::uint64_t value = 1;
+    for (int count = 0; count < exponent; ++count) value *= 10;
+    return value;
+}
+
+/// `value` times ten to the `exponent`, or nothing when that does not fit 64 bits.
+std::optional<std::uint64_t> scaledUp(std::uint64_t value, int exponent) {
+    for (int count = 0; count < exponent; ++count) {
+        if (value > std::numeric_limits<std::uint64_t>::max() / 10) return std::nullopt;
+        value *= 10;
+    }
+    return value;
+}
+
+/// A power of ten of a second as slang's time value: -8 is `10ns`.
+slang::TimeScaleValue timeValueOf(std::int8_t exponent) {
+    const int unit = std::clamp((2 - exponent) / 3, 0, 5);
+    const int magnitude = exponent + (3 * unit);
+    slang::TimeScaleMagnitude scaled = slang::TimeScaleMagnitude::One;
+    if (magnitude == 1) scaled = slang::TimeScaleMagnitude::Ten;
+    if (magnitude >= 2) scaled = slang::TimeScaleMagnitude::Hundred;
+    return {static_cast<slang::TimeUnit>(unit), scaled};
+}
+
+/// `count` of a unit ten to the `exponent` seconds, as a diagnostic shows it: `1500ps`.
+std::string timeText(std::uint64_t count, std::int8_t exponent) {
+    const slang::TimeScaleValue unit = timeValueOf(exponent);
+    if (unit.magnitude == slang::TimeScaleMagnitude::One)
+        return std::format("{}{}", count, slang::timeUnitToSuffix(unit.unit));
+    return std::format("{}x{}", count, unit.toString());
+}
 
 /// Maps a slang edge to Enzan's.
 std::optional<eir::EdgeKind> toEdgeKind(ast::EdgeKind edge) {
@@ -105,6 +147,13 @@ bool hasSideEffects(const ast::Expression& expression) {
 }
 
 } // namespace
+
+std::int8_t timeExponentOf(const slang::TimeScaleValue& value) noexcept {
+    int exponent = -3 * static_cast<int>(value.unit);
+    if (value.magnitude == slang::TimeScaleMagnitude::Ten) exponent += 1;
+    if (value.magnitude == slang::TimeScaleMagnitude::Hundred) exponent += 2;
+    return static_cast<std::int8_t>(exponent);
+}
 
 const ast::SubroutineSymbol* staticSubroutineOf(const ast::ValueSymbol& symbol) {
     if (symbol.kind != slang::ast::SymbolKind::Variable) return nullptr;
@@ -274,6 +323,111 @@ ProcessTranslator::foldThroughReals(const ast::Expression& expression, const eir
     return Value{.reg = result, .type = type};
 }
 
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateDelay(const ast::Expression& amount) {
+    const slang::TimeScale scale = timeScaleHere();
+    const std::int8_t unit = timeExponentOf(scale.base);
+    const std::int8_t precision = timeExponentOf(scale.precision);
+    const std::int8_t run = module->runTimeUnit();
+
+    ast::EvalContext context(module->evaluationScope());
+    const slang::ConstantValue value = amount.eval(context);
+    if (value.isInteger() || value.isReal()) {
+        // The delay as a count of the scope's precision, which the language rounds it to.
+        std::optional<std::uint64_t> counts;
+        bool negative = false;
+        if (value.isInteger()) {
+            const slang::SVInt& integer = value.integer();
+            if (integer.hasUnknown()) {
+                counts = 0;
+            } else if (integer.isSigned() && integer.isNegative()) {
+                negative = true;
+            } else if (const std::optional<std::uint64_t> whole = integer.as<std::uint64_t>()) {
+                counts = scaledUp(*whole, unit - precision);
+            }
+        } else {
+            const double real = value.real();
+            negative = real < 0;
+            const long double inPrecision =
+                std::round(static_cast<long double>(real)
+                           * static_cast<long double>(powerOfTen(unit - precision)));
+            if (!negative && inPrecision < 0x1p64L)
+                counts = static_cast<std::uint64_t>(inPrecision);
+        }
+        if (negative) {
+            module->reportUnsupported(amount.sourceRange.start(), "a negative delay");
+            failed = true;
+            return std::nullopt;
+        }
+
+        // Then as a count of the run's unit, which a coarser one rounds to the nearest, a half
+        // up, as a simulator run at a coarser precision rounds.
+        std::optional<std::uint64_t> ticks;
+        if (counts.has_value() && precision >= run) {
+            ticks = scaledUp(*counts, precision - run);
+        } else if (counts.has_value()) {
+            const std::uint64_t divisor = powerOfTen(run - precision);
+            const std::uint64_t remainder = *counts % divisor;
+            const std::uint64_t rounded =
+                (*counts / divisor) + (remainder >= divisor - remainder ? 1 : 0);
+            if (remainder != 0) {
+                module->reportRoundedDelay(amount.sourceRange.start(), timeText(*counts, precision),
+                                           timeText(rounded, run));
+            }
+            ticks = rounded;
+        }
+        if (!ticks.has_value()) {
+            module->reportUnsupported(amount.sourceRange.start(),
+                                      "a delay longer than 64 bits of the run's time unit count");
+            failed = true;
+            return std::nullopt;
+        }
+
+        const eir::Type type = eir::Type::bits(64, false, false);
+        const std::uint32_t constant = addConstant(eir::BitVector::fromUInt64(*ticks, 64));
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                    eir::Operand::constant(constant)));
+        return Value{.reg = result, .type = type};
+    }
+
+    // Known only as the process runs: a count of the scope's unit, so a whole number of its
+    // precision, scaled to the run's.
+    std::optional<Value> counted = translateExpression(amount);
+    if (!counted.has_value() || unit == run) return counted;
+    const Value wide = coerce(*counted, eir::Type::bits(64, false, counted->type.isFourState()));
+    if (unit > run) {
+        return offsetArithmetic(eir::Opcode::Multiply, wide,
+                                offsetConstant(static_cast<std::int64_t>(powerOfTen(unit - run))));
+    }
+    const std::uint64_t divisor = powerOfTen(run - unit);
+    const Value rounded = offsetArithmetic(eir::Opcode::Add, wide,
+                                           offsetConstant(static_cast<std::int64_t>(divisor / 2)));
+    return offsetArithmetic(eir::Opcode::Divide, rounded,
+                            offsetConstant(static_cast<std::int64_t>(divisor)));
+}
+
+slang::TimeScale ProcessTranslator::timeScaleHere() const {
+    const ast::Scope* scope = nullptr;
+    if (!inlineFrames.empty())
+        scope = inlineFrames.back().subroutine;
+    else if (const auto* body = module->evaluationScope().as_if<ast::InstanceBodySymbol>())
+        scope = body;
+    if (scope != nullptr) {
+        if (std::optional<slang::TimeScale> found = scope->getTimeScale()) return *found;
+    }
+
+    // Only a run's unit slang has no name for leaves a scope without one: the run's own.
+    const slang::TimeScaleValue run = timeValueOf(module->runTimeUnit());
+    return {run, run};
+}
+
+std::uint32_t ProcessTranslator::addSysCall(eir::SysTaskCall call) {
+    call.timeUnit = timeExponentOf(timeScaleHere().base);
+    process.sysCalls.push_back(std::move(call));
+    return static_cast<std::uint32_t>(process.sysCalls.size() - 1);
+}
+
 std::optional<eir::SensitivityEntry>
 ProcessTranslator::eventEntry(const ast::Expression& expression, ast::EdgeKind edge) {
     const std::optional<eir::EdgeKind> kind = toEdgeKind(edge);
@@ -400,7 +554,7 @@ bool ProcessTranslator::translateContinuousAssignment(const ast::Expression& ass
                                       "separate rise, fall and turn-off delays");
             return false;
         }
-        const std::optional<Value> ticks = translateExpression(*amount);
+        const std::optional<Value> ticks = translateDelay(*amount);
         if (!ticks.has_value()) return false;
         storeDelay = ticks->reg;
     }
@@ -689,8 +843,7 @@ bool ProcessTranslator::translateImmediateAssertion(const ast::Statement& statem
             assertion.assertionKind == ast::AssertionKind::Assume ? "assumption failed"
                                                                   : "assertion failed"));
         report.location = module->convertLocation(statement.sourceRange.start());
-        const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
-        process.sysCalls.push_back(std::move(report));
+        const std::uint32_t index = addSysCall(std::move(report));
         emit(eir::Instruction::make(eir::Opcode::SysTask, {}, eir::Operand::sysCall(index)));
     }
     if (!currentBlockTerminated())
@@ -1085,7 +1238,7 @@ bool ProcessTranslator::translateTimingControl(const ast::TimingControl& timing)
     switch (timing.kind) {
     case ast::TimingControlKind::Delay: {
         const auto& delay = timing.as<ast::DelayControl>();
-        const std::optional<Value> amount = translateExpression(delay.expr);
+        const std::optional<Value> amount = translateDelay(delay.expr);
         if (!amount.has_value()) return false;
 
         const std::uint32_t resume = newBlock("after-delay");
@@ -2433,8 +2586,7 @@ ProcessTranslator::translateFileOpen(const ast::CallExpression& call,
 
     const std::optional<eir::Type> resultType = module->convertType(*expression.type);
     if (!resultType.has_value()) return std::nullopt;
-    const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
-    process.sysCalls.push_back(std::move(descriptor));
+    const std::uint32_t index = addSysCall(std::move(descriptor));
     const eir::Type word = eir::Type::bits(32, false, false);
     const std::uint32_t result = newRegister(word);
     emit(eir::Instruction::make(eir::Opcode::SysFunction, eir::Operand::reg(result),
@@ -2466,8 +2618,7 @@ ProcessTranslator::translateRandom(std::string_view name, const ast::CallExpress
     const bool isRandom = descriptor.kind == eir::SysTaskKind::Random;
     const bool seeded = isRandom && !call.arguments().empty();
     const eir::Type drawn = eir::Type::bits(seeded ? 64 : 32, false, false);
-    const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
-    process.sysCalls.push_back(std::move(descriptor));
+    const std::uint32_t index = addSysCall(std::move(descriptor));
     const std::uint32_t result = newRegister(drawn);
     emit(eir::Instruction::make(eir::Opcode::SysFunction, eir::Operand::reg(result),
                                 eir::Operand::sysCall(index)));
@@ -2516,11 +2667,27 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
     if (call.isSystemCall()) {
         const std::string_view name = call.getSubroutineName();
         if (name == "$time" || name == "$stime" || name == "$realtime") {
+            // The run's ticks, counted in the calling scope's unit and rounded to a whole one
+            // (IEEE 1800 section 20.3.1).
             const std::optional<eir::Type> type = module->convertType(*expression.type);
             const eir::Type resultType = type.value_or(eir::Type::bits(64, false, false));
-            const std::uint32_t result = newRegister(resultType);
-            emit(eir::Instruction::make(eir::Opcode::ReadTime, eir::Operand::reg(result)));
-            return Value{.reg = result, .type = resultType};
+            const eir::Type ticksType = eir::Type::bits(64, false, false);
+            const std::uint32_t ticks = newRegister(ticksType);
+            emit(eir::Instruction::make(eir::Opcode::ReadTime, eir::Operand::reg(ticks)));
+            const int coarser = timeExponentOf(timeScaleHere().base) - module->runTimeUnit();
+            Value time{.reg = ticks, .type = ticksType};
+            if (coarser > 0) {
+                const std::uint64_t divisor = powerOfTen(coarser);
+                time = offsetArithmetic(eir::Opcode::Add, time,
+                                        offsetConstant(static_cast<std::int64_t>(divisor / 2)));
+                time = offsetArithmetic(eir::Opcode::Divide, time,
+                                        offsetConstant(static_cast<std::int64_t>(divisor)));
+            } else if (coarser < 0) {
+                time = offsetArithmetic(
+                    eir::Opcode::Multiply, time,
+                    offsetConstant(static_cast<std::int64_t>(powerOfTen(-coarser))));
+            }
+            return coerce(time, resultType);
         }
 
         // A cast in the form of a call: the bits are the argument's, and only the type that
@@ -2806,8 +2973,7 @@ ProcessTranslator::translateAssignment(const ast::Expression& expression) {
             return value;
         }
 
-        const std::optional<Value> ticks =
-            translateExpression(timing->as<ast::DelayControl>().expr);
+        const std::optional<Value> ticks = translateDelay(timing->as<ast::DelayControl>().expr);
         if (!ticks.has_value()) return std::nullopt;
         storeDelay = ticks->reg;
         const bool assigned = assignTo(assignment.left(), *value, true);
@@ -2978,8 +3144,7 @@ bool ProcessTranslator::translateReadMem(std::string_view name, const ast::CallE
     }
 
     noteWholeWrite(*objectIndex);
-    const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
-    process.sysCalls.push_back(std::move(descriptor));
+    const std::uint32_t index = addSysCall(std::move(descriptor));
     emit(eir::Instruction::make(eir::Opcode::SysTask, {}, eir::Operand::sysCall(index)));
     return true;
 }
@@ -3083,8 +3248,7 @@ bool ProcessTranslator::translateSystemTask(const ast::Expression& expressionNod
         descriptor.formatIndex = addString(std::string(stringLiteralOf(*arguments[0])->getValue()));
     }
 
-    const auto index = static_cast<std::uint32_t>(process.sysCalls.size());
-    process.sysCalls.push_back(std::move(descriptor));
+    const std::uint32_t index = addSysCall(std::move(descriptor));
     emit(eir::Instruction::make(eir::Opcode::SysTask, {}, eir::Operand::sysCall(index)));
     return true;
 }

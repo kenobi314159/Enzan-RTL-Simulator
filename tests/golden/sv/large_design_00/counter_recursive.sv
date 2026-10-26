@@ -16,14 +16,12 @@ module counter_recursive #(
     input  logic                               clk
    ,input  logic                               rst_n
    ,input  logic                               enable
-//   ,output logic [OUTPUTS-1:0][CNTR_WIDTH-1:0] count
+   ,output logic [OUTPUTS-1:0][CNTR_WIDTH-1:0] count
 );
 
 genvar I;
 
 localparam OUTPUTS_PER_INSTANCE = OUTPUTS / INSTANCES_PER_LEVEL;
-
-logic [CNTR_WIDTH-1:0] count0;
 
 if (LEVELS == 0) begin
 
@@ -33,7 +31,7 @@ if (LEVELS == 0) begin
         .clk(clk)
        ,.rst_n(rst_n)
        ,.enable(enable)
-       ,.count(count0)
+       ,.count(count[0])
     );
 
 end else begin
@@ -48,7 +46,7 @@ end else begin
             .clk(clk)
             ,.rst_n(rst_n)
             ,.enable(enable)
-//            ,.count(count[I*OUTPUTS_PER_INSTANCE +: OUTPUTS_PER_INSTANCE])
+            ,.count(count[I*OUTPUTS_PER_INSTANCE +: OUTPUTS_PER_INSTANCE])
         );
 
     end

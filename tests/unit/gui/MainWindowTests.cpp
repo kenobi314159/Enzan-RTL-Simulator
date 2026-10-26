@@ -13,7 +13,9 @@
 #include "gui/DesignTreeModel.h"
 #include "gui/ObjectsModel.h"
 #include "gui/Theme.h"
+#include "gui/TranscriptView.h"
 #include "gui/WaveformModel.h"
+#include "gui/WaveformView.h"
 
 #include "SessionFixture.h"
 
@@ -22,11 +24,19 @@
 #include <QAction>
 #include <QCoreApplication>
 #include <QDockWidget>
+#include <QElapsedTimer>
+#include <QFontDatabase>
+#include <QFontMetrics>
+#include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QString>
 #include <QTreeView>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <memory>
+#include <thread>
 
 namespace {
 
@@ -37,6 +47,7 @@ using enzan::gui::SignalInfo;
 using enzan::gui::Theme;
 using enzan::gui::WaveformModel;
 using enzan::gui::WaveRow;
+using enzan::ipc::SimulationState;
 
 /// The two scopes `guiTestDesign` elaborates to, outermost first.
 const QString Top = QStringLiteral("/tb");
@@ -172,7 +183,7 @@ TEST_F(MainWindowTest, AGroupedInsertNamesTheGroupAfterTheScopesPath) {
     EXPECT_EQ(signalsUnder(rows.front()), expected);
 }
 
-TEST_F(MainWindowTest, AGroupedRecursiveInsertPutsTheGroupsSideBySide) {
+TEST_F(MainWindowTest, AGroupedRecursiveInsertNestsTheGroupsAsTheDesignIs) {
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
@@ -180,24 +191,28 @@ TEST_F(MainWindowTest, AGroupedRecursiveInsertPutsTheGroupsSideBySide) {
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
-    ASSERT_EQ(rows.size(), 2) << "one group per scope, both at the top level";
+    ASSERT_EQ(rows.size(), 1) << "one group for the subtree";
 
-    // Siblings, not nested: the hierarchy is what the Structure window is for, and a reader
-    // comparing a subtree's modules should not have to open a group per level to see them.
-    for (const int rowId : rows) {
-        const WaveRow* row = waves()->row(rowId);
-        ASSERT_NE(row, nullptr);
-        EXPECT_EQ(row->kind, WaveRow::Kind::Group);
-        EXPECT_EQ(row->parent, -1);
-    }
+    const WaveRow* top = waves()->row(rows.front());
+    ASSERT_NE(top, nullptr);
+    EXPECT_EQ(top->kind, WaveRow::Kind::Group);
+    EXPECT_EQ(top->label, Top);
+    ASSERT_EQ(top->children.size(), 2) << "the scope's own signals, then its instance";
 
     // In the order the Structure window shows them, which is the order the tree arrived in —
-    // not the order the kernel happened to answer the queries in.
-    EXPECT_EQ(waves()->row(rows[0])->label, Top);
-    EXPECT_EQ(waves()->row(rows[1])->label, Child);
+    // not the order the kernel happened to answer the queries in. Inside the subtree's group an
+    // instance is named by its name: the group around it already says where it is.
+    const WaveRow* own = waves()->row(top->children[0]);
+    const WaveRow* child = waves()->row(top->children[1]);
+    ASSERT_NE(own, nullptr);
+    ASSERT_NE(child, nullptr);
+    EXPECT_EQ(own->kind, WaveRow::Kind::Group);
+    EXPECT_EQ(own->label, QStringLiteral("$top"));
+    EXPECT_EQ(child->kind, WaveRow::Kind::Group);
+    EXPECT_EQ(child->label, QStringLiteral("u_dut"));
 
-    EXPECT_EQ(signalsUnder(rows[0]), signalsOf(Top));
-    EXPECT_EQ(signalsUnder(rows[1]), signalsOf(Child));
+    EXPECT_EQ(signalsUnder(top->children[0]), signalsOf(Top));
+    EXPECT_EQ(signalsUnder(top->children[1]), signalsOf(Child));
 }
 
 // ---------------------------------------------------------------------------
@@ -224,21 +239,161 @@ TEST_F(MainWindowTest, AnInsertLeavesTheObjectsWindowOnTheScopeTheReaderClicked)
 
 TEST_F(MainWindowTest, NoGroupIsLeftEmpty) {
     // A group named after a scope with nothing in it says only that the scope was asked about,
-    // so an insert drops it. Both of the fixture's scopes declare signals, so what this pins is
-    // the other half of that rule: a group that *was* filled must survive. An over-eager removal
-    // — checking before the reply arrived, say — would take every group with it.
+    // so an insert drops it; SignalListTests pins that on a hierarchy with empty scopes in it.
+    // Both of the fixture's scopes declare signals, so what this pins is the other half of that
+    // rule: a group that *was* filled must survive. An over-eager removal — checking before the
+    // reply arrived, say — would take every group with it.
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
     insert(Top, QStringLiteral("Add to wave recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
-    const QVector<int> rows = topRows();
-    EXPECT_EQ(rows.size(), 2);
-    for (const int rowId : rows) {
-        EXPECT_FALSE(waves()->row(rowId)->children.isEmpty())
-            << waves()->row(rowId)->label.toStdString() << " is an empty group";
+    QVector<int> rows = topRows();
+    EXPECT_EQ(rows.size(), 1);
+    int groups = 0;
+    while (!rows.isEmpty()) {
+        const WaveRow* row = waves()->row(rows.takeLast());
+        ASSERT_NE(row, nullptr);
+        if (row->kind != WaveRow::Kind::Group) continue;
+        ++groups;
+        EXPECT_FALSE(row->children.isEmpty()) << row->label.toStdString() << " is an empty group";
+        rows += row->children;
     }
+    EXPECT_EQ(groups, 3) << "the subtree's, its own signals' and its instance's";
+}
+
+TEST_F(MainWindowTest, StopEndsARunTheWindowStarted) {
+    // The kernel serves on a thread of its own, as it does in a process of its own, so the window
+    // keeps its event loop while the design runs, as it does for a reader pressing Stop. The
+    // fixture's clock never stops, so the run ends only because the Stop reached the kernel, and
+    // the window says so only once it has taken in what the run sent before it. With the views
+    // refreshed for each of the clock's time slots, it took in a tenth of what the kernel sent
+    // and fell behind for good, so the end of the run never reached it.
+    const auto action = [this](const QString& text) -> QAction* {
+        for (QAction* candidate : window->findChildren<QAction*>()) {
+            if (candidate->text() == text) return candidate;
+        }
+        return nullptr;
+    };
+    QAction* runAll = action(QStringLiteral("Run All"));
+    QAction* stop = action(QStringLiteral("Stop"));
+    ASSERT_NE(runAll, nullptr);
+    ASSERT_NE(stop, nullptr);
+
+    // Streamed signals are what the window has to keep up with.
+    insert(Top, QStringLiteral("Add to wave recursive"));
+    ASSERT_TRUE(waitForSignals(static_cast<int>((signalsOf(Top) + signalsOf(Child)).size())));
+
+    std::atomic<bool> serving = true;
+    std::thread kernel([this, &serving] {
+        while (serving && server->step(10)) {}
+    });
+    const auto waitFor = [](const auto& done, int milliseconds) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!done() && timer.elapsed() < milliseconds)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        return done();
+    };
+
+    runAll->trigger();
+    EXPECT_TRUE(waitFor([this] { return session->state() == SimulationState::Running; }, 5000))
+        << "the run never started";
+    waitFor([] { return false; }, 500);
+    ASSERT_TRUE(stop->isEnabled()) << "Stop is offered while the design runs";
+    stop->trigger();
+    const bool stopped =
+        waitFor([this] { return session->state() == SimulationState::Idle; }, 20000);
+
+    serving = false;
+    kernel.join();
+    EXPECT_TRUE(stopped) << "the window went on showing a run the Stop had ended";
+    EXPECT_GT(server->kernel().time(), 0U) << "the run had not actually started";
+    EXPECT_EQ(session->latestTime(), server->kernel().time())
+        << "the window has not taken in everything the run sent";
+}
+
+TEST_F(MainWindowTest, TheWaveFontIsTheNamesAndTheTraces) {
+    // One size for both, so that each name stays level with its trace: the tree's font sets how
+    // tall a row is, and the canvas measures its labels against its own. The transcript has a
+    // size of its own, in its fixed-width font.
+    Theme sized;
+    sized.loadBuiltIn();
+    QString error;
+    ASSERT_TRUE(sized.evaluate(QStringLiteral("font wave 24\nfont transcript 15"), error))
+        << error.toStdString();
+    const MainWindow large(*session, sized);
+
+    const auto rowsOf = [](const MainWindow& of) -> const QTreeView* {
+        for (const QTreeView* view : of.findChildren<QTreeView*>()) {
+            if (qobject_cast<WaveformModel*>(view->model()) != nullptr) return view;
+        }
+        return nullptr;
+    };
+    const QTreeView* rows = rowsOf(large);
+    const QTreeView* plainRows = rowsOf(*window);
+    const auto* canvas = large.findChild<enzan::gui::WaveformView*>();
+    ASSERT_NE(rows, nullptr);
+    ASSERT_NE(plainRows, nullptr);
+    ASSERT_NE(canvas, nullptr);
+
+    EXPECT_EQ(rows->font().pointSizeF(), 24.0);
+    EXPECT_EQ(canvas->font(), rows->font());
+    EXPECT_GT(QFontMetrics(rows->font()).height(), QFontMetrics(plainRows->font()).height())
+        << "a larger size makes taller rows";
+
+    const auto* transcriptView = large.findChild<enzan::gui::TranscriptView*>();
+    ASSERT_NE(transcriptView, nullptr);
+    const auto* text = transcriptView->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+    EXPECT_EQ(text->font().pointSizeF(), 15.0);
+    EXPECT_EQ(text->font().family(), QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
+}
+
+TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
+    // The spellings `--run` takes, read by the same function (section 8.5): a count of the run's
+    // unit, or a time with a unit of its own. The fixture's design runs in nanoseconds, and has an
+    // event every five of them, which is where a run that ends between events leaves the time.
+    QLineEdit* length = nullptr;
+    for (QLineEdit* edit : window->findChildren<QLineEdit*>()) {
+        if (edit->toolTip().startsWith(QStringLiteral("How long"))) length = edit;
+    }
+    QAction* run = nullptr;
+    for (QAction* candidate : window->findChildren<QAction*>()) {
+        if (candidate->text() == QStringLiteral("Run")) run = candidate;
+    }
+    const auto* transcriptView = window->findChild<enzan::gui::TranscriptView*>();
+    ASSERT_NE(length, nullptr);
+    ASSERT_NE(run, nullptr);
+    ASSERT_NE(transcriptView, nullptr);
+    const auto* text = transcriptView->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+
+    const auto runFor = [&](const QString& written, std::uint64_t until) {
+        length->setText(written);
+        run->trigger();
+        return pumpUntil([&] {
+            return session->currentTime() == until
+                   && session->state() != enzan::ipc::SimulationState::Running;
+        });
+    };
+    EXPECT_TRUE(runFor(QStringLiteral("20ns"), 20)) << session->currentTime();
+    EXPECT_TRUE(runFor(QStringLiteral("15"), 35)) << session->currentTime();
+    EXPECT_TRUE(runFor(QStringLiteral("0.005us"), 40)) << session->currentTime();
+
+    // Refused with a note saying why, and nothing run.
+    length->setText(QStringLiteral("1.5"));
+    run->trigger();
+    length->setText(QStringLiteral("1ps"));
+    run->trigger();
+    pump();
+    EXPECT_EQ(session->currentTime(), 40U);
+    EXPECT_TRUE(text->toPlainText().contains(QStringLiteral("'1.5' is not a length of time")))
+        << text->toPlainText().toStdString();
+    EXPECT_TRUE(text->toPlainText().contains(
+        QStringLiteral("'1ps' is not a whole number of the run's time unit, ns")))
+        << text->toPlainText().toStdString();
 }
 
 } // namespace

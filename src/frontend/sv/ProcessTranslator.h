@@ -20,7 +20,9 @@
 
 namespace slang {
 class SourceLocation;
-}
+struct TimeScale;
+struct TimeScaleValue;
+} // namespace slang
 
 namespace slang::ast {
 enum class EdgeKind;
@@ -49,6 +51,9 @@ namespace enzan::frontend::sv {
 /// rather than a register of each call.
 [[nodiscard]] const slang::ast::SubroutineSymbol*
 staticSubroutineOf(const slang::ast::ValueSymbol& symbol);
+
+/// A slang time unit or precision as a power of ten of a second: `10ns` is -8.
+[[nodiscard]] std::int8_t timeExponentOf(const slang::TimeScaleValue& value) noexcept;
 
 /// What a process translator needs from the module it belongs to.
 ///
@@ -94,6 +99,15 @@ public:
 
     /// The instance body, in whose scope an expression of constants is evaluated.
     [[nodiscard]] virtual const slang::ast::Symbol& evaluationScope() const = 0;
+
+    /// The run's time unit, as a power of ten of a second, which every delay in the design is
+    /// converted to count (DESIGN_GUIDE.md section 3.1).
+    [[nodiscard]] virtual std::int8_t runTimeUnit() const = 0;
+
+    /// Reports that a delay its scope states is no whole number of the run's unit and is rounded
+    /// to it.
+    virtual void reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
+                                    std::string_view rounded) = 0;
 };
 
 /// Translates one procedural block or continuous assignment into an EIR process.
@@ -257,6 +271,20 @@ private:
 
     /// Emits the suspension for a timing control. Returns false on an unsupported one.
     bool translateTimingControl(const slang::ast::TimingControl& timing);
+
+    /// A delay as a count of the run's unit: `amount` counts the time unit of the scope it is
+    /// in, and is rounded to that scope's precision (IEEE 1800 section 3.14.2.1) and then to the
+    /// run's unit, which is reported where the design states the delay. A delay that is unknown
+    /// is none (section 9.4.1).
+    std::optional<Value> translateDelay(const slang::ast::Expression& amount);
+
+    /// The time scale of the scope being translated: the subroutine being inlined, whose own
+    /// module, package or compilation unit gives its delays their unit, or else the body.
+    [[nodiscard]] slang::TimeScale timeScaleHere() const;
+
+    /// Adds `call` to the process's system task calls, in the time unit of the scope it is in,
+    /// and returns its index.
+    std::uint32_t addSysCall(eir::SysTaskCall call);
 
     // --- expressions -------------------------------------------------------
 

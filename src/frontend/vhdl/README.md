@@ -34,7 +34,9 @@ measures what that changes.
 
 **Translating in the same child.** `analyse` runs the analysis and then the translation in one
 child, and the child sends the design back in EIR's own encoding: NVC's trees never reach the
-parent. A design's work library is NVC's in-memory one, written nowhere.
+parent. A design's work library is NVC's in-memory one, written nowhere, unless analysis writes
+into an Enzan library, whose `vhdl/` directory then holds NVC's units; the libraries a design is
+analysed against reach NVC by name (`UnitOptions::libraries`, DESIGN_GUIDE.md section 4.4).
 
 ## Files
 
@@ -53,7 +55,9 @@ parent. A design's work library is NVC's in-memory one, written nowhere.
 ## What is translated
 
 So far: entities, architectures, entity instances, component instances bound by default or by
-configuration specifications, generics of scalar, array and record types, null strings among them;
+configuration specifications, or with no entity to bind to the SystemVerilog module of their name,
+which the instance asks the session for (`eir::UnitRequest`); entities SystemVerilog instantiates,
+described as `eir::UnitInterface`s and translated for the values it asks for; generics of scalar, array and record types, null strings among them;
 deferred constants; signals and ports of enumeration, integer, physical and real types, of arrays of
 them, of one or more dimensions, with static bounds, and of records; ports of unconstrained array
 types of one dimension, which take their bounds from their actuals; ports, inout ones among them,

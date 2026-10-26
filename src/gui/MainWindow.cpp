@@ -4,6 +4,7 @@
 
 #include "common/Diagnostics.h"
 #include "eir/BitOps.h"
+#include "runtime/Time.h"
 
 #include <QAction>
 #include <QCloseEvent>
@@ -221,6 +222,13 @@ void MainWindow::buildDocks() {
 
     waveView = new WaveformView(*session, *waveModel, *theme, this);
     waveView->setRowView(waveRowsView);
+
+    // One font for the names and the traces. The tree's sets how tall a row is, and the canvas
+    // measures its labels against its own, so a size given to only one of them would put each
+    // trace beside a row of another height.
+    const QFont waveFont = theme->font(ThemeFont::Wave, waveRowsView->font());
+    waveRowsView->setFont(waveFont);
+    waveView->setFont(waveFont);
     connect(waveView, &WaveformView::cursorsChanged, this, &MainWindow::onCursorsChanged);
 
     // The canvas has no vertical scroll bar of its own; the tree's is the one that matters, so
@@ -329,7 +337,9 @@ void MainWindow::buildToolBar() {
 
     runLengthEdit = new QLineEdit(QStringLiteral("100"), bar);
     runLengthEdit->setFixedWidth(80);
-    runLengthEdit->setToolTip(tr("How long each Run advances the simulation, in time units"));
+    runLengthEdit->setToolTip(tr("How long each Run advances the simulation: a count of the "
+                                 "run's time unit, as 100, or a time with its unit, as 10ns or "
+                                 "1.5us"));
     bar->addWidget(runLengthEdit);
 
     runAllAction = bar->addAction(tr("Run All"), this, &MainWindow::runUntilFinished);
@@ -461,7 +471,7 @@ void MainWindow::onObjectsReceived(const QString& instancePath,
     // ask for a subtree twice — so each is given the answer rather than only the first.
     bool served = false;
     for (PendingLoad& load : pendingLoads) {
-        if (load.waiting.removeAll(instancePath) == 0) continue;
+        if (!load.waiting.remove(instancePath)) continue;
         load.objects.insert(instancePath, objects);
         served = true;
     }
@@ -646,8 +656,8 @@ void MainWindow::chooseSignalListToSave() {
 }
 
 void MainWindow::startLoad(PendingLoad load) {
-    load.waiting = scopesNeededBy(load.entries, session->instances());
-    const QStringList scopes = load.waiting;
+    const QStringList scopes = scopesNeededBy(load.entries, session->instances());
+    load.waiting = QSet<QString>(scopes.cbegin(), scopes.cend());
     pendingLoads.push_back(std::move(load));
 
     for (const QString& scope : scopes) session->queryObjects(scope);
@@ -896,10 +906,30 @@ void MainWindow::updateSubscription() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::runForRequestedTime() {
-    bool valid = false;
-    const quint64 duration = runLengthEdit->text().trimmed().toULongLong(&valid);
-    if (!valid || duration == 0) {
-        note(tr("'%1' is not a run length in whole time units").arg(runLengthEdit->text()));
+    // Read as `--run` reads its value, by the same function, so that what the one takes the other
+    // does too (DESIGN_GUIDE.md section 8.5).
+    const QString text = runLengthEdit->text().trimmed();
+    const std::optional<runtime::TimeLength> length = runtime::parseTimeLength(text.toStdString());
+    if (!length) {
+        note(tr("'%1' is not a length of time: a count of the run's time unit, 100, or a number "
+                "with its unit, 10ns or 1.5us")
+                 .arg(text));
+        return;
+    }
+
+    runtime::SimTime duration = 0;
+    switch (session->timeScale().countOf(*length, duration)) {
+    case runtime::LengthFit::Exact: break;
+    case runtime::LengthFit::NotWhole:
+        note(tr("'%1' is not a whole number of the run's time unit, %2")
+                 .arg(text, QString::fromStdString(session->timeScale().unitName())));
+        return;
+    case runtime::LengthFit::TooLong:
+        note(tr("'%1' is longer than a run counts").arg(text));
+        return;
+    }
+    if (duration == 0) {
+        note(tr("'%1' is no time at all, and a run has to advance the simulation").arg(text));
         return;
     }
 

@@ -14,7 +14,8 @@ waveform database and the PLI all consume it.
 - **Four-state operations** (`BitOps.h`) — the arithmetic, logical, bitwise,
   comparison, shift and selection semantics of IEEE 1800, including
   X-propagation. This is the highest-risk code in the project.
-- **The type system** (`Type.h`), **the structural layer** EIR-S (`Module.h`, `Design.h`) and
+- **The type system** (`Type.h`), **the structural layer** EIR-S (`Module.h`, `Design.h`, and
+  `ArrayDimension.h`, an array's dimensions, which the GUI reads too) and
   **the behavioural layer** EIR-B (`Process.h`, `Instruction.h`, `Opcodes.def`).
 - **Bodies** (`Process.h`): a process, which the kernel schedules, and a subprogram, which is
   called (section 4.1). Both are a `Body`, so everything that checks, encodes or compiles one

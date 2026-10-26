@@ -17,6 +17,11 @@ What a VPI application loaded with `--vpi` sees of a simulation, and how it driv
   regions and objects as VHPI names them, their VHDL types from the definitions' tables,
   values in VHPI's formats, and VHPI's callbacks on VPI's dispatch (section 9.7). The private
   model both files share is in `PliModel.h`.
+- **Each interface shows its own language** in a design of both (section 18, M7): VPI finds
+  nothing of VHDL by name and returns a VHDL instance it meets as a `vpiUnknown`; VHPI shows a
+  SystemVerilog instance as a `vhpiVerilog` region with nothing in it. Each finds a name whose
+  start is a path in the other's hierarchy, which is how cocotb hands an object from one to the
+  other.
 - **The routines** (`VpiRoutines.cpp`) — every routine of `include/enzan/vpi_user.h`, with C
   linkage, forwarding to the context.
 

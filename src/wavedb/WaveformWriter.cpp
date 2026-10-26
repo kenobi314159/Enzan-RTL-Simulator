@@ -3,10 +3,12 @@
 #include "wavedb/WaveformWriter.h"
 
 #include "eir/BitOps.h"
+#include "eir/Module.h"
 
 #include "elab/ElaboratedDesign.h"
 
 #include <algorithm>
+#include <format>
 #include <map>
 
 namespace enzan::wavedb {
@@ -73,11 +75,41 @@ std::uint32_t WaveformWriter::recordIndexOf(std::uint32_t signalIndex) const noe
     return signalIndex < recordIndex.size() ? recordIndex[signalIndex] : NotRecorded;
 }
 
+bool WaveformWriter::addRecorded(std::uint32_t signalIndex) {
+    if (!opened || signalIndex >= recordIndex.size() || recordIndex[signalIndex] != NotRecorded)
+        return false;
+    if (designImage->elaboratedDesign().slots()[signalIndex].holdsNothing) return false;
+    recordIndex[signalIndex] = static_cast<std::uint32_t>(recorded.size());
+    recorded.push_back(signalIndex);
+    isDirty.push_back(false);
+    // Room for every recorded signal to be dirty at once, so that a slot never grows it.
+    dirty.reserve(recorded.size());
+    return true;
+}
+
 std::uint32_t WaveformWriter::widthOf(std::uint32_t signalIndex) const noexcept {
     // Its one bit is a placeholder, a bit vector having at least one, which is no value of it.
     if (designImage->elaboratedDesign().slots()[signalIndex].holdsNothing) return 0;
     const runtime::Signal& signal = designImage->signals()[signalIndex];
     return eir::presentedWidth(signal.encoding, signal.bitWidth);
+}
+
+std::string WaveformWriter::describeTooWide() const {
+    constexpr std::size_t Named = 3;
+    const std::size_t named = std::min(leftOutForWidth.size(), Named);
+
+    std::string names;
+    for (std::size_t index = 0; index < named; ++index) {
+        if (index > 0) names += index + 1 == named ? " and " : ", ";
+        const std::uint32_t signalIndex = leftOutForWidth[index];
+        names += std::format("{} of {} bits", designImage->signals()[signalIndex].path,
+                             widthOf(signalIndex));
+    }
+
+    if (leftOutForWidth.size() <= 1) return names;
+    if (leftOutForWidth.size() <= Named)
+        return std::format("{} signals, {}", leftOutForWidth.size(), names);
+    return std::format("{} signals, among them {}", leftOutForWidth.size(), names);
 }
 
 eir::ConstBitRef WaveformWriter::valueOf(std::uint32_t signalIndex) const {
@@ -98,19 +130,34 @@ double WaveformWriter::realValueOf(std::uint32_t signalIndex) const {
 
 void WaveformWriter::selectSignals() {
     recordIndex.assign(designImage->signals().size(), NotRecorded);
+    leftOutForWidth.clear();
+
+    // A signal is recorded under the names the reader wrote, and one that has none, being only
+    // storage a frontend introduced, is not recorded at all (eir::isIntroducedName). One pass over
+    // every name rather than a search per signal, which would be quadratic in the design.
+    std::vector<bool> named(designImage->signals().size(), false);
+    for (const auto& [path, slotIndex] : designImage->elaboratedDesign().namesByPath()) {
+        if (slotIndex < named.size() && !eir::isIntroducedName(leafOf(path)))
+            named[slotIndex] = true;
+    }
 
     for (std::uint32_t signalIndex = 0; signalIndex < designImage->signals().size();
          ++signalIndex) {
+        if (!named[signalIndex]) continue;
         if (!isRecorded(designImage->signals()[signalIndex].path)) continue;
 
-        // A memory is not recorded, as IEEE 1364 section 18 leaves memories out of a VCD: one
-        // of any size would dominate the file and the database with a value nobody reads as a
-        // waveform.
+        // A file records no memory, as IEEE 1364 section 18 leaves memories out of a VCD.
         const elab::Slot& slot = designImage->elaboratedDesign().slots()[signalIndex];
-        if (!slot.unpackedDimensions.empty()) continue;
+        if (!slot.unpackedDimensions.empty() && !recordsArrays()) continue;
 
-        // Nor is a VHDL signal of a null range, whose one bit is no value of it.
+        // Nor is a VHDL signal of a null range recorded, whose one bit is no value of it.
         if (slot.holdsNothing) continue;
+
+        // Nor one wider than the limit, whose every change would cost the whole of it.
+        if (widthLimit != 0 && widthOf(signalIndex) > widthLimit) {
+            leftOutForWidth.push_back(signalIndex);
+            continue;
+        }
 
         recordIndex[signalIndex] = static_cast<std::uint32_t>(recorded.size());
         recorded.push_back(signalIndex);
@@ -128,10 +175,12 @@ void WaveformWriter::declareHierarchy() {
 
     // Every name a recorded signal has, grouped by the scope it appears in. A collapsed port has
     // two names for one slot and both are declared, because both are real and a viewer that shows
-    // a DUT's port only under its parent's name is confusing.
+    // a DUT's port only under its parent's name is confusing. A name a frontend made up is no
+    // name of the reader's, and is left out.
     std::map<std::string, std::vector<Entry>, std::less<>> byScope;
     for (const std::uint32_t signalIndex : recorded) {
         for (const std::string& name : designImage->elaboratedDesign().slotNames(signalIndex)) {
+            if (eir::isIntroducedName(leafOf(name))) continue;
             byScope[std::string(scopeOf(name))].push_back(
                 Entry{.signalIndex = signalIndex, .leafName = std::string(leafOf(name))});
         }

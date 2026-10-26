@@ -2,6 +2,6 @@
 
 enzan_add_component(
   elab
-  SOURCES ElaboratedDesign.cpp Elaborator.cpp
-  HEADERS ElaboratedDesign.h Elaborator.h
+  SOURCES Boundary.cpp ElaboratedDesign.cpp Elaborator.cpp Link.cpp
+  HEADERS Boundary.h ElaboratedDesign.h Elaborator.h Link.h
   DEPENDS enzan::common enzan::eir)

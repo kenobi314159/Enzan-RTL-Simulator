@@ -3,6 +3,7 @@
 #pragma once
 
 #include "common/SourceLocation.h"
+#include "eir/UnitRequest.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -57,6 +58,11 @@ struct UnitOptions {
     /// written nowhere.
     UnitLibrary work;
 
+    /// Libraries a design refers to by name, each where its units are: the VHDL of the Enzan
+    /// libraries a design is analysed against (`--in-lib`, DESIGN_GUIDE.md section 8.2). Found
+    /// before anything in `searchDirectories`.
+    std::vector<UnitLibrary> libraries;
+
     /// Directories holding the other libraries a design refers to, searched in order.
     ///
     /// Each library is a subdirectory named for it, as NVC lays them out, with the standard's
@@ -92,8 +98,8 @@ struct DesignOptions {
     /// Analysed first, into `units.work`, as `analyseUnits` would.
     UnitOptions units;
 
-    /// The top entity, in any case. Empty means every entity the sources declare that none of their
-    /// architectures instantiates.
+    /// The top entity, in any case. Empty means the one entity the sources declare that none of
+    /// their architectures instantiates; with several, none is translated and they are reported.
     std::string top;
 
     /// The unit EIR's delays count, as a power of ten of a second.
@@ -103,6 +109,36 @@ struct DesignOptions {
     /// reported, as GHDL's `--ieee-asserts`: they are guarded by a constant NVC's runtime would
     /// give, which the adapter folds to this.
     bool ieeeWarnings = true;
+
+    /// The SystemVerilog modules of a design of both languages, by their names as declared: a
+    /// component with no entity to be bound to is bound to the module of its name, in any case
+    /// (DESIGN_GUIDE.md section 18, M7).
+    std::vector<std::string> modules;
+
+    /// The entities SystemVerilog instantiates, each translated with the values it asks for, the
+    /// name of the definition each becomes answered in `Exchange::answers`.
+    std::vector<eir::UnitRequest> requests;
+
+    /// The names SystemVerilog instantiates and declares nowhere, of which each an entity has is
+    /// described, in `Exchange::interfaces`, and none is a top level.
+    std::vector<std::string> described;
+
+    /// Whether nothing but `requests` is translated, as when the top level is SystemVerilog's.
+    bool onlyRequested = false;
+};
+
+/// What a translation of the VHDL of a design of both languages exchanges with the SystemVerilog
+/// side (DESIGN_GUIDE.md section 18, M7).
+struct Exchange {
+    /// The SystemVerilog modules the design instantiates, which its instances name placeholders of.
+    std::vector<eir::UnitRequest> asked;
+
+    /// The definition each of `DesignOptions::requests` became, in order.
+    std::vector<std::string> answers;
+
+    /// The interface of each of `DesignOptions::described` that an entity has, named as asked, its
+    /// generics and ports named as declared.
+    std::vector<eir::UnitInterface> interfaces;
 };
 
 /// Analyses `options.units` and translates the design under the top into EIR (section 5.2).
@@ -111,10 +147,17 @@ struct DesignOptions {
 /// EIR's own encoding: NVC's trees live in the child and end with it, and nothing of NVC reaches
 /// the parent's memory.
 ///
+/// An instance of one of `options.modules` names a placeholder as its definition, and `exchange`,
+/// when given, receives what each placeholder asks for, for the SystemVerilog frontend to translate
+/// and the session to link, with what the design answers SystemVerilog.
+///
 /// Returns nothing having reported why, when a source does not analyse or the design uses
-/// something the adapter does not translate yet.
+/// something the adapter does not translate yet. `analysed`, when given, is set to whether the
+/// sources analysed, which leaves their units in the work library even where the translation
+/// after it failed (DESIGN_GUIDE.md section 4.4).
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
-                                     DiagnosticEngine& diagnostics);
+                                     DiagnosticEngine& diagnostics, Exchange* exchange = nullptr,
+                                     bool* analysed = nullptr);
 
 /// A resolution function asked for by how many drivers it resolves (DESIGN_GUIDE.md section 3.7):
 /// `function` names it as `eir::Resolution` does.
@@ -149,6 +192,10 @@ std::optional<ResolvedFunctions> resolutions(const DesignOptions& options,
                                              const SourceManager& sources,
                                              const std::vector<ResolutionRequest>& requests,
                                              DiagnosticEngine& diagnostics);
+
+/// The primary units `source` declares, `entity`, `package`, `configuration` and `context`, by
+/// their names in lower case: what a library records it holding, without analysing anything.
+[[nodiscard]] std::vector<std::string> declaredUnits(BufferId source, const SourceManager& sources);
 
 /// Where the standard libraries built with Enzan are: `lib/enzan/vhdl` beside the directory of the
 /// running program, which is where a build puts them and an installation keeps them (section 4.4).

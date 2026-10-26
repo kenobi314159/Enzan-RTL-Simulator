@@ -23,32 +23,35 @@
 
 namespace {
 
+using enzan::eir::ArrayDimension;
 using enzan::eir::BitVector;
 using enzan::eir::Logic;
 using enzan::ipc::ByeMessage;
+using enzan::ipc::ChangeCursor;
+using enzan::ipc::ChangeEntry;
+using enzan::ipc::ChangesMessage;
 using enzan::ipc::DepositMessage;
 using enzan::ipc::DesignMessage;
 using enzan::ipc::DiagnosticMessage;
 using enzan::ipc::FailureMessage;
+using enzan::ipc::FetchChangesMessage;
 using enzan::ipc::ForceMessage;
 using enzan::ipc::Frame;
 using enzan::ipc::FrameStatus;
-using enzan::ipc::HistoryEntry;
-using enzan::ipc::HistoryMessage;
 using enzan::ipc::InstanceEntry;
 using enzan::ipc::MessageType;
 using enzan::ipc::MessageWriter;
 using enzan::ipc::ObjectEntry;
 using enzan::ipc::ObjectsMessage;
+using enzan::ipc::ProgressMessage;
 using enzan::ipc::ProtocolVersion;
-using enzan::ipc::QueryHistoryMessage;
+using enzan::ipc::Recording;
 using enzan::ipc::RunMessage;
 using enzan::ipc::RunStateMessage;
+using enzan::ipc::SignalChanges;
 using enzan::ipc::SimulationState;
 using enzan::ipc::SubscribeMessage;
 using enzan::ipc::TranscriptMessage;
-using enzan::ipc::ValueChangesMessage;
-using enzan::ipc::ValueUpdate;
 using enzan::ipc::WelcomeMessage;
 using enzan::test::literal;
 
@@ -86,6 +89,7 @@ TEST(Protocol, WelcomeSurvivesTheRoundTrip) {
     sent.currentTime = 1'234'567'890'123ULL;
     sent.latestRecordedTime = 2'000'000ULL;
     sent.state = SimulationState::Running;
+    sent.widthLimit = 65536;
 
     const WelcomeMessage got = roundTrip(MessageType::Welcome, sent);
 
@@ -96,6 +100,7 @@ TEST(Protocol, WelcomeSurvivesTheRoundTrip) {
     EXPECT_EQ(got.currentTime, sent.currentTime);
     EXPECT_EQ(got.latestRecordedTime, sent.latestRecordedTime);
     EXPECT_EQ(got.state, SimulationState::Running);
+    EXPECT_EQ(got.widthLimit, 65536U);
 }
 
 TEST(Protocol, TheDesignTreeSurvivesTheRoundTrip) {
@@ -125,76 +130,119 @@ TEST(Protocol, TheDesignTreeSurvivesTheRoundTrip) {
 TEST(Protocol, ObjectsSurviveTheRoundTrip) {
     ObjectsMessage sent;
     sent.instancePath = "/tb";
-    sent.objects.push_back(ObjectEntry{
-        .signalIndex = 4, .name = "clk", .path = "/tb/clk", .width = 1, .recorded = true});
-    sent.objects.push_back(ObjectEntry{
-        .signalIndex = 9, .name = "count", .path = "/tb/count", .width = 32, .recorded = false});
+    sent.objects.push_back(ObjectEntry{.signalIndex = 4,
+                                       .name = "clk",
+                                       .path = "/tb/clk",
+                                       .width = 1,
+                                       .recording = Recording::Recorded});
+    sent.objects.push_back(ObjectEntry{.signalIndex = 9,
+                                       .name = "count",
+                                       .path = "/tb/count",
+                                       .width = 32,
+                                       .recording = Recording::OutsideScope});
+    // logic [7:0] grid [0:1][-1:-2], whose bounds may be negative
+    sent.objects.push_back(ObjectEntry{.signalIndex = 11,
+                                       .name = "grid",
+                                       .path = "/tb/grid",
+                                       .width = 32,
+                                       .recording = Recording::TooWide,
+                                       .dimensions = {ArrayDimension{.left = 0, .right = 1},
+                                                      ArrayDimension{.left = -1, .right = -2},
+                                                      ArrayDimension{.left = 7, .right = 0}}});
 
     const ObjectsMessage got = roundTrip(MessageType::Objects, sent);
 
     EXPECT_EQ(got.instancePath, "/tb");
-    ASSERT_EQ(got.objects.size(), 2U);
+    ASSERT_EQ(got.objects.size(), 3U);
     EXPECT_EQ(got.objects[0].name, "clk");
-    EXPECT_TRUE(got.objects[0].recorded);
+    EXPECT_EQ(got.objects[0].recording, Recording::Recorded);
+    EXPECT_TRUE(got.objects[0].dimensions.empty());
     EXPECT_EQ(got.objects[1].width, 32U);
-    EXPECT_FALSE(got.objects[1].recorded);
+    EXPECT_EQ(got.objects[1].recording, Recording::OutsideScope);
+    EXPECT_EQ(got.objects[2].recording, Recording::TooWide);
+    EXPECT_EQ(got.objects[2].dimensions, sent.objects[2].dimensions);
 }
 
 TEST(Protocol, FourStateValuesSurviveTheRoundTrip) {
     // The whole reason the two-plane encoding crosses the socket unchanged: an X or a Z that
     // arrived as a 0 would be a wrong simulation result shown to the user as a fact.
-    ValueChangesMessage sent;
-    sent.time = 4'000;
-    sent.updates.push_back(ValueUpdate{.signalIndex = 1, .value = literal("8'b10xz01x1")});
-    sent.updates.push_back(ValueUpdate{.signalIndex = 7, .value = literal("4'hf")});
+    ChangesMessage sent;
+    sent.signals.push_back(
+        SignalChanges{.signalIndex = 1,
+                      .width = 8,
+                      .first = 0,
+                      .recorded = 1,
+                      .completeTo = 4'000,
+                      .entries = {ChangeEntry{.time = 4'000, .value = literal("8'b10xz01x1")}}});
+    sent.signals.push_back(
+        SignalChanges{.signalIndex = 7,
+                      .width = 4,
+                      .first = 0,
+                      .recorded = 1,
+                      .completeTo = 4'000,
+                      .entries = {ChangeEntry{.time = 4'000, .value = literal("4'hf")}}});
 
-    const ValueChangesMessage got = roundTrip(MessageType::ValueChanges, sent);
+    const ChangesMessage got = roundTrip(MessageType::Changes, sent);
 
-    EXPECT_EQ(got.time, 4'000U);
-    ASSERT_EQ(got.updates.size(), 2U);
-    EXPECT_EQ(got.updates[0].signalIndex, 1U);
-    EXPECT_EQ(got.updates[0].value, literal("8'b10xz01x1"));
-    EXPECT_EQ(got.updates[1].value, literal("4'hf"));
+    ASSERT_EQ(got.signals.size(), 2U);
+    EXPECT_EQ(got.signals[0].signalIndex, 1U);
+    ASSERT_EQ(got.signals[0].entries.size(), 1U);
+    EXPECT_EQ(got.signals[0].entries[0].time, 4'000U);
+    EXPECT_EQ(got.signals[0].entries[0].value, literal("8'b10xz01x1"));
+    ASSERT_EQ(got.signals[1].entries.size(), 1U);
+    EXPECT_EQ(got.signals[1].entries[0].value, literal("4'hf"));
 }
 
 TEST(Protocol, AValueWiderThanOneWordSurvivesTheRoundTrip) {
-    ValueChangesMessage sent;
-    sent.time = 1;
-
     BitVector wide = BitVector::filled(130, Logic::Zero);
     wide.set(0, Logic::One);
     wide.set(64, Logic::Unknown);
     wide.set(129, Logic::HighZ);
-    sent.updates.push_back(ValueUpdate{.signalIndex = 0, .value = wide});
+    ChangesMessage sent;
+    sent.signals.push_back(SignalChanges{.signalIndex = 0,
+                                         .width = 130,
+                                         .first = 0,
+                                         .recorded = 1,
+                                         .completeTo = 1,
+                                         .entries = {ChangeEntry{.time = 1, .value = wide}}});
 
-    const ValueChangesMessage got = roundTrip(MessageType::ValueChanges, sent);
+    const ChangesMessage got = roundTrip(MessageType::Changes, sent);
 
-    ASSERT_EQ(got.updates.size(), 1U);
-    EXPECT_EQ(got.updates[0].value.width(), 130U);
-    EXPECT_EQ(got.updates[0].value.get(0), Logic::One);
-    EXPECT_EQ(got.updates[0].value.get(64), Logic::Unknown);
-    EXPECT_EQ(got.updates[0].value.get(129), Logic::HighZ);
-    EXPECT_EQ(got.updates[0].value.get(1), Logic::Zero);
+    ASSERT_EQ(got.signals.size(), 1U);
+    ASSERT_EQ(got.signals[0].entries.size(), 1U);
+    const BitVector& value = got.signals[0].entries[0].value;
+    EXPECT_EQ(value.width(), 130U);
+    EXPECT_EQ(value.get(0), Logic::One);
+    EXPECT_EQ(value.get(64), Logic::Unknown);
+    EXPECT_EQ(value.get(129), Logic::HighZ);
+    EXPECT_EQ(value.get(1), Logic::Zero);
 }
 
-TEST(Protocol, HistorySurvivesTheRoundTrip) {
-    HistoryMessage sent;
-    sent.signalIndex = 3;
-    sent.width = 4;
-    sent.latestTime = 900;
-    sent.complete = false;
-    sent.entries.push_back(HistoryEntry{.time = 0, .value = literal("4'bxxxx")});
-    sent.entries.push_back(HistoryEntry{.time = 10, .value = literal("4'h3")});
+TEST(Protocol, AnAnswerOfChangesKeepsWhereItStandsInTheSignal) {
+    // Which changes these are, how many the kernel holds and how far the copy is complete are
+    // what the client needs to know whether to ask again and how far to draw.
+    ChangesMessage sent;
+    sent.signals.push_back(
+        SignalChanges{.signalIndex = 3,
+                      .width = 4,
+                      .first = 2,
+                      .recorded = 9,
+                      .completeTo = 30,
+                      .entries = {ChangeEntry{.time = 10, .value = literal("4'bxxxx")},
+                                  ChangeEntry{.time = 20, .value = literal("4'h3")}}});
 
-    const HistoryMessage got = roundTrip(MessageType::History, sent);
+    const ChangesMessage got = roundTrip(MessageType::Changes, sent);
 
-    EXPECT_EQ(got.signalIndex, 3U);
-    EXPECT_EQ(got.width, 4U);
-    EXPECT_EQ(got.latestTime, 900U);
-    EXPECT_FALSE(got.complete);
-    ASSERT_EQ(got.entries.size(), 2U);
-    EXPECT_EQ(got.entries[1].time, 10U);
-    EXPECT_EQ(got.entries[1].value, literal("4'h3"));
+    ASSERT_EQ(got.signals.size(), 1U);
+    const SignalChanges& changes = got.signals[0];
+    EXPECT_EQ(changes.signalIndex, 3U);
+    EXPECT_EQ(changes.width, 4U);
+    EXPECT_EQ(changes.first, 2U);
+    EXPECT_EQ(changes.recorded, 9U);
+    EXPECT_EQ(changes.completeTo, 30U);
+    ASSERT_EQ(changes.entries.size(), 2U);
+    EXPECT_EQ(changes.entries[1].time, 20U);
+    EXPECT_EQ(changes.entries[1].value, literal("4'h3"));
 }
 
 TEST(Protocol, DiagnosticsSurviveTheRoundTripWithTheirNotes) {
@@ -231,13 +279,20 @@ TEST(Protocol, SmallMessagesSurviveTheRoundTrip) {
     EXPECT_EQ(runBack.duration, 100'000U);
     EXPECT_TRUE(runBack.untilFinished);
 
-    QueryHistoryMessage query;
-    query.signalIndex = 8;
-    query.fromTime = 5;
-    query.toTime = 500;
-    const QueryHistoryMessage queryBack = roundTrip(MessageType::QueryHistory, query);
-    EXPECT_EQ(queryBack.signalIndex, 8U);
-    EXPECT_EQ(queryBack.toTime, 500U);
+    FetchChangesMessage fetch;
+    fetch.signals = {ChangeCursor{.signalIndex = 8, .held = 5},
+                     ChangeCursor{.signalIndex = 2, .held = 0}};
+    const FetchChangesMessage fetchBack = roundTrip(MessageType::FetchChanges, fetch);
+    ASSERT_EQ(fetchBack.signals.size(), 2U);
+    EXPECT_EQ(fetchBack.signals[0].signalIndex, 8U);
+    EXPECT_EQ(fetchBack.signals[0].held, 5U);
+
+    ProgressMessage progress;
+    progress.time = 70;
+    progress.latestRecordedTime = 75;
+    const ProgressMessage progressBack = roundTrip(MessageType::Progress, progress);
+    EXPECT_EQ(progressBack.time, 70U);
+    EXPECT_EQ(progressBack.latestRecordedTime, 75U);
 
     TranscriptMessage transcript;
     transcript.text = "count = 42\n";
@@ -413,16 +468,26 @@ TEST(Protocol, AZeroWidthValueFailsToDecode) {
     // assertion deep in the value engine instead of being reported as the protocol error it is.
     std::vector<std::byte> payload;
     MessageWriter writer(payload);
-    std::uint64_t time = 0;
-    writer.u64(time);
-    std::uint32_t count = 1;
-    writer.u32(count);
+    std::uint32_t signals = 1;
+    writer.u32(signals);
     std::uint32_t signalIndex = 0;
     writer.u32(signalIndex);
+    std::uint32_t declared = 1;
+    writer.u32(declared);
+    std::uint64_t first = 0;
+    writer.u64(first);
+    std::uint64_t recorded = 1;
+    writer.u64(recorded);
+    std::uint64_t completeTo = 0;
+    writer.u64(completeTo);
+    std::uint32_t entries = 1;
+    writer.u32(entries);
+    std::uint64_t time = 0;
+    writer.u64(time);
     std::uint32_t width = 0;
     writer.u32(width);
 
-    ValueChangesMessage decoded;
+    ChangesMessage decoded;
     EXPECT_FALSE(enzan::ipc::decodePayload(payload, decoded));
 }
 
@@ -462,7 +527,7 @@ TEST(Protocol, AnUnknownStateDecodesAsFailedRatherThanOutOfRange) {
 
 TEST(Protocol, MessageNamesAreStableAndUnknownOnesSayTheirNumber) {
     EXPECT_EQ(enzan::ipc::toString(MessageType::Hello), "hello");
-    EXPECT_EQ(enzan::ipc::toString(MessageType::ValueChanges), "value-changes");
+    EXPECT_EQ(enzan::ipc::toString(MessageType::FetchChanges), "fetch-changes");
     // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) — the point of the test
     EXPECT_EQ(enzan::ipc::toString(static_cast<MessageType>(4242)), "message(4242)");
     EXPECT_EQ(enzan::ipc::toString(SimulationState::Idle), "idle");

@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -565,6 +566,117 @@ TEST_F(StoredLibraryTest, AnEntryIsNamedAfterItsSourceAndStaysThereWhenItChanges
         if (e.path().extension() == ".eirlib") after.push_back(e.path().filename());
 
     EXPECT_EQ(after, before) << "the entry was rewritten in place, not written beside the old one";
+}
+
+// ---------------------------------------------------------------------------
+// VHDL (sections 4.4 and 8.2)
+// ---------------------------------------------------------------------------
+
+/// The options a VHDL source is analysed with, as the session puts them in its key.
+constexpr std::string_view VhdlOptions = "std 2008\nwork work";
+
+/// Makes `library`'s VHDL directory, as NVC's analysis does when it writes the units.
+void analysedByNvc(const Library& library) {
+    std::filesystem::create_directories(library.vhdlDirectory());
+}
+
+/// `text` in upper case, as NVC names a unit's file.
+std::string upper(std::string text) {
+    for (char& character : text)
+        character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    return text;
+}
+
+TEST_F(StoredLibraryTest, AVhdlSourceStoredIsCurrentAndDeclaresItsUnits) {
+    const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
+    analysedByNvc(library);
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+
+    EXPECT_TRUE(library.holdsVhdl());
+    EXPECT_TRUE(library.vhdlCurrent({&file, 1}, sources, VhdlOptions));
+    EXPECT_EQ(library.vhdlUnits(), std::vector<std::string>{"counter"});
+    EXPECT_EQ(library.unitNames(), std::vector<std::string>{"counter"}) << "`lib list` shows it";
+}
+
+TEST_F(StoredLibraryTest, AVhdlSourceEditedOrAnalysedOtherwiseIsStale) {
+    const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
+    analysedByNvc(library);
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+
+    const LibrarySource edited = source("counter.vhd", "entity counter is port (a : bit); end;\n");
+    EXPECT_FALSE(library.vhdlCurrent({&edited, 1}, sources, VhdlOptions));
+    EXPECT_FALSE(library.vhdlCurrent({&file, 1}, sources, "std 1993\nwork work"));
+}
+
+TEST_F(StoredLibraryTest, VhdlEntriesWithoutNvcsUnitsAreStale) {
+    const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+    EXPECT_FALSE(library.vhdlCurrent({&file, 1}, sources, VhdlOptions))
+        << "an entry says what NVC analysed; without NVC's units it describes nothing";
+}
+
+TEST_F(StoredLibraryTest, NvcsUnitsNoEntryRecordsAreFound) {
+    // What an analysis stopped part-way leaves: NVC has written the unit, as a file named for the
+    // library and the unit in upper case, and no entry declares it. Once one does, it is recorded.
+    analysedByNvc(library);
+    std::ofstream(library.vhdlDirectory() / (upper(library.name()) + ".COUNTER")) << "unit";
+    EXPECT_TRUE(library.holdsUnrecordedVhdl("counter"));
+    EXPECT_TRUE(library.holdsUnrecordedVhdl("Counter")) << "VHDL names are in any case";
+    EXPECT_FALSE(library.holdsUnrecordedVhdl("other")) << "a unit NVC did not write";
+
+    const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+    EXPECT_FALSE(library.holdsUnrecordedVhdl("counter"));
+}
+
+TEST_F(StoredLibraryTest, VhdlHoldsNoTimeUnit) {
+    // A VHDL design is translated in the run's unit when it runs, so a library of VHDL holds no
+    // delays and fixes no unit: it may be read beside one of SystemVerilog in any.
+    const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
+    analysedByNvc(library);
+    library.setOptions({}, {}, {}, -15);
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+    EXPECT_FALSE(library.timeUnit().has_value());
+
+    Design loaded;
+    ASSERT_TRUE(library.loadAll(loaded, engine));
+    EXPECT_EQ(loaded.size(), 0U) << "a VHDL entry holds no units of EIR";
+}
+
+TEST_F(StoredLibraryTest, TheVhdlStampChangesWhenItsVhdlIsAnalysedAgain) {
+    EXPECT_TRUE(library.vhdlStamp().empty());
+
+    const LibrarySource file = source("pkg.vhd", "package pkg is end package;\n");
+    analysedByNvc(library);
+    const std::vector<std::vector<std::string>> units{{"pkg"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+    const std::string first = library.vhdlStamp();
+    EXPECT_FALSE(first.empty());
+
+    const LibrarySource edited = source("pkg.vhd", "package pkg is constant c : bit; end;\n");
+    ASSERT_TRUE(library.storeVhdl({&edited, 1}, sources, VhdlOptions, units, engine));
+    EXPECT_NE(library.vhdlStamp(), first);
+}
+
+TEST_F(StoredLibraryTest, CleaningRemovesEveryEntryAndNvcsUnits) {
+    const LibrarySource sv = source("a.sv", "module a; endmodule\n");
+    library.setOptions({}, {}, {}, Picoseconds);
+    ASSERT_TRUE(library.store({&sv, 1}, sources, designWith("a", sv.buffer), engine));
+    const LibrarySource vhdl = source("counter.vhd", "entity counter is end entity;\n");
+    analysedByNvc(library);
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&vhdl, 1}, sources, VhdlOptions, units, engine));
+
+    EXPECT_EQ(library.clean(), 2U);
+    EXPECT_FALSE(library.holdsVhdl());
+    EXPECT_FALSE(std::filesystem::exists(library.vhdlDirectory()));
+    EXPECT_TRUE(library.unitNames().empty());
+    EXPECT_EQ(library.name(), "work") << "the library and its name stay";
 }
 
 } // namespace

@@ -259,6 +259,45 @@ TEST_F(SessionTest, AFileNamedTwiceIsAnalysedOnce) {
     EXPECT_TRUE(session.elaborate("tb")) << firstMessage();
 }
 
+// ---------------------------------------------------------------------------
+// The run's time unit (section 3.1)
+// ---------------------------------------------------------------------------
+
+/// A design whose one module asks for femtoseconds.
+constexpr std::string_view FemtosecondSource = "`timescale 1ns / 1fs\n"
+                                               "module tb;\n  logic a;\n"
+                                               "  initial #1 a = 1'b1;\nendmodule\n";
+
+TEST_F(SessionTest, ARunNothingFixesTheUnitOfCountsTheFinestPrecisionTheDesignAsksFor) {
+    ASSERT_TRUE(session.chooseTimeScale(std::nullopt));
+    ASSERT_TRUE(analyse("fine.sv", FemtosecondSource)) << firstMessage();
+    EXPECT_EQ(session.timeScale().precisionExponent(), -15);
+}
+
+TEST_F(SessionTest, ALibraryBeingWrittenKeepsTheUnitAModuleWithNoTimeScaleIsIn) {
+    // What the library stores counts its unit, and a later analysis into it takes that unit for
+    // a module with no time scale, so this analysis has to have used it too.
+    ASSERT_TRUE(session.openOutputLibrary(workspace / "work")) << firstMessage();
+    ASSERT_TRUE(session.chooseTimeScale(std::nullopt));
+    ASSERT_TRUE(analyse("fine.sv", FemtosecondSource)) << firstMessage();
+    EXPECT_EQ(session.timeScale().precisionExponent(), -12);
+}
+
+TEST_F(SessionTest, AModuleWithNoTimeScaleIsInTheDefaultUnitNotTheRefinedOne) {
+    // Another module asking for femtoseconds makes the run count them, and leaves a module that
+    // states nothing in picoseconds, across a second analysis as within the first.
+    ASSERT_TRUE(session.chooseTimeScale(std::nullopt));
+    ASSERT_TRUE(analyse("fine.sv", FemtosecondSource)) << firstMessage();
+    ASSERT_TRUE(analyse("plain.sv", "module plain;\n  logic a;\n  initial #5 a = 1'b1;\n"
+                                    "endmodule\n"))
+        << firstMessage();
+    ASSERT_EQ(session.timeScale().precisionExponent(), -15);
+
+    ASSERT_TRUE(session.elaborate("plain")) << firstMessage();
+    session.run(std::nullopt);
+    EXPECT_EQ(session.time(), 5000U) << "5 ps, counted in femtoseconds";
+}
+
 TEST_F(SessionTest, AFileASecondAnalysisNamesAgainIsAnalysedOnce) {
     // A session accumulates what each analysis names, so naming a file again is a repeat too.
     ASSERT_TRUE(analyse("counter.sv", CounterSource)) << firstMessage();
@@ -691,10 +730,67 @@ TEST_F(SessionTest, ADesignCannotBeRestartedWhileAnApplicationIsLoaded) {
     EXPECT_EQ(session.time(), 50U) << "nothing was put back";
 }
 
+TEST_F(SessionTest, ASearchFindsNoNameAFrontendMadeUp) {
+    // `.count(count_lin[I])` gives the port storage of its own in the parent, named with a `$`.
+    ASSERT_TRUE(analyse("tb.sv", R"(
+        module counter (input logic clk, output logic [3:0] count);
+            always_ff @(posedge clk) count <= count + 1'b1;
+        endmodule
+
+        module tb;
+            logic clk = 1'b0;
+            logic [1:0][3:0] count_lin;
+            genvar I;
+            for (I = 0; I < 2; I++) begin : cntr_lin_gen
+                counter cntr_i (.clk(clk), .count(count_lin[I]));
+            end
+        endmodule
+    )")) << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+
+    const std::vector<std::string> found = session.findSignals("*");
+    EXPECT_FALSE(found.empty());
+    for (const std::string& path : found) EXPECT_EQ(path.find('$'), std::string::npos) << path;
+    EXPECT_EQ(session.findSignals("/tb/cntr_lin_gen[0].cntr_i/count"),
+              (std::vector<std::string>{"/tb/cntr_lin_gen[0].cntr_i/count"}));
+}
+
 TEST_F(SessionTest, AnApplicationThatCannotBeLoadedIsReported) {
     EXPECT_FALSE(session.loadVpiApplication("/nonexistent/libnothing.so", commandLine()));
     EXPECT_TRUE(reported(DiagCode::VpiLibraryUnloadable));
     EXPECT_FALSE(session.hasVpiApplication());
 }
+
+// ---------------------------------------------------------------------------
+// A design of both languages (DESIGN_GUIDE.md section 18, M7)
+// ---------------------------------------------------------------------------
+
+class BothLanguagesTest : public SessionTest {
+protected:
+    bool analyseBoth(std::string_view top) {
+        workspace.write("tb.vhd", "entity tb is\nend entity;\narchitecture a of tb is\nbegin\n"
+                                  "end architecture;\n");
+        workspace.write("m.sv", "module Buffer(input logic i, output logic o);\n"
+                                "  assign o = i;\nendmodule\n");
+        Session::AnalysisRequest request;
+        request.files = {workspace / "tb.vhd", workspace / "m.sv"};
+        request.top = top;
+        return session.analyse(request);
+    }
+};
+
+#ifdef ENZAN_WITH_VHDL
+TEST_F(BothLanguagesTest, ADesignOfBothLanguagesIsNotStoredInALibraryYet) {
+    ASSERT_TRUE(session.openOutputLibrary(workspace / "work")) << firstMessage();
+    EXPECT_FALSE(analyseBoth("tb"));
+    EXPECT_TRUE(reported(DiagCode::NotYetImplemented));
+}
+#else
+TEST_F(BothLanguagesTest, ADesignOfBothLanguagesNeedsABuildWithBothFrontends) {
+    EXPECT_FALSE(analyseBoth("tb"));
+    EXPECT_TRUE(reported(DiagCode::NotYetImplemented));
+    EXPECT_NE(firstMessage().find("ENZAN_ENABLE_VHDL=OFF"), std::string::npos) << firstMessage();
+}
+#endif
 
 } // namespace

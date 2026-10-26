@@ -37,6 +37,7 @@ jobs:
   lint:
     name: Format and license headers
     runs-on: ubuntu-24.04
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -61,6 +62,7 @@ jobs:
   build:
     name: ${{ matrix.preset }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -164,25 +166,6 @@ jobs:
             >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 
-      # M6's exit design (section 14.5): NEORV32 through its own testbench's on-chip debugger
-      # sequence, held to GHDL's reports and to its CPU trace and UART logs. A few minutes, so
-      # on the main branch only, and with the one build that is optimised for GCC.
-      - name: Design regression - NEORV32
-        if: matrix.preset == 'gcc-release' && github.ref == 'refs/heads/main'
-        run: >
-          tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)" \
-            build/designs/neorv32
-
-      - name: Keep the NEORV32 logs
-        if: failure() && matrix.preset == 'gcc-release'
-        uses: actions/upload-artifact@v4
-        with:
-          name: neorv32-logs
-          path: |
-            build/designs/neorv32/differences.txt
-            build/designs/neorv32/enzan/*.txt
-            build/designs/neorv32/ghdl/transcript.txt
-
       - name: Report cache statistics
         if: always()
         run: ccache --show-stats
@@ -190,6 +173,7 @@ jobs:
   sanitize:
     name: ASan + UBSan
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -232,6 +216,7 @@ jobs:
     name: clang-tidy
     runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/main'
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -279,6 +264,7 @@ jobs:
   gui:
     name: Graphical front end without the language frontends
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
@@ -326,6 +312,7 @@ jobs:
   systemverilog:
     name: SystemVerilog frontend and golden suite, default configuration
     runs-on: ubuntu-24.04
+    timeout-minutes: ${{ github.ref == 'refs/heads/main' && 30 || 20 }}
     steps:
       # NVC, which the VHDL frontend builds part of, is a submodule.
       - uses: actions/checkout@v4
@@ -345,13 +332,14 @@ jobs:
       # needs the shared library to do it.
       #
       # flex and zstd for NVC's analysis, and Qt 6 and Tcl for the GUI, which the default
-      # configuration builds.
+      # configuration builds. GHDL is NEORV32's reference.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ccache libgtest-dev zlib1g-dev python3 python3-venv \
-            libpython3-dev iverilog gtkwave flex libzstd-dev qt6-base-dev tcl-dev
+            libpython3-dev iverilog gtkwave flex libzstd-dev qt6-base-dev tcl-dev ghdl \
+            ghdl-mcode
 
       # The cocotb version is named once, in requirements.txt (DESIGN_GUIDE.md section 14.6), and
       # so is what sv-tests' driver needs (section 14.4).
@@ -430,6 +418,18 @@ jobs:
           name: sv-tests-logs
           path: build/sv-tests/out/logs
 
+      # NVC's regression tests of VHDL with Verilog (section 14.4), which only this build, with both
+      # frontends, can run, held to a pass list of their own. Seconds.
+      - name: NVC regression tests, VHDL with Verilog
+        run: |
+          status=0
+          tests/conformance/nvc/run-suite.sh build/gcc-release/bin/enzan build/nvc-mixed mixed \
+            > build/nvc-mixed.txt 2>&1 || status=$?
+          grep -v -e '^FAIL ' -e '^PASS ' build/nvc-mixed.txt
+          { echo '```'; grep -v -e '^FAIL ' -e '^PASS ' build/nvc-mixed.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
       # The design regression (section 14.5): each design's own testbenches, held to their own
       # verdicts and, where Icarus Verilog can run them, to its transcript. Under a second here.
       - name: Design regression
@@ -444,6 +444,7 @@ jobs:
       # The long running tests only execute on the main branch.
       - name: Design regression - long run
         if: github.ref == 'refs/heads/main'
+        timeout-minutes: 5
         env:
           COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
         run: |
@@ -451,6 +452,28 @@ jobs:
           status=0
           tests/designs/taxi/run.sh build/gcc-release/bin/enzan build/designs/taxi || status=1
           exit "$status"
+
+      # The exit designs of M6 and M7 (section 14.5): NEORV32 through its own testbench's
+      # on-chip debugger sequence, and through the same testbench in Verilog around its VHDL,
+      # each held to GHDL's reports of the VHDL testbench and to its CPU trace and UART logs. A
+      # few minutes, so on the main branch only, in the one build with both frontends.
+      - name: Design regression - NEORV32
+        if: github.ref == 'refs/heads/main'
+        timeout-minutes: 5
+        run: >
+          tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)" \
+            build/designs/neorv32
+
+      - name: Keep the NEORV32 logs
+        if: failure() && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: neorv32-logs
+          path: |
+            build/designs/neorv32/differences.txt
+            build/designs/neorv32/enzan/*.txt
+            build/designs/neorv32/enzan-verilog/*.txt
+            build/designs/neorv32/ghdl/transcript.txt
 
       - name: Keep the design regression logs
         if: failure()
