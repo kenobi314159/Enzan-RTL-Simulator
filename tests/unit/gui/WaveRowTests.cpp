@@ -869,6 +869,36 @@ TEST_F(WaveWindowTest, RenameOpensTheEditorOnTheName) {
     EXPECT_EQ(waveModel->indexOfRow(bus).data().toString(), QStringLiteral("tally"));
 }
 
+TEST_F(WaveWindowTest, PasteGoesAfterTheCurrentRowAtItsLevel) {
+    // After a group as after anything else, rather than into it: pasting into a group left no
+    // way to paste after one, and dragging is what puts a row inside a group.
+    addToWave(QStringLiteral("clk"));
+    addToWave(QStringLiteral("count"));
+    ASSERT_EQ(waveModel->rowCount(), 2);
+    const int clock = waveModel->rowIdOf(waveModel->index(0, 0));
+    const int counter = waveModel->rowIdOf(waveModel->index(1, 0));
+    const int group = waveModel->addGroup(QStringLiteral("g"));
+    ASSERT_TRUE(waveModel->moveRowsTo({counter}, group, 0));
+    ASSERT_EQ(waveModel->rowCount(), 2) << "the clock, then the group holding the counter";
+
+    waveModel->copySignalRows({clock});
+    waveRows->setCurrentIndex(waveModel->indexOfRow(group));
+    ASSERT_TRUE(triggerWaveAction(QStringLiteral("Paste")));
+
+    ASSERT_EQ(waveModel->rowCount(), 3);
+    EXPECT_EQ(waveModel->rowIdOf(waveModel->index(1, 0)), group);
+    EXPECT_EQ(waveModel->index(2, 0).data().toString(), QStringLiteral("clk"))
+        << "the copy belongs after the group";
+    EXPECT_EQ(waveModel->rowCount(waveModel->indexOfRow(group)), 1) << "and not inside it";
+
+    // Inside a group, after the row that is current there.
+    waveRows->setCurrentIndex(waveModel->indexOfRow(counter));
+    ASSERT_TRUE(triggerWaveAction(QStringLiteral("Paste")));
+    const QModelIndex inside = waveModel->indexOfRow(group);
+    ASSERT_EQ(waveModel->rowCount(inside), 2);
+    EXPECT_EQ(waveModel->index(1, 0, inside).data().toString(), QStringLiteral("clk"));
+}
+
 TEST_F(WaveWindowTest, TheBitRangeDialogIsGone) {
     // Section 10.3: a range is reached by unpacking and removing what is not wanted, not by
     // typing `high:low` into a box. The entry that did is not there to be found.

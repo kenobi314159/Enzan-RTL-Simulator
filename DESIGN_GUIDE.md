@@ -2477,8 +2477,8 @@ it would sit beside is how a tool acquires a number nobody reads.
   It is the same act as the disclosure arrow, which is what creates a vector's
   bits the first time, so the two can never disagree about what a row is showing.
 - **Copy and paste.** Ctrl+C copies the selected rows, with everything below
-  them, and Ctrl+V pastes them beside whatever is current — inside it when that
-  is a group. A copy keeps its radix, its highlight and how far it was unpacked,
+  them, and Ctrl+V pastes them after whatever is current, at its level, a group
+  included; dragging is what puts rows inside a group. A copy keeps its radix, its highlight and how far it was unpacked,
   because a row that had been set up and then pasted back as a bare default
   would be a worse answer than copying nothing. The clipboard also carries the
   hierarchical paths as plain text, so that a copy is worth something outside

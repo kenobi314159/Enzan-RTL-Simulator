@@ -1038,20 +1038,18 @@ void MainWindow::pasteWaves() {
         return;
     }
 
-    // Pasted beside whatever is current — inside it when that is a group — because that is
-    // where the reader is looking, and at the end of the window when nothing is.
+    // Pasted after whatever is current, at its level, because that is where the reader is
+    // looking, and at the end of the window when nothing is. After a group too, rather than
+    // inside it: pasting into a group left no way to paste after one, while dragging already
+    // puts rows inside a group.
     const int current = waveModel->rowIdOf(waveRowsView->currentIndex());
     const WaveRow* currentRow = waveModel->row(current);
 
     int targetGroup = -1;
     int position = -1;
     if (currentRow != nullptr) {
-        if (!currentRow->children.isEmpty() || currentRow->kind == WaveRow::Kind::Group) {
-            targetGroup = current;
-        } else {
-            targetGroup = currentRow->parent;
-            position = waveModel->indexOfRow(current).row() + 1;
-        }
+        targetGroup = currentRow->parent;
+        position = waveModel->indexOfRow(current).row() + 1;
     }
 
     const QVector<int> pasted = waveModel->pasteSignalRows(targetGroup, position);
