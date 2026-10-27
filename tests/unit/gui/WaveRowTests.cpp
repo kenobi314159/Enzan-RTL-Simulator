@@ -1007,6 +1007,7 @@ TEST_F(WaveWindowTest, TheWaveListsKeysActOnlyInTheWaveWindow) {
 }
 
 TEST_F(WaveWindowTest, TheWaveKeysLeaveTheListsTypingAlone) {
+    // NOLINTBEGIN(clang-analyzer-cplusplus.NewDelete)
     // The wave window's own keys carry a modifier or are punctuation, so that a letter typed in
     // the list still finds a row by its name (section 10.7), and they act only in the Wave tab.
     addToWave(QStringLiteral("clk"));
@@ -1031,6 +1032,7 @@ TEST_F(WaveWindowTest, TheWaveKeysLeaveTheListsTypingAlone) {
     waveRows->setFocus();
     QTest::keyClick(waveRows, Qt::Key_Insert);
     EXPECT_EQ(canvas->cursors().size(), cursors + 1) << "Insert in the wave list adds a cursor";
+    // NOLINTEND(clang-analyzer-cplusplus.NewDelete)
 }
 
 TEST_F(WaveWindowTest, TheEditMenuIsTheWaveListsMenu) {
