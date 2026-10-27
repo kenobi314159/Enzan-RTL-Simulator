@@ -5,6 +5,7 @@
 #include "common/Diagnostics.h"
 #include "common/Version.h"
 #include "eir/BitOps.h"
+#include "gui/TclSyntax.h"
 #include "runtime/Time.h"
 
 #include <QAction>
@@ -726,7 +727,7 @@ void MainWindow::addSelectedObjectsToWave() {
         const SignalInfo* info = objectsModel->objectAt(index.row());
         if (info == nullptr) continue;
         waveModel->addSignal(*info);
-        paths << quoteSignalListWord(info->path);
+        paths << quoteTclWord(info->path);
     }
     if (!paths.isEmpty()) echo(QStringLiteral("add wave ") + paths.join(u' '));
 
@@ -745,7 +746,7 @@ void MainWindow::insertScopeSignals(bool recursive) {
     command.recursive = recursive;
 
     echo(QStringLiteral("add wave ") + (recursive ? QStringLiteral("-r ") : QString())
-         + quoteSignalListWord(root));
+         + quoteTclWord(root));
 
     PendingLoad load;
     load.entries.push_back(std::move(command));

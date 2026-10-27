@@ -64,14 +64,11 @@ struct ParsedSignalList {
 
 /// Reads a signal list.
 ///
-/// Split into commands by Tcl's own parser and never evaluated: quoting, braces, backslashes,
+/// Split into commands by `splitTclCommands` and never evaluated: quoting, braces, backslashes,
 /// line continuation and comments are Tcl's, and nothing is substituted, so `$` and `[…]` are
-/// ordinary characters and `/tb/gen[0].q` needs no braces.
+/// ordinary characters and `/tb/gen[0].q` needs no braces. A word is written for it with
+/// `quoteTclWord`.
 [[nodiscard]] ParsedSignalList parseSignalList(const QByteArray& text);
-
-/// Writes `word` so that `parseSignalList` reads it back unchanged, quoting it only when it
-/// must be.
-[[nodiscard]] QString quoteSignalListWord(const QString& word);
 
 /// The word `-radix` takes for `radix`.
 [[nodiscard]] QString radixWord(eir::Radix radix);

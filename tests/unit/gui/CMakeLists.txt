@@ -15,6 +15,7 @@ add_executable(
   ShortcutSheetTests.cpp
   SignalListLoadTests.cpp
   SignalListTests.cpp
+  TclSyntaxTests.cpp
   ThemeTests.cpp
   WaveRowTests.cpp
   WaveformInteractionTests.cpp

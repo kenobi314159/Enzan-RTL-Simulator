@@ -8,6 +8,8 @@ waveform view and the transcript (DESIGN_GUIDE.md section 10).
 - **The theme** (`Theme.h`) — the colours everything here paints with, loaded from a Tcl script.
 - **Signal lists** (`SignalList.h`) — reading, resolving and writing the wave window's list as a
   file (DESIGN_GUIDE.md section 10.8).
+- **Tcl's syntax** (`TclSyntax.h`) — splitting a file into commands with Tcl's parser, evaluating
+  nothing, and quoting a word so that it reads back. Signal lists are read with it.
 - **The session** (`KernelSession.h`) — the GUI's end of the connection, on Qt's event loop, and
   the client-side copy of the waveform it is drawing.
 - **The models** (`DesignTreeModel.h`, `ObjectsModel.h`, `WaveformModel.h`) — the hierarchy, the
@@ -40,8 +42,8 @@ one purpose. The script gets one command and nothing else: a theme is a
 list of colours, and an interpreter that also offered file access would make "copy this theme
 from the internet" a more exciting decision than it should be.
 
-**A signal list is not even that.** It is split into commands by `Tcl_ParseCommand` and never
-evaluated, so there is no interpreter for a list to reach. That is also what lets the window
+**A signal list is not even that.** It is split into commands by `Tcl_ParseCommand`, through
+`splitTclCommands`, and never evaluated, so there is no interpreter for a list to reach. That is also what lets the window
 write one back out: a program cannot be saved from what it produced, and a list can.
 
 **Every row is made one way.** `WaveformModel::rowFor`, `sliceOf`, `elementOf` and `bitOf` are

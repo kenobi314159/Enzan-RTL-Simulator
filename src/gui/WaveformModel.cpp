@@ -3,6 +3,7 @@
 #include "gui/WaveformModel.h"
 
 #include "gui/SignalList.h"
+#include "gui/TclSyntax.h"
 
 #include "eir/BitOps.h"
 
@@ -810,7 +811,7 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
         if (waveRow->highlight != 0)
             words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
         words.prepend(QStringLiteral("group"));
-        words << quoteSignalListWord(waveRow->label) << body(waveRow->children);
+        words << quoteTclWord(waveRow->label) << body(waveRow->children);
         text += indent + words.join(u' ') + u'\n';
         return;
     }
@@ -837,7 +838,7 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
     // The label only when the reader changed it: one the window would have made again is not
     // worth a word, and leaving it out is what keeps a hand-written list short.
     if (waveRow->label != leaf + range)
-        words << QStringLiteral("-label") << quoteSignalListWord(waveRow->label);
+        words << QStringLiteral("-label") << quoteTclWord(waveRow->label);
     if (waveRow->highlight != 0)
         words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
 
@@ -850,7 +851,7 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
     }
 
     words.prepend(QStringLiteral("add wave"));
-    words << quoteSignalListWord(path + range);
+    words << quoteTclWord(path + range);
     text += indent + words.join(u' ') + u'\n';
 }
 

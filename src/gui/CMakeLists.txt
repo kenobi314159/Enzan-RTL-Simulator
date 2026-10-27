@@ -18,6 +18,7 @@ enzan_add_component(
           ShortcutSheet.cpp
           SignalList.cpp
           TclLibrary.cpp
+          TclSyntax.cpp
           Theme.cpp
           TimeAxis.cpp
           TranscriptView.cpp
@@ -30,6 +31,7 @@ enzan_add_component(
           ShortcutSheet.h
           SignalList.h
           TclLibrary.h
+          TclSyntax.h
           Theme.h
           ThemeColors.def
           TimeAxis.h
