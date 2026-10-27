@@ -16,6 +16,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFont>
 #include <QHeaderView>
 #include <QIcon>
 #include <QInputDialog>
@@ -89,18 +90,18 @@ void showKeyInToolTip(QAction* action) {
 /// theme's, and a size worked out from there would keep what a theme set after a theme that sets
 /// none had replaced it.
 const QFont& desktopFont() {
-    static const QFont font = QApplication::font();
-    return font;
+    static const QFont Desktop = QApplication::font();
+    return Desktop;
 }
 
 } // namespace
 
-MainWindow::MainWindow(KernelSession& kernelSession, Theme initialTheme,
-                       ConfigurationDirectory settingsDirectory, QWidget* parent)
+MainWindow::MainWindow(KernelSession& kernelSession, const Theme& initialTheme,
+                       ConfigurationDirectory directory, QWidget* parent)
     : QMainWindow(parent),
       session(&kernelSession),
-      theme(std::move(initialTheme)),
-      configuration(std::move(settingsDirectory)),
+      theme(initialTheme),
+      configuration(std::move(directory)),
       themeName(configuration.read().theme) {
     setWindowTitle(tr("Enzan"));
 

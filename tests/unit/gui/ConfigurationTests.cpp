@@ -275,16 +275,17 @@ TEST_F(ConfigurationTest, ANewThemeIsTheShippedOneUnderAName) {
     const ConfigurationDirectory directory(fresh());
     QString error;
 
-    const std::optional<QString> mine = directory.writeTheme(QStringLiteral("mine"), error);
-    ASSERT_TRUE(mine.has_value()) << error.toStdString();
-    EXPECT_EQ(*mine, QStringLiteral("themes/mine.tcl"));
-    EXPECT_EQ(contentsOf(directory.resolve(*mine)), Theme::builtInScript().toUtf8());
+    const std::optional<QString> written = directory.writeTheme(QStringLiteral("mine"), error);
+    ASSERT_TRUE(written.has_value()) << error.toStdString();
+    const QString mine = written.value_or(QString());
+    EXPECT_EQ(mine, QStringLiteral("themes/mine.tcl"));
+    EXPECT_EQ(contentsOf(directory.resolve(mine)), Theme::builtInScript().toUtf8());
 
     // The extension may be given or not; a name already taken is never written over.
-    write(directory.resolve(*mine), "theme accent #123456\n");
+    write(directory.resolve(mine), "theme accent #123456\n");
     EXPECT_FALSE(directory.writeTheme(QStringLiteral("mine.tcl"), error).has_value());
     EXPECT_FALSE(error.isEmpty());
-    EXPECT_EQ(contentsOf(directory.resolve(*mine)), QByteArray("theme accent #123456\n"));
+    EXPECT_EQ(contentsOf(directory.resolve(mine)), QByteArray("theme accent #123456\n"));
 }
 
 TEST_F(ConfigurationTest, ANewThemeNeedsANameForAFileInThemes) {
@@ -307,7 +308,7 @@ TEST_F(ConfigurationTest, ChoosingAThemeRewritesOnlyItsCommand) {
     const std::optional<QByteArray> after =
         configurationWithTheme(before, QStringLiteral("themes/light.tcl"));
     ASSERT_TRUE(after.has_value());
-    EXPECT_EQ(*after,
+    EXPECT_EQ(after.value_or(QByteArray()),
               QByteArray("# my settings\nlayout tall\n  theme themes/light.tcl  ;# the usual\n"));
 }
 
@@ -344,11 +345,12 @@ TEST_F(ConfigurationTest, AnyThemeNameReadsBackAsItWasWritten) {
          {QStringLiteral("themes/plain.tcl"), QStringLiteral("themes/two words.tcl"),
           QStringLiteral("themes/brace{.tcl"), QStringLiteral("/abs/$dollar.tcl"),
           QStringLiteral("#hash.tcl"), QStringLiteral("themes/ünïcode.tcl")}) {
-        const std::optional<QByteArray> text = configurationWithTheme("# c\n", theme);
-        ASSERT_TRUE(text.has_value()) << theme.toStdString();
-        const ParsedConfiguration parsed = parseConfiguration(*text);
-        EXPECT_TRUE(parsed.errors.isEmpty()) << text->toStdString() << ": " << firstError(parsed);
-        EXPECT_EQ(parsed.theme, theme) << "written as " << text->toStdString();
+        const std::optional<QByteArray> written = configurationWithTheme("# c\n", theme);
+        ASSERT_TRUE(written.has_value()) << theme.toStdString();
+        const QByteArray text = written.value_or(QByteArray());
+        const ParsedConfiguration parsed = parseConfiguration(text);
+        EXPECT_TRUE(parsed.errors.isEmpty()) << text.toStdString() << ": " << firstError(parsed);
+        EXPECT_EQ(parsed.theme, theme) << "written as " << text.toStdString();
     }
 }
 

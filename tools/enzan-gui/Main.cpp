@@ -22,7 +22,6 @@
 #include <cstdlib>
 #include <optional>
 #include <string_view>
-#include <utility>
 
 namespace {
 
@@ -75,7 +74,7 @@ int main(int argc, char** argv) {
     // and without Qt reporting that it could not connect to one.
     if (const std::optional<int> status = answerHelpOrVersion(argc, argv)) return *status;
 
-    QApplication application(argc, argv);
+    const QApplication application(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("enzan-gui"));
     QCoreApplication::setApplicationVersion(QString::fromStdString(enzan::versionLine()));
 
@@ -112,7 +111,7 @@ int main(int argc, char** argv) {
         enzan::gui::ConfigurationDirectory::standardPath());
     QString settingsError;
     const bool settingsMade = settings.createDefaults(settingsError);
-    enzan::gui::ConfiguredTheme configured = settings.loadTheme();
+    const enzan::gui::ConfiguredTheme configured = settings.loadTheme();
 
     // The window gives the application the theme's palette, style sheet and fonts, as it does
     // whenever the theme changes afterwards.
@@ -121,7 +120,7 @@ int main(int argc, char** argv) {
     // --- the session -------------------------------------------------------
 
     enzan::gui::KernelSession session;
-    enzan::gui::MainWindow window(session, std::move(configured.theme), settings);
+    enzan::gui::MainWindow window(session, configured.theme, settings);
     window.show();
 
     if (!settingsMade) {

@@ -14,7 +14,6 @@
 #include "gui/WaveformModel.h"
 #include "gui/WaveformView.h"
 
-#include <QFont>
 #include <QHash>
 #include <QMainWindow>
 #include <QSet>
@@ -48,12 +47,12 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    /// `session` must outlive the window. The window keeps its own copy of `theme`, which
-    /// `setTheme` replaces. `configuration` is where the Theme menu finds themes and records the
-    /// one chosen (DESIGN_GUIDE.md section 10.9); none at all leaves the menu only the built-in
-    /// theme.
-    MainWindow(KernelSession& session, Theme theme,
-               ConfigurationDirectory configuration = ConfigurationDirectory(),
+    /// `kernelSession` must outlive the window. The window keeps its own copy of `initialTheme`,
+    /// which `setTheme` replaces. `directory` is where the Theme menu finds themes and records the
+    /// one chosen, and where the layout is kept (DESIGN_GUIDE.md section 10.9); none at all leaves
+    /// the menu only the built-in theme and the window its first size.
+    MainWindow(KernelSession& kernelSession, const Theme& initialTheme,
+               ConfigurationDirectory directory = ConfigurationDirectory(),
                QWidget* parent = nullptr);
 
     /// Colours the window with `replacement`, as though it had opened with it.

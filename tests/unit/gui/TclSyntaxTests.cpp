@@ -81,8 +81,9 @@ TEST(TclSyntax, TextThatIsNoCommandIsReportedAtItsLine) {
 
     EXPECT_FALSE(result.read);
     ASSERT_TRUE(result.malformed.has_value());
-    EXPECT_EQ(result.malformed->line, 2);
-    EXPECT_FALSE(result.malformed->text.isEmpty());
+    const TclSyntaxError malformed = result.malformed.value_or(TclSyntaxError{});
+    EXPECT_EQ(malformed.line, 2);
+    EXPECT_FALSE(malformed.text.isEmpty());
 }
 
 TEST(TclSyntax, AStoppedSplitIsNotAMalformedOne) {

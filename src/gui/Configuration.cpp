@@ -307,8 +307,7 @@ std::optional<QString> ConfigurationDirectory::writeTheme(const QString& name,
         return std::nullopt;
     }
 
-    const QString theme =
-        QStringLiteral("%1/%2.tcl").arg(QString::fromLatin1(ThemesDirectory), base);
+    QString theme = QStringLiteral("%1/%2.tcl").arg(QString::fromLatin1(ThemesDirectory), base);
     const QString path = resolve(theme);
     if (QFileInfo::exists(path)) {
         error = QStringLiteral("'%1' exists already, and is not replaced").arg(path);

@@ -106,7 +106,8 @@ bool splitTclCommands(const char* text, int size, const TclOrigin& origin,
             return false;
         }
 
-        TclCommand command{.words = wordsOf(parse), .line = lineOf(origin, parse.commandStart)};
+        const TclCommand command{.words = wordsOf(parse),
+                                 .line = lineOf(origin, parse.commandStart)};
         const char* next = parse.commandStart + parse.commandSize;
         Tcl_FreeParse(&parse);
 

@@ -8,7 +8,6 @@
 #include <QFile>
 
 #include <algorithm>
-#include <utility>
 
 #include <tcl.h>
 
@@ -189,7 +188,7 @@ bool Theme::evaluateAt(const QString& script, QString& error, int& line) {
         return false;
     }
 
-    *this = std::move(result);
+    *this = result;
     return true;
 }
 
@@ -210,7 +209,7 @@ bool Theme::loadFile(const QString& path, QString& error) {
         return false;
     }
 
-    *this = std::move(result);
+    *this = result;
     return true;
 }
 

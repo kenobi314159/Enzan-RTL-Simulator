@@ -627,7 +627,7 @@ TEST_F(ThemeMenuTest, AWindowWithNoDirectoryOffersOnlyTheBuiltInTheme) {
 TEST(MainWindowLayout, IsKeptInTheConfigurationDirectory) {
     // Beside `config`, and nowhere else: a window with no directory restores nothing, which is
     // also what keeps every other test's window at its first size whoever runs the suite.
-    QTemporaryDir home;
+    const QTemporaryDir home;
     ASSERT_TRUE(home.isValid());
     const enzan::gui::ConfigurationDirectory directory(home.filePath(QStringLiteral("enzan")));
     QString error;
