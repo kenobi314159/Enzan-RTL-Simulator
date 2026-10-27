@@ -2129,8 +2129,8 @@ The layout follows Modelsim, which is what users expect:
 | Transcript | command entry, `$display`/`report` output, diagnostics |
 | Processes | active processes and their state |
 
-Docking uses `QDockWidget`. Layout is persisted and is definable from a Tcl
-configuration script.
+Docking uses `QDockWidget`. Layout is persisted, in the configuration directory (10.9), and is
+definable from a Tcl configuration script.
 
 **A served kernel's own output is part of its transcript.** A VPI application prints to the
 process's standard output, never through Enzan — cocotb's whole log is written that way — so a
@@ -2852,6 +2852,11 @@ the shipped theme. A theme that cannot be read or does not load leaves the shipp
 setting an older one has never heard of, and a directory shared between the two must not lose its
 theme in the older one. A mistake in a command that is known — `theme` naming no file, or two —
 and text that cannot be split into commands are errors, and then nothing in the file is used.
+
+**The window's layout is kept there too**, in `layout.ini`: where the docks are and how large the
+window is, written as it closes and read as it opens. It is Qt's own record of the docks rather
+than a setting anyone writes, which is why it is a file of its own, in Qt's format, rather than a
+command in `config`; deleting it opens the window as it first opened.
 
 **The window changes `config` in place.** Choosing a theme rewrites the `theme` command where it
 stands, adds one when there is none, or takes its line out for the built-in theme, and keeps

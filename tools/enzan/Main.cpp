@@ -189,9 +189,9 @@ Graphical front end:
 
   The window keeps its settings in ~/.config/enzan/, or $XDG_CONFIG_HOME/enzan/
   when that is set, creating it the first time a window opens: `config` names
-  the theme, a Tcl script in themes/, which starts as the built-in dark.tcl.
-  The window's View > Theme menu chooses, writes and reloads them. A simulation
-  reads nothing from there.
+  the theme, a Tcl script in themes/, which starts as the built-in dark.tcl,
+  and layout.ini is where the docks were. The window's View > Theme menu
+  chooses, writes and reloads themes. A simulation reads nothing from there.
 
   -h, --help              Print this message and exit.
   -V, --version           Print version and build information and exit.

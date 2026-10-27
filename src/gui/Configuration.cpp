@@ -186,6 +186,10 @@ QString ConfigurationDirectory::configFile() const {
     return root.isEmpty() ? QString() : root + QStringLiteral("/config");
 }
 
+QString ConfigurationDirectory::layoutFile() const {
+    return root.isEmpty() ? QString() : root + QStringLiteral("/layout.ini");
+}
+
 bool ConfigurationDirectory::createDefaults(QString& error) const {
     if (root.isEmpty()) {
         error = QStringLiteral("there is no home directory to keep settings in");

@@ -20,7 +20,6 @@
 #include <gtest/gtest.h>
 
 #include <QAction>
-#include <QCoreApplication>
 #include <QDockWidget>
 #include <QFile>
 #include <QItemSelectionModel>
@@ -47,11 +46,6 @@ using enzan::gui::WaveRow;
 class SignalListLoadTest : public enzan::test::SessionFixture {
 protected:
     void SetUp() override {
-        // A settings identity of the suite's own, so that the layout the window restores is not
-        // whatever the developer running this last saved.
-        QCoreApplication::setOrganizationName(QStringLiteral("enzan-tests"));
-        QCoreApplication::setApplicationName(QStringLiteral("gui-tests"));
-
         SessionFixture::SetUp();
         theme.loadBuiltIn();
         window = std::make_unique<MainWindow>(*session, theme);

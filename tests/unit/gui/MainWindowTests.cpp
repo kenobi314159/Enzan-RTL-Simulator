@@ -31,6 +31,7 @@
 #include <QDockWidget>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QImage>
@@ -42,6 +43,7 @@
 #include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSize>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -74,12 +76,6 @@ const QString Child = QStringLiteral("/tb/u_dut");
 class MainWindowTest : public enzan::test::SessionFixture {
 protected:
     void SetUp() override {
-        // A settings identity of the suite's own. `MainWindow` restores its layout on
-        // construction, and under the real application's name it would restore whatever layout
-        // the developer running this suite last saved — making the result depend on the machine.
-        QCoreApplication::setOrganizationName(QStringLiteral("enzan-tests"));
-        QCoreApplication::setApplicationName(QStringLiteral("gui-tests"));
-
         SessionFixture::SetUp();
 
         window = std::make_unique<MainWindow>(*session, theme);
@@ -626,6 +622,31 @@ TEST_F(ThemeMenuTest, AWindowWithNoDirectoryOffersOnlyTheBuiltInTheme) {
     EXPECT_EQ(entry(QStringLiteral("dark")), nullptr);
     ASSERT_NE(entry(QStringLiteral("New Theme…")), nullptr);
     EXPECT_FALSE(entry(QStringLiteral("New Theme…"))->isEnabled());
+}
+
+TEST(MainWindowLayout, IsKeptInTheConfigurationDirectory) {
+    // Beside `config`, and nowhere else: a window with no directory restores nothing, which is
+    // also what keeps every other test's window at its first size whoever runs the suite.
+    QTemporaryDir home;
+    ASSERT_TRUE(home.isValid());
+    const enzan::gui::ConfigurationDirectory directory(home.filePath(QStringLiteral("enzan")));
+    QString error;
+    ASSERT_TRUE(directory.createDefaults(error)) << error.toStdString();
+
+    Theme theme;
+    theme.loadBuiltIn();
+    enzan::gui::KernelSession idle;
+    {
+        MainWindow first(idle, theme, directory);
+        first.show();
+        first.resize(700, 500);
+        QCoreApplication::processEvents();
+        first.close();
+    }
+    EXPECT_TRUE(QFileInfo::exists(directory.layoutFile()));
+
+    const MainWindow second(idle, theme, directory);
+    EXPECT_EQ(second.size(), QSize(700, 500));
 }
 
 TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {

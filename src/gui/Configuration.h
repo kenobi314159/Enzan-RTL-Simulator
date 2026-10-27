@@ -91,6 +91,12 @@ public:
 
     [[nodiscard]] QString configFile() const;
 
+    /// Where the window keeps the layout of its docks and its size between sessions.
+    ///
+    /// Qt's own record of the docks rather than a setting anyone writes, so it is a file of its
+    /// own beside `config` and in Qt's format: deleting it opens the window as it first opened.
+    [[nodiscard]] QString layoutFile() const;
+
     /// Makes what the window starts from, when `config` does not exist: `config`, naming
     /// `DefaultTheme`, and the shipped theme at `DefaultTheme` unless a file is there already.
     ///

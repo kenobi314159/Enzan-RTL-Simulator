@@ -1305,9 +1305,15 @@ void MainWindow::updateActions() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::restoreLayout() {
-    const QSettings settings;
-    const QByteArray geometry = settings.value(QLatin1StringView(GeometryKey)).toByteArray();
-    const QByteArray state = settings.value(QLatin1StringView(WindowStateKey)).toByteArray();
+    // From the configuration directory (section 10.9). A window with none opens at its first
+    // size, which is also what a test's window does, whoever runs it.
+    QByteArray geometry;
+    QByteArray state;
+    if (const QString file = configuration.layoutFile(); !file.isEmpty()) {
+        const QSettings layout(file, QSettings::IniFormat);
+        geometry = layout.value(QLatin1StringView(GeometryKey)).toByteArray();
+        state = layout.value(QLatin1StringView(WindowStateKey)).toByteArray();
+    }
 
     if (!geometry.isEmpty())
         restoreGeometry(geometry);
@@ -1318,9 +1324,12 @@ void MainWindow::restoreLayout() {
 }
 
 void MainWindow::saveLayout() {
-    QSettings settings;
-    settings.setValue(QLatin1StringView(GeometryKey), saveGeometry());
-    settings.setValue(QLatin1StringView(WindowStateKey), saveState());
+    const QString file = configuration.layoutFile();
+    if (file.isEmpty()) return;
+
+    QSettings layout(file, QSettings::IniFormat);
+    layout.setValue(QLatin1StringView(GeometryKey), saveGeometry());
+    layout.setValue(QLatin1StringView(WindowStateKey), saveState());
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {

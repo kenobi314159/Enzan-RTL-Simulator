@@ -168,7 +168,8 @@ Colours come from a Tcl theme file and nowhere else. The window keeps its settin
 written out as a starting point. *View → Theme* chooses between the files in `themes/`, writes a
 new one with *New Theme…*, and reads the one in use again with *Reload Theme* after you edit it. A
 theme is loaded over the built-in one, so a file that sets three colours changes three colours.
-Nothing in that directory changes what a simulation computes or records.
+The window also keeps where its docks were there, in `layout.ini`. Nothing in that directory
+changes what a simulation computes or records.
 
 What the wave window shows can be kept. *File → Save Signal List* (Ctrl+S) writes it to a file,
 the same one each time after the first, and *Load Signal List…* or `enzan run --gui --wave-list signals.tcl` puts it back. The file is a short

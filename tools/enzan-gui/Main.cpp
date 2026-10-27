@@ -77,7 +77,6 @@ int main(int argc, char** argv) {
 
     QApplication application(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("enzan-gui"));
-    QCoreApplication::setOrganizationName(QStringLiteral("Enzan"));
     QCoreApplication::setApplicationVersion(QString::fromStdString(enzan::versionLine()));
 
     // Neither `addHelpOption` nor `addVersionOption`: both are answered above, from one text
