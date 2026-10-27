@@ -85,6 +85,9 @@ theme wave.highlight.3             #f4e6c1
 theme wave.highlight.4             #f1d8ec
 theme wave.highlight.5             #cde7ee
 
+# A shade darker than the panel's text, as the dark theme's is a shade brighter.
+theme wave.highlight.text          #14181d
+
 # --- Fonts -------------------------------------------------------------------
 #
 # None is set, as in the dark theme, so text is the desktop's size. These would set them:

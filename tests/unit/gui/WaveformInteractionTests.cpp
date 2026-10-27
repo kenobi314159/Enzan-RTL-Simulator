@@ -714,8 +714,19 @@ TEST_F(InteractionTest, HighlightingARowComesFromTheThemeAndCanBeCleared) {
     ASSERT_TRUE(background.isValid());
     EXPECT_EQ(background.value<QColor>(), theme.color(enzan::gui::highlightColor(2)));
 
+    // And so is its text, which has a colour of its own for every highlight.
+    const QVariant text = model->data(model->indexOfRow(clock), Qt::ForegroundRole);
+    ASSERT_TRUE(text.isValid());
+    EXPECT_EQ(text.value<QColor>(), theme.color(enzan::gui::ThemeColor::WaveHighlightText));
+    EXPECT_EQ(model->data(model->indexOfRow(clock).siblingAtColumn(WaveformModel::ValueColumn),
+                          Qt::ForegroundRole),
+              text)
+        << "the value is on the highlighted row too";
+
     model->setHighlight(clock, 0);
     EXPECT_FALSE(model->data(model->indexOfRow(clock), Qt::BackgroundRole).isValid());
+    EXPECT_FALSE(model->data(model->indexOfRow(clock), Qt::ForegroundRole).isValid())
+        << "a row with no highlight keeps the panel's text";
 }
 
 TEST_F(InteractionTest, AHighlightIsPaintedOnTheTraceToo) {

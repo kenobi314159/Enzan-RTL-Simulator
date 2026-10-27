@@ -155,8 +155,8 @@ public:
 
     /// `session` and `theme` must both outlive the model.
     ///
-    /// The theme is here because Qt asks a model for `Qt::BackgroundRole`, and section 10.5
-    /// allows exactly one place for a colour to come from.
+    /// The theme is here because Qt asks a model for `Qt::BackgroundRole` and
+    /// `Qt::ForegroundRole`, and section 10.5 allows exactly one place for a colour to come from.
     WaveformModel(const KernelSession& session, const Theme& theme, QObject* parent = nullptr);
 
     /// A subtree not yet in the model: read off the clipboard, or out of a signal list.

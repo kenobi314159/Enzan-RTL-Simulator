@@ -2662,7 +2662,12 @@ it would sit beside is how a tool acquires a number nobody reads.
   in widget code would be five violations of the same rule. A highlight covers
   the whole row in both panes, the name and the trace, because they are one row
   to the reader and a highlight that stopped at the splitter would read as a
-  rendering fault.
+  rendering fault. The name and value on a highlighted row of the signal list
+  are drawn in a colour of their own, `wave.highlight.text`, one for all five
+  backgrounds: a theme that makes its highlights strong enough to find at a
+  glance can then keep the text on them readable, rather than leaving it in the
+  panel's colour, chosen for a background the highlight has replaced. A row
+  with no highlight keeps the panel's text, and a selected one the selection's.
 
 **The keyboard.** A modifier means what it means on the wheel: Ctrl zooms, Ctrl+`+` and
 Ctrl+`-` by a step, Ctrl+F to fit the run and Ctrl+Shift+F to the cursors; Shift pans, with

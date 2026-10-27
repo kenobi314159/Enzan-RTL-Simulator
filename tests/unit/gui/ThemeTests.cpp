@@ -134,10 +134,11 @@ TEST(ThemeTests, EveryShippedThemeIsReadable) {
                 << enzan::gui::themeKey(pair.background);
         }
         for (int slot = 1; slot <= enzan::gui::HighlightSlots; ++slot) {
-            EXPECT_GE(contrast(theme.color(ThemeColor::WaveTrace),
-                               theme.color(enzan::gui::highlightColor(slot))),
-                      Mark)
+            const QColor highlight = theme.color(enzan::gui::highlightColor(slot));
+            EXPECT_GE(contrast(theme.color(ThemeColor::WaveTrace), highlight), Mark)
                 << name.toStdString() << ": the trace on highlight " << slot;
+            EXPECT_GE(contrast(theme.color(ThemeColor::WaveHighlightText), highlight), Text)
+                << name.toStdString() << ": a name on highlight " << slot;
         }
     }
 }

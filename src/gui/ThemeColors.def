@@ -86,3 +86,7 @@ ENZAN_THEME_COLOR(WaveHighlight2, "wave.highlight.2")
 ENZAN_THEME_COLOR(WaveHighlight3, "wave.highlight.3")
 ENZAN_THEME_COLOR(WaveHighlight4, "wave.highlight.4")
 ENZAN_THEME_COLOR(WaveHighlight5, "wave.highlight.5")
+
+// The names and values on a highlighted row of the signal list, one colour for all five
+// backgrounds, so that a theme can keep them readable on each of them.
+ENZAN_THEME_COLOR(WaveHighlightText, "wave.highlight.text")

@@ -111,6 +111,10 @@ theme wave.highlight.3             #5a4b28
 theme wave.highlight.4             #512a48
 theme wave.highlight.5             #26455a
 
+# The names and values on a highlighted row of the signal list, on all five of them. A shade
+# brighter than the panel's text, so that a row the reader marked reads a little louder too.
+theme wave.highlight.text          #f2f5f9
+
 # --- Fonts -------------------------------------------------------------------
 #
 # Sizes in points. None is set here: how large text should be is for the reader's screen and eyes

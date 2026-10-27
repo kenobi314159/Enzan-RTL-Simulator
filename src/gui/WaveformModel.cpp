@@ -430,7 +430,7 @@ void WaveformModel::setHighlight(int rowId, int slot) {
     rows[rowId].highlight = std::clamp(slot, 0, HighlightSlots);
     const QModelIndex changed = indexOfRow(rowId);
     Q_EMIT dataChanged(changed, changed.siblingAtColumn(ColumnCount - 1),
-                       {Qt::BackgroundRole, HighlightRole});
+                       {Qt::BackgroundRole, Qt::ForegroundRole, HighlightRole});
 }
 
 std::pair<std::uint32_t, std::uint32_t> WaveformModel::bitRange(const WaveRow& waveRow) {
@@ -1243,6 +1243,13 @@ QVariant WaveformModel::data(const QModelIndex& index, int role) const {
     if (role == Qt::BackgroundRole) {
         if (waveRow.highlight == 0) return {};
         return theme->color(highlightColor(waveRow.highlight));
+    }
+
+    // A highlighted row's text has a colour of its own, so that a theme can keep it readable on
+    // every highlight; a row with none keeps the panel's.
+    if (role == Qt::ForegroundRole) {
+        if (waveRow.highlight == 0) return {};
+        return theme->color(ThemeColor::WaveHighlightText);
     }
 
     if (role == Qt::EditRole && index.column() == NameColumn) return waveRow.label;
