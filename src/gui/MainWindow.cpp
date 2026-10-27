@@ -9,6 +9,7 @@
 #include "runtime/Time.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDockWidget>
@@ -94,8 +95,13 @@ const QFont& desktopFont() {
 
 } // namespace
 
-MainWindow::MainWindow(KernelSession& kernelSession, Theme initialTheme, QWidget* parent)
-    : QMainWindow(parent), session(&kernelSession), theme(std::move(initialTheme)) {
+MainWindow::MainWindow(KernelSession& kernelSession, Theme initialTheme,
+                       ConfigurationDirectory settingsDirectory, QWidget* parent)
+    : QMainWindow(parent),
+      session(&kernelSession),
+      theme(std::move(initialTheme)),
+      configuration(std::move(settingsDirectory)),
+      themeName(configuration.read().theme) {
     setWindowTitle(tr("Enzan"));
 
     designModel = new DesignTreeModel(this);
@@ -392,6 +398,91 @@ void MainWindow::applyTheme() {
     transcriptView->applyTheme();
 }
 
+void MainWindow::fillThemeMenu() {
+    // The entries are the menu's and go with `clear`, and leave the group as they go; the two
+    // commands below them are the window's and stay.
+    themeMenu->clear();
+
+    const auto offer = [this](const QString& label, const QString& name) {
+        QAction* entry = themeMenu->addAction(label);
+        entry->setCheckable(true);
+        entry->setChecked(name == themeName);
+        themeChoices->addAction(entry);
+        connect(entry, &QAction::triggered, this, [this, name] { chooseTheme(name); });
+    };
+
+    offer(tr("Built-in"), QString());
+    const QStringList themes = configuration.themes();
+    for (const QString& name : themes) offer(QFileInfo(name).completeBaseName(), name);
+
+    // A theme `config` names from somewhere other than `themes/` is the one in use all the same,
+    // and is offered by the name `config` gives it.
+    if (!themeName.isEmpty() && !themes.contains(themeName)) offer(themeName, themeName);
+
+    themeMenu->addSeparator();
+    themeMenu->addAction(reloadThemeAction);
+    themeMenu->addAction(newThemeAction);
+    newThemeAction->setEnabled(!configuration.path().isEmpty());
+}
+
+bool MainWindow::useTheme(const QString& name) {
+    Theme loaded;
+    loaded.loadBuiltIn();
+
+    QString error;
+    if (!name.isEmpty() && !loaded.loadFile(configuration.resolve(name), error)) {
+        report(ConfigurationMessage{.text = error, .isError = true});
+        note(tr("The theme is as it was."));
+        return false;
+    }
+
+    setTheme(loaded);
+    return true;
+}
+
+void MainWindow::chooseTheme(const QString& name) {
+    if (!useTheme(name)) return;
+    themeName = name;
+
+    QString error;
+    if (!configuration.setTheme(name, error)) {
+        report(ConfigurationMessage{
+            .file = configuration.configFile(),
+            .text = tr("the theme is used until the window closes, and not kept: %1").arg(error)});
+    }
+}
+
+void MainWindow::reloadTheme() {
+    if (!useTheme(themeName)) return;
+    note(themeName.isEmpty()
+             ? tr("The built-in theme is in use.")
+             : tr("The theme was read again from %1.").arg(configuration.resolve(themeName)));
+}
+
+void MainWindow::askForNewTheme() {
+    auto* dialog = new QInputDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(tr("New Theme"));
+    dialog->setLabelText(tr("The built-in theme is written to a file of this name in %1, to be "
+                            "edited, and used:")
+                             .arg(configuration.resolve(QStringLiteral("themes"))));
+    connect(dialog, &QInputDialog::textValueSelected, this, &MainWindow::createTheme);
+    dialog->open();
+}
+
+void MainWindow::createTheme(const QString& name) {
+    QString error;
+    const std::optional<QString> written = configuration.writeTheme(name, error);
+    if (!written) {
+        report(ConfigurationMessage{.text = error, .isError = true});
+        return;
+    }
+
+    chooseTheme(*written);
+    note(tr("%1 is the built-in theme, written out to be edited. Reload Theme shows an edit.")
+             .arg(configuration.resolve(*written)));
+}
+
 void MainWindow::buildToolBar() {
     auto* bar = addToolBar(tr("Toolbar"));
     bar->setObjectName(QStringLiteral("simulation"));
@@ -499,6 +590,19 @@ void MainWindow::buildMenus() {
         view->addAction(dock->toggleViewAction());
     }
     for (const QToolBar* bar : findChildren<QToolBar*>()) view->addAction(bar->toggleViewAction());
+    view->addSeparator();
+
+    // The themes in the configuration directory, the built-in one first, and the two things a
+    // reader editing one needs: a new file to edit, and the file in use read again (section 10.5).
+    themeMenu = view->addMenu(tr("Theme"));
+    themeChoices = new QActionGroup(themeMenu);
+    reloadThemeAction = new QAction(tr("Reload Theme"), this);
+    connect(reloadThemeAction, &QAction::triggered, this, &MainWindow::reloadTheme);
+    newThemeAction = new QAction(tr("New Theme…"), this);
+    connect(newThemeAction, &QAction::triggered, this, &MainWindow::askForNewTheme);
+    connect(themeMenu, &QMenu::aboutToShow, this, &MainWindow::fillThemeMenu);
+    fillThemeMenu();
+
     view->addSeparator();
     view->addAction(transcriptView->clearAction());
 

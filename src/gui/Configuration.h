@@ -6,6 +6,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include <optional>
@@ -102,6 +103,23 @@ public:
 
     /// The path of the theme `config` names as `theme`.
     [[nodiscard]] QString resolve(const QString& theme) const;
+
+    /// The themes in `themes/`, named as `config` names them, in order of name.
+    [[nodiscard]] QStringList themes() const;
+
+    /// Names `theme` in `config`, or the shipped theme when it is empty, keeping the rest of the
+    /// file as it is (`configurationWithTheme`).
+    ///
+    /// Returns false having filled `error` when there is no directory, when `config` has a
+    /// mistake in it, or when it cannot be written.
+    bool setTheme(const QString& theme, QString& error) const;
+
+    /// Writes the shipped theme to `themes/<name>.tcl`, as a theme to edit, and gives how
+    /// `config` names it.
+    ///
+    /// Nothing, having filled `error`, when `name` is not a name for a file, when a theme of that
+    /// name exists — which is never replaced — or when it cannot be written.
+    [[nodiscard]] std::optional<QString> writeTheme(const QString& name, QString& error) const;
 
     /// The theme `config` names, loaded over the shipped one.
     ///

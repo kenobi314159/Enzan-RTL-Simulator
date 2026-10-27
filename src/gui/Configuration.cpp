@@ -30,8 +30,12 @@ constexpr std::string_view DefaultConfiguration =
 # and braces hold a word with spaces in it, as in `theme {themes/my theme.tcl}`.
 #
 # The theme is a Tcl script, relative to this directory or as a full path. Without a `theme`
-# line the window uses the theme built into Enzan.
+# line the window uses the theme built into Enzan. The window's View > Theme menu changes it here,
+# keeping the rest of this file as it is.
 )";
+
+/// Where the themes the window lists and writes are, relative to the directory.
+constexpr const char* ThemesDirectory = "themes";
 
 /// Where `config`'s theme command lies in its text, from its first word to the end of its last.
 struct ThemeCommandSpan {
@@ -231,6 +235,87 @@ ParsedConfiguration ConfigurationDirectory::read() const {
 QString ConfigurationDirectory::resolve(const QString& theme) const {
     if (QFileInfo(theme).isAbsolute()) return theme;
     return QDir(root).filePath(theme);
+}
+
+QStringList ConfigurationDirectory::themes() const {
+    QStringList names;
+    if (root.isEmpty()) return names;
+
+    const QDir themes(resolve(QString::fromLatin1(ThemesDirectory)));
+    for (const QString& file :
+         themes.entryList({QStringLiteral("*.tcl")}, QDir::Files | QDir::Readable, QDir::Name)) {
+        names << QStringLiteral("%1/%2").arg(QString::fromLatin1(ThemesDirectory), file);
+    }
+    return names;
+}
+
+bool ConfigurationDirectory::setTheme(const QString& theme, QString& error) const {
+    if (root.isEmpty()) {
+        error = QStringLiteral("there is no home directory to keep settings in");
+        return false;
+    }
+
+    // A `config` that has gone missing since the window opened is begun again as the first start
+    // begins it, so that it still explains itself.
+    QByteArray text(DefaultConfiguration.data(),
+                    static_cast<qsizetype>(DefaultConfiguration.size()));
+    QFile file(configFile());
+    if (file.exists()) {
+        if (!file.open(QIODevice::ReadOnly)) {
+            error = QStringLiteral("could not read '%1': %2").arg(configFile(), file.errorString());
+            return false;
+        }
+        text = file.readAll();
+        file.close();
+    }
+
+    const std::optional<QByteArray> rewritten = configurationWithTheme(text, theme);
+    if (!rewritten) {
+        const ParsedConfiguration parsed = parseConfiguration(text);
+        ConfigurationMessage first = parsed.errors.value(0);
+        first.file = configFile();
+        error = QStringLiteral("it is not rewritten while it has a mistake in it: %1")
+                    .arg(describe(first));
+        return false;
+    }
+    if (*rewritten == text && file.exists()) return true;
+
+    if (!QDir().mkpath(root)) {
+        error = QStringLiteral("could not make '%1'").arg(root);
+        return false;
+    }
+    return writeWhole(configFile(), *rewritten, error);
+}
+
+std::optional<QString> ConfigurationDirectory::writeTheme(const QString& name,
+                                                          QString& error) const {
+    if (root.isEmpty()) {
+        error = QStringLiteral("there is no home directory to keep settings in");
+        return std::nullopt;
+    }
+
+    QString base = name.trimmed();
+    if (base.endsWith(QStringLiteral(".tcl"))) base.chop(4);
+    if (base.isEmpty() || base.startsWith(u'.') || base.contains(u'/')) {
+        error = QStringLiteral("'%1' is not a name for a theme; it names a file in %2/, without "
+                               "a '/' in it")
+                    .arg(name, resolve(QString::fromLatin1(ThemesDirectory)));
+        return std::nullopt;
+    }
+
+    const QString theme =
+        QStringLiteral("%1/%2.tcl").arg(QString::fromLatin1(ThemesDirectory), base);
+    const QString path = resolve(theme);
+    if (QFileInfo::exists(path)) {
+        error = QStringLiteral("'%1' exists already, and is not replaced").arg(path);
+        return std::nullopt;
+    }
+    if (!QDir().mkpath(QFileInfo(path).path())) {
+        error = QStringLiteral("could not make '%1'").arg(QFileInfo(path).path());
+        return std::nullopt;
+    }
+    if (!writeWhole(path, Theme::builtInScript().toUtf8(), error)) return std::nullopt;
+    return theme;
 }
 
 ConfiguredTheme ConfigurationDirectory::loadTheme() const {

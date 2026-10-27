@@ -1746,8 +1746,7 @@ no Qt.
 
 **The front end's own options travel through `enzan` too.** The signal list it starts with
 (10.8) is what a user chooses about one run of it, so `--wave-list` is an option of `enzan` that
-is forwarded, as `--write-theme` is, which starts no kernel because writing a file out is not a
-simulation. An option reachable only by running the front end directly would make it the second
+is forwarded. An option reachable only by running the front end directly would make it the second
 program this section exists to avoid. Its theme is not an option at all: it belongs to the person
 at the screen rather than to the run, so the window finds it in the configuration directory
 (10.9), and `enzan --help` says where that is.
@@ -2307,6 +2306,23 @@ it stopped at. A window coloured partly by a theme that did not load takes its c
 places with nothing to say which came from where, and a signal list follows the same rule for the
 same reason (10.8). Which theme the window uses is named in the configuration directory (10.9).
 
+**A theme is chosen, written and reloaded from the window.** *View → Theme* offers the built-in
+theme and every file in the configuration directory's `themes/`, and choosing one colours the
+window and names it in `config` for the next. *New Theme…* writes the shipped theme to a file of
+its own there, refusing a name already taken, and *Reload Theme* reads the theme in use again for
+a reader who has just edited it — asked for, rather than done whenever the file changes, because
+an editor saves in steps and a theme loaded halfway through a save is one that failed. The
+built-in theme is always among them: it is the one a newer Enzan has improved, which a copy
+written out by an older one never sees, and the one that works when the directory does not.
+
+**A new theme reaches everything already drawn.** Nothing in the window keeps a colour or a size
+past the moment it was painted without being told when the theme changes: the canvas's drawn
+traces (10.3), the transcript's lines, each of which remembers which of the theme's colours it is
+in rather than the colour, and the highlight swatches. A window that showed half its traces in the
+old theme until they happened to be drawn again would look broken, and would be. Sizes are worked
+out from the desktop's fonts every time, so a theme that sets none gives the desktop's back after
+one that set them. Nothing else changes — not the rows, the cursors, the zoom or the run.
+
 **The colours reach the widgets through a `QPalette`, not a style sheet.** This
 is a performance rule wearing a presentation rule's clothes. A Qt style sheet
 rule that gives a widget a background — or a border — makes Qt draw that widget
@@ -2836,6 +2852,13 @@ the shipped theme. A theme that cannot be read or does not load leaves the shipp
 setting an older one has never heard of, and a directory shared between the two must not lose its
 theme in the older one. A mistake in a command that is known — `theme` naming no file, or two —
 and text that cannot be split into commands are errors, and then nothing in the file is used.
+
+**The window changes `config` in place.** Choosing a theme rewrites the `theme` command where it
+stands, adds one when there is none, or takes its line out for the built-in theme, and keeps
+every other byte of the file, comments and unknown commands included: a file the reader has
+annotated stays theirs. A file with a mistake in it is not rewritten, since where its theme is
+would be a guess, and the theme chosen is then used until the window closes and said not to be
+kept.
 
 ---
 

@@ -184,16 +184,14 @@ Graphical front end:
                           Closing that window leaves the kernel running.
       --listen <socket>   Elaborate and wait for a front end without starting
                           one, so the kernel outlives whatever attaches.
-      --write-theme <file>
-                          Write the built-in theme out as a starting point for
-                          one of your own, and exit.
       --wave-list <file>  Open the wave window with this signal list in it.
                           The window's File menu saves one.
 
   The window keeps its settings in ~/.config/enzan/, or $XDG_CONFIG_HOME/enzan/
   when that is set, creating it the first time a window opens: `config` names
-  the theme, a Tcl script in themes/, which starts as the built-in dark.tcl. A
-  simulation reads nothing from there.
+  the theme, a Tcl script in themes/, which starts as the built-in dark.tcl.
+  The window's View > Theme menu chooses, writes and reloads them. A simulation
+  reads nothing from there.
 
   -h, --help              Print this message and exit.
   -V, --version           Print version and build information and exit.
@@ -223,7 +221,6 @@ struct Invocation {
     bool useGui = false;
     std::filesystem::path attachPath;
     std::string libraryName;
-    std::filesystem::path writeThemePath;
 
     /// A signal list the window starts with (DESIGN_GUIDE.md section 10.8).
     std::filesystem::path waveListPath;
@@ -688,14 +685,6 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
-        if (argument == "--write-theme") {
-            const char* value = requireValue(index, argument);
-            if (value == nullptr) return ParseOutcome::BadUsage;
-            if (!once("--write-theme", value)) return ParseOutcome::BadUsage;
-            invocation.writeThemePath = value;
-            continue;
-        }
-
         if (argument == "--wave-list") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
@@ -810,10 +799,6 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
 /// (DESIGN_GUIDE.md section 10.9).
 std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::vector<std::string> options;
-    if (!invocation.writeThemePath.empty()) {
-        options.emplace_back("--write-theme");
-        options.push_back(invocation.writeThemePath.string());
-    }
     if (!invocation.waveListPath.empty()) {
         options.emplace_back("--wave-list");
         options.push_back(invocation.waveListPath.string());
@@ -823,8 +808,8 @@ std::vector<std::string> frontEndOptions(const Invocation& invocation) {
 
 /// Runs the front end with `options` and nothing else, and never returns.
 ///
-/// For `--write-theme`, which writes a file and exits: there is no simulation in it, so a kernel
-/// would be a process started to do nothing.
+/// For a window that starts no kernel of its own: a kernel here would be a process started to do
+/// nothing.
 [[noreturn]] void becomeFrontEnd(const std::vector<std::string>& options) {
     const std::filesystem::path program = frontEndProgram();
 
@@ -1321,8 +1306,6 @@ int main(int argc, char** argv) {
             invocation.files.clear();
         }
     }
-
-    if (!invocation.writeThemePath.empty()) becomeFrontEnd(frontEndOptions(invocation));
 
     // An application observes a simulation, and these commands run none (section 9.1).
     if ((!invocation.vpiApplications.empty() || !invocation.vhpiApplications.empty())

@@ -25,9 +25,11 @@
 #include <vector>
 
 class QAction;
+class QActionGroup;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QSplitter;
 class QTabWidget;
 class QTableView;
@@ -47,8 +49,12 @@ class MainWindow : public QMainWindow {
 
 public:
     /// `session` must outlive the window. The window keeps its own copy of `theme`, which
-    /// `setTheme` replaces.
-    MainWindow(KernelSession& session, Theme theme, QWidget* parent = nullptr);
+    /// `setTheme` replaces. `configuration` is where the Theme menu finds themes and records the
+    /// one chosen (DESIGN_GUIDE.md section 10.9); none at all leaves the menu only the built-in
+    /// theme.
+    MainWindow(KernelSession& session, Theme theme,
+               ConfigurationDirectory configuration = ConfigurationDirectory(),
+               QWidget* parent = nullptr);
 
     /// Colours the window with `replacement`, as though it had opened with it.
     ///
@@ -217,6 +223,25 @@ private:
     /// back after one that set them.
     void applyTheme();
 
+    /// Fills the Theme menu from the configuration directory as it is when the menu opens, so
+    /// that a theme put into `themes/` is offered without the window being opened again.
+    void fillThemeMenu();
+
+    /// Colours the window with the theme `config` would call `name`, or the built-in one for an
+    /// empty name. Returns false, having said why and changed nothing, when it does not load.
+    bool useTheme(const QString& name);
+
+    /// Uses the theme `name` and names it in `config`, so that the next window opens with it.
+    void chooseTheme(const QString& name);
+
+    /// Reads the theme in use again, for a reader who has just edited it.
+    void reloadTheme();
+
+    /// Asks for a name and writes the built-in theme out under it, as a theme to edit, and uses
+    /// it. Asked in a dialog that is opened rather than run, as the About box is.
+    void askForNewTheme();
+    void createTheme(const QString& name);
+
     void buildToolBar();
     void buildMenus();
     void updateActions();
@@ -232,6 +257,18 @@ private:
     /// What the models, the canvas and the transcript paint with. They hold its address, so it
     /// is replaced in place and never moved.
     Theme theme;
+
+    ConfigurationDirectory configuration;
+
+    /// The theme as `config` names it, empty for the built-in one: the one the Theme menu shows
+    /// as chosen and Reload Theme reads again. Kept here rather than read back from `config`, so
+    /// that a choice the directory could not record is still the one in use.
+    QString themeName;
+
+    QMenu* themeMenu = nullptr;
+    QActionGroup* themeChoices = nullptr;
+    QAction* reloadThemeAction = nullptr;
+    QAction* newThemeAction = nullptr;
 
     DesignTreeModel* designModel = nullptr;
     ObjectsModel* objectsModel = nullptr;

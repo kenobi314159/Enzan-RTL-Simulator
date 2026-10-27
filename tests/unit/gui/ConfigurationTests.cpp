@@ -16,6 +16,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QString>
+#include <QStringList>
 #include <QTemporaryDir>
 
 #include <optional>
@@ -221,6 +222,79 @@ TEST_F(ConfigurationTest, AMissingThemeFileIsReported) {
     EXPECT_TRUE(configured.theme.isComplete());
     ASSERT_EQ(configured.problems.size(), 1);
     EXPECT_TRUE(describe(configured.problems.front()).contains(QStringLiteral("gone.tcl")));
+}
+
+// ---------------------------------------------------------------------------
+// What the Theme menu does to the directory
+// ---------------------------------------------------------------------------
+
+TEST_F(ConfigurationTest, TheThemesAreTheTclFilesInThemes) {
+    const ConfigurationDirectory directory(fresh());
+    write(directory.resolve(QStringLiteral("themes/b.tcl")), "\n");
+    write(directory.resolve(QStringLiteral("themes/a.tcl")), "\n");
+    write(directory.resolve(QStringLiteral("themes/notes.txt")), "\n");
+    write(directory.resolve(QStringLiteral("themes/old/c.tcl")), "\n");
+
+    EXPECT_EQ(directory.themes(),
+              (QStringList{QStringLiteral("themes/a.tcl"), QStringLiteral("themes/b.tcl")}));
+    EXPECT_TRUE(ConfigurationDirectory().themes().isEmpty());
+}
+
+TEST_F(ConfigurationTest, NamingAThemeKeepsTheRestOfConfig) {
+    const ConfigurationDirectory directory(fresh());
+    write(directory.configFile(), "# mine\ntheme themes/dark.tcl\nlayout tall\n");
+
+    QString error;
+    ASSERT_TRUE(directory.setTheme(QStringLiteral("themes/light.tcl"), error))
+        << error.toStdString();
+    EXPECT_EQ(contentsOf(directory.configFile()),
+              QByteArray("# mine\ntheme themes/light.tcl\nlayout tall\n"));
+}
+
+TEST_F(ConfigurationTest, AConfigThatHasGoneIsBegunAgain) {
+    const ConfigurationDirectory directory(fresh());
+    QString error;
+    ASSERT_TRUE(directory.setTheme(QStringLiteral("themes/light.tcl"), error))
+        << error.toStdString();
+    EXPECT_EQ(directory.read().theme, QStringLiteral("themes/light.tcl"));
+    EXPECT_TRUE(contentsOf(directory.configFile()).startsWith("# Enzan's settings"));
+}
+
+TEST_F(ConfigurationTest, AConfigWithAMistakeIsNotRewritten) {
+    const ConfigurationDirectory directory(fresh());
+    write(directory.configFile(), "theme a.tcl b.tcl\n");
+
+    QString error;
+    EXPECT_FALSE(directory.setTheme(QStringLiteral("themes/light.tcl"), error));
+    EXPECT_TRUE(error.contains(directory.configFile() + QStringLiteral(":1:")))
+        << error.toStdString();
+    EXPECT_EQ(contentsOf(directory.configFile()), QByteArray("theme a.tcl b.tcl\n"));
+}
+
+TEST_F(ConfigurationTest, ANewThemeIsTheShippedOneUnderAName) {
+    const ConfigurationDirectory directory(fresh());
+    QString error;
+
+    const std::optional<QString> mine = directory.writeTheme(QStringLiteral("mine"), error);
+    ASSERT_TRUE(mine.has_value()) << error.toStdString();
+    EXPECT_EQ(*mine, QStringLiteral("themes/mine.tcl"));
+    EXPECT_EQ(contentsOf(directory.resolve(*mine)), Theme::builtInScript().toUtf8());
+
+    // The extension may be given or not; a name already taken is never written over.
+    write(directory.resolve(*mine), "theme accent #123456\n");
+    EXPECT_FALSE(directory.writeTheme(QStringLiteral("mine.tcl"), error).has_value());
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(contentsOf(directory.resolve(*mine)), QByteArray("theme accent #123456\n"));
+}
+
+TEST_F(ConfigurationTest, ANewThemeNeedsANameForAFileInThemes) {
+    const ConfigurationDirectory directory(fresh());
+    for (const QString& name : {QString(), QStringLiteral("  "), QStringLiteral("../escape"),
+                                QStringLiteral("sub/dir"), QStringLiteral(".hidden")}) {
+        QString error;
+        EXPECT_FALSE(directory.writeTheme(name, error).has_value()) << name.toStdString();
+        EXPECT_FALSE(error.isEmpty()) << name.toStdString();
+    }
 }
 
 // ---------------------------------------------------------------------------

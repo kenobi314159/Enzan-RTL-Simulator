@@ -236,8 +236,8 @@ TEST(ThemeTests, AMissingFileIsReportedRatherThanSilentlySkipped) {
 }
 
 TEST(ThemeTests, TheWrittenOutThemeLoadsBackUnchanged) {
-    // `--write-theme` exists so that a user can start from the shipped colours. A copy that did
-    // not load would make the feature a trap.
+    // The window writes the shipped theme out, on its first start and for New Theme, so that a
+    // user can start from the shipped colours. A copy that did not load would make that a trap.
     const QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
 

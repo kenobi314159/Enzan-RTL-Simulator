@@ -44,7 +44,7 @@ enzan_add_component(
 
 # The theme is compiled in rather than installed beside the binary. Section 10.5 makes the theme
 # file the only place colours live, so it has to be there whatever the installation looks like;
-# `enzan-gui --write-theme` hands a copy to a user who wants to change one.
+# the window writes copies of it into the configuration directory for a user to change.
 qt_add_resources(enzan_gui "enzan_gui_themes" PREFIX "/enzan" FILES themes/dark.tcl)
 
 target_include_directories(enzan_gui SYSTEM PRIVATE ${TCL_INCLUDE_PATH})

@@ -17,9 +17,10 @@
 # the size is in points, at the end of this file.
 #
 # The window writes this text to ~/.config/enzan/themes/dark.tcl the first time it opens, and
-# ~/.config/enzan/config names that file. To change a colour, edit it there, or a copy of it named
-# in `config`. A theme is layered over this one, so a file that sets three colours changes three
-# colours. `enzan --write-theme <file>` writes this text out anywhere else.
+# ~/.config/enzan/config names that file. To change a colour, edit it there; the window's View >
+# Theme menu chooses between the files in themes/, writes a new one from this text, and reads the
+# one in use again after an edit. A theme is layered over this one, so a file that sets three
+# colours changes three colours.
 
 # --- Chrome ------------------------------------------------------------------
 #

@@ -16,7 +16,6 @@
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
-#include <QFile>
 #include <QStringList>
 #include <QTextStream>
 
@@ -44,8 +43,6 @@ Options:
   -h, --help              Print this message and exit.
   -V, --version           Print version and build information and exit.
       --attach <socket>   Attach to a kernel listening on this Unix domain socket.
-      --write-theme <file>
-                          Write the built-in theme to this file and exit.
       --wave-list <file>  Open the wave window with this signal list in it.
 )";
 
@@ -91,17 +88,11 @@ int main(int argc, char** argv) {
         QStringLiteral("attach"),
         QStringLiteral("Attach to a kernel listening on this Unix domain socket."),
         QStringLiteral("socket"));
-    const QCommandLineOption writeThemeOption(
-        QStringLiteral("write-theme"),
-        QStringLiteral("Write the built-in theme to this file and exit, as a starting point "
-                       "for one of your own."),
-        QStringLiteral("file"));
     const QCommandLineOption waveListOption(
         QStringLiteral("wave-list"),
         QStringLiteral("Open the wave window with this signal list in it."),
         QStringLiteral("file"));
     parser.addOption(attachOption);
-    parser.addOption(writeThemeOption);
     parser.addOption(waveListOption);
     // `enzan run --gui ...` forwards its command word, which this process has no use for: it
     // starts a kernel, and the kernel is the thing that runs. Dropped rather than refused, so
@@ -112,21 +103,6 @@ int main(int argc, char** argv) {
         forwarded << argument;
     }
     parser.process(forwarded);
-
-    // --- writing the theme out ---------------------------------------------
-
-    if (parser.isSet(writeThemeOption)) {
-        const QString path = parser.value(writeThemeOption);
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream(stderr) << "enzan-gui: could not write '" << path
-                                << "': " << file.errorString() << '\n';
-            return EXIT_FAILURE;
-        }
-        file.write(enzan::gui::Theme::builtInScript().toUtf8());
-        QTextStream(stdout) << "wrote the built-in theme to " << path << '\n';
-        return EXIT_SUCCESS;
-    }
 
     // --- the settings ------------------------------------------------------
 
@@ -146,7 +122,7 @@ int main(int argc, char** argv) {
     // --- the session -------------------------------------------------------
 
     enzan::gui::KernelSession session;
-    enzan::gui::MainWindow window(session, std::move(configured.theme));
+    enzan::gui::MainWindow window(session, std::move(configured.theme), settings);
     window.show();
 
     if (!settingsMade) {

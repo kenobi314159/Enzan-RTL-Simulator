@@ -8,7 +8,8 @@ waveform view and the transcript (DESIGN_GUIDE.md section 10).
 - **The theme** (`Theme.h`) — the colours everything here paints with, loaded from a Tcl script.
 - **The configuration directory** (`Configuration.h`) — `~/.config/enzan`, which the window makes
   the first time it opens and reads each time it does: `config`, naming the theme, and the themes
-  in `themes/` (DESIGN_GUIDE.md section 10.9). The kernel never reads it.
+  in `themes/` (DESIGN_GUIDE.md section 10.9), which *View → Theme* chooses between, adds to and
+  reads again. The kernel never reads it.
 - **Signal lists** (`SignalList.h`) — reading, resolving and writing the wave window's list as a
   file (DESIGN_GUIDE.md section 10.8).
 - **Tcl's syntax** (`TclSyntax.h`) — splitting a file into commands with Tcl's parser, evaluating
