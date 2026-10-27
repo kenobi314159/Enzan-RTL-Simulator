@@ -51,32 +51,32 @@ theme source.breakpoint.disabled   #f2b8bd
 
 # --- Waveform view -----------------------------------------------------------
 
-theme wave.background              #ffffff
-theme wave.trace                   #1a7f37
-theme wave.trace.fill              #b7e4c0
-theme wave.text                    #0f5323
-theme wave.unknown                 #c4202b
-theme wave.highimpedance           #0969da
-theme wave.grid                    #e6eaee
-theme wave.row.separator           #eef0f3
-theme wave.row.selected            #dceafc
-theme wave.ruler.background        #f3f4f6
-theme wave.ruler.foreground        #545d68
-theme wave.cursor                  #8a5a00
-theme wave.cursor.locked           #b33c00
-theme wave.cursor.text             #ffffff
+theme wave.background              #000000
+theme wave.trace                   #7ee787
+theme wave.trace.fill              #1d3325
+theme wave.text                    #b9f6ca
+theme wave.unknown                 #f85149
+theme wave.highimpedance           #58a6ff
+theme wave.grid                    #1a1f26
+theme wave.row.separator           #141a20
+theme wave.row.selected            #10202c
+theme wave.ruler.background        #0b0d10
+theme wave.ruler.foreground        #8b949e
+theme wave.cursor                  #ffd866
+theme wave.cursor.locked           #ff8f6b
+theme wave.cursor.text             #1a1300
 
-theme wave.beyond.recorded         #eceef1
+theme wave.beyond.recorded         #090c12
 
-theme wave.zoom.band               #338a5a00
+theme wave.zoom.band               #40ffd866
 
-theme wave.highlight.1             #e3e3e3
-theme wave.highlight.2             #d3efcf
-theme wave.highlight.3             #f4e6c1
-theme wave.highlight.4             #f1d8ec
-theme wave.highlight.5             #cde7ee
+theme wave.highlight.1             #444444
+theme wave.highlight.2             #2c5428
+theme wave.highlight.3             #5a4b28
+theme wave.highlight.4             #512a48
+theme wave.highlight.5             #26455a
 
-theme wave.highlight.text          #14181d
+theme wave.highlight.text          #f2f5f9
 
 # --- Fonts -------------------------------------------------------------------
 #

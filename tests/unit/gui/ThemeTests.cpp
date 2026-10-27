@@ -76,12 +76,15 @@ TEST(ThemeTests, TheDarkThemeIsTheDefaultAndALightOneIsShippedBesideIt) {
     EXPECT_EQ(Theme::builtInScript(), Theme::builtInScript(QStringLiteral("dark")));
 }
 
-TEST(ThemeTests, TheLightThemeIsLight) {
+TEST(ThemeTests, TheLightThemeIsLightExceptForWaveform) {
     Theme light;
     ASSERT_TRUE(light.loadBuiltIn(QStringLiteral("light")));
     for (const ThemeColor ground : {ThemeColor::WindowBackground, ThemeColor::PanelBackground,
-                                    ThemeColor::WaveBackground, ThemeColor::SourceBackground}) {
+                                    ThemeColor::SourceBackground}) {
         EXPECT_GT(light.color(ground).lightnessF(), 0.9F) << enzan::gui::themeKey(ground);
+    }
+    for (const ThemeColor ground : {ThemeColor::WaveBackground}) {
+        EXPECT_LT(light.color(ground).lightnessF(), 0.1F) << enzan::gui::themeKey(ground);
     }
     EXPECT_LT(light.color(ThemeColor::PanelForeground).lightnessF(), 0.3F);
 }
