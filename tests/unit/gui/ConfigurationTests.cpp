@@ -32,6 +32,7 @@ using enzan::gui::parseConfiguration;
 using enzan::gui::ParsedConfiguration;
 using enzan::gui::Theme;
 using enzan::gui::ThemeColor;
+using enzan::gui::ThemeName;
 
 QByteArray contentsOf(const QString& path) {
     QFile file(path);
@@ -88,7 +89,7 @@ TEST_F(ConfigurationTest, TheFirstStartWritesTheShippedThemeAndNamesIt) {
     const ParsedConfiguration parsed = directory.read();
     EXPECT_TRUE(parsed.errors.isEmpty()) << firstError(parsed);
     EXPECT_TRUE(parsed.warnings.isEmpty());
-    EXPECT_EQ(parsed.theme, QStringLiteral("themes/dark.tcl"));
+    EXPECT_EQ(parsed.theme.file, QStringLiteral("themes/dark.tcl"));
 
     const ConfiguredTheme configured = directory.loadTheme();
     EXPECT_TRUE(configured.problems.isEmpty());
@@ -107,7 +108,7 @@ TEST_F(ConfigurationTest, NothingThatExistsIsReplaced) {
     QString error;
     ASSERT_TRUE(directory.createDefaults(error)) << error.toStdString();
     EXPECT_EQ(contentsOf(theme), QByteArray("theme wave.trace #010203\n"));
-    EXPECT_EQ(directory.read().theme, QStringLiteral("themes/dark.tcl"));
+    EXPECT_EQ(directory.read().theme.file, QStringLiteral("themes/dark.tcl"));
 
     write(directory.configFile(), "# mine\n");
     ASSERT_TRUE(directory.createDefaults(error)) << error.toStdString();
@@ -135,7 +136,7 @@ TEST_F(ConfigurationTest, NoHomeDirectoryIsNoDirectoryAtAll) {
     QString error;
     EXPECT_FALSE(directory.createDefaults(error));
     EXPECT_FALSE(error.isEmpty());
-    EXPECT_TRUE(directory.read().theme.isEmpty());
+    EXPECT_TRUE(directory.read().theme.isDefault());
     EXPECT_TRUE(directory.loadTheme().theme.isComplete());
 }
 
@@ -154,7 +155,7 @@ TEST_F(ConfigurationTest, AThemeIsRelativeToTheDirectoryUnlessItIsAbsolute) {
 TEST_F(ConfigurationTest, NothingInConfigIsEvaluated) {
     const ParsedConfiguration parsed = parseConfiguration("theme $HOME/[pwd].tcl\n");
     EXPECT_TRUE(parsed.errors.isEmpty()) << firstError(parsed);
-    EXPECT_EQ(parsed.theme, QStringLiteral("$HOME/[pwd].tcl"));
+    EXPECT_EQ(parsed.theme.file, QStringLiteral("$HOME/[pwd].tcl"));
 }
 
 TEST_F(ConfigurationTest, AnUnknownSettingIsSkippedAndTheRestApplies) {
@@ -165,7 +166,7 @@ TEST_F(ConfigurationTest, AnUnknownSettingIsSkippedAndTheRestApplies) {
     ASSERT_EQ(parsed.warnings.size(), 1);
     EXPECT_EQ(parsed.warnings.front().line, 1);
     EXPECT_TRUE(parsed.warnings.front().text.contains(QStringLiteral("layout")));
-    EXPECT_EQ(parsed.theme, QStringLiteral("themes/my theme.tcl"));
+    EXPECT_EQ(parsed.theme.file, QStringLiteral("themes/my theme.tcl"));
 }
 
 TEST_F(ConfigurationTest, AMistakeInAKnownSettingMeansNothingIsUsed) {
@@ -176,8 +177,8 @@ TEST_F(ConfigurationTest, AMistakeInAKnownSettingMeansNothingIsUsed) {
     for (const char* text : mistakes) {
         const ParsedConfiguration parsed = parseConfiguration(text);
         EXPECT_FALSE(parsed.errors.isEmpty()) << text;
-        EXPECT_TRUE(parsed.theme.isEmpty())
-            << text << " still named " << parsed.theme.toStdString();
+        EXPECT_TRUE(parsed.theme.isDefault())
+            << text << " still named " << parsed.theme.file.toStdString();
     }
 
     const ParsedConfiguration twice = parseConfiguration("theme a.tcl\n\ntheme b.tcl\n");
@@ -185,6 +186,52 @@ TEST_F(ConfigurationTest, AMistakeInAKnownSettingMeansNothingIsUsed) {
     EXPECT_EQ(twice.errors.front().line, 3);
     EXPECT_TRUE(twice.errors.front().text.contains(QStringLiteral("line 1")))
         << twice.errors.front().text.toStdString();
+}
+
+TEST_F(ConfigurationTest, ABuiltInThemeIsNamedByAnOption) {
+    const ParsedConfiguration light = parseConfiguration("\ntheme -builtin light\n");
+    EXPECT_TRUE(light.errors.isEmpty()) << firstError(light);
+    EXPECT_EQ(light.theme, ThemeName::ofBuiltIn(QStringLiteral("light")));
+    EXPECT_FALSE(light.theme.isFile());
+    EXPECT_EQ(light.themeLine, 2);
+
+    // The default named outright is the default, as naming none is.
+    EXPECT_TRUE(parseConfiguration("theme -builtin dark\n").theme.isDefault());
+    EXPECT_TRUE(parseConfiguration("# nothing\n").theme.isDefault());
+
+    // `-builtin` with no name is a mistake rather than a file called `-builtin`.
+    EXPECT_FALSE(parseConfiguration("theme -builtin\n").errors.isEmpty());
+    EXPECT_FALSE(parseConfiguration("theme -builtin {}\n").errors.isEmpty());
+}
+
+TEST_F(ConfigurationTest, TheLightThemeLoadsFromConfig) {
+    const ConfigurationDirectory directory(fresh());
+    write(directory.configFile(), "theme -builtin light\n");
+
+    const ConfiguredTheme configured = directory.loadTheme();
+    EXPECT_TRUE(configured.problems.isEmpty());
+    Theme light;
+    ASSERT_TRUE(light.loadBuiltIn(QStringLiteral("light")));
+    EXPECT_EQ(configured.theme.color(ThemeColor::WaveBackground),
+              light.color(ThemeColor::WaveBackground));
+}
+
+TEST_F(ConfigurationTest, ABuiltInThemeThisBuildLacksLeavesTheDefaultAndSaysWhere) {
+    // A newer Enzan may build in a theme an older one has never heard of; the older one opens with
+    // its default and names the line, as it does for a file that is missing.
+    const ConfigurationDirectory directory(fresh());
+    write(directory.configFile(), "# mine\ntheme -builtin sepia\n");
+
+    const ConfiguredTheme configured = directory.loadTheme();
+    Theme byDefault;
+    byDefault.loadBuiltIn();
+    EXPECT_EQ(configured.theme.color(ThemeColor::WaveTrace),
+              byDefault.color(ThemeColor::WaveTrace));
+    ASSERT_EQ(configured.problems.size(), 1);
+    const QString message = describe(configured.problems.front());
+    EXPECT_TRUE(message.startsWith(directory.configFile() + QStringLiteral(":2: ")))
+        << message.toStdString();
+    EXPECT_TRUE(message.contains(QStringLiteral("dark and light"))) << message.toStdString();
 }
 
 TEST_F(ConfigurationTest, ATroubledThemeLeavesTheShippedOneAndSaysWhere) {
@@ -245,7 +292,7 @@ TEST_F(ConfigurationTest, NamingAThemeKeepsTheRestOfConfig) {
     write(directory.configFile(), "# mine\ntheme themes/dark.tcl\nlayout tall\n");
 
     QString error;
-    ASSERT_TRUE(directory.setTheme(QStringLiteral("themes/light.tcl"), error))
+    ASSERT_TRUE(directory.setTheme(ThemeName::ofFile(QStringLiteral("themes/light.tcl")), error))
         << error.toStdString();
     EXPECT_EQ(contentsOf(directory.configFile()),
               QByteArray("# mine\ntheme themes/light.tcl\nlayout tall\n"));
@@ -254,9 +301,9 @@ TEST_F(ConfigurationTest, NamingAThemeKeepsTheRestOfConfig) {
 TEST_F(ConfigurationTest, AConfigThatHasGoneIsBegunAgain) {
     const ConfigurationDirectory directory(fresh());
     QString error;
-    ASSERT_TRUE(directory.setTheme(QStringLiteral("themes/light.tcl"), error))
+    ASSERT_TRUE(directory.setTheme(ThemeName::ofFile(QStringLiteral("themes/light.tcl")), error))
         << error.toStdString();
-    EXPECT_EQ(directory.read().theme, QStringLiteral("themes/light.tcl"));
+    EXPECT_EQ(directory.read().theme.file, QStringLiteral("themes/light.tcl"));
     EXPECT_TRUE(contentsOf(directory.configFile()).startsWith("# Enzan's settings"));
 }
 
@@ -265,7 +312,7 @@ TEST_F(ConfigurationTest, AConfigWithAMistakeIsNotRewritten) {
     write(directory.configFile(), "theme a.tcl b.tcl\n");
 
     QString error;
-    EXPECT_FALSE(directory.setTheme(QStringLiteral("themes/light.tcl"), error));
+    EXPECT_FALSE(directory.setTheme(ThemeName::ofFile(QStringLiteral("themes/light.tcl")), error));
     EXPECT_TRUE(error.contains(directory.configFile() + QStringLiteral(":1:")))
         << error.toStdString();
     EXPECT_EQ(contentsOf(directory.configFile()), QByteArray("theme a.tcl b.tcl\n"));
@@ -275,7 +322,8 @@ TEST_F(ConfigurationTest, ANewThemeIsTheShippedOneUnderAName) {
     const ConfigurationDirectory directory(fresh());
     QString error;
 
-    const std::optional<QString> written = directory.writeTheme(QStringLiteral("mine"), error);
+    const std::optional<QString> written =
+        directory.writeTheme(QStringLiteral("mine"), ThemeName(), error);
     ASSERT_TRUE(written.has_value()) << error.toStdString();
     const QString mine = written.value_or(QString());
     EXPECT_EQ(mine, QStringLiteral("themes/mine.tcl"));
@@ -283,9 +331,33 @@ TEST_F(ConfigurationTest, ANewThemeIsTheShippedOneUnderAName) {
 
     // The extension may be given or not; a name already taken is never written over.
     write(directory.resolve(mine), "theme accent #123456\n");
-    EXPECT_FALSE(directory.writeTheme(QStringLiteral("mine.tcl"), error).has_value());
+    EXPECT_FALSE(directory.writeTheme(QStringLiteral("mine.tcl"), ThemeName(), error).has_value());
     EXPECT_FALSE(error.isEmpty());
     EXPECT_EQ(contentsOf(directory.resolve(mine)), QByteArray("theme accent #123456\n"));
+}
+
+TEST_F(ConfigurationTest, ANewThemeIsACopyOfTheThemeItIsMadeFrom) {
+    const ConfigurationDirectory directory(fresh());
+    QString error;
+
+    const std::optional<QString> light = directory.writeTheme(
+        QStringLiteral("pale"), ThemeName::ofBuiltIn(QStringLiteral("light")), error);
+    ASSERT_TRUE(light.has_value()) << error.toStdString();
+    EXPECT_EQ(contentsOf(directory.resolve(light.value_or(QString()))),
+              Theme::builtInScript(QStringLiteral("light")).toUtf8());
+
+    write(directory.resolve(QStringLiteral("themes/edited.tcl")), "theme accent #123456\n");
+    const std::optional<QString> copy = directory.writeTheme(
+        QStringLiteral("again"), ThemeName::ofFile(QStringLiteral("themes/edited.tcl")), error);
+    ASSERT_TRUE(copy.has_value()) << error.toStdString();
+    EXPECT_EQ(contentsOf(directory.resolve(copy.value_or(QString()))),
+              QByteArray("theme accent #123456\n"));
+
+    EXPECT_FALSE(directory
+                     .writeTheme(QStringLiteral("none"),
+                                 ThemeName::ofBuiltIn(QStringLiteral("sepia")), error)
+                     .has_value());
+    EXPECT_FALSE(QFileInfo::exists(directory.resolve(QStringLiteral("themes/none.tcl"))));
 }
 
 TEST_F(ConfigurationTest, ANewThemeNeedsANameForAFileInThemes) {
@@ -293,7 +365,8 @@ TEST_F(ConfigurationTest, ANewThemeNeedsANameForAFileInThemes) {
     for (const QString& name : {QString(), QStringLiteral("  "), QStringLiteral("../escape"),
                                 QStringLiteral("sub/dir"), QStringLiteral(".hidden")}) {
         QString error;
-        EXPECT_FALSE(directory.writeTheme(name, error).has_value()) << name.toStdString();
+        EXPECT_FALSE(directory.writeTheme(name, ThemeName(), error).has_value())
+            << name.toStdString();
         EXPECT_FALSE(error.isEmpty()) << name.toStdString();
     }
 }
@@ -306,38 +379,52 @@ TEST_F(ConfigurationTest, ChoosingAThemeRewritesOnlyItsCommand) {
     // The reader's comments and settings this build does not know stay exactly as written.
     const QByteArray before("# my settings\nlayout tall\n  theme themes/dark.tcl  ;# the usual\n");
     const std::optional<QByteArray> after =
-        configurationWithTheme(before, QStringLiteral("themes/light.tcl"));
+        configurationWithTheme(before, ThemeName::ofFile(QStringLiteral("themes/light.tcl")));
     ASSERT_TRUE(after.has_value());
     EXPECT_EQ(after.value_or(QByteArray()),
               QByteArray("# my settings\nlayout tall\n  theme themes/light.tcl  ;# the usual\n"));
 }
 
+TEST_F(ConfigurationTest, ChoosingABuiltInThemeWritesItsOption) {
+    EXPECT_EQ(configurationWithTheme("# c\ntheme themes/dark.tcl\n",
+                                     ThemeName::ofBuiltIn(QStringLiteral("light"))),
+              QByteArray("# c\ntheme -builtin light\n"));
+    EXPECT_EQ(configurationWithTheme("# c\n", ThemeName::ofBuiltIn(QStringLiteral("light"))),
+              QByteArray("# c\ntheme -builtin light\n"));
+    EXPECT_EQ(configurationWithTheme("theme -builtin light\n", ThemeName()), QByteArray());
+}
+
 TEST_F(ConfigurationTest, ChoosingTheSameThemeWritesTheSameBytes) {
     const QByteArray before("theme {themes/my theme.tcl}\n# after\n");
-    EXPECT_EQ(configurationWithTheme(before, QStringLiteral("themes/my theme.tcl")), before);
+    EXPECT_EQ(
+        configurationWithTheme(before, ThemeName::ofFile(QStringLiteral("themes/my theme.tcl"))),
+        before);
 }
 
 TEST_F(ConfigurationTest, AThemeIsAddedWhereThereWasNone) {
-    EXPECT_EQ(configurationWithTheme("# nothing yet", QStringLiteral("themes/a b.tcl")),
+    EXPECT_EQ(configurationWithTheme("# nothing yet",
+                                     ThemeName::ofFile(QStringLiteral("themes/a b.tcl"))),
               QByteArray("# nothing yet\ntheme {themes/a b.tcl}\n"));
-    EXPECT_EQ(configurationWithTheme("", QStringLiteral("themes/a.tcl")),
+    EXPECT_EQ(configurationWithTheme("", ThemeName::ofFile(QStringLiteral("themes/a.tcl"))),
               QByteArray("theme themes/a.tcl\n"));
 }
 
-TEST_F(ConfigurationTest, TheShippedThemeIsChosenByLeavingTheCommandOut) {
-    EXPECT_EQ(configurationWithTheme("# keep\ntheme themes/dark.tcl\n# this too\n", QString()),
+TEST_F(ConfigurationTest, TheDefaultThemeIsChosenByLeavingTheCommandOut) {
+    EXPECT_EQ(configurationWithTheme("# keep\ntheme themes/dark.tcl\n# this too\n", ThemeName()),
               QByteArray("# keep\n# this too\n"));
-    EXPECT_EQ(configurationWithTheme("theme themes/dark.tcl", QString()), QByteArray());
+    EXPECT_EQ(configurationWithTheme("theme themes/dark.tcl", ThemeName()), QByteArray());
 
     // Something else on the command's line keeps the line.
-    EXPECT_EQ(configurationWithTheme("theme themes/dark.tcl ;# old\n", QString()),
+    EXPECT_EQ(configurationWithTheme("theme themes/dark.tcl ;# old\n", ThemeName()),
               QByteArray(" ;# old\n"));
 }
 
 TEST_F(ConfigurationTest, AFileWithAMistakeIsNotRewritten) {
     // Its commands could not all be read, so where its theme is would be a guess.
-    EXPECT_FALSE(configurationWithTheme("theme {never closed\n", QStringLiteral("a.tcl")));
-    EXPECT_FALSE(configurationWithTheme("theme a.tcl b.tcl\n", QStringLiteral("a.tcl")));
+    EXPECT_FALSE(configurationWithTheme("theme {never closed\n",
+                                        ThemeName::ofFile(QStringLiteral("a.tcl"))));
+    EXPECT_FALSE(
+        configurationWithTheme("theme a.tcl b.tcl\n", ThemeName::ofFile(QStringLiteral("a.tcl"))));
 }
 
 TEST_F(ConfigurationTest, AnyThemeNameReadsBackAsItWasWritten) {
@@ -345,12 +432,13 @@ TEST_F(ConfigurationTest, AnyThemeNameReadsBackAsItWasWritten) {
          {QStringLiteral("themes/plain.tcl"), QStringLiteral("themes/two words.tcl"),
           QStringLiteral("themes/brace{.tcl"), QStringLiteral("/abs/$dollar.tcl"),
           QStringLiteral("#hash.tcl"), QStringLiteral("themes/ünïcode.tcl")}) {
-        const std::optional<QByteArray> written = configurationWithTheme("# c\n", theme);
+        const std::optional<QByteArray> written =
+            configurationWithTheme("# c\n", ThemeName::ofFile(theme));
         ASSERT_TRUE(written.has_value()) << theme.toStdString();
         const QByteArray text = written.value_or(QByteArray());
         const ParsedConfiguration parsed = parseConfiguration(text);
         EXPECT_TRUE(parsed.errors.isEmpty()) << text.toStdString() << ": " << firstError(parsed);
-        EXPECT_EQ(parsed.theme, theme) << "written as " << text.toStdString();
+        EXPECT_EQ(parsed.theme.file, theme) << "written as " << text.toStdString();
     }
 }
 

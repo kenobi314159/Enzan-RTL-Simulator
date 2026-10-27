@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QSaveFile>
 #include <QStandardPaths>
+#include <QStringList>
 
 #include <string_view>
 #include <utility>
@@ -29,9 +30,10 @@ constexpr std::string_view DefaultConfiguration =
 # One command a line. The syntax is Tcl's, but nothing here is evaluated: `#` starts a comment,
 # and braces hold a word with spaces in it, as in `theme {themes/my theme.tcl}`.
 #
-# The theme is a Tcl script, relative to this directory or as a full path. Without a `theme`
-# line the window uses the theme built into Enzan. The window's View > Theme menu changes it here,
-# keeping the rest of this file as it is.
+# The theme is a Tcl script, relative to this directory or as a full path, or one of the themes
+# built into Enzan, as in `theme -builtin light`. Without a `theme` line the window uses the
+# built-in dark theme. The window's View > Theme menu changes it here, keeping the rest of this
+# file as it is.
 )";
 
 /// Where the themes the window lists and writes are, relative to the directory.
@@ -46,7 +48,6 @@ struct ThemeCommandSpan {
 /// Reads `text`'s commands, reporting into `parsed`, and finds the theme command's span.
 std::optional<ThemeCommandSpan> readCommands(const QByteArray& text, ParsedConfiguration& parsed) {
     std::optional<ThemeCommandSpan> span;
-    int themeLine = 0;
 
     const auto error = [&parsed](int line, QString message) {
         parsed.errors.push_back(
@@ -76,35 +77,55 @@ std::optional<ThemeCommandSpan> readCommands(const QByteArray& text, ParsedConfi
                 return true;
             }
 
-            if (command.words.size() != 2) {
-                error(command.line, QStringLiteral("`theme` names one file: `theme <file>`"));
+            // A theme of Enzan's own is named by an option, so that no file, whatever it is
+            // called, can be taken for one.
+            const bool builtIn =
+                command.words.size() >= 2 && command.words[1].text == QByteArray("-builtin");
+            if (command.words.size() != (builtIn ? 3U : 2U)) {
+                error(command.line, QStringLiteral("`theme` names one theme: `theme <file>`, or "
+                                                   "`theme -builtin <name>` for one built into "
+                                                   "Enzan"));
                 return true;
             }
-            if (themeLine != 0) {
+            if (parsed.themeLine != 0) {
                 error(command.line,
                       QStringLiteral("the theme is named twice, here and at line %1; it takes one")
-                          .arg(themeLine));
+                          .arg(parsed.themeLine));
                 return true;
             }
-            const TclWord& file = command.words[1];
-            if (file.text.isEmpty()) {
-                error(command.line, QStringLiteral("`theme` names no file; leave the line out for "
-                                                   "the theme built into Enzan"));
+            const TclWord& last = command.words.back();
+            if (last.text.isEmpty()) {
+                error(command.line, QStringLiteral("`theme` names no theme; leave the line out for "
+                                                   "the built-in dark theme"));
                 return true;
             }
 
-            themeLine = command.line;
-            parsed.theme = QString::fromUtf8(file.text);
+            parsed.themeLine = command.line;
+            const QString word = QString::fromUtf8(last.text);
+            parsed.theme = builtIn ? ThemeName::ofBuiltIn(word) : ThemeName::ofFile(word);
             const TclWord& first = command.words.front();
             span = ThemeCommandSpan{.start = first.start - text.constData(),
-                                    .end = file.start + file.size - text.constData()};
+                                    .end = last.start + last.size - text.constData()};
             return true;
         },
         malformed);
 
     if (malformed) error(malformed->line, std::move(malformed->text));
-    if (!parsed.errors.isEmpty()) parsed.theme.clear();
+    if (!parsed.errors.isEmpty()) {
+        parsed.theme = ThemeName();
+        parsed.themeLine = 0;
+    }
     return span;
+}
+
+/// Says that no theme is built in as `name`, naming those that are.
+QString notBuiltIn(const QString& name) {
+    QStringList names = Theme::builtInNames();
+    const QString last = names.takeLast();
+    const QString listed =
+        names.isEmpty() ? last : QStringLiteral("%1 and %2").arg(names.join(u", "), last);
+    return QStringLiteral("no theme is built into Enzan as '%1'; the built-in themes are %2")
+        .arg(name, listed);
 }
 
 /// Writes `contents` to `path` whole, so that a write cut short leaves the old file rather than
@@ -121,6 +142,18 @@ bool writeWhole(const QString& path, const QByteArray& contents, QString& error)
 
 } // namespace
 
+ThemeName ThemeName::ofFile(const QString& path) {
+    return ThemeName{.file = path, .builtIn = {}};
+}
+
+ThemeName ThemeName::ofBuiltIn(const QString& name) {
+    return ThemeName{.file = {}, .builtIn = name};
+}
+
+bool ThemeName::isDefault() const {
+    return file.isEmpty() && builtIn == QLatin1StringView(Theme::DefaultBuiltIn);
+}
+
 QString describe(const ConfigurationMessage& message) {
     if (message.file.isEmpty()) return message.text;
     if (message.line > 0) {
@@ -136,15 +169,18 @@ ParsedConfiguration parseConfiguration(const QByteArray& text) {
     return parsed;
 }
 
-std::optional<QByteArray> configurationWithTheme(const QByteArray& text, const QString& theme) {
+std::optional<QByteArray> configurationWithTheme(const QByteArray& text, const ThemeName& theme) {
     ParsedConfiguration parsed;
     const std::optional<ThemeCommandSpan> span = readCommands(text, parsed);
     if (!parsed.errors.isEmpty()) return std::nullopt;
 
     QByteArray result = text;
 
-    if (!theme.isEmpty()) {
-        const QByteArray command = (QStringLiteral("theme ") + quoteTclWord(theme)).toUtf8();
+    if (!theme.isDefault()) {
+        const QByteArray command =
+            (theme.isFile() ? QStringLiteral("theme %1").arg(quoteTclWord(theme.file))
+                            : QStringLiteral("theme -builtin %1").arg(quoteTclWord(theme.builtIn)))
+                .toUtf8();
         if (span) return result.replace(span->start, span->end - span->start, command);
 
         if (!result.isEmpty() && !result.endsWith('\n')) result += '\n';
@@ -153,7 +189,7 @@ std::optional<QByteArray> configurationWithTheme(const QByteArray& text, const Q
 
     if (!span) return result;
 
-    // The command goes with its line when nothing else is on it, so that choosing the shipped
+    // The command goes with its line when nothing else is on it, so that choosing the default
     // theme leaves no blank line behind; otherwise only the command goes.
     qsizetype start = span->start;
     qsizetype end = span->end;
@@ -208,7 +244,7 @@ bool ConfigurationDirectory::createDefaults(QString& error) const {
     const QByteArray header(DefaultConfiguration.data(),
                             static_cast<qsizetype>(DefaultConfiguration.size()));
     const std::optional<QByteArray> contents =
-        configurationWithTheme(header, QString::fromLatin1(DefaultTheme));
+        configurationWithTheme(header, ThemeName::ofFile(QString::fromLatin1(DefaultTheme)));
 
     // The text is this file's own, so a header that did not read back is a broken build rather
     // than a misconfigured one.
@@ -241,6 +277,14 @@ QString ConfigurationDirectory::resolve(const QString& theme) const {
     return QDir(root).filePath(theme);
 }
 
+bool ConfigurationDirectory::load(const ThemeName& name, Theme& theme, QString& error) const {
+    // Each changes nothing when it fails.
+    if (name.isFile()) return theme.loadFile(resolve(name.file), error);
+    if (theme.loadBuiltIn(name.builtIn)) return true;
+    error = notBuiltIn(name.builtIn);
+    return false;
+}
+
 QStringList ConfigurationDirectory::themes() const {
     QStringList names;
     if (root.isEmpty()) return names;
@@ -253,7 +297,7 @@ QStringList ConfigurationDirectory::themes() const {
     return names;
 }
 
-bool ConfigurationDirectory::setTheme(const QString& theme, QString& error) const {
+bool ConfigurationDirectory::setTheme(const ThemeName& theme, QString& error) const {
     if (root.isEmpty()) {
         error = QStringLiteral("there is no home directory to keep settings in");
         return false;
@@ -292,6 +336,7 @@ bool ConfigurationDirectory::setTheme(const QString& theme, QString& error) cons
 }
 
 std::optional<QString> ConfigurationDirectory::writeTheme(const QString& name,
+                                                          const ThemeName& from,
                                                           QString& error) const {
     if (root.isEmpty()) {
         error = QStringLiteral("there is no home directory to keep settings in");
@@ -317,7 +362,25 @@ std::optional<QString> ConfigurationDirectory::writeTheme(const QString& name,
         error = QStringLiteral("could not make '%1'").arg(QFileInfo(path).path());
         return std::nullopt;
     }
-    if (!writeWhole(path, Theme::builtInScript().toUtf8(), error)) return std::nullopt;
+
+    QByteArray contents;
+    if (from.isFile()) {
+        QFile source(resolve(from.file));
+        if (!source.open(QIODevice::ReadOnly)) {
+            error = QStringLiteral("could not read '%1': %2")
+                        .arg(resolve(from.file), source.errorString());
+            return std::nullopt;
+        }
+        contents = source.readAll();
+    } else {
+        contents = Theme::builtInScript(from.builtIn).toUtf8();
+        if (contents.isEmpty()) {
+            error = notBuiltIn(from.builtIn);
+            return std::nullopt;
+        }
+    }
+
+    if (!writeWhole(path, contents, error)) return std::nullopt;
     return theme;
 }
 
@@ -328,11 +391,17 @@ ConfiguredTheme ConfigurationDirectory::loadTheme() const {
     const ParsedConfiguration parsed = read();
     result.problems = parsed.warnings;
     result.problems += parsed.errors;
-    if (parsed.theme.isEmpty()) return result;
+    if (parsed.theme.isDefault()) return result;
 
+    // A file's error names the file and its line already; a built-in theme's is against the line
+    // of `config` that named it.
     QString error;
-    if (!result.theme.loadFile(resolve(parsed.theme), error)) {
-        result.problems.push_back(ConfigurationMessage{.text = error, .isError = true});
+    if (!load(parsed.theme, result.theme, error)) {
+        result.problems.push_back(
+            ConfigurationMessage{.file = parsed.theme.isFile() ? QString() : configFile(),
+                                 .line = parsed.theme.isFile() ? 0 : parsed.themeLine,
+                                 .text = error,
+                                 .isError = true});
     }
     return result;
 }

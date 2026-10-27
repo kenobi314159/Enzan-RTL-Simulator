@@ -404,7 +404,7 @@ void MainWindow::fillThemeMenu() {
     // commands below them are the window's and stay.
     themeMenu->clear();
 
-    const auto offer = [this](const QString& label, const QString& name) {
+    const auto offer = [this](const QString& label, const ThemeName& name) {
         QAction* entry = themeMenu->addAction(label);
         entry->setCheckable(true);
         entry->setChecked(name == themeName);
@@ -412,13 +412,21 @@ void MainWindow::fillThemeMenu() {
         connect(entry, &QAction::triggered, this, [this, name] { chooseTheme(name); });
     };
 
-    offer(tr("Built-in"), QString());
+    // The built-in themes first, the default at their head, by the names `config` gives them.
+    for (const QString& name : Theme::builtInNames()) {
+        offer(tr("%1 (built-in)").arg(name.left(1).toUpper() + name.mid(1)),
+              ThemeName::ofBuiltIn(name));
+    }
     const QStringList themes = configuration.themes();
-    for (const QString& name : themes) offer(QFileInfo(name).completeBaseName(), name);
+    for (const QString& name : themes) {
+        offer(QFileInfo(name).completeBaseName(), ThemeName::ofFile(name));
+    }
 
-    // A theme `config` names from somewhere other than `themes/` is the one in use all the same,
+    // A file `config` names from somewhere other than `themes/` is the one in use all the same,
     // and is offered by the name `config` gives it.
-    if (!themeName.isEmpty() && !themes.contains(themeName)) offer(themeName, themeName);
+    if (themeName.isFile() && !themes.contains(themeName.file)) {
+        offer(themeName.file, themeName);
+    }
 
     themeMenu->addSeparator();
     themeMenu->addAction(reloadThemeAction);
@@ -426,12 +434,10 @@ void MainWindow::fillThemeMenu() {
     newThemeAction->setEnabled(!configuration.path().isEmpty());
 }
 
-bool MainWindow::useTheme(const QString& name) {
+bool MainWindow::useTheme(const ThemeName& name) {
     Theme loaded;
-    loaded.loadBuiltIn();
-
     QString error;
-    if (!name.isEmpty() && !loaded.loadFile(configuration.resolve(name), error)) {
+    if (!configuration.load(name, loaded, error)) {
         report(ConfigurationMessage{.text = error, .isError = true});
         note(tr("The theme is as it was."));
         return false;
@@ -441,7 +447,7 @@ bool MainWindow::useTheme(const QString& name) {
     return true;
 }
 
-void MainWindow::chooseTheme(const QString& name) {
+void MainWindow::chooseTheme(const ThemeName& name) {
     if (!useTheme(name)) return;
     themeName = name;
 
@@ -455,17 +461,17 @@ void MainWindow::chooseTheme(const QString& name) {
 
 void MainWindow::reloadTheme() {
     if (!useTheme(themeName)) return;
-    note(themeName.isEmpty()
-             ? tr("The built-in theme is in use.")
-             : tr("The theme was read again from %1.").arg(configuration.resolve(themeName)));
+    note(themeName.isFile()
+             ? tr("The theme was read again from %1.").arg(configuration.resolve(themeName.file))
+             : tr("The built-in %1 theme is in use.").arg(themeName.builtIn));
 }
 
 void MainWindow::askForNewTheme() {
     auto* dialog = new QInputDialog(this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(tr("New Theme"));
-    dialog->setLabelText(tr("The built-in theme is written to a file of this name in %1, to be "
-                            "edited, and used:")
+    dialog->setLabelText(tr("A copy of the theme in use is written to a file of this name in %1, "
+                            "to be edited, and used:")
                              .arg(configuration.resolve(QStringLiteral("themes"))));
     connect(dialog, &QInputDialog::textValueSelected, this, &MainWindow::createTheme);
     dialog->open();
@@ -473,14 +479,15 @@ void MainWindow::askForNewTheme() {
 
 void MainWindow::createTheme(const QString& name) {
     QString error;
-    const std::optional<QString> written = configuration.writeTheme(name, error);
+    const std::optional<QString> written = configuration.writeTheme(name, themeName, error);
     if (!written) {
         report(ConfigurationMessage{.text = error, .isError = true});
         return;
     }
 
-    chooseTheme(*written);
-    note(tr("%1 is the built-in theme, written out to be edited. Reload Theme shows an edit.")
+    chooseTheme(ThemeName::ofFile(*written));
+    note(tr("%1 is a copy of the theme that was in use, written out to be edited. Reload Theme "
+            "shows an edit.")
              .arg(configuration.resolve(*written)));
 }
 

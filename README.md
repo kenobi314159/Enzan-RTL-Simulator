@@ -165,9 +165,11 @@ force holds it against the design until released.
 Colours come from a Tcl theme file and nowhere else. The window keeps its settings in
 `~/.config/enzan/` (or `$XDG_CONFIG_HOME/enzan/`), which it creates the first time it opens:
 `config` names the theme, `theme themes/dark.tcl`, and `themes/dark.tcl` is the built-in dark theme
-written out as a starting point. *View → Theme* chooses between the files in `themes/`, writes a
-new one with *New Theme…*, and reads the one in use again with *Reload Theme* after you edit it. A
-theme is loaded over the built-in one, so a file that sets three colours changes three colours.
+written out as a starting point. A light theme is built in beside the dark one. *View → Theme*
+chooses between the two built-in themes and the files in `themes/`, writes a copy of the one in
+use with *New Theme…*, and reads the one in use again with *Reload Theme* after you edit it; in
+`config`, `theme -builtin light` names the light theme. A theme file is loaded over the built-in
+dark theme, so a file that sets three colours changes three colours.
 The window also keeps where its docks were there, in `layout.ini`. Nothing in that directory
 changes what a simulation computes or records.
 

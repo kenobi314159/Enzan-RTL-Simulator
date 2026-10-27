@@ -2316,13 +2316,15 @@ places with nothing to say which came from where, and a signal list follows the 
 same reason (10.8). Which theme the window uses is named in the configuration directory (10.9).
 
 **A theme is chosen, written and reloaded from the window.** *View → Theme* offers the built-in
-theme and every file in the configuration directory's `themes/`, and choosing one colours the
-window and names it in `config` for the next. *New Theme…* writes the shipped theme to a file of
-its own there, refusing a name already taken, and *Reload Theme* reads the theme in use again for
-a reader who has just edited it — asked for, rather than done whenever the file changes, because
-an editor saves in steps and a theme loaded halfway through a save is one that failed. The
-built-in theme is always among them: it is the one a newer Enzan has improved, which a copy
-written out by an older one never sees, and the one that works when the directory does not.
+themes, the default first, and every file in the configuration directory's `themes/`, and
+choosing one colours the window and names it in `config` for the next. *New Theme…* writes a copy
+of the theme in use to a file of its own there — the built-in theme's text, or the file's —
+refusing a name already taken: what the reader is looking at is what they go on to edit. *Reload
+Theme* reads the theme in use again for a reader who has just edited it — asked for, rather than
+done whenever the file changes, because an editor saves in steps and a theme loaded halfway
+through a save is one that failed. The built-in themes are always among them: they are the ones a
+newer Enzan has improved, which a copy written out by an older one never sees, and the ones that
+work when the directory does not.
 
 **A new theme reaches everything already drawn.** Nothing in the window keeps a colour or a size
 past the moment it was painted without being told when the theme changes: the canvas's drawn
@@ -2838,28 +2840,33 @@ a kernel on a compute server (2.2) is coloured by the settings of the person loo
 headless run makes no directory.
 
 **The window makes it the first time it opens**: `config`, naming the theme, and
-`themes/dark.tcl`, the shipped theme written out as a starting point. Each is written only when it
-is missing, and nothing Enzan writes there replaces a file that exists: the directory is the
+`themes/dark.tcl`, the default theme written out as a starting point. Each is written only when
+it is missing, and nothing Enzan writes there replaces a file that exists: the directory is the
 reader's, and a file they have edited is theirs. When it cannot be made — no home directory, a
-file system that is read-only — the window opens with the shipped theme and says why in the
+file system that is read-only — the window opens with the default theme and says why in the
 transcript. Settings are a convenience, and a window that refused to open without them would put
 them before the design.
 
 **`config` has Tcl's syntax and is not Tcl**, as a signal list is not (10.8): it is split into
-commands by Tcl's parser, nothing is substituted and nothing evaluated. It has one command:
+commands by Tcl's parser, nothing is substituted and nothing evaluated. It has one command, which
+names the theme as a file, relative to the directory or as an absolute path, or as one of the
+themes built in:
 
 ```tcl
 theme themes/dark.tcl
+theme -builtin light
 ```
 
-naming the theme, relative to the directory or as an absolute path. Without one the window uses
-the shipped theme. A theme that cannot be read or does not load leaves the shipped theme too, as
-10.5 says, and the transcript names the file and the line.
+A built-in theme is named by an option rather than by a word of its own, so that no file,
+whatever it is called, can be taken for one. Without a `theme` command the window uses the
+default built-in theme, and `theme -builtin dark` says the same. A theme that cannot be read or
+does not load leaves the default theme too, as 10.5 says, and so does a built-in theme this build
+lacks — one a newer Enzan has — and the transcript names the file and the line.
 
 **A command this build does not know is a warning, and the rest applies.** This is the one place
 `config` departs from a signal list's rules, and it is deliberate: a newer Enzan may write a
 setting an older one has never heard of, and a directory shared between the two must not lose its
-theme in the older one. A mistake in a command that is known — `theme` naming no file, or two —
+theme in the older one. A mistake in a command that is known — `theme` naming no theme, or two —
 and text that cannot be split into commands are errors, and then nothing in the file is used.
 
 **The window's layout is kept there too**, in `layout.ini`: where the docks are and how large the
@@ -2868,7 +2875,7 @@ than a setting anyone writes, which is why it is a file of its own, in Qt's form
 command in `config`; deleting it opens the window as it first opened.
 
 **The window changes `config` in place.** Choosing a theme rewrites the `theme` command where it
-stands, adds one when there is none, or takes its line out for the built-in theme, and keeps
+stands, adds one when there is none, or takes its line out for the default theme, and keeps
 every other byte of the file, comments and unknown commands included: a file the reader has
 annotated stays theirs. A file with a mistake in it is not rewritten, since where its theme is
 would be a guess, and the theme chosen is then used until the window closes and said not to be

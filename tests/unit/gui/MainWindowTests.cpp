@@ -483,7 +483,7 @@ protected:
         directory = enzan::gui::ConfigurationDirectory(home.filePath(QStringLiteral("enzan")));
         QString error;
         ASSERT_TRUE(directory.createDefaults(error)) << error.toStdString();
-        writeTheme(QStringLiteral("themes/light.tcl"), "theme window.background #0a0b0c\n");
+        writeTheme(QStringLiteral("themes/pale.tcl"), "theme window.background #0a0b0c\n");
     }
 
     void TearDown() override {
@@ -521,7 +521,7 @@ protected:
         return nullptr;
     }
 
-    [[nodiscard]] QString configured() const { return directory.read().theme; }
+    [[nodiscard]] enzan::gui::ThemeName configured() const { return directory.read().theme; }
 
     [[nodiscard]] QString transcript() const {
         const auto* text = chooser->findChild<QPlainTextEdit*>();
@@ -542,9 +542,10 @@ TEST_F(ThemeMenuTest, OffersTheBuiltInThemeAndEveryFileInThemes) {
     for (const QAction* action : themes->actions()) {
         texts << (action->isSeparator() ? QStringLiteral("-") : action->text());
     }
-    EXPECT_EQ(texts, (QStringList{QStringLiteral("Built-in"), QStringLiteral("dark"),
-                                  QStringLiteral("light"), QStringLiteral("-"),
-                                  QStringLiteral("Reload Theme"), QStringLiteral("New Theme…")}));
+    EXPECT_EQ(texts,
+              (QStringList{QStringLiteral("Dark (built-in)"), QStringLiteral("Light (built-in)"),
+                           QStringLiteral("dark"), QStringLiteral("pale"), QStringLiteral("-"),
+                           QStringLiteral("Reload Theme"), QStringLiteral("New Theme…")}));
 
     ASSERT_NE(entry(QStringLiteral("dark")), nullptr);
     EXPECT_TRUE(entry(QStringLiteral("dark"))->isChecked()) << "config names dark.tcl";
@@ -558,20 +559,39 @@ TEST_F(ThemeMenuTest, AThemeDroppedInIsOfferedWhenTheMenuOpens) {
 
 TEST_F(ThemeMenuTest, ChoosingAThemeColoursTheWindowAndKeepsIt) {
     open();
-    entry(QStringLiteral("light"))->trigger();
+    entry(QStringLiteral("pale"))->trigger();
 
     EXPECT_EQ(QApplication::palette().color(QPalette::Window), QColor(0x0A, 0x0B, 0x0C));
-    EXPECT_EQ(configured(), QStringLiteral("themes/light.tcl"));
-    EXPECT_TRUE(entry(QStringLiteral("light"))->isChecked());
+    EXPECT_EQ(configured().file, QStringLiteral("themes/pale.tcl"));
+    EXPECT_TRUE(entry(QStringLiteral("pale"))->isChecked());
 
-    // The built-in theme is chosen by leaving the theme out.
-    entry(QStringLiteral("Built-in"))->trigger();
-    Theme builtIn;
-    builtIn.loadBuiltIn();
+    // The default built-in theme is chosen by leaving the theme out.
+    entry(QStringLiteral("Dark (built-in)"))->trigger();
+    Theme byDefault;
+    byDefault.loadBuiltIn();
     EXPECT_EQ(QApplication::palette().color(QPalette::Window),
-              builtIn.color(enzan::gui::ThemeColor::WindowBackground));
-    EXPECT_TRUE(configured().isEmpty());
-    EXPECT_TRUE(entry(QStringLiteral("Built-in"))->isChecked());
+              byDefault.color(enzan::gui::ThemeColor::WindowBackground));
+    EXPECT_TRUE(configured().isDefault());
+    EXPECT_TRUE(entry(QStringLiteral("Dark (built-in)"))->isChecked());
+}
+
+TEST_F(ThemeMenuTest, TheLightThemeIsChosenFromTheMenuAndKept) {
+    open();
+    entry(QStringLiteral("Light (built-in)"))->trigger();
+
+    Theme light;
+    ASSERT_TRUE(light.loadBuiltIn(QStringLiteral("light")));
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window),
+              light.color(enzan::gui::ThemeColor::WindowBackground));
+    EXPECT_EQ(configured(), enzan::gui::ThemeName::ofBuiltIn(QStringLiteral("light")));
+    EXPECT_TRUE(entry(QStringLiteral("Light (built-in)"))->isChecked());
+
+    // And the next window opens with it.
+    chooser = nullptr;
+    open();
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window),
+              light.color(enzan::gui::ThemeColor::WindowBackground));
+    EXPECT_TRUE(entry(QStringLiteral("Light (built-in)"))->isChecked());
 }
 
 TEST_F(ThemeMenuTest, AThemeThatDoesNotLoadChangesNothing) {
@@ -582,7 +602,7 @@ TEST_F(ThemeMenuTest, AThemeThatDoesNotLoadChangesNothing) {
     entry(QStringLiteral("broken"))->trigger();
 
     EXPECT_EQ(QApplication::palette().color(QPalette::Window), before);
-    EXPECT_EQ(configured(), QStringLiteral("themes/dark.tcl"));
+    EXPECT_EQ(configured().file, QStringLiteral("themes/dark.tcl"));
     EXPECT_TRUE(entry(QStringLiteral("dark"))->isChecked());
     EXPECT_TRUE(transcript().contains(QStringLiteral("broken.tcl:1: ")))
         << transcript().toStdString();
@@ -590,16 +610,19 @@ TEST_F(ThemeMenuTest, AThemeThatDoesNotLoadChangesNothing) {
 
 TEST_F(ThemeMenuTest, ReloadReadsTheThemeInUseAgain) {
     open();
-    entry(QStringLiteral("light"))->trigger();
-    writeTheme(QStringLiteral("themes/light.tcl"), "theme window.background #0d0e0f\n");
+    entry(QStringLiteral("pale"))->trigger();
+    writeTheme(QStringLiteral("themes/pale.tcl"), "theme window.background #0d0e0f\n");
 
     entry(QStringLiteral("Reload Theme"))->trigger();
 
     EXPECT_EQ(QApplication::palette().color(QPalette::Window), QColor(0x0D, 0x0E, 0x0F));
 }
 
-TEST_F(ThemeMenuTest, NewThemeWritesTheBuiltInThemeOutAndUsesIt) {
+TEST_F(ThemeMenuTest, NewThemeWritesACopyOfTheThemeInUseAndUsesIt) {
+    // With the light theme in use, a new theme starts from the light theme: what the reader sees
+    // is what they go on to edit.
     open();
+    entry(QStringLiteral("Light (built-in)"))->trigger();
     entry(QStringLiteral("New Theme…"))->trigger();
 
     auto* dialog = chooser->findChild<QInputDialog*>();
@@ -609,16 +632,17 @@ TEST_F(ThemeMenuTest, NewThemeWritesTheBuiltInThemeOutAndUsesIt) {
 
     QFile written(directory.resolve(QStringLiteral("themes/mine.tcl")));
     ASSERT_TRUE(written.open(QIODevice::ReadOnly));
-    EXPECT_EQ(written.readAll(), Theme::builtInScript().toUtf8());
-    EXPECT_EQ(configured(), QStringLiteral("themes/mine.tcl"));
+    EXPECT_EQ(written.readAll(), Theme::builtInScript(QStringLiteral("light")).toUtf8());
+    EXPECT_EQ(configured().file, QStringLiteral("themes/mine.tcl"));
     EXPECT_TRUE(entry(QStringLiteral("mine"))->isChecked());
 }
 
-TEST_F(ThemeMenuTest, AWindowWithNoDirectoryOffersOnlyTheBuiltInTheme) {
+TEST_F(ThemeMenuTest, AWindowWithNoDirectoryOffersOnlyTheBuiltInThemes) {
     directory = enzan::gui::ConfigurationDirectory();
     open();
 
-    EXPECT_NE(entry(QStringLiteral("Built-in")), nullptr);
+    EXPECT_NE(entry(QStringLiteral("Dark (built-in)")), nullptr);
+    EXPECT_NE(entry(QStringLiteral("Light (built-in)")), nullptr);
     EXPECT_EQ(entry(QStringLiteral("dark")), nullptr);
     ASSERT_NE(entry(QStringLiteral("New Theme…")), nullptr);
     EXPECT_FALSE(entry(QStringLiteral("New Theme…"))->isEnabled());

@@ -31,11 +31,38 @@ struct ConfigurationMessage {
 /// `message` as one line, `file:line: text`, for a terminal.
 [[nodiscard]] QString describe(const ConfigurationMessage& message);
 
+/// A theme as `config` names it: a file, or one of the themes built into Enzan.
+///
+/// One or the other, never both. A default-made name is the default built-in theme, which
+/// `config` names by naming no theme at all.
+struct ThemeName {
+    /// The file, relative to the directory or absolute; empty for a built-in theme.
+    QString file;
+
+    /// The built-in theme's name, when `file` is empty.
+    QString builtIn = QString::fromLatin1(Theme::DefaultBuiltIn);
+
+    /// The theme in `path`, relative to the directory or absolute.
+    [[nodiscard]] static ThemeName ofFile(const QString& path);
+
+    /// The theme built into Enzan as `name`.
+    [[nodiscard]] static ThemeName ofBuiltIn(const QString& name);
+
+    [[nodiscard]] bool isFile() const noexcept { return !file.isEmpty(); }
+
+    /// True for the default built-in theme.
+    [[nodiscard]] bool isDefault() const;
+
+    friend bool operator==(const ThemeName&, const ThemeName&) = default;
+};
+
 /// What a `config` file says (DESIGN_GUIDE.md section 10.9).
 struct ParsedConfiguration {
-    /// The theme as `config` names it, relative to the directory or absolute; empty for the
-    /// theme built into Enzan.
-    QString theme;
+    /// The theme `config` names; the default built-in one when it names none.
+    ThemeName theme;
+
+    /// The line `theme` is on, or 0 when there is none, for a theme that does not load.
+    int themeLine = 0;
 
     /// Commands this build does not know. Each is skipped and the rest applies, so that a file a
     /// newer Enzan wrote still works in an older one.
@@ -51,19 +78,20 @@ struct ParsedConfiguration {
 /// syntax is Tcl's and the language is not, which is what lets the window write it back.
 [[nodiscard]] ParsedConfiguration parseConfiguration(const QByteArray& text);
 
-/// `text` naming `theme` as its theme, or the theme built into Enzan when `theme` is empty.
+/// `text` naming `theme` as its theme.
 ///
 /// The `theme` command is rewritten where it stands, added at the end when there is none, or
-/// removed with its line; everything else is kept byte for byte, so that a file the reader has
-/// annotated stays theirs. Nothing when `text` has a mistake in it, since a file whose commands
-/// cannot all be read cannot be rewritten without guessing at what it meant.
+/// removed with its line for the default built-in theme; everything else is kept byte for byte,
+/// so that a file the reader has annotated stays theirs. Nothing when `text` has a mistake in it,
+/// since a file whose commands cannot all be read cannot be rewritten without guessing at what it
+/// meant.
 [[nodiscard]] std::optional<QByteArray> configurationWithTheme(const QByteArray& text,
-                                                               const QString& theme);
+                                                               const ThemeName& theme);
 
 /// The theme a configuration directory names, loaded, and what went wrong on the way.
 struct ConfiguredTheme {
-    /// The theme to colour the window with: the one `config` names, or the theme built into
-    /// Enzan when it names none or it did not load.
+    /// The theme to colour the window with: the one `config` names, or the default built-in
+    /// one when it names none or it did not load.
     Theme theme;
 
     QVector<ConfigurationMessage> problems;
@@ -107,29 +135,38 @@ public:
     /// Reads `config`. A directory with no `config` names no theme, which is no mistake.
     [[nodiscard]] ParsedConfiguration read() const;
 
-    /// The path of the theme `config` names as `theme`.
+    /// The path of the file `config` names as `theme`.
     [[nodiscard]] QString resolve(const QString& theme) const;
+
+    /// Loads the theme `name` into `theme`: a file over the default built-in theme, or a built-in
+    /// theme on its own.
+    ///
+    /// Returns false, having changed nothing and filled `error`, when the file cannot be read or
+    /// does not load, or when no theme is built in under the name.
+    bool load(const ThemeName& name, Theme& theme, QString& error) const;
 
     /// The themes in `themes/`, named as `config` names them, in order of name.
     [[nodiscard]] QStringList themes() const;
 
-    /// Names `theme` in `config`, or the shipped theme when it is empty, keeping the rest of the
-    /// file as it is (`configurationWithTheme`).
+    /// Names `theme` in `config`, keeping the rest of the file as it is
+    /// (`configurationWithTheme`).
     ///
     /// Returns false having filled `error` when there is no directory, when `config` has a
     /// mistake in it, or when it cannot be written.
-    bool setTheme(const QString& theme, QString& error) const;
+    bool setTheme(const ThemeName& theme, QString& error) const;
 
-    /// Writes the shipped theme to `themes/<name>.tcl`, as a theme to edit, and gives how
-    /// `config` names it.
+    /// Writes a copy of the theme `from` to `themes/<name>.tcl`, as a theme to edit, and gives
+    /// how `config` names the copy: a built-in theme's text, or the file's.
     ///
     /// Nothing, having filled `error`, when `name` is not a name for a file, when a theme of that
-    /// name exists — which is never replaced — or when it cannot be written.
-    [[nodiscard]] std::optional<QString> writeTheme(const QString& name, QString& error) const;
+    /// name exists — which is never replaced — or when `from` cannot be read or the copy cannot
+    /// be written.
+    [[nodiscard]] std::optional<QString> writeTheme(const QString& name, const ThemeName& from,
+                                                    QString& error) const;
 
-    /// The theme `config` names, loaded over the shipped one.
+    /// The theme `config` names, loaded.
     ///
-    /// Whatever goes wrong leaves the shipped theme and says why: the window is opened with
+    /// Whatever goes wrong leaves the default theme and says why: the window is opened with
     /// colours whatever the directory holds, because a reader who cannot see the design for a
     /// mistyped colour has lost more than the colour.
     [[nodiscard]] ConfiguredTheme loadTheme() const;

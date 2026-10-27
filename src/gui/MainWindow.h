@@ -226,18 +226,18 @@ private:
     /// that a theme put into `themes/` is offered without the window being opened again.
     void fillThemeMenu();
 
-    /// Colours the window with the theme `config` would call `name`, or the built-in one for an
-    /// empty name. Returns false, having said why and changed nothing, when it does not load.
-    bool useTheme(const QString& name);
+    /// Colours the window with the theme `name`. Returns false, having said why and changed
+    /// nothing, when it does not load.
+    bool useTheme(const ThemeName& name);
 
     /// Uses the theme `name` and names it in `config`, so that the next window opens with it.
-    void chooseTheme(const QString& name);
+    void chooseTheme(const ThemeName& name);
 
     /// Reads the theme in use again, for a reader who has just edited it.
     void reloadTheme();
 
-    /// Asks for a name and writes the built-in theme out under it, as a theme to edit, and uses
-    /// it. Asked in a dialog that is opened rather than run, as the About box is.
+    /// Asks for a name and writes a copy of the theme in use under it, as a theme to edit, and
+    /// uses it. Asked in a dialog that is opened rather than run, as the About box is.
     void askForNewTheme();
     void createTheme(const QString& name);
 
@@ -259,10 +259,10 @@ private:
 
     ConfigurationDirectory configuration;
 
-    /// The theme as `config` names it, empty for the built-in one: the one the Theme menu shows
-    /// as chosen and Reload Theme reads again. Kept here rather than read back from `config`, so
+    /// The theme in use, as `config` names it: the one the Theme menu shows as chosen, Reload
+    /// Theme reads again and New Theme copies. Kept here rather than read back from `config`, so
     /// that a choice the directory could not record is still the one in use.
-    QString themeName;
+    ThemeName themeName;
 
     QMenu* themeMenu = nullptr;
     QActionGroup* themeChoices = nullptr;
