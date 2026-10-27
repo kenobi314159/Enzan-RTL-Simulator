@@ -6,8 +6,13 @@
 // in, so that the suite behaves the same whether CI runs it on a machine with no display at all
 // or a contributor runs it by hand inside a desktop session. A GUI test that only passes when
 // somebody happens to be logged in is a GUI test nobody runs.
+//
+// For the same reason the configuration directory is a temporary one: a test that read the
+// developer's own settings would depend on the machine, and one that wrote them would change
+// what the developer's window looks like.
 
 #include <QApplication>
+#include <QTemporaryDir>
 
 #include <gtest/gtest.h>
 
@@ -20,6 +25,7 @@ class QtEnvironment final : public ::testing::Environment {
 public:
     void SetUp() override {
         qputenv("QT_QPA_PLATFORM", "offscreen");
+        qputenv("XDG_CONFIG_HOME", configuration.path().toUtf8());
 
         // Qt keeps a reference to argc, so both have to outlive the application object.
         application = std::make_unique<QApplication>(argumentCount, arguments.data());
@@ -31,6 +37,7 @@ private:
     int argumentCount = 1;
     std::array<char*, 2> arguments{const_cast<char*>("enzan-gui-tests"), nullptr};
     std::unique_ptr<QApplication> application;
+    QTemporaryDir configuration;
 };
 
 } // namespace

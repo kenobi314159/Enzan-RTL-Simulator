@@ -747,6 +747,13 @@ void MainWindow::note(const QString& text) {
     transcriptView->appendNote(QStringLiteral("-- ") + text);
 }
 
+void MainWindow::report(const ConfigurationMessage& problem) {
+    const DiagnosticSeverity severity =
+        problem.isError ? DiagnosticSeverity::Error : DiagnosticSeverity::Warning;
+    transcriptView->appendDiagnostic(static_cast<int>(severity), problem.text, problem.file,
+                                     problem.line);
+}
+
 // ---------------------------------------------------------------------------
 // Wave window editing
 // ---------------------------------------------------------------------------

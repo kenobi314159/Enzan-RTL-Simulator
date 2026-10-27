@@ -162,10 +162,13 @@ Right-clicking in **Objects** offers **Deposit…**, **Force…** and **Release*
 Wave*. A deposit writes the value now and the next thing that drives the signal overwrites it; a
 force holds it against the design until released.
 
-Colours come from a Tcl theme file and nowhere else. `enzan --write-theme mine.tcl` writes
-the built-in dark theme out as a starting point, and `enzan --gui --theme mine.tcl` — or dropping it at
-`~/.config/enzan-gui/theme.tcl` — loads yours over it, so a file that sets three colours changes
-three colours.
+Colours come from a Tcl theme file and nowhere else. The window keeps its settings in
+`~/.config/enzan/` (or `$XDG_CONFIG_HOME/enzan/`), which it creates the first time it opens:
+`config` names the theme, `theme themes/dark.tcl`, and `themes/dark.tcl` is the built-in dark theme
+written out as a starting point. Edit it, or a copy named in `config`; a theme is loaded over the
+built-in one, so a file that sets three colours changes three colours. `enzan --write-theme
+mine.tcl` writes the built-in theme out anywhere else. Nothing in that directory changes what a
+simulation computes or records.
 
 What the wave window shows can be kept. *File → Save Signal List* (Ctrl+S) writes it to a file,
 the same one each time after the first, and *Load Signal List…* or `enzan run --gui --wave-list signals.tcl` puts it back. The file is a short

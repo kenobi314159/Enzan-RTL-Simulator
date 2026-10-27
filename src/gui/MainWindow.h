@@ -3,6 +3,7 @@
 #pragma once
 
 #include "eir/BitVector.h"
+#include "gui/Configuration.h"
 #include "gui/DesignTreeModel.h"
 #include "gui/KernelSession.h"
 #include "gui/ObjectsModel.h"
@@ -62,6 +63,10 @@ public:
 
     /// Writes a note into the transcript, for the messages the front end makes itself.
     void note(const QString& text);
+
+    /// Reports a problem in the configuration directory (DESIGN_GUIDE.md section 10.9) in the
+    /// transcript, against the file and line it is in.
+    void report(const ConfigurationMessage& problem);
 
     /// Replaces the wave window's list with the signal list in `path` (DESIGN_GUIDE.md section
     /// 10.8).

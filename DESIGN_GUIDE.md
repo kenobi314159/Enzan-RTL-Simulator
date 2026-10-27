@@ -1744,11 +1744,13 @@ ends when that window does. The front end therefore needs to know nothing about
 libraries, file lists or any option added later, and the kernel binary still links
 no Qt.
 
-**The front end's own options travel through `enzan` too.** Its theme and the signal
-list it starts with (10.8) are what a user configures about it, so `--theme`,
-`--write-theme` and `--wave-list` are options of `enzan` that are forwarded, and `--write-theme` starts no kernel because writing a
-file out is not a simulation. An option reachable only by running the front end
-directly would make it the second program this section exists to avoid.
+**The front end's own options travel through `enzan` too.** The signal list it starts with
+(10.8) is what a user chooses about one run of it, so `--wave-list` is an option of `enzan` that
+is forwarded, as `--write-theme` is, which starts no kernel because writing a file out is not a
+simulation. An option reachable only by running the front end directly would make it the second
+program this section exists to avoid. Its theme is not an option at all: it belongs to the person
+at the screen rather than to the run, so the window finds it in the configuration directory
+(10.9), and `enzan --help` says where that is.
 
 **The front end is a separate executable and not a second entry point.** It remains
 a separate *binary* because the kernel MUST NOT link Qt, and a separate *process*
@@ -2303,7 +2305,7 @@ undefined. A script that fails — a key this build does not know, a colour that
 changes nothing, the lines before the mistake included, and the error names the file and the line
 it stopped at. A window coloured partly by a theme that did not load takes its colours from two
 places with nothing to say which came from where, and a signal list follows the same rule for the
-same reason (10.8).
+same reason (10.8). Which theme the window uses is named in the configuration directory (10.9).
 
 **The colours reach the widgets through a `QPalette`, not a style sheet.** This
 is a performance rule wearing a presentation rule's clothes. A Qt style sheet
@@ -2776,7 +2778,7 @@ design it was saved from, and refusing a whole arrangement because one signal wa
 would make the file useless at exactly the moment it is needed.
 
 **From the command line, `--wave-list <file>`**, an option of `enzan` forwarded to the front
-end as `--theme` is (8.4): `enzan run --gui --wave-list <file> <top>`, or with `--gui
+end (8.4): `enzan run --gui --wave-list <file> <top>`, or with `--gui
 --attach`. Without `--gui` it is refused, because there is no window to show the list in.
 A file that cannot be read is reported and the window comes up empty, as a theme that
 cannot be read leaves the built-in colours.
@@ -2792,6 +2794,48 @@ read familiarly, but its files are not loaded. A `wave.do` is a Tcl program, wri
 window, full of that window's own commands (`WaveRestoreCursors`, `configure wave`), and its
 paths separate a generate block with `/` where Enzan's use `.` (5.1). Loading some of them
 would be promising all of them.
+
+### 10.9 The configuration directory
+
+The window keeps what its reader has chosen about it in one directory, `$XDG_CONFIG_HOME/enzan`,
+which is `~/.config/enzan` when that variable is unset. `enzan --help` says where it is, because a
+setting kept in a file nobody can find might as well not be kept.
+
+**Nothing in it may change what a simulation computes or records.** It holds how a window shows a
+run, never what the run does. A run is reproduced from its command line and its files (3.8), and
+a setting in someone's home directory that changed a result would be the cache section 8.2
+refuses: found only after it had been trusted, and on a second machine not at all. So the kernel
+reads nothing from it, and anything that would change a result belongs on the command line however
+often a user gives it.
+
+**Only the front end reads or writes it**, on the machine its window is on. A window attached to
+a kernel on a compute server (2.2) is coloured by the settings of the person looking at it, and a
+headless run makes no directory.
+
+**The window makes it the first time it opens**: `config`, naming the theme, and
+`themes/dark.tcl`, the shipped theme written out as a starting point. Each is written only when it
+is missing, and nothing Enzan writes there replaces a file that exists: the directory is the
+reader's, and a file they have edited is theirs. When it cannot be made — no home directory, a
+file system that is read-only — the window opens with the shipped theme and says why in the
+transcript. Settings are a convenience, and a window that refused to open without them would put
+them before the design.
+
+**`config` has Tcl's syntax and is not Tcl**, as a signal list is not (10.8): it is split into
+commands by Tcl's parser, nothing is substituted and nothing evaluated. It has one command:
+
+```tcl
+theme themes/dark.tcl
+```
+
+naming the theme, relative to the directory or as an absolute path. Without one the window uses
+the shipped theme. A theme that cannot be read or does not load leaves the shipped theme too, as
+10.5 says, and the transcript names the file and the line.
+
+**A command this build does not know is a warning, and the rest applies.** This is the one place
+`config` departs from a signal list's rules, and it is deliberate: a newer Enzan may write a
+setting an older one has never heard of, and a directory shared between the two must not lose its
+theme in the older one. A mistake in a command that is known — `theme` naming no file, or two —
+and text that cannot be split into commands are errors, and then nothing in the file is used.
 
 ---
 

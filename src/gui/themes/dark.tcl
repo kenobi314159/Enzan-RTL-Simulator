@@ -16,9 +16,10 @@
 # where the colour is anything Qt accepts — `#rrggbb`, `#aarrggbb` or an SVG colour name — and
 # the size is in points, at the end of this file.
 #
-# To change a colour, copy this file, edit it, and pass it with `enzan --theme <file>`. A
-# user theme is layered over this one, so a file that sets three colours changes three colours.
-# `enzan --write-theme <file>` writes this text out for you.
+# The window writes this text to ~/.config/enzan/themes/dark.tcl the first time it opens, and
+# ~/.config/enzan/config names that file. To change a colour, edit it there, or a copy of it named
+# in `config`. A theme is layered over this one, so a file that sets three colours changes three
+# colours. `enzan --write-theme <file>` writes this text out anywhere else.
 
 # --- Chrome ------------------------------------------------------------------
 #

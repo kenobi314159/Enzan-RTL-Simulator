@@ -184,13 +184,16 @@ Graphical front end:
                           Closing that window leaves the kernel running.
       --listen <socket>   Elaborate and wait for a front end without starting
                           one, so the kernel outlives whatever attaches.
-      --theme <file>      Colour the window from this Tcl theme script. The
-                          default is $XDG_CONFIG_HOME/enzan-gui/theme.tcl.
       --write-theme <file>
                           Write the built-in theme out as a starting point for
                           one of your own, and exit.
       --wave-list <file>  Open the wave window with this signal list in it.
-                          The window's Wave menu saves one.
+                          The window's File menu saves one.
+
+  The window keeps its settings in ~/.config/enzan/, or $XDG_CONFIG_HOME/enzan/
+  when that is set, creating it the first time a window opens: `config` names
+  the theme, a Tcl script in themes/, which starts as the built-in dark.tcl. A
+  simulation reads nothing from there.
 
   -h, --help              Print this message and exit.
   -V, --version           Print version and build information and exit.
@@ -220,7 +223,6 @@ struct Invocation {
     bool useGui = false;
     std::filesystem::path attachPath;
     std::string libraryName;
-    std::filesystem::path themePath;
     std::filesystem::path writeThemePath;
 
     /// A signal list the window starts with (DESIGN_GUIDE.md section 10.8).
@@ -686,14 +688,6 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
-        if (argument == "--theme") {
-            const char* value = requireValue(index, argument);
-            if (value == nullptr) return ParseOutcome::BadUsage;
-            if (!once("--theme", value)) return ParseOutcome::BadUsage;
-            invocation.themePath = value;
-            continue;
-        }
-
         if (argument == "--write-theme") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
@@ -810,15 +804,12 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
 /// The window's own options, as the front end spells them.
 ///
 /// `--gui` is the only way in (8.4), so anything the window needs has to travel through here.
-/// Its theme and the signal list it starts with are what a user configures about it, and
-/// leaving those reachable only by running the front end directly would make it a second
-/// program to learn after all.
+/// The signal list it starts with is what a user chooses about one run of it, and leaving that
+/// reachable only by running the front end directly would make it a second program to learn
+/// after all. Its theme is the reader's rather than the run's, and the window finds it itself
+/// (DESIGN_GUIDE.md section 10.9).
 std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::vector<std::string> options;
-    if (!invocation.themePath.empty()) {
-        options.emplace_back("--theme");
-        options.push_back(invocation.themePath.string());
-    }
     if (!invocation.writeThemePath.empty()) {
         options.emplace_back("--write-theme");
         options.push_back(invocation.writeThemePath.string());
@@ -1355,12 +1346,6 @@ int main(int argc, char** argv) {
                   << (invocation.command == Command::Analyse ? "analyse" : "elaborate")
                   << "` runs none; give " << (options.size() == 1 ? "it" : "them")
                   << " to `run` or to the one-shot form\n";
-        return static_cast<int>(ExitStatus::Usage);
-    }
-
-    if (!invocation.themePath.empty() && !invocation.useGui) {
-        std::cerr << "enzan: '--theme' needs '--gui'; it colours a window, and a headless run "
-                     "has none\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 

@@ -11,7 +11,8 @@ set(CMAKE_AUTORCC OFF)
 
 enzan_add_component(
   gui
-  SOURCES DesignTreeModel.cpp
+  SOURCES Configuration.cpp
+          DesignTreeModel.cpp
           KernelSession.cpp
           MainWindow.cpp
           ObjectsModel.cpp
@@ -24,7 +25,8 @@ enzan_add_component(
           TranscriptView.cpp
           WaveformModel.cpp
           WaveformView.cpp
-  HEADERS DesignTreeModel.h
+  HEADERS Configuration.h
+          DesignTreeModel.h
           KernelSession.h
           MainWindow.h
           ObjectsModel.h

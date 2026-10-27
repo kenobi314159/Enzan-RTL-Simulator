@@ -456,6 +456,19 @@ TEST_F(MainWindowTest, TheHighlightSwatchesAreTheThemesColours) {
     EXPECT_EQ(swatch.pixelColor(6, 6), QColor(0x10, 0x20, 0x30));
 }
 
+TEST_F(MainWindowTest, AProblemWithTheSettingsIsReportedAgainstItsLine) {
+    window->report(enzan::gui::ConfigurationMessage{
+        .file = QStringLiteral("/home/reader/.config/enzan/config"),
+        .line = 3,
+        .text = QStringLiteral("'layout' is not a setting this build knows, and is skipped")});
+
+    const auto* text = window->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+    EXPECT_TRUE(text->toPlainText().contains(
+        QStringLiteral("/home/reader/.config/enzan/config:3: 'layout' is not a setting")))
+        << text->toPlainText().toStdString();
+}
+
 TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
     // The spellings `--run` takes, read by the same function (section 8.5): a count of the run's
     // unit, or a time with a unit of its own. The fixture's design runs in nanoseconds, and has an
