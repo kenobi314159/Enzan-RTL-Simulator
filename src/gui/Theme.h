@@ -6,6 +6,7 @@
 #include <QFont>
 #include <QPalette>
 #include <QString>
+#include <QStringList>
 
 #include <array>
 #include <cstdint>
@@ -53,9 +54,10 @@ enum class ThemeFont : std::uint8_t {
 /// The colours the GUI paints with, and the sizes of its fonts, loaded from a Tcl script.
 ///
 /// **No colour literal appears in widget code** (DESIGN_GUIDE.md section 10.5), and none
-/// appears in C++ at all: the defaults live in the shipped `themes/dark.tcl`, which is compiled
-/// in as a resource and loaded before any user theme. A default written in C++ would be exactly
-/// the literal the rule forbids, and it would let a half-applied theme go unnoticed.
+/// appears in C++ at all: the colours live in the shipped themes, `themes/dark.tcl` and
+/// `themes/light.tcl`, which are compiled in as resources. The dark one is the default and is
+/// loaded before any user theme. A default written in C++ would be exactly the literal the rule
+/// forbids, and it would let a half-applied theme go unnoticed.
 ///
 /// Tcl rather than a settings format of its own, because section 10.5 commits to Tcl as *the*
 /// configuration language with no second format anywhere in the tool. The script gets two
@@ -67,22 +69,39 @@ enum class ThemeFont : std::uint8_t {
 /// font  wave            11
 /// ```
 ///
-/// A user theme is layered over the shipped one, so a script that sets three colours changes
+/// A user theme is layered over the default one, so a script that sets three colours changes
 /// three colours rather than leaving the rest undefined. It is taken whole or not at all: a
 /// script that fails at its fortieth line changes nothing, rather than the thirty-nine before it.
 ///
-/// **A font size is the desktop's unless a theme says otherwise.** The shipped theme sets none,
+/// **A font size is the desktop's unless a theme says otherwise.** The shipped themes set none,
 /// because how large text should be is the reader's screen's and eyes' to say, which a
 /// default written down here would only guess at. An area a theme leaves unset takes the
 /// window's size, and the window the desktop's.
 class Theme {
 public:
+    /// The compiled-in theme a window has when nothing names another.
+    static constexpr const char* DefaultBuiltIn = "dark";
+
     Theme();
 
-    /// Loads the shipped dark theme, replacing everything. Cannot fail: the theme is compiled
-    /// in, and a build whose own theme did not parse is broken rather than misconfigured, which
-    /// is what the assertion in the implementation says.
+    /// Loads the default compiled-in theme, replacing everything. Cannot fail: the theme is
+    /// compiled in, and a build whose own theme did not parse is broken rather than
+    /// misconfigured, which is what the assertion in the implementation says.
     void loadBuiltIn();
+
+    /// Loads the compiled-in theme called `name`, replacing everything.
+    ///
+    /// On its own, not over the default: each shipped theme sets every colour, which a test
+    /// holds it to, so that a key one of them forgot shows up there rather than as a colour of
+    /// another theme's in its window. Returns false, changing nothing, for a name no theme is
+    /// built in under.
+    bool loadBuiltIn(const QString& name);
+
+    /// The names of the compiled-in themes, the default first and the rest in order of name.
+    ///
+    /// Read from the resources rather than listed here, so that a theme is shipped by adding its
+    /// file to the build and nothing else.
+    [[nodiscard]] static QStringList builtInNames();
 
     /// Evaluates `script`, overlaying whatever it sets on what is already loaded.
     ///
@@ -111,8 +130,10 @@ public:
     /// The first key the catalogue lists that no loaded script has set, or an empty string.
     [[nodiscard]] QString firstMissingKey() const;
 
-    /// The shipped theme's text, for a user who wants to copy it and change a colour.
-    [[nodiscard]] static QString builtInScript();
+    /// The text of the compiled-in theme called `name`, or the default's when `name` is empty,
+    /// for a user who wants to copy it and change a colour. Empty for a name no theme is built
+    /// in under.
+    [[nodiscard]] static QString builtInScript(const QString& name = {});
 
     /// The size in points `area`'s text is set to: its own, or else the window's. Nothing when
     /// neither is set, which leaves the desktop's.

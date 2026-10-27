@@ -5,7 +5,9 @@
 #include "common/Assert.h"
 #include "gui/TclLibrary.h"
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 
 #include <algorithm>
 
@@ -44,6 +46,9 @@ constexpr const char* FontAreaNames[] = {"window", "wave", "transcript", "source
 constexpr std::size_t FontAreaCount = static_cast<std::size_t>(ThemeFont::Count);
 
 static_assert(std::size(FontAreaNames) == FontAreaCount, "every ThemeFont needs a name");
+
+/// Where the compiled-in themes are, one file each, named for the theme.
+constexpr const char* BuiltInDirectory = ":/enzan/themes";
 
 /// The largest size a theme may give, in points: past it a mistyped size is far likelier than a
 /// reader who wants it.
@@ -131,26 +136,50 @@ Theme::Theme() {
     colors.fill(QColor());
 }
 
-QString Theme::builtInScript() {
-    QFile file(QStringLiteral(":/enzan/themes/dark.tcl"));
+QStringList Theme::builtInNames() {
+    const QString fallback = QString::fromLatin1(DefaultBuiltIn);
+    QStringList names;
+    for (const QFileInfo& file :
+         QDir(QString::fromLatin1(BuiltInDirectory))
+             .entryInfoList({QStringLiteral("*.tcl")}, QDir::Files, QDir::Name)) {
+        if (file.completeBaseName() != fallback) names << file.completeBaseName();
+    }
+    names.prepend(fallback);
+    return names;
+}
+
+QString Theme::builtInScript(const QString& name) {
+    const QString theme = name.isEmpty() ? QString::fromLatin1(DefaultBuiltIn) : name;
+    if (!builtInNames().contains(theme)) return {};
+
+    QFile file(QStringLiteral("%1/%2.tcl").arg(QString::fromLatin1(BuiltInDirectory), theme));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
     return QString::fromUtf8(file.readAll());
 }
 
 void Theme::loadBuiltIn() {
-    colors.fill(QColor());
-    assigned.fill(false);
-    fontSizes.fill(std::nullopt);
-
-    QString error;
-    const bool loaded = evaluate(builtInScript(), error);
-
-    // The shipped theme is compiled into the binary. A build whose own theme does not parse, or
-    // does not define every key the catalogue lists, is broken rather than misconfigured, and
-    // saying so here beats a window full of black rectangles.
-    ENZAN_ASSERT(loaded, "the built-in theme failed to load");
-    ENZAN_ASSERT(isComplete(), "the built-in theme does not define every colour");
+    const bool loaded = loadBuiltIn(QString::fromLatin1(DefaultBuiltIn));
+    ENZAN_ASSERT(loaded, "the default theme is not built in");
     static_cast<void>(loaded);
+}
+
+bool Theme::loadBuiltIn(const QString& name) {
+    const QString script = builtInScript(name);
+    if (script.isEmpty()) return false;
+
+    Theme result;
+    QString error;
+    const bool loaded = result.evaluate(script, error);
+
+    // The shipped themes are compiled into the binary. A build whose own theme does not parse,
+    // or does not define every key the catalogue lists, is broken rather than misconfigured, and
+    // saying so here beats a window full of black rectangles.
+    ENZAN_ASSERT(loaded, "a built-in theme failed to load");
+    ENZAN_ASSERT(result.isComplete(), "a built-in theme does not define every colour");
+    static_cast<void>(loaded);
+
+    *this = result;
+    return true;
 }
 
 bool Theme::evaluate(const QString& script, QString& error) {

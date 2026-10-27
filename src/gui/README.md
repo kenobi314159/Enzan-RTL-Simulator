@@ -36,10 +36,11 @@ the same database class the kernel fills, fed from the protocol instead of from 
 
 **Every colour comes from the theme file, and there is no fallback in C++.** Section 10.5
 forbids colour literals in widget code, and a default written in C++ would be exactly that. The
-shipped `themes/dark.tcl` is compiled in as a resource, loaded first, and a user theme is
-layered over it, so a file that sets three colours changes three colours. A key added to
-`ThemeColors.def` without being added to the theme file fails a test rather than producing a
-black rectangle on someone's screen.
+shipped themes, `themes/dark.tcl` and `themes/light.tcl`, are compiled in as resources and named
+for their files; the dark one is loaded first, and a user theme is layered over it, so a file
+that sets three colours changes three colours. A key added to `ThemeColors.def` without being
+added to every shipped theme fails a test rather than producing a black rectangle on someone's
+screen.
 
 **A theme can change while the window is open**, so it reaches the window one way only:
 `MainWindow::applyTheme`, which opening the window calls too. Whatever keeps a colour past the
@@ -54,8 +55,9 @@ list of colours, and an interpreter that also offered file access would make "co
 from the internet" a more exciting decision than it should be.
 
 **A signal list is not even that.** It is split into commands by `Tcl_ParseCommand`, through
-`splitTclCommands`, and never evaluated, so there is no interpreter for a list to reach. That is also what lets the window
-write one back out: a program cannot be saved from what it produced, and a list can.
+`splitTclCommands`, and never evaluated, so there is no interpreter for a list to reach. That is
+also what lets the window write one back out: a program cannot be saved from what it produced,
+and a list can.
 
 **Every row is made one way.** `WaveformModel::rowFor`, `sliceOf`, `elementOf` and `bitOf` are
 how a row is made from a signal, a range of one, an element of an array or a bit, and

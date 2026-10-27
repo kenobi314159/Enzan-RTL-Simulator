@@ -2,10 +2,10 @@
 #
 # Enzan's default theme.
 #
-# This file is the only place Enzan's colours are written down. DESIGN_GUIDE.md section 10.5
-# requires every colour to come from the theme configuration file and forbids colour literals in
-# widget code, so there is no fallback in C++ to fall back to: if a key below is missing, the
-# widget asking for it gets nothing.
+# This file and light.tcl, the light theme built in beside it, are the only places Enzan's
+# colours are written down. DESIGN_GUIDE.md section 10.5 requires every colour to come from a
+# theme file and forbids colour literals in widget code, so there is no fallback in C++ to fall
+# back to: if a key below is missing, the widget asking for it gets nothing.
 #
 # Section 10.5 makes Tcl the theme language, so this is a Tcl script rather than an ini file. It
 # gets two commands:
@@ -24,9 +24,9 @@
 
 # --- Chrome ------------------------------------------------------------------
 #
-# Dark throughout, as section 10.5 requires. The greys are close together on purpose: a dense
-# tool that a user reads for hours should separate its panes with contrast at the edges rather
-# than with large steps in brightness across the whole window.
+# Dark throughout, as section 10.5 asks of the default. The greys are close together on purpose:
+# a dense tool that a user reads for hours should separate its panes with contrast at the edges
+# rather than with large steps in brightness across the whole window.
 
 theme window.background            #16181d
 theme window.foreground            #d7dae0

@@ -3,9 +3,9 @@
 // Tests for the Tcl-driven theme.
 //
 // The one that matters most is the completeness check: DESIGN_GUIDE.md section 10.5 forbids
-// colour literals in widget code, so there is no fallback in C++ for a key the theme file
-// forgot. A key added to the catalogue without being added to the shipped theme would show up as
-// an invisible widget on somebody's screen, and this is what catches it instead.
+// colour literals in widget code, so there is no fallback in C++ for a key a theme file forgot.
+// A key added to the catalogue without being added to every shipped theme would show up as an
+// invisible widget on somebody's screen, and this is what catches it instead.
 
 #include "gui/Theme.h"
 
@@ -18,8 +18,11 @@
 #include <QFile>
 #include <QFont>
 #include <QString>
+#include <QStringList>
 #include <QTemporaryDir>
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -28,13 +31,126 @@ using enzan::gui::Theme;
 using enzan::gui::ThemeColor;
 using enzan::gui::ThemeFont;
 
-TEST(ThemeTests, TheShippedThemeDefinesEveryColour) {
+/// The contrast between two colours as WCAG 2 measures it, from 1 to 21.
+double contrast(const QColor& first, const QColor& second) {
+    const auto luminance = [](const QColor& colour) {
+        const auto channel = [](double value) {
+            return value <= 0.03928 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+        };
+        return (0.2126 * channel(static_cast<double>(colour.redF())))
+               + (0.7152 * channel(static_cast<double>(colour.greenF())))
+               + (0.0722 * channel(static_cast<double>(colour.blueF())));
+    };
+    const double lighter = std::max(luminance(first), luminance(second));
+    const double darker = std::min(luminance(first), luminance(second));
+    return (lighter + 0.05) / (darker + 0.05);
+}
+
+TEST(ThemeTests, EveryShippedThemeDefinesEveryColourOnItsOwn) {
+    // Evaluated alone rather than over the default, so that a key one theme forgot is not hidden
+    // by the default's colour for it — a dark patch in a light window.
+    for (const QString& name : Theme::builtInNames()) {
+        Theme theme;
+        QString error;
+        ASSERT_TRUE(theme.evaluate(Theme::builtInScript(name), error))
+            << name.toStdString() << ": " << error.toStdString();
+        EXPECT_TRUE(theme.isComplete())
+            << "the shipped theme '" << name.toStdString() << "' does not set '"
+            << theme.firstMissingKey().toStdString() << "'; add it to src/gui/themes/"
+            << name.toStdString() << ".tcl";
+    }
+}
+
+TEST(ThemeTests, TheDarkThemeIsTheDefaultAndALightOneIsShippedBesideIt) {
+    const QStringList names = Theme::builtInNames();
+    ASSERT_FALSE(names.isEmpty());
+    EXPECT_EQ(names.front(), QString::fromLatin1(Theme::DefaultBuiltIn));
+    EXPECT_EQ(names.front(), QStringLiteral("dark"));
+    EXPECT_TRUE(names.contains(QStringLiteral("light")));
+
+    Theme byDefault;
+    byDefault.loadBuiltIn();
+    Theme dark;
+    ASSERT_TRUE(dark.loadBuiltIn(QStringLiteral("dark")));
+    EXPECT_EQ(byDefault.color(ThemeColor::WaveTrace), dark.color(ThemeColor::WaveTrace));
+    EXPECT_EQ(Theme::builtInScript(), Theme::builtInScript(QStringLiteral("dark")));
+}
+
+TEST(ThemeTests, TheLightThemeIsLight) {
+    Theme light;
+    ASSERT_TRUE(light.loadBuiltIn(QStringLiteral("light")));
+    for (const ThemeColor ground : {ThemeColor::WindowBackground, ThemeColor::PanelBackground,
+                                    ThemeColor::WaveBackground, ThemeColor::SourceBackground}) {
+        EXPECT_GT(light.color(ground).lightnessF(), 0.9F) << enzan::gui::themeKey(ground);
+    }
+    EXPECT_LT(light.color(ThemeColor::PanelForeground).lightnessF(), 0.3F);
+}
+
+TEST(ThemeTests, EveryShippedThemeIsReadable) {
+    // Text at the contrast WCAG asks of body text, and lines and marks — a trace, a cursor, a
+    // line number — at the contrast it asks of what is not text. Held for every shipped theme,
+    // because a theme whose traces vanish into its own background is worse than none.
+    struct Pair {
+        ThemeColor foreground;
+        ThemeColor background;
+        double least;
+    };
+
+    constexpr double Text = 4.5;
+    constexpr double Mark = 3.0;
+    const Pair pairs[] = {
+        {ThemeColor::WindowForeground, ThemeColor::WindowBackground, Text},
+        {ThemeColor::PanelForeground, ThemeColor::PanelBackground, Text},
+        {ThemeColor::HeaderForeground, ThemeColor::HeaderBackground, Text},
+        {ThemeColor::SelectionForeground, ThemeColor::SelectionBackground, Text},
+        {ThemeColor::ControlForeground, ThemeColor::ControlBackground, Text},
+        {ThemeColor::TranscriptForeground, ThemeColor::PanelBackground, Text},
+        {ThemeColor::TranscriptNote, ThemeColor::PanelBackground, Text},
+        {ThemeColor::TranscriptWarning, ThemeColor::PanelBackground, Text},
+        {ThemeColor::TranscriptError, ThemeColor::PanelBackground, Text},
+        {ThemeColor::SourceForeground, ThemeColor::SourceBackground, Text},
+        {ThemeColor::SourceGutterForeground, ThemeColor::SourceGutterBackground, Mark},
+        {ThemeColor::WaveText, ThemeColor::WaveBackground, Text},
+        {ThemeColor::WaveText, ThemeColor::WaveSelectedRow, Text},
+        {ThemeColor::WaveRulerForeground, ThemeColor::WaveRulerBackground, Text},
+        {ThemeColor::WaveCursorText, ThemeColor::WaveCursor, Text},
+        {ThemeColor::WaveCursorText, ThemeColor::WaveCursorLocked, Text},
+        {ThemeColor::WaveTrace, ThemeColor::WaveBackground, Mark},
+        {ThemeColor::WaveTrace, ThemeColor::WaveSelectedRow, Mark},
+        {ThemeColor::WaveTrace, ThemeColor::WaveBeyondRecorded, Mark},
+        {ThemeColor::WaveUnknown, ThemeColor::WaveBackground, Mark},
+        {ThemeColor::WaveHighImpedance, ThemeColor::WaveBackground, Mark},
+        {ThemeColor::WaveCursor, ThemeColor::WaveBackground, Mark},
+        {ThemeColor::WaveCursorLocked, ThemeColor::WaveBackground, Mark},
+    };
+
+    for (const QString& name : Theme::builtInNames()) {
+        Theme theme;
+        ASSERT_TRUE(theme.loadBuiltIn(name));
+        for (const Pair& pair : pairs) {
+            EXPECT_GE(contrast(theme.color(pair.foreground), theme.color(pair.background)),
+                      pair.least)
+                << name.toStdString() << ": " << enzan::gui::themeKey(pair.foreground) << " on "
+                << enzan::gui::themeKey(pair.background);
+        }
+        for (int slot = 1; slot <= enzan::gui::HighlightSlots; ++slot) {
+            EXPECT_GE(contrast(theme.color(ThemeColor::WaveTrace),
+                               theme.color(enzan::gui::highlightColor(slot))),
+                      Mark)
+                << name.toStdString() << ": the trace on highlight " << slot;
+        }
+    }
+}
+
+TEST(ThemeTests, AThemeNoneIsBuiltInUnderChangesNothing) {
     Theme theme;
     theme.loadBuiltIn();
+    const QColor trace = theme.color(ThemeColor::WaveTrace);
 
-    EXPECT_TRUE(theme.isComplete())
-        << "the shipped theme does not set '" << theme.firstMissingKey().toStdString()
-        << "'; add it to src/gui/themes/dark.tcl";
+    EXPECT_FALSE(theme.loadBuiltIn(QStringLiteral("sepia")));
+    EXPECT_EQ(theme.color(ThemeColor::WaveTrace), trace);
+    EXPECT_TRUE(Theme::builtInScript(QStringLiteral("sepia")).isEmpty());
+    EXPECT_TRUE(Theme::builtInScript(QStringLiteral("../dark")).isEmpty());
 }
 
 TEST(ThemeTests, TheShippedThemeHonoursWhatTheGuideFixes) {

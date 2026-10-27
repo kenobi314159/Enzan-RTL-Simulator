@@ -2293,13 +2293,22 @@ write path is a test of one size against zero until then — which is what keeps
 
 ### 10.5 Theme
 
-Dark throughout. **Every colour MUST come from the theme configuration file**;
-no colour literals in widget code.
+Dark by default. **Every colour MUST come from a theme file**; no colour literals in widget
+code.
 
 Waveform view defaults: high-contrast black background, light green traces.
 
-**A theme is the shipped one with a script over it, taken whole or not at all.** A script that
-sets three colours changes three colours, and the rest are the shipped theme's rather than
+**Two themes are built in**: `dark`, the default, and `light`, for a reader who wants one. Each is a
+file of its own compiled into the front end, and each sets every colour itself: the light theme is
+not the dark one with some colours changed, because a colour it forgot would then be the dark
+theme's, a dark patch in a light window, and a test holds every built-in theme to setting every
+key. The light theme keeps the dark one's distinctions — its own colours for unknown and high
+impedance, a shade between the background and the traces for time not yet simulated — turned to
+read on white. Both are held to one bar of readability: text at the contrast WCAG asks of body
+text, traces and cursors at the contrast it asks of what is not text.
+
+**A theme is the default one with a script over it, taken whole or not at all.** A script that
+sets three colours changes three colours, and the rest are the default theme's rather than
 undefined. A script that fails — a key this build does not know, a colour that is not one —
 changes nothing, the lines before the mistake included, and the error names the file and the line
 it stopped at. A window coloured partly by a theme that did not load takes its colours from two
