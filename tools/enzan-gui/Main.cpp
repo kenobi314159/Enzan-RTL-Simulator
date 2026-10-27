@@ -159,7 +159,7 @@ int main(int argc, char** argv) {
     if (!themePath.isEmpty() && !theme.loadFile(themePath, themeError)) {
         // Reported and carried on from, not fatal: a mistyped colour should not stop someone
         // debugging, and the built-in theme is already loaded underneath.
-        QTextStream(stderr) << "enzan-gui: " << themePath << ": " << themeError << '\n';
+        QTextStream(stderr) << "enzan-gui: " << themeError << '\n';
     }
 
     QApplication::setStyle(QStringLiteral("Fusion"));
@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
     window.show();
 
     if (!themeError.isEmpty()) {
-        window.note(QStringLiteral("%1: %2").arg(themePath, themeError));
+        window.note(themeError);
     }
 
     QString error;

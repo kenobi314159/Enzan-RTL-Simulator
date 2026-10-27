@@ -8,6 +8,7 @@
 #include <QFile>
 
 #include <algorithm>
+#include <utility>
 
 #include <tcl.h>
 
@@ -154,7 +155,15 @@ void Theme::loadBuiltIn() {
 }
 
 bool Theme::evaluate(const QString& script, QString& error) {
+    int line = 0;
+    if (evaluateAt(script, error, line)) return true;
+    if (line > 0) error = QStringLiteral("line %1: %2").arg(QString::number(line), error);
+    return false;
+}
+
+bool Theme::evaluateAt(const QString& script, QString& error, int& line) {
     error.clear();
+    line = 0;
 
     const Interpreter interpreter;
     if (interpreter.get() == nullptr) {
@@ -162,19 +171,25 @@ bool Theme::evaluate(const QString& script, QString& error) {
         return false;
     }
 
-    Tcl_CreateObjCommand(interpreter.get(), "theme", &themeCommandProc, this, nullptr);
-    Tcl_CreateObjCommand(interpreter.get(), "font", &fontCommandProc, this, nullptr);
+    // Into a copy, which replaces this theme only once the whole script has run. A theme that
+    // stopped halfway would be a window whose colours come from two places, with nothing to say
+    // which came from where.
+    Theme result = *this;
+    Tcl_CreateObjCommand(interpreter.get(), "theme", &themeCommandProc, &result, nullptr);
+    Tcl_CreateObjCommand(interpreter.get(), "font", &fontCommandProc, &result, nullptr);
 
     const QByteArray text = script.toUtf8();
     if (Tcl_EvalEx(interpreter.get(), text.constData(), static_cast<int>(text.size()), 0)
         != TCL_OK) {
-        // The interpreter's own message carries the line number, which is the one thing a user
-        // with a mistyped colour actually needs.
+        // The interpreter's result is the message alone; the line it stopped at is kept apart,
+        // and it is the one thing a user with a mistyped colour actually needs.
         error = QString::fromUtf8(Tcl_GetStringResult(interpreter.get()));
         if (error.isEmpty()) error = QStringLiteral("the theme script failed");
+        line = Tcl_GetErrorLine(interpreter.get());
         return false;
     }
 
+    *this = std::move(result);
     return true;
 }
 
@@ -185,7 +200,18 @@ bool Theme::loadFile(const QString& path, QString& error) {
         return false;
     }
 
-    return evaluate(QString::fromUtf8(file.readAll()), error);
+    Theme result;
+    result.loadBuiltIn();
+
+    int line = 0;
+    if (!result.evaluateAt(QString::fromUtf8(file.readAll()), error, line)) {
+        error = line > 0 ? QStringLiteral("%1:%2: %3").arg(path, QString::number(line), error)
+                         : QStringLiteral("%1: %2").arg(path, error);
+        return false;
+    }
+
+    *this = std::move(result);
+    return true;
 }
 
 bool Theme::set(const QString& key, const QString& value, QString& error) {

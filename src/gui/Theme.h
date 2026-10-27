@@ -68,7 +68,8 @@ enum class ThemeFont : std::uint8_t {
 /// ```
 ///
 /// A user theme is layered over the shipped one, so a script that sets three colours changes
-/// three colours rather than leaving the rest undefined.
+/// three colours rather than leaving the rest undefined. It is taken whole or not at all: a
+/// script that fails at its fortieth line changes nothing, rather than the thirty-nine before it.
 ///
 /// **A font size is the desktop's unless a theme says otherwise.** The shipped theme sets none,
 /// because how large text should be is the reader's screen's and eyes' to say, which a
@@ -85,11 +86,15 @@ public:
 
     /// Evaluates `script`, overlaying whatever it sets on what is already loaded.
     ///
-    /// Returns false having filled `error` with the interpreter's message, including the line
-    /// number, so that a mistyped colour in a user's theme says where it is.
+    /// All of it or none of it. On failure nothing has changed, and `error` holds the
+    /// interpreter's message after the line it stopped at, so that a mistyped colour in a
+    /// user's theme says where it is.
     bool evaluate(const QString& script, QString& error);
 
-    /// Reads `path` and evaluates it. Returns false having filled `error`.
+    /// Loads the shipped theme with the script in `path` over it, replacing everything.
+    ///
+    /// When the file cannot be read or its script fails, nothing has changed and `error` names
+    /// the file, and the line where there is one.
     bool loadFile(const QString& path, QString& error);
 
     [[nodiscard]] QColor color(ThemeColor which) const noexcept {
@@ -137,6 +142,10 @@ public:
 
 private:
     friend class ThemeCommand;
+
+    /// `evaluate`, with the line the script stopped at given apart from the message, or 0 when
+    /// it did not get as far as a line.
+    bool evaluateAt(const QString& script, QString& error, int& line);
 
     /// Records one key, or reports an unknown one. Called by the Tcl command.
     bool set(const QString& key, const QString& value, QString& error);

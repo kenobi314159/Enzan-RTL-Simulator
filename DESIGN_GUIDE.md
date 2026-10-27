@@ -2297,6 +2297,14 @@ no colour literals in widget code.
 
 Waveform view defaults: high-contrast black background, light green traces.
 
+**A theme is the shipped one with a script over it, taken whole or not at all.** A script that
+sets three colours changes three colours, and the rest are the shipped theme's rather than
+undefined. A script that fails — a key this build does not know, a colour that is not one —
+changes nothing, the lines before the mistake included, and the error names the file and the line
+it stopped at. A window coloured partly by a theme that did not load takes its colours from two
+places with nothing to say which came from where, and a signal list follows the same rule for the
+same reason (10.8).
+
 **The colours reach the widgets through a `QPalette`, not a style sheet.** This
 is a performance rule wearing a presentation rule's clothes. A Qt style sheet
 rule that gives a widget a background — or a border — makes Qt draw that widget

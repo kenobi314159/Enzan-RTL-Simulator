@@ -151,9 +151,9 @@ TEST(ThemeTests, AFontSizeThatIsNotOneIsReported) {
     }
 }
 
-TEST(ThemeTests, ASyntaxErrorCarriesItsLineNumber) {
-    // The interpreter's own message is passed through because the line number in it is the one
-    // thing a user with a broken theme actually needs.
+TEST(ThemeTests, AnErrorCarriesItsLineNumber) {
+    // The interpreter's message is the error alone, and the line it stopped at is the one thing
+    // a user with a broken theme actually needs, so it is put in front.
     Theme theme;
     theme.loadBuiltIn();
 
@@ -161,23 +161,69 @@ TEST(ThemeTests, ASyntaxErrorCarriesItsLineNumber) {
     EXPECT_FALSE(theme.evaluate(QStringLiteral("theme accent #112233\n"
                                                "theme\n"),
                                 error));
-    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(error.startsWith(QStringLiteral("line 2: "))) << error.toStdString();
 }
 
-TEST(ThemeTests, AFailedOverlayLeavesTheEarlierColoursAlone) {
+TEST(ThemeTests, AFailedScriptChangesNothing) {
+    // Whole or not at all: the lines before the mistake do not take effect either, so a window
+    // is never coloured partly by a theme that did not load.
     Theme theme;
     theme.loadBuiltIn();
-    const QColor background = theme.color(ThemeColor::WaveBackground);
+    const QColor trace = theme.color(ThemeColor::WaveTrace);
 
     QString error;
     EXPECT_FALSE(theme.evaluate(QStringLiteral("theme wave.trace #010203\n"
+                                               "font wave 30\n"
                                                "theme wave.nonsense #040506\n"),
                                 error));
 
-    // The lines before the failure did take effect, which is what a script evaluated in order
-    // does, and nothing else was disturbed.
+    EXPECT_EQ(theme.color(ThemeColor::WaveTrace), trace);
+    EXPECT_FALSE(theme.fontSize(ThemeFont::Wave).has_value());
+}
+
+TEST(ThemeTests, AFileWithAMistakeChangesNothingAndSaysWhere) {
+    const QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("broken.tcl"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("theme wave.trace #010203\n\ntheme wave.nonsense #040506\n");
+    file.close();
+
+    Theme theme;
+    theme.loadBuiltIn();
+    QString error;
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme wave.cursor #0a0b0c"), error));
+
+    EXPECT_FALSE(theme.loadFile(path, error));
+    EXPECT_TRUE(error.startsWith(path + QStringLiteral(":3: "))) << error.toStdString();
+    EXPECT_EQ(theme.color(ThemeColor::WaveCursor), QColor(0x0A, 0x0B, 0x0C))
+        << "a file that did not load must leave what was there before";
+}
+
+TEST(ThemeTests, ALoadedFileReplacesWhatWasThereBefore) {
+    // A theme file is the shipped theme with the file over it, not the file over whatever the
+    // window happened to have, so switching from one theme to another leaves nothing of the first.
+    const QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("mine.tcl"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("theme wave.trace #010203\n");
+    file.close();
+
+    Theme builtIn;
+    builtIn.loadBuiltIn();
+
+    Theme theme;
+    theme.loadBuiltIn();
+    QString error;
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme wave.cursor #0a0b0c\nfont wave 30"), error));
+
+    ASSERT_TRUE(theme.loadFile(path, error)) << error.toStdString();
     EXPECT_EQ(theme.color(ThemeColor::WaveTrace), QColor(0x01, 0x02, 0x03));
-    EXPECT_EQ(theme.color(ThemeColor::WaveBackground), background);
+    EXPECT_EQ(theme.color(ThemeColor::WaveCursor), builtIn.color(ThemeColor::WaveCursor));
+    EXPECT_FALSE(theme.fontSize(ThemeFont::Wave).has_value());
 }
 
 TEST(ThemeTests, AMissingFileIsReportedRatherThanSilentlySkipped) {
