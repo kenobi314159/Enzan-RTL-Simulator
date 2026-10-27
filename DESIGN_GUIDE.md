@@ -161,8 +161,7 @@ flattening, process merging, partitioning — belong here.
 
 **Execution** runs the elaborated image under the simulation kernel.
 
-The instruction in `IDEA.md` to avoid whole-design flattening applies to
-*analysis*, which MUST remain per-design-unit and modular. Flattening at
+*Analysis* MUST remain per-design-unit and modular. Flattening at
 elaboration time is a legitimate optimisation and MUST remain available, because
 it is where a large fraction of achievable performance lives.
 
@@ -258,10 +257,6 @@ conversion at run time. A SystemVerilog delay counts the unit of the scope stati
 it, a task's that of the module or package declaring the task, rounded to that
 scope's precision first (IEEE 1800 section 3.14.2.1), and `$time` counts the
 calling module's unit.
-
-`IDEA.md` referred to a "pre-set minimum delta step". The correct concept is
-this global time precision. Delta cycles have no duration at all (see 3.2) and
-are a separate mechanism.
 
 Note the practical range: at 1 fs precision the 64-bit counter covers about 5.1
 hours of simulated time; at 1 ps it covers about 213 days. Overflow MUST be
@@ -1242,10 +1237,10 @@ interpreter.
 
 ### 6.4 Parallelism — realistic expectations
 
-`IDEA.md` aims for parallel execution. This needs calibrating, because
-thread-parallel event-driven RTL simulation has a thirty-year research history
-of disappointing results: synchronisation cost typically exceeds the work
-performed per event.
+The original proposed idea aims for parallel execution. This needs calibrating,
+because thread-parallel event-driven RTL simulation has a thirty-year research
+history of disappointing results: synchronisation cost typically exceeds the
+work performed per event.
 
 What actually pays, in order of confidence:
 
@@ -1830,10 +1825,9 @@ features.** It gives Enzan a full Python-driven verification environment
 without Enzan having to implement classes, randomisation, coverage or UVM — an
 extremely high return for the effort, and a strong differentiator.
 
-Note the distinction, which `IDEA.md` blurred: **DPI** is for calling C code
-*from* SystemVerilog. **VPI** (IEEE 1364/1800) is the introspection and callback
-API that cocotb drives simulations through. **VHPI** (IEEE 1076-2019) is the
-VHDL equivalent. cocotb uses VPI, VHPI and FLI. Enzan implements VPI first.
+**VPI** (IEEE 1364/1800) is the introspection and callback API that cocotb
+drives simulations through. **VHPI** (IEEE 1076-2019) is the VHDL equivalent.
+cocotb uses VPI, VHPI and FLI. Enzan implements VPI first.
 
 The required subset is small and well-bounded:
 
@@ -3048,8 +3042,8 @@ and mixing two styles in one translation unit is worse than either style alone.
 
 ### 13.3 Documentation comments
 
-Per `IDEA.md`: every public class and every non-trivial public method MUST
-carry a Doxygen `///` comment.
+Every public class and every non-trivial public method MUST carry
+a Doxygen `///` comment.
 
 A good comment explains the **contract and the reasoning** — preconditions,
 invariants, ownership, why this approach was chosen. A comment restating the

@@ -4,7 +4,7 @@
 #
 # The policy (DESIGN_GUIDE.md section 11.2) is: system packages first,
 # FetchContent as a fallback, and a clear actionable error naming the package
-# when neither works. "Clearly recognisable dependencies" from IDEA.md means a
+# when neither works. "Clearly recognisable dependencies" requirement means a
 # user reading the CMake output knows exactly what to install, so the diagnostic
 # text below is a feature and not boilerplate.
 
