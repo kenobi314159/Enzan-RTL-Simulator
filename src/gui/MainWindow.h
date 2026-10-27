@@ -13,12 +13,14 @@
 #include "gui/WaveformModel.h"
 #include "gui/WaveformView.h"
 
+#include <QFont>
 #include <QHash>
 #include <QMainWindow>
 #include <QSet>
 #include <QString>
 #include <QStringList>
 
+#include <array>
 #include <vector>
 
 class QAction;
@@ -43,8 +45,20 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    /// `session` and `theme` must outlive the window.
-    MainWindow(KernelSession& session, const Theme& theme, QWidget* parent = nullptr);
+    /// `session` must outlive the window. The window keeps its own copy of `theme`, which
+    /// `setTheme` replaces.
+    MainWindow(KernelSession& session, Theme theme, QWidget* parent = nullptr);
+
+    /// Colours the window with `replacement`, as though it had opened with it.
+    ///
+    /// Everything that took a colour or a size from the old theme takes it from the new one:
+    /// the palette and the style sheet, the fonts, the traces already drawn, the highlight
+    /// swatches, and every line already in the transcript. Nothing else changes — not the rows,
+    /// the cursors, the zoom or the run.
+    void setTheme(const Theme& replacement);
+
+    /// The theme the window is coloured with.
+    [[nodiscard]] const Theme& currentTheme() const noexcept { return theme; }
 
     /// Writes a note into the transcript, for the messages the front end makes itself.
     void note(const QString& text);
@@ -189,6 +203,15 @@ private:
     void releaseSelectedObjects();
 
     void buildDocks();
+
+    /// Gives the application and every widget the theme's colours and sizes.
+    ///
+    /// The one way a theme reaches the window, on opening as on every change afterwards, so the
+    /// two cannot come to differ. Sizes are worked out from the desktop's fonts each time rather
+    /// than from the fonts the window has now, so that a theme setting none gives the desktop's
+    /// back after one that set them.
+    void applyTheme();
+
     void buildToolBar();
     void buildMenus();
     void updateActions();
@@ -200,7 +223,10 @@ private:
     [[nodiscard]] QVector<int> selectedWaveRows() const;
 
     KernelSession* session;
-    const Theme* theme;
+
+    /// What the models, the canvas and the transcript paint with. They hold its address, so it
+    /// is replaced in place and never moved.
+    Theme theme;
 
     DesignTreeModel* designModel = nullptr;
     ObjectsModel* objectsModel = nullptr;
@@ -235,6 +261,9 @@ private:
     QAction* zoomFitAction = nullptr;
     QAction* zoomCursorsAction = nullptr;
     QAction* addCursorAction = nullptr;
+
+    /// The Highlight menu's entries, whose icons are swatches of the theme's colours.
+    std::array<QAction*, HighlightSlots> highlightActions{};
 
     /// The signals currently subscribed to, so that a change of what is displayed sends only
     /// the difference rather than resubscribing to everything.

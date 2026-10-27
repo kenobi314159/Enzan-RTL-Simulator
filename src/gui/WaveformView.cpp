@@ -891,6 +891,11 @@ void WaveformView::invalidateTraces() {
     for (CachedSamples& entry : sampleCache) entry.trace = QPixmap();
 }
 
+void WaveformView::themeChanged() {
+    invalidateTraces();
+    update();
+}
+
 WaveformView::CachedSamples* WaveformView::sampleRow(int rowId, const QRect& area) {
     const int columns = area.width();
     if (columns <= 0) return nullptr;

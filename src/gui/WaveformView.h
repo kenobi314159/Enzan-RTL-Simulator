@@ -70,6 +70,13 @@ public:
     /// The tree view whose rows this canvas lines up with.
     void setRowView(QTreeView* rowView);
 
+    /// The theme's colours, or the canvas's font, have changed: every trace is drawn again.
+    ///
+    /// A drawn trace is kept between repaints (section 10.3), and nothing in it says which
+    /// colours it was drawn in, so without this a new theme would reach only the rows that
+    /// happened to change afterwards.
+    void themeChanged();
+
     [[nodiscard]] TimeAxis& axis() noexcept { return timeAxis; }
 
     [[nodiscard]] const TimeAxis& axis() const noexcept { return timeAxis; }

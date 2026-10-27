@@ -24,20 +24,24 @@
 #include <gtest/gtest.h>
 
 #include <QAction>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QImage>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QString>
 #include <QTest>
+#include <QTextBlock>
 #include <QTextBrowser>
 #include <QTreeView>
 
@@ -157,6 +161,14 @@ protected:
 
         std::ranges::sort(indices);
         return indices;
+    }
+
+    /// The wave window's list of names, which is the tree whose model is the wave model.
+    [[nodiscard]] QTreeView* waveRows() const {
+        for (QTreeView* view : window->findChildren<QTreeView*>()) {
+            if (qobject_cast<WaveformModel*>(view->model()) != nullptr) return view;
+        }
+        return nullptr;
     }
 
     /// The window's action whose text is `text`, or null.
@@ -366,6 +378,82 @@ TEST_F(MainWindowTest, TheWaveFontIsTheNamesAndTheTraces) {
     ASSERT_NE(text, nullptr);
     EXPECT_EQ(text->font().pointSizeF(), 15.0);
     EXPECT_EQ(text->font().family(), QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
+}
+
+// ---------------------------------------------------------------------------
+// Changing the theme
+// ---------------------------------------------------------------------------
+
+/// The shipped theme with `script` over it.
+Theme themeWith(const char* script) {
+    Theme result;
+    result.loadBuiltIn();
+    QString error;
+    EXPECT_TRUE(result.evaluate(QString::fromUtf8(script), error)) << error.toStdString();
+    return result;
+}
+
+TEST_F(MainWindowTest, ANewThemeReachesTheWholeApplication) {
+    window->setTheme(themeWith("theme window.background #0a0b0c\n"
+                               "theme header.background #0d0e0f\n"));
+
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window), QColor(0x0A, 0x0B, 0x0C));
+    EXPECT_TRUE(qApp->styleSheet().contains(QStringLiteral("#ff0d0e0f"), Qt::CaseInsensitive))
+        << "the style sheet still has the old theme's header";
+    EXPECT_EQ(window->currentTheme().color(enzan::gui::ThemeColor::WindowBackground),
+              QColor(0x0A, 0x0B, 0x0C));
+}
+
+TEST_F(MainWindowTest, AThemeThatSetsNoSizesGivesTheDesktopsBack) {
+    // Sizes are worked out from the desktop's fonts every time. Worked out from the fonts the
+    // window had, a theme setting none would keep whatever the theme before it set.
+    const QTreeView* rows = waveRows();
+    ASSERT_NE(rows, nullptr);
+    const double desktop = rows->font().pointSizeF();
+    const double desktopWindow = QApplication::font().pointSizeF();
+
+    window->setTheme(themeWith("font window 20\nfont wave 24\n"));
+    EXPECT_EQ(rows->font().pointSizeF(), 24.0);
+    EXPECT_EQ(QApplication::font().pointSizeF(), 20.0);
+    EXPECT_EQ(window->findChild<enzan::gui::WaveformView*>()->font(), rows->font());
+
+    window->setTheme(themeWith(""));
+    EXPECT_EQ(rows->font().pointSizeF(), desktop);
+    EXPECT_EQ(QApplication::font().pointSizeF(), desktopWindow);
+}
+
+TEST_F(MainWindowTest, ANewThemeRecoloursTheLinesAlreadyInTheTranscript) {
+    // Each line remembers which of the theme's colours it is in, so a note written under the old
+    // theme takes the new theme's colour for notes, and every line of a note that had several.
+    window->setTheme(themeWith(""));
+    window->note(QStringLiteral("first of two\nsecond of two"));
+
+    window->setTheme(themeWith("theme transcript.note #010203\n"));
+
+    const auto* text = window->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+    int found = 0;
+    for (QTextBlock block = text->document()->begin(); block.isValid(); block = block.next()) {
+        if (!block.text().endsWith(QStringLiteral("of two"))) continue;
+        ++found;
+        EXPECT_EQ(block.begin().fragment().charFormat().foreground().color(), QColor(1, 2, 3))
+            << block.text().toStdString();
+    }
+    EXPECT_EQ(found, 2);
+}
+
+TEST_F(MainWindowTest, TheHighlightSwatchesAreTheThemesColours) {
+    window->setTheme(themeWith("theme wave.highlight.2 #102030\n"));
+
+    const QMenu* highlight = nullptr;
+    for (const QMenu* menu : window->findChildren<QMenu*>()) {
+        if (menu->title() == QStringLiteral("Highlight")) highlight = menu;
+    }
+    ASSERT_NE(highlight, nullptr);
+    ASSERT_GE(highlight->actions().size(), 2);
+
+    const QImage swatch = highlight->actions().at(1)->icon().pixmap(12, 12).toImage();
+    EXPECT_EQ(swatch.pixelColor(6, 6), QColor(0x10, 0x20, 0x30));
 }
 
 TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {

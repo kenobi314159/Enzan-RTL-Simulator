@@ -37,6 +37,13 @@ layered over it, so a file that sets three colours changes three colours. A key 
 `ThemeColors.def` without being added to the theme file fails a test rather than producing a
 black rectangle on someone's screen.
 
+**A theme can change while the window is open**, so it reaches the window one way only:
+`MainWindow::applyTheme`, which opening the window calls too. Whatever keeps a colour past the
+moment it was painted has to be told — the canvas's drawn traces (`WaveformView::themeChanged`),
+the transcript's lines, which remember which of the theme's colours they are in rather than the
+colour, and the highlight swatches. Sizes are worked out from the desktop's fonts each time, never
+from the window's, so that a theme setting none gives the desktop's back.
+
 **The theme is Tcl** because section 10.5 says so, rather than inventing a settings format for
 one purpose. The script gets one command and nothing else: a theme is a
 list of colours, and an interpreter that also offered file access would make "copy this theme

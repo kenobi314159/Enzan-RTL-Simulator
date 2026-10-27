@@ -162,17 +162,9 @@ int main(int argc, char** argv) {
         QTextStream(stderr) << "enzan-gui: " << themeError << '\n';
     }
 
+    // The window gives the application the theme's palette, style sheet and fonts, as it does
+    // whenever the theme changes afterwards.
     QApplication::setStyle(QStringLiteral("Fusion"));
-    // The palette carries nearly all of the theme, and the style sheet only what a palette
-    // cannot say. Keeping backgrounds out of the style sheet is what lets the signal list and
-    // the wave canvas move what they have already drawn when they scroll, rather than drawing
-    // it all again (DESIGN_GUIDE.md section 10.5).
-    QApplication::setPalette(theme.palette());
-    application.setStyleSheet(theme.styleSheet());
-
-    // Before any widget exists, so that every one starts with it; the areas with sizes of their
-    // own are given theirs as they are built.
-    QApplication::setFont(theme.font(enzan::gui::ThemeFont::Window, QApplication::font()));
 
     // --- the session -------------------------------------------------------
 

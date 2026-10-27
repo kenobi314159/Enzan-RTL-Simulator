@@ -495,6 +495,24 @@ TEST_F(WaveformViewTest, TracesArePaintedInTheThemeColour) {
         << "the ruler was not drawn";
 }
 
+TEST_F(WaveformViewTest, ANewThemeReachesTracesAlreadyDrawn) {
+    // A drawn trace is kept as a picture between repaints (section 10.3), and nothing in the
+    // picture says which colours it was drawn in, so a theme changed under it has to be told.
+    showEverythingAndRun(200);
+    const QColor before = theme.color(enzan::gui::ThemeColor::WaveTrace);
+    ASSERT_GT(countOf(colourHistogram(render()), before), 200);
+
+    QString error;
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme wave.trace #ff00ff"), error))
+        << error.toStdString();
+    view->themeChanged();
+
+    const std::map<QRgb, int> counts = colourHistogram(render());
+    EXPECT_GT(countOf(counts, QColor(0xFF, 0x00, 0xFF)), 200)
+        << "the traces were not drawn in the new theme's colour";
+    EXPECT_EQ(countOf(counts, before), 0) << "a trace kept the old theme's colour";
+}
+
 TEST_F(WaveformViewTest, AConstantBitOfABusyBusIsDrawnAsALevelAndNotAsABusyBar) {
     // The complaint this pins: zoomed out far enough that a pixel column spans several changes
     // of an unpacked bus, every one of its bits was filled as busy — because the row was

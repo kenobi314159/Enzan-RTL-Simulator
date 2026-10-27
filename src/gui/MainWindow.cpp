@@ -9,6 +9,7 @@
 #include "runtime/Time.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCloseEvent>
 #include <QDockWidget>
 #include <QFile>
@@ -80,19 +81,31 @@ void showKeyInToolTip(QAction* action) {
         QStringLiteral("%1 (%2)").arg(action->toolTip(), keyText(action->shortcut())));
 }
 
+/// The desktop's font, as it was before any theme was applied, which every size a theme gives is
+/// worked out from.
+///
+/// Read once, before the first theme replaces it: afterwards the application's font is the last
+/// theme's, and a size worked out from there would keep what a theme set after a theme that sets
+/// none had replaced it.
+const QFont& desktopFont() {
+    static const QFont font = QApplication::font();
+    return font;
+}
+
 } // namespace
 
-MainWindow::MainWindow(KernelSession& kernelSession, const Theme& themeToUse, QWidget* parent)
-    : QMainWindow(parent), session(&kernelSession), theme(&themeToUse) {
+MainWindow::MainWindow(KernelSession& kernelSession, Theme initialTheme, QWidget* parent)
+    : QMainWindow(parent), session(&kernelSession), theme(std::move(initialTheme)) {
     setWindowTitle(tr("Enzan"));
 
     designModel = new DesignTreeModel(this);
     objectsModel = new ObjectsModel(*session, this);
-    waveModel = new WaveformModel(*session, *theme, this);
+    waveModel = new WaveformModel(*session, theme, this);
 
     buildDocks();
     buildToolBar();
     buildMenus();
+    applyTheme();
 
     statusTime = new QLabel(this);
     statusState = new QLabel(this);
@@ -247,15 +260,8 @@ void MainWindow::buildDocks() {
     waveRowsView->setDragDropMode(QAbstractItemView::InternalMove);
     waveRowsView->setDefaultDropAction(Qt::MoveAction);
 
-    waveView = new WaveformView(*session, *waveModel, *theme, this);
+    waveView = new WaveformView(*session, *waveModel, theme, this);
     waveView->setRowView(waveRowsView);
-
-    // One font for the names and the traces. The tree's sets how tall a row is, and the canvas
-    // measures its labels against its own, so a size given to only one of them would put each
-    // trace beside a row of another height.
-    const QFont waveFont = theme->font(ThemeFont::Wave, waveRowsView->font());
-    waveRowsView->setFont(waveFont);
-    waveView->setFont(waveFont);
     connect(waveView, &WaveformView::cursorsChanged, this, &MainWindow::onCursorsChanged);
 
     // The canvas has no vertical scroll bar of its own; the tree's is the one that matters, so
@@ -322,14 +328,14 @@ void MainWindow::buildDocks() {
     }
     waveRowsView->addAction(radixMenu->menuAction());
 
-    // The palette is the theme's (section 10.5), so each entry carries its actual colour, and is
-    // numbered as `-highlight` numbers it in a signal list file (section 10.8).
+    // The palette is the theme's (section 10.5), so each entry carries its actual colour, which
+    // `applyTheme` paints, and is numbered as `-highlight` numbers it in a signal list file
+    // (section 10.8).
     auto* highlightMenu = new QMenu(tr("Highlight"), waveRowsView);
     for (int slot = 1; slot <= HighlightSlots; ++slot) {
-        QPixmap swatch(12, 12);
-        swatch.fill(theme->color(highlightColor(slot)));
-        connect(highlightMenu->addAction(QIcon(swatch), QString::number(slot)), &QAction::triggered,
-                this, [this, slot] { setSelectedHighlight(slot); });
+        QAction* entry = highlightMenu->addAction(QString::number(slot));
+        connect(entry, &QAction::triggered, this, [this, slot] { setSelectedHighlight(slot); });
+        highlightActions.at(static_cast<std::size_t>(slot - 1)) = entry;
     }
     connect(highlightMenu->addAction(tr("None")), &QAction::triggered, this,
             [this] { setSelectedHighlight(0); });
@@ -342,12 +348,48 @@ void MainWindow::buildDocks() {
 
     // --- Transcript --------------------------------------------------------
 
-    transcriptView = new TranscriptView(*theme, this);
+    transcriptView = new TranscriptView(theme, this);
 
     auto* transcriptDock = new QDockWidget(tr("Transcript"), this);
     transcriptDock->setObjectName(QStringLiteral("transcript"));
     transcriptDock->setWidget(transcriptView);
     addDockWidget(Qt::BottomDockWidgetArea, transcriptDock);
+}
+
+void MainWindow::setTheme(const Theme& replacement) {
+    theme = replacement;
+    applyTheme();
+}
+
+void MainWindow::applyTheme() {
+    // The palette carries nearly all of the theme, and the style sheet only what a palette
+    // cannot say. Keeping backgrounds out of the style sheet is what lets the signal list and
+    // the wave canvas move what they have already drawn when they scroll, rather than drawing
+    // it all again (DESIGN_GUIDE.md section 10.5).
+    QApplication::setPalette(theme.palette());
+    qApp->setStyleSheet(theme.styleSheet());
+
+    const QFont& desktop = desktopFont();
+    QApplication::setFont(theme.font(ThemeFont::Window, desktop));
+
+    // One font for the names and the traces. The tree's sets how tall a row is, and the canvas
+    // measures its labels against its own, so a size given to only one of them would put each
+    // trace beside a row of another height.
+    const QFont waveFont = theme.font(ThemeFont::Wave, desktop);
+    waveRowsView->setFont(waveFont);
+    waveView->setFont(waveFont);
+
+    for (int slot = 1; slot <= HighlightSlots; ++slot) {
+        QPixmap swatch(12, 12);
+        swatch.fill(theme.color(highlightColor(slot)));
+        highlightActions.at(static_cast<std::size_t>(slot - 1))->setIcon(QIcon(swatch));
+    }
+
+    // A highlighted name is the model's background, read as the list paints, and a trace is a
+    // picture the canvas keeps; each is told to look again.
+    waveRowsView->viewport()->update();
+    waveView->themeChanged();
+    transcriptView->applyTheme();
 }
 
 void MainWindow::buildToolBar() {
