@@ -230,7 +230,15 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
       GIT_SHALLOW TRUE
       EXCLUDE_FROM_ALL
       FIND_PACKAGE_ARGS ${ENZAN_SLANG_VERSION} CONFIG)
+
+    # slang follows BUILD_SHARED_LIBS, which a distribution's build macros may turn on: Fedora's
+    # %cmake does. A shared slang would be a library nothing installs (DESIGN_GUIDE.md section
+    # 11.5), and an installed `enzan` would fail to start without it, so it is built static
+    # whatever was asked, as every Enzan component is.
+    set(_enzan_build_shared_libs ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
     FetchContent_MakeAvailable(slang)
+    set(BUILD_SHARED_LIBS ${_enzan_build_shared_libs})
 
     # slang and the dependencies it brings with it are third-party code; their headers must
     # not be held to Enzan's warning set.
