@@ -246,9 +246,21 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
     # interceptors and produces both false negatives and spurious reports. The
     # sanitizer job is a correctness gate, so it wins over slang's allocator
     # speed there.
+    #
+    # Otherwise it is used where the system has it, and never built from source.
+    # slang uses it for nothing but replacing the allocator, and the copy slang
+    # builds replaces malloc inside the executable, statically: built so with GCC
+    # 16 against glibc 2.44, every program linking slang crashed in free() before
+    # main, from glibc's own newlocale. A system's shared mimalloc does not.
     if(ENZAN_SANITIZERS)
       set(SLANG_USE_MIMALLOC OFF)
       message(STATUS "slang: mimalloc disabled because sanitizers are enabled")
+    else()
+      find_package(mimalloc QUIET CONFIG)
+      if(NOT mimalloc_FOUND)
+        set(SLANG_USE_MIMALLOC OFF)
+        message(STATUS "slang: mimalloc is not installed, and is not built from source")
+      endif()
     endif()
 
     FetchContent_Declare(

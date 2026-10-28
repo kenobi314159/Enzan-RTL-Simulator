@@ -8,7 +8,7 @@
 # enzan-<version>.tar.xz and its .sha256 are written into <directory>, build/dist by default, from
 # <revision>, HEAD by default. The tarball holds the revision's tree; each submodule at the commit
 # the revision pins, NVC's included; in third_party/bundled/, the sources FetchContent downloads
-# to build slang, slang's own among them; and .tarball-revision, the revision it was made from. A
+# to build slang, slang's own and fmt; and .tarball-revision, the revision it was made from. A
 # distribution's builder has no network, and this is everything a build needs that a distribution
 # does not package.
 #

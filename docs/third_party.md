@@ -51,7 +51,10 @@ The build prefers a system package and falls back to building from source. See
 | [cocotb](https://github.com/cocotb/cocotb) | `2.1.0`, pinned in `tests/conformance/cocotb/requirements.txt` | BSD-3-Clause | the cocotb golden test and regression suite (M4); loaded with `--vpi`, never linked | `pip`; its test suite is fetched at the matching tag and never vendored |
 
 slang itself builds against fmt, Boost headers and mimalloc, which it acquires
-on its own terms; all three are permissively licensed.
+on its own terms; all three are permissively licensed. Enzan has slang use
+mimalloc only where the system has one, and never build it: the static copy
+slang builds crashed every program linking it, in glibc's own start-up (see
+`cmake/EnzanDependencies.cmake`).
 
 ## Pinned revisions
 
@@ -79,7 +82,6 @@ second place they are set:
 |---|---|---|---|
 | slang | `v11.0` | MIT | Enzan, `ENZAN_SLANG_GIT_TAG` |
 | [fmt](https://github.com/fmtlib/fmt) | `12.1.0` | MIT | slang, which builds its own (see `cmake/EnzanDependencies.cmake`) |
-| [mimalloc](https://github.com/microsoft/mimalloc) | `v3.3.2` | MIT | slang, where no mimalloc 3.3 or later is installed |
 
 None of them is in the repository, and each keeps its own licence text in the tarball.
 

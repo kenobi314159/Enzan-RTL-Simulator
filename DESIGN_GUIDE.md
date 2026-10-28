@@ -3006,7 +3006,7 @@ of a tag leaves submodules out, so it holds no NVC, and building it downloads sl
 distribution packages. A distribution's builder has no network — Debian's, Fedora's and
 openSUSE's do not, nor Launchpad's — so the tarball carries both: every submodule at the commit
 the tag pins, and in `third_party/bundled/` the sources FetchContent downloads to build slang,
-slang's own among them. The script finds those by configuring the tag with every download forced
+slang's own and fmt. The script finds those by configuring the tag with every download forced
 and copying what CMake fetched, so the revisions slang pins for its own dependencies are restated
 nowhere.
 
