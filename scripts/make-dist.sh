@@ -48,11 +48,14 @@ while read -r _ type submodule path; do
 done < <(git -C "$root" ls-tree -r "$commit")
 
 # Every download forced, a system package found or not, and only what needs them: the
-# SystemVerilog frontend and the tests.
+# SystemVerilog frontend and the tests. mimalloc is never built from source, so it is not looked
+# for either: found, it would be downloaded here, and the tarball would depend on whose machine
+# made it.
 cmake -S "$tree" -B "$staging/configure" \
     -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_ENABLE_VHDL=OFF -DENZAN_BUILD_GUI=OFF \
     -DENZAN_BUILD_TESTS=ON -DENZAN_ALLOW_FETCH=ON \
     -DCMAKE_DISABLE_FIND_PACKAGE_slang=ON -DCMAKE_DISABLE_FIND_PACKAGE_GTest=ON \
+    -DCMAKE_DISABLE_FIND_PACKAGE_mimalloc=ON \
     -DFETCHCONTENT_TRY_FIND_PACKAGE_MODE=NEVER \
     >"$staging/configure.log" 2>&1 || {
     cat "$staging/configure.log" >&2
