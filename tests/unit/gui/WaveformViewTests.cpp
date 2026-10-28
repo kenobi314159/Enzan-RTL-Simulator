@@ -983,15 +983,23 @@ TEST_F(ScrollingCanvasTest, StepsThatArriveFasterThanRepaintsEachMoveTheContents
 }
 
 TEST_F(ScrollingCanvasTest, AJumpPastAWindowfulIsRepaintedRatherThanBlitted) {
-    fillWithRows(40);
+    // Rows enough that the list's whole length is several windowfuls whatever height the style
+    // gives a row: forty were two windowfuls under Qt 6.11 and fewer than two under Qt 6.12, where
+    // the jump below moved the list less than a windowful and was rightly blitted.
+    fillWithRows(160);
     QScrollBar* bar = treeView->verticalScrollBar();
 
     static_cast<void>(shown());
+
+    const QModelIndex first = model->index(0, 0);
+    const int before = treeView->visualRect(first).top();
 
     // Nothing on screen survives a jump this far, so there is nothing worth moving and the
     // canvas is painted afresh instead.
     bar->setValue(bar->maximum());
     QCoreApplication::processEvents();
+    ASSERT_GE(before - treeView->visualRect(first).top(), view->height())
+        << "the jump moved the list less than a windowful, so it is not the case this tests";
     EXPECT_EQ(view->lastScrollShift(), 0);
 
     // What it drew has to be right either way.
