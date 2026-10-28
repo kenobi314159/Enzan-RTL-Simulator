@@ -1391,10 +1391,13 @@ job need to tell a broken invocation from a broken design:
 | 1 | the command line was wrong |
 | 2 | analysis or elaboration failed |
 | 3 | the simulation ran and the design failed |
+| 4 | the window `--gui` started crashed or exited with an error |
 
-Conflating the last two is the mistake to avoid: a regression script that cannot
+Conflating 2 and 3 is the mistake to avoid: a regression script that cannot
 distinguish "the tool could not compile this" from "the testbench reported an
-error" reports both as the same red square.
+error" reports both as the same red square. 4 is a case of its own: a window that
+crashed is no broken invocation, analysis or design, and 0 would say the session
+worked when its reader may never have seen it (8.4).
 
 **A command line that gives nothing to work on is wrong, not a design that failed**: `lib`
 with no subcommand of its own, `run` or `elaborate` given neither a library nor a file list,
@@ -1765,7 +1768,9 @@ user chose is the decision, so there is nothing further to configure:
 - **`enzan run --gui <top>`** — the window started the kernel, so closing the
   window ends the kernel too, and the process's exit status is the simulation's
   (8.1) rather than the window's. A run nobody is watching, that nobody asked to
-  keep, is a leak.
+  keep, is a leak. A window that crashed or exited with an error is not one that
+  was closed: it is reported, and the status is 4 when the run gave no other. A
+  front end that cannot be started at all is status 1, as under `--attach`.
 - **`enzan --gui --attach <socket>`** — the window did not start the kernel, so
   closing it only detaches. **`--attach` requires `--gui`**: it is a window that
   attaches to a running kernel, a kernel has nothing to attach to, and accepting it

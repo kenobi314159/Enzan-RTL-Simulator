@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -26,6 +27,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 #include "eir/Library.h"
@@ -33,6 +36,7 @@
 #include "session/FileList.h"
 #include "session/Session.h"
 
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -60,6 +64,11 @@ enum class ExitStatus : std::uint8_t {
     Usage = 1,
     AnalysisFailed = 2,
     SimulationFailed = 3,
+
+    /// The window `--gui` started crashed or exited with an error. Not a window its reader closed,
+    /// which is how such a session ends: a status of 0 would say that the session worked when the
+    /// reader may never have seen it (8.4).
+    FrontEndFailed = 4,
 };
 
 /// What the command line asked to be done.
@@ -201,7 +210,8 @@ Graphical front end:
   -V, --version           Print version and build information and exit.
 
 Exit statuses: 0 success, 1 the command line was wrong, 2 analysis or elaboration
-failed, 3 the simulation ran and the design failed.
+failed, 3 the simulation ran and the design failed, 4 the window --gui started
+crashed or exited with an error.
 )";
 
 void printVersion() {
@@ -816,58 +826,103 @@ std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     return options;
 }
 
+/// The front end's command line: its program, then `options`.
+std::vector<std::string> frontEndCommand(std::vector<std::string> options) {
+    options.insert(options.begin(), frontEndProgram().string());
+    return options;
+}
+
+/// `words` as `execvp` takes them, ended by a null. The pointers are into `words`, which must
+/// outlive them unchanged.
+std::vector<char*> argumentVector(std::vector<std::string>& words) {
+    std::vector<char*> argv;
+    argv.reserve(words.size() + 1);
+    for (std::string& word : words) argv.push_back(word.data());
+    argv.push_back(nullptr);
+    return argv;
+}
+
+/// Says that the front end `program` could not be started, `failure` being the `errno` of the call
+/// that failed: `execvp`, or the `fork` or `pipe2` before it.
+void reportFrontEndNotStarted(const std::string& program, int failure) {
+    std::cerr << "enzan: could not start the graphical front end '" << program
+              << "': " << std::generic_category().message(failure);
+    // Missing, as a build configured without it leaves it, rather than there and failing.
+    if (failure == ENOENT)
+        std::cerr << "; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)";
+    std::cerr << '\n';
+}
+
 /// Runs the front end with `options` and nothing else, and never returns.
 ///
 /// For a window that starts no kernel of its own: a kernel here would be a process started to do
 /// nothing.
 [[noreturn]] void becomeFrontEnd(const std::vector<std::string>& options) {
-    const std::filesystem::path program = frontEndProgram();
+    std::vector<std::string> command = frontEndCommand(options);
+    std::vector<char*> argv = argumentVector(command);
 
-    std::vector<std::string> owned = options;
-    std::string name = program.string();
+    ::execvp(argv.front(), argv.data());
 
-    std::vector<char*> argv;
-    argv.push_back(name.data());
-    for (std::string& option : owned) argv.push_back(option.data());
-    argv.push_back(nullptr);
-
-    ::execvp(name.c_str(), argv.data());
-
-    std::cerr << "enzan: could not start the graphical front end '" << name
-              << "'; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)\n";
+    reportFrontEndNotStarted(command.front(), errno);
     std::exit(static_cast<int>(ExitStatus::Usage));
 }
 
 #ifdef ENZAN_WITH_FRONTEND
 
-/// Starts a window attached to `socketPath`, and returns its process id or -1.
+/// Starts a window attached to `socketPath`, and returns its process id, or -1 having said why.
 ///
 /// `--gui` is an option of `enzan` rather than a second program to learn, but the two remain
 /// two processes and the kernel binary links no Qt: a headless server and a CI runner must not
 /// install a GUI toolkit to run a batch simulation (2.2). The kernel is what parses the command
 /// line, analyses and elaborates; the window only ever attaches, which is why it needs to know
 /// nothing about libraries or file lists.
+///
+/// The command line is built before the fork, so that the child does nothing but replace itself.
+/// After a fork only async-signal-safe calls are safe in a process with threads, and a mistake
+/// made in the child ends only the child, where nothing reports it. Whether `execvp` worked comes
+/// back through a pipe closed on exec, which reads as empty once the window has started and carries
+/// `errno` when it could not, so that a front end that cannot be started is said to be one now
+/// rather than taken for a window that closed.
 ::pid_t startFrontEnd(const Invocation& invocation, const std::filesystem::path& socketPath) {
-    const ::pid_t child = ::fork();
-    if (child != 0) return child;
-
     std::vector<std::string> options = frontEndOptions(invocation);
     options.emplace_back("--attach");
     options.push_back(socketPath.string());
+    std::vector<std::string> command = frontEndCommand(std::move(options));
+    std::vector<char*> argv = argumentVector(command);
 
-    const std::filesystem::path program = frontEndProgram();
-    std::string name = program.string();
+    std::array<int, 2> started{};
+    if (::pipe2(started.data(), O_CLOEXEC) != 0) {
+        reportFrontEndNotStarted(command.front(), errno);
+        return -1;
+    }
 
-    std::vector<char*> argv;
-    argv.push_back(name.data());
-    for (std::string& option : options) argv.push_back(option.data());
-    argv.push_back(nullptr);
+    const ::pid_t child = ::fork();
+    if (child == 0) {
+        ::execvp(argv.front(), argv.data());
+        const int failure = errno;
+        const ::ssize_t written = ::write(started[1], &failure, sizeof failure);
+        static_cast<void>(written);
+        ::_exit(static_cast<int>(ExitStatus::Usage));
+    }
+    const int forkFailure = errno;
+    ::close(started[1]);
+    if (child < 0) {
+        ::close(started[0]);
+        reportFrontEndNotStarted(command.front(), forkFailure);
+        return -1;
+    }
 
-    ::execvp(name.c_str(), argv.data());
+    int failure = 0;
+    ::ssize_t got = 0;
+    do {
+        got = ::read(started[0], &failure, sizeof failure);
+    } while (got < 0 && errno == EINTR);
+    ::close(started[0]);
+    if (got <= 0) return child;
 
-    std::cerr << "enzan: could not start the graphical front end '" << name
-              << "'; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)\n";
-    std::_Exit(static_cast<int>(ExitStatus::Usage));
+    static_cast<void>(::waitpid(child, nullptr, 0));
+    reportFrontEndNotStarted(command.front(), failure);
+    return -1;
 }
 
 #endif // ENZAN_WITH_FRONTEND
@@ -1054,14 +1109,31 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
 /// `--listen`: a kernel that outlives its window is the whole point of that spelling. With
 /// `--gui` the kernel exists *for* the window it started, so its closing ends the kernel too
 /// (8.4). Stepping rather than serving is what lets both be true of one server.
-int serveUntilDone(enzan::ipc::KernelServer& server, ::pid_t window) {
+///
+/// `windowStatus` is set to how the window ended, as `waitpid` says it, when it has; it is left
+/// alone when the server stopped first.
+int serveUntilDone(enzan::ipc::KernelServer& server, ::pid_t window, int& windowStatus) {
     while (server.step(200)) {
         if (window <= 0) continue;
-
-        int status = 0;
-        if (::waitpid(window, &status, WNOHANG) == window) break;
+        if (::waitpid(window, &windowStatus, WNOHANG) == window) break;
     }
     return server.exitStatus();
+}
+
+/// Whether a window that ended with `status`, as `waitpid` says it, failed, having said how.
+///
+/// Its reader closing it is not failing, and leaves the exit status to the simulation (8.4).
+bool reportFailedWindow(int status) {
+    if (WIFSIGNALED(status)) {
+        std::cerr << "enzan: the graphical front end ended on signal " << WTERMSIG(status) << '\n';
+        return true;
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        std::cerr << "enzan: the graphical front end exited with status " << WEXITSTATUS(status)
+                  << '\n';
+        return true;
+    }
+    return false;
 }
 
 ExitStatus serve(const Invocation& invocation, const std::filesystem::path& socketPath,
@@ -1089,10 +1161,7 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
     ::pid_t window = -1;
     if (invocation.useGui) {
         window = startFrontEnd(invocation, server.socketPath());
-        if (window < 0) {
-            std::cerr << "enzan: the graphical front end could not be started\n";
-            return ExitStatus::Usage;
-        }
+        if (window < 0) return ExitStatus::Usage;
     } else {
         // Printed rather than logged, because it is the one thing the user needs next and they
         // are looking at this terminal. Not printed under --gui, where the socket is an
@@ -1111,9 +1180,14 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
                   << error << '\n';
     }
 
-    const int status = serveUntilDone(server, window);
+    int windowStatus = 0;
+    const int status = serveUntilDone(server, window, windowStatus);
+    const bool windowFailed = reportFailedWindow(windowStatus);
+
+    // What the design did comes first, and the window only when the design gave no other answer.
     if (status != 0) return ExitStatus::SimulationFailed;
     if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;
+    if (windowFailed) return ExitStatus::FrontEndFailed;
     return ExitStatus::Success;
 }
 
