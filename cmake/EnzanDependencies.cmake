@@ -124,7 +124,8 @@ if(ENZAN_BUILD_TESTS)
         GIT_TAG v1.17.0
         GIT_SHALLOW TRUE
         EXCLUDE_FROM_ALL
-        FIND_PACKAGE_ARGS NAMES GTest)
+        # The same floor as above, or FetchContent would take the GoogleTest just refused.
+        FIND_PACKAGE_ARGS 1.12 NAMES GTest)
       # GoogleTest's own install and mock targets are not wanted here.
       set(INSTALL_GTEST OFF)
       set(BUILD_GMOCK ON)
