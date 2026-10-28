@@ -17,10 +17,12 @@ License:        GPL-3.0-or-later AND Apache-2.0 AND LGPL-3.0-or-later AND MIT AN
 URL:            https://github.com/kenobi314159/Enzan-RTL-Simulator
 Source0:        %{url}/releases/download/v%{upstream_version}/enzan-%{upstream_version}.tar.xz
 
-# RHEL 9's GCC is 11, and Enzan needs 13 (DESIGN_GUIDE.md section 11.1).
+# RHEL 9's GCC is 11, and Enzan needs 13 (DESIGN_GUIDE.md section 11.1). RHEL's build flags load
+# the annobin plugin, which the toolset's compiler has only from a package of its own.
 %if 0%{?rhel} == 9
 BuildRequires:  gcc-toolset-13-gcc
 BuildRequires:  gcc-toolset-13-gcc-c++
+BuildRequires:  gcc-toolset-13-annobin-plugin-gcc
 %else
 BuildRequires:  gcc >= 13
 BuildRequires:  gcc-c++ >= 13
