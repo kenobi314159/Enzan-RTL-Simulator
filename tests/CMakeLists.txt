@@ -40,8 +40,19 @@ set(ENZAN_COCOTB_ENVIRONMENT "ASAN_OPTIONS=path_list_append:detect_leaks=0")
 # Command lines that are wrong, and what Enzan says of them (DESIGN_GUIDE.md section 8). Every
 # build runs it, since a command line is checked before any frontend is reached.
 add_test(NAME golden.cli COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/golden/run-cli-check.sh"
-                                 $<TARGET_FILE:enzan>)
+                                 $<TARGET_FILE:enzan> "${ENZAN_FRONT_END_FROM_PROGRAM}")
 set_tests_properties(golden.cli PROPERTIES PASS_REGULAR_EXPRESSION "PASS cli" TIMEOUT 120)
+
+# This build installed, moved and made read-only, run as the build is (DESIGN_GUIDE.md section
+# 11.5), and installing nothing that is not Enzan's. Every build runs it, since every build installs.
+add_test(
+  NAME golden.install
+  COMMAND
+    "${CMAKE_CURRENT_SOURCE_DIR}/golden/run-install-check.sh" "${CMAKE_COMMAND}"
+    "${PROJECT_BINARY_DIR}" "$<IF:$<TARGET_EXISTS:enzan-gui>,ON,OFF>" "${ENZAN_INSTALL_BINDIR}"
+    "${ENZAN_INSTALL_LIBEXECDIR}" "${ENZAN_INSTALL_VHDLDIR}" "${ENZAN_INSTALL_INCLUDEDIR}"
+    "${ENZAN_INSTALL_DATADIR}")
+set_tests_properties(golden.install PROPERTIES PASS_REGULAR_EXPRESSION "PASS install" TIMEOUT 120)
 
 # Golden tests need the simulator, so they exist only when a frontend does.
 if(ENZAN_ENABLE_SYSTEMVERILOG)

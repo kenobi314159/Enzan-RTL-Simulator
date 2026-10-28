@@ -3,8 +3,8 @@
 # VHDL's standard libraries, `std`, `ieee` and NVC's own `nvc`, analysed when Enzan is built and
 # found beside the executable at run time (DESIGN_GUIDE.md section 4.4).
 #
-# They live in lib/enzan/vhdl, beside bin/, one directory per library and standard as NVC lays
-# them out: `std` and `ieee` for 1993, which serve 2000 and 2002 as well, then `std.08`, `std.19`
+# They live in lib/enzan/vhdl, beside bin/, in the build tree as in an installation (section 11.5),
+# one directory per library and standard as NVC lays them out: `std` and `ieee` for 1993, which serve 2000 and 2002 as well, then `std.08`, `std.19`
 # and so on. A library is analysed from the sources NVC ships, by enzan-vhdl-library, one source
 # file per run as NVC's own build does (docs/nvc_integration.md).
 
@@ -14,7 +14,7 @@ target_link_libraries(enzan-vhdl-library PRIVATE enzan::compile_options enzan::c
 
 set(_nvc "${PROJECT_SOURCE_DIR}/third_party/nvc")
 set(ENZAN_VHDL_LIBRARY_ROOT
-    "${PROJECT_BINARY_DIR}/lib/enzan/vhdl"
+    "${ENZAN_BUILD_VHDLDIR}"
     CACHE INTERNAL "Where the build puts VHDL's standard libraries")
 
 # The order is NVC's, read from the deps.mk files its tree carries beside each library's sources:
@@ -116,3 +116,10 @@ foreach(_standard 1993 2008 2019)
 endforeach()
 
 add_custom_target(enzan-vhdl-libraries ALL DEPENDS ${_all})
+
+# Every library the steps above wrote, as they wrote it. An installation's copy is one nothing
+# writes to (section 4.4), and usually one its user cannot.
+install(
+  DIRECTORY "${ENZAN_VHDL_LIBRARY_ROOT}/"
+  DESTINATION "${ENZAN_INSTALL_VHDLDIR}"
+  COMPONENT enzan)

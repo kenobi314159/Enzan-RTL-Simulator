@@ -197,8 +197,8 @@ std::optional<ResolvedFunctions> resolutions(const DesignOptions& options,
 /// their names in lower case: what a library records it holding, without analysing anything.
 [[nodiscard]] std::vector<std::string> declaredUnits(BufferId source, const SourceManager& sources);
 
-/// Where the standard libraries built with Enzan are: `lib/enzan/vhdl` beside the directory of the
-/// running program, which is where a build puts them and an installation keeps them (section 4.4).
+/// Where the standard libraries built with Enzan are, found from the directory of the running
+/// program, which is where a build puts them and an installation keeps them (sections 4.4, 11.5).
 std::filesystem::path standardLibraryDirectory();
 
 } // namespace enzan::frontend::vhdl

@@ -202,7 +202,8 @@ make SIM=enzan COCOTB_MAKEFILES_DIR=$PWD/build/cocotb-makefiles
 
 run in the directory of an ordinary cocotb testbench, with `TOPLEVEL_LANG=vhdl` for a VHDL
 toplevel, which cocotb reaches through VHPI (`--vhpi`, in a build with the VHDL frontend).
-`ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`. The run counts
+`ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`. In an
+installation the script is `share/enzan/cocotb/makefiles.sh` under its prefix. The run counts
 time in the unit `COCOTB_HDL_TIMEPRECISION` names, which is also the unit of a module that states
 no `` `timescale ``.
 
@@ -266,6 +267,18 @@ The binary lands at `build/gcc-debug/bin/enzan`:
 ```sh
 ./build/gcc-debug/bin/enzan --version
 ```
+
+### Installing
+
+```sh
+cmake --install build/gcc-release --prefix ~/.local
+```
+
+puts `enzan` in `~/.local/bin` and the rest of Enzan where it finds it from there: the front end
+in `libexec/enzan`, VHDL's standard libraries in `lib/enzan`, the VPI and VHPI headers in
+`include/enzan` and the cocotb makefile in `share/enzan/cocotb`. An installation can be moved, and
+versions installed side by side each run their own parts. `DESIGN_GUIDE.md` section 11.5 has the
+layout.
 
 ### Presets
 

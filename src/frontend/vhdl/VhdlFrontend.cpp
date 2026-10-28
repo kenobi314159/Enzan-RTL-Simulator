@@ -3,6 +3,7 @@
 #include "frontend/vhdl/VhdlFrontend.h"
 
 #include "common/Diagnostics.h"
+#include "common/Installation.h"
 #include "common/SourceManager.h"
 #include "eir/Design.h"
 #include "eir/Serialization.h"
@@ -706,10 +707,7 @@ std::vector<std::string> declaredUnits(BufferId source, const SourceManager& sou
 }
 
 std::filesystem::path standardLibraryDirectory() {
-    std::error_code failure;
-    const std::filesystem::path program = std::filesystem::read_symlink("/proc/self/exe", failure);
-    if (failure) return {};
-    return (program.parent_path() / ".." / "lib" / "enzan" / "vhdl").lexically_normal();
+    return vhdlLibraryDirectory(programDirectory());
 }
 
 } // namespace enzan::frontend::vhdl

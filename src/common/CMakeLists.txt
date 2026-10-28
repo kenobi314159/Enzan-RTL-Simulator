@@ -28,13 +28,19 @@ endif()
 set(_enzan_version_info "${PROJECT_BINARY_DIR}/generated/common/VersionInfo.h")
 configure_file(VersionInfo.h.in "${_enzan_version_info}" @ONLY)
 
+# Where the rest of Enzan is from the directory of the executable (cmake/EnzanInstallDirs.cmake).
+set(_enzan_installation_info "${PROJECT_BINARY_DIR}/generated/common/InstallationInfo.h")
+configure_file(InstallationInfo.h.in "${_enzan_installation_info}" @ONLY)
+
 enzan_add_component(
   common
-  SOURCES Assert.cpp Diagnostics.cpp SourceManager.cpp Version.cpp
+  SOURCES Assert.cpp Diagnostics.cpp Installation.cpp SourceManager.cpp Version.cpp
   HEADERS Assert.h
           DiagnosticCodes.def
           Diagnostics.h
+          Installation.h
           SourceLocation.h
           SourceManager.h
           Version.h
-          "${_enzan_version_info}")
+          "${_enzan_version_info}"
+          "${_enzan_installation_info}")

@@ -10,6 +10,7 @@
 // or to serve it to a front end. Section 8 holds the rules it shares with `enzan-gui`.
 
 #include "common/Diagnostics.h"
+#include "common/Installation.h"
 #include "common/SourceManager.h"
 #include "common/Version.h"
 
@@ -753,13 +754,10 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
     return ParseOutcome::Run;
 }
 
-/// The front end executable, beside this one first so that a build tree runs its own.
+/// The front end executable, where this one's installation, or build tree, keeps it (8.4, 11.5),
+/// and nowhere else: one found on the PATH could be another version's.
 std::filesystem::path frontEndProgram() {
-    std::error_code failure;
-    std::filesystem::path beside =
-        std::filesystem::read_symlink("/proc/self/exe", failure).parent_path() / "enzan-gui";
-    if (!failure && std::filesystem::exists(beside, failure)) return beside;
-    return "enzan-gui";
+    return enzan::frontEndProgram(enzan::programDirectory());
 }
 
 #ifdef ENZAN_WITH_FRONTEND
@@ -832,7 +830,7 @@ std::vector<std::string> frontEndCommand(std::vector<std::string> options) {
     return options;
 }
 
-/// `words` as `execvp` takes them, ended by a null. The pointers are into `words`, which must
+/// `words` as `execv` takes them, ended by a null. The pointers are into `words`, which must
 /// outlive them unchanged.
 std::vector<char*> argumentVector(std::vector<std::string>& words) {
     std::vector<char*> argv;
@@ -843,13 +841,23 @@ std::vector<char*> argumentVector(std::vector<std::string>& words) {
 }
 
 /// Says that the front end `program` could not be started, `failure` being the `errno` of the call
-/// that failed: `execvp`, or the `fork` or `pipe2` before it.
+/// that failed: `execv`, or the `fork` or `pipe2` before it.
 void reportFrontEndNotStarted(const std::string& program, int failure) {
+    // Without the place of this program there is no place of the front end either, and `execv`
+    // would have been given an empty path to fail on.
+    if (program.empty()) {
+        std::cerr << "enzan: could not start the graphical front end: where this program is "
+                     "cannot be read from /proc/self/exe\n";
+        return;
+    }
     std::cerr << "enzan: could not start the graphical front end '" << program
               << "': " << std::generic_category().message(failure);
-    // Missing, as a build configured without it leaves it, rather than there and failing.
+    // Missing, as a build configured without it leaves it, or a package of Enzan installed
+    // without the separate one of its front end, rather than there and failing.
     if (failure == ENOENT)
-        std::cerr << "; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)";
+        std::cerr << "; it is not installed, which a package of Enzan leaves to a package of its "
+                     "own, enzan-gui, or this build was configured without it "
+                     "(-DENZAN_BUILD_GUI=ON)";
     std::cerr << '\n';
 }
 
@@ -861,7 +869,7 @@ void reportFrontEndNotStarted(const std::string& program, int failure) {
     std::vector<std::string> command = frontEndCommand(options);
     std::vector<char*> argv = argumentVector(command);
 
-    ::execvp(argv.front(), argv.data());
+    ::execv(argv.front(), argv.data());
 
     reportFrontEndNotStarted(command.front(), errno);
     std::exit(static_cast<int>(ExitStatus::Usage));
@@ -879,7 +887,7 @@ void reportFrontEndNotStarted(const std::string& program, int failure) {
 ///
 /// The command line is built before the fork, so that the child does nothing but replace itself.
 /// After a fork only async-signal-safe calls are safe in a process with threads, and a mistake
-/// made in the child ends only the child, where nothing reports it. Whether `execvp` worked comes
+/// made in the child ends only the child, where nothing reports it. Whether `execv` worked comes
 /// back through a pipe closed on exec, which reads as empty once the window has started and carries
 /// `errno` when it could not, so that a front end that cannot be started is said to be one now
 /// rather than taken for a window that closed.
@@ -898,7 +906,7 @@ void reportFrontEndNotStarted(const std::string& program, int failure) {
 
     const ::pid_t child = ::fork();
     if (child == 0) {
-        ::execvp(argv.front(), argv.data());
+        ::execv(argv.front(), argv.data());
         const int failure = errno;
         const ::ssize_t written = ::write(started[1], &failure, sizeof failure);
         static_cast<void>(written);

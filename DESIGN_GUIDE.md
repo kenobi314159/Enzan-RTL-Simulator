@@ -775,8 +775,9 @@ that appeared without being asked for is one they would have to find first.
 
 **VHDL's standard libraries are part of the tool, not a cache.** `std`, `ieee` and
 NVC's own `nvc`, which NVC's 2008 `ieee` bodies use, are analysed from the sources
-NVC ships when Enzan is built, and are found beside the executable without being
-named. Nothing a user does writes to them, they change only when Enzan does, and
+NVC ships when Enzan is built, and are found from the executable's own directory, in
+the installation or build tree it belongs to (11.5), without being named. Nothing a
+user does writes to them, they change only when Enzan does, and
 `library ieee;` has to resolve with no flag in every VHDL tool, so none of the
 reasons above applies; they are to a VHDL design what a compiler's standard headers
 are to a C one. A library the user names `ieee` replaces them (8.2).
@@ -1759,8 +1760,9 @@ the window finds it in the configuration directory (10.9), and `enzan --help` sa
 **The front end is a separate executable and not a second entry point.** It remains
 a separate *binary* because the kernel MUST NOT link Qt, and a separate *process*
 for 2.2's reasons; neither makes it something to invoke. Its command line is
-therefore only what `enzan` sends it, and when this project gains an install step
-it belongs in `libexec` rather than on a user's `PATH`.
+therefore only what `enzan` sends it, and it is installed in `libexec` rather than on
+a user's `PATH` (11.5). `enzan` starts the front end of its own installation and no
+other: one found on the `PATH` could be another version's.
 
 **The lifetime of the kernel follows how the session was started.** The flag a
 user chose is the decision, so there is nothing further to configure:
@@ -2949,6 +2951,47 @@ The profiling configuration is `RelWithDebInfo` with frame pointers kept through
 dependencies included, so that a sampling profiler can walk a stack cheaply and without
 recording each one whole. It is a local configuration rather than a CI job: a profile is read
 by the person who took it.
+
+### 11.5 Installation
+
+**`cmake --install` installs Enzan**, and whatever else installs it starts from what that
+installs. An installation is laid out so, under its prefix:
+
+```
+bin/enzan                      the one program a user runs
+libexec/enzan/enzan-gui        the front end, started only by `enzan --gui` (8.4)
+lib/enzan/vhdl/                VHDL's standard libraries (4.4)
+include/enzan/                 vpi_user.h, sv_vpi_user.h and vhpi_user.h (9.1, 9.7)
+share/enzan/cocotb/            Makefile.enzan and makefiles.sh (9.6)
+```
+
+**Nothing else is installed.** `enzan-vhdl-library` builds the standard libraries and has no use
+afterwards, and the themes are compiled into the front end (10.5). A dependency built in the tree
+installs nothing either: its own install rules would put a library's headers into every package
+of Enzan, so the `golden.install` test fails on any file the table does not list. Documentation
+and the licence are left to each package, which puts them where its distribution keeps them.
+
+**`enzan` finds the rest of Enzan from where it is itself**, through `/proc/self/exe`, by paths
+relative to its own directory that are compiled in. An installation therefore works wherever it is
+moved, and two versions installed side by side each run their own parts. Every directory is held
+relative to the prefix, including one a distribution's build macros give as an absolute path, and
+one outside the prefix is refused when CMake configures, since no relative path made at build time
+could be relied on to reach it.
+
+**The build tree is laid out as an installation is.** A build directory is a prefix that has not
+been installed: `enzan-gui` is built into its `libexec/enzan/` and the standard libraries into
+its `lib/enzan/vhdl/`. The one lookup then serves both, and a build always runs its own parts
+rather than an installed copy's.
+
+**`lib/enzan`, not the distribution's library directory.** The standard libraries are compiled
+files only Enzan reads, and `CMAKE_INSTALL_LIBDIR` is for libraries other programs link:
+`lib/x86_64-linux-gnu` on Debian, `lib64` on Fedora. Both keep a package's private files in
+`/usr/lib/<package>`.
+
+**An installation is never written to.** Nothing Enzan does at run time writes beside its
+executable — a library a user names is where they name it (8.2), and settings are in the
+configuration directory (10.9) — so an installation its user cannot write to works as one they
+can. `golden.install` runs one that has been moved and made read-only.
 
 ---
 
