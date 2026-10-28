@@ -499,14 +499,14 @@ void MainWindow::buildToolBar() {
     // A debugger's keys, F5 to go and Shift+F5 to stop, and the window's rather than a pane's: a
     // run is started and stopped from wherever the reader happens to be. Restart is the hardest
     // of them to press by accident, because it throws away the recorded waveform.
-    runAction = bar->addAction(tr("Run"), this, &MainWindow::runForRequestedTime);
+    runAction = bar->addAction(tr("Run"), this, &MainWindow::runActionExec);
     runAction->setShortcut(QKeySequence(Qt::Key_F5));
 
     runLengthEdit = new QLineEdit(QStringLiteral("100"), bar);
     runLengthEdit->setFixedWidth(80);
     runLengthEdit->setToolTip(tr("How long each Run advances the simulation: a count of the "
                                  "run's time unit, as 100, or a time with its unit, as 10ns or "
-                                 "1.5us"));
+                                 "1.5us; or all, until the design finishes"));
     connect(runLengthEdit, &QLineEdit::returnPressed, runAction, &QAction::trigger);
     bar->addWidget(runLengthEdit);
 
@@ -732,6 +732,10 @@ void MainWindow::onWelcomed() {
     setWindowTitle(tr("Enzan — %1").arg(session->topModule()));
     note(tr("Attached to %1, top level %2").arg(session->kernelVersion(), session->topModule()));
     updateActions();
+
+    // A run asked for before the kernel had named the run's unit — by `--run`, which is read as
+    // the window opens.
+    if (!deferredRun.isEmpty()) run(std::exchange(deferredRun, QString()));
 }
 
 void MainWindow::onDesignChanged() {
@@ -841,6 +845,8 @@ void MainWindow::onWavesCleared() {
 void MainWindow::onDetached(const QString& reason) {
     note(reason.isEmpty() ? tr("Disconnected from the kernel")
                           : tr("Disconnected from the kernel: %1").arg(reason));
+    // Asked of the kernel that has gone, and not of whichever one comes next.
+    deferredRun.clear();
     updateActions();
 }
 
@@ -1250,20 +1256,36 @@ void MainWindow::updateSubscription() {
 // Running
 // ---------------------------------------------------------------------------
 
-void MainWindow::runForRequestedTime() {
+void MainWindow::runActionExec() {
+    run(runLengthEdit->text().trimmed());
+}
+
+void MainWindow::run(const QString& text) {
     // Read as `--run` reads its value, by the same function, so that what the one takes the other
     // does too (DESIGN_GUIDE.md section 8.5).
-    const QString text = runLengthEdit->text().trimmed();
-    const std::optional<runtime::TimeLength> length = runtime::parseTimeLength(text.toStdString());
+    const std::optional<runtime::RunLength> length = runtime::parseRunLength(text.toStdString());
     if (!length) {
         note(tr("'%1' is not a length of time: a count of the run's time unit, 100, or a number "
-                "with its unit, 10ns or 1.5us")
+                "with its unit, 10ns or 1.5us; or all")
                  .arg(text));
         return;
     }
 
+    if (!session->isWelcomed()) {
+        deferredRun = text;
+        return;
+    }
+    startRun(*length, text);
+}
+
+void MainWindow::startRun(const runtime::RunLength& length, const QString& text) {
+    if (length.untilFinished) {
+        runUntilFinished();
+        return;
+    }
+
     runtime::SimTime duration = 0;
-    switch (session->timeScale().countOf(*length, duration)) {
+    switch (session->timeScale().countOf(length.length, duration)) {
     case runtime::LengthFit::Exact: break;
     case runtime::LengthFit::NotWhole:
         note(tr("'%1' is not a whole number of the run's time unit, %2")

@@ -1377,8 +1377,10 @@ time with its own unit, `--run 10ns` or `--run 1.5us`. Which unit a count counts
 design's and its libraries' to settle (3.1), which a reader writing the command line seldom
 knows, so a time with a unit is turned into a count once the run's unit is known, and one that
 is no whole number of that unit is refused rather than rounded: a run that stopped at another
-time than the one asked for would look like the design stopping there. The wave window's run
-length takes the same spellings, read by the same function in `runtime` (8.5).
+time than the one asked for would look like the design stopping there. `--run all` runs until
+the design finishes, which is what a run given no `--run` does; it is there to be said to a window,
+which runs nothing until asked (8.4). The wave window's run length takes the same spellings, read
+by the same function in `runtime` (8.5).
 
 **Exit statuses are distinct enough to branch on**, because a Makefile and a CI
 job need to tell a broken invocation from a broken design:
@@ -1725,8 +1727,13 @@ runner would otherwise install a GUI toolkit to run a batch simulation.
 **With `--gui` the design is elaborated and handed over, not run.** The front end
 drives every run. This is not only a preference: serving a session puts the design
 back to time zero and begins recording there, so anything run beforehand would be
-discarded rather than shown. `--run` alongside `--gui` is therefore refused rather
-than silently dropped.
+discarded rather than shown. `--run` alongside `--gui` is therefore not a run made
+here but one the window is asked to make: it is forwarded, and the window asks the
+kernel for it once the kernel has welcomed it. Not merely once attached, because a
+time with a unit is counted in the run's time unit (8.1), which the window learns
+from the kernel's greeting; counted before it, the run would be of another length
+than the one asked for. With `--gui --attach` it is asked of the kernel the window
+finds.
 
 **`--vcd` and `--fst` are allowed with `--gui`.** Someone debugging in a window
 who then wants a file for later should not have to run the design again, so a
@@ -1740,11 +1747,11 @@ libraries, file lists or any option added later, and the kernel binary still lin
 no Qt.
 
 **The front end's own options travel through `enzan` too.** The signal list it starts with
-(10.8) is what a user chooses about one run of it, so `--wave-list` is an option of `enzan` that
-is forwarded. An option reachable only by running the front end directly would make it the second
-program this section exists to avoid. Its theme is not an option at all: it belongs to the person
-at the screen rather than to the run, so the window finds it in the configuration directory
-(10.9), and `enzan --help` says where that is.
+(10.8) and how long it first runs the design are what a user chooses about one run of it, so
+`--wave-list` and `--run` are options of `enzan` that are forwarded. An option reachable only by
+running the front end directly would make it the second program this section exists to avoid. Its
+theme is not an option at all: it belongs to the person at the screen rather than to the run, so
+the window finds it in the configuration directory (10.9), and `enzan --help` says where that is.
 
 **The front end is a separate executable and not a second entry point.** It remains
 a separate *binary* because the kernel MUST NOT link Qt, and a separate *process*
@@ -1799,8 +1806,8 @@ again is the same answer, as a Makefile appending its own flags to a user's can 
 accepted. So is a top level given both with `--top` and as `run`'s word, when they agree.
 
 **A value the window and the command line both take is read by one function.** The wave
-window's run length and `--run` are one question asked in two places, so `10ns` means the same
-in each, and an answer one refuses the other refuses too.
+window's run length and `--run` are one question asked in two places, so `10ns` and `all` mean
+the same in each, and an answer one refuses the other refuses too.
 
 **`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` is not a synonym:
 `.f` lists spell a library file that way (8.3), and binding it to something else on

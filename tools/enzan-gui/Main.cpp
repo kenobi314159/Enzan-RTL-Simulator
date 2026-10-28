@@ -43,6 +43,9 @@ Options:
   -V, --version           Print version and build information and exit.
       --attach <socket>   Attach to a kernel listening on this Unix domain socket.
       --wave-list <file>  Open the wave window with this signal list in it.
+  -r, --run <time>        Run the design for this long once attached: a count of
+                          the run's time unit, 100, or a time with its unit, 10ns
+                          or 1.5us. `all` runs until the design finishes.
 )";
 
 /// Answers `--help` and `--version` before Qt's parser sees the command line.
@@ -90,8 +93,12 @@ int main(int argc, char** argv) {
         QStringLiteral("wave-list"),
         QStringLiteral("Open the wave window with this signal list in it."),
         QStringLiteral("file"));
+    const QCommandLineOption runOption(
+        QStringList() << QStringLiteral("r") << QStringLiteral("run"),
+        QStringLiteral("Run the design for this long once attached."), QStringLiteral("time"));
     parser.addOption(attachOption);
     parser.addOption(waveListOption);
+    parser.addOption(runOption);
     // `enzan run --gui ...` forwards its command word, which this process has no use for: it
     // starts a kernel, and the kernel is the thing that runs. Dropped rather than refused, so
     // that both spellings of the same request work (DESIGN_GUIDE.md section 8.4).
@@ -135,8 +142,10 @@ int main(int argc, char** argv) {
     }
 
     QString error;
+    bool attached = false;
     if (parser.isSet(attachOption)) {
-        if (!session.attach(parser.value(attachOption), error)) {
+        attached = session.attach(parser.value(attachOption), error);
+        if (!attached) {
             window.note(QStringLiteral("Could not attach to %1: %2")
                             .arg(parser.value(attachOption), error));
         }
@@ -157,6 +166,10 @@ int main(int argc, char** argv) {
         window.note(QStringLiteral(
             "Nothing to show. This is the front end `enzan --gui` starts; run that instead, or "
             "pass --attach <socket> to reach a kernel already listening."));
+    } else if (attached && parser.isSet(runOption)) {
+        // Asked for now and run once the kernel has said what unit it counts in, as a list named
+        // here is loaded once the design has arrived.
+        window.run(parser.value(runOption));
     }
 
     return QApplication::exec();

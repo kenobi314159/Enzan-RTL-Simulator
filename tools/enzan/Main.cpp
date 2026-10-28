@@ -83,10 +83,11 @@ struct NamedLibrary {
     std::filesystem::path path;
 };
 
-/// How long `--run` runs, as the run's precision will count it (`runtime::TimeLength`), and as it
-/// was written, for saying what is wrong with it.
-struct RunLength {
-    enzan::runtime::TimeLength length;
+/// How long `--run` runs, as the run's precision will count it (`runtime::RunLength`), and as it
+/// was written, for saying what is wrong with it and for handing to a window, which reads it again
+/// by the same function (8.5).
+struct RunOption {
+    enzan::runtime::RunLength length;
     std::string text;
 };
 
@@ -151,7 +152,9 @@ Simulation:
   -t, --top <module>      Module to elaborate as the top level. `elaborate` and
                           `run` take it as their one positional word instead.
   -r, --run <time>        Stop after this long: a count of the run's time unit,
-                          100, or a time with its unit, 10ns or 1.5us.
+                          100, or a time with its unit, 10ns or 1.5us. `all` runs
+                          until the design finishes, as no --run does. With
+                          --gui, the window starts the run once it opens.
       --assert-level <note|warning|error|failure|none>
                           The severity at which a VHDL report or failed assertion
                           ends the run. Default `failure`; `none` never ends it.
@@ -241,7 +244,7 @@ struct Invocation {
     /// never does.
     std::uint8_t stopSeverity = 3;
     std::string topModule;
-    std::optional<RunLength> runUntil;
+    std::optional<RunOption> runUntil;
     std::filesystem::path vcdPath;
     std::filesystem::path fstPath;
     std::string waveformScope;
@@ -455,15 +458,15 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--run", value)) return ParseOutcome::BadUsage;
             simulationOnly("--run");
-            const std::optional<enzan::runtime::TimeLength> parsed =
-                enzan::runtime::parseTimeLength(value);
+            const std::optional<enzan::runtime::RunLength> parsed =
+                enzan::runtime::parseRunLength(value);
             if (!parsed.has_value()) {
                 std::cerr << "enzan: '" << value
                           << "' is not a length of time: a count of the run's time unit, `100`, "
-                             "or a number with its unit, `10ns` or `1.5us`\n";
+                             "or a number with its unit, `10ns` or `1.5us`; or `all`\n";
                 return ParseOutcome::BadUsage;
             }
-            invocation.runUntil = RunLength{.length = *parsed, .text = value};
+            invocation.runUntil = RunOption{.length = *parsed, .text = value};
             continue;
         }
 
@@ -794,15 +797,21 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
 /// The window's own options, as the front end spells them.
 ///
 /// `--gui` is the only way in (8.4), so anything the window needs has to travel through here.
-/// The signal list it starts with is what a user chooses about one run of it, and leaving that
-/// reachable only by running the front end directly would make it a second program to learn
-/// after all. Its theme is the reader's rather than the run's, and the window finds it itself
-/// (DESIGN_GUIDE.md section 10.9).
+/// The signal list it starts with and how long it runs the design are what a user chooses about one
+/// run of it, and leaving them reachable only by running the front end directly would make it a
+/// second program to learn after all. The run length is forwarded as it was written, because the
+/// window reads it again by the same function and counts it in the unit the kernel tells it. Its
+/// theme is the reader's rather than the run's, and the window finds it itself (DESIGN_GUIDE.md
+/// section 10.9).
 std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::vector<std::string> options;
     if (!invocation.waveListPath.empty()) {
         options.emplace_back("--wave-list");
         options.push_back(invocation.waveListPath.string());
+    }
+    if (invocation.runUntil.has_value()) {
+        options.emplace_back("--run");
+        options.push_back(invocation.runUntil->text);
     }
     return options;
 }
@@ -1108,18 +1117,18 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
     return ExitStatus::Success;
 }
 
-/// `length` as a count of the run's time unit; nothing, having said why, when it is no whole
+/// `run`'s length as a count of the run's time unit; nothing, having said why, when it is no whole
 /// number of the unit or more than a run counts.
-std::optional<std::uint64_t> runCount(const RunLength& length, enzan::runtime::TimeScale scale) {
+std::optional<std::uint64_t> runCount(const RunOption& run, enzan::runtime::TimeScale scale) {
     enzan::runtime::SimTime count = 0;
-    switch (scale.countOf(length.length, count)) {
+    switch (scale.countOf(run.length.length, count)) {
     case enzan::runtime::LengthFit::Exact: return count;
     case enzan::runtime::LengthFit::NotWhole:
-        std::cerr << "enzan: '" << length.text << "' is not a whole number of the run's time unit, "
+        std::cerr << "enzan: '" << run.text << "' is not a whole number of the run's time unit, "
                   << scale.unitName() << "\n";
         return std::nullopt;
     case enzan::runtime::LengthFit::TooLong:
-        std::cerr << "enzan: '" << length.text << "' is longer than a run counts\n";
+        std::cerr << "enzan: '" << run.text << "' is longer than a run counts\n";
         return std::nullopt;
     }
     return std::nullopt;
@@ -1172,7 +1181,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     // A time with a unit is a count only once the run's precision is known, which the design and
     // its libraries settle (section 3.1).
     std::optional<std::uint64_t> until;
-    if (invocation.runUntil.has_value()) {
+    if (invocation.runUntil.has_value() && !invocation.runUntil->length.untilFinished) {
         until = runCount(*invocation.runUntil, session.timeScale());
         if (!until.has_value()) return ExitStatus::Usage;
     }
@@ -1412,13 +1421,6 @@ int main(int argc, char** argv) {
         std::cerr << "enzan: '--listen' cannot be combined with '--gui'; --gui starts a window "
                      "on a socket of its own, and --listen is for a kernel that outlives "
                      "whatever attaches to it\n";
-        return static_cast<int>(ExitStatus::Usage);
-    }
-
-    if (invocation.useGui && invocation.runUntil.has_value()) {
-        std::cerr << "enzan: '--run' cannot be combined with '--gui'; the window drives the "
-                     "run, and a design run before it attached would be put back to time zero "
-                     "rather than shown\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 

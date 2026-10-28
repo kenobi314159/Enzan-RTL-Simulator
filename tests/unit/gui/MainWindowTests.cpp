@@ -61,6 +61,7 @@
 namespace {
 
 using enzan::gui::DesignTreeModel;
+using enzan::gui::KernelSession;
 using enzan::gui::MainWindow;
 using enzan::gui::ObjectsModel;
 using enzan::gui::SignalInfo;
@@ -183,6 +184,26 @@ protected:
     /// Waits until the wave window holds `count` signals anywhere in it.
     bool waitForSignals(int count) {
         return pumpUntil([this, count] { return waves()->displayedSignals().size() == count; });
+    }
+
+    /// The toolbar's run length, which is the field whose tooltip says how long a run is.
+    [[nodiscard]] QLineEdit* runLength() const {
+        for (QLineEdit* edit : window->findChildren<QLineEdit*>()) {
+            if (edit->toolTip().startsWith(QStringLiteral("How long"))) return edit;
+        }
+        return nullptr;
+    }
+
+    /// Keeps the window's event loop until `done` or `milliseconds` have passed, for a test whose
+    /// kernel serves on a thread of its own rather than in `pump`'s turns. Returns what `done`
+    /// last said.
+    template<typename Predicate>
+    static bool waitFor(const Predicate& done, int milliseconds) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!done() && timer.elapsed() < milliseconds)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        return done();
     }
 
     Theme theme;
@@ -319,13 +340,6 @@ TEST_F(MainWindowTest, StopEndsARunTheWindowStarted) {
     std::thread kernel([this, &serving] {
         while (serving && server->step(10)) {}
     });
-    const auto waitFor = [](const auto& done, int milliseconds) {
-        QElapsedTimer timer;
-        timer.start();
-        while (!done() && timer.elapsed() < milliseconds)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        return done();
-    };
 
     runAll->trigger();
     EXPECT_TRUE(waitFor([this] { return session->state() == SimulationState::Running; }, 5000))
@@ -677,10 +691,7 @@ TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
     // The spellings `--run` takes, read by the same function (section 8.5): a count of the run's
     // unit, or a time with a unit of its own. The fixture's design runs in nanoseconds, and has an
     // event every five of them, which is where a run that ends between events leaves the time.
-    QLineEdit* length = nullptr;
-    for (QLineEdit* edit : window->findChildren<QLineEdit*>()) {
-        if (edit->toolTip().startsWith(QStringLiteral("How long"))) length = edit;
-    }
+    QLineEdit* length = runLength();
     QAction* run = nullptr;
     for (QAction* candidate : window->findChildren<QAction*>()) {
         if (candidate->text() == QStringLiteral("Run")) run = candidate;
@@ -724,6 +735,55 @@ TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
         return session->currentTime() == 45
                && session->state() != enzan::ipc::SimulationState::Running;
     })) << session->currentTime();
+}
+
+TEST_F(MainWindowTest, AllInTheRunLengthRunsUntilTheDesignFinishes) {
+    // As `--run all` does (section 8.5). The fixture's clock never stops, so the run goes on until
+    // it is stopped, and the kernel serves on a thread of its own: a run is carried out within one
+    // step of it, and `pump` would never come back.
+    QLineEdit* length = runLength();
+    QAction* run = actionCalled(QStringLiteral("Run"));
+    ASSERT_NE(length, nullptr);
+    ASSERT_NE(run, nullptr);
+
+    std::atomic<bool> serving = true;
+    std::thread kernel([this, &serving] {
+        while (serving && server->step(10)) {}
+    });
+
+    length->setText(QStringLiteral("all"));
+    run->trigger();
+    const bool started =
+        waitFor([this] { return session->state() == SimulationState::Running; }, 5000);
+    session->stop();
+    const bool stopped =
+        waitFor([this] { return session->state() == SimulationState::Idle; }, 20000);
+
+    serving = false;
+    kernel.join();
+    EXPECT_TRUE(started) << "'all' did not start a run";
+    EXPECT_TRUE(stopped) << "the run of 'all' did not end when stopped";
+}
+
+TEST_F(MainWindowTest, ARunAskedForBeforeTheWelcomeIsCountedInTheKernelsUnit) {
+    // What `enzan --gui --run 20ns` does: the window is asked for the run as it opens, before the
+    // kernel has said that the run counts nanoseconds. Counted then, in the session's default of
+    // picoseconds, it was a run of twenty thousand of them. Only one client may attach at a time,
+    // so the fixture's steps aside.
+    session->detach();
+    pump();
+
+    KernelSession late;
+    MainWindow lateWindow(late, theme);
+    QString error;
+    ASSERT_TRUE(late.attach(socketPath, error)) << error.toStdString();
+    ASSERT_FALSE(late.isWelcomed()) << "the greeting is a round trip away";
+    lateWindow.run(QStringLiteral("20ns"));
+
+    EXPECT_TRUE(pumpUntil([&late] {
+        return late.isWelcomed() && late.currentTime() == 20
+               && late.state() != SimulationState::Running;
+    })) << late.currentTime();
 }
 
 TEST_F(MainWindowTest, TheTranscriptIsClearedByOneCommand) {

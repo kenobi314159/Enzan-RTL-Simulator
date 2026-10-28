@@ -49,6 +49,13 @@ std::optional<TimeLength> parseTimeLength(std::string_view text) noexcept {
     return length;
 }
 
+std::optional<RunLength> parseRunLength(std::string_view text) noexcept {
+    if (text == "all") return RunLength{.length = TimeLength{}, .untilFinished = true};
+    const std::optional<TimeLength> length = parseTimeLength(text);
+    if (!length) return std::nullopt;
+    return RunLength{.length = *length, .untilFinished = false};
+}
+
 LengthFit TimeScale::countOf(const TimeLength& length, SimTime& count) const noexcept {
     if (length.inUnits) {
         count = length.mantissa;

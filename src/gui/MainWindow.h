@@ -13,6 +13,7 @@
 #include "gui/TranscriptView.h"
 #include "gui/WaveformModel.h"
 #include "gui/WaveformView.h"
+#include "runtime/Time.h"
 
 #include <QHash>
 #include <QMainWindow>
@@ -84,6 +85,16 @@ public:
 
     /// Writes the wave window's list to `path`. Returns false, having said why, when it cannot.
     bool saveSignalList(const QString& path);
+
+    /// Runs the design for `text`, read as `--run` reads it (DESIGN_GUIDE.md section 8.5): a count
+    /// of the run's time unit, a time with a unit of its own, or `all`, until the design finishes.
+    ///
+    /// What is no length of time is refused at once, with a note saying why. A run asked for
+    /// before the kernel has welcomed the window waits for the welcome, because that is where the
+    /// run's time unit comes from: `--run` is read as the window opens, before the kernel has said
+    /// anything, and a time counted in a unit the kernel has not named would run for another
+    /// length than the one asked for. So this may be called as soon as the window exists.
+    void run(const QString& text);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -159,7 +170,12 @@ private:
     /// a kernel on another machine is the case section 2.2 exists for.
     void showAbout();
 
-    void runForRequestedTime();
+    void runActionExec();
+
+    /// Asks the kernel for the run `length` is, now that the run's time unit is known. `text` is
+    /// how it was written, for saying what is wrong with it.
+    void startRun(const runtime::RunLength& length, const QString& text);
+
     void runUntilFinished();
     void stopRun();
     void restartRun();
@@ -323,6 +339,9 @@ private:
 
     /// A signal list asked for before the design arrived, loaded when it does.
     QString deferredSignalList;
+
+    /// A run asked for before the kernel welcomed the window, run when it does.
+    QString deferredRun;
 
     /// The file the wave window's list was last loaded from or saved to, which Save writes back
     /// to. Empty until there is one; a file that loaded nothing is not it.
