@@ -3024,6 +3024,14 @@ distribution's packaging repository would be given that repository's revision.
 **The same tag gives the same tarball**: its files in name order, owned by no one, dated at the
 commit and compressed by one `xz` thread. A tarball can therefore be checked by making it again.
 
+**A release is made by pushing its tag**, and the release workflow (16) does the rest but
+publish. It makes the tarball and refuses a tag that is not the tarball's version, so a tag on a
+`-dev` commit fails before anything is built; builds and tests every distribution's packages
+(11.7); and attaches the tarball, the packages and their checksums to a draft release. A
+maintainer reads the draft over and publishes it. Nothing is published unattended, because a
+published release is never replaced: its tarball's checksum is in every recipe that names it.
+`docs/releasing.md` has the steps in order.
+
 ### 11.7 Packages
 
 **Enzan is packaged for the distributions its toolchain floor reaches**: Ubuntu 24.04, Debian 13,
@@ -3059,7 +3067,7 @@ only where the distribution's package is missing or too old; Arch's mimalloc is 
 Fedora its Tcl 9.
 
 **`packaging/build-package.sh <target> <tarball>` builds one distribution's packages in a
-container of it**, as anyone can with Docker or Podman. What the
+container of it**, as the release workflow does and as anyone can with Docker or Podman. What the
 build needs is installed from the recipe into an image of its own; the build then runs with no
 network; and the packages are installed into a fresh container, the simulator's alone first.
 There `packaging/smoke-test.sh` runs a design of each language from them, shows that no Qt came
@@ -3450,6 +3458,12 @@ Jobs on `main` only:
 - `clang-tidy`, which analyses every source file.
 - The design regression for `taxi`, whose cocotb testbenches take minutes, and for NEORV32,
   under its VHDL testbench and the Verilog one (14.5).
+
+The release workflow runs on a tag only, `vX.Y.Z`, and by hand: it makes the source tarball,
+builds and tests the packages of every distribution of 11.7, each in a container of its own, and
+from a tag creates a draft release with them (11.6). Run by hand on a branch it tries the
+packaging and releases nothing, which is how a change to it is tried before a release depends on
+it.
 
 There is no scheduled job. A nightly run would be a useful addition once there is somewhere to
 publish its results: conformance pass rates over time, the benchmark series of 15.3, and the

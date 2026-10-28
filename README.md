@@ -371,6 +371,7 @@ Commit messages carry a category prefix; see section 17.1 of the design guide.
   both SystemVerilog and VHDL: what crosses between them, and at what cost.
 - [`docs/installing.md`](docs/installing.md) — installing a release's packages,
   or its source tarball.
+- [`docs/releasing.md`](docs/releasing.md) — making a release, for maintainers.
 - `docs/` — human-facing documentation (user manual, tutorials), to be
   derived from the design guide as the project matures.
 

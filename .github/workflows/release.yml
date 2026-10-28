@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Releases (DESIGN_GUIDE.md sections 11.6, 11.7 and 16). On a tag, `vX.Y.Z`, the source tarball and
+# every distribution's packages are made, tested and attached to a draft release, which a
+# maintainer reads over and publishes; nothing is published from here.
+#
+# It runs on a tag only, so the allowance branch CI spends is untouched. It can also be run by hand
+# on any branch, to try the packaging before a release: that builds and tests everything and
+# releases nothing.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dist:
+    name: Source tarball
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      tarball: ${{ steps.dist.outputs.tarball }}
+    steps:
+      # The tags, for the revision the tarball records, and NVC, which it carries.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Make the tarball
+        id: dist
+        run: |
+          tarball=$(scripts/make-dist.sh HEAD dist)
+          echo "tarball=$(basename "$tarball")" >>"$GITHUB_OUTPUT"
+
+      # A release's version has no suffix and is the tag's (section 11.6). A tag on a commit still
+      # -dev, or naming another version, is refused before anything is built.
+      - name: Check the tag against the version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TARBALL: ${{ steps.dist.outputs.tarball }}
+        run: |
+          expected="enzan-${GITHUB_REF_NAME#v}.tar.xz"
+          if [[ $TARBALL != "$expected" ]]; then
+            echo "::error::$GITHUB_REF_NAME is a release of $expected, and the commit makes $TARBALL"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  packages:
+    name: Packages, ${{ matrix.target }}
+    needs: dist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [ubuntu-24.04, debian-13, fedora, el9, arch]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      # Built with no network and tested from a fresh container (section 11.7).
+      - name: Build and test the packages
+        run: packaging/build-package.sh ${{ matrix.target }} "dist/${{ needs.dist.outputs.tarball }}" packages
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.target }}
+          path: packages/
+
+  release:
+    name: Draft release
+    needs: [dist, packages]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # What a user installs: the tarball and each distribution's packages. The debug symbols and
+      # the source packages stay in the run's artifacts, for whoever needs them.
+      - name: Collect what is released
+        run: |
+          mkdir release
+          cp artifacts/dist/* release/
+          find artifacts/packages-* -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
+            ! -name '*-dbgsym_*' ! -name '*-debuginfo-*' ! -name '*-debugsource-*' \
+            ! -name '*-debug-*' ! -name '*.src.rpm' -exec cp {} release/ \;
+          (cd release && sha256sum -- * >SHA256SUMS)
+          ls -l release
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft
+          --title "Enzan ${GITHUB_REF_NAME#v}" --generate-notes release/*
