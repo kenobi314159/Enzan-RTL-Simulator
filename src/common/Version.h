@@ -14,8 +14,9 @@ namespace enzan {
 /// the lifetime of the process, so callers may hold the returned view.
 std::string_view version() noexcept;
 
-/// Returns the abbreviated source revision the binary was built from, or
-/// `"unknown"` when the build tree was not a git checkout.
+/// Returns the abbreviated source revision the binary was built from: the one a
+/// release tarball records, or the checkout's, or `"unknown"` when the source was
+/// neither.
 ///
 /// This is the revision as of the last CMake *configure*, not the current state
 /// of the working tree: building after a commit without reconfiguring leaves it

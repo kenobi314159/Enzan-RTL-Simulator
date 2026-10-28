@@ -2993,6 +2993,35 @@ executable — a library a user names is where they name it (8.2), and settings 
 configuration directory (10.9) — so an installation its user cannot write to works as one they
 can. `golden.install` runs one that has been moved and made read-only.
 
+### 11.6 Releases
+
+**A release is a tag, `vX.Y.Z`, on a commit whose version is `X.Y.Z` with no suffix.** The release
+commit sets `project(VERSION)` and clears the default of `ENZAN_VERSION_SUFFIX`, so that anyone
+who builds its tarball is told the version it is, rather than every package having to pass
+`-DENZAN_VERSION_SUFFIX=` and anyone else building a `-dev`. The commit after it moves to the next
+version, with `-dev` again.
+
+**Its source tarball is made by `scripts/make-dist.sh`, not by GitHub.** The archive GitHub makes
+of a tag leaves submodules out, so it holds no NVC, and building it downloads slang, which no
+distribution packages. A distribution's builder has no network — Debian's, Fedora's and
+openSUSE's do not, nor Launchpad's — so the tarball carries both: every submodule at the commit
+the tag pins, and in `third_party/bundled/` the sources FetchContent downloads to build slang,
+slang's own among them. The script finds those by configuring the tag with every download forced
+and copying what CMake fetched, so the revisions slang pins for its own dependencies are restated
+nowhere.
+
+**A bundled source stands where its download would.** A system package is still preferred where
+one is found (11.2), and a checkout, which has no such directory, downloads as before. Nothing is
+vendored by it: the directory exists only in a tarball. `ENZAN_ALLOW_FETCH=OFF` admits a bundled
+source, since building one downloads nothing.
+
+**The tarball records the revision it was made from**, in `.tarball-revision`, and `--version`
+reports that rather than asking git. A tarball is not a checkout, and one unpacked inside a
+distribution's packaging repository would be given that repository's revision.
+
+**The same tag gives the same tarball**: its files in name order, owned by no one, dated at the
+commit and compressed by one `xz` thread. A tarball can therefore be checked by making it again.
+
 ---
 
 ## 12. Repository layout
@@ -3039,7 +3068,7 @@ Enzan-RTL-Simulator/
 │   └── designs/              scripts fetching external RTL — NEVER vendored
 ├── bench/                    performance benchmarks and result tracking
 ├── docs/                     human documentation, derived from this guide
-├── scripts/                  repository checks, runnable locally and by CI
+├── scripts/                  repository checks and release tooling, runnable locally and by CI
 └── third_party/              vendored dependencies where unavoidable
 ```
 

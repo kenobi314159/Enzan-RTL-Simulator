@@ -4,9 +4,16 @@
 # on .git/HEAD would rebuild the world on every commit for the sake of a string
 # nothing but `--version` reads, so the staleness is accepted and documented in
 # Version.h instead.
+#
+# A release tarball records the revision it was made from (DESIGN_GUIDE.md
+# section 11.6), and that comes first. A tarball is not a checkout, and one
+# unpacked inside a checkout, as a distribution's packaging repository unpacks
+# it, would otherwise be given that repository's revision.
 set(ENZAN_SOURCE_REVISION "unknown")
 find_package(Git QUIET)
-if(Git_FOUND)
+if(EXISTS "${PROJECT_SOURCE_DIR}/.tarball-revision")
+  file(STRINGS "${PROJECT_SOURCE_DIR}/.tarball-revision" ENZAN_SOURCE_REVISION LIMIT_COUNT 1)
+elseif(Git_FOUND)
   execute_process(
     COMMAND "${GIT_EXECUTABLE}" describe --always --dirty --abbrev=8
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"

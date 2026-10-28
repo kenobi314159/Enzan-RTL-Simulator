@@ -34,6 +34,33 @@ function(enzan_mark_includes_system target)
   endif()
 endfunction()
 
+# ---------------------------------------------------------------------------
+# Sources a release's tarball carries
+# ---------------------------------------------------------------------------
+#
+# A release's source tarball carries, in third_party/bundled/, the sources FetchContent would
+# otherwise download: slang and what slang fetches in turn (DESIGN_GUIDE.md section 11.6). A
+# distribution's builder has no network, so a tarball that downloaded would build on none of
+# them. Each directory stands in for its download, so a system package is still preferred where
+# one is found, as section 11.2 has it. A checkout has no such directory and downloads as before.
+set(_enzan_bundled "${PROJECT_SOURCE_DIR}/third_party/bundled")
+if(IS_DIRECTORY "${_enzan_bundled}")
+  file(
+    GLOB _enzan_bundled_names
+    LIST_DIRECTORIES true
+    RELATIVE "${_enzan_bundled}"
+    "${_enzan_bundled}/*")
+  foreach(_name IN LISTS _enzan_bundled_names)
+    if(IS_DIRECTORY "${_enzan_bundled}/${_name}")
+      string(TOUPPER "${_name}" _upper)
+      set(FETCHCONTENT_SOURCE_DIR_${_upper}
+          "${_enzan_bundled}/${_name}"
+          CACHE PATH "The source of ${_name} the release tarball carries")
+      message(STATUS "${_name} is built, if it is not found, from the source the tarball carries")
+    endif()
+  endforeach()
+endif()
+
 # FETCHCONTENT_BASE_DIR is deliberately left at its default, one per build
 # directory. Pointing several build trees at a shared base directory would share
 # not only the downloaded sources but also the dependency *build* trees, and two
@@ -182,7 +209,8 @@ set(ENZAN_SLANG_GIT_TAG
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   find_package(slang ${ENZAN_SLANG_VERSION} QUIET CONFIG)
   if(NOT slang_FOUND)
-    if(NOT ENZAN_ALLOW_FETCH)
+    # Building the source a release tarball carries downloads nothing.
+    if(NOT ENZAN_ALLOW_FETCH AND NOT FETCHCONTENT_SOURCE_DIR_SLANG)
       enzan_dependency_missing(
         NAME slang
         PURPOSE

@@ -67,6 +67,22 @@ Changing the default pinned revision is a deliberate act. Upgrading slang or NVC
 is expected to break the adapters in `src/frontend/`, which is what the golden
 tests exist to catch (DESIGN_GUIDE.md section 5.2).
 
+## Bundled in a release's source tarball
+
+A release's tarball carries, in `third_party/bundled/`, the sources FetchContent downloads to
+build slang, because a distribution's builder has no network (DESIGN_GUIDE.md section 11.6). They
+are what slang's pinned revision fetches, and `scripts/make-dist.sh` copies whatever CMake fetched
+rather than restating them, so this list is a record of the current revision rather than a
+second place they are set:
+
+| Dependency | Version | License | Brought in by |
+|---|---|---|---|
+| slang | `v11.0` | MIT | Enzan, `ENZAN_SLANG_GIT_TAG` |
+| [fmt](https://github.com/fmtlib/fmt) | `12.1.0` | MIT | slang, which builds its own (see `cmake/EnzanDependencies.cmake`) |
+| [mimalloc](https://github.com/microsoft/mimalloc) | `v3.3.2` | MIT | slang, where no mimalloc 3.3 or later is installed |
+
+None of them is in the repository, and each keeps its own licence text in the tarball.
+
 ## Adding a dependency
 
 Per DESIGN_GUIDE.md section 11.2, adding one requires all of:
