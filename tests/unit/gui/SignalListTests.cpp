@@ -8,6 +8,7 @@
 #include "gui/SignalList.h"
 
 #include "gui/KernelSession.h"
+#include "gui/TclSyntax.h"
 #include "gui/Theme.h"
 #include "gui/WaveformModel.h"
 
@@ -31,7 +32,7 @@ using enzan::eir::Radix;
 using enzan::gui::KernelSession;
 using enzan::gui::ParsedSignalList;
 using enzan::gui::parseSignalList;
-using enzan::gui::quoteSignalListWord;
+using enzan::gui::quoteTclWord;
 using enzan::gui::radixFromWord;
 using enzan::gui::radixWord;
 using enzan::gui::ResolvedSignalList;
@@ -223,12 +224,6 @@ TEST(SignalList, NestingIsBounded) {
 // Writing words back
 // ---------------------------------------------------------------------------
 
-TEST(SignalList, AWordIsQuotedOnlyWhenItMustBe) {
-    EXPECT_EQ(quoteSignalListWord(QStringLiteral("/tb/gen[0].q")), QStringLiteral("/tb/gen[0].q"));
-    EXPECT_EQ(quoteSignalListWord(QStringLiteral("two words")), QStringLiteral("{two words}"));
-    EXPECT_EQ(quoteSignalListWord(QString()), QStringLiteral("{}"));
-}
-
 TEST(SignalList, EveryWordReadsBackAsItWasWritten) {
     const QStringList words = {
         QStringLiteral("plain"),      QStringLiteral("two words"),   QStringLiteral("a{b"),
@@ -241,7 +236,7 @@ TEST(SignalList, EveryWordReadsBackAsItWasWritten) {
 
     for (const QString& word : words) {
         const QByteArray text =
-            QStringLiteral("add wave -label %1 /tb/a\n").arg(quoteSignalListWord(word)).toUtf8();
+            QStringLiteral("add wave -label %1 /tb/a\n").arg(quoteTclWord(word)).toUtf8();
         const ParsedSignalList parsed = parseSignalList(text);
         ASSERT_TRUE(parsed.errors.isEmpty()) << word.toStdString() << " written as "
                                              << text.toStdString() << ": " << firstError(parsed);

@@ -13,7 +13,9 @@
 namespace {
 
 using enzan::runtime::LengthFit;
+using enzan::runtime::parseRunLength;
 using enzan::runtime::parseTimeLength;
+using enzan::runtime::RunLength;
 using enzan::runtime::SimTime;
 using enzan::runtime::TimeLength;
 using enzan::runtime::TimeScale;
@@ -64,8 +66,30 @@ TEST(TimeTests, ATimeLongerThanARunCountsIsRefused) {
 
 TEST(TimeTests, WhatIsNoLengthOfTimeDoesNotParse) {
     for (const std::string_view text : {"", "ns", "1.5", "5.", ".5ns", "1.ns", "10xs", "10 ns",
-                                        "-1ns", "1e3ns", "99999999999999999999ns"}) {
+                                        "-1ns", "1e3ns", "99999999999999999999ns", "all"}) {
         EXPECT_FALSE(parseTimeLength(text).has_value()) << "'" << text << "'";
+    }
+}
+
+TEST(TimeTests, ARunGoesOnUntilTheDesignFinishesOrForALengthOfTime) {
+    const std::optional<RunLength> all = parseRunLength("all");
+    ASSERT_TRUE(all.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access): checked by the ASSERT above.
+    EXPECT_TRUE(all->untilFinished);
+
+    // Anything else is a length, read as parseTimeLength reads it.
+    const std::optional<RunLength> length = parseRunLength("1.5us");
+    ASSERT_TRUE(length.has_value());
+    // NOLINTBEGIN(bugprone-unchecked-optional-access): checked by the ASSERT above.
+    EXPECT_FALSE(length->untilFinished);
+    SimTime count = 0;
+    EXPECT_EQ(TimeScale(-12).countOf(length->length, count), LengthFit::Exact);
+    // NOLINTEND(bugprone-unchecked-optional-access)
+    EXPECT_EQ(count, 1'500'000U);
+
+    // Spelt as it is, as a unit is.
+    for (const std::string_view text : {"ALL", "All", " all", "all ", "allns", "1.5", ""}) {
+        EXPECT_FALSE(parseRunLength(text).has_value()) << "'" << text << "'";
     }
 }
 

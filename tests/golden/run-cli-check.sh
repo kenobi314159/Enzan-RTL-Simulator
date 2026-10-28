@@ -71,6 +71,7 @@ expect 1 "option '--top' needs a value" "$enzan" --top
 # A served session is driven by its client (8.4), and a signal list fills a window a headless run
 # does not have (10.8): each refused rather than dropped.
 expect 1 "cannot be combined" "$enzan" --listen k.sock --run 10 tb.sv
+expect 1 "cannot be combined" "$enzan" --listen k.sock --run all tb.sv
 expect 1 "'--wave-list' needs '--gui'" "$enzan" run --wave-list signals.tcl tb
 
 # --- the shape of the command (8.1) ---------------------------------------------------------------
@@ -116,9 +117,14 @@ expect 0 "tb.sv" "$enzan" --dry-run -t tb --top tb -G W=1 -GW=1 tb.sv
 # --- how long a run runs --------------------------------------------------------------------------
 
 # A count of the run's time unit, or a time with a unit of its own, which has to be a whole number
-# of the run's unit once the design has settled what that is (3.1).
+# of the run's unit once the design has settled what that is (3.1); or `all`, until the design
+# finishes, as no `--run` does.
 expect 1 "'1.5' is not a length of time" "$enzan" --run 1.5 tb.sv
 expect 1 "'10xs' is not a length of time" "$enzan" --run 10xs tb.sv
+expect 1 "'ALL' is not a length of time" "$enzan" --run ALL tb.sv
+if [[ ${#sources[@]} -gt 0 ]]; then
+    expect 0 "PASS cli tb" "$enzan" --run all "${sources[0]}"
+fi
 if has systemverilog; then
     printf '`timescale 1ns/1ps\nmodule clock;\n  reg c = 0;\n  always #5 c = ~c;\nendmodule\n' \
         >clock.sv
@@ -130,6 +136,41 @@ elif has vhdl; then
     printf 'entity clock is end entity;\narchitecture a of clock is\n  signal c : bit;\n' >clock.vhd
     printf 'begin\n  c <= not c after 5 ns;\nend architecture;\n' >>clock.vhd
     expect 0 "ended at 1500000000fs" "$enzan" --dump-stats --run 1.5us clock.vhd
+fi
+
+# --- what reaches the window (8.4) ---------------------------------------------------------------
+
+# The window's own options are forwarded as they were written, and none it was not given: the
+# window reads `--run` again, by the same function, once the kernel has said what unit it counts.
+# `enzan` starts the front end beside itself, so a copy of it is put beside a stand-in that says
+# what it was given, with the build's lib/ beside the copy's bin/ for VHDL's standard libraries;
+# `--attach` starts no kernel, so this needs no design and no display.
+mkdir -p window/bin
+cp "$enzan" window/bin/enzan
+ln -s "$(cd "$(dirname "$enzan")/.." && pwd)/lib" window/lib
+printf '#!/bin/sh\necho "front end: $*"\n' >window/bin/enzan-gui
+chmod +x window/bin/enzan-gui
+expect 0 "front end: --attach k.sock" window/bin/enzan --gui --attach k.sock
+expect 0 "front end: --run 10ns --attach k.sock" window/bin/enzan --gui --attach k.sock --run 10ns
+expect 0 "front end: --run all --attach k.sock" window/bin/enzan --gui --attach k.sock -r all
+
+# A window `--gui` started that failed is not one its reader closed (8.1, 8.4): it is said to have,
+# and the status is 4, where a closed one leaves the run's. One that cannot be started at all is
+# said to be at once. SIGTERM rather than a crash's signal, so that no core is dumped.
+if [[ ${#sources[@]} -gt 0 ]]; then
+    stand_in() {
+        printf '#!/bin/sh\n%s\n' "$1" >window/bin/enzan-gui
+        chmod +x window/bin/enzan-gui
+    }
+    stand_in 'exit 0'
+    expect 0 "" window/bin/enzan --gui "${sources[0]}"
+    stand_in 'kill -TERM $$'
+    expect 4 "the graphical front end ended on signal 15" window/bin/enzan --gui "${sources[0]}"
+    stand_in 'exit 7'
+    expect 4 "the graphical front end exited with status 7" window/bin/enzan --gui "${sources[0]}"
+    rm window/bin/enzan-gui
+    expect 1 "could not start the graphical front end" \
+        env PATH="$work/nowhere" window/bin/enzan --gui "${sources[0]}"
 fi
 
 # --- a dependency file (8.3) ---------------------------------------------------------------------

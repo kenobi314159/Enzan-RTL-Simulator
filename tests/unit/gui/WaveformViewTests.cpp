@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include <QImage>
+#include <QItemSelectionModel>
 #include <QPixmap>
 #include <QScrollBar>
 #include <QTreeView>
@@ -495,6 +496,63 @@ TEST_F(WaveformViewTest, TracesArePaintedInTheThemeColour) {
         << "the ruler was not drawn";
 }
 
+TEST_F(WaveformViewTest, AHighlightedRowsNamesAreInTheThemesColourForThem) {
+    // Drawn rather than asked of the model, because what a model offers a view can still be
+    // overruled on the way to the screen: by a style sheet, or by a style that ignores it.
+    showEverythingAndRun(50);
+    QString error;
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme wave.highlight.text #ff00ff"), error))
+        << error.toStdString();
+    const int first = model->rowIdOf(model->index(0, 0));
+
+    // Text is antialiased, so its pixels are blends of its colour and the background rather than
+    // the colour itself. Magenta is counted by its shape instead, because nothing else in the
+    // list comes near it.
+    const auto magenta = [this] {
+        QCoreApplication::processEvents();
+        const QImage drawn =
+            treeView->viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+        int count = 0;
+        for (int y = 0; y < drawn.height(); ++y) {
+            for (int x = 0; x < drawn.width(); ++x) {
+                const QColor pixel = drawn.pixelColor(x, y);
+                if (pixel.red() > 150 && pixel.green() < 100 && pixel.blue() > 150) ++count;
+            }
+        }
+        return count;
+    };
+
+    model->setHighlight(first, 1);
+    EXPECT_GT(magenta(), 10) << "the highlighted row's name was not drawn in wave.highlight.text";
+
+    // Selected, the row's text is the selection's, as its background is.
+    treeView->selectionModel()->select(model->index(0, 0), QItemSelectionModel::ClearAndSelect
+                                                               | QItemSelectionModel::Rows);
+    EXPECT_EQ(magenta(), 0) << "a selected row kept the highlight's text colour";
+    treeView->selectionModel()->clearSelection();
+
+    model->setHighlight(first, 0);
+    EXPECT_EQ(magenta(), 0) << "a row with no highlight still had the highlight's text colour";
+}
+
+TEST_F(WaveformViewTest, ANewThemeReachesTracesAlreadyDrawn) {
+    // A drawn trace is kept as a picture between repaints (section 10.3), and nothing in the
+    // picture says which colours it was drawn in, so a theme changed under it has to be told.
+    showEverythingAndRun(200);
+    const QColor before = theme.color(enzan::gui::ThemeColor::WaveTrace);
+    ASSERT_GT(countOf(colourHistogram(render()), before), 200);
+
+    QString error;
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme wave.trace #ff00ff"), error))
+        << error.toStdString();
+    view->themeChanged();
+
+    const std::map<QRgb, int> counts = colourHistogram(render());
+    EXPECT_GT(countOf(counts, QColor(0xFF, 0x00, 0xFF)), 200)
+        << "the traces were not drawn in the new theme's colour";
+    EXPECT_EQ(countOf(counts, before), 0) << "a trace kept the old theme's colour";
+}
+
 TEST_F(WaveformViewTest, AConstantBitOfABusyBusIsDrawnAsALevelAndNotAsABusyBar) {
     // The complaint this pins: zoomed out far enough that a pixel column spans several changes
     // of an unpacked bus, every one of its bits was filled as busy — because the row was
@@ -608,6 +666,56 @@ TEST_F(WaveformViewTest, RenderingCostDoesNotGrowWithTheTransitionsInView) {
     EXPECT_GT(countOf(wide, theme.color(enzan::gui::ThemeColor::WaveTrace)), 200);
 }
 
+TEST_F(WaveformViewTest, ABusyStretchIsUnknownOnlyWhereTheValueWas) {
+    // Zoomed out, a bus changing in every pixel column is drawn as one filled band, red where its
+    // value was unknown. The band took the colour of its first column, so one unknown column at
+    // the left edge made the whole row red, and one anywhere else was not shown at all.
+    SignalInfo count;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+        if (info.name == QStringLiteral("count")) count = info;
+    }
+    ASSERT_GT(count.width, 1U);
+    model->addSignal(count);
+    session->subscribe({count.signalIndex});
+
+    // Counting, then unknown for a moment, then counting again: the clock ticks every ten units,
+    // so a column fifty units wide holds five changes.
+    session->run(20'000);
+    ASSERT_TRUE(pumpUntilCaughtUp(20'000));
+    session->deposit(count.signalIndex,
+                     enzan::eir::BitVector::filled(count.width, enzan::eir::Logic::Unknown));
+    session->run(100);
+    ASSERT_TRUE(pumpUntilCaughtUp(20'100));
+    session->deposit(count.signalIndex, enzan::eir::BitVector::fromUInt64(0, count.width));
+    session->run(19'900);
+    ASSERT_TRUE(pumpUntilCaughtUp(40'000));
+
+    const QColor fill = theme.color(enzan::gui::ThemeColor::WaveTraceFill);
+    const QColor unknown = theme.color(enzan::gui::ThemeColor::WaveUnknown);
+    const auto columnHas = [](const QImage& image, int x, const QColor& colour) {
+        for (int y = 0; y < image.height(); ++y) {
+            if (image.pixel(x, y) == colour.rgb()) return true;
+        }
+        return false;
+    };
+
+    // The unknown stretch in the middle of the window, and then in the first column, which is
+    // busy and unknown at once: the clock ticks at 19985 and 19995 and the deposit lands at 20000.
+    for (const enzan::runtime::SimTime start :
+         {enzan::runtime::SimTime{10'000}, enzan::runtime::SimTime{19'980}}) {
+        view->axis().setRange(start, 20'000);
+        const QImage image = render();
+        const int right = image.width() - 40;
+
+        EXPECT_TRUE(columnHas(image, right, fill)) << "from " << start
+                                                   << ": far from the unknown "
+                                                      "stretch the band is the trace's fill";
+        EXPECT_FALSE(columnHas(image, right, unknown)) << "from " << start;
+        EXPECT_GT(countOf(colourHistogram(image), unknown), 0)
+            << "from " << start << ": the unknown stretch is shown";
+    }
+}
+
 TEST_F(WaveformViewTest, ZoomingToFitShowsTheWholeRun) {
     showEverythingAndRun(500);
 
@@ -664,6 +772,32 @@ TEST_F(WaveformViewTest, ScrollingReusesTheSummariesAlreadyComputed) {
 
     EXPECT_LE(view->summariesComputed() - afterFirstPaint, 2U)
         << "scrolling one line must summarise the row that came into view, not every row";
+}
+
+TEST_F(WaveformViewTest, MovingTheCursorDrawsNoTraceAgain) {
+    // A cursor move changes the value beside every row and nothing on any trace. Every trace was
+    // drawn again all the same, and a group made of a whole design joins every value in it for
+    // each segment it labels, which made each click on a large design take most of a second.
+    showEverythingAndRun(2000);
+    view->axis().setRange(0, 200);
+    static_cast<void>(render());
+    const std::uint64_t drawn = view->tracesDrawn();
+    ASSERT_GT(drawn, 0U);
+
+    model->setCursorTime(105);
+    static_cast<void>(render());
+    EXPECT_EQ(view->tracesDrawn(), drawn) << "moving the cursor redrew a trace";
+
+    // What a trace does show is drawn again when it changes: a radix and a name.
+    const int counter = model->rowIdOf(model->index(1, 0));
+    model->setRadixRecursive(counter, enzan::eir::Radix::Binary);
+    static_cast<void>(render());
+    EXPECT_GT(view->tracesDrawn(), drawn) << "a radix changes what a trace prints";
+
+    const std::uint64_t afterRadix = view->tracesDrawn();
+    model->setSymbolicRecursive(counter, true);
+    static_cast<void>(render());
+    EXPECT_GT(view->tracesDrawn(), afterRadix) << "naming changes what a trace prints";
 }
 
 TEST_F(WaveformViewTest, ZoomingSummarisesAgain) {

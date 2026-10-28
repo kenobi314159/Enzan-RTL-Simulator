@@ -10,11 +10,11 @@
 // **There are no colour values here.** DESIGN_GUIDE.md section 10.5 requires every colour to
 // come from the theme configuration file, and a default written in C++ would be exactly the
 // literal that rule forbids — it would also mean a theme could be half-applied without anyone
-// noticing. The shipped dark theme (themes/dark.tcl) defines every key below, and loading it is
-// what supplies the defaults; a user theme is layered on top of it.
+// noticing. Every shipped theme (themes/*.tcl) defines every key below, and loading the default
+// dark one is what supplies the defaults; a user theme is layered on top of it.
 //
-// Adding a key here means adding it to themes/dark.tcl in the same commit, or the theme test
-// fails. That is the point of the test.
+// Adding a key here means adding it to every file in themes/ in the same commit, or the theme
+// test fails. That is the point of the test.
 
 // --- Chrome ----------------------------------------------------------------
 
@@ -58,7 +58,8 @@ ENZAN_THEME_COLOR(SourceBreakpointDisabled, "source.breakpoint.disabled")
 
 // --- Waveform view ---------------------------------------------------------
 //
-// Section 10.5 fixes two of these: a high-contrast black background and light green traces.
+// Section 10.5 fixes two of these for the default theme: a high-contrast black background and
+// light green traces.
 
 ENZAN_THEME_COLOR(WaveBackground, "wave.background")
 ENZAN_THEME_COLOR(WaveTrace, "wave.trace")
@@ -85,3 +86,7 @@ ENZAN_THEME_COLOR(WaveHighlight2, "wave.highlight.2")
 ENZAN_THEME_COLOR(WaveHighlight3, "wave.highlight.3")
 ENZAN_THEME_COLOR(WaveHighlight4, "wave.highlight.4")
 ENZAN_THEME_COLOR(WaveHighlight5, "wave.highlight.5")
+
+// The names and values on a highlighted row of the signal list, one colour for all five
+// backgrounds, so that a theme can keep them readable on each of them.
+ENZAN_THEME_COLOR(WaveHighlightText, "wave.highlight.text")

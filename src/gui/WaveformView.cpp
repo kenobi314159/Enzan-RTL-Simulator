@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <optional>
 #include <span>
 
@@ -42,6 +43,9 @@ constexpr double MinimumGridPixels = 90.0;
 
 /// How much one wheel notch zooms.
 constexpr double ZoomStep = 1.25;
+
+/// How far one press of a pan key moves the view.
+constexpr double PanStepPixels = 60.0;
 
 /// Positions the scroll bar can take. The time range is 64-bit and a scroll bar is not, so the
 /// bar works in fractions of the scrollable span rather than in time units.
@@ -102,12 +106,20 @@ void WaveformView::setRowView(QTreeView* rowView) {
         connect(model, &QAbstractItemModel::rowsMoved, this, restructured);
         connect(model, &QAbstractItemModel::modelReset, this, restructured);
         connect(model, &QAbstractItemModel::layoutChanged, this, restructured);
-        // A radix, a highlight, a new value under the cursor: the row is the same shape and
-        // the summary still stands, but the picture drawn from it does not.
-        connect(model, &QAbstractItemModel::dataChanged, this, [this] {
-            invalidateTraces();
-            update();
-        });
+        // A radix, a highlight, a name: the row is the same shape and the summary still stands,
+        // but the picture drawn from it does not. A change confined to the value column is the
+        // cursor moving or values arriving, and redraws nothing: no trace depends on where the
+        // cursor is, and what arrives moves the time the traces stop at, which the paint checks
+        // for itself. Redrawing every trace on every click was what made a large design's
+        // window too slow to answer.
+        connect(model, &QAbstractItemModel::dataChanged, this,
+                [this](const QModelIndex& topLeft, const QModelIndex& bottomRight) {
+                    if (topLeft.column() == WaveformModel::ValueColumn
+                        && bottomRight.column() == WaveformModel::ValueColumn)
+                        return;
+                    invalidateTraces();
+                    update();
+                });
     }
 
     // Selecting a row in the list means the same thing as clicking its trace: it is the row
@@ -240,6 +252,14 @@ void WaveformView::zoomToCursors() {
     if (first == second) return;
 
     timeAxis.showRange(cursorList[first].time, cursorList[second].time);
+    following = false;
+    syncScrollBar();
+    update();
+    Q_EMIT rangeChanged();
+}
+
+void WaveformView::panStep(bool later) {
+    timeAxis.pan(later ? PanStepPixels : -PanStepPixels);
     following = false;
     syncScrollBar();
     update();
@@ -404,18 +424,57 @@ void WaveformView::stepActiveCursorToEdge(bool forward) {
 
     // The reader is stepping towards something they want to look at, so the view goes with
     // them rather than leaving the cursor off the side of the window.
-    if (cursorList[index].time < timeAxis.start() || cursorList[index].time > timeAxis.end()) {
-        timeAxis.setRange(cursorList[index].time > timeAxis.span() / 2
-                              ? cursorList[index].time - (timeAxis.span() / 2)
-                              : 0,
-                          timeAxis.span());
-        following = false;
-        syncScrollBar();
-        Q_EMIT rangeChanged();
-    }
+    bringIntoView(edge);
 
     update();
     Q_EMIT cursorsChanged();
+}
+
+void WaveformView::placeActiveCursor(runtime::SimTime time) {
+    if (cursorList.isEmpty()) return;
+
+    const int index = std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1);
+    if (cursorList[index].locked) return;
+
+    cursorList[index].time = time;
+    bringIntoView(time);
+    update();
+    Q_EMIT cursorsChanged();
+}
+
+void WaveformView::activateNeighbourCursor(bool later) {
+    if (cursorList.size() < 2) return;
+
+    // Ordered by time, and by name where two share one: a cursor just added sits on the active
+    // one's time, and the list itself is reordered whenever a cursor is made active, so without
+    // the names the two would swap places each time either key was pressed.
+    QVector<int> order(cursorList.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::ranges::stable_sort(order, [this](int left, int right) {
+        if (cursorList[left].time != cursorList[right].time)
+            return cursorList[left].time < cursorList[right].time;
+        return cursorList[left].name < cursorList[right].name;
+    });
+
+    const auto position =
+        order.indexOf(std::clamp(active, 0, static_cast<int>(cursorList.size()) - 1));
+    const qsizetype neighbour = later ? position + 1 : position - 1;
+    if (neighbour < 0 || neighbour >= order.size()) return;
+
+    const runtime::SimTime time = cursorList[order[neighbour]].time;
+    setActiveCursor(order[neighbour]);
+    bringIntoView(time);
+}
+
+void WaveformView::bringIntoView(runtime::SimTime time) {
+    if (time >= timeAxis.start() && time <= timeAxis.end()) return;
+
+    timeAxis.setRange(time > timeAxis.span() / 2 ? time - (timeAxis.span() / 2) : 0,
+                      timeAxis.span());
+    following = false;
+    syncScrollBar();
+    update();
+    Q_EMIT rangeChanged();
 }
 
 void WaveformView::pickAt(const QPoint& point) {
@@ -832,6 +891,11 @@ void WaveformView::invalidateTraces() {
     for (CachedSamples& entry : sampleCache) entry.trace = QPixmap();
 }
 
+void WaveformView::themeChanged() {
+    invalidateTraces();
+    update();
+}
+
 WaveformView::CachedSamples* WaveformView::sampleRow(int rowId, const QRect& area) {
     const int columns = area.width();
     if (columns <= 0) return nullptr;
@@ -883,6 +947,7 @@ void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
         // At the device's own resolution, or the trace would be drawn at one scale and shown
         // at another — which on a high-resolution screen is the difference between a crisp
         // line and a blurred one.
+        ++traceCount;
         const qreal scale = devicePixelRatioF();
         entry.trace = QPixmap(traceRect.size() * scale);
         entry.trace.setDevicePixelRatio(scale);
@@ -1018,8 +1083,14 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId
         const int x = area.left() + static_cast<int>(column);
 
         if (sample.transitions > 0) {
+            // The run stops where the unknown flag changes, as the one-bit painter's does. Taking
+            // the colour of its first column instead painted a whole zoomed-out row red for one
+            // unknown column at its left edge, and hid one anywhere else.
             std::size_t run = column;
-            while (run < samples.size() && samples[run].transitions > 0) ++run;
+            while (run < samples.size() && samples[run].transitions > 0
+                   && samples[run].anyUnknown == sample.anyUnknown) {
+                ++run;
+            }
 
             const int runWidth = static_cast<int>(run - column);
             painter.fillRect(QRect(x, top, runWidth, bottom - top + 1),
@@ -1275,29 +1346,41 @@ void WaveformView::wheelEvent(QWheelEvent* event) {
     event->accept();
 }
 
+QVector<ShortcutEntry> WaveformView::gestures() {
+    return {
+        {.keys = tr("Wheel"), .meaning = tr("Scroll the signal list")},
+        {.keys = tr("Ctrl+Wheel"), .meaning = tr("Zoom about the pointer")},
+        {.keys = tr("Shift+Wheel"), .meaning = tr("Pan")},
+        {.keys = tr("Middle drag"), .meaning = tr("Pan")},
+        {.keys = tr("Right drag leftwards"), .meaning = tr("Zoom to the range dragged over")},
+        {.keys = tr("Right drag rightwards"), .meaning = tr("Zoom to fit the run")},
+        {.keys = tr("Click a trace"),
+         .meaning = tr("Select its row and move the active cursor to an edge near the click")},
+        {.keys = tr("Click a cursor's label"), .meaning = tr("Make it the active cursor")},
+        {.keys = tr("Double-click a cursor's label"), .meaning = tr("Rename it")},
+        {.keys = tr("Right-click a cursor's label"), .meaning = tr("Rename, lock or remove it")},
+        {.keys = tr("Drag a row"), .meaning = tr("Move it, into or out of a group too")},
+        {.keys = tr("Up, Down"), .meaning = tr("Move between rows")},
+        {.keys = tr("Left, Right"),
+         .meaning = tr("Pack or unpack a row, or move out of or into it")},
+        {.keys = tr("+, -, *"), .meaning = tr("Unpack, pack, unpack everything below")},
+        {.keys = tr("Home, End"), .meaning = tr("First and last row")},
+        {.keys = tr("Type a name"),
+         .meaning = tr("Jump to the next row whose name starts with it")},
+    };
+}
+
 void WaveformView::keyPressEvent(QKeyEvent* event) {
-    switch (event->key()) {
-    case Qt::Key_Plus:
-    case Qt::Key_Equal: zoomIn(); return;
-    case Qt::Key_Minus: zoomOut(); return;
-    case Qt::Key_F: zoomFit(); return;
-    case Qt::Key_Home: setCursorTime(active, 0); return;
-    case Qt::Key_Left:
-        timeAxis.pan(-60.0);
-        following = false;
-        syncScrollBar();
-        update();
-        Q_EMIT rangeChanged();
+    if (rows == nullptr) {
+        QWidget::keyPressEvent(event);
         return;
-    case Qt::Key_Right:
-        timeAxis.pan(60.0);
-        following = false;
-        syncScrollBar();
-        update();
-        Q_EMIT rangeChanged();
-        return;
-    default: QWidget::keyPressEvent(event); return;
     }
+
+    // Accepted here whatever the list made of it. A key the list ignores has already been
+    // offered to everything above the list, and that is everything above this view too; letting
+    // it go on from here would offer it to all of them a second time.
+    QCoreApplication::sendEvent(rows, event);
+    event->accept();
 }
 
 bool WaveformView::focusNextPrevChild(bool next) {

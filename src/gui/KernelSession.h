@@ -119,6 +119,11 @@ public:
 
     [[nodiscard]] bool isAttached() const;
 
+    /// Whether the kernel has answered the handshake, and so whether what it describes itself
+    /// with — `timeScale()` first, which a run length with a unit is counted in — is the kernel's
+    /// rather than a default. Attaching sends the handshake; the answer arrives a round trip later.
+    [[nodiscard]] bool isWelcomed() const noexcept { return greeted; }
+
     // --- requests ----------------------------------------------------------
 
     void queryDesign();
@@ -276,6 +281,9 @@ private:
     /// Signal metadata by kernel index. Ordered rather than hash-based, because what the GUI
     /// lists is observable and section 3.8 makes observable ordering reproducible.
     std::map<std::uint32_t, SignalInfo> knownSignals;
+
+    /// Whether `onWelcome` has taken the kernel's greeting since the connection was made.
+    bool greeted = false;
 
     QString top;
     QString version;

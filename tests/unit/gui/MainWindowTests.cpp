@@ -10,8 +10,11 @@
 
 #include "gui/MainWindow.h"
 
+#include "common/Version.h"
+#include "gui/Configuration.h"
 #include "gui/DesignTreeModel.h"
 #include "gui/ObjectsModel.h"
+#include "gui/ShortcutSheet.h"
 #include "gui/Theme.h"
 #include "gui/TranscriptView.h"
 #include "gui/WaveformModel.h"
@@ -22,14 +25,31 @@
 #include <gtest/gtest.h>
 
 #include <QAction>
+#include <QApplication>
 #include <QCoreApplication>
+#include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QImage>
+#include <QInputDialog>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMenuBar>
+#include <QMessageBox>
+#include <QPalette>
 #include <QPlainTextEdit>
+#include <QPushButton>
+#include <QSize>
 #include <QString>
+#include <QStringList>
+#include <QTemporaryDir>
+#include <QTest>
+#include <QTextBlock>
+#include <QTextBrowser>
 #include <QTreeView>
 
 #include <algorithm>
@@ -41,6 +61,7 @@
 namespace {
 
 using enzan::gui::DesignTreeModel;
+using enzan::gui::KernelSession;
 using enzan::gui::MainWindow;
 using enzan::gui::ObjectsModel;
 using enzan::gui::SignalInfo;
@@ -56,12 +77,6 @@ const QString Child = QStringLiteral("/tb/u_dut");
 class MainWindowTest : public enzan::test::SessionFixture {
 protected:
     void SetUp() override {
-        // A settings identity of the suite's own. `MainWindow` restores its layout on
-        // construction, and under the real application's name it would restore whatever layout
-        // the developer running this suite last saved — making the result depend on the machine.
-        QCoreApplication::setOrganizationName(QStringLiteral("enzan-tests"));
-        QCoreApplication::setApplicationName(QStringLiteral("gui-tests"));
-
         SessionFixture::SetUp();
 
         window = std::make_unique<MainWindow>(*session, theme);
@@ -150,9 +165,45 @@ protected:
         return indices;
     }
 
+    /// The wave window's list of names, which is the tree whose model is the wave model.
+    [[nodiscard]] QTreeView* waveRows() const {
+        for (QTreeView* view : window->findChildren<QTreeView*>()) {
+            if (qobject_cast<WaveformModel*>(view->model()) != nullptr) return view;
+        }
+        return nullptr;
+    }
+
+    /// The window's action whose text is `text`, or null.
+    [[nodiscard]] QAction* actionCalled(const QString& text) const {
+        for (QAction* candidate : window->findChildren<QAction*>()) {
+            if (candidate->text() == text) return candidate;
+        }
+        return nullptr;
+    }
+
     /// Waits until the wave window holds `count` signals anywhere in it.
     bool waitForSignals(int count) {
         return pumpUntil([this, count] { return waves()->displayedSignals().size() == count; });
+    }
+
+    /// The toolbar's run length, which is the field whose tooltip says how long a run is.
+    [[nodiscard]] QLineEdit* runLength() const {
+        for (QLineEdit* edit : window->findChildren<QLineEdit*>()) {
+            if (edit->toolTip().startsWith(QStringLiteral("How long"))) return edit;
+        }
+        return nullptr;
+    }
+
+    /// Keeps the window's event loop until `done` or `milliseconds` have passed, for a test whose
+    /// kernel serves on a thread of its own rather than in `pump`'s turns. Returns what `done`
+    /// last said.
+    template<typename Predicate>
+    static bool waitFor(const Predicate& done, int milliseconds) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!done() && timer.elapsed() < milliseconds)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        return done();
     }
 
     Theme theme;
@@ -167,7 +218,7 @@ TEST_F(MainWindowTest, AGroupedInsertNamesTheGroupAfterTheScopesPath) {
     const QVector<std::uint32_t> expected = signalsOf(Top);
     ASSERT_FALSE(expected.isEmpty());
 
-    insert(Top, QStringLiteral("Add to wave"));
+    insert(Top, QStringLiteral("Add to Wave"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
@@ -187,7 +238,7 @@ TEST_F(MainWindowTest, AGroupedRecursiveInsertNestsTheGroupsAsTheDesignIs) {
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
-    insert(Top, QStringLiteral("Add to wave recursive"));
+    insert(Top, QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
@@ -231,7 +282,7 @@ TEST_F(MainWindowTest, AnInsertLeavesTheObjectsWindowOnTheScopeTheReaderClicked)
     ASSERT_TRUE(pumpUntil([this] { return objects()->scope() == Top; }));
 
     const QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
-    insert(Top, QStringLiteral("Add to wave recursive"));
+    insert(Top, QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     EXPECT_EQ(objects()->scope(), Top);
@@ -246,7 +297,7 @@ TEST_F(MainWindowTest, NoGroupIsLeftEmpty) {
     QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
     std::ranges::sort(expected);
 
-    insert(Top, QStringLiteral("Add to wave recursive"));
+    insert(Top, QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     QVector<int> rows = topRows();
@@ -282,20 +333,13 @@ TEST_F(MainWindowTest, StopEndsARunTheWindowStarted) {
     ASSERT_NE(stop, nullptr);
 
     // Streamed signals are what the window has to keep up with.
-    insert(Top, QStringLiteral("Add to wave recursive"));
+    insert(Top, QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>((signalsOf(Top) + signalsOf(Child)).size())));
 
     std::atomic<bool> serving = true;
     std::thread kernel([this, &serving] {
         while (serving && server->step(10)) {}
     });
-    const auto waitFor = [](const auto& done, int milliseconds) {
-        QElapsedTimer timer;
-        timer.start();
-        while (!done() && timer.elapsed() < milliseconds)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        return done();
-    };
 
     runAll->trigger();
     EXPECT_TRUE(waitFor([this] { return session->state() == SimulationState::Running; }, 5000))
@@ -351,14 +395,303 @@ TEST_F(MainWindowTest, TheWaveFontIsTheNamesAndTheTraces) {
     EXPECT_EQ(text->font().family(), QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
 }
 
+// ---------------------------------------------------------------------------
+// Changing the theme
+// ---------------------------------------------------------------------------
+
+/// The shipped theme with `script` over it.
+Theme themeWith(const char* script) {
+    Theme result;
+    result.loadBuiltIn();
+    QString error;
+    EXPECT_TRUE(result.evaluate(QString::fromUtf8(script), error)) << error.toStdString();
+    return result;
+}
+
+TEST_F(MainWindowTest, ANewThemeReachesTheWholeApplication) {
+    window->setTheme(themeWith("theme window.background #0a0b0c\n"
+                               "theme header.background #0d0e0f\n"));
+
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window), QColor(0x0A, 0x0B, 0x0C));
+    EXPECT_TRUE(qApp->styleSheet().contains(QStringLiteral("#ff0d0e0f"), Qt::CaseInsensitive))
+        << "the style sheet still has the old theme's header";
+    EXPECT_EQ(window->currentTheme().color(enzan::gui::ThemeColor::WindowBackground),
+              QColor(0x0A, 0x0B, 0x0C));
+}
+
+TEST_F(MainWindowTest, AThemeThatSetsNoSizesGivesTheDesktopsBack) {
+    // Sizes are worked out from the desktop's fonts every time. Worked out from the fonts the
+    // window had, a theme setting none would keep whatever the theme before it set.
+    const QTreeView* rows = waveRows();
+    ASSERT_NE(rows, nullptr);
+    const double desktop = rows->font().pointSizeF();
+    const double desktopWindow = QApplication::font().pointSizeF();
+
+    window->setTheme(themeWith("font window 20\nfont wave 24\n"));
+    EXPECT_EQ(rows->font().pointSizeF(), 24.0);
+    EXPECT_EQ(QApplication::font().pointSizeF(), 20.0);
+    EXPECT_EQ(window->findChild<enzan::gui::WaveformView*>()->font(), rows->font());
+
+    window->setTheme(themeWith(""));
+    EXPECT_EQ(rows->font().pointSizeF(), desktop);
+    EXPECT_EQ(QApplication::font().pointSizeF(), desktopWindow);
+}
+
+TEST_F(MainWindowTest, ANewThemeRecoloursTheLinesAlreadyInTheTranscript) {
+    // Each line remembers which of the theme's colours it is in, so a note written under the old
+    // theme takes the new theme's colour for notes, and every line of a note that had several.
+    window->setTheme(themeWith(""));
+    window->note(QStringLiteral("first of two\nsecond of two"));
+
+    window->setTheme(themeWith("theme transcript.note #010203\n"));
+
+    const auto* text = window->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+    int found = 0;
+    for (QTextBlock block = text->document()->begin(); block.isValid(); block = block.next()) {
+        if (!block.text().endsWith(QStringLiteral("of two"))) continue;
+        ++found;
+        EXPECT_EQ(block.begin().fragment().charFormat().foreground().color(), QColor(1, 2, 3))
+            << block.text().toStdString();
+    }
+    EXPECT_EQ(found, 2);
+}
+
+TEST_F(MainWindowTest, TheHighlightSwatchesAreTheThemesColours) {
+    window->setTheme(themeWith("theme wave.highlight.2 #102030\n"));
+
+    const QMenu* highlight = nullptr;
+    for (const QMenu* menu : window->findChildren<QMenu*>()) {
+        if (menu->title() == QStringLiteral("Highlight")) highlight = menu;
+    }
+    ASSERT_NE(highlight, nullptr);
+    ASSERT_GE(highlight->actions().size(), 2);
+
+    const QImage swatch = highlight->actions().at(1)->icon().pixmap(12, 12).toImage();
+    EXPECT_EQ(swatch.pixelColor(6, 6), QColor(0x10, 0x20, 0x30));
+}
+
+TEST_F(MainWindowTest, AProblemWithTheSettingsIsReportedAgainstItsLine) {
+    window->report(enzan::gui::ConfigurationMessage{
+        .file = QStringLiteral("/home/reader/.config/enzan/config"),
+        .line = 3,
+        .text = QStringLiteral("'layout' is not a setting this build knows, and is skipped")});
+
+    const auto* text = window->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+    EXPECT_TRUE(text->toPlainText().contains(
+        QStringLiteral("/home/reader/.config/enzan/config:3: 'layout' is not a setting")))
+        << text->toPlainText().toStdString();
+}
+
+// ---------------------------------------------------------------------------
+// The Theme menu
+// ---------------------------------------------------------------------------
+
+/// A window with a configuration directory of its own, and its Theme menu.
+class ThemeMenuTest : public MainWindowTest {
+protected:
+    void SetUp() override {
+        MainWindowTest::SetUp();
+        ASSERT_TRUE(home.isValid());
+        directory = enzan::gui::ConfigurationDirectory(home.filePath(QStringLiteral("enzan")));
+        QString error;
+        ASSERT_TRUE(directory.createDefaults(error)) << error.toStdString();
+        writeTheme(QStringLiteral("themes/pale.tcl"), "theme window.background #0a0b0c\n");
+    }
+
+    void TearDown() override {
+        chooser = nullptr;
+        MainWindowTest::TearDown();
+    }
+
+    void writeTheme(const QString& name, const QByteArray& script) const {
+        QFile file(directory.resolve(name));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly)) << name.toStdString();
+        file.write(script);
+    }
+
+    void open() {
+        chooser = std::make_unique<MainWindow>(*session, directory.loadTheme().theme, directory);
+    }
+
+    /// The Theme menu, filled as it is when it opens.
+    [[nodiscard]] QMenu* menu() const {
+        for (QMenu* candidate : chooser->findChildren<QMenu*>()) {
+            if (candidate->title() == QStringLiteral("Theme")) {
+                Q_EMIT candidate->aboutToShow();
+                return candidate;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] QAction* entry(const QString& text) const {
+        QMenu* themes = menu();
+        if (themes == nullptr) return nullptr;
+        for (QAction* candidate : themes->actions()) {
+            if (candidate->text() == text) return candidate;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] enzan::gui::ThemeName configured() const { return directory.read().theme; }
+
+    [[nodiscard]] QString transcript() const {
+        const auto* text = chooser->findChild<QPlainTextEdit*>();
+        return text == nullptr ? QString() : text->toPlainText();
+    }
+
+    QTemporaryDir home;
+    enzan::gui::ConfigurationDirectory directory;
+    std::unique_ptr<MainWindow> chooser;
+};
+
+TEST_F(ThemeMenuTest, OffersTheBuiltInThemeAndEveryFileInThemes) {
+    open();
+    QMenu* themes = menu();
+    ASSERT_NE(themes, nullptr);
+
+    QStringList texts;
+    for (const QAction* action : themes->actions()) {
+        texts << (action->isSeparator() ? QStringLiteral("-") : action->text());
+    }
+    EXPECT_EQ(texts,
+              (QStringList{QStringLiteral("Dark (built-in)"), QStringLiteral("Light (built-in)"),
+                           QStringLiteral("dark"), QStringLiteral("pale"), QStringLiteral("-"),
+                           QStringLiteral("Reload Theme"), QStringLiteral("New Theme…")}));
+
+    ASSERT_NE(entry(QStringLiteral("dark")), nullptr);
+    EXPECT_TRUE(entry(QStringLiteral("dark"))->isChecked()) << "config names dark.tcl";
+}
+
+TEST_F(ThemeMenuTest, AThemeDroppedInIsOfferedWhenTheMenuOpens) {
+    open();
+    writeTheme(QStringLiteral("themes/later.tcl"), "theme accent #123456\n");
+    EXPECT_NE(entry(QStringLiteral("later")), nullptr);
+}
+
+TEST_F(ThemeMenuTest, ChoosingAThemeColoursTheWindowAndKeepsIt) {
+    open();
+    entry(QStringLiteral("pale"))->trigger();
+
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window), QColor(0x0A, 0x0B, 0x0C));
+    EXPECT_EQ(configured().file, QStringLiteral("themes/pale.tcl"));
+    EXPECT_TRUE(entry(QStringLiteral("pale"))->isChecked());
+
+    // The default built-in theme is chosen by leaving the theme out.
+    entry(QStringLiteral("Dark (built-in)"))->trigger();
+    Theme byDefault;
+    byDefault.loadBuiltIn();
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window),
+              byDefault.color(enzan::gui::ThemeColor::WindowBackground));
+    EXPECT_TRUE(configured().isDefault());
+    EXPECT_TRUE(entry(QStringLiteral("Dark (built-in)"))->isChecked());
+}
+
+TEST_F(ThemeMenuTest, TheLightThemeIsChosenFromTheMenuAndKept) {
+    open();
+    entry(QStringLiteral("Light (built-in)"))->trigger();
+
+    Theme light;
+    ASSERT_TRUE(light.loadBuiltIn(QStringLiteral("light")));
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window),
+              light.color(enzan::gui::ThemeColor::WindowBackground));
+    EXPECT_EQ(configured(), enzan::gui::ThemeName::ofBuiltIn(QStringLiteral("light")));
+    EXPECT_TRUE(entry(QStringLiteral("Light (built-in)"))->isChecked());
+
+    // And the next window opens with it.
+    chooser = nullptr;
+    open();
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window),
+              light.color(enzan::gui::ThemeColor::WindowBackground));
+    EXPECT_TRUE(entry(QStringLiteral("Light (built-in)"))->isChecked());
+}
+
+TEST_F(ThemeMenuTest, AThemeThatDoesNotLoadChangesNothing) {
+    writeTheme(QStringLiteral("themes/broken.tcl"), "theme window.nonsense #000000\n");
+    open();
+    const QColor before = QApplication::palette().color(QPalette::Window);
+
+    entry(QStringLiteral("broken"))->trigger();
+
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window), before);
+    EXPECT_EQ(configured().file, QStringLiteral("themes/dark.tcl"));
+    EXPECT_TRUE(entry(QStringLiteral("dark"))->isChecked());
+    EXPECT_TRUE(transcript().contains(QStringLiteral("broken.tcl:1: ")))
+        << transcript().toStdString();
+}
+
+TEST_F(ThemeMenuTest, ReloadReadsTheThemeInUseAgain) {
+    open();
+    entry(QStringLiteral("pale"))->trigger();
+    writeTheme(QStringLiteral("themes/pale.tcl"), "theme window.background #0d0e0f\n");
+
+    entry(QStringLiteral("Reload Theme"))->trigger();
+
+    EXPECT_EQ(QApplication::palette().color(QPalette::Window), QColor(0x0D, 0x0E, 0x0F));
+}
+
+TEST_F(ThemeMenuTest, NewThemeWritesACopyOfTheThemeInUseAndUsesIt) {
+    // With the light theme in use, a new theme starts from the light theme: what the reader sees
+    // is what they go on to edit.
+    open();
+    entry(QStringLiteral("Light (built-in)"))->trigger();
+    entry(QStringLiteral("New Theme…"))->trigger();
+
+    auto* dialog = chooser->findChild<QInputDialog*>();
+    ASSERT_NE(dialog, nullptr);
+    dialog->setTextValue(QStringLiteral("mine"));
+    dialog->accept();
+
+    QFile written(directory.resolve(QStringLiteral("themes/mine.tcl")));
+    ASSERT_TRUE(written.open(QIODevice::ReadOnly));
+    EXPECT_EQ(written.readAll(), Theme::builtInScript(QStringLiteral("light")).toUtf8());
+    EXPECT_EQ(configured().file, QStringLiteral("themes/mine.tcl"));
+    EXPECT_TRUE(entry(QStringLiteral("mine"))->isChecked());
+}
+
+TEST_F(ThemeMenuTest, AWindowWithNoDirectoryOffersOnlyTheBuiltInThemes) {
+    directory = enzan::gui::ConfigurationDirectory();
+    open();
+
+    EXPECT_NE(entry(QStringLiteral("Dark (built-in)")), nullptr);
+    EXPECT_NE(entry(QStringLiteral("Light (built-in)")), nullptr);
+    EXPECT_EQ(entry(QStringLiteral("dark")), nullptr);
+    ASSERT_NE(entry(QStringLiteral("New Theme…")), nullptr);
+    EXPECT_FALSE(entry(QStringLiteral("New Theme…"))->isEnabled());
+}
+
+TEST(MainWindowLayout, IsKeptInTheConfigurationDirectory) {
+    // Beside `config`, and nowhere else: a window with no directory restores nothing, which is
+    // also what keeps every other test's window at its first size whoever runs the suite.
+    const QTemporaryDir home;
+    ASSERT_TRUE(home.isValid());
+    const enzan::gui::ConfigurationDirectory directory(home.filePath(QStringLiteral("enzan")));
+    QString error;
+    ASSERT_TRUE(directory.createDefaults(error)) << error.toStdString();
+
+    Theme theme;
+    theme.loadBuiltIn();
+    enzan::gui::KernelSession idle;
+    {
+        MainWindow first(idle, theme, directory);
+        first.show();
+        first.resize(700, 500);
+        QCoreApplication::processEvents();
+        first.close();
+    }
+    EXPECT_TRUE(QFileInfo::exists(directory.layoutFile()));
+
+    const MainWindow second(idle, theme, directory);
+    EXPECT_EQ(second.size(), QSize(700, 500));
+}
+
 TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
     // The spellings `--run` takes, read by the same function (section 8.5): a count of the run's
     // unit, or a time with a unit of its own. The fixture's design runs in nanoseconds, and has an
     // event every five of them, which is where a run that ends between events leaves the time.
-    QLineEdit* length = nullptr;
-    for (QLineEdit* edit : window->findChildren<QLineEdit*>()) {
-        if (edit->toolTip().startsWith(QStringLiteral("How long"))) length = edit;
-    }
+    QLineEdit* length = runLength();
     QAction* run = nullptr;
     for (QAction* candidate : window->findChildren<QAction*>()) {
         if (candidate->text() == QStringLiteral("Run")) run = candidate;
@@ -394,6 +727,145 @@ TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
     EXPECT_TRUE(text->toPlainText().contains(
         QStringLiteral("'1ps' is not a whole number of the run's time unit, ns")))
         << text->toPlainText().toStdString();
+
+    // Enter in the field runs, which is what typing a length is for.
+    length->setText(QStringLiteral("5"));
+    QTest::keyClick(length, Qt::Key_Return);
+    EXPECT_TRUE(pumpUntil([&] {
+        return session->currentTime() == 45
+               && session->state() != enzan::ipc::SimulationState::Running;
+    })) << session->currentTime();
+}
+
+TEST_F(MainWindowTest, AllInTheRunLengthRunsUntilTheDesignFinishes) {
+    // As `--run all` does (section 8.5). The fixture's clock never stops, so the run goes on until
+    // it is stopped, and the kernel serves on a thread of its own: a run is carried out within one
+    // step of it, and `pump` would never come back.
+    QLineEdit* length = runLength();
+    QAction* run = actionCalled(QStringLiteral("Run"));
+    ASSERT_NE(length, nullptr);
+    ASSERT_NE(run, nullptr);
+
+    std::atomic<bool> serving = true;
+    std::thread kernel([this, &serving] {
+        while (serving && server->step(10)) {}
+    });
+
+    length->setText(QStringLiteral("all"));
+    run->trigger();
+    const bool started =
+        waitFor([this] { return session->state() == SimulationState::Running; }, 5000);
+    session->stop();
+    const bool stopped =
+        waitFor([this] { return session->state() == SimulationState::Idle; }, 20000);
+
+    serving = false;
+    kernel.join();
+    EXPECT_TRUE(started) << "'all' did not start a run";
+    EXPECT_TRUE(stopped) << "the run of 'all' did not end when stopped";
+}
+
+TEST_F(MainWindowTest, ARunAskedForBeforeTheWelcomeIsCountedInTheKernelsUnit) {
+    // What `enzan --gui --run 20ns` does: the window is asked for the run as it opens, before the
+    // kernel has said that the run counts nanoseconds. Counted then, in the session's default of
+    // picoseconds, it was a run of twenty thousand of them. Only one client may attach at a time,
+    // so the fixture's steps aside.
+    session->detach();
+    pump();
+
+    KernelSession late;
+    MainWindow lateWindow(late, theme);
+    QString error;
+    ASSERT_TRUE(late.attach(socketPath, error)) << error.toStdString();
+    ASSERT_FALSE(late.isWelcomed()) << "the greeting is a round trip away";
+    lateWindow.run(QStringLiteral("20ns"));
+
+    EXPECT_TRUE(pumpUntil([&late] {
+        return late.isWelcomed() && late.currentTime() == 20
+               && late.state() != SimulationState::Running;
+    })) << late.currentTime();
+}
+
+TEST_F(MainWindowTest, TheTranscriptIsClearedByOneCommand) {
+    // The transcript's own menu and the window's View menu offer the same action.
+    auto* transcriptView = window->findChild<enzan::gui::TranscriptView*>();
+    ASSERT_NE(transcriptView, nullptr);
+    const auto* text = transcriptView->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+    window->note(QStringLiteral("something to clear"));
+    ASSERT_FALSE(text->toPlainText().isEmpty());
+
+    bool inViewMenu = false;
+    for (const QAction* entry : window->menuBar()->actions()) {
+        if (entry->menu() != nullptr && entry->text() == QStringLiteral("&View"))
+            inViewMenu = entry->menu()->actions().contains(transcriptView->clearAction());
+    }
+    EXPECT_TRUE(inViewMenu);
+
+    transcriptView->clearAction()->trigger();
+    EXPECT_TRUE(text->toPlainText().isEmpty());
+}
+
+TEST_F(MainWindowTest, TheShortcutSheetIsReadFromTheActions) {
+    QAction* shortcuts = actionCalled(QStringLiteral("Keyboard Shortcuts…"));
+    ASSERT_NE(shortcuts, nullptr);
+    EXPECT_EQ(shortcuts->shortcut(), QKeySequence(QKeySequence::HelpContents));
+
+    const auto sheetText = [this, shortcuts] {
+        shortcuts->trigger();
+        const auto* sheet = window->findChild<enzan::gui::ShortcutSheet*>();
+        if (sheet == nullptr || !sheet->isVisible()) return QString();
+        const auto* browser = sheet->findChild<QTextBrowser*>();
+        return browser != nullptr ? browser->toPlainText() : QString();
+    };
+
+    const QString text = sheetText();
+    for (const QString& expected :
+         {QStringLiteral("Zoom Fit"), QStringLiteral("Next Edge"),
+          QStringLiteral("Add to Wave Recursive"), QStringLiteral("Ctrl+Shift+W"),
+          QStringLiteral("Ctrl+Wheel"), QStringLiteral("Type a name")}) {
+        EXPECT_TRUE(text.contains(expected)) << expected.toStdString();
+    }
+    EXPECT_EQ(text.count(QStringLiteral("Copy")), 1)
+        << "the wave list's commands are the Edit menu's, and are listed once";
+
+    // Read from the actions, so a key bound differently is listed differently.
+    QAction* fit = actionCalled(QStringLiteral("Zoom Fit"));
+    ASSERT_NE(fit, nullptr);
+    fit->setShortcut(QKeySequence(Qt::Key_F9));
+    EXPECT_TRUE(sheetText().contains(QStringLiteral("F9")));
+
+    // And it can be closed with something on it, since a tiling window manager may draw no title
+    // bar to close it with.
+    auto* sheet = window->findChild<enzan::gui::ShortcutSheet*>();
+    ASSERT_NE(sheet, nullptr);
+    const auto* buttons = sheet->findChild<QDialogButtonBox*>();
+    ASSERT_NE(buttons, nullptr);
+    QPushButton* close = buttons->button(QDialogButtonBox::Close);
+    ASSERT_NE(close, nullptr);
+    close->click();
+    EXPECT_FALSE(sheet->isVisible());
+}
+
+TEST_F(MainWindowTest, AToolbarButtonsKeyIsWrittenOut) {
+    // "Add Cursor (Ins)" read as a cursor a nanosecond long.
+    const QAction* add = actionCalled(QStringLiteral("Add Cursor"));
+    ASSERT_NE(add, nullptr);
+    EXPECT_EQ(add->toolTip(), QStringLiteral("Add Cursor (Insert)"));
+}
+
+TEST_F(MainWindowTest, AboutNamesTheVersionOfEachHalf) {
+    // Two programs, which may come from two builds when the kernel is on another machine.
+    QAction* about = actionCalled(QStringLiteral("About Enzan"));
+    ASSERT_NE(about, nullptr);
+    about->trigger();
+
+    const auto* box = window->findChild<QMessageBox*>();
+    ASSERT_NE(box, nullptr);
+    EXPECT_TRUE(box->isVisible());
+    ASSERT_FALSE(session->kernelVersion().isEmpty());
+    EXPECT_TRUE(box->text().contains(QString::fromStdString(enzan::versionLine()).toHtmlEscaped()));
+    EXPECT_TRUE(box->text().contains(session->kernelVersion().toHtmlEscaped()));
 }
 
 } // namespace

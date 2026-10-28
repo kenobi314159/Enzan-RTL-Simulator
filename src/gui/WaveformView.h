@@ -3,6 +3,7 @@
 #pragma once
 
 #include "gui/KernelSession.h"
+#include "gui/ShortcutSheet.h"
 #include "gui/Theme.h"
 #include "gui/TimeAxis.h"
 #include "gui/WaveformModel.h"
@@ -69,6 +70,13 @@ public:
     /// The tree view whose rows this canvas lines up with.
     void setRowView(QTreeView* rowView);
 
+    /// The theme's colours, or the canvas's font, have changed: every trace is drawn again.
+    ///
+    /// A drawn trace is kept between repaints (section 10.3), and nothing in it says which
+    /// colours it was drawn in, so without this a new theme would reach only the rows that
+    /// happened to change afterwards.
+    void themeChanged();
+
     [[nodiscard]] TimeAxis& axis() noexcept { return timeAxis; }
 
     [[nodiscard]] const TimeAxis& axis() const noexcept { return timeAxis; }
@@ -83,6 +91,9 @@ public:
 
     /// Shows the span between the two most recently used cursors.
     void zoomToCursors();
+
+    /// Moves the view one step along the time axis, towards later times when `later` is set.
+    void panStep(bool later);
 
     /// Keeps the right-hand edge at the latest simulated time while a run is in progress.
     void setFollowTail(bool follow);
@@ -114,8 +125,28 @@ public:
     /// previous one. Does nothing without a selected signal, or past its last edge.
     void stepActiveCursorToEdge(bool forward);
 
+    /// Moves the active cursor to `time` and brings it into view. Does nothing to a locked
+    /// cursor, which stays where it was pinned whatever moves it.
+    void placeActiveCursor(runtime::SimTime time);
+
+    /// Makes the cursor to the right of the active one active, or the one to its left, and
+    /// brings it into view.
+    ///
+    /// By time rather than by the order the cursors were made in, because the reader sees them
+    /// on an axis and the keys are named for directions on it. Nothing happens past the last
+    /// one either way: going round would make the key that reaches the leftmost cursor also the
+    /// one that jumps to the rightmost.
+    void activateNeighbourCursor(bool later);
+
     /// The wave row the signal list has selected, or -1.
     [[nodiscard]] int selectedRow() const;
+
+    /// What the mouse does in the wave window, and the keys the signal list answers to there.
+    ///
+    /// The shortcut sheet lists them beside the window's actions. Neither is an action it could
+    /// read them from, so they are written here, beside the handlers that do them, and follow
+    /// section 10.7.
+    [[nodiscard]] static QVector<ShortcutEntry> gestures();
 
     /// Pixels a click may miss an edge by and still snap to it.
     ///
@@ -142,6 +173,13 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+
+    /// Hands a key to the signal list beside it.
+    ///
+    /// The names and the traces are one window, so a key means on the traces what it means on
+    /// the names: moving between rows, packing and unpacking, and finding a row by typing the
+    /// start of its name (section 10.7). The window's own keys are actions of the whole Wave
+    /// tab and never arrive here.
     void keyPressEvent(QKeyEvent* event) override;
 
     /// Consumes Tab and Shift+Tab, which Qt would otherwise spend on focus navigation.
@@ -164,6 +202,13 @@ public:
     /// one that fails on a loaded build machine for reasons that have nothing to do with the
     /// change it is meant to be guarding.
     [[nodiscard]] std::uint64_t summariesComputed() const noexcept { return summaryCount; }
+
+    /// How many row traces have been drawn since the view was made, rather than blitted from the
+    /// picture drawn before.
+    ///
+    /// Drawing is the other half of a repaint's cost, and the half that reads a value for every
+    /// segment it labels; this is what lets a test say a click drew no trace again.
+    [[nodiscard]] std::uint64_t tracesDrawn() const noexcept { return traceCount; }
 
     /// How far the last scroll moved what was already drawn, in pixels.
     ///
@@ -274,6 +319,9 @@ private:
     /// Moves the active cursor to the time under `x`, if it is not locked.
     void moveActiveCursorTo(double x);
 
+    /// Scrolls the view so that `time` is in it, centred, unless it already is.
+    void bringIntoView(runtime::SimTime time);
+
     /// Applies a change of selection in the list, which means the same as a click on the row.
     void onRowSelected();
 
@@ -328,6 +376,9 @@ private:
 
     /// Counts summaries computed, for `summariesComputed`.
     std::uint64_t summaryCount = 0;
+
+    /// Counts traces drawn, for `tracesDrawn`.
+    std::uint64_t traceCount = 0;
 
     /// A row the canvas has drawn, and where it drew it, so that the next scroll can measure
     /// how far the list has moved by asking where that row is now.

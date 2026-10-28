@@ -64,14 +64,11 @@ struct ParsedSignalList {
 
 /// Reads a signal list.
 ///
-/// Split into commands by Tcl's own parser and never evaluated: quoting, braces, backslashes,
+/// Split into commands by `splitTclCommands` and never evaluated: quoting, braces, backslashes,
 /// line continuation and comments are Tcl's, and nothing is substituted, so `$` and `[…]` are
-/// ordinary characters and `/tb/gen[0].q` needs no braces.
+/// ordinary characters and `/tb/gen[0].q` needs no braces. A word is written for it with
+/// `quoteTclWord`.
 [[nodiscard]] ParsedSignalList parseSignalList(const QByteArray& text);
-
-/// Writes `word` so that `parseSignalList` reads it back unchanged, quoting it only when it
-/// must be.
-[[nodiscard]] QString quoteSignalListWord(const QString& word);
 
 /// The word `-radix` takes for `radix`.
 [[nodiscard]] QString radixWord(eir::Radix radix);
@@ -98,9 +95,9 @@ struct ResolvedSignalList {
 
 /// Builds the rows `entries` describe, from the objects of every scope `scopesNeededBy` named.
 ///
-/// A scope path produces exactly what the Structure window's *Add to wave* produces: a group
+/// A scope path produces exactly what the Structure window's *Add to Wave* produces: a group
 /// named by the scope's path holding every object of the scope, or nothing for a scope with no
-/// objects. With `-r` it produces what *Add to wave recursive* does: the subtree's groups,
+/// objects. With `-r` it produces what *Add to Wave Recursive* does: the subtree's groups,
 /// nested as its instances are. Section 10.8 defines the command as those menu entries, not
 /// beside them.
 [[nodiscard]] ResolvedSignalList

@@ -29,14 +29,6 @@ if(ENZAN_BUILD_TESTS)
   add_test(NAME cli.enzan-gui.unknown_option COMMAND enzan-gui --no-such-option)
   set_tests_properties(cli.enzan-gui.unknown_option PROPERTIES
                        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" WILL_FAIL TRUE)
-
-  # The built-in theme has to be writable out and has to parse when read back, which is what
-  # makes `--write-theme` a usable starting point rather than a decoration.
-  add_test(NAME cli.enzan-gui.write_theme
-           COMMAND enzan-gui --write-theme "${CMAKE_CURRENT_BINARY_DIR}/written-theme.tcl")
-  set_tests_properties(cli.enzan-gui.write_theme PROPERTIES
-                       ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-                       PASS_REGULAR_EXPRESSION "wrote the built-in theme")
 endif()
 
 # Qt's unprefixed `signals`, `slots` and `emit` keywords collide with the vocabulary the rest of

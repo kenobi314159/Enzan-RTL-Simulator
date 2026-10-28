@@ -3,14 +3,17 @@
 #pragma once
 
 #include "eir/BitVector.h"
+#include "gui/Configuration.h"
 #include "gui/DesignTreeModel.h"
 #include "gui/KernelSession.h"
 #include "gui/ObjectsModel.h"
+#include "gui/ShortcutSheet.h"
 #include "gui/SignalList.h"
 #include "gui/Theme.h"
 #include "gui/TranscriptView.h"
 #include "gui/WaveformModel.h"
 #include "gui/WaveformView.h"
+#include "runtime/Time.h"
 
 #include <QHash>
 #include <QMainWindow>
@@ -18,12 +21,16 @@
 #include <QString>
 #include <QStringList>
 
+#include <array>
 #include <vector>
 
 class QAction;
+class QActionGroup;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QMenu;
+class QSplitter;
 class QTabWidget;
 class QTableView;
 class QTreeView;
@@ -41,11 +48,31 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    /// `session` and `theme` must outlive the window.
-    MainWindow(KernelSession& session, const Theme& theme, QWidget* parent = nullptr);
+    /// `kernelSession` must outlive the window. The window keeps its own copy of `initialTheme`,
+    /// which `setTheme` replaces. `directory` is where the Theme menu finds themes and records the
+    /// one chosen, and where the layout is kept (DESIGN_GUIDE.md section 10.9); none at all leaves
+    /// the menu only the built-in theme and the window its first size.
+    MainWindow(KernelSession& kernelSession, const Theme& initialTheme,
+               ConfigurationDirectory directory = ConfigurationDirectory(),
+               QWidget* parent = nullptr);
+
+    /// Colours the window with `replacement`, as though it had opened with it.
+    ///
+    /// Everything that took a colour or a size from the old theme takes it from the new one:
+    /// the palette and the style sheet, the fonts, the traces already drawn, the highlight
+    /// swatches, and every line already in the transcript. Nothing else changes — not the rows,
+    /// the cursors, the zoom or the run.
+    void setTheme(const Theme& replacement);
+
+    /// The theme the window is coloured with.
+    [[nodiscard]] const Theme& currentTheme() const noexcept { return theme; }
 
     /// Writes a note into the transcript, for the messages the front end makes itself.
     void note(const QString& text);
+
+    /// Reports a problem in the configuration directory (DESIGN_GUIDE.md section 10.9) in the
+    /// transcript, against the file and line it is in.
+    void report(const ConfigurationMessage& problem);
 
     /// Replaces the wave window's list with the signal list in `path` (DESIGN_GUIDE.md section
     /// 10.8).
@@ -58,6 +85,16 @@ public:
 
     /// Writes the wave window's list to `path`. Returns false, having said why, when it cannot.
     bool saveSignalList(const QString& path);
+
+    /// Runs the design for `text`, read as `--run` reads it (DESIGN_GUIDE.md section 8.5): a count
+    /// of the run's time unit, a time with a unit of its own, or `all`, until the design finishes.
+    ///
+    /// What is no length of time is refused at once, with a note saying why. A run asked for
+    /// before the kernel has welcomed the window waits for the welcome, because that is where the
+    /// run's time unit comes from: `--run` is read as the window opens, before the kernel has said
+    /// anything, and a time counted in a unit the kernel has not named would run for another
+    /// length than the one asked for. So this may be called as soon as the window exists.
+    void run(const QString& text);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -93,6 +130,13 @@ private:
     void chooseSignalListToLoad();
     void chooseSignalListToSave();
 
+    /// Writes the list back to the file it was last loaded from or saved to, and asks for one
+    /// only when there is none yet.
+    ///
+    /// Arranging the window, saving it and running again is the loop a signal list exists for
+    /// (section 10.8), so after the first time saving asks nothing.
+    void saveSignalListToItsFile();
+
     void groupSelectedWaves();
 
     /// Opens the name editor on the row the reader is on.
@@ -116,8 +160,22 @@ private:
     void copySelectedWaves();
     void pasteWaves();
     void addCursor();
+    void toggleActiveCursorLock();
 
-    void runForRequestedTime();
+    /// Shows the Keyboard Shortcuts window, read afresh from the actions so that it lists what
+    /// the window is bound to now.
+    void showShortcuts();
+
+    /// Shows the versions of both halves, which can come from two builds: a window attached to
+    /// a kernel on another machine is the case section 2.2 exists for.
+    void showAbout();
+
+    void runActionExec();
+
+    /// Asks the kernel for the run `length` is, now that the run's time unit is known. `text` is
+    /// how it was written, for saying what is wrong with it.
+    void startRun(const runtime::RunLength& length, const QString& text);
+
     void runUntilFinished();
     void stopRun();
     void restartRun();
@@ -171,6 +229,34 @@ private:
     void releaseSelectedObjects();
 
     void buildDocks();
+
+    /// Gives the application and every widget the theme's colours and sizes.
+    ///
+    /// The one way a theme reaches the window, on opening as on every change afterwards, so the
+    /// two cannot come to differ. Sizes are worked out from the desktop's fonts each time rather
+    /// than from the fonts the window has now, so that a theme setting none gives the desktop's
+    /// back after one that set them.
+    void applyTheme();
+
+    /// Fills the Theme menu from the configuration directory as it is when the menu opens, so
+    /// that a theme put into `themes/` is offered without the window being opened again.
+    void fillThemeMenu();
+
+    /// Colours the window with the theme `name`. Returns false, having said why and changed
+    /// nothing, when it does not load.
+    bool useTheme(const ThemeName& name);
+
+    /// Uses the theme `name` and names it in `config`, so that the next window opens with it.
+    void chooseTheme(const ThemeName& name);
+
+    /// Reads the theme in use again, for a reader who has just edited it.
+    void reloadTheme();
+
+    /// Asks for a name and writes a copy of the theme in use under it, as a theme to edit, and
+    /// uses it. Asked in a dialog that is opened rather than run, as the About box is.
+    void askForNewTheme();
+    void createTheme(const QString& name);
+
     void buildToolBar();
     void buildMenus();
     void updateActions();
@@ -182,7 +268,22 @@ private:
     [[nodiscard]] QVector<int> selectedWaveRows() const;
 
     KernelSession* session;
-    const Theme* theme;
+
+    /// What the models, the canvas and the transcript paint with. They hold its address, so it
+    /// is replaced in place and never moved.
+    Theme theme;
+
+    ConfigurationDirectory configuration;
+
+    /// The theme in use, as `config` names it: the one the Theme menu shows as chosen, Reload
+    /// Theme reads again and New Theme copies. Kept here rather than read back from `config`, so
+    /// that a choice the directory could not record is still the one in use.
+    ThemeName themeName;
+
+    QMenu* themeMenu = nullptr;
+    QActionGroup* themeChoices = nullptr;
+    QAction* reloadThemeAction = nullptr;
+    QAction* newThemeAction = nullptr;
 
     DesignTreeModel* designModel = nullptr;
     ObjectsModel* objectsModel = nullptr;
@@ -194,9 +295,15 @@ private:
     WaveformView* waveView = nullptr;
     TranscriptView* transcriptView = nullptr;
 
+    /// The Wave tab: the names and the traces beside them. Its keys are the wave window's,
+    /// whichever of the two has the focus.
+    QSplitter* waveTab = nullptr;
+
     /// The central area's tabs. Each needs the whole width, so they share it in turn rather
     /// than side by side.
     QTabWidget* panes = nullptr;
+
+    ShortcutSheet* shortcutSheet = nullptr;
 
     QLineEdit* runLengthEdit = nullptr;
     QLabel* statusTime = nullptr;
@@ -208,6 +315,12 @@ private:
     QAction* stopAction = nullptr;
     QAction* restartAction = nullptr;
     QAction* followAction = nullptr;
+    QAction* zoomFitAction = nullptr;
+    QAction* zoomCursorsAction = nullptr;
+    QAction* addCursorAction = nullptr;
+
+    /// The Highlight menu's entries, whose icons are swatches of the theme's colours.
+    std::array<QAction*, HighlightSlots> highlightActions{};
 
     /// The signals currently subscribed to, so that a change of what is displayed sends only
     /// the difference rather than resubscribing to everything.
@@ -226,6 +339,13 @@ private:
 
     /// A signal list asked for before the design arrived, loaded when it does.
     QString deferredSignalList;
+
+    /// A run asked for before the kernel welcomed the window, run when it does.
+    QString deferredRun;
+
+    /// The file the wave window's list was last loaded from or saved to, which Save writes back
+    /// to. Empty until there is one; a file that loaded nothing is not it.
+    QString signalListFile;
 
     /// The scopes of the design the window last showed, to tell a new design from the same one
     /// sent again.

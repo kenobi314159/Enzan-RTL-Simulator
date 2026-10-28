@@ -3,6 +3,9 @@
 #include "gui/WaveformModel.h"
 
 #include "gui/SignalList.h"
+#include "gui/TclSyntax.h"
+
+#include "eir/BitOps.h"
 
 #include "wavedb/WaveformDatabase.h"
 
@@ -402,10 +405,12 @@ void WaveformModel::setRadixRecursive(int rowId, eir::Radix radix) {
 void WaveformModel::setSymbolicRecursive(int rowId, bool symbolic) {
     if (row(rowId) == nullptr) return;
 
+    // The whole row, as a radix does: naming changes how the trace reads as well as the value
+    // beside it, and a change confined to the value column is one the canvas leaves its traces
+    // alone for.
     rows[rowId].symbolic = symbolic;
     const QModelIndex changed = indexOfRow(rowId);
-    Q_EMIT dataChanged(changed.siblingAtColumn(ValueColumn), changed.siblingAtColumn(ValueColumn),
-                       {Qt::DisplayRole});
+    Q_EMIT dataChanged(changed, changed.siblingAtColumn(ColumnCount - 1), {Qt::DisplayRole});
     notifyValueChangedUpwards(rowId);
 
     for (const int child : rows[rowId].children) setSymbolicRecursive(child, symbolic);
@@ -425,7 +430,7 @@ void WaveformModel::setHighlight(int rowId, int slot) {
     rows[rowId].highlight = std::clamp(slot, 0, HighlightSlots);
     const QModelIndex changed = indexOfRow(rowId);
     Q_EMIT dataChanged(changed, changed.siblingAtColumn(ColumnCount - 1),
-                       {Qt::BackgroundRole, HighlightRole});
+                       {Qt::BackgroundRole, Qt::ForegroundRole, HighlightRole});
 }
 
 std::pair<std::uint32_t, std::uint32_t> WaveformModel::bitRange(const WaveRow& waveRow) {
@@ -806,7 +811,7 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
         if (waveRow->highlight != 0)
             words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
         words.prepend(QStringLiteral("group"));
-        words << quoteSignalListWord(waveRow->label) << body(waveRow->children);
+        words << quoteTclWord(waveRow->label) << body(waveRow->children);
         text += indent + words.join(u' ') + u'\n';
         return;
     }
@@ -833,7 +838,7 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
     // The label only when the reader changed it: one the window would have made again is not
     // worth a word, and leaving it out is what keeps a hand-written list short.
     if (waveRow->label != leaf + range)
-        words << QStringLiteral("-label") << quoteSignalListWord(waveRow->label);
+        words << QStringLiteral("-label") << quoteTclWord(waveRow->label);
     if (waveRow->highlight != 0)
         words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
 
@@ -846,7 +851,7 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
     }
 
     words.prepend(QStringLiteral("add wave"));
-    words << quoteSignalListWord(path + range);
+    words << quoteTclWord(path + range);
     text += indent + words.join(u' ') + u'\n';
 }
 
@@ -869,12 +874,12 @@ void WaveformModel::moveToGroup(int rowId, int group) {
 eir::BitVector WaveformModel::slice(const WaveRow& waveRow, const eir::BitVector& value) {
     if (!waveRow.sliced) return value;
 
+    // A word at a time, as the runtime reads a part-select, with what lies past the value's end
+    // reading as unknown. A trace prints a value for every segment wide enough to hold one, so
+    // this runs that many times a repaint for every sliced row on screen.
     const std::uint32_t width = waveRow.highBit - waveRow.lowBit + 1;
     eir::BitVector narrowed = eir::BitVector::filled(width, eir::Logic::Zero);
-    for (std::uint32_t bit = 0; bit < width; ++bit) {
-        const std::uint32_t source = waveRow.lowBit + bit;
-        narrowed.set(bit, source < value.width() ? value.get(source) : eir::Logic::Unknown);
-    }
+    eir::bitops::partSelectAt(narrowed.mutableRef(), value.ref(), waveRow.lowBit);
     return narrowed;
 }
 
@@ -959,14 +964,15 @@ std::optional<eir::BitVector> WaveformModel::combinedValueAt(int rowId,
     if (parts.isEmpty()) return std::nullopt;
 
     // The first child is the most significant, which is the order the list shows them in and
-    // the order unpacking creates them in.
+    // the order unpacking creates them in. Copied a word at a time: a group made by adding a
+    // subtree joins every signal in it, for every value its trace prints, and a bit at a time
+    // that was most of what a repaint of a large design cost.
     eir::BitVector joined = eir::BitVector::filled(total, eir::Logic::Zero);
 
-    std::uint32_t bit = total;
+    std::uint32_t top = total;
     for (const eir::BitVector& part : parts) {
-        for (std::uint32_t index = part.width(); index-- > 0;) {
-            joined.set(--bit, part.get(index));
-        }
+        top -= part.width();
+        eir::bitops::assignPartAt(joined.mutableRef(), part.ref(), top);
     }
 
     return joined;
@@ -1237,6 +1243,13 @@ QVariant WaveformModel::data(const QModelIndex& index, int role) const {
     if (role == Qt::BackgroundRole) {
         if (waveRow.highlight == 0) return {};
         return theme->color(highlightColor(waveRow.highlight));
+    }
+
+    // A highlighted row's text has a colour of its own, so that a theme can keep it readable on
+    // every highlight; a row with none keeps the panel's.
+    if (role == Qt::ForegroundRole) {
+        if (waveRow.highlight == 0) return {};
+        return theme->color(ThemeColor::WaveHighlightText);
     }
 
     if (role == Qt::EditRole && index.column() == NameColumn) return waveRow.label;

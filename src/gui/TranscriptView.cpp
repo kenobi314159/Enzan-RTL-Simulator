@@ -2,9 +2,12 @@
 
 #include "gui/TranscriptView.h"
 
+#include <QAction>
 #include <QFontDatabase>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QScrollBar>
+#include <QTextBlock>
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QVBoxLayout>
@@ -39,16 +42,29 @@ TranscriptView::TranscriptView(const Theme& themeToUse, QWidget* parent)
     output->setUndoRedoEnabled(false);
     output->setMaximumBlockCount(MaximumLines);
     output->setLineWrapMode(QPlainTextEdit::NoWrap);
-    output->setFont(
-        theme->font(ThemeFont::Transcript, QFontDatabase::systemFont(QFontDatabase::FixedFont)));
+
+    // The text edit's own menu, copying and selecting, with clearing added to it: what a reader
+    // right-clicking a log expects to find there.
+    clear = new QAction(tr("Clear Transcript"), this);
+    connect(clear, &QAction::triggered, this, &TranscriptView::clearTranscript);
+    output->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(output, &QWidget::customContextMenuRequested, this, [this](const QPoint& where) {
+        QMenu* menu = output->createStandardContextMenu();
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        menu->addSeparator();
+        menu->addAction(clear);
+        menu->popup(output->viewport()->mapToGlobal(where));
+    });
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(2);
     layout->addWidget(output, 1);
+
+    applyTheme();
 }
 
-void TranscriptView::append(const QString& text, const QColor& colour, bool ownLine) {
+void TranscriptView::append(const QString& text, ThemeColor colour) {
     if (text.isEmpty()) return;
 
     // Only follow the end when the reader is already there. Yanking the view back while
@@ -61,10 +77,18 @@ void TranscriptView::append(const QString& text, const QColor& colour, bool ownL
     cursor.movePosition(QTextCursor::End);
 
     QTextCharFormat format;
-    format.setForeground(colour);
+    format.setForeground(theme->color(colour));
 
-    if (ownLine && !output->document()->isEmpty()) cursor.insertBlock();
+    if (!output->document()->isEmpty()) cursor.insertBlock();
+    QTextBlock block = cursor.block();
     cursor.insertText(text, format);
+
+    // Every line the text made, which is more than one when it had line breaks in it, records
+    // which of the theme's colours it is in, for `applyTheme`.
+    for (const QTextBlock last = cursor.block(); block.isValid(); block = block.next()) {
+        block.setUserState(static_cast<int>(colour));
+        if (block == last) break;
+    }
 
     if (atEnd) bar->setValue(bar->maximum());
 }
@@ -81,12 +105,12 @@ void TranscriptView::appendOutput(const QString& text) {
     const QString complete = partialLine.left(lastBreak);
     partialLine = partialLine.mid(lastBreak + 1);
 
-    const QColor colour = theme->color(ThemeColor::TranscriptForeground);
-    for (const QString& line : complete.split(u'\n')) append(line, colour, true);
+    for (const QString& line : complete.split(u'\n'))
+        append(line, ThemeColor::TranscriptForeground);
 }
 
 void TranscriptView::appendNote(const QString& text) {
-    append(text, theme->color(ThemeColor::TranscriptNote), true);
+    append(text, ThemeColor::TranscriptNote);
 }
 
 void TranscriptView::appendDiagnostic(int severity, const QString& text, const QString& file,
@@ -98,12 +122,31 @@ void TranscriptView::appendDiagnostic(int severity, const QString& text, const Q
     }
     rendered += text;
 
-    append(rendered, theme->color(colorForSeverity(severity)), true);
+    append(rendered, colorForSeverity(severity));
 }
 
 void TranscriptView::clearTranscript() {
     output->clear();
     partialLine.clear();
+}
+
+void TranscriptView::applyTheme() {
+    output->setFont(
+        theme->font(ThemeFont::Transcript, QFontDatabase::systemFont(QFontDatabase::FixedFont)));
+
+    // One edit for the whole document, so that it is laid out once rather than once a line.
+    QTextCursor cursor(output->document());
+    cursor.beginEditBlock();
+    for (QTextBlock block = output->document()->begin(); block.isValid(); block = block.next()) {
+        if (block.userState() < 0) continue;
+
+        QTextCharFormat format;
+        format.setForeground(theme->color(static_cast<ThemeColor>(block.userState())));
+        cursor.setPosition(block.position());
+        cursor.setPosition(block.position() + block.length() - 1, QTextCursor::KeepAnchor);
+        cursor.mergeCharFormat(format);
+    }
+    cursor.endEditBlock();
 }
 
 } // namespace enzan::gui

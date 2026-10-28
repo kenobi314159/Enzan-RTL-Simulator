@@ -11,23 +11,29 @@ set(CMAKE_AUTORCC OFF)
 
 enzan_add_component(
   gui
-  SOURCES DesignTreeModel.cpp
+  SOURCES Configuration.cpp
+          DesignTreeModel.cpp
           KernelSession.cpp
           MainWindow.cpp
           ObjectsModel.cpp
+          ShortcutSheet.cpp
           SignalList.cpp
           TclLibrary.cpp
+          TclSyntax.cpp
           Theme.cpp
           TimeAxis.cpp
           TranscriptView.cpp
           WaveformModel.cpp
           WaveformView.cpp
-  HEADERS DesignTreeModel.h
+  HEADERS Configuration.h
+          DesignTreeModel.h
           KernelSession.h
           MainWindow.h
           ObjectsModel.h
+          ShortcutSheet.h
           SignalList.h
           TclLibrary.h
+          TclSyntax.h
           Theme.h
           ThemeColors.def
           TimeAxis.h
@@ -36,10 +42,12 @@ enzan_add_component(
           WaveformView.h
   DEPENDS enzan::common enzan::eir enzan::ipc enzan::wavedb Qt6::Widgets Qt6::Gui Qt6::Core)
 
-# The theme is compiled in rather than installed beside the binary. Section 10.5 makes the theme
-# file the only place colours live, so it has to be there whatever the installation looks like;
-# `enzan-gui --write-theme` hands a copy to a user who wants to change one.
-qt_add_resources(enzan_gui "enzan_gui_themes" PREFIX "/enzan" FILES themes/dark.tcl)
+# The themes are compiled in rather than installed beside the binary. Section 10.5 makes the theme
+# files the only place colours live, so they have to be there whatever the installation looks
+# like; the window writes copies of them into the configuration directory for a user to change.
+# A theme listed here is a built-in theme, named for its file: nothing else names them.
+qt_add_resources(enzan_gui "enzan_gui_themes" PREFIX "/enzan" FILES themes/dark.tcl
+                 themes/light.tcl)
 
 target_include_directories(enzan_gui SYSTEM PRIVATE ${TCL_INCLUDE_PATH})
 target_link_libraries(enzan_gui PRIVATE ${TCL_LIBRARY})

@@ -22,10 +22,14 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QDockWidget>
 #include <QHash>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMenuBar>
 #include <QStringList>
 #include <QTableView>
+#include <QTest>
 #include <QTreeView>
 
 #include <cstdint>
@@ -144,6 +148,23 @@ TEST_F(WaveRowTest, AGroupOfOneBitSignalsBehavesAsAVector) {
 
     model->setRadix(group, Radix::Binary);
     EXPECT_EQ(model->renderValue(group, 400), QStringLiteral("0010"));
+}
+
+TEST_F(WaveRowTest, AGroupWiderThanAWordJoinsAcrossIt) {
+    // A group's bits are joined a word at a time, so the bits worth checking are the ones that
+    // straddle a word: nine copies of the counter's bits are seventy-two, and 40 is 0x28.
+    const int group = model->addGroup(QStringLiteral("wide"));
+    for (int copy = 0; copy < 9; ++copy) {
+        const int bus = model->addSignal(counter);
+        model->unpack(bus);
+        while (model->rowCount(model->indexOfRow(bus)) > 0) {
+            ASSERT_TRUE(model->moveRowsTo({childOf(bus, 0)}, group,
+                                          model->rowCount(model->indexOfRow(group))));
+        }
+    }
+
+    EXPECT_EQ(model->displayedWidth(group), 72U);
+    EXPECT_EQ(model->renderValue(group, 400), QStringLiteral("282828282828282828"));
 }
 
 TEST_F(WaveRowTest, AGroupOfDifferingWidthsReadsAsAList) {
@@ -848,6 +869,36 @@ TEST_F(WaveWindowTest, RenameOpensTheEditorOnTheName) {
     EXPECT_EQ(waveModel->indexOfRow(bus).data().toString(), QStringLiteral("tally"));
 }
 
+TEST_F(WaveWindowTest, PasteGoesAfterTheCurrentRowAtItsLevel) {
+    // After a group as after anything else, rather than into it: pasting into a group left no
+    // way to paste after one, and dragging is what puts a row inside a group.
+    addToWave(QStringLiteral("clk"));
+    addToWave(QStringLiteral("count"));
+    ASSERT_EQ(waveModel->rowCount(), 2);
+    const int clock = waveModel->rowIdOf(waveModel->index(0, 0));
+    const int counter = waveModel->rowIdOf(waveModel->index(1, 0));
+    const int group = waveModel->addGroup(QStringLiteral("g"));
+    ASSERT_TRUE(waveModel->moveRowsTo({counter}, group, 0));
+    ASSERT_EQ(waveModel->rowCount(), 2) << "the clock, then the group holding the counter";
+
+    waveModel->copySignalRows({clock});
+    waveRows->setCurrentIndex(waveModel->indexOfRow(group));
+    ASSERT_TRUE(triggerWaveAction(QStringLiteral("Paste")));
+
+    ASSERT_EQ(waveModel->rowCount(), 3);
+    EXPECT_EQ(waveModel->rowIdOf(waveModel->index(1, 0)), group);
+    EXPECT_EQ(waveModel->index(2, 0).data().toString(), QStringLiteral("clk"))
+        << "the copy belongs after the group";
+    EXPECT_EQ(waveModel->rowCount(waveModel->indexOfRow(group)), 1) << "and not inside it";
+
+    // Inside a group, after the row that is current there.
+    waveRows->setCurrentIndex(waveModel->indexOfRow(counter));
+    ASSERT_TRUE(triggerWaveAction(QStringLiteral("Paste")));
+    const QModelIndex inside = waveModel->indexOfRow(group);
+    ASSERT_EQ(waveModel->rowCount(inside), 2);
+    EXPECT_EQ(waveModel->index(1, 0, inside).data().toString(), QStringLiteral("clk"));
+}
+
 TEST_F(WaveWindowTest, TheBitRangeDialogIsGone) {
     // Section 10.3: a range is reached by unpacking and removing what is not wanted, not by
     // typing `high:low` into a box. The entry that did is not there to be found.
@@ -914,6 +965,84 @@ TEST_F(WaveWindowTest, ASecondBusArrivesPackedWhileTheFirstStaysOpen) {
     EXPECT_FALSE(waveRows->isExpanded(waveModel->indexOfRow(second)));
     EXPECT_FALSE(waveModel->row(second)->unpacked)
         << "the second copy of a bus must not inherit the first one's unpacking";
+}
+
+// ---------------------------------------------------------------------------
+// Whose keys they are
+// ---------------------------------------------------------------------------
+
+TEST_F(WaveWindowTest, TheWaveListsKeysActOnlyInTheWaveWindow) {
+    // Delete in the Structure window removed whatever was selected in the wave list, and Ctrl+C in
+    // the Objects window copied wave rows: a key given to one pane was a key of the whole window.
+    addToWave(QStringLiteral("count"));
+    ASSERT_EQ(waveModel->rowCount(), 1);
+    waveRows->setCurrentIndex(waveModel->index(0, 0));
+
+    window->activateWindow();
+    ASSERT_TRUE(QTest::qWaitForWindowActive(window.get()));
+
+    QTreeView* structure = nullptr;
+    for (const QDockWidget* dock : window->findChildren<QDockWidget*>()) {
+        if (dock->objectName() == QStringLiteral("structure"))
+            structure = qobject_cast<QTreeView*>(dock->widget());
+    }
+    ASSERT_NE(structure, nullptr);
+
+    structure->setFocus();
+    QTest::keyClick(structure, Qt::Key_Delete);
+    EXPECT_EQ(waveModel->rowCount(), 1) << "Delete in the Structure window removed a wave row";
+
+    QApplication::clipboard()->clear();
+    objects->setFocus();
+    QTest::keyClick(objects, Qt::Key_C, Qt::ControlModifier);
+    EXPECT_FALSE(WaveformModel::clipboardHasRows())
+        << "Ctrl+C in the Objects window copied wave rows";
+
+    // The traces are as much the wave window as the names are, so there the key does act.
+    auto* canvas = window->findChild<enzan::gui::WaveformView*>();
+    ASSERT_NE(canvas, nullptr);
+    canvas->setFocus();
+    QTest::keyClick(canvas, Qt::Key_Delete);
+    EXPECT_EQ(waveModel->rowCount(), 0) << "Delete on the traces removes the selected row";
+}
+
+TEST_F(WaveWindowTest, TheWaveKeysLeaveTheListsTypingAlone) {
+    // NOLINTBEGIN(clang-analyzer-cplusplus.NewDelete)
+    // The wave window's own keys carry a modifier or are punctuation, so that a letter typed in
+    // the list still finds a row by its name (section 10.7), and they act only in the Wave tab.
+    addToWave(QStringLiteral("clk"));
+    addToWave(QStringLiteral("count"));
+    ASSERT_EQ(waveModel->rowCount(), 2);
+
+    window->activateWindow();
+    ASSERT_TRUE(QTest::qWaitForWindowActive(window.get()));
+    auto* canvas = window->findChild<enzan::gui::WaveformView*>();
+    ASSERT_NE(canvas, nullptr);
+
+    waveRows->setFocus();
+    waveRows->setCurrentIndex(waveModel->index(0, 0));
+    QTest::keyClicks(waveRows, QStringLiteral("co"));
+    EXPECT_EQ(waveRows->currentIndex().data().toString(), QStringLiteral("count"));
+
+    const qsizetype cursors = canvas->cursors().size();
+    objects->setFocus();
+    QTest::keyClick(objects, Qt::Key_Insert);
+    EXPECT_EQ(canvas->cursors().size(), cursors) << "Insert outside the Wave tab added a cursor";
+
+    waveRows->setFocus();
+    QTest::keyClick(waveRows, Qt::Key_Insert);
+    EXPECT_EQ(canvas->cursors().size(), cursors + 1) << "Insert in the wave list adds a cursor";
+    // NOLINTEND(clang-analyzer-cplusplus.NewDelete)
+}
+
+TEST_F(WaveWindowTest, TheEditMenuIsTheWaveListsMenu) {
+    // One set of actions in one order, so that the two menus cannot come to differ.
+    const QMenu* edit = nullptr;
+    for (const QAction* entry : window->menuBar()->actions()) {
+        if (entry->text() == QStringLiteral("&Edit")) edit = entry->menu();
+    }
+    ASSERT_NE(edit, nullptr);
+    EXPECT_EQ(edit->actions(), waveRows->actions());
 }
 
 } // namespace

@@ -2,7 +2,7 @@
 
 #include "gui/SignalList.h"
 
-#include "gui/TclLibrary.h"
+#include "gui/TclSyntax.h"
 #include "gui/Theme.h"
 
 #include <QSet>
@@ -13,8 +13,6 @@
 #include <iterator>
 #include <utility>
 #include <vector>
-
-#include <tcl.h>
 
 namespace enzan::gui {
 
@@ -31,143 +29,23 @@ constexpr std::array ListedRadixes{eir::Radix::Binary, eir::Radix::Octal, eir::R
 /// for each level of the design, and slang refuses a hierarchy more than 128 instances deep.
 constexpr int MaximumDepth = 256;
 
-/// Where the text being parsed lies in the file, so that a message can name a line.
-struct Origin {
-    /// The first character of the text lines are counted from.
-    const char* base = nullptr;
-
-    /// The line `base` is on.
-    int baseLine = 1;
-
-    /// False for a body that had to be decoded into a copy, whose lines no longer line up with
-    /// the file's. Everything in it is then reported at the line the body starts on.
-    bool exact = true;
-};
-
-int lineOf(const Origin& origin, const char* position) {
-    if (!origin.exact || position == nullptr || position < origin.base) return origin.baseLine;
-    return origin.baseLine + static_cast<int>(std::count(origin.base, position, '\n'));
-}
-
-/// A word as the file wrote it: backslash sequences decoded, and nothing substituted.
-struct Word {
-    QByteArray text;
-
-    /// Where the word starts, for its line.
-    const char* start = nullptr;
-
-    /// For a word that was one piece of literal text — braced, or bare with nothing in it to
-    /// decode — where that text is in the file. A body read from there keeps its line numbers.
-    const char* literalStart = nullptr;
-    int literalSize = 0;
-
-    /// `{*}` in front of something that would need evaluating — a variable or a command. Tcl's
-    /// parser expands `{*}` in front of literal text itself, into the words it plainly is, so
-    /// only this kind ever reaches here.
-    bool expansion = false;
-};
-
-std::vector<Word> wordsOf(const Tcl_Parse& parse) {
-    std::vector<Word> words;
-    const Tcl_Token* token = parse.tokenPtr;
-
-    for (int index = 0; index < parse.numWords; ++index) {
-        Word word;
-        word.start = token->start;
-        word.expansion = token->type == TCL_TOKEN_EXPAND_WORD;
-
-        const Tcl_Token* component = token + 1;
-        const Tcl_Token* end = component + token->numComponents;
-
-        if (token->numComponents == 1 && component->type == TCL_TOKEN_TEXT) {
-            word.literalStart = component->start;
-            word.literalSize = component->size;
-        }
-
-        while (component < end) {
-            switch (component->type) {
-            case TCL_TOKEN_TEXT:
-                word.text.append(component->start, component->size);
-                ++component;
-                break;
-
-            case TCL_TOKEN_BS: {
-                std::array<char, TCL_UTF_MAX + 1> decoded{};
-                int read = 0;
-                const int written = Tcl_UtfBackslash(component->start, &read, decoded.data());
-                word.text.append(decoded.data(), written);
-                ++component;
-                break;
-            }
-
-            default:
-                // A command or a variable substitution in Tcl, and in a signal list the
-                // characters as written: `/tb/gen[0].q` is a path, not a call to `0`.
-                word.text.append(component->start, component->size);
-                component += 1 + component->numComponents;
-                break;
-            }
-        }
-
-        words.push_back(std::move(word));
-        token = end;
-    }
-
-    return words;
-}
-
-QString describeParseError(int errorType) {
-    switch (errorType) {
-    case TCL_PARSE_QUOTE_EXTRA:
-        return QStringLiteral("a quoted word is followed by something other than a space");
-    case TCL_PARSE_BRACE_EXTRA:
-        return QStringLiteral("a braced word is followed by something other than a space");
-    case TCL_PARSE_MISSING_BRACE: return QStringLiteral("a brace opened here is never closed");
-    case TCL_PARSE_MISSING_BRACKET:
-        return QStringLiteral("a bracket opened here is never closed; a word's brackets must "
-                              "balance unless it is in braces");
-    case TCL_PARSE_MISSING_QUOTE: return QStringLiteral("a quote opened here is never closed");
-    case TCL_PARSE_MISSING_VAR_BRACE:
-        return QStringLiteral("`${` opened here is never closed; a word with `$` in it belongs "
-                              "in braces");
-    default: return QStringLiteral("this cannot be read as a command");
-    }
-}
-
 class Parser {
 public:
     explicit Parser(QVector<SignalListMessage>& messages) : errors(messages) {}
 
     /// Reads the commands in `text` into `out`. Returns false when the text could not be split
     /// into commands at all, after which nothing more is read.
-    bool parse(const char* text, int size, const Origin& origin, int depth,
+    bool parse(const char* text, int size, const TclOrigin& origin, int depth,
                std::vector<SignalListEntry>& out) {
-        const char* cursor = text;
-        int remaining = size;
-
-        while (remaining > 0) {
-            Tcl_Parse parse;
-            if (Tcl_ParseCommand(nullptr, cursor, remaining, 0, &parse) != TCL_OK) {
-                error(lineOf(origin, parse.term), describeParseError(parse.errorType));
-                Tcl_FreeParse(&parse);
-                return false;
-            }
-
-            const std::vector<Word> words = wordsOf(parse);
-            const int line = lineOf(origin, parse.commandStart);
-            const char* next = parse.commandStart + parse.commandSize;
-            Tcl_FreeParse(&parse);
-
-            if (!words.empty() && !command(words, line, origin, depth, out)) return false;
-
-            // A parse always consumes something while there is text left; the test is here so
-            // that a parser that one day did not would stop rather than spin.
-            if (next <= cursor) break;
-            remaining -= static_cast<int>(next - cursor);
-            cursor = next;
-        }
-
-        return true;
+        std::optional<TclSyntaxError> malformed;
+        const bool read = splitTclCommands(
+            text, size, origin,
+            [&](const TclCommand& each) {
+                return command(each.words, each.line, origin, depth, out);
+            },
+            malformed);
+        if (malformed) error(malformed->line, std::move(malformed->text));
+        return read;
     }
 
 private:
@@ -176,7 +54,7 @@ private:
     }
 
     /// Reads a body — of a group, or of `-contents` — as a signal list of its own.
-    bool body(const Word& word, const Origin& origin, int line, int depth,
+    bool body(const TclWord& word, const TclOrigin& origin, int line, int depth,
               std::vector<SignalListEntry>& out) {
         if (depth >= MaximumDepth) {
             error(line, QStringLiteral("groups are nested more than %1 deep").arg(MaximumDepth));
@@ -188,14 +66,14 @@ private:
         }
 
         // Decoded, so its characters are a copy and its lines are reported as the body's own.
-        const Origin copy{.base = word.text.constData(), .baseLine = line, .exact = false};
+        const TclOrigin copy{.base = word.text.constData(), .baseLine = line, .exact = false};
         return parse(word.text.constData(), static_cast<int>(word.text.size()), copy, depth + 1,
                      out);
     }
 
-    bool command(const std::vector<Word>& words, int line, const Origin& origin, int depth,
+    bool command(const std::vector<TclWord>& words, int line, const TclOrigin& origin, int depth,
                  std::vector<SignalListEntry>& out) {
-        for (const Word& word : words) {
+        for (const TclWord& word : words) {
             if (word.expansion) {
                 error(line, QStringLiteral("`{*}` here would expand a variable or a command's "
                                            "result, and nothing in a signal list is evaluated"));
@@ -220,7 +98,7 @@ private:
     }
 
     /// Reads the value an option takes. Returns false having reported that it is missing.
-    bool valueOf(const std::vector<Word>& words, std::size_t& index, int line,
+    bool valueOf(const std::vector<TclWord>& words, std::size_t& index, int line,
                  const QString& option) {
         if (index + 1 >= words.size()) {
             error(line, QStringLiteral("%1 needs a value").arg(option));
@@ -232,7 +110,7 @@ private:
 
     /// Reads an option common to `add wave` and `group`. Returns false when `option` is not one
     /// of them, and sets `failed` when it is one but its value is wrong.
-    bool sharedOption(const std::vector<Word>& words, std::size_t& index, int line,
+    bool sharedOption(const std::vector<TclWord>& words, std::size_t& index, int line,
                       SignalListEntry& entry, bool& failed) {
         const QString option = QString::fromUtf8(words[index].text);
 
@@ -277,14 +155,14 @@ private:
         return false;
     }
 
-    bool addWave(const std::vector<Word>& words, int line, const Origin& origin, int depth,
+    bool addWave(const std::vector<TclWord>& words, int line, const TclOrigin& origin, int depth,
                  std::vector<SignalListEntry>& out) {
         SignalListEntry entry;
         entry.kind = SignalListEntry::Kind::AddWave;
         entry.line = line;
 
         bool failed = false;
-        const Word* contents = nullptr;
+        const TclWord* contents = nullptr;
         std::size_t index = 2;
 
         for (; index < words.size() && words[index].text.startsWith('-'); ++index) {
@@ -342,7 +220,7 @@ private:
         return true;
     }
 
-    bool group(const std::vector<Word>& words, int line, const Origin& origin, int depth,
+    bool group(const std::vector<TclWord>& words, int line, const TclOrigin& origin, int depth,
                std::vector<SignalListEntry>& out) {
         SignalListEntry entry;
         entry.kind = SignalListEntry::Kind::Group;
@@ -700,65 +578,12 @@ void collectScopes(const std::vector<SignalListEntry>& entries, const ScopeTree&
 } // namespace
 
 ParsedSignalList parseSignalList(const QByteArray& text) {
-    initialiseTcl();
-
     ParsedSignalList result;
     Parser parser(result.errors);
-    const Origin origin{.base = text.constData(), .baseLine = 1, .exact = true};
+    const TclOrigin origin{.base = text.constData(), .baseLine = 1, .exact = true};
     if (!parser.parse(text.constData(), static_cast<int>(text.size()), origin, 0, result.entries))
         result.entries.clear();
     return result;
-}
-
-QString quoteSignalListWord(const QString& word) {
-    if (word.isEmpty()) return QStringLiteral("{}");
-
-    // Bare when nothing in it means anything to the parser. Brackets are characters like any
-    // other in a signal list, but Tcl's parser still matches them, so they must balance.
-    bool bare = !word.startsWith(u'#');
-    int brackets = 0;
-    for (const QChar character : word) {
-        if (character.isSpace() || character == u'{' || character == u'}' || character == u'"'
-            || character == u'\\' || character == u';' || character == u'$') {
-            bare = false;
-        }
-        if (character == u'[') ++brackets;
-        if (character == u']' && --brackets < 0) bare = false;
-    }
-    if (brackets != 0) bare = false;
-    if (bare) return word;
-
-    // Braced when its own braces balance: everything inside braces is literal, which is how a
-    // label with spaces in it reads best.
-    int depth = 0;
-    bool balanced = !word.contains(u'\\');
-    for (const QChar character : word) {
-        if (character == u'{') ++depth;
-        if (character == u'}' && --depth < 0) balanced = false;
-    }
-    if (balanced && depth == 0) return u'{' + word + u'}';
-
-    // Otherwise each character the parser would act on is escaped.
-    QString escaped;
-    for (qsizetype index = 0; index < word.size(); ++index) {
-        const QChar character = word[index];
-        if (character == u'\n') {
-            escaped += QStringLiteral("\\n");
-        } else if (character == u'\t') {
-            escaped += QStringLiteral("\\t");
-        } else if (character == u'\r') {
-            escaped += QStringLiteral("\\r");
-        } else if (character.isSpace() || character == u'{' || character == u'}'
-                   || character == u'"' || character == u'\\' || character == u';'
-                   || character == u'$' || character == u'[' || character == u']'
-                   || (index == 0 && character == u'#')) {
-            escaped += u'\\';
-            escaped += character;
-        } else {
-            escaped += character;
-        }
-    }
-    return escaped;
 }
 
 QString radixWord(eir::Radix radix) {

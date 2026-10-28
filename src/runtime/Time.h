@@ -44,7 +44,7 @@ constexpr TimeExponent FinestTimeExponent = -15;
 /// Which unit a count counts is settled by the design and its libraries (section 3.1), which the
 /// reader seldom knows, so a length with a unit is turned into a count only once the run's
 /// precision is (`TimeScale::countOf`). `--run` and the wave window's run length both read one
-/// with `parseTimeLength`, so that the two take the same spellings (section 8.5).
+/// with `parseRunLength`, so that the two take the same spellings (section 8.5).
 struct TimeLength {
     std::uint64_t mantissa = 0;
     int exponent = 0;
@@ -56,6 +56,22 @@ struct TimeLength {
 /// `text` as a `TimeLength`: whole digits, or digits with a fraction and a unit after them, with
 /// no space between. Nothing for anything else, and for more digits than 64 bits hold.
 [[nodiscard]] std::optional<TimeLength> parseTimeLength(std::string_view text) noexcept;
+
+/// How long a run goes on, as `--run` and the wave window's run length take it: a `TimeLength`,
+/// or `all`, until the design finishes, which is what a run given no length does.
+struct RunLength {
+    TimeLength length;
+
+    /// True for `all`, whose `length` means nothing.
+    bool untilFinished = false;
+};
+
+/// `text` as a `RunLength`: `all`, or what `parseTimeLength` reads. Nothing for anything else.
+///
+/// The one reader of both, because the command line and the window are asked the same question:
+/// `all` read by each of them apart is how one came to take it and the other to refuse it
+/// (section 8.5).
+[[nodiscard]] std::optional<RunLength> parseRunLength(std::string_view text) noexcept;
 
 /// Whether a `TimeLength` is a whole number of a scale's unit.
 enum class LengthFit : std::uint8_t {

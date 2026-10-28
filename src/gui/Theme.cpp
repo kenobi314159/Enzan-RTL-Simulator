@@ -5,7 +5,9 @@
 #include "common/Assert.h"
 #include "gui/TclLibrary.h"
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 
 #include <algorithm>
 
@@ -44,6 +46,9 @@ constexpr const char* FontAreaNames[] = {"window", "wave", "transcript", "source
 constexpr std::size_t FontAreaCount = static_cast<std::size_t>(ThemeFont::Count);
 
 static_assert(std::size(FontAreaNames) == FontAreaCount, "every ThemeFont needs a name");
+
+/// Where the compiled-in themes are, one file each, named for the theme.
+constexpr const char* BuiltInDirectory = ":/enzan/themes";
 
 /// The largest size a theme may give, in points: past it a mistyped size is far likelier than a
 /// reader who wants it.
@@ -131,30 +136,62 @@ Theme::Theme() {
     colors.fill(QColor());
 }
 
-QString Theme::builtInScript() {
-    QFile file(QStringLiteral(":/enzan/themes/dark.tcl"));
+QStringList Theme::builtInNames() {
+    const QString fallback = QString::fromLatin1(DefaultBuiltIn);
+    QStringList names;
+    for (const QFileInfo& file :
+         QDir(QString::fromLatin1(BuiltInDirectory))
+             .entryInfoList({QStringLiteral("*.tcl")}, QDir::Files, QDir::Name)) {
+        if (file.completeBaseName() != fallback) names << file.completeBaseName();
+    }
+    names.prepend(fallback);
+    return names;
+}
+
+QString Theme::builtInScript(const QString& name) {
+    const QString theme = name.isEmpty() ? QString::fromLatin1(DefaultBuiltIn) : name;
+    if (!builtInNames().contains(theme)) return {};
+
+    QFile file(QStringLiteral("%1/%2.tcl").arg(QString::fromLatin1(BuiltInDirectory), theme));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
     return QString::fromUtf8(file.readAll());
 }
 
 void Theme::loadBuiltIn() {
-    colors.fill(QColor());
-    assigned.fill(false);
-    fontSizes.fill(std::nullopt);
-
-    QString error;
-    const bool loaded = evaluate(builtInScript(), error);
-
-    // The shipped theme is compiled into the binary. A build whose own theme does not parse, or
-    // does not define every key the catalogue lists, is broken rather than misconfigured, and
-    // saying so here beats a window full of black rectangles.
-    ENZAN_ASSERT(loaded, "the built-in theme failed to load");
-    ENZAN_ASSERT(isComplete(), "the built-in theme does not define every colour");
+    const bool loaded = loadBuiltIn(QString::fromLatin1(DefaultBuiltIn));
+    ENZAN_ASSERT(loaded, "the default theme is not built in");
     static_cast<void>(loaded);
 }
 
+bool Theme::loadBuiltIn(const QString& name) {
+    const QString script = builtInScript(name);
+    if (script.isEmpty()) return false;
+
+    Theme result;
+    QString error;
+    const bool loaded = result.evaluate(script, error);
+
+    // The shipped themes are compiled into the binary. A build whose own theme does not parse,
+    // or does not define every key the catalogue lists, is broken rather than misconfigured, and
+    // saying so here beats a window full of black rectangles.
+    ENZAN_ASSERT(loaded, "a built-in theme failed to load");
+    ENZAN_ASSERT(result.isComplete(), "a built-in theme does not define every colour");
+    static_cast<void>(loaded);
+
+    *this = result;
+    return true;
+}
+
 bool Theme::evaluate(const QString& script, QString& error) {
+    int line = 0;
+    if (evaluateAt(script, error, line)) return true;
+    if (line > 0) error = QStringLiteral("line %1: %2").arg(QString::number(line), error);
+    return false;
+}
+
+bool Theme::evaluateAt(const QString& script, QString& error, int& line) {
     error.clear();
+    line = 0;
 
     const Interpreter interpreter;
     if (interpreter.get() == nullptr) {
@@ -162,19 +199,25 @@ bool Theme::evaluate(const QString& script, QString& error) {
         return false;
     }
 
-    Tcl_CreateObjCommand(interpreter.get(), "theme", &themeCommandProc, this, nullptr);
-    Tcl_CreateObjCommand(interpreter.get(), "font", &fontCommandProc, this, nullptr);
+    // Into a copy, which replaces this theme only once the whole script has run. A theme that
+    // stopped halfway would be a window whose colours come from two places, with nothing to say
+    // which came from where.
+    Theme result = *this;
+    Tcl_CreateObjCommand(interpreter.get(), "theme", &themeCommandProc, &result, nullptr);
+    Tcl_CreateObjCommand(interpreter.get(), "font", &fontCommandProc, &result, nullptr);
 
     const QByteArray text = script.toUtf8();
     if (Tcl_EvalEx(interpreter.get(), text.constData(), static_cast<int>(text.size()), 0)
         != TCL_OK) {
-        // The interpreter's own message carries the line number, which is the one thing a user
-        // with a mistyped colour actually needs.
+        // The interpreter's result is the message alone; the line it stopped at is kept apart,
+        // and it is the one thing a user with a mistyped colour actually needs.
         error = QString::fromUtf8(Tcl_GetStringResult(interpreter.get()));
         if (error.isEmpty()) error = QStringLiteral("the theme script failed");
+        line = Tcl_GetErrorLine(interpreter.get());
         return false;
     }
 
+    *this = result;
     return true;
 }
 
@@ -185,7 +228,18 @@ bool Theme::loadFile(const QString& path, QString& error) {
         return false;
     }
 
-    return evaluate(QString::fromUtf8(file.readAll()), error);
+    Theme result;
+    result.loadBuiltIn();
+
+    int line = 0;
+    if (!result.evaluateAt(QString::fromUtf8(file.readAll()), error, line)) {
+        error = line > 0 ? QStringLiteral("%1:%2: %3").arg(path, QString::number(line), error)
+                         : QStringLiteral("%1: %2").arg(path, error);
+        return false;
+    }
+
+    *this = result;
+    return true;
 }
 
 bool Theme::set(const QString& key, const QString& value, QString& error) {

@@ -161,8 +161,7 @@ flattening, process merging, partitioning — belong here.
 
 **Execution** runs the elaborated image under the simulation kernel.
 
-The instruction in `IDEA.md` to avoid whole-design flattening applies to
-*analysis*, which MUST remain per-design-unit and modular. Flattening at
+*Analysis* MUST remain per-design-unit and modular. Flattening at
 elaboration time is a legitimate optimisation and MUST remain available, because
 it is where a large fraction of achievable performance lives.
 
@@ -258,10 +257,6 @@ conversion at run time. A SystemVerilog delay counts the unit of the scope stati
 it, a task's that of the module or package declaring the task, rounded to that
 scope's precision first (IEEE 1800 section 3.14.2.1), and `$time` counts the
 calling module's unit.
-
-`IDEA.md` referred to a "pre-set minimum delta step". The correct concept is
-this global time precision. Delta cycles have no duration at all (see 3.2) and
-are a separate mechanism.
 
 Note the practical range: at 1 fs precision the 64-bit counter covers about 5.1
 hours of simulated time; at 1 ps it covers about 213 days. Overflow MUST be
@@ -1242,10 +1237,10 @@ interpreter.
 
 ### 6.4 Parallelism — realistic expectations
 
-`IDEA.md` aims for parallel execution. This needs calibrating, because
-thread-parallel event-driven RTL simulation has a thirty-year research history
-of disappointing results: synchronisation cost typically exceeds the work
-performed per event.
+The original proposed idea aims for parallel execution. This needs calibrating,
+because thread-parallel event-driven RTL simulation has a thirty-year research
+history of disappointing results: synchronisation cost typically exceeds the
+work performed per event.
 
 What actually pays, in order of confidence:
 
@@ -1382,8 +1377,10 @@ time with its own unit, `--run 10ns` or `--run 1.5us`. Which unit a count counts
 design's and its libraries' to settle (3.1), which a reader writing the command line seldom
 knows, so a time with a unit is turned into a count once the run's unit is known, and one that
 is no whole number of that unit is refused rather than rounded: a run that stopped at another
-time than the one asked for would look like the design stopping there. The wave window's run
-length takes the same spellings, read by the same function in `runtime` (8.5).
+time than the one asked for would look like the design stopping there. `--run all` runs until
+the design finishes, which is what a run given no `--run` does; it is there to be said to a window,
+which runs nothing until asked (8.4). The wave window's run length takes the same spellings, read
+by the same function in `runtime` (8.5).
 
 **Exit statuses are distinct enough to branch on**, because a Makefile and a CI
 job need to tell a broken invocation from a broken design:
@@ -1394,10 +1391,13 @@ job need to tell a broken invocation from a broken design:
 | 1 | the command line was wrong |
 | 2 | analysis or elaboration failed |
 | 3 | the simulation ran and the design failed |
+| 4 | the window `--gui` started crashed or exited with an error |
 
-Conflating the last two is the mistake to avoid: a regression script that cannot
+Conflating 2 and 3 is the mistake to avoid: a regression script that cannot
 distinguish "the tool could not compile this" from "the testbench reported an
-error" reports both as the same red square.
+error" reports both as the same red square. 4 is a case of its own: a window that
+crashed is no broken invocation, analysis or design, and 0 would say the session
+worked when its reader may never have seen it (8.4).
 
 **A command line that gives nothing to work on is wrong, not a design that failed**: `lib`
 with no subcommand of its own, `run` or `elaborate` given neither a library nor a file list,
@@ -1730,8 +1730,13 @@ runner would otherwise install a GUI toolkit to run a batch simulation.
 **With `--gui` the design is elaborated and handed over, not run.** The front end
 drives every run. This is not only a preference: serving a session puts the design
 back to time zero and begins recording there, so anything run beforehand would be
-discarded rather than shown. `--run` alongside `--gui` is therefore refused rather
-than silently dropped.
+discarded rather than shown. `--run` alongside `--gui` is therefore not a run made
+here but one the window is asked to make: it is forwarded, and the window asks the
+kernel for it once the kernel has welcomed it. Not merely once attached, because a
+time with a unit is counted in the run's time unit (8.1), which the window learns
+from the kernel's greeting; counted before it, the run would be of another length
+than the one asked for. With `--gui --attach` it is asked of the kernel the window
+finds.
 
 **`--vcd` and `--fst` are allowed with `--gui`.** Someone debugging in a window
 who then wants a file for later should not have to run the design again, so a
@@ -1744,11 +1749,12 @@ ends when that window does. The front end therefore needs to know nothing about
 libraries, file lists or any option added later, and the kernel binary still links
 no Qt.
 
-**The front end's own options travel through `enzan` too.** Its theme and the signal
-list it starts with (10.8) are what a user configures about it, so `--theme`,
-`--write-theme` and `--wave-list` are options of `enzan` that are forwarded, and `--write-theme` starts no kernel because writing a
-file out is not a simulation. An option reachable only by running the front end
-directly would make it the second program this section exists to avoid.
+**The front end's own options travel through `enzan` too.** The signal list it starts with
+(10.8) and how long it first runs the design are what a user chooses about one run of it, so
+`--wave-list` and `--run` are options of `enzan` that are forwarded. An option reachable only by
+running the front end directly would make it the second program this section exists to avoid. Its
+theme is not an option at all: it belongs to the person at the screen rather than to the run, so
+the window finds it in the configuration directory (10.9), and `enzan --help` says where that is.
 
 **The front end is a separate executable and not a second entry point.** It remains
 a separate *binary* because the kernel MUST NOT link Qt, and a separate *process*
@@ -1762,7 +1768,9 @@ user chose is the decision, so there is nothing further to configure:
 - **`enzan run --gui <top>`** — the window started the kernel, so closing the
   window ends the kernel too, and the process's exit status is the simulation's
   (8.1) rather than the window's. A run nobody is watching, that nobody asked to
-  keep, is a leak.
+  keep, is a leak. A window that crashed or exited with an error is not one that
+  was closed: it is reported, and the status is 4 when the run gave no other. A
+  front end that cannot be started at all is status 1, as under `--attach`.
 - **`enzan --gui --attach <socket>`** — the window did not start the kernel, so
   closing it only detaches. **`--attach` requires `--gui`**: it is a window that
   attaches to a running kernel, a kernel has nothing to attach to, and accepting it
@@ -1803,8 +1811,8 @@ again is the same answer, as a Makefile appending its own flags to a user's can 
 accepted. So is a top level given both with `--top` and as `run`'s word, when they agree.
 
 **A value the window and the command line both take is read by one function.** The wave
-window's run length and `--run` are one question asked in two places, so `10ns` means the same
-in each, and an answer one refuses the other refuses too.
+window's run length and `--run` are one question asked in two places, so `10ns` and `all` mean
+the same in each, and an answer one refuses the other refuses too.
 
 **`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` is not a synonym:
 `.f` lists spell a library file that way (8.3), and binding it to something else on
@@ -1829,10 +1837,9 @@ features.** It gives Enzan a full Python-driven verification environment
 without Enzan having to implement classes, randomisation, coverage or UVM — an
 extremely high return for the effort, and a strong differentiator.
 
-Note the distinction, which `IDEA.md` blurred: **DPI** is for calling C code
-*from* SystemVerilog. **VPI** (IEEE 1364/1800) is the introspection and callback
-API that cocotb drives simulations through. **VHPI** (IEEE 1076-2019) is the
-VHDL equivalent. cocotb uses VPI, VHPI and FLI. Enzan implements VPI first.
+**VPI** (IEEE 1364/1800) is the introspection and callback API that cocotb
+drives simulations through. **VHPI** (IEEE 1076-2019) is the VHDL equivalent.
+cocotb uses VPI, VHPI and FLI. Enzan implements VPI first.
 
 The required subset is small and well-bounded:
 
@@ -2128,8 +2135,8 @@ The layout follows Modelsim, which is what users expect:
 | Transcript | command entry, `$display`/`report` output, diagnostics |
 | Processes | active processes and their state |
 
-Docking uses `QDockWidget`. Layout is persisted and is definable from a Tcl
-configuration script.
+Docking uses `QDockWidget`. Layout is persisted, in the configuration directory (10.9), and is
+definable from a Tcl configuration script.
 
 **A served kernel's own output is part of its transcript.** A VPI application prints to the
 process's standard output, never through Enzan — cocotb's whole log is written that way — so a
@@ -2163,6 +2170,14 @@ next to an eighty-column listing leaves too little of either to read, and a
 reader is looking at one or the other. The Source tab is raised automatically
 when the design stops at a line, because the reader asked to stop somewhere and
 the point is to see it.
+
+**A command is one action wherever it is offered.** The menu bar, the toolbar and a pane's
+own menu share it, so a command has one name and one key in all of them; the wave list's menu
+is the window's Edit menu, entry for entry. A pane's keys act while the focus is in that pane
+and nowhere else, so that Delete in the Structure window cannot remove a wave row. The run's
+keys are the window's, a debugger's: F5 runs and Shift+F5 stops. *Help → Keyboard Shortcuts*,
+F1, lists every key, read from the actions each time it opens so that it cannot disagree with
+them, and the mouse's gestures, which are not actions, from a table beside their handlers.
 
 ### 10.3 Waveform view
 
@@ -2212,7 +2227,8 @@ a separate cost in the same place:
   picture, and blitted rather than drawn again. Drawing a bus means a segment, a
   value measured against the font and a string laid out for every run of columns
   across the window; that is the expensive half and it was being repeated to put
-  the same traces one line up.
+  the same traces one line up. Nor does a trace depend on the cursor, so moving
+  the cursor draws none of them again.
 - The distance to move by is **measured from the list**, by asking where a row
   the canvas has drawn sits now, rather than worked out from the scroll bar.
   Deriving it would mean assuming whether the bar counts items or pixels and
@@ -2283,10 +2299,46 @@ write path is a test of one size against zero until then — which is what keeps
 
 ### 10.5 Theme
 
-Dark throughout. **Every colour MUST come from the theme configuration file**;
-no colour literals in widget code.
+Dark by default. **Every colour MUST come from a theme file**; no colour literals in widget
+code.
 
 Waveform view defaults: high-contrast black background, light green traces.
+
+**Two themes are built in**: `dark`, the default, and `light`, for a reader who wants one. Each is a
+file of its own compiled into the front end, and each sets every colour itself: the light theme is
+not the dark one with some colours changed, because a colour it forgot would then be the dark
+theme's, a dark patch in a light window, and a test holds every built-in theme to setting every
+key. The light theme keeps the dark one's distinctions — its own colours for unknown and high
+impedance, a shade between the background and the traces for time not yet simulated — turned to
+read on white. Both are held to one bar of readability: text at the contrast WCAG asks of body
+text, traces and cursors at the contrast it asks of what is not text.
+
+**A theme is the default one with a script over it, taken whole or not at all.** A script that
+sets three colours changes three colours, and the rest are the default theme's rather than
+undefined. A script that fails — a key this build does not know, a colour that is not one —
+changes nothing, the lines before the mistake included, and the error names the file and the line
+it stopped at. A window coloured partly by a theme that did not load takes its colours from two
+places with nothing to say which came from where, and a signal list follows the same rule for the
+same reason (10.8). Which theme the window uses is named in the configuration directory (10.9).
+
+**A theme is chosen, written and reloaded from the window.** *View → Theme* offers the built-in
+themes, the default first, and every file in the configuration directory's `themes/`, and
+choosing one colours the window and names it in `config` for the next. *New Theme…* writes a copy
+of the theme in use to a file of its own there — the built-in theme's text, or the file's —
+refusing a name already taken: what the reader is looking at is what they go on to edit. *Reload
+Theme* reads the theme in use again for a reader who has just edited it — asked for, rather than
+done whenever the file changes, because an editor saves in steps and a theme loaded halfway
+through a save is one that failed. The built-in themes are always among them: they are the ones a
+newer Enzan has improved, which a copy written out by an older one never sees, and the ones that
+work when the directory does not.
+
+**A new theme reaches everything already drawn.** Nothing in the window keeps a colour or a size
+past the moment it was painted without being told when the theme changes: the canvas's drawn
+traces (10.3), the transcript's lines, each of which remembers which of the theme's colours it is
+in rather than the colour, and the highlight swatches. A window that showed half its traces in the
+old theme until they happened to be drawn again would look broken, and would be. Sizes are worked
+out from the desktop's fonts every time, so a theme that sets none gives the desktop's back after
+one that set them. Nothing else changes — not the rows, the cursors, the zoom or the run.
 
 **The colours reach the widgets through a `QPalette`, not a style sheet.** This
 is a performance rule wearing a presentation rule's clothes. A Qt style sheet
@@ -2423,11 +2475,14 @@ Which signal is selected is not decoration: it is what Tab steps along below.
 - Clicking a cursor's label makes it the active cursor.
 - Double-clicking a label renames it.
 - Right-clicking a label opens that cursor's own menu: rename, lock or unlock,
-  remove. It is a menu rather than a set of window-level commands because every
-  entry is about *that* cursor, and a command that acted on "the active one"
-  would need the reader to make it active first and then remember that they had.
+  remove. That is the mouse's way, and it names the cursor by pointing at it. A key
+  cannot point, so the keyboard acts on the active cursor, which is drawn heavier
+  than the rest: Ctrl+L locks or unlocks it, `,` and `.` make the cursor to its left
+  or right active, and Ctrl+Home and Ctrl+End move it, unless it is locked, to time
+  zero and to where the traces stop.
 - A cursor is added from the toolbar, beside the zoom controls, because adding
-  one is part of measuring rather than part of configuring the window.
+  one is part of measuring rather than part of configuring the window; or with
+  Insert. The new cursor is the active one, at the active one's time.
 - **Tab** moves the active cursor to the next transition of the selected row,
   **Shift+Tab** to the previous one. It does so wherever the focus is — the
   signal list must not spend the key on its own focus navigation.
@@ -2465,8 +2520,8 @@ it would sit beside is how a tool acquires a number nobody reads.
   It is the same act as the disclosure arrow, which is what creates a vector's
   bits the first time, so the two can never disagree about what a row is showing.
 - **Copy and paste.** Ctrl+C copies the selected rows, with everything below
-  them, and Ctrl+V pastes them beside whatever is current — inside it when that
-  is a group. A copy keeps its radix, its highlight and how far it was unpacked,
+  them, and Ctrl+V pastes them after whatever is current, at its level, a group
+  included; dragging is what puts rows inside a group. A copy keeps its radix, its highlight and how far it was unpacked,
   because a row that had been set up and then pasted back as a bare default
   would be a worse answer than copying nothing. The clipboard also carries the
   hierarchical paths as plain text, so that a copy is worth something outside
@@ -2613,10 +2668,24 @@ it would sit beside is how a tool acquires a number nobody reads.
   in widget code would be five violations of the same rule. A highlight covers
   the whole row in both panes, the name and the trace, because they are one row
   to the reader and a highlight that stopped at the splitter would read as a
-  rendering fault.
+  rendering fault. The name and value on a highlighted row of the signal list
+  are drawn in a colour of their own, `wave.highlight.text`, one for all five
+  backgrounds: a theme that makes its highlights strong enough to find at a
+  glance can then keep the text on them readable, rather than leaving it in the
+  panel's colour, chosen for a background the highlight has replaced. A row
+  with no highlight keeps the panel's text, and a selected one the selection's.
 
-**What this does not change.** Panning with the middle button, the keyboard zoom
-and pan, cursor locking, grouping and per-row radix all stay as they are.
+**The keyboard.** A modifier means what it means on the wheel: Ctrl zooms, Ctrl+`+` and
+Ctrl+`-` by a step, Ctrl+F to fit the run and Ctrl+Shift+F to the cursors; Shift pans, with
+Shift+← and Shift+→. A key without one is the signal list's own, as Qt's tree gives it: the
+arrows move, pack and unpack, `+`, `-` and `*` pack and unpack, and typing the start of a name
+jumps to the row. The traces hand such a key to the list, so it means one thing across the Wave
+tab, and the window's wave keys act only while the focus is there.
+
+**Finding a row by typing its name is kept on purpose.** It is why the keys above carry a
+modifier or are punctuation, and a command MUST NOT take a key that types a letter or a digit in
+the Wave tab: it would take away a way of finding a row that a reader may rely on without
+knowing it has a name.
 
 Panning is the middle button's alone. Ctrl+drag used to pan as well, and no
 longer does: Ctrl means *zoom* on the wheel, and a modifier that meant zoom under
@@ -2677,9 +2746,9 @@ What `add wave` adds depends on what the path names:
   warning, naming the ranges the signal is declared with. The whole path is looked up as a
   signal first, then with one select fewer at a time, so a name that itself ends in brackets is
   never taken for a select.
-- **A scope** adds what *Add to wave* on that scope in the Structure window adds: a group
-  named by the scope's path, holding its signals. With `-r` it adds what *Add to wave
-  recursive* adds: the subtree's groups, nested as its instances are, in the Structure
+- **A scope** adds what *Add to Wave* on that scope in the Structure window adds: a group
+  named by the scope's path, holding its signals. With `-r` it adds what *Add to Wave
+  Recursive* adds: the subtree's groups, nested as its instances are, in the Structure
   window's order. A scope with instances below it becomes a group holding its own signals in
   a group called `$top`, then a group for each instance below it, named by the instance's
   name; one without is the group of its signals. A group that would hold nothing is left out,
@@ -2708,8 +2777,10 @@ window lets it become: its bits can be deleted and reordered, and other rows can
 into it (10.7). `-contents` describes any of that with the same two commands, each bit with
 its own radix, label and highlight, so nothing the window can show is beyond the file.
 
-**Saving writes what the window shows.** *Save signal list…* writes every row, top to
-bottom, so that loading the file rebuilds the same list:
+**Saving writes what the window shows.** *Save Signal List* writes every row, top to
+bottom, back to the file the list was last loaded from or saved to, asking only when there is
+none, and *Save Signal List As…* to another; arranging, saving and running again is the loop
+the file exists for. Loading the file rebuilds the same list:
 
 - a label only where the row was renamed, `-expand` for a signal exactly as unpacking left
   it and `-contents` for one that has been changed since;
@@ -2734,7 +2805,7 @@ go into the window the way a paste puts them there. So:
 - the whole file is read, and every path looked up, before any row is added, so a file
   with a mistake in it changes nothing rather than half of the window.
 
-*Load signal list…* replaces the window's list. Adding one list to another is what copying
+*Load Signal List…* replaces the window's list. Adding one list to another is what copying
 and pasting are for.
 
 **A mistake in the file is an error; a path the design lacks is not.** An unknown command,
@@ -2745,7 +2816,7 @@ design it was saved from, and refusing a whole arrangement because one signal wa
 would make the file useless at exactly the moment it is needed.
 
 **From the command line, `--wave-list <file>`**, an option of `enzan` forwarded to the front
-end as `--theme` is (8.4): `enzan run --gui --wave-list <file> <top>`, or with `--gui
+end (8.4): `enzan run --gui --wave-list <file> <top>`, or with `--gui
 --attach`. Without `--gui` it is refused, because there is no window to show the list in.
 A file that cannot be read is reported and the window comes up empty, as a theme that
 cannot be read leaves the built-in colours.
@@ -2761,6 +2832,65 @@ read familiarly, but its files are not loaded. A `wave.do` is a Tcl program, wri
 window, full of that window's own commands (`WaveRestoreCursors`, `configure wave`), and its
 paths separate a generate block with `/` where Enzan's use `.` (5.1). Loading some of them
 would be promising all of them.
+
+### 10.9 The configuration directory
+
+The window keeps what its reader has chosen about it in one directory, `$XDG_CONFIG_HOME/enzan`,
+which is `~/.config/enzan` when that variable is unset. `enzan --help` says where it is, because a
+setting kept in a file nobody can find might as well not be kept.
+
+**Nothing in it may change what a simulation computes or records.** It holds how a window shows a
+run, never what the run does. A run is reproduced from its command line and its files (3.8), and
+a setting in someone's home directory that changed a result would be the cache section 8.2
+refuses: found only after it had been trusted, and on a second machine not at all. So the kernel
+reads nothing from it, and anything that would change a result belongs on the command line however
+often a user gives it.
+
+**Only the front end reads or writes it**, on the machine its window is on. A window attached to
+a kernel on a compute server (2.2) is coloured by the settings of the person looking at it, and a
+headless run makes no directory.
+
+**The window makes it the first time it opens**: `config`, naming the theme, and
+`themes/dark.tcl`, the default theme written out as a starting point. Each is written only when
+it is missing, and nothing Enzan writes there replaces a file that exists: the directory is the
+reader's, and a file they have edited is theirs. When it cannot be made — no home directory, a
+file system that is read-only — the window opens with the default theme and says why in the
+transcript. Settings are a convenience, and a window that refused to open without them would put
+them before the design.
+
+**`config` has Tcl's syntax and is not Tcl**, as a signal list is not (10.8): it is split into
+commands by Tcl's parser, nothing is substituted and nothing evaluated. It has one command, which
+names the theme as a file, relative to the directory or as an absolute path, or as one of the
+themes built in:
+
+```tcl
+theme themes/dark.tcl
+theme -builtin light
+```
+
+A built-in theme is named by an option rather than by a word of its own, so that no file,
+whatever it is called, can be taken for one. Without a `theme` command the window uses the
+default built-in theme, and `theme -builtin dark` says the same. A theme that cannot be read or
+does not load leaves the default theme too, as 10.5 says, and so does a built-in theme this build
+lacks — one a newer Enzan has — and the transcript names the file and the line.
+
+**A command this build does not know is a warning, and the rest applies.** This is the one place
+`config` departs from a signal list's rules, and it is deliberate: a newer Enzan may write a
+setting an older one has never heard of, and a directory shared between the two must not lose its
+theme in the older one. A mistake in a command that is known — `theme` naming no theme, or two —
+and text that cannot be split into commands are errors, and then nothing in the file is used.
+
+**The window's layout is kept there too**, in `layout.ini`: where the docks are and how large the
+window is, written as it closes and read as it opens. It is Qt's own record of the docks rather
+than a setting anyone writes, which is why it is a file of its own, in Qt's format, rather than a
+command in `config`; deleting it opens the window as it first opened.
+
+**The window changes `config` in place.** Choosing a theme rewrites the `theme` command where it
+stands, adds one when there is none, or takes its line out for the default theme, and keeps
+every other byte of the file, comments and unknown commands included: a file the reader has
+annotated stays theirs. A file with a mistake in it is not rewritten, since where its theme is
+would be a guess, and the theme chosen is then used until the window closes and said not to be
+kept.
 
 ---
 
@@ -2924,8 +3054,8 @@ and mixing two styles in one translation unit is worse than either style alone.
 
 ### 13.3 Documentation comments
 
-Per `IDEA.md`: every public class and every non-trivial public method MUST
-carry a Doxygen `///` comment.
+Every public class and every non-trivial public method MUST carry
+a Doxygen `///` comment.
 
 A good comment explains the **contract and the reasoning** — preconditions,
 invariants, ownership, why this approach was chosen. A comment restating the

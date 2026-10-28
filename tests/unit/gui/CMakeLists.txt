@@ -8,12 +8,15 @@ set(CMAKE_AUTOMOC ON)
 
 add_executable(
   enzan_unittest_gui
+  ConfigurationTests.cpp
   DesignTreeModelTests.cpp
   GuiTestMain.cpp
   KernelSessionTests.cpp
   MainWindowTests.cpp
+  ShortcutSheetTests.cpp
   SignalListLoadTests.cpp
   SignalListTests.cpp
+  TclSyntaxTests.cpp
   ThemeTests.cpp
   WaveRowTests.cpp
   WaveformInteractionTests.cpp

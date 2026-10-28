@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -26,6 +27,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 #include "eir/Library.h"
@@ -33,6 +36,7 @@
 #include "session/FileList.h"
 #include "session/Session.h"
 
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -60,6 +64,11 @@ enum class ExitStatus : std::uint8_t {
     Usage = 1,
     AnalysisFailed = 2,
     SimulationFailed = 3,
+
+    /// The window `--gui` started crashed or exited with an error. Not a window its reader closed,
+    /// which is how such a session ends: a status of 0 would say that the session worked when the
+    /// reader may never have seen it (8.4).
+    FrontEndFailed = 4,
 };
 
 /// What the command line asked to be done.
@@ -83,10 +92,11 @@ struct NamedLibrary {
     std::filesystem::path path;
 };
 
-/// How long `--run` runs, as the run's precision will count it (`runtime::TimeLength`), and as it
-/// was written, for saying what is wrong with it.
-struct RunLength {
-    enzan::runtime::TimeLength length;
+/// How long `--run` runs, as the run's precision will count it (`runtime::RunLength`), and as it
+/// was written, for saying what is wrong with it and for handing to a window, which reads it again
+/// by the same function (8.5).
+struct RunOption {
+    enzan::runtime::RunLength length;
     std::string text;
 };
 
@@ -151,7 +161,9 @@ Simulation:
   -t, --top <module>      Module to elaborate as the top level. `elaborate` and
                           `run` take it as their one positional word instead.
   -r, --run <time>        Stop after this long: a count of the run's time unit,
-                          100, or a time with its unit, 10ns or 1.5us.
+                          100, or a time with its unit, 10ns or 1.5us. `all` runs
+                          until the design finishes, as no --run does. With
+                          --gui, the window starts the run once it opens.
       --assert-level <note|warning|error|failure|none>
                           The severity at which a VHDL report or failed assertion
                           ends the run. Default `failure`; `none` never ends it.
@@ -184,19 +196,22 @@ Graphical front end:
                           Closing that window leaves the kernel running.
       --listen <socket>   Elaborate and wait for a front end without starting
                           one, so the kernel outlives whatever attaches.
-      --theme <file>      Colour the window from this Tcl theme script. The
-                          default is $XDG_CONFIG_HOME/enzan-gui/theme.tcl.
-      --write-theme <file>
-                          Write the built-in theme out as a starting point for
-                          one of your own, and exit.
       --wave-list <file>  Open the wave window with this signal list in it.
-                          The window's Wave menu saves one.
+                          The window's File menu saves one.
+
+  The window keeps its settings in ~/.config/enzan/, or $XDG_CONFIG_HOME/enzan/
+  when that is set, creating it the first time a window opens: `config` names
+  the theme, one built in, dark or light, or a Tcl script in themes/, which
+  starts with a copy of dark.tcl, and layout.ini is where the docks were. The
+  window's View > Theme menu chooses, writes and reloads themes. A simulation
+  reads nothing from there.
 
   -h, --help              Print this message and exit.
   -V, --version           Print version and build information and exit.
 
 Exit statuses: 0 success, 1 the command line was wrong, 2 analysis or elaboration
-failed, 3 the simulation ran and the design failed.
+failed, 3 the simulation ran and the design failed, 4 the window --gui started
+crashed or exited with an error.
 )";
 
 void printVersion() {
@@ -220,8 +235,6 @@ struct Invocation {
     bool useGui = false;
     std::filesystem::path attachPath;
     std::string libraryName;
-    std::filesystem::path themePath;
-    std::filesystem::path writeThemePath;
 
     /// A signal list the window starts with (DESIGN_GUIDE.md section 10.8).
     std::filesystem::path waveListPath;
@@ -241,7 +254,7 @@ struct Invocation {
     /// never does.
     std::uint8_t stopSeverity = 3;
     std::string topModule;
-    std::optional<RunLength> runUntil;
+    std::optional<RunOption> runUntil;
     std::filesystem::path vcdPath;
     std::filesystem::path fstPath;
     std::string waveformScope;
@@ -455,15 +468,15 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             if (value == nullptr) return ParseOutcome::BadUsage;
             if (!once("--run", value)) return ParseOutcome::BadUsage;
             simulationOnly("--run");
-            const std::optional<enzan::runtime::TimeLength> parsed =
-                enzan::runtime::parseTimeLength(value);
+            const std::optional<enzan::runtime::RunLength> parsed =
+                enzan::runtime::parseRunLength(value);
             if (!parsed.has_value()) {
                 std::cerr << "enzan: '" << value
                           << "' is not a length of time: a count of the run's time unit, `100`, "
-                             "or a number with its unit, `10ns` or `1.5us`\n";
+                             "or a number with its unit, `10ns` or `1.5us`; or `all`\n";
                 return ParseOutcome::BadUsage;
             }
-            invocation.runUntil = RunLength{.length = *parsed, .text = value};
+            invocation.runUntil = RunOption{.length = *parsed, .text = value};
             continue;
         }
 
@@ -686,22 +699,6 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             continue;
         }
 
-        if (argument == "--theme") {
-            const char* value = requireValue(index, argument);
-            if (value == nullptr) return ParseOutcome::BadUsage;
-            if (!once("--theme", value)) return ParseOutcome::BadUsage;
-            invocation.themePath = value;
-            continue;
-        }
-
-        if (argument == "--write-theme") {
-            const char* value = requireValue(index, argument);
-            if (value == nullptr) return ParseOutcome::BadUsage;
-            if (!once("--write-theme", value)) return ParseOutcome::BadUsage;
-            invocation.writeThemePath = value;
-            continue;
-        }
-
         if (argument == "--wave-list") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
@@ -810,78 +807,122 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
 /// The window's own options, as the front end spells them.
 ///
 /// `--gui` is the only way in (8.4), so anything the window needs has to travel through here.
-/// Its theme and the signal list it starts with are what a user configures about it, and
-/// leaving those reachable only by running the front end directly would make it a second
-/// program to learn after all.
+/// The signal list it starts with and how long it runs the design are what a user chooses about one
+/// run of it, and leaving them reachable only by running the front end directly would make it a
+/// second program to learn after all. The run length is forwarded as it was written, because the
+/// window reads it again by the same function and counts it in the unit the kernel tells it. Its
+/// theme is the reader's rather than the run's, and the window finds it itself (DESIGN_GUIDE.md
+/// section 10.9).
 std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::vector<std::string> options;
-    if (!invocation.themePath.empty()) {
-        options.emplace_back("--theme");
-        options.push_back(invocation.themePath.string());
-    }
-    if (!invocation.writeThemePath.empty()) {
-        options.emplace_back("--write-theme");
-        options.push_back(invocation.writeThemePath.string());
-    }
     if (!invocation.waveListPath.empty()) {
         options.emplace_back("--wave-list");
         options.push_back(invocation.waveListPath.string());
     }
+    if (invocation.runUntil.has_value()) {
+        options.emplace_back("--run");
+        options.push_back(invocation.runUntil->text);
+    }
     return options;
+}
+
+/// The front end's command line: its program, then `options`.
+std::vector<std::string> frontEndCommand(std::vector<std::string> options) {
+    options.insert(options.begin(), frontEndProgram().string());
+    return options;
+}
+
+/// `words` as `execvp` takes them, ended by a null. The pointers are into `words`, which must
+/// outlive them unchanged.
+std::vector<char*> argumentVector(std::vector<std::string>& words) {
+    std::vector<char*> argv;
+    argv.reserve(words.size() + 1);
+    for (std::string& word : words) argv.push_back(word.data());
+    argv.push_back(nullptr);
+    return argv;
+}
+
+/// Says that the front end `program` could not be started, `failure` being the `errno` of the call
+/// that failed: `execvp`, or the `fork` or `pipe2` before it.
+void reportFrontEndNotStarted(const std::string& program, int failure) {
+    std::cerr << "enzan: could not start the graphical front end '" << program
+              << "': " << std::generic_category().message(failure);
+    // Missing, as a build configured without it leaves it, rather than there and failing.
+    if (failure == ENOENT)
+        std::cerr << "; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)";
+    std::cerr << '\n';
 }
 
 /// Runs the front end with `options` and nothing else, and never returns.
 ///
-/// For `--write-theme`, which writes a file and exits: there is no simulation in it, so a kernel
-/// would be a process started to do nothing.
+/// For a window that starts no kernel of its own: a kernel here would be a process started to do
+/// nothing.
 [[noreturn]] void becomeFrontEnd(const std::vector<std::string>& options) {
-    const std::filesystem::path program = frontEndProgram();
+    std::vector<std::string> command = frontEndCommand(options);
+    std::vector<char*> argv = argumentVector(command);
 
-    std::vector<std::string> owned = options;
-    std::string name = program.string();
+    ::execvp(argv.front(), argv.data());
 
-    std::vector<char*> argv;
-    argv.push_back(name.data());
-    for (std::string& option : owned) argv.push_back(option.data());
-    argv.push_back(nullptr);
-
-    ::execvp(name.c_str(), argv.data());
-
-    std::cerr << "enzan: could not start the graphical front end '" << name
-              << "'; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)\n";
+    reportFrontEndNotStarted(command.front(), errno);
     std::exit(static_cast<int>(ExitStatus::Usage));
 }
 
 #ifdef ENZAN_WITH_FRONTEND
 
-/// Starts a window attached to `socketPath`, and returns its process id or -1.
+/// Starts a window attached to `socketPath`, and returns its process id, or -1 having said why.
 ///
 /// `--gui` is an option of `enzan` rather than a second program to learn, but the two remain
 /// two processes and the kernel binary links no Qt: a headless server and a CI runner must not
 /// install a GUI toolkit to run a batch simulation (2.2). The kernel is what parses the command
 /// line, analyses and elaborates; the window only ever attaches, which is why it needs to know
 /// nothing about libraries or file lists.
+///
+/// The command line is built before the fork, so that the child does nothing but replace itself.
+/// After a fork only async-signal-safe calls are safe in a process with threads, and a mistake
+/// made in the child ends only the child, where nothing reports it. Whether `execvp` worked comes
+/// back through a pipe closed on exec, which reads as empty once the window has started and carries
+/// `errno` when it could not, so that a front end that cannot be started is said to be one now
+/// rather than taken for a window that closed.
 ::pid_t startFrontEnd(const Invocation& invocation, const std::filesystem::path& socketPath) {
-    const ::pid_t child = ::fork();
-    if (child != 0) return child;
-
     std::vector<std::string> options = frontEndOptions(invocation);
     options.emplace_back("--attach");
     options.push_back(socketPath.string());
+    std::vector<std::string> command = frontEndCommand(std::move(options));
+    std::vector<char*> argv = argumentVector(command);
 
-    const std::filesystem::path program = frontEndProgram();
-    std::string name = program.string();
+    std::array<int, 2> started{};
+    if (::pipe2(started.data(), O_CLOEXEC) != 0) {
+        reportFrontEndNotStarted(command.front(), errno);
+        return -1;
+    }
 
-    std::vector<char*> argv;
-    argv.push_back(name.data());
-    for (std::string& option : options) argv.push_back(option.data());
-    argv.push_back(nullptr);
+    const ::pid_t child = ::fork();
+    if (child == 0) {
+        ::execvp(argv.front(), argv.data());
+        const int failure = errno;
+        const ::ssize_t written = ::write(started[1], &failure, sizeof failure);
+        static_cast<void>(written);
+        ::_exit(static_cast<int>(ExitStatus::Usage));
+    }
+    const int forkFailure = errno;
+    ::close(started[1]);
+    if (child < 0) {
+        ::close(started[0]);
+        reportFrontEndNotStarted(command.front(), forkFailure);
+        return -1;
+    }
 
-    ::execvp(name.c_str(), argv.data());
+    int failure = 0;
+    ::ssize_t got = 0;
+    do {
+        got = ::read(started[0], &failure, sizeof failure);
+    } while (got < 0 && errno == EINTR);
+    ::close(started[0]);
+    if (got <= 0) return child;
 
-    std::cerr << "enzan: could not start the graphical front end '" << name
-              << "'; this build may have been configured without it (-DENZAN_BUILD_GUI=ON)\n";
-    std::_Exit(static_cast<int>(ExitStatus::Usage));
+    static_cast<void>(::waitpid(child, nullptr, 0));
+    reportFrontEndNotStarted(command.front(), failure);
+    return -1;
 }
 
 #endif // ENZAN_WITH_FRONTEND
@@ -1068,14 +1109,31 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
 /// `--listen`: a kernel that outlives its window is the whole point of that spelling. With
 /// `--gui` the kernel exists *for* the window it started, so its closing ends the kernel too
 /// (8.4). Stepping rather than serving is what lets both be true of one server.
-int serveUntilDone(enzan::ipc::KernelServer& server, ::pid_t window) {
+///
+/// `windowStatus` is set to how the window ended, as `waitpid` says it, when it has; it is left
+/// alone when the server stopped first.
+int serveUntilDone(enzan::ipc::KernelServer& server, ::pid_t window, int& windowStatus) {
     while (server.step(200)) {
         if (window <= 0) continue;
-
-        int status = 0;
-        if (::waitpid(window, &status, WNOHANG) == window) break;
+        if (::waitpid(window, &windowStatus, WNOHANG) == window) break;
     }
     return server.exitStatus();
+}
+
+/// Whether a window that ended with `status`, as `waitpid` says it, failed, having said how.
+///
+/// Its reader closing it is not failing, and leaves the exit status to the simulation (8.4).
+bool reportFailedWindow(int status) {
+    if (WIFSIGNALED(status)) {
+        std::cerr << "enzan: the graphical front end ended on signal " << WTERMSIG(status) << '\n';
+        return true;
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        std::cerr << "enzan: the graphical front end exited with status " << WEXITSTATUS(status)
+                  << '\n';
+        return true;
+    }
+    return false;
 }
 
 ExitStatus serve(const Invocation& invocation, const std::filesystem::path& socketPath,
@@ -1103,10 +1161,7 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
     ::pid_t window = -1;
     if (invocation.useGui) {
         window = startFrontEnd(invocation, server.socketPath());
-        if (window < 0) {
-            std::cerr << "enzan: the graphical front end could not be started\n";
-            return ExitStatus::Usage;
-        }
+        if (window < 0) return ExitStatus::Usage;
     } else {
         // Printed rather than logged, because it is the one thing the user needs next and they
         // are looking at this terminal. Not printed under --gui, where the socket is an
@@ -1125,24 +1180,29 @@ ExitStatus serve(const Invocation& invocation, const std::filesystem::path& sock
                   << error << '\n';
     }
 
-    const int status = serveUntilDone(server, window);
+    int windowStatus = 0;
+    const int status = serveUntilDone(server, window, windowStatus);
+    const bool windowFailed = reportFailedWindow(windowStatus);
+
+    // What the design did comes first, and the window only when the design gave no other answer.
     if (status != 0) return ExitStatus::SimulationFailed;
     if (diagnostics.hasErrors()) return ExitStatus::AnalysisFailed;
+    if (windowFailed) return ExitStatus::FrontEndFailed;
     return ExitStatus::Success;
 }
 
-/// `length` as a count of the run's time unit; nothing, having said why, when it is no whole
+/// `run`'s length as a count of the run's time unit; nothing, having said why, when it is no whole
 /// number of the unit or more than a run counts.
-std::optional<std::uint64_t> runCount(const RunLength& length, enzan::runtime::TimeScale scale) {
+std::optional<std::uint64_t> runCount(const RunOption& run, enzan::runtime::TimeScale scale) {
     enzan::runtime::SimTime count = 0;
-    switch (scale.countOf(length.length, count)) {
+    switch (scale.countOf(run.length.length, count)) {
     case enzan::runtime::LengthFit::Exact: return count;
     case enzan::runtime::LengthFit::NotWhole:
-        std::cerr << "enzan: '" << length.text << "' is not a whole number of the run's time unit, "
+        std::cerr << "enzan: '" << run.text << "' is not a whole number of the run's time unit, "
                   << scale.unitName() << "\n";
         return std::nullopt;
     case enzan::runtime::LengthFit::TooLong:
-        std::cerr << "enzan: '" << length.text << "' is longer than a run counts\n";
+        std::cerr << "enzan: '" << run.text << "' is longer than a run counts\n";
         return std::nullopt;
     }
     return std::nullopt;
@@ -1195,7 +1255,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     // A time with a unit is a count only once the run's precision is known, which the design and
     // its libraries settle (section 3.1).
     std::optional<std::uint64_t> until;
-    if (invocation.runUntil.has_value()) {
+    if (invocation.runUntil.has_value() && !invocation.runUntil->length.untilFinished) {
         until = runCount(*invocation.runUntil, session.timeScale());
         if (!until.has_value()) return ExitStatus::Usage;
     }
@@ -1331,8 +1391,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (!invocation.writeThemePath.empty()) becomeFrontEnd(frontEndOptions(invocation));
-
     // An application observes a simulation, and these commands run none (section 9.1).
     if ((!invocation.vpiApplications.empty() || !invocation.vhpiApplications.empty())
         && invocation.command != Command::Run && invocation.command != Command::OneShot) {
@@ -1355,12 +1413,6 @@ int main(int argc, char** argv) {
                   << (invocation.command == Command::Analyse ? "analyse" : "elaborate")
                   << "` runs none; give " << (options.size() == 1 ? "it" : "them")
                   << " to `run` or to the one-shot form\n";
-        return static_cast<int>(ExitStatus::Usage);
-    }
-
-    if (!invocation.themePath.empty() && !invocation.useGui) {
-        std::cerr << "enzan: '--theme' needs '--gui'; it colours a window, and a headless run "
-                     "has none\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 
@@ -1443,13 +1495,6 @@ int main(int argc, char** argv) {
         std::cerr << "enzan: '--listen' cannot be combined with '--gui'; --gui starts a window "
                      "on a socket of its own, and --listen is for a kernel that outlives "
                      "whatever attaches to it\n";
-        return static_cast<int>(ExitStatus::Usage);
-    }
-
-    if (invocation.useGui && invocation.runUntil.has_value()) {
-        std::cerr << "enzan: '--run' cannot be combined with '--gui'; the window drives the "
-                     "run, and a design run before it attached would be put back to time zero "
-                     "rather than shown\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 

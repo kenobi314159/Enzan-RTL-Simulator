@@ -73,6 +73,7 @@ void KernelSession::teardown(const QString& reason) {
 
     const bool wasOpen = connection.isOpen();
     connection.close();
+    greeted = false;
     fetching = false;
     fetchAgain = false;
 
@@ -236,6 +237,7 @@ void KernelSession::onWelcome(const ipc::Frame& frame) {
     kernelTime = message.currentTime;
     recordedTime = message.latestRecordedTime;
     simulationState = message.state;
+    greeted = true;
 
     Q_EMIT welcomed();
     Q_EMIT runStateChanged();

@@ -8,6 +8,7 @@
 // that lets a local window drive a kernel on a compute server.
 
 #include "common/Version.h"
+#include "gui/Configuration.h"
 #include "gui/KernelSession.h"
 #include "gui/MainWindow.h"
 #include "gui/Theme.h"
@@ -15,10 +16,6 @@
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QStandardPaths>
 #include <QStringList>
 #include <QTextStream>
 
@@ -27,17 +24,6 @@
 #include <string_view>
 
 namespace {
-
-/// Where a user's theme is looked for when none is named on the command line.
-///
-/// One well-known place rather than a search path: a colour that came from a file the user
-/// cannot immediately point at is worse than no colour at all.
-QString defaultThemePath() {
-    const QString configuration =
-        QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-    if (configuration.isEmpty()) return {};
-    return configuration + QStringLiteral("/theme.tcl");
-}
 
 /// What `--help` prints.
 ///
@@ -56,11 +42,10 @@ Options:
   -h, --help              Print this message and exit.
   -V, --version           Print version and build information and exit.
       --attach <socket>   Attach to a kernel listening on this Unix domain socket.
-      --theme <file>      Load colours from this Tcl theme script. The default is
-                          $XDG_CONFIG_HOME/enzan-gui/theme.tcl when it exists.
-      --write-theme <file>
-                          Write the built-in theme to this file and exit.
       --wave-list <file>  Open the wave window with this signal list in it.
+  -r, --run <time>        Run the design for this long once attached: a count of
+                          the run's time unit, 100, or a time with its unit, 10ns
+                          or 1.5us. `all` runs until the design finishes.
 )";
 
 /// Answers `--help` and `--version` before Qt's parser sees the command line.
@@ -92,9 +77,8 @@ int main(int argc, char** argv) {
     // and without Qt reporting that it could not connect to one.
     if (const std::optional<int> status = answerHelpOrVersion(argc, argv)) return *status;
 
-    QApplication application(argc, argv);
+    const QApplication application(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("enzan-gui"));
-    QCoreApplication::setOrganizationName(QStringLiteral("Enzan"));
     QCoreApplication::setApplicationVersion(QString::fromStdString(enzan::versionLine()));
 
     // Neither `addHelpOption` nor `addVersionOption`: both are answered above, from one text
@@ -105,22 +89,16 @@ int main(int argc, char** argv) {
         QStringLiteral("attach"),
         QStringLiteral("Attach to a kernel listening on this Unix domain socket."),
         QStringLiteral("socket"));
-    const QCommandLineOption themeOption(QStringLiteral("theme"),
-                                         QStringLiteral("Load colours from this Tcl theme script."),
-                                         QStringLiteral("file"));
-    const QCommandLineOption writeThemeOption(
-        QStringLiteral("write-theme"),
-        QStringLiteral("Write the built-in theme to this file and exit, as a starting point "
-                       "for one of your own."),
-        QStringLiteral("file"));
     const QCommandLineOption waveListOption(
         QStringLiteral("wave-list"),
         QStringLiteral("Open the wave window with this signal list in it."),
         QStringLiteral("file"));
+    const QCommandLineOption runOption(
+        QStringList() << QStringLiteral("r") << QStringLiteral("run"),
+        QStringLiteral("Run the design for this long once attached."), QStringLiteral("time"));
     parser.addOption(attachOption);
-    parser.addOption(themeOption);
-    parser.addOption(writeThemeOption);
     parser.addOption(waveListOption);
+    parser.addOption(runOption);
     // `enzan run --gui ...` forwards its command word, which this process has no use for: it
     // starts a kernel, and the kernel is the thing that runs. Dropped rather than refused, so
     // that both spellings of the same request work (DESIGN_GUIDE.md section 8.4).
@@ -131,62 +109,43 @@ int main(int argc, char** argv) {
     }
     parser.process(forwarded);
 
-    // --- the theme ---------------------------------------------------------
+    // --- the settings ------------------------------------------------------
 
-    enzan::gui::Theme theme;
-    theme.loadBuiltIn();
+    // Made the first time a window opens and read each time one does (DESIGN_GUIDE.md section
+    // 10.9). Neither is fatal: a mistyped colour should not stop someone debugging, and whatever
+    // goes wrong leaves the built-in theme and is said in the transcript.
+    const enzan::gui::ConfigurationDirectory settings(
+        enzan::gui::ConfigurationDirectory::standardPath());
+    QString settingsError;
+    const bool settingsMade = settings.createDefaults(settingsError);
+    const enzan::gui::ConfiguredTheme configured = settings.loadTheme();
 
-    if (parser.isSet(writeThemeOption)) {
-        const QString path = parser.value(writeThemeOption);
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream(stderr) << "enzan-gui: could not write '" << path
-                                << "': " << file.errorString() << '\n';
-            return EXIT_FAILURE;
-        }
-        file.write(enzan::gui::Theme::builtInScript().toUtf8());
-        QTextStream(stdout) << "wrote the built-in theme to " << path << '\n';
-        return EXIT_SUCCESS;
-    }
-
-    QString themePath = parser.value(themeOption);
-    if (themePath.isEmpty()) {
-        const QString fallback = defaultThemePath();
-        if (!fallback.isEmpty() && QFile::exists(fallback)) themePath = fallback;
-    }
-
-    QString themeError;
-    if (!themePath.isEmpty() && !theme.loadFile(themePath, themeError)) {
-        // Reported and carried on from, not fatal: a mistyped colour should not stop someone
-        // debugging, and the built-in theme is already loaded underneath.
-        QTextStream(stderr) << "enzan-gui: " << themePath << ": " << themeError << '\n';
-    }
-
+    // The window gives the application the theme's palette, style sheet and fonts, as it does
+    // whenever the theme changes afterwards.
     QApplication::setStyle(QStringLiteral("Fusion"));
-    // The palette carries nearly all of the theme, and the style sheet only what a palette
-    // cannot say. Keeping backgrounds out of the style sheet is what lets the signal list and
-    // the wave canvas move what they have already drawn when they scroll, rather than drawing
-    // it all again (DESIGN_GUIDE.md section 10.5).
-    QApplication::setPalette(theme.palette());
-    application.setStyleSheet(theme.styleSheet());
-
-    // Before any widget exists, so that every one starts with it; the areas with sizes of their
-    // own are given theirs as they are built.
-    QApplication::setFont(theme.font(enzan::gui::ThemeFont::Window, QApplication::font()));
 
     // --- the session -------------------------------------------------------
 
     enzan::gui::KernelSession session;
-    enzan::gui::MainWindow window(session, theme);
+    enzan::gui::MainWindow window(session, configured.theme, settings);
     window.show();
 
-    if (!themeError.isEmpty()) {
-        window.note(QStringLiteral("%1: %2").arg(themePath, themeError));
+    if (!settingsMade) {
+        QTextStream(stderr) << "enzan-gui: settings are not kept: " << settingsError << '\n';
+        window.note(QStringLiteral("Settings are not kept: %1. The window uses the theme built "
+                                   "into Enzan.")
+                        .arg(settingsError));
+    }
+    for (const enzan::gui::ConfigurationMessage& problem : configured.problems) {
+        QTextStream(stderr) << "enzan-gui: " << enzan::gui::describe(problem) << '\n';
+        window.report(problem);
     }
 
     QString error;
+    bool attached = false;
     if (parser.isSet(attachOption)) {
-        if (!session.attach(parser.value(attachOption), error)) {
+        attached = session.attach(parser.value(attachOption), error);
+        if (!attached) {
             window.note(QStringLiteral("Could not attach to %1: %2")
                             .arg(parser.value(attachOption), error));
         }
@@ -207,6 +166,10 @@ int main(int argc, char** argv) {
         window.note(QStringLiteral(
             "Nothing to show. This is the front end `enzan --gui` starts; run that instead, or "
             "pass --attach <socket> to reach a kernel already listening."));
+    } else if (attached && parser.isSet(runOption)) {
+        // Asked for now and run once the kernel has said what unit it counts in, as a list named
+        // here is loaded once the design has arrived.
+        window.run(parser.value(runOption));
     }
 
     return QApplication::exec();

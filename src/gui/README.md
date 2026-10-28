@@ -6,8 +6,15 @@ waveform view and the transcript (DESIGN_GUIDE.md section 10).
 ## Responsibility
 
 - **The theme** (`Theme.h`) — the colours everything here paints with, loaded from a Tcl script.
+- **The configuration directory** (`Configuration.h`) — `~/.config/enzan`, which the window makes
+  the first time it opens and reads each time it does: `config`, naming the theme, and the themes
+  in `themes/` (DESIGN_GUIDE.md section 10.9), which *View → Theme* chooses between, with the
+  built-in themes, adds to and reads again, and `layout.ini`, where the docks were. The kernel
+  never reads it.
 - **Signal lists** (`SignalList.h`) — reading, resolving and writing the wave window's list as a
   file (DESIGN_GUIDE.md section 10.8).
+- **Tcl's syntax** (`TclSyntax.h`) — splitting a file into commands with Tcl's parser, evaluating
+  nothing, and quoting a word so that it reads back. Signal lists are read with it.
 - **The session** (`KernelSession.h`) — the GUI's end of the connection, on Qt's event loop, and
   the client-side copy of the waveform it is drawing.
 - **The models** (`DesignTreeModel.h`, `ObjectsModel.h`, `WaveformModel.h`) — the hierarchy, the
@@ -30,25 +37,34 @@ the same database class the kernel fills, fed from the protocol instead of from 
 
 **Every colour comes from the theme file, and there is no fallback in C++.** Section 10.5
 forbids colour literals in widget code, and a default written in C++ would be exactly that. The
-shipped `themes/dark.tcl` is compiled in as a resource, loaded first, and a user theme is
-layered over it, so a file that sets three colours changes three colours. A key added to
-`ThemeColors.def` without being added to the theme file fails a test rather than producing a
-black rectangle on someone's screen.
+shipped themes, `themes/dark.tcl` and `themes/light.tcl`, are compiled in as resources and named
+for their files; the dark one is loaded first, and a user theme is layered over it, so a file
+that sets three colours changes three colours. A key added to `ThemeColors.def` without being
+added to every shipped theme fails a test rather than producing a black rectangle on someone's
+screen.
+
+**A theme can change while the window is open**, so it reaches the window one way only:
+`MainWindow::applyTheme`, which opening the window calls too. Whatever keeps a colour past the
+moment it was painted has to be told — the canvas's drawn traces (`WaveformView::themeChanged`),
+the transcript's lines, which remember which of the theme's colours they are in rather than the
+colour, and the highlight swatches. Sizes are worked out from the desktop's fonts each time, never
+from the window's, so that a theme setting none gives the desktop's back.
 
 **The theme is Tcl** because section 10.5 says so, rather than inventing a settings format for
 one purpose. The script gets one command and nothing else: a theme is a
 list of colours, and an interpreter that also offered file access would make "copy this theme
 from the internet" a more exciting decision than it should be.
 
-**A signal list is not even that.** It is split into commands by `Tcl_ParseCommand` and never
-evaluated, so there is no interpreter for a list to reach. That is also what lets the window
-write one back out: a program cannot be saved from what it produced, and a list can.
+**A signal list is not even that.** It is split into commands by `Tcl_ParseCommand`, through
+`splitTclCommands`, and never evaluated, so there is no interpreter for a list to reach. That is
+also what lets the window write one back out: a program cannot be saved from what it produced,
+and a list can.
 
 **Every row is made one way.** `WaveformModel::rowFor`, `sliceOf`, `elementOf` and `bitOf` are
 how a row is made from a signal, a range of one, an element of an array or a bit, and
 `unpackedRows` is what unpacking makes of a row. Adding from the Objects window, pasting and
 loading a list all go through them and through `insertSignalRows`. The Structure window's
-*Add to wave* entries go further: they run the signal list command `add wave ?-r? <scope>`, so
+*Add to Wave* entries go further: they run the signal list command `add wave ?-r? <scope>`, so
 the menu and the file cannot come to disagree about what a scope adds.
 
 **Rendering is bounded by pixels, not by transitions** (section 10.3). Each trace is drawn by

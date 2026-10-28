@@ -128,7 +128,7 @@ read both times off their labels to measure. Right-click a cursor's label to ren
 remove it.
 
 Selecting a signal in the list does the same thing as clicking its trace, so Tab works whichever
-way you picked it — and it works on a group too.
+way you picked it — and it works on a group too. **F1** lists every key and what the mouse does.
 
 Rows drag to reorder, rename in place with **F2**, copy and paste with **Ctrl+C** and **Ctrl+V**,
 and the context menu offers those, a pack/unpack toggle, a radix and one of five highlight
@@ -162,13 +162,19 @@ Right-clicking in **Objects** offers **Deposit…**, **Force…** and **Release*
 Wave*. A deposit writes the value now and the next thing that drives the signal overwrites it; a
 force holds it against the design until released.
 
-Colours come from a Tcl theme file and nowhere else. `enzan --write-theme mine.tcl` writes
-the built-in dark theme out as a starting point, and `enzan --gui --theme mine.tcl` — or dropping it at
-`~/.config/enzan-gui/theme.tcl` — loads yours over it, so a file that sets three colours changes
-three colours.
+Colours come from a Tcl theme file and nowhere else. The window keeps its settings in
+`~/.config/enzan/` (or `$XDG_CONFIG_HOME/enzan/`), which it creates the first time it opens:
+`config` names the theme, `theme themes/dark.tcl`, and `themes/dark.tcl` is the built-in dark theme
+written out as a starting point. A light theme is built in beside the dark one. *View → Theme*
+chooses between the two built-in themes and the files in `themes/`, writes a copy of the one in
+use with *New Theme…*, and reads the one in use again with *Reload Theme* after you edit it; in
+`config`, `theme -builtin light` names the light theme. A theme file is loaded over the built-in
+dark theme, so a file that sets three colours changes three colours.
+The window also keeps where its docks were there, in `layout.ini`. Nothing in that directory
+changes what a simulation computes or records.
 
-What the wave window shows can be kept. *Wave → Save Signal List…* writes it to a file, and
-*Load Signal List…* or `enzan run --gui --wave-list signals.tcl` puts it back. The file is a short
+What the wave window shows can be kept. *File → Save Signal List* (Ctrl+S) writes it to a file,
+the same one each time after the first, and *Load Signal List…* or `enzan run --gui --wave-list signals.tcl` puts it back. The file is a short
 list of `add wave` and `group` commands, written in Tcl's syntax but never run as Tcl, and easy
 to write by hand:
 
