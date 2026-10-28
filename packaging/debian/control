@@ -1,0 +1,46 @@
+Source: enzan
+Section: electronics
+Priority: optional
+Maintainer: @PACKAGER@
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.24),
+               ninja-build,
+               g++ (>= 4:13),
+               flex,
+               libzstd-dev,
+               zlib1g-dev,
+               qt6-base-dev,
+               qt6-qpa-plugins,
+               tcl-dev,
+               libgtest-dev
+Standards-Version: 4.7.0
+Homepage: https://github.com/kenobi314159/Enzan-RTL-Simulator
+Rules-Requires-Root: no
+
+Package: enzan
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Suggests: enzan-gui
+Description: event-driven mixed-language RTL simulator
+ Enzan simulates SystemVerilog and VHDL, each alone or both in one design,
+ writes VCD and FST waveforms, and runs cocotb testbenches through VPI and
+ VHPI.
+ .
+ This package is the simulator, VHDL's standard libraries, the VPI and VHPI
+ headers and cocotb's makefile for Enzan. The graphical debugging environment
+ `enzan --gui` opens is in enzan-gui, so that a machine without a display
+ installs no GUI toolkit.
+
+Package: enzan-gui
+Architecture: any
+Depends: enzan (= ${binary:Version}),
+         qt6-qpa-plugins,
+         ${shlibs:Depends},
+         ${misc:Depends}
+Description: event-driven mixed-language RTL simulator - graphical front end
+ Enzan simulates SystemVerilog and VHDL, each alone or both in one design,
+ writes VCD and FST waveforms, and runs cocotb testbenches through VPI and
+ VHPI.
+ .
+ This package is the window `enzan --gui` opens on a simulation: its waveform
+ view, design structure and transcript.

@@ -270,6 +270,10 @@ The binary lands at `build/gcc-debug/bin/enzan`:
 
 ### Installing
 
+Each release has packages for Ubuntu 24.04, Debian 13, Fedora, RHEL 9 and Arch Linux, and a source
+tarball that builds with no network; [`docs/installing.md`](docs/installing.md) says how to install
+either. From a build directory:
+
 ```sh
 cmake --install build/gcc-release --prefix ~/.local
 ```
@@ -365,6 +369,8 @@ Commit messages carry a category prefix; see section 17.1 of the design guide.
   and their pinned revisions.
 - [`docs/mixed-language.md`](docs/mixed-language.md) — simulating a design of
   both SystemVerilog and VHDL: what crosses between them, and at what cost.
+- [`docs/installing.md`](docs/installing.md) — installing a release's packages,
+  or its source tarball.
 - `docs/` — human-facing documentation (user manual, tutorials), to be
   derived from the design guide as the project matures.
 

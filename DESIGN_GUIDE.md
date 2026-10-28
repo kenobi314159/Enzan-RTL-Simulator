@@ -1762,7 +1762,9 @@ a separate *binary* because the kernel MUST NOT link Qt, and a separate *process
 for 2.2's reasons; neither makes it something to invoke. Its command line is
 therefore only what `enzan` sends it, and it is installed in `libexec` rather than on
 a user's `PATH` (11.5). `enzan` starts the front end of its own installation and no
-other: one found on the `PATH` could be another version's.
+other: one found on the `PATH` could be another version's. A package of Enzan carries
+the front end as a package of its own (11.7), so that a machine installs the kernel
+without Qt as the kernel binary runs without it.
 
 **The lifetime of the kernel follows how the session was started.** The flag a
 user chose is the decision, so there is nothing further to configure:
@@ -2954,8 +2956,8 @@ by the person who took it.
 
 ### 11.5 Installation
 
-**`cmake --install` installs Enzan**, and whatever else installs it starts from what that
-installs. An installation is laid out so, under its prefix:
+**`cmake --install` installs Enzan**, and every package of it is made from what that installs
+(11.7). An installation is laid out so, under its prefix:
 
 ```
 bin/enzan                      the one program a user runs
@@ -3005,11 +3007,10 @@ version, with `-dev` again.
 of a tag leaves submodules out, so it holds no NVC, and building it downloads slang, which no
 distribution packages. A distribution's builder has no network — Debian's, Fedora's and
 openSUSE's do not, nor Launchpad's — so the tarball carries both: every submodule at the commit
-the tag pins, and in `third_party/bundled/` the sources FetchContent downloads to build slang,
-slang's own and fmt, and GoogleTest, which RHEL 9 packages older than the 1.12 the tests need.
-The script finds those by configuring the tag with every download forced
-and copying what CMake fetched, so the revisions slang pins for its own dependencies are restated
-nowhere.
+the tag pins, and in `third_party/bundled/` the sources FetchContent downloads, slang's, the fmt
+slang builds and GoogleTest's, which RHEL 9 packages older than the 1.12 the tests need. The
+script finds them by configuring the tag with every download forced and copying what CMake
+fetched, so the revisions slang pins for its own dependencies are restated nowhere.
 
 **A bundled source stands where its download would.** A system package is still preferred where
 one is found (11.2), and a checkout, which has no such directory, downloads as before. Nothing is
@@ -3022,6 +3023,47 @@ distribution's packaging repository would be given that repository's revision.
 
 **The same tag gives the same tarball**: its files in name order, owned by no one, dated at the
 commit and compressed by one `xz` thread. A tarball can therefore be checked by making it again.
+
+### 11.7 Packages
+
+**Enzan is packaged for the distributions its toolchain floor reaches**: Ubuntu 24.04, Debian 13,
+Fedora, RHEL 9 and its rebuilds with gcc-toolset-13 and EPEL, and Arch Linux. Ubuntu 22.04 and
+Debian 12 are not, their GCC being 12, below 11.1's floor; Ubuntu 22.04's Qt is 6.2 besides.
+
+**The recipes are each distribution's own**, `packaging/debian/`, `packaging/rpm/enzan.spec` and
+`packaging/arch/PKGBUILD`, not CPack's. A distribution's own tools build with its compiler flags,
+hardening and LTO included, split the debug symbols into packages of their own and work out the
+dependencies; and only a recipe in a distribution's format can later be built into a repository,
+by Launchpad, COPR, OBS or the AUR. CPack makes binary packages and nothing a repository builds
+from, and has no format for Arch at all.
+
+**The packages are attached to a release, not served from a repository.** A repository, from
+which a new release arrives with the system's other updates, is a later step, and the recipes are
+what it would be built from.
+
+**Every recipe builds from the release tarball** (11.6), never from a checkout or GitHub's
+archive: with no network, and with `ENZAN_ALLOW_FETCH=OFF`, so that a download is an error rather
+than an attempt. It runs the test suite, `golden.install` included, and installs with
+`cmake --install`. Its version comes from the tarball's name, so the version is set in one place,
+`project()`. A suffix is spelled `~dev` for dpkg and RPM and run on, `dev`, for pacman, which is
+how each sorts `0.2.0-dev` before `0.2.0`.
+
+**The front end is a package of its own, `enzan-gui`**, which depends on `enzan` at the same
+version. The simulator's package depends on no GUI toolkit, so a compute server or a CI runner
+installs Enzan without Qt (8.4). It suggests the front end rather than recommending it, since
+apt and dnf install what is recommended; `enzan --gui` without it says it is not installed and
+names its package.
+
+**What a distribution packages, Enzan is built against.** The tarball's bundled sources are used
+only where the distribution's package is missing or too old; Arch's mimalloc is used, and on
+Fedora its Tcl 9.
+
+**`packaging/build-package.sh <target> <tarball>` builds one distribution's packages in a
+container of it**, as anyone can with Docker or Podman. What the
+build needs is installed from the recipe into an image of its own; the build then runs with no
+network; and the packages are installed into a fresh container, the simulator's alone first.
+There `packaging/smoke-test.sh` runs a design of each language from them, shows that no Qt came
+with the simulator, and starts the front end through `enzan --gui`.
 
 ---
 
@@ -3069,6 +3111,7 @@ Enzan-RTL-Simulator/
 │   └── designs/              scripts fetching external RTL — NEVER vendored
 ├── bench/                    performance benchmarks and result tracking
 ├── docs/                     human documentation, derived from this guide
+├── packaging/                each distribution's recipe, and the scripts that build them (11.7)
 ├── scripts/                  repository checks and release tooling, runnable locally and by CI
 └── third_party/              vendored dependencies where unavoidable
 ```
