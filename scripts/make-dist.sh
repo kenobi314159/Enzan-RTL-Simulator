@@ -8,7 +8,8 @@
 # enzan-<version>.tar.xz and its .sha256 are written into <directory>, build/dist by default, from
 # <revision>, HEAD by default. The tarball holds the revision's tree; each submodule at the commit
 # the revision pins, NVC's included; in third_party/bundled/, the sources FetchContent downloads
-# to build slang, slang's own and fmt; and .tarball-revision, the revision it was made from. A
+# to build slang, slang's own and fmt, and GoogleTest, which RHEL 9 packages too old; and
+# .tarball-revision, the revision it was made from. A
 # distribution's builder has no network, and this is everything a build needs that a distribution
 # does not package.
 #
@@ -46,11 +47,13 @@ while read -r _ type submodule path; do
     git -C "$root/$path" archive "$submodule" | tar -x -C "$tree/$path"
 done < <(git -C "$root" ls-tree -r "$commit")
 
-# Every download forced, a system package found or not, and only the frontend that needs them.
+# Every download forced, a system package found or not, and only what needs them: the
+# SystemVerilog frontend and the tests.
 cmake -S "$tree" -B "$staging/configure" \
     -DENZAN_ENABLE_SYSTEMVERILOG=ON -DENZAN_ENABLE_VHDL=OFF -DENZAN_BUILD_GUI=OFF \
-    -DENZAN_BUILD_TESTS=OFF -DENZAN_ALLOW_FETCH=ON \
-    -DCMAKE_DISABLE_FIND_PACKAGE_slang=ON -DFETCHCONTENT_TRY_FIND_PACKAGE_MODE=NEVER \
+    -DENZAN_BUILD_TESTS=ON -DENZAN_ALLOW_FETCH=ON \
+    -DCMAKE_DISABLE_FIND_PACKAGE_slang=ON -DCMAKE_DISABLE_FIND_PACKAGE_GTest=ON \
+    -DFETCHCONTENT_TRY_FIND_PACKAGE_MODE=NEVER \
     >"$staging/configure.log" 2>&1 || {
     cat "$staging/configure.log" >&2
     echo "make-dist.sh: configuring $commit to fetch its dependencies failed" >&2

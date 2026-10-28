@@ -39,7 +39,8 @@ endfunction()
 # ---------------------------------------------------------------------------
 #
 # A release's source tarball carries, in third_party/bundled/, the sources FetchContent would
-# otherwise download: slang and what slang fetches in turn (DESIGN_GUIDE.md section 11.6). A
+# otherwise download: slang, what slang fetches in turn, and GoogleTest (DESIGN_GUIDE.md section
+# 11.6). A
 # distribution's builder has no network, so a tarball that downloaded would build on none of
 # them. Each directory stands in for its download, so a system package is still preferred where
 # one is found, as section 11.2 has it. A checkout has no such directory and downloads as before.
@@ -114,7 +115,8 @@ endfunction()
 if(ENZAN_BUILD_TESTS)
   find_package(GTest 1.12 QUIET)
   if(NOT GTest_FOUND)
-    if(ENZAN_ALLOW_FETCH)
+    # Building the source a release tarball carries downloads nothing.
+    if(ENZAN_ALLOW_FETCH OR FETCHCONTENT_SOURCE_DIR_GOOGLETEST)
       message(STATUS "GoogleTest not found on the system; building it from source")
       FetchContent_Declare(
         googletest
