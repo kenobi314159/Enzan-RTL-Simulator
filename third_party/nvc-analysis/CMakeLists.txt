@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The part of NVC the VHDL frontend uses: its analysis, built from the submodule in
-# ../nvc without NVC's autotools. See README.md here and docs/nvc_integration.md.
+# ../nvc without NVC's autotools. See README.md here and docs/development/nvc_integration.md.
 
 set(_nvc "${CMAKE_CURRENT_SOURCE_DIR}/../nvc")
 
@@ -52,7 +52,7 @@ configure_file(nvc_config.h.in "${_generated}/config.h" @ONLY)
 flex_target(enzan_nvc_lexer "${_nvc}/src/lexer.l" "${_generated}/lexer.c")
 
 # The files analysis needs once NVC's constant evaluator is replaced, as measured by the spike;
-# docs/nvc_integration.md says how the list was derived and how to derive it again.
+# docs/development/nvc_integration.md says how the list was derived and how to derive it again.
 set(_nvc_sources
     src/bounds.c
     src/common.c

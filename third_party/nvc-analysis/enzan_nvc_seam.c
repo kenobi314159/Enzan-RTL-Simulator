@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * What NVC's analysis needs from outside the files Enzan builds of it (docs/nvc_integration.md).
+ * What NVC's analysis needs from outside the files Enzan builds of it (docs/development/nvc_integration.md).
  *
  * Two things. NVC's driver, nvc.c, defines the version string its report of an internal error
  * prints, and Enzan builds no driver. And NVC's simplifier folds locally static expressions through

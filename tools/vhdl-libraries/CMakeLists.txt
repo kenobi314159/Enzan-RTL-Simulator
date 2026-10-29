@@ -6,7 +6,7 @@
 # They live in lib/enzan/vhdl, beside bin/, in the build tree as in an installation, one directory
 # per library and standard as NVC lays them out: `std` and `ieee` for 1993, which serve 2000 and
 # 2002 as well, then `std.08`, `std.19` and so on. A library is analysed from the sources NVC ships,
-# by enzan-vhdl-library, one source file per run as NVC's own build does (docs/nvc_integration.md).
+# by enzan-vhdl-library, one source file per run as NVC's own build does (docs/development/nvc_integration.md).
 
 add_executable(enzan-vhdl-library Main.cpp)
 target_link_libraries(enzan-vhdl-library PRIVATE enzan::compile_options enzan::common

@@ -162,10 +162,10 @@ message(STATUS "Using zlib ${ZLIB_VERSION_STRING}")
 # ---------------------------------------------------------------------------
 
 # Needed only by the VHDL frontend, and only to build the part of NVC it uses
-# (docs/nvc_integration.md). NVC's lexer is a flex source, so flex runs at build time and
-# nothing of it is linked. NVC compresses the analysed units it writes into a library with
-# zstd, whose header its file layer includes unconditionally. Neither has a source fallback:
-# both are packaged everywhere Enzan builds.
+# (docs/development/nvc_integration.md). NVC's lexer is a flex source, so flex runs at build
+# time and nothing of it is linked. NVC compresses the analysed units it writes into a library
+# with zstd, whose header its file layer includes unconditionally. Neither has a source
+# fallback: both are packaged everywhere Enzan builds.
 if(ENZAN_ENABLE_VHDL)
   find_package(FLEX QUIET)
   if(NOT FLEX_FOUND)

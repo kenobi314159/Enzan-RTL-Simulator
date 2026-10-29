@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Enzan's stand-in for the config.h NVC's autoconf would write, covering the files Enzan builds
- * of it (docs/nvc_integration.md). CMake fills it in from the checks in CMakeLists.txt beside it.
+ * of it (docs/development/nvc_integration.md). CMake fills it in from the checks in CMakeLists.txt beside it.
  */
 
 #ifndef ENZAN_NVC_CONFIG_H

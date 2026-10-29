@@ -28,8 +28,8 @@ same buffer every other diagnostic quotes.
 of the work library it names, and NVC analyses each after the sources declaring them, in the order
 given otherwise.
 
-**With its constant evaluator replaced**, by `third_party/nvc-analysis`, so analysis folds
-nothing through NVC's JIT and this adapter folds as it translates. `docs/nvc_integration.md`
+**With its constant evaluator replaced**, by `third_party/nvc-analysis`, so analysis folds nothing
+through NVC's JIT and this adapter folds as it translates. `docs/development/nvc_integration.md`
 measures what that changes.
 
 **Translating in the same child.** `analyse` runs the analysis and then the translation in one

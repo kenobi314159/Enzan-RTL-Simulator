@@ -12,7 +12,7 @@ beside the submodule rather than in it, so that NVC's tree stays exactly the pin
 | `enzan_nvc_seam.c` | the version string NVC's driver would define, and the replacement for NVC's constant evaluator |
 
 All three are Enzan's, GPL-3.0-or-later. Which files of NVC are built, why those, and how the list
-was measured is in `docs/nvc_integration.md`.
+was measured is in `docs/development/nvc_integration.md`.
 
 ## Rules for this directory
 

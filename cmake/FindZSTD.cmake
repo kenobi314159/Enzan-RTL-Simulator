@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Finds libzstd, which NVC compresses its analysed units with (docs/nvc_integration.md).
+# Finds libzstd, which NVC compresses its analysed units with (docs/development/nvc_integration.md).
 #
 # CMake ships no module for it. zstd's own CMake package is installed by some distributions and
 # not others, depending on how they built zstd, and where it is it names its targets
