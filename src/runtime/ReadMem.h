@@ -13,7 +13,7 @@
 namespace enzan::runtime {
 
 /// A memory as `$readmemh` sees it: one unpacked dimension of elements, stored flat with the
-/// left element highest (DESIGN_GUIDE.md section 4.3).
+/// left element highest.
 struct MemoryShape {
     std::int64_t left = 0;
     std::int64_t right = 0;

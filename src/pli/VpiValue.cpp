@@ -117,8 +117,7 @@ bool readValue(eir::ConstBitRef bits, bool isSigned, s_vpi_value& value, ValueSt
     case vpiStringVal: return setString(toCharacters(bits));
 
     case vpiScalarVal:
-        // Enzan's encoding of one bit is the standard's: 0, 1, Z and X are 0, 1, 2 and 3 in
-        // both (DESIGN_GUIDE.md section 3.6).
+        // Enzan's encoding of one bit is the standard's: 0, 1, Z and X are 0, 1, 2 and 3 in both.
         value.value.scalar = static_cast<PLI_INT32>(bits.get(0));
         return true;
 

@@ -12,10 +12,10 @@ namespace enzan::wavedb {
 
 /// Writes value changes as an FST file.
 ///
-/// FST is "compressed, far more practical for large designs, readable by GTKWave and Surfer"
-/// (DESIGN_GUIDE.md section 7.3), and it is what anyone recording a real design will actually use:
-/// a VCD of a few million value changes is hundreds of megabytes where the FST is a few, and a
-/// viewer can seek in it instead of parsing from the start.
+/// FST is compressed, far more practical for large designs and readable by GTKWave and Surfer, and
+/// it is what anyone recording a real design will actually use: a VCD of a few million value
+/// changes is hundreds of megabytes where the FST is a few, and a viewer can seek in it instead of
+/// parsing from the start.
 ///
 /// The format is produced by GTKWave's own library, vendored in third_party/fst. Writing an FST
 /// encoder from scratch would mean reimplementing a compressed block container with a hierarchy
@@ -59,7 +59,7 @@ private:
     std::vector<std::uint32_t> handles;
 
     /// Reused buffer for the character-per-bit form the library takes, so that emitting a change
-    /// allocates nothing (section 13.4).
+    /// allocates nothing.
     std::string valueBuffer;
 };
 

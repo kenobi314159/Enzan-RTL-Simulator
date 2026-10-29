@@ -322,7 +322,7 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
                                   reg(instruction.a, instruction.aWidth), instruction.isSigned);
             break;
 
-        // Across a language boundary (DESIGN_GUIDE.md section 3.5).
+        // Across a language boundary.
         case eir::Opcode::Present:
             eir::present(static_cast<eir::Encoding>(instruction.b),
                          reg(instruction.a, instruction.aWidth),
@@ -374,8 +374,8 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
 
         case eir::Opcode::Store: {
             // A store goes straight into the signal unless what it writes is resolved with
-            // other drivers, in which case it goes through this process's driver (section
-            // 3.7). One load and a compare on the common path.
+            // other drivers, in which case it goes through this process's driver. One load
+            // and a compare on the common path.
             const WriteRoute& route = current.writeRoutes[instruction.dst];
             if (route.direct()) {
                 kernel.writeSignal(current.writeSignals[instruction.a],

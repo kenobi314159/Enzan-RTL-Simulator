@@ -66,9 +66,8 @@ void MessageWriter::bits(eir::BitVector& value) {
     auto width = value.width();
     u32(width);
 
-    // Both planes, in the order they sit in memory. That is deliberately the same layout the
-    // state arena uses (DESIGN_GUIDE.md section 3.6), so a value crosses the socket without
-    // being taken apart and put back together.
+    // Both planes, in the order they sit in memory. That is deliberately the same layout the state
+    // arena uses, so a value crosses the socket without being taken apart and put back together.
     const eir::ConstBitRef view = value.ref();
     const std::uint32_t words = eir::storageWordsFor(width);
     for (std::uint32_t word = 0; word < words; ++word) {

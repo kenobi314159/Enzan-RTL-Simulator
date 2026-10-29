@@ -34,9 +34,9 @@ struct RecordedSignal {
 struct DatabaseOptions {
     /// Ceiling on the resident value payload, in bytes.
     ///
-    /// Section 7.1 requires a configurable budget with spill to disk rather than unbounded
-    /// growth. The budget governs the *values*, which are the bulk; the time index stays
-    /// resident because it is what makes rendering pixel-bounded (see the class comment).
+    /// A configurable budget with spill to disk rather than unbounded growth. The budget governs
+    /// the *values*, which are the bulk; the time index stays resident because it is what makes
+    /// rendering pixel-bounded (see the class comment).
     std::uint64_t memoryBudgetBytes = 256ULL << 20U;
 
     /// Value changes per chunk. Chunks are the unit of spilling.
@@ -79,11 +79,11 @@ struct Change {
     eir::BitVector value;
 };
 
-/// The in-memory waveform database (DESIGN_GUIDE.md section 7).
+/// The in-memory waveform database.
 ///
-/// Section 7.2 fixes the structure: per-signal append-only chunks of value changes, plus a time
-/// index for random access. The split between the two is what the requirements of 7.1 and 10.3
-/// turn on, so it is worth stating plainly.
+/// The structure is per-signal append-only chunks of value changes, plus a time index for random
+/// access. The split between the two is what the memory budget and pixel-bounded rendering turn on,
+/// so it is worth stating plainly.
 ///
 /// **The time index is resident; the values spill.** Per signal the database keeps an array of
 /// change times and a prefix count of changes to an unknown value, both always in memory, and
@@ -94,11 +94,11 @@ struct Change {
 /// unknown in it, which change is in effect at its left edge — is answered from the resident
 /// index by binary search and subtraction, touching no values at all.
 ///
-/// That is what makes section 10.3's requirement achievable: **the cost of drawing a window is a
-/// function of the number of pixel columns, not of the number of value changes in it.** A column
-/// spanning a million transitions costs one binary search, the same as a column spanning none.
-/// Values are read only for the columns that are constant enough to print one, which bounds
-/// reads — and therefore chunk reloads — by the pixel count too.
+/// That is what makes pixel-bounded rendering achievable (DESIGN_GUIDE.md section 10.3): **the cost
+/// of drawing a window is a function of the number of pixel columns, not of the number of value
+/// changes in it.** A column spanning a million transitions costs one binary search, the same as a
+/// column spanning none. Values are read only for the columns that are constant enough to print
+/// one, which bounds reads — and therefore chunk reloads — by the pixel count too.
 ///
 /// **That bound is for a whole signal.** Summarising a *bit range* of one cannot be answered from
 /// the index, because the index counts changes of the signal and says nothing about which bits
@@ -106,9 +106,9 @@ struct Change {
 /// the changes in the range cost. It exists because the alternative was a wrong picture rather
 /// than a slow one — see that overload for the whole of the argument.
 ///
-/// The database is written by one producer in increasing time order and read concurrently by
-/// the view (section 7.1 requires live streaming). It is not thread-safe: the GUI process holds
-/// its own copy, fed over IPC, and the kernel process holds the authoritative one.
+/// The database is written by one producer in increasing time order and read concurrently by the
+/// view, which shows a run as it progresses. It is not thread-safe: the GUI process holds its own
+/// copy, fed over IPC, and the kernel process holds the authoritative one.
 class WaveformDatabase {
 public:
     explicit WaveformDatabase(DatabaseOptions databaseOptions = {});
@@ -137,8 +137,8 @@ public:
     ///
     /// `time` must not precede the signal's last recorded change, and `value` must be the
     /// signal's declared width. A change to the value the signal already holds is still
-    /// appended: the caller has already filtered those (the kernel reports changes only, see
-    /// section 6.2), and second-guessing it here would hide a producer that had not.
+    /// appended: the caller has already filtered those (the kernel reports changes only),
+    /// and second-guessing it here would hide a producer that had not.
     void append(std::uint32_t recordIndex, runtime::SimTime time, eir::ConstBitRef value);
 
     /// Records that the trace is known to be valid up to `time`, whether or not anything
@@ -166,8 +166,8 @@ public:
     ///
     /// Edge navigation is a query rather than a scan because it is what a reader does most in
     /// a wave window: snapping a cursor to the edge under the pointer, and stepping a cursor
-    /// from edge to edge along a signal (DESIGN_GUIDE.md sections 7.1 and 10.7). Both happen
-    /// per keystroke and per click, on traces with millions of transitions.
+    /// from edge to edge along a signal. Both happen per keystroke and per click, on traces
+    /// with millions of transitions.
     [[nodiscard]] std::uint64_t nextChangeAfter(std::uint32_t recordIndex,
                                                 runtime::SimTime time) const;
 
@@ -209,8 +209,8 @@ public:
     /// Exact, and it costs more than the whole-signal overload: answering it needs the values of
     /// the changes in the range, so the work is proportional to the changes the range covers
     /// rather than to the number of columns, and it reads the value payload where the other one
-    /// touches only the resident index. That is a deliberate trade — section 1.2 puts a correct
-    /// picture above a fast one — and it is bounded in the two ways that matter: the renderer
+    /// touches only the resident index. That is a deliberate trade — a correct picture comes
+    /// before a fast one — and it is bounded in the two ways that matter: the renderer
     /// caches a summary until the range changes, so a scroll or a repaint pays nothing, and only
     /// a row the reader has actually sliced or unpacked takes this path at all.
     ///
@@ -314,8 +314,7 @@ private:
     std::vector<SignalStore> signalList;
 
     /// Kernel signal index to database index. Ordered rather than hash-based: the database's
-    /// contents are observable through the GUI and section 3.8 makes observable ordering
-    /// reproducible.
+    /// contents are observable through the GUI, and observable ordering must be reproducible.
     std::map<std::uint32_t, std::uint32_t> indexBySignal;
 
     runtime::SimTime latest = 0;

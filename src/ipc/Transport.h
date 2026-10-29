@@ -17,10 +17,9 @@ namespace enzan::ipc {
 
 /// A file descriptor that closes itself.
 ///
-/// The transport juggles several descriptors across error paths where an early return is the
-/// normal outcome, and a leaked one in a kernel that runs for hours is not a theoretical
-/// problem. Section 13.2 asks for RAII everywhere rather than manual cleanup, and this is the
-/// smallest thing that provides it.
+/// The transport juggles several descriptors across error paths where an early return is the normal
+/// outcome, and a leaked one in a kernel that runs for hours is not a theoretical problem. RAII
+/// rather than manual cleanup, and this is the smallest thing that provides it.
 class Descriptor {
 public:
     Descriptor() = default;
@@ -65,11 +64,11 @@ enum class ReceiveStatus : std::uint8_t {
 
 /// One end of a connection, with buffering in both directions.
 ///
-/// The connection never blocks. Section 2.2 requires that a stalled or slow GUI never stall
-/// the kernel, and a blocking write is exactly how that happens: a client that stops reading
-/// fills the socket buffer, and the kernel sits in `write` until it comes back. Output is
-/// queued here instead and drained whenever the socket will take it, so a client that stops
-/// reading costs memory in the kernel and nothing else.
+/// The connection never blocks. A stalled or slow GUI must never stall the kernel, and a blocking
+/// write is exactly how that happens: a client that stops reading fills the socket buffer, and the
+/// kernel sits in `write` until it comes back. Output is queued here instead and drained whenever
+/// the socket will take it, so a client that stops reading costs memory in the kernel and nothing
+/// else.
 class Connection {
 public:
     Connection() = default;

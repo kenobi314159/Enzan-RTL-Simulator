@@ -240,7 +240,7 @@ void WaveformWriter::onValueChange(std::uint32_t signalIndex, eir::ConstBitRef /
     // Only the fact of the change is recorded. The value is read from the arena when the slot is
     // flushed, so several changes within one slot collapse into the value it settles on — which is
     // what every other simulator records, and what stops a diff of two waveforms from drowning in
-    // delta-level noise (section 14.3).
+    // delta-level noise.
     isDirty[index] = true;
     dirty.push_back(signalIndex);
 }

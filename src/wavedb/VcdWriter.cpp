@@ -68,7 +68,7 @@ void VcdWriter::leaveScope() {
 
 void VcdWriter::declareSignal(std::uint32_t signalIndex, std::string_view leafName) {
     // `wire` for everything: GTKWave and Surfer do not distinguish, and the net/variable
-    // distinction that does matter belongs to driver resolution (M5) rather than the waveform.
+    // distinction that does matter belongs to driver resolution rather than the waveform.
     //
     // Two names for one signal share an identifier, which VCD supports precisely for this.
     //
@@ -107,9 +107,8 @@ void VcdWriter::writeChange(std::uint32_t signalIndex) {
         return;
     }
 
-    // Vectors are emitted at full width. The format permits dropping leading zeroes, but a
-    // constant width makes a diff of two VCD files line up, which is what section 14.3's
-    // differential testing needs.
+    // Vectors are emitted at full width. The format permits dropping leading zeroes, but a constant
+    // width makes a diff of two VCD files line up, which is what differential testing needs.
     stream->file << 'b' << eir::toString(value, eir::Radix::Binary) << ' ' << identifier << '\n';
 }
 

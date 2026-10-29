@@ -293,7 +293,7 @@ void WaveformDatabase::sample(std::uint32_t recordIndex, runtime::SimTime from, 
 
     // The columns are scanned in increasing time, so each binary search starts where the last
     // one ended. That is what keeps the whole pass logarithmic in the trace length rather than
-    // linear in the changes it covers (section 10.3).
+    // linear in the changes it covers.
     auto searchFrom = store.times.begin();
 
     for (std::size_t column = 0; column < out.size(); ++column) {

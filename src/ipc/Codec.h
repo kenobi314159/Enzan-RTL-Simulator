@@ -32,9 +32,9 @@ constexpr std::uint32_t MaxSignalBits = 1U << 24U;
 /// an encoder and a decoder written separately drift, and a field added to one and forgotten
 /// in the other is a bug that only appears when the two ends are different builds.
 ///
-/// Everything is little-endian on the wire. Enzan is Linux-only on little-endian hardware
-/// today, but a protocol that matched whatever the host happened to be would be a trap for
-/// the remote-attach case section 2.2 calls for.
+/// Everything is little-endian on the wire. Enzan is Linux-only on little-endian hardware today,
+/// but a protocol that matched whatever the host happened to be would be a trap for a window
+/// attached to a kernel on another machine.
 class MessageWriter {
 public:
     explicit MessageWriter(std::vector<std::byte>& target) noexcept : out(&target) {}

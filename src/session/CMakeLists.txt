@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The pipeline one `enzan` process holds: analysis, elaboration, the kernel and the waveform
-# files. Owns a kernel, so the GUI must not link it (DESIGN_GUIDE.md section 2.2).
+# files. Owns a kernel, so the GUI must not link it.
 
 enzan_add_component(
   session

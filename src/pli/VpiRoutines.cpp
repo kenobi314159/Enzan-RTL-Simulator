@@ -4,8 +4,8 @@
 //
 // Each one finds the process's context and forwards to it; the work is in PliContext.cpp.
 // Every routine the standard declares is defined here, the unsupported ones included, so that
-// an application naming one it never calls still loads (DESIGN_GUIDE.md section 9.1). The
-// `enzan` executable exports these and nothing else.
+// an application naming one it never calls still loads. The `enzan` executable exports these
+// and nothing else.
 //
 // Called with no context — before one exists, or from an application's own clean-up after the
 // session has gone — every routine fails quietly rather than dereferencing nothing.
@@ -272,7 +272,7 @@ PLI_INT32 vpi_get_vlog_info(p_vpi_vlog_info vlog_info_p) {
 }
 
 PLI_INT32 vpi_get_data(PLI_INT32 /*id*/, PLI_BYTE8* /*dataLoc*/, PLI_INT32 /*numOfBytes*/) {
-    // Save and restart are M9's (DESIGN_GUIDE.md section 18).
+    // Save and restart are not supported yet.
     if (PliContext* current = context(); current != nullptr) current->unsupported("vpi_get_data");
     return 0;
 }

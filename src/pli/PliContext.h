@@ -32,19 +32,18 @@ class Image;
 
 namespace enzan::pli {
 
-/// The procedural interfaces of one `enzan` process: the Verilog Procedural Interface
-/// (DESIGN_GUIDE.md section 9), and the VHDL one beside it (section 9.7), which share one model
-/// of the design and one set of callbacks, so that an application using both, as cocotb does
-/// with a design of both languages, sees one simulation.
+/// The procedural interfaces of one `enzan` process: the Verilog Procedural Interface, and the
+/// VHDL one beside it, which share one model of the design and one set of callbacks, so that an
+/// application using both, as cocotb does with a design of both languages, sees one simulation.
 ///
 /// Holds everything an application can reach: the libraries it was loaded from, the handles
 /// it has been given, the callbacks it has registered and the last error. The `vpi_*` routines
 /// carry no context argument, so they find this one through `current`; there is one per
 /// process, which is also what a session is (src/session/README.md).
 ///
-/// An application sees the elaborated design (section 9.2) and drives the kernel through the
-/// same operations the front end uses (sections 9.4 and 10.4). It reaches the region ordering
-/// through the kernel's `PliHooks`, which this implements.
+/// An application sees the elaborated design and drives the kernel through the same
+/// operations the front end uses. It reaches the region ordering through the kernel's
+/// `PliHooks`, which this implements.
 ///
 /// Loading comes first and needs no design; `attach` binds one when elaboration has produced
 /// it, and from then until `detach` the application can see and drive it.
@@ -67,7 +66,7 @@ public:
     /// routines is called.
     enum class Interface : std::uint8_t { Vpi, Vhpi };
 
-    /// Loads `library[:entry]` and runs its startup routines (sections 9.1 and 9.7).
+    /// Loads `library[:entry]` and runs its startup routines.
     ///
     /// Returns false having reported why when the library cannot be opened, or offers neither
     /// the entry it was asked for nor the interface's table, `vlog_startup_routines` or
@@ -91,7 +90,7 @@ public:
     /// Raises `cbStartOfSimulation`. Only the first call does anything.
     void startOfSimulation();
 
-    /// Raises `cbEndOfSimulation`. Only the first call does anything (section 9.5).
+    /// Raises `cbEndOfSimulation`. Only the first call does anything.
     void endOfSimulation();
 
     /// Where `vpi_printf` writes. Null means the standard output.
@@ -140,12 +139,12 @@ public:
     PLI_INT32 print(std::string_view text);
     PLI_INT32 flush();
 
-    /// Records that `routine` is not supported, for `vpi_chk_error` (section 9.1).
+    /// Records that `routine` is not supported, for `vpi_chk_error`.
     void unsupported(std::string_view routine);
 
 #ifdef ENZAN_WITH_VHDL
     // -----------------------------------------------------------------------
-    // The routines of vhpi_user.h (section 9.7). VhpiRoutines.cpp forwards to these.
+    // The routines of vhpi_user.h. VhpiRoutines.cpp forwards to these.
     // -----------------------------------------------------------------------
 
     vhpiHandleT vhpiHandle(vhpiOneToOneT type, vhpiHandleT reference);
@@ -285,15 +284,15 @@ private:
     std::vector<std::vector<std::uint32_t>> parameterScopes;
 
     /// Every name `vpi_handle_by_name` resolves. Ordered so that nothing about it depends on
-    /// hashing (section 3.8).
+    /// hashing (DESIGN_GUIDE.md section 3.8).
     std::map<std::string, Target, std::less<>> byFullName;
 
     /// Every object an application holds a handle to, owned here. The key is the handle, so
-    /// that checking one before use is a lookup rather than a dereference (section 9.2).
+    /// that checking one before use is a lookup rather than a dereference.
     std::map<const void*, std::unique_ptr<Object>> objects;
     std::map<Target, Object*> interned;
 
-    // Callbacks, by where they fire. Each list holds them in registration order (3.8).
+    // Callbacks, by where they fire. Each list holds them in registration order.
     std::vector<std::vector<Callback*>> valueChangeWatchers;
     std::multimap<runtime::SimTime, Callback*> timedCallbacks;
     std::vector<Callback*> readWrite;
@@ -302,11 +301,11 @@ private:
     std::vector<Callback*> startCallbacks;
     std::vector<Callback*> endCallbacks;
 
-    /// Registered during read-only, to run once time has moved (section 9.3).
+    /// Registered during read-only, to run once time has moved (DESIGN_GUIDE.md section 9.3).
     std::vector<Callback*> deferredReadWrite;
     std::vector<Callback*> deferredReadOnly;
 
-    /// Writes with a delay, due at the start of their slot (section 9.4).
+    /// Writes with a delay, due at the start of their slot.
     struct DelayedWrite {
         std::uint32_t signal = 0;
         eir::BitVector value;

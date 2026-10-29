@@ -15,8 +15,8 @@ namespace enzan::ipc {
 ///
 /// A VPI application does not print through Enzan: cocotb's Python logging writes to
 /// `sys.stdout` and its C++ layer to `stdout`, both straight to file descriptor 1, where the
-/// transcript a front end shows cannot see them (DESIGN_GUIDE.md section 10.2). Capturing the
-/// descriptor itself is what reaches them, and any other application, whatever it is written in.
+/// transcript a front end shows cannot see them. Capturing the descriptor itself is what reaches
+/// them, and any other application, whatever it is written in.
 ///
 /// **Nothing that reached the terminal stops reaching it.** Everything captured is copied to the
 /// descriptor it was taken from, as it arrives, and only then offered to the transcript.
@@ -35,10 +35,10 @@ namespace enzan::ipc {
 ///
 /// **A thread drains the capture.** A callback can write more than a pseudo-terminal or a pipe
 /// holds in one go — a traceback, a report at the end of a run — and a write that cannot
-/// complete blocks the thread making it. If that thread also had to drain the capture, which
-/// it would at a time-slot boundary, it would wait for itself. The thread copies bytes and
-/// touches no simulation state, so the kernel remains single-threaded in the sense of section
-/// 6.4.
+/// complete blocks the thread making it. If that thread also had to drain the capture, which it
+/// would at a time-slot boundary, it would wait for itself. The thread copies bytes and touches no
+/// simulation state, so the kernel remains single-threaded in every sense that matters to
+/// determinism.
 class OutputCapture {
 public:
     OutputCapture() = default;
