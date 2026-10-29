@@ -104,13 +104,13 @@ The two interfaces share one design, and each shows its own language:
 
 - VPI finds no VHDL object by name. An iteration that meets a VHDL instance returns it named,
   as a `vpiUnknown`.
-- VHPI shows a SystemVerilog region as an object of class 1117, cocotb's `vhpiVerilog`. Under a
-  SystemVerilog top there is no VHPI root instance.
+- VHPI shows a SystemVerilog region as one of cocotb's class `vhpiVerilog`. Under a SystemVerilog
+  top there is no VHPI root instance.
 - A name either is asked for may begin in the other language's hierarchy, and its VHDL part is
   matched without regard to case.
 
-This is what cocotb expects of a simulator of both languages. It takes a handle VPI cannot type
-and asks VHPI for it by name. For cocotb, `tools/cocotb/Makefile.enzan` loads the toplevel
+This is what cocotb expects of a simulator of both languages. It takes a handle VPI cannot type and
+asks VHPI for it by name. For cocotb, Enzan's makefile (see [cocotb](cocotb.md)) loads the toplevel
 language's library with `--vpi` or `--vhpi` and names the other in `GPI_EXTRA`.
 
 ## Diagnostics

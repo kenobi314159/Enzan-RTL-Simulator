@@ -15,7 +15,7 @@ dependency below is compatible with that.
 | [FST](https://github.com/gtkwave/gtkwave) (`fstapi`) | tag `v3.3.116`, from `gtkwave3-gtk3/src/helpers/fst/` | MIT | FST waveform output | see `third_party/fst/README.md` |
 | [FastLZ](https://github.com/ariya/FastLZ) | as shipped with the above | MIT | FST block compression | vendored by GTKWave, kept with it |
 | [LZ4](https://github.com/lz4/lz4) | as shipped with the above | BSD-2-Clause | FST block compression | vendored by GTKWave, kept with it |
-| [NVC](https://github.com/nickg/nvc) | tag `r1.23.0` (`cba10a2`), a git submodule | GPL-3.0-or-later | VHDL frontend | see `docs/nvc_integration.md` |
+| [NVC](https://github.com/nickg/nvc) | tag `r1.23.0` (`cba10a2`), a git submodule | GPL-3.0-or-later | VHDL frontend | see `docs/development/nvc_integration.md` |
 
 Vendoring is reserved for cases where it is unavoidable. FST qualifies because it is not released
 as a library: no distribution packages a `libfst` with headers, and GTKWave ships it as source
@@ -28,7 +28,7 @@ to upstream, which is what makes the next update a replacement rather than a mer
 NVC is the other case, since it is consumed at a pinned revision of its internal APIs rather than
 as a released library. It is a git submodule rather than a copy, so
 `third_party/nvc` is NVC's own tree at the pinned commit, licence included, and
-`git submodule update --init third_party/nvc` fetches it; `docs/nvc_integration.md` records which
+`git submodule update --init third_party/nvc` fetches it; `docs/development/nvc_integration.md` records which
 of its files Enzan builds and why.
 
 ## Acquired at configure time
@@ -54,20 +54,6 @@ on its own terms; all three are permissively licensed. Enzan has slang use
 mimalloc only where the system has one, and never build it: the static copy
 slang builds crashed every program linking it, in glibc's own start-up (see
 `cmake/EnzanDependencies.cmake`).
-
-## Pinned revisions
-
-The slang revision is a CMake cache variable rather than a hard-coded string, so
-that a contributor can test against a different revision without editing the
-build:
-
-```sh
-cmake --preset gcc-debug -DENZAN_SLANG_GIT_TAG=v10.0 -DENZAN_SLANG_VERSION=10.0
-```
-
-Changing the default pinned revision is a deliberate act. Upgrading slang or NVC
-is expected to break the adapters in `src/frontend/`, which is what the golden
-tests exist to catch.
 
 ## Bundled in a release's source tarball
 

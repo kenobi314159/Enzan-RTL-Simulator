@@ -55,5 +55,6 @@ Enzan from where it is itself. Two versions installed side by side, in `/opt/enz
 
 ## From a checkout
 
-As the README says: configure, build, and `cmake --install` the build directory the same way. A
-checkout downloads slang and its dependencies the first time it is configured.
+As [CONTRIBUTING.md](../CONTRIBUTING.md) says: configure, build, and `cmake --install` the build
+directory the same way. A checkout downloads slang and its dependencies the first time it is
+configured.

@@ -41,8 +41,7 @@ package_enzan() {
   DESTDIR="$pkgdir" cmake --install build --component enzan
   install -Dm644 "enzan-$_upstream/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 -t "$pkgdir/usr/share/doc/$pkgname" "enzan-$_upstream/README.md" \
-    "enzan-$_upstream/docs/third_party.md" "enzan-$_upstream/docs/mixed-language.md" \
-    "enzan-$_upstream/docs/libraries.md" "enzan-$_upstream/docs/signal-lists.md"
+    "enzan-$_upstream"/docs/{installing,gui,signal-lists,libraries,mixed-language,cocotb,third_party}.md
 }
 
 package_enzan-gui() {

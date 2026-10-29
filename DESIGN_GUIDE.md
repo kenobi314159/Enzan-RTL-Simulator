@@ -29,9 +29,9 @@ this document is not a second copy of them.
 
 **Citing this document.** A comment states its own reason. It also cites this document, as
 `DESIGN_GUIDE.md section N.M`, only where the code enforces a rule made here and a change made
-locally could break it unknowingly. Documentation, and anything a user reads, never cites it.
-Section numbers are stable: a change that renumbers a section updates every citation of it in the
-same commit.
+locally could break it unknowingly. Documentation, and anything a user reads, never cites it; the
+one exception is `CONTRIBUTING.md`, which sends developers here. Section numbers are stable: a
+change that renumbers a section updates every citation of it in the same commit.
 
 ---
 
@@ -1390,6 +1390,7 @@ Enzan-RTL-Simulator/
 ├── CMakePresets.json         reproducible configurations
 ├── LICENSE                   GPLv3
 ├── README.md                 short orientation for users
+├── CONTRIBUTING.md           building from source and checking a change; points here
 ├── DESIGN_GUIDE.md           this document — the normative specification
 ├── .clang-format
 ├── .clang-tidy
@@ -1426,6 +1427,7 @@ Enzan-RTL-Simulator/
 │   └── designs/              scripts fetching external RTL — NEVER vendored
 ├── bench/                    performance benchmarks and result tracking
 ├── docs/                     documentation for users
+│   └── development/          documentation for developers and maintainers
 ├── packaging/                each distribution's recipe, and the scripts that build them (11.7)
 ├── scripts/                  repository checks and release tooling, runnable locally and by CI
 └── third_party/              vendored dependencies where unavoidable
