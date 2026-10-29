@@ -3,19 +3,16 @@
 // A synthetic benchmark: a chain of registered stages with combinational logic between them,
 // clocked for a fixed number of cycles.
 //
-// Synthetic rather than a real design, deliberately. DESIGN_GUIDE.md section 15.3 requires a
-// *fixed* set of designs with *fixed* stimulus, because a benchmark whose input changes
-// measures nothing across commits. Real designs are fetched under tests/designs/ as capability
-// grows (section 14.5) and become benchmarks once they simulate; until then a synthetic
-// pipeline exercises what dominates a real run — the clock edge, the non-blocking update
-// queue, and combinational settling — with a cycle count that is exactly what the harness
-// asked for. The cycle count is fixed in the source rather than overridden per run, because a
-// benchmark whose input varies between runs is not a benchmark.
+// Synthetic rather than a real design, deliberately. A benchmark is a *fixed* design with *fixed*
+// stimulus, because a benchmark whose input changes measures nothing across commits. Real designs
+// are fetched under tests/designs/ as capability grows and become benchmarks once they simulate;
+// until then a synthetic pipeline exercises what dominates a real run — the clock edge, the
+// non-blocking update queue, and combinational settling — with a cycle count that is exactly what
+// the harness asked for. The cycle count is fixed in the source rather than overridden per run,
+// because a benchmark whose input varies between runs is not a benchmark.
 //
-// The stages are written out rather than generated over a packed array. One wide vector driven
-// in disjoint parts by several continuous assignments is legal SystemVerilog, but Enzan's
-// driver check works per signal rather than per bit range, so it refuses it until driver
-// resolution arrives at M5 (see src/elab/README.md).
+// The stages are written out rather than generated over a packed array, and stay so: a
+// benchmark whose source changes measures nothing across commits.
 
 module stage #(
     parameter int WIDTH = 32
@@ -27,7 +24,7 @@ module stage #(
     logic [WIDTH-1:0] mixed;
 
     // Enough combinational work per stage that the benchmark is not purely scheduler
-    // overhead, but nothing outside the M1 subset.
+    // overhead, but nothing beyond the commonest constructs.
     always_comb mixed = (d ^ (d >> 3)) + 32'h9E37_79B9;
 
     always_ff @(posedge clk) q <= mixed;

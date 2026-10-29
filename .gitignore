@@ -13,23 +13,23 @@ compile_commands.json
 *.profdata
 
 # Simulation libraries and analysis output. Enzan writes these next to wherever
-# it is run, and they are regenerated from source (DESIGN_GUIDE.md section 4.4).
+# it is run, and they are regenerated from source.
 /work/
 *.enzanlib/
 
-# Waveform dumps and transcripts. Never committed (DESIGN_GUIDE.md section 17.5).
+# Waveform dumps and transcripts. Never committed.
 *.vcd
 *.fst
 *.fst.hier
 /transcript
 /transcript.*
 
-# External RTL fetched by tests/designs/ scripts (DESIGN_GUIDE.md section 12).
+# External RTL fetched by tests/designs/ scripts.
 /tests/designs/checkout/
 
 # Benchmark results are a per-machine measurement, not a shared artefact: a number taken on one
 # laptop is not comparable with one taken on another, and committing them would make the file a
-# merge conflict on every run. CI publishes its own series (DESIGN_GUIDE.md section 16).
+# merge conflict on every run.
 /bench/results.tsv
 
 # Editor and OS droppings.

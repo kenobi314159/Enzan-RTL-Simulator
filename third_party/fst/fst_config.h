@@ -14,9 +14,8 @@
 #ifndef ENZAN_FST_CONFIG_H
 #define ENZAN_FST_CONFIG_H
 
-/* Linux provides both. Enzan targets Linux only (DESIGN_GUIDE.md section 1.3), so these are
- * asserted rather than probed; a port would have to probe them, and would have far more to
- * change than this file. */
+/* Linux provides both. Enzan targets Linux only, so these are asserted rather than probed; a
+ * port would have to probe them, and would have far more to change than this file. */
 #define HAVE_ALLOCA_H 1
 #define HAVE_FSEEKO 1
 #define HAVE_REALPATH 1
@@ -26,7 +25,7 @@
  *
  * libJudy is LGPL, and upstream's own comment notes that the Jenkins hash alternative is
  * functionally equivalent and appears slightly faster. Taking on an extra dependency with a
- * different licence for no measured gain is the wrong trade (section 11.2).
+ * different licence for no measured gain is the wrong trade.
  */
 /* #undef _WAVE_HAVE_JUDY */
 
@@ -34,10 +33,10 @@
  * The parallel writer is deliberately *not* enabled.
  *
  * It spawns a thread that compresses blocks while simulation continues. The kernel is
- * single-threaded by design (section 6.4) and determinism is a hard requirement (section 3.8);
- * introducing a background thread into the one component whose output is byte-compared against
- * a reference simulator would put that at risk for a gain nobody has measured. `bench/` exists
- * so that this can be revisited with a number rather than a hunch.
+ * single-threaded by design and determinism is a hard requirement; introducing a background
+ * thread into the one component whose output is byte-compared against a reference simulator
+ * would put that at risk for a gain nobody has measured. `bench/` exists so that this can be
+ * revisited with a number rather than a hunch.
  */
 /* #undef HAVE_LIBPTHREAD */
 

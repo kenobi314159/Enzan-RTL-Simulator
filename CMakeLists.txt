@@ -1,13 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Enzan RTL Simulator — top-level build.
-#
-# See DESIGN_GUIDE.md section 11 for the toolchain and dependency policy, and
-# section 12 for the repository layout this file mirrors.
 
 # 3.24 is the floor because CMakePresets schema version 5 and the
 # FIND_PACKAGE_ARGS form of FetchContent_Declare both require it, and the
-# dependency policy in DESIGN_GUIDE.md section 11.2 is built on the latter.
+# dependency policy — system packages first, a download as the fallback — is
+# built on the latter.
 cmake_minimum_required(VERSION 3.24)
 
 project(
@@ -47,9 +45,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
       "  cmake --preset gcc-debug")
 endif()
 
-# Linux only, by explicit design decision (DESIGN_GUIDE.md section 1.3). The
-# guard exists so that a port attempt fails with the reason rather than with a
-# thousand compile errors.
+# Linux only, by explicit design decision. The guard exists so that a port
+# attempt fails with the reason rather than with a thousand compile errors.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   message(
     FATAL_ERROR
@@ -62,8 +59,8 @@ endif()
 # Language level
 # ---------------------------------------------------------------------------
 
-# C++20 is a hard floor: slang requires it (DESIGN_GUIDE.md section 5.1).
-# Extensions are off so that a GCC-only construct fails on GCC too.
+# C++20 is a hard floor: slang requires it. Extensions are off so that a
+# GCC-only construct fails on GCC too.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -84,7 +81,7 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 # Keep binaries and libraries in one predictable place per build directory, so
 # that scripts and documentation can name a stable path. The executables are
 # where an installation puts them, bin/ by default, because the build tree is
-# laid out as the installation is (DESIGN_GUIDE.md section 11.5).
+# laid out as the installation is.
 include(EnzanInstallDirs)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${ENZAN_BUILD_BINDIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
@@ -100,9 +97,9 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 # belongs to a later milestone and stays off until it has something to build. The milestone each
 # component belongs to is named here.
 option(ENZAN_BUILD_TESTS "Build the unit test suites" ON)
-option(ENZAN_ENABLE_SYSTEMVERILOG "Build the slang-based SystemVerilog frontend (M1)" ON)
-option(ENZAN_ENABLE_VHDL "Build the NVC-based VHDL frontend (M6)" ON)
-option(ENZAN_BUILD_GUI "Build the Qt 6 graphical front end (M2)" ON)
+option(ENZAN_ENABLE_SYSTEMVERILOG "Build the slang-based SystemVerilog frontend" ON)
+option(ENZAN_ENABLE_VHDL "Build the NVC-based VHDL frontend" ON)
+option(ENZAN_BUILD_GUI "Build the Qt 6 graphical front end" ON)
 option(ENZAN_ENABLE_JIT "Build the LLVM JIT backend (M8)" OFF)
 
 option(ENZAN_WERROR "Treat compiler warnings as errors" OFF)
@@ -139,9 +136,9 @@ endif()
 # Benchmarks
 # ---------------------------------------------------------------------------
 
-# A target rather than a test. CI runs it as a step of its own (section 15.3), and a measurement
-# that runs as part of the ordinary test suite would be both slow and meaningless: a number taken
-# on a loaded machine alongside three hundred other tests is not comparable with anything.
+# A target rather than a test. CI runs it as a step of its own, and a measurement that runs as
+# part of the ordinary test suite would be both slow and meaningless: a number taken on a loaded machine alongside three hundred
+# other tests is not comparable with anything.
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   add_custom_target(
     enzan-bench

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Writes the source tarball of a release (DESIGN_GUIDE.md section 11.6):
+# Writes the source tarball of a release:
 #
 #   scripts/make-dist.sh [<revision> [<directory>]]
 #

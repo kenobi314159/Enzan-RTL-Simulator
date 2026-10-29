@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Verifies that every source file carries an SPDX license identifier, as
-# DESIGN_GUIDE.md section 1.4 requires. Run from anywhere in the working tree;
-# exits non-zero and lists the offenders when any file is missing one.
+# Verifies that every source file carries an SPDX license identifier. Run from
+# anywhere in the working tree; exits non-zero and lists the offenders when
+# any file is missing one.
 #
 # Enzan is GPLv3 as a consequence of linking NVC, so the identifier is not
 # decoration: it is what makes the license of each file unambiguous to

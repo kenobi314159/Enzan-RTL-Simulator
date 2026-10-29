@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Where an installation puts each part of Enzan, and the build tree laid out the same way
-# (DESIGN_GUIDE.md section 11.5).
+# Where an installation puts each part of Enzan, and the build tree laid out the same way.
 #
 # `enzan` finds the rest of Enzan from where it is itself, so an installation can be moved, or
 # kept beside another version of itself, and still work. The paths it follows are therefore
@@ -37,7 +36,7 @@ _enzan_inside_prefix(_enzan_libexecdir "${CMAKE_INSTALL_LIBEXECDIR}")
 _enzan_inside_prefix(_enzan_datadir "${CMAKE_INSTALL_DATADIR}")
 _enzan_inside_prefix(_enzan_includedir "${CMAKE_INSTALL_INCLUDEDIR}")
 
-# The front end is a program only `enzan` starts (section 8.4), so it is kept off the PATH.
+# The front end is a program only `enzan` starts, so it is kept off the PATH.
 set(ENZAN_INSTALL_LIBEXECDIR "${_enzan_libexecdir}/enzan")
 
 # lib/enzan rather than CMAKE_INSTALL_LIBDIR. VHDL's standard libraries are compiled files only

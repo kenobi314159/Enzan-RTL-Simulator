@@ -26,7 +26,7 @@
 #define PACKAGE_BUGREPORT "https://github.com/nickg/nvc/issues"
 #define PACKAGE_URL "https://www.nickg.me.uk/nvc/"
 
-/* Linux's separators, the only system Enzan targets (DESIGN_GUIDE.md section 1.3). */
+/* Linux's separators, the only system Enzan targets. */
 #define DIR_SEP "/"
 #define PATH_SEP ":"
 
@@ -60,7 +60,7 @@
 #cmakedefine HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC 1
 #define HAVE_PTHREAD 1
 
-/* GCC and Clang, the only compilers Enzan builds with (DESIGN_GUIDE.md section 11.1), both have it. */
+/* GCC and Clang, the only compilers Enzan builds with, both have it. */
 #define HAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL 1
 
 /*

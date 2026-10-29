@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Builds the packages of a release's source tarball for one distribution, in a container of it,
-# and tests them there (DESIGN_GUIDE.md section 11.7):
+# and tests them there:
 #
 #   packaging/build-package.sh <target> <tarball> [<directory>]
 #
@@ -13,7 +13,7 @@
 # The build runs with no network, as a distribution's builder does, so that a tarball lacking a
 # source is found here rather than by one: what the build needs is installed first, from the
 # recipe, into an image of its own. The packages are then installed into a fresh container and run
-# there, the simulator's alone first, since it must need no GUI toolkit (section 8.4).
+# there, the simulator's alone first, since it must need no GUI toolkit.
 
 set -euo pipefail
 
@@ -30,7 +30,7 @@ out=${3:-$here/../build/packages/$target}
 engine=${ENZAN_CONTAINER:-docker}
 jobs=${ENZAN_JOBS:-$(nproc)}
 
-# The distributions of DESIGN_GUIDE.md section 11.7, and the image each is built in.
+# The distributions Enzan is packaged for, and the image each is built in.
 case $target in
     ubuntu-24.04) image=docker.io/library/ubuntu:24.04 ;;
     debian-13) image=docker.io/library/debian:13 ;;

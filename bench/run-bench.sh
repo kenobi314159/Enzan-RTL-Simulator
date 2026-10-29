@@ -3,9 +3,8 @@
 #
 # Measures simulated clock cycles per second and appends a row to the results file.
 #
-# DESIGN_GUIDE.md section 15.1 is explicit about what is binding for M0 to M2: "the binding
-# requirement is not the number — it is that bench/ exists and records cycles/sec per commit
-# from the very first milestone." A performance goal without continuous measurement is
+# What is binding is not a performance number but that cycles/sec are recorded per commit, from
+# the first simulation onwards. A performance goal without continuous measurement is
 # decoration, and a regression is invisible without a baseline.
 #
 # Usage: run-bench.sh <enzan-binary> [results-file]

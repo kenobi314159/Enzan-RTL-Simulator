@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs an installed package of Enzan as a user would (DESIGN_GUIDE.md section 11.7):
+# Runs an installed package of Enzan as a user would:
 #
 #   smoke-test.sh kernel    with the enzan package installed and enzan-gui not
 #   smoke-test.sh gui       with both installed
@@ -35,7 +35,7 @@ if [[ $1 == kernel ]]; then
     output=$(enzan --top tb tb.sv 2>&1) || fail "the SystemVerilog design failed: $output"
     grep -qF "PASS smoke sv" <<<"$output" || fail "the SystemVerilog design said: $output"
 
-    # VHDL's standard libraries are found from where `enzan` is, without being named (4.4).
+    # VHDL's standard libraries are found from where `enzan` is, without being named.
     {
         printf 'library ieee;\nuse ieee.numeric_std.all;\nuse std.textio.all;\n'
         printf 'entity tb is end entity;\narchitecture a of tb is\nbegin\n  process\n'

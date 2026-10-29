@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Components are added as the milestones that introduce them land
-# (DESIGN_GUIDE.md sections 12 and 18).
+# The components, each added after those it depends on.
 
 add_subdirectory(common)
 
