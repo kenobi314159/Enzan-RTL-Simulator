@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# VHDL in Enzan's libraries (DESIGN_GUIDE.md sections 4.4 and 8.2), driven as a Makefile drives
-# them: a package and a counter analysed into one library, a testbench analysed against it into
-# another, and runs from both. What a library is for is that one process analyses and another
-# runs, so it cannot be checked from inside one invocation.
+# VHDL in Enzan's libraries, driven as a Makefile drives them: a package and a counter analysed
+# into one library, a testbench analysed against it into another, and runs from both. What a
+# library is for is that one process analyses and another runs, so it cannot be checked from
+# inside one invocation.
 
 set -euo pipefail
 
@@ -136,7 +136,8 @@ begin
 end architecture;
 EOF
 
-# --- a library takes VHDL as it takes SystemVerilog ---------------------------------------------
+# --- a library takes VHDL as it takes SystemVerilog
+# ------------------------------------------------
 
 "$enzan" lib create libs/ip >/dev/null || fail "libs/ip could not be created"
 "$enzan" analyse --out-lib libs/ip pkg.vhd counter.vhd || fail "analysis into libs/ip failed"
@@ -150,7 +151,8 @@ grep -q 'counter' <<<"$listing" && grep -q 'ip_pkg' <<<"$listing" \
 [[ $(status_of "$enzan" analyse --out-lib libs/ip --work other pkg.vhd) -eq 2 ]] \
     || fail "--work naming another library than --out-lib's was not refused"
 
-# --- a design is analysed against a library and runs from it -------------------------------------
+# --- a design is analysed against a library and runs from it
+# ---------------------------------------
 
 "$enzan" analyse --out-lib libs/ip components.vhd || fail "the package of components did not analyse"
 binding=$("$enzan" --in-lib libs/ip --top binding binding.vhd 2>&1) \
@@ -169,7 +171,8 @@ one_shot=$("$enzan" --in-lib libs/ip --top tb tb.vhd 2>&1) \
     || fail "a one-shot run against libs/ip failed: $one_shot"
 grep -q 'PASS library' <<<"$one_shot" || fail "the one-shot run did not reach its check"
 
-# --- a source analysed already is not analysed again, and one edited is --------------------------
+# --- a source analysed already is not analysed again, and one edited is
+# ----------------------------
 
 "$enzan" --out-lib libs/tb --in-lib libs/ip --top tb tb.vhd >/dev/null 2>&1 \
     || fail "a run into libs/tb failed"
@@ -189,7 +192,8 @@ sleep 1
 [[ $(written libs/tb/vhdl/TBL.TB) -gt $before ]] \
     || fail "a source analysed against a library that changed was not analysed again"
 
-# --- a top two libraries declare is named with its library ----------------------------------------
+# --- a top two libraries declare is named with its library
+# -----------------------------------------
 
 "$enzan" lib create --name other libs/other >/dev/null || fail "libs/other could not be created"
 "$enzan" analyse --out-lib libs/other --in-lib libs/ip tb.vhd || fail "libs/other analysis"
@@ -201,11 +205,12 @@ grep -q 'PASS library' <<<"$qualified" || fail "the qualified top did not reach 
 [[ $(status_of "$enzan" run --in-lib libs/ip --in-lib libs/tb .tb) -eq 2 ]] \
     || fail "a top of an empty library name was not refused"
 
-# --- without a top, analysis translates nothing and a run takes the one root ----------------------
+# --- without a top, analysis translates nothing and a run takes the one root
+# -----------------------
 
 # A wrapper nothing instantiates, whose default generic the adapter cannot compute, as OFM's MI
-# splitter has one. An analysis that names no top stores it without translating it (5.2), and a
-# run without a top is refused for having two candidates rather than translating both.
+# splitter has one. An analysis that names no top stores it without translating it, and a run
+# without a top is refused for having two candidates rather than translating both.
 cat >picks.vhd <<'EOF'
 package picks is
     function pick return integer;
@@ -260,7 +265,8 @@ grep -q "ENZ3002" <<<"$refused" && grep -q "'alone', 'wrapper'" <<<"$refused" \
 alone=$("$enzan" alone.vhd 2>&1) || fail "a run of its one root failed: $alone"
 grep -q 'PASS alone' <<<"$alone" || fail "the one root was not taken for the top"
 
-# --- what NVC analysed is recorded, whatever the translation after it did -------------------------
+# --- what NVC analysed is recorded, whatever the translation after it did
+# --------------------------
 
 # The wrapper named as the top does not translate, but its sources analysed, and NVC's units are in
 # the library: recorded, so a run of another top from the library finds its own.

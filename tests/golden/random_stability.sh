@@ -1,9 +1,8 @@
 #!/usr/bin/env sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Random stability and the seed (DESIGN_GUIDE.md section 3.8): one seed gives the same run twice,
-# another seed gives other draws, and one process's $urandom sequence does not depend on whether
-# another process draws too.
+# Random stability and the seed: one seed gives the same run twice, another seed gives other
+# draws, and one process's $urandom sequence does not depend on whether another process draws too.
 #
 #   random_stability.sh <enzan> <random_stability.sv> <work-directory>
 

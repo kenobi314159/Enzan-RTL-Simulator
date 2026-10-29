@@ -296,8 +296,7 @@ TEST_F(WriterFixture, ChangesAreAttributedToTheSlotThatIsEndingNotTheOneBeginnin
 
 TEST_F(WriterFixture, SeveralChangesInOneSlotCollapseToTheSettledValue) {
     // Delta-level intermediate values are noise: recording them would make a diff of two
-    // VCD files fail constantly, which section 14.3 warns is how a differential suite gets
-    // switched off.
+    // VCD files fail constantly, which is how a differential suite gets switched off.
     build(flatDesign(), "tb");
 
     VcdWriter writer(*image, arena, TimeScale());
@@ -547,7 +546,7 @@ TEST_F(WriterFixture, ACollapsedPortIsDeclaredUnderBothOfItsNames) {
 
 TEST_F(WriterFixture, ScopeFilteringRecordsOnlyTheSelectedSubtree) {
     // Selective capture is a requirement, not a convenience: recording everything on a
-    // large design exhausts memory within seconds of simulated time (section 7.1).
+    // large design exhausts memory within seconds of simulated time.
     build(hierarchicalDesign(), "tb");
 
     VcdWriter writer(*image, arena, TimeScale());

@@ -110,7 +110,7 @@ TEST(SourceManager, IdentifiersAreAssignedInInsertionOrder) {
     const BufferId second = sources.addBuffer("b.sv", "");
 
     // Ordering by identifier must be reproducible, because diagnostics are
-    // grouped by buffer (DESIGN_GUIDE.md section 3.8).
+    // grouped by buffer.
     EXPECT_LT(first, second);
     EXPECT_EQ(first.index(), 0U);
     EXPECT_EQ(second.index(), 1U);

@@ -1,7 +1,7 @@
 # The pulp-platform/common_cells revision the design regression runs against, and those of the
 # two repositories it depends on, at the versions its Bender.yml asks for: tech_cells_generic
-# v0.2.14 and common_verification v0.2.0 (DESIGN_GUIDE.md section 14.5). The one place they are
-# named. Each line is a name, a repository and a commit.
+# v0.2.14 and common_verification v0.2.0. The one place they are named. Each line is a name, a
+# repository and a commit.
 common_cells https://github.com/pulp-platform/common_cells.git e73baaec2ca665cd80c3c384e9258e35242b829c
 tech_cells_generic https://github.com/pulp-platform/tech_cells_generic.git 3a3de73632a06826b1bd9c65a0a2e92b32016845
 common_verification https://github.com/pulp-platform/common_verification.git 6fc76fb013315af9fabbb90b431863d498df2d6d

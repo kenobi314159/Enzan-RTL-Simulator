@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: GPL-3.0-or-later
 --
--- ports.sv in VHDL, which GHDL runs ports.vhd against. What crosses into SystemVerilog is four-state
--- (DESIGN_GUIDE.md section 3.6), which To_X01Z is, so each value read is passed through it.
+-- ports.sv in VHDL, which GHDL runs ports.vhd against. What crosses into SystemVerilog is
+-- four-state, which To_X01Z is, so each value read is passed through it.
 library ieee;
 use ieee.std_logic_1164.all;
 

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The configuration directory (DESIGN_GUIDE.md section 10.9): what the window makes the first
-// time it opens, what `config` may say, and how the window rewrites it without disturbing the rest
-// of the file. Every directory here is a temporary one; GuiTestMain points the standard location
-// at one too, so nothing here can reach the settings of whoever runs the suite.
+// The configuration directory: what the window makes the first time it opens, what `config` may
+// say, and how the window rewrites it without disturbing the rest of the file. Every directory
+// here is a temporary one; GuiTestMain points the standard location at one too, so nothing here
+// can reach the settings of whoever runs the suite.
 
 #include "gui/Configuration.h"
 

@@ -3,10 +3,10 @@
 // Tests for the kernel end of the kernel/GUI split.
 //
 // A real client over a real socket pair, driving a real simulation. The behaviour worth pinning
-// is the behaviour section 2.2 asks for and that nothing else can check: a run that can be
-// stopped while it is in progress, a client that can attach part-way through and still see what
-// it missed, a client that can leave without ending the simulation, and a restart that puts the
-// design back at time zero without losing what the user was watching.
+// is the behaviour separating the kernel from the front end is for, and that nothing else can
+// check: a run that can be stopped while it is in progress, a client that can attach part-way
+// through and still see what it missed, a client that can leave without ending the simulation,
+// and a restart that puts the design back at time zero without losing what the user was watching.
 
 #include "ipc/KernelServer.h"
 
@@ -620,7 +620,7 @@ TEST_F(ServerFixture, TheHandshakeDescribesTheDesign) {
 
 TEST_F(ServerFixture, AVersionMismatchIsRefusedRatherThanNegotiated) {
     // Two builds that half-understand each other would show the user wrong values, and
-    // section 1.2 puts correctness above the convenience of carrying on.
+    // correctness comes before the convenience of carrying on.
     std::array<int, 2> descriptors{-1, -1};
     ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors.data()), 0);
     client = Connection::adopt(Descriptor(descriptors[0]));
@@ -984,7 +984,7 @@ TEST_F(ServerFixture, AShownSignalsChangesAreFetchedAsTheyWereRecorded) {
     EXPECT_FALSE(sawAny(MessageType::Changes)) << "the kernel sends no value it is not asked for";
 
     // One settled time slot a change, in increasing time: delta-level intermediate values must
-    // never reach the view (section 14.3). And caught up, the copy is complete to the end.
+    // never reach the view. And caught up, the copy is complete to the end.
     const std::vector<ChangeEntry>& clock = fetchAll(signalIndex("/tb/clk"));
     ASSERT_GE(clock.size(), 20U) << "a clock that toggled twenty times has a past";
     EXPECT_EQ(clock.front().time, 0U);
@@ -1014,10 +1014,10 @@ TEST_F(ServerFixture, ARunSaysHowFarItHasGotAndSendsNoValues) {
 }
 
 TEST_F(ServerFixture, StopEndsARunThatIsAlreadyInProgress) {
-    // Section 2.2's requirement in its most visible form. The design asked for runs for ever,
-    // so this test only ends because the Stop reaches the kernel's interrupt while it is
-    // simulating. The stop is sent from another thread for the same reason: the server is
-    // inside `run` and will not return until it arrives.
+    // Stopping a run from the front end, in its most visible form. The design asked for runs for
+    // ever, so this test only ends because the Stop reaches the kernel's interrupt while it is
+    // simulating. The stop is sent from another thread for the same reason: the server is inside
+    // `run` and will not return until it arrives.
     connectClient();
 
     RunMessage run;
@@ -1115,8 +1115,8 @@ TEST_F(ServerFixture, RunningAFinishedDesignIsRefusedUntilItIsRestarted) {
 }
 
 TEST_F(ServerFixture, ARunPastTheEndOfTimeIsRefused) {
-    // Section 3.1 requires overflow to be detected and reported rather than wrapping silently.
-    // The kernel must be some way into the run for the sum to overflow at all, so it is.
+    // Time overflowing is detected and reported rather than wrapping silently. The
+    // kernel must be some way into the run for the sum to overflow at all, so it is.
     connectClient();
 
     RunMessage first;
@@ -1165,7 +1165,7 @@ TEST_F(ServerFixture, AClientAttachingMidRunSeesWhatItMissed) {
 }
 
 TEST_F(ServerFixture, DetachingReleasesTheClientAndLeavesTheSimulationIntact) {
-    // Section 2.2 requires the GUI to detach without terminating the kernel, which is how a
+    // The GUI must be able to detach without terminating the kernel, which is how a
     // long run on a compute server is looked in on and left alone again.
     connectClient();
 
@@ -1240,7 +1240,7 @@ TEST_F(ServerFixture, RestartReturnsToTimeZeroAndKeepsTheSubscriptions) {
 
 TEST_F(ServerFixture, RestartIsRefusedWhileAVpiApplicationIsLoaded) {
     // The client's restart reaches the kernel without going through the session, so the server
-    // has to make the session's refusal itself (DESIGN_GUIDE.md section 9.5).
+    // has to make the session's refusal itself.
     rebuild(tickingDesign(), true);
     connectClient();
 
@@ -1272,7 +1272,7 @@ TEST_F(ServerFixture, TheTranscriptGoesToTheClientAndToTheTerminal) {
 }
 
 // ---------------------------------------------------------------------------
-// Captured output (section 10.2)
+// Captured output
 // ---------------------------------------------------------------------------
 
 /// Points this process's standard output and standard error somewhere else for one test, and
@@ -1675,7 +1675,7 @@ TEST_F(ServerFixture, AskingAboutASignalThatDoesNotExistIsAFailure) {
 }
 
 // ---------------------------------------------------------------------------
-// Writing a signal from outside the simulation (section 10.4)
+// Writing a signal from outside the simulation
 // ---------------------------------------------------------------------------
 
 /// A served design a client can write signals in.

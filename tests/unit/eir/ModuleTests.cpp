@@ -52,7 +52,7 @@ TEST(NetKind, IsNamedByItsKeyword) {
 }
 
 TEST(Encoding, VhdlLogicShowsAsTheFourStateBitEachCodeStandsFor) {
-    // U X 0 1 Z W L H -, a byte each, the left element highest (DESIGN_GUIDE.md section 3.6).
+    // U X 0 1 Z W L H -, a byte each, the left element highest.
     BitVector codes = BitVector::filled(72, Logic::Zero);
     for (std::uint32_t position = 0; position < 9; ++position) {
         const std::uint32_t element = 8 - position;
@@ -99,8 +99,8 @@ TEST(Encoding, VhdlBitShowsAsTwoStateBitsAndBitsAsThemselves) {
 }
 
 TEST(Encoding, EncodingGivesAnUnknownBitOfABitOrABooleanItsZero) {
-    // A value crossing into VHDL arrives whatever it holds (DESIGN_GUIDE.md section 3.5), as
-    // assigning an unknown bit to a two-state variable makes it 0.
+    // A value crossing into VHDL arrives whatever it holds, as assigning an unknown bit to a
+    // two-state variable makes it 0.
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     const BitVector shown = *BitVector::parse("4'b10zx");
     BitVector bits = BitVector::filled(32, Logic::One);

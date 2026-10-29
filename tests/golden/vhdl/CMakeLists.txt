@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Self-checking VHDL cases (DESIGN_GUIDE.md section 14.2), as ../ has for SystemVerilog.
+# Self-checking VHDL cases, as ../ has for SystemVerilog.
 #
 # Every case is a testbench entity `tb` that ends by reporting `PASS <name>` and calling
 # `std.env.finish`, so a case that stops early fails on the missing line. Any error fails it too:
@@ -11,7 +11,7 @@
 # ---------------------------------------------------------------------------
 #
 # Registers `golden.vhdl.<name>`, which runs <name>.vhd and requires the PASS line, and
-# `golden.vhdl.<name>.differential`, which compares the run against GHDL's (section 14.3).
+# `golden.vhdl.<name>.differential`, which compares the run against GHDL's.
 function(enzan_add_vhdl_golden_test name)
   set(source "${CMAKE_CURRENT_SOURCE_DIR}/${name}.vhd")
   if(NOT EXISTS "${source}")
@@ -36,7 +36,7 @@ function(enzan_add_vhdl_golden_test name)
   set_tests_properties(golden.vhdl.${name}.differential PROPERTIES TIMEOUT 120)
 endfunction()
 
-# GHDL is M6's reference for VHDL. Skipped rather than failed when it is not installed, as Icarus
+# GHDL is the reference for VHDL. Skipped rather than failed when it is not installed, as Icarus
 # Verilog is for SystemVerilog, so that a contributor without it can still run the suite; CI
 # installs it.
 find_program(ENZAN_VHDL_REFERENCE_SIMULATOR ghdl)
@@ -63,8 +63,7 @@ enzan_add_vhdl_golden_test(subprograms)
 # A counter on std_logic and numeric_std, which are translated from the IEEE packages' own bodies.
 enzan_add_vhdl_golden_test(ieee_counter)
 
-# A FIFO on std_logic and numeric_std: with the counter, the designs of DESIGN_GUIDE.md section 18's
-# checkpoint 6b.
+# A FIFO on std_logic and numeric_std.
 enzan_add_vhdl_golden_test(fifo)
 
 # Records: as signals, variables and ports, with fields assigned and aggregates of every kind.
@@ -194,7 +193,7 @@ enzan_add_vhdl_golden_test(deferred)
 # Generics of record types, and their fields folded.
 enzan_add_vhdl_golden_test(record_generics)
 
-# VHDL analysed into libraries and run from them, as a Makefile drives it (sections 4.4 and 8.2).
+# VHDL analysed into libraries and run from them, as a Makefile drives it.
 add_test(NAME golden.vhdl.library COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh"
                                           $<TARGET_FILE:enzan>)
 set_tests_properties(
@@ -203,8 +202,8 @@ set_tests_properties(
              FAIL_REGULAR_EXPRESSION "FAIL vhdl library"
              TIMEOUT 120)
 
-# cocotb driving a VHDL toplevel through VHPI (DESIGN_GUIDE.md section 9.7), as the golden test
-# beside the SystemVerilog cases drives one through VPI, when a Python has cocotb.
+# cocotb driving a VHDL toplevel through VHPI, as the golden test beside the SystemVerilog
+# cases drives one through VPI, when a Python has cocotb.
 if(ENZAN_HAVE_COCOTB)
   add_test(NAME golden.cocotb.vhdl
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../run-cocotb-check.sh" $<TARGET_FILE:enzan>

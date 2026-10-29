@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Test suites (DESIGN_GUIDE.md section 14).
+# Test suites.
 
 include(GoogleTest)
 
 add_subdirectory(unit)
 
-# The cocotb golden tests, one for each frontend's toplevel, drive Enzan as a user does
-# (DESIGN_GUIDE.md section 14.6). Skipped rather than failed when no Python has cocotb installed,
-# so that a contributor without it can still run the suite; CI installs it. ENZAN_COCOTB_PYTHON
-# names the Python to use when the one CMake finds is not the one cocotb was installed into.
+# The cocotb golden tests, one for each frontend's toplevel, drive Enzan as a user does. Skipped
+# rather than failed when no Python has cocotb installed, so that a contributor without it can
+# still run the suite; CI installs it. ENZAN_COCOTB_PYTHON names the Python to use when the one
+# CMake finds is not the one cocotb was installed into.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 set(ENZAN_COCOTB_PYTHON
     "${Python3_EXECUTABLE}"
@@ -37,14 +37,14 @@ endif()
 # `detect_leaks=1` the run sets.
 set(ENZAN_COCOTB_ENVIRONMENT "ASAN_OPTIONS=path_list_append:detect_leaks=0")
 
-# Command lines that are wrong, and what Enzan says of them (DESIGN_GUIDE.md section 8). Every
-# build runs it, since a command line is checked before any frontend is reached.
+# Command lines that are wrong, and what Enzan says of them. Every build runs it, since a
+# command line is checked before any frontend is reached.
 add_test(NAME golden.cli COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/golden/run-cli-check.sh"
                                  $<TARGET_FILE:enzan> "${ENZAN_FRONT_END_FROM_PROGRAM}")
 set_tests_properties(golden.cli PROPERTIES PASS_REGULAR_EXPRESSION "PASS cli" TIMEOUT 120)
 
-# This build installed, moved and made read-only, run as the build is (DESIGN_GUIDE.md section
-# 11.5), and installing nothing that is not Enzan's. Every build runs it, since every build installs.
+# This build installed, moved and made read-only, run as the build is, and installing nothing that
+# is not Enzan's. Every build runs it, since every build installs.
 add_test(
   NAME golden.install
   COMMAND
@@ -64,4 +64,3 @@ endif()
 if(ENZAN_ENABLE_SYSTEMVERILOG AND ENZAN_ENABLE_VHDL)
   add_subdirectory(golden/mixed)
 endif()
-# add_subdirectory(conformance)  # M5 — sv-tests, ivtest harnesses

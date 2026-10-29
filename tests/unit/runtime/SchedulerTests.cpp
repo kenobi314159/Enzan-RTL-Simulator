@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The region iteration rules of DESIGN_GUIDE.md section 3.3 and the FIFO ordering of
-// section 3.8 are what these tests pin. Both are semantics rather than implementation
-// detail: a scheduler that runs the right processes in the wrong order produces
-// plausible-looking but wrong results, which is the failure mode the project weighs
-// above all others.
+// IEEE 1800's region iteration rules and the FIFO ordering within a region are what these tests
+// pin. Both are semantics rather than implementation detail: a scheduler that runs the right
+// processes in the wrong order produces plausible-looking but wrong results, which is the
+// failure mode the project weighs above all others.
 
 #include "runtime/Scheduler.h"
 
@@ -43,7 +42,7 @@ TEST(Scheduler, StartsEmpty) {
 
 TEST(Scheduler, RegionsAreStrictlyFifo) {
     // Execution order within a region is observable and must be reproducible across
-    // runs (section 3.8), which rules out anything but insertion order.
+    // runs, which rules out anything but insertion order.
     Scheduler scheduler;
     for (const std::uint32_t process : {7U, 3U, 11U, 3U})
         scheduler.schedule(Region::Active, process);
@@ -237,8 +236,8 @@ TEST(Scheduler, TakingUpdatesLeavesThePendingListEmpty) {
 }
 
 TEST(Scheduler, AnUpdateAppendedWhileABatchIsAppliedLeavesTheBatchAlone) {
-    // What a VPI callback does while the kernel applies the batch (DESIGN_GUIDE.md section
-    // 9.4): the batch it is iterating must neither move nor change underneath it.
+    // What a VPI callback does while the kernel applies the batch: the batch it is
+    // iterating must neither move nor change underneath it.
     Scheduler scheduler;
     const BitVector first = literal("8'h11");
     scheduler.appendNonBlocking(1, first.ref(), 0, false);

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Nets with more than one driver, resolved per bit as DESIGN_GUIDE.md section 3.7 and IEEE
-// 1800 tables 6-2 to 6-4 define: a tristate bus whose drivers take turns, contend and let go;
-// wired-AND and wired-OR nets; pulled nets that a driver leaves at z; a supply net no strong
-// driver can move; and two instances whose outputs overlap on one bus.
+// Nets with more than one driver, resolved per bit as IEEE 1800 tables 6-2 to 6-4 define: a
+// tristate bus whose drivers take turns, contend and let go; wired-AND and wired-OR nets; pulled
+// nets that a driver leaves at z; a supply net no strong driver can move; and two instances whose
+// outputs overlap on one bus.
 
 module tristate (
     input  logic       enable,

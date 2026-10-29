@@ -116,8 +116,7 @@ public:
     }
 
     /// An assignment to `width` bits of a signal from the offset in `offsetRegister`, which drives
-    /// every bit of the object because nothing says which it will reach (DESIGN_GUIDE.md section
-    /// 3.7).
+    /// every bit of the object because nothing says which it will reach.
     void drivePart(std::uint32_t objectIndex, std::uint32_t source, std::uint32_t offsetRegister,
                    std::uint32_t objectWidth) {
         writes.push_back(eir::WriteExtent::whole(objectIndex, objectWidth));
@@ -126,7 +125,7 @@ public:
     }
 
     /// A part store whose index is a register, which drives every bit of the object because
-    /// nothing says which it will reach (DESIGN_GUIDE.md section 3.7).
+    /// nothing says which it will reach.
     void storePartNonBlocking(std::uint32_t objectIndex, std::uint32_t source,
                               std::uint32_t indexRegister, std::uint32_t objectWidth) {
         writes.push_back(eir::WriteExtent::whole(objectIndex, objectWidth));

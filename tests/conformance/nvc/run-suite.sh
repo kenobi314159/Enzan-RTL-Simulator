@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs NVC's own regression tests (DESIGN_GUIDE.md section 14.4) under Enzan, from the NVC the
-# VHDL frontend is built on, at the revision it is vendored at.
+# Runs NVC's own regression tests under Enzan, from the NVC the VHDL frontend is built on, at
+# the revision it is vendored at.
 #
 #   run-suite.sh <enzan> <work-directory> [mixed]
 #
@@ -16,8 +16,8 @@
 # environment variables, which Enzan's command line does not give a VHDL top yet.
 #
 # With `mixed`, only the tests of VHDL and Verilog together are run instead, each with the Verilog
-# file beside its VHDL, by an Enzan built with both frontends (DESIGN_GUIDE.md section 18, M7).
-# Their pass list is passing-mixed.txt, since the build the other tests run in lacks SystemVerilog.
+# file beside its VHDL, by an Enzan built with both frontends. Their pass list is
+# passing-mixed.txt, since the build the other tests run in lacks SystemVerilog.
 #
 # Prints PASS or FAIL for each test, then the counts, and writes the tests that passed to
 # <work-directory>/passed.txt, for ratchet.sh to hold to the pass list.

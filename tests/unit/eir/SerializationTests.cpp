@@ -421,7 +421,7 @@ TEST_F(SerializationTest, AProcedureRoundTripsWithoutAResult) {
 TEST_F(SerializationTest, InstructionLocationsRoundTrip) {
     // Without these a unit served from the library decodes cleanly, simulates identically, and
     // silently cannot be debugged: every breakpoint on it is refused as a line that compiled to
-    // no instructions (DESIGN_GUIDE.md section 10.4).
+    // no instructions.
     const std::vector<ModuleDefinition> decoded = roundTrip({richModule(buffer)});
     ASSERT_EQ(decoded.front().processes.size(), 1U);
     const Process& process = decoded.front().processes.front();
@@ -529,7 +529,7 @@ TEST_F(SerializationTest, EncodingIsStableForTheSameInput) {
 
 TEST_F(SerializationTest, ContentLeavesOutWhereAUnitCameFrom) {
     // A unit a session analysed has its locations; the same unit read from a library has none.
-    // They are one unit, and two libraries holding it must be usable together (section 8.2).
+    // They are one unit, and two libraries holding it must be usable together.
     const std::vector<ModuleDefinition> analysed{richModule(buffer)};
     std::vector<ModuleDefinition> stored;
     ASSERT_TRUE(enzan::eir::decodeModules(

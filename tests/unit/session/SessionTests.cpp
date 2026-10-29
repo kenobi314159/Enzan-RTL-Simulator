@@ -2,7 +2,7 @@
 //
 // The session drives real analysis, elaboration and simulation, so these tests compile real
 // SystemVerilog. That is deliberate at this level: the session's whole job is to hold the
-// three phases of DESIGN_GUIDE.md section 2.1 together, and a test against a hand-built
+// three phases, analysis, elaboration and execution, together, and a test against a hand-built
 // design would not exercise the joins that are the thing being tested.
 
 #include "session/Session.h"
@@ -79,10 +79,10 @@ module tb;
 endmodule
 )";
 
-/// Signals as the VHDL frontend holds them (DESIGN_GUIDE.md section 3.6): a std_logic holding '1'
-/// and a std_logic_vector(3 downto 0) holding "0101" as their codes, a bit's, and a
-/// std_logic_vector of a null range, whose one bit is a placeholder. Built by hand, so that
-/// neither frontend is needed.
+/// Signals as the VHDL frontend holds them: a std_logic holding '1' and a
+/// std_logic_vector(3 downto 0) holding "0101" as their codes, a bit's, and a std_logic_vector
+/// of a null range, whose one bit is a placeholder. Built by hand, so that neither frontend is
+/// needed.
 enzan::eir::Design vhdlCodedDesign() {
     using enzan::eir::BitVector;
     using enzan::eir::Encoding;
@@ -260,7 +260,7 @@ TEST_F(SessionTest, AFileNamedTwiceIsAnalysedOnce) {
 }
 
 // ---------------------------------------------------------------------------
-// The run's time unit (section 3.1)
+// The run's time unit
 // ---------------------------------------------------------------------------
 
 /// A design whose one module asks for femtoseconds.
@@ -656,7 +656,7 @@ TEST_F(SessionTest, AFileInADirectoryThatDoesNotExistIsReported) {
 }
 
 // ---------------------------------------------------------------------------
-// VPI applications (DESIGN_GUIDE.md section 9)
+// VPI applications
 // ---------------------------------------------------------------------------
 
 /// How many times `needle` appears in `text`.
@@ -702,7 +702,7 @@ TEST_F(SessionTest, AFinishedRunEndsTheApplicationsSimulationOnce) {
 TEST_F(SessionTest, ARunStoppedShortStillEndsTheApplicationsSimulation) {
     // What a batch run with `--run` does: the process ends while the design could have gone
     // on, and an application that writes its results when told the simulation is over — as
-    // cocotb does — would otherwise never write them (section 9.5).
+    // cocotb does — would otherwise never write them.
     {
         Session shortRun(sources, engine);
         shortRun.setTranscript(&transcript);
@@ -762,7 +762,7 @@ TEST_F(SessionTest, AnApplicationThatCannotBeLoadedIsReported) {
 }
 
 // ---------------------------------------------------------------------------
-// A design of both languages (DESIGN_GUIDE.md section 18, M7)
+// A design of both languages
 // ---------------------------------------------------------------------------
 
 class BothLanguagesTest : public SessionTest {

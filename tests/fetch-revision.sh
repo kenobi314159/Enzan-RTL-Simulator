@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Fetches a repository at one revision, for the suites and designs that test Enzan against code
-# it does not hold (DESIGN_GUIDE.md sections 12, 14.4 and 14.5).
+# it does not hold.
 #
 #   fetch-revision.sh <url> <revision> <directory>
 #

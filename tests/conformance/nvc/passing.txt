@@ -1,6 +1,6 @@
-# The NVC regression tests that pass (DESIGN_GUIDE.md section 14.4), each by its name in NVC's
-# test/regress/testlist.txt. ratchet.sh holds every run to this list: a test on it must pass, and a
-# test that newly passes is added in the same commit as the change that made it pass.
+# The NVC regression tests that pass, each by its name in NVC's test/regress/testlist.txt.
+# ratchet.sh holds every run to this list: a test on it must pass, and a test that newly passes is
+# added in the same commit as the change that made it pass.
 agg1
 agg11
 agg12

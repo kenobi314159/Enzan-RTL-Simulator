@@ -146,8 +146,8 @@ TEST_F(CompilerTest, RegistersBecomeFrameOffsetsAndCarryTheirWidths) {
 }
 
 TEST_F(CompilerTest, AStoreCarriesItsObjectsPositionAmongTheObjectsWritten) {
-    // The runtime routes a store by this position (DESIGN_GUIDE.md section 3.7), so it counts
-    // objects, not extents: object 1 is written in two ranges and is still position 0.
+    // The runtime routes a store by this position, so it counts objects, not extents: object
+    // 1 is written in two ranges and is still position 0.
     Process process = makeCopyProcess();
     process.writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
                         WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 4},

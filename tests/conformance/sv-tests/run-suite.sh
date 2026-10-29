@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs the sv-tests SystemVerilog conformance suite against Enzan (DESIGN_GUIDE.md section 14.4).
+# Runs the sv-tests SystemVerilog conformance suite against Enzan.
 #
 #   run-suite.sh <enzan> <work-directory> [jobs]
 #

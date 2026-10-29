@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The Makefile of DESIGN_GUIDE.md section 8.3, actually run. What it has to show is the part a
-# shell script cannot assert for itself: that `make` rebuilds the right library and only that
-# one, which depends on the dependency file naming every file an analysis read — the includes
+# A design built with `make`, as docs/libraries.md shows it, actually run. What it has to show is
+# the part a shell script cannot assert for itself: that `make` rebuilds the right library and only
+# that one, which depends on the dependency file naming every file an analysis read — the includes
 # included, since those are what a build cannot work out for itself.
 
 set -euo pipefail

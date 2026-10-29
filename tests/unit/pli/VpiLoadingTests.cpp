@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Loading an application (DESIGN_GUIDE.md section 9.1), with real shared libraries built beside
-// this test. The test executable exports the `vpi_*` routines the same way `enzan` does, so
-// these also check that a library can resolve against a host that exports only those.
+// Loading an application, with real shared libraries built beside this test. The test
+// executable exports the `vpi_*` routines the same way `enzan` does, so these also check that a
+// library can resolve against a host that exports only those.
 
 #include "pli/PliContext.h"
 

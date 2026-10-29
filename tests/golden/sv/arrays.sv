@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Unpacked arrays, which Enzan stores flat with the left element highest (DESIGN_GUIDE.md
-// section 4.3): memories read and written at a variable index, both directions of declared
-// range, two dimensions, and a wire array driven element by element as a lookup table often is.
-// Assignment patterns, whole-array copy and equality, and an array through a port, which Icarus
-// Verilog 12 does not implement or leaves X, and an index past an inner dimension, which it lets
-// land in the next row, are in aggregates.sv.
+// Unpacked arrays, which Enzan stores flat with the left element highest: memories read and
+// written at a variable index, both directions of declared range, two dimensions, and a wire array
+// driven element by element as a lookup table often is. Assignment patterns, whole-array copy and
+// equality, and an array through a port, which Icarus Verilog 12 does not implement or leaves X,
+// and an index past an inner dimension, which it lets land in the next row, are in aggregates.sv.
 
 module tb;
     logic [7:0] memory [0:15];

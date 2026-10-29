@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Self-checking HDL cases (DESIGN_GUIDE.md section 14.2).
+# Self-checking HDL cases.
 #
 # Self-checking is strongly preferred over golden output files: a testbench that calls
 # `$fatal` on mismatch needs no golden file to drift out of date. Every case here ends by
@@ -15,12 +15,12 @@
 # Registers `golden.<name>`, which runs sv/<name>.sv and requires the PASS line, and
 # `golden.<name>.differential`, which compares the transcript against a reference simulator.
 #
-# NO_DIFFERENTIAL marks a case where simulators legitimately differ, which section 14.3
-# warns about. Such a case still runs under Enzan; it simply is not held to another tool's
+# NO_DIFFERENTIAL marks a case where simulators legitimately differ, as two correct ones may in
+# delta-level ordering. Such a case still runs under Enzan; it simply is not held to another tool's
 # behaviour.
 #
 # A case runs in nanoseconds, `--timescale ns`, unless OWN_TIME_SCALES says that every module
-# states its own time scale, when it runs in the unit the design asks for (section 3.1).
+# states its own time scale, when it runs in the unit the design asks for.
 
 # A failure line, anchored to the start of one.
 #
@@ -78,8 +78,8 @@ function(enzan_add_golden_test name)
 endfunction()
 
 # Differential testing is the single highest-value testing strategy available and must exist
-# from M1 (section 14.3). It is skipped rather than failed when no reference is installed, so
-# that a contributor without one can still run the suite; CI installs one.
+# from M1. It is skipped rather than failed when no reference is installed, so that a
+# contributor without one can still run the suite; CI installs one.
 find_program(ENZAN_REFERENCE_SIMULATOR iverilog)
 if(ENZAN_REFERENCE_SIMULATOR)
   message(STATUS "Differential tests will compare against ${ENZAN_REFERENCE_SIMULATOR}")
@@ -87,7 +87,6 @@ else()
   message(STATUS "iverilog not found; differential tests are skipped")
 endif()
 
-# M1's exit criteria name these two by name.
 enzan_add_golden_test(counter)
 enzan_add_golden_test(fifo)
 
@@ -105,7 +104,7 @@ enzan_add_golden_test(scheduling NO_DIFFERENTIAL)
 # single-instance case cannot tell a parameter that is honoured from one that is ignored.
 enzan_add_golden_test(router)
 
-# Drivers of disjoint bits of one signal, the case section 3.7 is written around: a
+# Drivers of disjoint bits of one signal, the case drivers of bit ranges exist for: a
 # parameterised number of instances whose outputs are bits and slices of one array.
 enzan_add_golden_test(drivers)
 
@@ -228,12 +227,12 @@ add_test(NAME golden.runtime_error_status
 # Waveform output
 # ---------------------------------------------------------------------------
 #
-# M1's exit criteria include waveforms opening in GTKWave (section 18). A viewer needs a display
-# and cannot run in CI, so the properties a viewer relies on are checked instead — balanced
-# scopes, declared identifiers, widths that match their declaration, monotonic time. That is both
-# automatable and stricter than "it opened without complaining".
+# A waveform has to open in GTKWave. A viewer needs a display and cannot run in CI, so the
+# properties a viewer relies on are checked instead — balanced scopes, declared identifiers,
+# widths that match their declaration, monotonic time. That is both automatable and stricter than
+# "it opened without complaining".
 #
-# `router` is checked as well as the two M1 cases because it is the only one with nested scopes
+# `router` is checked as well as counter and fifo because it is the only one with nested scopes
 # and repeated instances, which is where a writer's scope nesting and its aliasing of collapsed
 # ports actually get exercised.
 find_package(Python3 COMPONENTS Interpreter QUIET)
@@ -270,9 +269,9 @@ else()
   message(STATUS "fst2vcd not found; the FST round-trip checks are skipped")
 endif()
 
-# The command line of section 8, driven as a Makefile drives it. A library exists so that what
-# one process analysed another can run, so the separation is what has to be checked and cannot
-# be checked from inside a single invocation.
+# The command line, driven as a Makefile drives it. A library exists so that what one process
+# analysed another can run, so the separation is what has to be checked and cannot be checked
+# from inside a single invocation.
 add_test(NAME golden.library
          COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh" $<TARGET_FILE:enzan>
                  "${CMAKE_CURRENT_SOURCE_DIR}/sv/counter.sv")
@@ -282,9 +281,9 @@ set_tests_properties(
              FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
              TIMEOUT 120)
 
-# The Makefile of section 8.3, actually run. What only `make` can show is that the right library
-# rebuilds and no other, which rests on the dependency file naming the headers an analysis read
-# — the one thing a build cannot work out for itself.
+# A design built with `make`, as docs/libraries.md shows it, actually run. What only `make` can show
+# is that the right library rebuilds and no other, which rests on the dependency file naming the
+# headers an analysis read — the one thing a build cannot work out for itself.
 add_test(NAME golden.make
          COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-make-check.sh" $<TARGET_FILE:enzan>)
 set_tests_properties(
@@ -293,8 +292,8 @@ set_tests_properties(
              FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}"
              TIMEOUT 180)
 
-# cocotb driving Enzan through VPI, as a user runs it (DESIGN_GUIDE.md section 14.6), when a
-# Python has cocotb (tests/CMakeLists.txt).
+# cocotb driving Enzan through VPI, as a user runs it, when a Python has cocotb
+# (tests/CMakeLists.txt).
 if(ENZAN_HAVE_COCOTB)
   add_test(NAME golden.cocotb
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-cocotb-check.sh" $<TARGET_FILE:enzan>

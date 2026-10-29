@@ -223,8 +223,8 @@ TEST(Connection, AMessageSplitAcrossReadsIsReassembled) {
 }
 
 TEST(Connection, AFullSocketQueuesRatherThanBlocking) {
-    // Section 2.2's requirement in its most direct form: a client that has stopped reading must
-    // cost the kernel memory and nothing else. If this blocked, the test would hang.
+    // A slow GUI never stalls the kernel, in its most direct form: a client that has stopped
+    // reading must cost the kernel memory and nothing else. If this blocked, the test would hang.
     SocketPair pair;
 
     for (int index = 0; index < 2000; ++index) {

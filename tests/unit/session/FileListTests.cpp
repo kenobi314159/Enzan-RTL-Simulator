@@ -32,8 +32,8 @@ public:
 class FileListTest : public ::testing::Test {
 protected:
     // The tests stand in the workspace because that is where a `.f` file's relative paths
-    // resolve to (section 8.3), and checking that convention from another directory would
-    // check something else.
+    // resolve to, and checking that convention from another directory would check
+    // something else.
     FileListTest() : standing(workspace.path()), engine(sources) { engine.addConsumer(consumer); }
 
     /// Reads `name` from the workspace and returns whether it succeeded.
@@ -161,7 +161,7 @@ TEST_F(FileListTest, SaysSoWhenALibrarySearchIsAskedForAndNotPerformed) {
     EXPECT_NE(consumer.received[1].message.find("-v"), std::string::npos)
         << consumer.received[1].message;
 
-    // The position, so the fix is a visible edit rather than a hunt (section 8.3).
+    // The position, so the fix is a visible edit rather than a hunt.
     EXPECT_TRUE(consumer.received[0].location.valid());
 }
 
@@ -205,9 +205,9 @@ TEST_F(FileListTest, MinusCapitalFResolvesAgainstTheListsOwnDirectory) {
     workspace.write("outer.f", "-F sub/inner.f\n");
 
     // The nested list is found beside the list that named it, and so is everything *inside* it:
-    // `-F` says the list was written as though the tool had been run from its own directory
-    // (DESIGN_GUIDE.md section 8.3). Anchoring only the list's own path and not its contents
-    // would send the analysis looking for `b.sv` in the working directory, where it is not.
+    // `-F` says the list was written as though the tool had been run from its own directory.
+    // Anchoring only the list's own path and not its contents would send the analysis looking
+    // for `b.sv` in the working directory, where it is not.
     ASSERT_TRUE(read("outer.f"));
     EXPECT_EQ(fileNames(), (std::vector<std::string>{(workspace / "sub" / "b.sv").string()}));
 }

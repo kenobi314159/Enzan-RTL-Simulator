@@ -1,3 +1,2 @@
-# The fpganinja/taxi revision the design regression runs against (DESIGN_GUIDE.md section 14.5).
-# The one place it is named.
+# The fpganinja/taxi revision the design regression runs against. The one place it is named.
 cc70b270b910d369ab1ad7b3855e76399fd461f1

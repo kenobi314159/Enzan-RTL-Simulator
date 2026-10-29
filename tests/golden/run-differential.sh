@@ -3,13 +3,12 @@
 #
 # Runs one design under Enzan and under a reference simulator and compares their transcripts.
 #
-# Differential testing is "the single highest-value testing strategy available" and must exist
-# from M1 (DESIGN_GUIDE.md section 14.3). Comparing *transcripts* rather than waveforms is
-# deliberate: section 14.3 warns that two correct simulators may legitimately differ in
-# delta-level ordering, so a comparison has to be made at settled time boundaries. A
-# self-checking testbench's `$display` output is exactly that — it happens after a delay, when
-# the design has settled — whereas a VCD diff compares every delta and produces constant false
-# failures until somebody switches the suite off.
+# Differential testing is the single highest-value testing strategy available. Comparing
+# *transcripts* rather than waveforms is deliberate: two correct simulators may legitimately differ
+# in delta-level ordering, so a comparison has to be made at settled time boundaries. A
+# self-checking testbench's `$display` output is exactly that — it happens after a delay, when the
+# design has settled — whereas a VCD diff compares every delta and produces constant false failures
+# until somebody switches the suite off.
 #
 # Usage: run-differential.sh <enzan> <reference> <source.sv> <top> [<enzan option>...]
 #
@@ -38,7 +37,7 @@ trap 'rm -rf "$workdir"' EXIT
 # Enzan writes `$display` to stdout and diagnostics to stderr, which is the separation a
 # scriptable tool should have. Merging them would make this test compare Enzan's warnings
 # against Icarus's, and the two tools warn about different things by design — Enzan inherits
-# slang's diagnostics, which are deliberately better than most (DESIGN_GUIDE.md section 10.6).
+# slang's diagnostics, which are deliberately better than most.
 #
 # `$time` counts each module's own unit in both, so a transcript compares whatever the run's is.
 "$enzan" --top "$top" "$@" "$source_file" >"$workdir/enzan.txt" \

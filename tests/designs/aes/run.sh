@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Runs secworks' AES core through its own testbenches under Enzan and under Icarus Verilog, and
-# compares what the two print (DESIGN_GUIDE.md section 14.5; the first exit design of M5).
+# compares what the two print.
 #
 #   run.sh <enzan> <iverilog> <work-directory>
 #
@@ -16,9 +16,9 @@
 # refuses them where Icarus Verilog lets them through.
 #
 # By an Enzan with both frontends, tb/tb_aes_core.vhd, tb_aes_core in VHDL around the same Verilog
-# core, is run as well (the second exit design of M7), and its transcript must be tb_aes_core's
-# under Icarus Verilog but for the lines that testbench prints from inside the core, the key memory
-# and the encipher state, which VHDL cannot name.
+# core, is run as well, and its transcript must be tb_aes_core's under Icarus Verilog but for the
+# lines that testbench prints from inside the core, the key memory and the encipher state, which
+# VHDL cannot name.
 
 set -uo pipefail
 

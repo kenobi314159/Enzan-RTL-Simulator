@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs the VESTs conformance suite (DESIGN_GUIDE.md section 14.4), as it ships inside GHDL's test
-# suite, under Enzan.
+# Runs the VESTs conformance suite, as it ships inside GHDL's test suite, under Enzan.
 #
 #   run-suite.sh <enzan> <work-directory>
 #

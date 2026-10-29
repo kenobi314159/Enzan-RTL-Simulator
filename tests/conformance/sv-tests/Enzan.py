@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The sv-tests runner for Enzan (DESIGN_GUIDE.md section 14.4).
+# The sv-tests runner for Enzan.
 #
 # sv-tests loads a runner by name from RUNNERS_DIR, and run-suite.sh points that here, so this
 # file is used in place rather than copied into the suite. sv-tests then decides a case's result

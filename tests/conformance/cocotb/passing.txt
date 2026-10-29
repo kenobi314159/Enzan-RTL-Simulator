@@ -1,5 +1,5 @@
 # Every case of cocotb's tests/test_cases that passes against Enzan, one per line.
-# run-suite.sh fails when one of these stops passing (DESIGN_GUIDE.md section 14.6).
+# run-suite.sh fails when one of these stops passing.
 test_cocotb_tops
 test_compare
 test_configuration

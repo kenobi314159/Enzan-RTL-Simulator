@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Random numbers (DESIGN_GUIDE.md section 3.8). `$random` is IEEE 1364's generator, so the same
-// seed draws the same sequence in every simulator that follows it, and this transcript is
-// compared with Icarus Verilog's: with a seed variable it updates, and without, from the
-// simulation's own seed. `$urandom` and `$urandom_range` draw from each process's own
-// generator, which no two simulators share, so only their properties are checked.
+// Random numbers. `$random` is IEEE 1364's generator, so the same seed draws the same sequence
+// in every simulator that follows it, and this transcript is compared with Icarus Verilog's:
+// with a seed variable it updates, and without, from the simulation's own seed. `$urandom` and
+// `$urandom_range` draw from each process's own generator, which no two simulators share, so
+// only their properties are checked.
 
 module tb;
     integer seed;

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // NEORV32's sim/neorv32_tb.vhd in Verilog, around the processor's VHDL and its VHDL simulation
-// models (DESIGN_GUIDE.md section 18, M7): the same configuration, clock, reset, buses and models,
-// and the same on-chip debugger sequence over JTAG, its reports displayed, so that its reports and
-// logs are those of the VHDL testbench under GHDL (run.sh). No other free simulator instantiates
-// VHDL from Verilog, and that run is what checks this testbench (section 14.5).
+// models: the same configuration, clock, reset, buses and models, and the same on-chip debugger
+// sequence over JTAG, its reports displayed, so that its reports and logs are those of the VHDL
+// testbench under GHDL (run.sh). No other free simulator instantiates VHDL from Verilog, and that
+// run is what checks this testbench.
 //
 // What differs is what a Verilog net is: a weak pull, VHDL's 'H' or 'L', is a pulled net here,
 // tri1 or tri0, which a design reads as a strong 1 or 0.

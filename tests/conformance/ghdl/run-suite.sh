@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs GHDL's own regression tests, its testsuite/gna, under Enzan (DESIGN_GUIDE.md section 14.4),
-# from GHDL fetched at the revision ../vests/revision.txt names, the one VESTs is run from.
+# Runs GHDL's own regression tests, its testsuite/gna, under Enzan, from GHDL fetched at the
+# revision ../vests/revision.txt names, the one VESTs is run from.
 #
 #   run-suite.sh <enzan> <work-directory>
 #

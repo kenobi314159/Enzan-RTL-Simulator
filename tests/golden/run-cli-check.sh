@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Command lines that are wrong, and what Enzan says of them (DESIGN_GUIDE.md section 8). A
-# command line is wrong when it asks for nothing, for two things at once, or for something the
-# command it gives does not do; each is refused with status 1 and a message saying which, rather
-# than run as if the option had been taken. An option that changes nothing and says nothing is
-# indistinguishable from one that worked.
+# Command lines that are wrong, and what Enzan says of them. A command line is wrong when it asks
+# for nothing, for two things at once, or for something the command it gives does not do; each is
+# refused with status 1 and a message saying which, rather than run as if the option had been
+# taken. An option that changes nothing and says nothing is indistinguishable from one that worked.
 #
 #   run-cli-check.sh <enzan> <front end>
 #
-# <front end> is where `enzan` looks for the graphical front end, relative to its own directory
-# (section 11.5). Every build runs it: a command line is checked before any frontend is reached. What needs a
-# design to analyse runs in the languages the build has, which `enzan --version` lists.
+# <front end> is where `enzan` looks for the graphical front end, relative to its own directory.
+# Every build runs it: a command line is checked before any frontend is reached. What needs a design
+# to analyse runs in the languages the build has, which `enzan --version` lists.
 
 set -uo pipefail
 
@@ -70,13 +69,13 @@ expect 1 "Usage: enzan" "$enzan"
 expect 1 "no source files were given" "$enzan" --top tb
 expect 1 "option '--top' needs a value" "$enzan" --top
 
-# A served session is driven by its client (8.4), and a signal list fills a window a headless run
-# does not have (10.8): each refused rather than dropped.
+# A served session is driven by its client, and a signal list fills a window a headless run does
+# not have: each refused rather than dropped.
 expect 1 "cannot be combined" "$enzan" --listen k.sock --run 10 tb.sv
 expect 1 "cannot be combined" "$enzan" --listen k.sock --run all tb.sv
 expect 1 "'--wave-list' needs '--gui'" "$enzan" run --wave-list signals.tcl tb
 
-# --- the shape of the command (8.1) ---------------------------------------------------------------
+# --- the shape of the command ---------------------------------------------------------------------
 
 # `lib` is a command whatever follows it, rather than a source to read.
 expect 1 "\`lib\` takes create, list or clean" "$enzan" lib
@@ -95,7 +94,7 @@ printf 'module tb; endmodule\n' >slip.sv
 expect 1 "'slip.sv' is a source" "$enzan" run --in-lib libs/none slip.sv
 expect 1 "'slip.sv' is a source" "$enzan" elaborate --in-lib libs/none slip.sv
 
-# --- a simulation's options where nothing is simulated (8.1) --------------------------------------
+# --- a simulation's options where nothing is simulated --------------------------------------------
 
 # A waveform `analyse` never writes, a run length `elaborate` never runs: refused, as `--vpi` is,
 # rather than taken and dropped.
@@ -105,7 +104,7 @@ expect 1 "\`elaborate\` runs none" "$enzan" elaborate --in-lib libs/none --fst a
 expect 1 "'--gui' applies" "$enzan" elaborate --in-lib libs/none --gui tb
 expect 1 "'--listen' applies" "$enzan" analyse --listen k.sock tb.sv
 
-# --- an option given twice (8.5) -----------------------------------------------------------------
+# --- an option given twice ------------------------------------------------------------------------
 
 # Two values for one are two answers to one question, which the last no longer settles; the same
 # value again is the same answer. `--dry-run` stops before anything is analysed.
@@ -119,8 +118,8 @@ expect 0 "tb.sv" "$enzan" --dry-run -t tb --top tb -G W=1 -GW=1 tb.sv
 # --- how long a run runs --------------------------------------------------------------------------
 
 # A count of the run's time unit, or a time with a unit of its own, which has to be a whole number
-# of the run's unit once the design has settled what that is (3.1); or `all`, until the design
-# finishes, as no `--run` does.
+# of the run's unit once the design has settled what that is; or `all`, until the design finishes,
+# as no `--run` does.
 expect 1 "'1.5' is not a length of time" "$enzan" --run 1.5 tb.sv
 expect 1 "'10xs' is not a length of time" "$enzan" --run 10xs tb.sv
 expect 1 "'ALL' is not a length of time" "$enzan" --run ALL tb.sv
@@ -140,14 +139,13 @@ elif has vhdl; then
     expect 0 "ended at 1500000000fs" "$enzan" --dump-stats --run 1.5us clock.vhd
 fi
 
-# --- what reaches the window (8.4) ---------------------------------------------------------------
+# --- what reaches the window ----------------------------------------------------------------------
 
-# The window's own options are forwarded as they were written, and none it was not given: the
-# window reads `--run` again, by the same function, once the kernel has said what unit it counts.
-# `enzan` starts the front end it finds from its own directory (11.5), so a copy of it is put where
-# that leads to a stand-in that says what it was given, with the build's lib/ beside the copy's bin/
-# for VHDL's standard libraries; `--attach` starts no kernel, so this needs no design and no
-# display.
+# The window's own options are forwarded as they were written, and none it was not given: the window
+# reads `--run` again, by the same function, once the kernel has said what unit it counts. `enzan`
+# starts the front end it finds from its own directory, so a copy of it is put where that leads to a
+# stand-in that says what it was given, with the build's lib/ beside the copy's bin/ for VHDL's
+# standard libraries; `--attach` starts no kernel, so this needs no design and no display.
 mkdir -p window/bin
 cp "$enzan" window/bin/enzan
 ln -s "$(cd "$(dirname "$enzan")/.." && pwd)/lib" window/lib
@@ -159,9 +157,9 @@ expect 0 "front end: --attach k.sock" window/bin/enzan --gui --attach k.sock
 expect 0 "front end: --run 10ns --attach k.sock" window/bin/enzan --gui --attach k.sock --run 10ns
 expect 0 "front end: --run all --attach k.sock" window/bin/enzan --gui --attach k.sock -r all
 
-# A window `--gui` started that failed is not one its reader closed (8.1, 8.4): it is said to have,
-# and the status is 4, where a closed one leaves the run's. One that cannot be started at all is
-# said to be at once. SIGTERM rather than a crash's signal, so that no core is dumped.
+# A window `--gui` started that failed is not one its reader closed: it is said to have, and the
+# status is 4, where a closed one leaves the run's. One that cannot be started at all is said to be
+# at once. SIGTERM rather than a crash's signal, so that no core is dumped.
 if [[ ${#sources[@]} -gt 0 ]]; then
     stand_in() {
         printf '#!/bin/sh\n%s\n' "$1" >"$stand_in_path"
@@ -183,7 +181,7 @@ if [[ ${#sources[@]} -gt 0 ]]; then
         env PATH="$work/elsewhere:$PATH" window/bin/enzan --gui "${sources[0]}"
 fi
 
-# --- a dependency file (8.3) ---------------------------------------------------------------------
+# --- a dependency file ----------------------------------------------------------------------------
 
 # Its rule needs a target, and a target needs the file to be written; a rule for no target is one
 # make refuses to read.

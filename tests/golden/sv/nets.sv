@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// What a net holds where nothing drives it (DESIGN_GUIDE.md section 3.7): `z` for most kinds,
-// and the pull or supply value for the rest. A partly driven bus shows both on one signal,
-// because an undriven bit is its own default and not whatever its neighbour holds.
+// What a net holds where nothing drives it: `z` for most kinds, and the pull or supply value
+// for the rest. A partly driven bus shows both on one signal, because an undriven bit is its
+// own default and not whatever its neighbour holds.
 
 module tb;
     wire        w;

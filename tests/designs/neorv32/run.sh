@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Runs NEORV32 through its own testbench under Enzan and under GHDL, and compares what the two
-# report and write (DESIGN_GUIDE.md section 14.5; the exit design of M6).
+# report and write.
 #
 #   run.sh <enzan> <ghdl> <work-directory>
 #
@@ -15,8 +15,8 @@
 # retired with the registers and memory it touched.
 #
 # By an Enzan with both frontends, tb/neorv32_tb.v, the testbench in Verilog around the same VHDL
-# (the first exit design of M7), is run as well, and held to the same: its displayed reports and
-# the design's to GHDL's of the VHDL testbench (tb/compare-reports.py), and its logs to GHDL's.
+# is run as well, and held to the same: its displayed reports and the design's to GHDL's of the
+# VHDL testbench (tb/compare-reports.py), and its logs to GHDL's.
 
 set -uo pipefail
 

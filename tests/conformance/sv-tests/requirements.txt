@@ -1,2 +1,2 @@
-# What sv-tests' own driver imports (DESIGN_GUIDE.md section 14.4). CI installs from this file.
+# What sv-tests' own driver imports. CI installs from this file.
 psutil

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# What cocotb relies on in a design of both languages (DESIGN_GUIDE.md section 18, M7): each
-# interface shows its own language, cocotb hands a unit of the other to the other interface by its
-# name, and values, deposits and value changes work through either.
+# What cocotb relies on in a design of both languages: each interface shows its own language,
+# cocotb hands a unit of the other to the other interface by its name, and values, deposits and
+# value changes work through either.
 
 import os
 

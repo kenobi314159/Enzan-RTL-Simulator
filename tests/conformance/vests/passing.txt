@@ -1,6 +1,6 @@
-# The VESTs cases that pass (DESIGN_GUIDE.md section 14.4), each by its path under GHDL's
-# testsuite/vests/vhdl-93. ratchet.sh holds every run to this list: a case on it must pass, and a
-# case that newly passes is added in the same commit as the change that made it pass.
+# The VESTs cases that pass, each by its path under GHDL's testsuite/vests/vhdl-93. ratchet.sh
+# holds every run to this list: a case on it must pass, and a case that newly passes is added in
+# the same commit as the change that made it pass.
 billowitch/compliant/tc1.vhd
 billowitch/compliant/tc10.vhd
 billowitch/compliant/tc100.vhd

@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Reading and writing signal list files (DESIGN_GUIDE.md section 10.8): Tcl's syntax, two
-// commands, and nothing evaluated; and what a scope resolves to, in a hierarchy built here with
-// the empty and deep scopes the window's fixture design lacks. What a list turns into in a
-// window is SignalListLoadTests.
+// Reading and writing signal list files: Tcl's syntax, two commands, and nothing evaluated; and
+// what a scope resolves to, in a hierarchy built here with the empty and deep scopes the
+// window's fixture design lacks. What a list turns into in a window is SignalListLoadTests.
 
 #include "gui/SignalList.h"
 

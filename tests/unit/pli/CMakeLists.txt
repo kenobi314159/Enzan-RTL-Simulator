@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# VHPI is the VHDL frontend's (DESIGN_GUIDE.md section 9.7), and is tested where it is built.
+# VHPI is the VHDL frontend's, and is tested where it is built.
 set(ENZAN_VHPI_TESTS "")
 if(ENZAN_ENABLE_VHDL)
   set(ENZAN_VHPI_TESTS VhpiTests.cpp MixedLanguageTests.cpp)

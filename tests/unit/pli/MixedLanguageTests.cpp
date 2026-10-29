@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // VPI and VHPI on a design of both languages, built by hand: each interface shows its own
-// language, and finds a name another interface made, whose start is that interface's path
-// (DESIGN_GUIDE.md section 18, M7).
+// language, and finds a name another interface made, whose start is that interface's path.
 
 #include "pli/PliContext.h"
 

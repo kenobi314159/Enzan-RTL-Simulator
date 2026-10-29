@@ -1,3 +1,2 @@
-# The secworks/aes revision the design regression runs against (DESIGN_GUIDE.md section 14.5).
-# The one place it is named.
+# The secworks/aes revision the design regression runs against. The one place it is named.
 80dc4718e1dcbbdb4b0dd1bdb393d8f7b98981dc

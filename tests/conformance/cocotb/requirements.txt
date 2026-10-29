@@ -1,5 +1,5 @@
-# The cocotb the regression suite runs against (DESIGN_GUIDE.md section 14.6). The one place the
-# version is named: CI installs from this file, and run-suite.sh fetches the suite matching
-# whatever is installed rather than restating it.
+# The cocotb the regression suite runs against. The one place the version is named: CI installs
+# from this file, and run-suite.sh fetches the suite matching whatever is installed rather than
+# restating it.
 cocotb==2.1.0
 pytest

@@ -450,8 +450,8 @@ TEST(WaveformDatabaseTests, AnUnwritableSpillDirectoryKeepsTheDataInMemory) {
 }
 
 TEST(WaveformDatabaseTests, EdgeNavigationFindsTheNeighbouringChanges) {
-    // What a cursor snaps to and what Tab steps along (DESIGN_GUIDE.md 10.7). Both happen per
-    // click and per keystroke, so both are one query rather than a scan.
+    // What a cursor snaps to and what Tab steps along. Both happen per click and per
+    // keystroke, so both are one query rather than a scan.
     WaveformDatabase database;
     const std::uint32_t signal = database.addSignal(0, "/tb/clk", 1);
 

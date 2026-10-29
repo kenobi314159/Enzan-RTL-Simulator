@@ -13,7 +13,7 @@
 // has to keep its counters straight across hundreds of clocks; a state machine that has to
 // come back to rest after being made to fail; and enough simulated time that a scheduling
 // error which loses one event in a hundred has somewhere to show itself. Every check is in the
-// testbench, so the case needs no golden file to drift out of date (DESIGN_GUIDE.md 14.2).
+// testbench, so the case needs no golden file to drift out of date.
 
 // ---------------------------------------------------------------------------
 // Level 3: one transfer

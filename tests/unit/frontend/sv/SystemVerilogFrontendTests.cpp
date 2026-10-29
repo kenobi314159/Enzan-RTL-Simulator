@@ -204,7 +204,7 @@ TEST_F(FrontendTest, AnEnumeratedObjectCarriesTheNamesOfItsValues) {
     // EIR does not model an enumeration as a type — every operation on one treats it as the
     // packed vector it is — but the names have to survive translation, because a reader
     // looking at a state register wants to be told `S_SEND` and nothing downstream of the
-    // frontend could ever work that out (DESIGN_GUIDE.md section 10.7).
+    // frontend could ever work that out.
     const std::unique_ptr<Design> design = analyse(R"(
         module m (input logic clk);
             typedef enum logic [2:0] {
@@ -275,8 +275,7 @@ TEST_F(FrontendTest, OneEnumerationIsRecordedOnceHoweverManyObjectsHaveIt) {
 TEST_F(FrontendTest, ParametersAreRecordedWithWhatTheyResolvedTo) {
     // A parameterised module is already one definition per parameterisation, so nothing here
     // is used to simulate anything. It is recorded so that a reader looking at one of three
-    // differently-configured copies of a module can see which copy they are looking at
-    // (DESIGN_GUIDE.md section 10.7).
+    // differently-configured copies of a module can see which copy they are looking at.
     const std::unique_ptr<Design> design = analyse(R"(
         module leaf #(parameter int WIDTH = 8) ();
             localparam int BYTES = WIDTH / 8;
@@ -362,8 +361,8 @@ TEST_F(FrontendTest, AParameterThatIsNotAnIntegerIsSkippedRatherThanRefused) {
 
 TEST_F(FrontendTest, OutputIsAlwaysVerifiableEir) {
     // The frontend verifies its own output before returning it, so a design that comes back at
-    // all satisfies the core invariant of section 4.2. Checking again here makes that contract
-    // explicit rather than incidental.
+    // all satisfies the core invariant. Checking again here makes that contract explicit
+    // rather than incidental.
     const std::unique_ptr<Design> design = analyse(R"(
         module m (input logic a, input logic b, output logic y);
             assign y = a & b;
@@ -474,7 +473,7 @@ TEST_F(FrontendTest, EachParameterisationBecomesItsOwnDefinition) {
     // by a counter. The distinction matters beyond this design: a counter numbers the
     // parameterisations in the order one compilation walked them, so `leaf$1` from another
     // analysis would be a different module under the same name, and a design assembled from
-    // two libraries (section 8.2) would bind an instance to the wrong body.
+    // two libraries would bind an instance to the wrong body.
     const std::vector<std::uint32_t> leaves = design->findSpecialisations("leaf");
     ASSERT_EQ(leaves.size(), 2U);
 
@@ -594,8 +593,8 @@ TEST_F(FrontendTest, AnInstanceInAGenerateBlockHasTheBlockInItsName) {
 // ---------------------------------------------------------------------------
 //
 // A write set records the bits a process writes, because a driver owns bits rather than a
-// signal (DESIGN_GUIDE.md section 3.7). What these pin is which bits: elaboration decides
-// whether two processes are in conflict by comparing them.
+// signal. What these pin is which bits: elaboration decides whether two processes are in
+// conflict by comparing them.
 
 TEST_F(FrontendTest, AWholeAssignmentWritesEveryBit) {
     const std::unique_ptr<Design> design = analyse(R"(
@@ -975,7 +974,7 @@ TEST_F(FrontendTest, AConstantSelectOutsideTheObjectWritesNothing) {
 }
 
 TEST_F(FrontendTest, EachInstanceOfAGeneratedArrayDrivesItsOwnBit) {
-    // The case section 3.7 is written around: a parameterised number of instances whose
+    // The case drivers of bit ranges exist for: a parameterised number of instances whose
     // outputs are bits of one array. Each connection drives one bit and no other.
     const std::unique_ptr<Design> design = analyse(R"(
         module channel (output logic ready);
@@ -1023,8 +1022,8 @@ TEST_F(FrontendTest, ReportsAFileThatDoesNotExist) {
 
 TEST_F(FrontendTest, TranslatesSlangsDiagnosticsIntoTheEnzanEngine) {
     // slang's diagnostics are dramatically better than most tools', and preserving that
-    // quality end to end is a selling point rather than polish (section 10.6). They must
-    // therefore arrive through the same engine as everything else.
+    // quality end to end is a selling point rather than polish. They must therefore
+    // arrive through the same engine as everything else.
     EXPECT_EQ(analyse("module m; this is not verilog endmodule"), nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::SystemVerilogError));
     EXPECT_FALSE(consumer.messages.empty());
@@ -1050,7 +1049,7 @@ TEST_F(FrontendTest, ReportsSourceWithNoTopLevel) {
 
 TEST_F(FrontendTest, ReportsAnUnsupportedConstructRatherThanMistranslatingIt) {
     // A partially translated body would produce a design that simulates and gives the wrong
-    // answer, which section 1.2 ranks as the worst possible outcome.
+    // answer, which is the worst possible outcome.
     EXPECT_EQ(analyse(R"(
         module m;
             real x;
@@ -1117,7 +1116,7 @@ TEST_F(FrontendTest, AnExplicitStrongDriveIsTheDefaultAndAccepted) {
 
 TEST_F(FrontendTest, ACalledFunctionIsInlinedAndItsReadsAreTheCallers) {
     // The body becomes part of the process that calls it, so what it reads is in that process's
-    // read set, and an always_comb calling it is sensitive to it (DESIGN_GUIDE.md section 4.2).
+    // read set, and an always_comb calling it is sensitive to it.
     const std::unique_ptr<Design> design = analyse(R"(
         module top;
             logic [7:0] scale;
@@ -1564,7 +1563,7 @@ TEST_F(FrontendTest, AToleranceRangeInAnInsideSetIsRefused) {
 
 TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {
     // The location has to resolve in Enzan's source manager, or the transcript shows a
-    // message with no snippet and the quality that section 10.6 is about is lost.
+    // message with no snippet and the quality of its diagnostics is lost.
     //
     // The file is named by an absolute path, which is what a build system passes and what a
     // file list expands to. slang shortens such a path when it renders a file *name*, so a
@@ -1587,8 +1586,8 @@ TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {
 }
 
 TEST_F(FrontendTest, AModuleDefinitionCarriesTheFileItWasWrittenIn) {
-    // The library attributes units to source files by their definition's location (section
-    // 4.4), so a definition with no location is a unit that can never be cached.
+    // The library attributes units to source files by their definition's location, so a
+    // definition with no location is a unit that can never be cached.
     const std::unique_ptr<Design> design = analyse("module m;\nendmodule\n");
     ASSERT_NE(design, nullptr);
     ASSERT_EQ(design->size(), 1U);
@@ -1640,7 +1639,7 @@ TEST_F(FrontendTest, EveryInstanceOfOneParameterisationSharesOneDefinitionAndIsW
 }
 
 // ---------------------------------------------------------------------------
-// Time units (DESIGN_GUIDE.md section 3.1)
+// Time units
 // ---------------------------------------------------------------------------
 
 TEST_F(FrontendTest, ADelayCountsItsModulesUnitAndIsGivenInTheRuns) {
@@ -1771,7 +1770,7 @@ TEST_F(FrontendTest, ASystemTaskCallCarriesTheTimeUnitOfItsScope) {
 }
 
 // ---------------------------------------------------------------------------
-// Modules another language instantiates (DESIGN_GUIDE.md section 18, M7)
+// Modules another language instantiates
 // ---------------------------------------------------------------------------
 
 /// A module VHDL instantiates, whose width has no default, and one nothing instantiates whose

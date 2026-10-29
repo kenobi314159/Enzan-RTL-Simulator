@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Exercises the operator set against values a human can check by eye, including the
-// X-propagation rules that DESIGN_GUIDE.md section 3 makes normative. Anything here that
-// disagrees with a reference simulator is a semantic defect, not a style difference.
+// X-propagation rules of IEEE 1800. Anything here that disagrees with a reference
+// simulator is a semantic defect, not a style difference.
 
 module tb;
     int failures = 0;

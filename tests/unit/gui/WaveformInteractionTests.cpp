@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Tests for the mouse and keyboard model of DESIGN_GUIDE.md section 10.7.
+// Tests for the wave window's mouse and keyboard model.
 //
-// Every gesture there is arbitrary in the sense that the other way round would also have worked
-// — a bare wheel could have zoomed, a right-drag could have framed the other direction. That is
+// Every gesture is arbitrary in the sense that the other way round would also have worked — a
+// bare wheel could have zoomed, a right-drag could have framed the other direction. That is
 // exactly why they are tested: an arbitrary choice with nothing holding it in place is one that
 // gets quietly swapped by whoever next finds the opposite more natural, and the reader who had
 // learned the first one pays for it.
@@ -443,7 +443,7 @@ TEST_F(InteractionTest, TabWorksWhileTheListHasFocus) {
 }
 
 TEST_F(InteractionTest, AGroupCanBeSteppedAlongLikeASignal) {
-    // Section 10.7: a group shows a value on its line, so it has edges.
+    // A group shows a value on its line, so it has edges.
     populate();
 
     const int group = model->addGroup(QStringLiteral("both"));
@@ -670,8 +670,8 @@ TEST_F(InteractionTest, ASingleBitSignalDoesNotOfferToUnpack) {
 }
 
 TEST_F(InteractionTest, AGroupOfOneBitSignalsDrawsAsABus) {
-    // The other half of "a group of one-bit signals behaves as a vector" (section 10.7): it has
-    // to be drawn as one too, or the reader gets the number on the line and a blank beside it.
+    // The other half of "a group of one-bit signals behaves as a vector": it has to be drawn as
+    // one too, or the reader gets the number on the line and a blank beside it.
     populate();
 
     const int bus = rowOf.value(QStringLiteral("count"));
@@ -709,7 +709,7 @@ TEST_F(InteractionTest, HighlightingARowComesFromTheThemeAndCanBeCleared) {
 
     EXPECT_EQ(model->row(clock)->highlight, 2);
 
-    // Section 10.5: the colour on screen is the theme's, not a literal in widget code.
+    // The colour on screen is the theme's, not a literal in widget code.
     const QVariant background = model->data(model->indexOfRow(clock), Qt::BackgroundRole);
     ASSERT_TRUE(background.isValid());
     EXPECT_EQ(background.value<QColor>(), theme.color(enzan::gui::highlightColor(2)));

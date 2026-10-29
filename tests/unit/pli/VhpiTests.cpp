@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // VHPI as an application sees it: the routines of vhpi_user.h, called on a design built by hand
-// and run by a real kernel, as PliContextTests.cpp calls VPI's (DESIGN_GUIDE.md section 9.7).
+// and run by a real kernel, as PliContextTests.cpp calls VPI's.
 
 #include "pli/PliContext.h"
 

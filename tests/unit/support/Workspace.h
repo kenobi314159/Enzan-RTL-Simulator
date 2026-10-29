@@ -64,8 +64,8 @@ private:
 /// Stands the process in `directory` for as long as this object lives.
 ///
 /// Needed where the behaviour under test is defined in terms of the working directory — a
-/// `.f` file's relative paths are (DESIGN_GUIDE.md section 8.3) — because testing that
-/// convention from the wrong directory tests something else.
+/// `.f` file's relative paths are — because testing that convention from the wrong
+/// directory tests something else.
 class ScopedWorkingDirectory {
 public:
     explicit ScopedWorkingDirectory(const std::filesystem::path& directory)

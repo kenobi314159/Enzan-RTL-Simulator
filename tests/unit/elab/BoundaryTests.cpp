@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The conversions a port crossing between SystemVerilog and VHDL is connected through
-// (DESIGN_GUIDE.md section 3.5), on hand-built EIR, so that what is tested is the boundary and
-// not a frontend: each direction, an inout port that releases its bus, a record field by field,
-// and the ports no rule converts.
+// The conversions a port crossing between SystemVerilog and VHDL is connected through, on
+// hand-built EIR, so that what is tested is the boundary and not a frontend: each direction, an
+// inout port that releases its bus, a record field by field, and the ports no rule converts.
 
 #include "elab/Boundary.h"
 

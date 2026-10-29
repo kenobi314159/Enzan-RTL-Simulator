@@ -3,10 +3,9 @@
 #
 # Validates FST output by reading it back with GTKWave's own converter.
 #
-# M1's exit criteria include waveforms opening in GTKWave (DESIGN_GUIDE.md section 18), and section
-# 7.3 requires both VCD and FST. A viewer needs a display and cannot run in CI, but `fst2vcd` is
-# the same reader GTKWave uses, so putting Enzan's FST through it and comparing the result against
-# Enzan's own VCD checks three things at once:
+# A waveform has to open in GTKWave, in VCD and in FST alike. A viewer needs a display and cannot
+# run in CI, but `fst2vcd` is the same reader GTKWave uses, so putting Enzan's FST through it and
+# comparing the result against Enzan's own VCD checks three things at once:
 #
 #   * the FST is a file GTKWave can read at all;
 #   * its hierarchy survives the round trip, aliases included — a collapsed port is one variable

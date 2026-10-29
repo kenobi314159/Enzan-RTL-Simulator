@@ -4,7 +4,7 @@
 # Runs one design of both languages under Enzan, a SystemVerilog testbench <name>.sv around VHDL
 # units <name>.vhd, and the same design all in SystemVerilog under Icarus Verilog, the units as
 # <name>_ref.sv, and compares what each printed: the testbench's transcript, at settled times, as
-# ../run-differential.sh compares a design of SystemVerilog alone (DESIGN_GUIDE.md section 14.3).
+# ../run-differential.sh compares a design of SystemVerilog alone.
 #
 # Usage: run-sv-differential.sh <enzan> <iverilog> <directory> <name>
 

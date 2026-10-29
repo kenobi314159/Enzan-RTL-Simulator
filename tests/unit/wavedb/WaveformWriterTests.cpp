@@ -440,7 +440,7 @@ TEST_F(WaveformWriterTest, ACollapsedPortIsDeclaredUnderBothNamesWithOneRecord) 
 
 TEST_F(WaveformWriterTest, ScopeFilteringRecordsOnlyTheSelectedSubtree) {
     // Selective capture is a requirement, not a convenience: recording everything on a large design
-    // exhausts memory within seconds of simulated time (section 7.1).
+    // exhausts memory within seconds of simulated time.
     build(hierarchicalDesign(), "tb");
     writer->setScope("/tb/u_dut");
     ASSERT_TRUE(opened());
@@ -563,7 +563,7 @@ TEST_F(WaveformWriterTest, ChangesBelongToTheSlotThatIsEndingNotTheOneBeginning)
 
 TEST_F(WaveformWriterTest, SeveralChangesInOneSlotCollapseToTheSettledValue) {
     // Delta-level intermediate values are noise: recording them makes a diff of two waveforms fail
-    // constantly, which section 14.3 warns is how a differential suite gets switched off.
+    // constantly, which is how a differential suite gets switched off.
     build(flatDesign(), "tb");
     ASSERT_TRUE(opened());
     const std::size_t afterOpen = writer->events.size();
