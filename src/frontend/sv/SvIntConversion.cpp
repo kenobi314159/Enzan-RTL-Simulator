@@ -12,12 +12,11 @@ eir::BitVector toBitVector(const slang::SVInt& value) {
 
     // Read one bit at a time through slang's own accessor rather than over its storage words.
     //
-    // Reading the words directly is a little faster and considerably more fragile: it depends
-    // on slang's internal layout, which is not a stability-guaranteed interface and is exactly
-    // the kind of thing that changes under a rebase (DESIGN_GUIDE.md section 5.2 names that
-    // risk for NVC, and it applies here too). It also made the static analyser — correctly —
-    // unable to prove the indexing in bounds, because a narrow value is stored inline in a
-    // single word.
+    // Reading the words directly is a little faster and considerably more fragile: it depends on
+    // slang's internal layout, which is not a stability-guaranteed interface and is exactly the
+    // kind of thing that changes under a rebase, as NVC's internal APIs are. It also made the
+    // static analyser — correctly — unable to prove the indexing in bounds, because a narrow value
+    // is stored inline in a single word.
     //
     // The cost is linear in the width, and this runs once per literal and initial value at
     // analysis time, never in the simulation loop.

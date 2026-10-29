@@ -1503,8 +1503,8 @@ std::optional<BodyTranslator::MovingSlice> BodyTranslator::movingSlice(tree_t ra
         return result;
     };
 
-    // Whichever way the array runs, the slice's right element is in its lowest bits (section
-    // 3.6), at the offset that element would have in the whole.
+    // Whichever way the array runs, the slice's right element is in its lowest bits, at the
+    // offset that element would have in the whole.
     const Value right0 = constant(layout.index.right, type, nullptr);
     const Value elementBits = constant(layout.elementBits, type, nullptr);
     const Value fromRight = layout.index.ascending ? binary(eir::Opcode::Subtract, right0, last)
@@ -2103,7 +2103,7 @@ bool BodyTranslator::messageParts(tree_t message, std::string& format,
     }
 
     // Any other string, a function's result say, or character is its characters' codes, which
-    // `%s` shows as they are, the left one first (DESIGN_GUIDE.md section 3.6).
+    // `%s` shows as they are, the left one first.
     type_t type = tree_type(message);
     type_t character = type_is_array(type) ? type_elem(type) : type;
     if (type_is_enum(character)
@@ -2680,7 +2680,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
         fail(expression, "a string literal of another length than where it is used");
         return std::nullopt;
 
-    // `null`, the handle no line has (DESIGN_GUIDE.md section 4.3); every other literal folds.
+    // `null`, the handle no line has; every other literal folds.
     case T_LITERAL:
         if (tree_subkind(expression) == L_NULL)
             return constant(0, eir::Type::bits(64, false, false), type);
@@ -3669,9 +3669,9 @@ BodyTranslator::slidingSlice(const Layout& layout, tree_t range) {
         return std::nullopt;
     }
 
-    // Whichever way the array runs, the right element of the slice is its lowest (section 3.6),
-    // at the offset that element has in the whole. Each bound is checked against the array's,
-    // as VHDL checks a slice's (IEEE 1076 section 8.5).
+    // Whichever way the array runs, the right element of the slice is its lowest, at the offset
+    // that element has in the whole. Each bound is checked against the array's, as VHDL checks
+    // a slice's (IEEE 1076 section 8.5).
     const std::optional<Offset> offset = elementOffset(layout, right);
     if (!offset || !elementOffset(layout, left)) return std::nullopt;
     return std::pair(*part, *offset);

@@ -9,10 +9,10 @@
 /// Four-state operations on packed bit vectors.
 ///
 /// **This is the highest-risk code in the project.** Every one of these functions
-/// implements a rule from IEEE 1800, and a subtly wrong X-propagation rule
-/// produces plausible-looking but wrong simulation results — the failure mode
-/// DESIGN_GUIDE.md section 1.2 ranks above all others, and the one users are least
-/// able to detect. Changes here MUST come with tests that pin the behaviour.
+/// implements a rule from IEEE 1800, and a subtly wrong X-propagation rule produces
+/// plausible-looking but wrong simulation results — the worst failure there is, and
+/// the one users are least able to detect. Changes here MUST come with tests that
+/// pin the behaviour.
 ///
 /// **Calling conventions.**
 ///
@@ -23,7 +23,7 @@
 /// - `dst` MUST NOT overlap any source, except where a function's documentation
 ///   says otherwise. Codegen guarantees this by allocating distinct registers; the
 ///   alternative — copying into a temporary — would allocate on the hot path
-///   (section 13.4).
+///   (DESIGN_GUIDE.md section 13.4).
 /// - Every function leaves `dst` in canonical form: bits at or above its width are
 ///   zero in both planes.
 /// - Nothing here allocates or throws.
@@ -31,7 +31,7 @@
 /// **The two-state fast path.** Operations whose cost is dominated by
 /// X-propagation bookkeeping check `isTwoState()` first and take a plain integer
 /// path when they can. That is an optimisation of the four-state representation
-/// and never a separate engine (section 3.6).
+/// and never a separate engine.
 namespace enzan::eir::bitops {
 
 // ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ void realToInteger(BitRef dst, ConstBitRef source);
 void extend(BitRef dst, ConstBitRef source, bool signExtend);
 
 /// Sets every bit of `dst` to X. Used for the result of an operation whose
-/// operands make it undefined, and for time-zero initialisation (section 3.9).
+/// operands make it undefined, and for time-zero initialisation.
 void setUnknown(BitRef dst);
 
 // ---------------------------------------------------------------------------
@@ -243,8 +243,7 @@ void bitSelect(BitRef dst, ConstBitRef source, ConstBitRef index);
 /// As `partSelect`, with the index as a plain integer.
 ///
 /// The runtime often has the index in hand as a number rather than as a vector, and
-/// wrapping it in a BitVector to pass it would allocate on the hot path (DESIGN_GUIDE.md
-/// section 13.4).
+/// wrapping it in a BitVector to pass it would allocate on the hot path.
 void partSelectAt(BitRef dst, ConstBitRef source, std::uint64_t lowIndex);
 
 /// As `assignPart`, with the index as a plain integer. See `partSelectAt`.
@@ -288,11 +287,11 @@ void conditional(BitRef dst, ConstBitRef condition, ConstBitRef whenTrue, ConstB
 // Resolution
 // ---------------------------------------------------------------------------
 //
-// How a bit of a net with several drivers takes its value (DESIGN_GUIDE.md section 3.7). Each
-// function folds one more driver into an accumulator that holds what the drivers so far
-// resolved to, so a bit with `n` drivers costs `n - 1` calls. `acc` and `driver` must have the
-// same width and must not overlap. Strength is not modelled: every driver is strong, which the
-// frontend guarantees by refusing any other.
+// How a bit of a net with several drivers takes its value. Each function folds one more driver
+// into an accumulator that holds what the drivers so far resolved to, so a bit with `n`
+// drivers costs `n - 1` calls. `acc` and `driver` must have the same width and must not
+// overlap. Strength is not modelled: every driver is strong, which the frontend guarantees by
+// refusing any other.
 //
 // `z` is the identity of all three, so an accumulator starts as the first driver's value.
 

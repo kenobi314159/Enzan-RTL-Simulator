@@ -92,8 +92,9 @@ std::optional<double> realOf(std::string_view text) {
 
 /// The value `generics` binds the generic `generic` to as a SystemVerilog literal, which sets the
 /// parameter of its name of the module its component is bound to: an integer in decimal, a `bit`, a
-/// `boolean` or a `std_ulogic` as one bit by section 3.6's mapping, an array of them as that many
-/// bits, the left element highest, and a string as a string. Nothing for a value of another type.
+/// `boolean` or a `std_ulogic` as the four-state bit its code stands for, an array of them as that
+/// many bits, the left element highest, and a string as a string. Nothing for a value of another
+/// type.
 std::optional<std::string> systemVerilogLiteral(const Folder& generics, tree_t generic) {
     // std_ulogic's codes, U X 0 1 Z W L H -, as four-state bits.
     static constexpr std::string_view Logic = "xx01zx01x";
@@ -351,9 +352,8 @@ private:
     bool addObject(tree_t declaration);
 
     /// Records a constant the architecture declares, with its value folded, as a parameter local
-    /// to the definition, which VHPI shows as a constant as it shows a generic (DESIGN_GUIDE.md
-    /// section 9.7). One whose value does not fold is computed where it is used, and shows as
-    /// nothing.
+    /// to the definition, which VHPI shows as a constant as it shows a generic. One whose value
+    /// does not fold is computed where it is used, and shows as nothing.
     void addConstant(tree_t declaration);
 
     void declarations(tree_t container);
@@ -395,10 +395,10 @@ private:
 
     /// Connects `port` through an object of this definition named `objectName` standing for it,
     /// kept equal to its actuals by a process for each of `associations`: for a port associated in
-    /// parts, or with part of a signal, a conversion or an expression (DESIGN_GUIDE.md section
-    /// 5.2). An inout port has a second object for its driving value, and a process for each
-    /// association each way. The associations' formals name `formalPort`, the port itself or a
-    /// component's of its name. Nothing, having reported why, when the port cannot be connected.
+    /// parts, or with part of a signal, a conversion or an expression. An inout port has a second
+    /// object for its driving value, and a process for each association each way. The
+    /// associations' formals name `formalPort`, the port itself or a component's of its name.
+    /// Nothing, having reported why, when the port cannot be connected.
     std::optional<Through> connectThrough(std::string objectName, tree_t port, tree_t formalPort,
                                           const std::vector<tree_t>& associations,
                                           const Folder& childGenerics);
@@ -439,12 +439,12 @@ private:
     std::set<std::uint32_t> sourcedByInstances;
 
     /// What a name declared where translation is begins with: the generate blocks and blocks it
-    /// is inside, each followed by a dot, as SystemVerilog's are (DESIGN_GUIDE.md section 5.1).
+    /// is inside, each followed by a dot, as SystemVerilog's are.
     std::string prefix;
 };
 
 /// The definition a package's subprograms are translated into: one with no objects, which a call
-/// needs no instance of (DESIGN_GUIDE.md section 4.1).
+/// needs no instance of.
 class PackageScope final : public DefinitionScope {
 public:
     PackageScope(DesignTranslator& owner, eir::ModuleDefinition& package)
@@ -581,8 +581,8 @@ public:
         return nullptr;
     }
 
-    /// The subprogram `declaration` specialised for `shape` (DESIGN_GUIDE.md section 4.1): from
-    /// `architecture` when it is one of that architecture's, and translated the first time.
+    /// The subprogram `declaration` specialised for `shape`: from `architecture` when it is one
+    /// of that architecture's, and translated the first time.
     std::optional<Callee> callee(tree_t declaration, const Shape& shape, tree_t where,
                                  ArchitectureTranslator* architecture) {
         tree_t body = subprogramBody(declaration);
@@ -593,7 +593,7 @@ public:
         }
         // A package's subprograms are a definition of their own, and so are an entity's or an
         // architecture's when no architecture is translating them: a resolution function's, which
-        // elaboration asks for alone (DESIGN_GUIDE.md section 3.7).
+        // elaboration asks for alone.
         tree_t unit = tree_container(body);
         const tree_kind_t unitKind = tree_kind(unit);
         const bool inPackage =
@@ -1324,7 +1324,7 @@ private:
         }
 
         // A port of an unconstrained type takes its bounds from its actual, which SystemVerilog
-        // does not give (DESIGN_GUIDE.md section 18, M7).
+        // does not give.
         for (unsigned index = 0; index < tree_ports(entity); ++index) {
             type_t type = tree_type(tree_port(entity, index));
             if (type_is_array(type) && type_is_unconstrained(type)) {
@@ -1587,7 +1587,7 @@ private:
     /// where the actual gives those too, or value, `_` for one the shape leaves free:
     /// `resolved(Y)U$0to1`, `ser(...)$0to2(3downto0)`. Made of what the specialisation is, so that
     /// two translations of one name one subprogram, as the second that elaboration asks for
-    /// resolution functions does (DESIGN_GUIDE.md section 3.7).
+    /// resolution functions does.
     [[nodiscard]] static std::string specialisationName(tree_t body, const SpecialisationKey& key) {
         std::string name = simpleName(tree_ident(body));
         const std::string_view mangled = istr(tree_ident2(body));
@@ -1784,9 +1784,9 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     std::optional<Layout> layout = declaredLayout(declaration, folding);
 
     // A signal of a null range holds nothing, and is declared all the same, with a placeholder
-    // bit, since a bit vector has at least one: what names its bounds reads them from its type,
-    // or from its actual for a port of an unconstrained type, and VHPI shows it as the empty array
-    // it is (DESIGN_GUIDE.md section 9.7). Nothing else of it is translated.
+    // bit, since a bit vector has at least one: what names its bounds reads them from its type, or
+    // from its actual for a port of an unconstrained type, and VHPI shows it as the empty array it
+    // is. Nothing else of it is translated.
     bool null = false;
     if (!layout) {
         layout = declaredNullLayout(declaration, folding);
@@ -1865,7 +1865,7 @@ eir::ModuleDefinition ArchitectureTranslator::translate() {
     result.name = specialisation.name;
     result.sourceName = simpleName(tree_ident(entity));
     result.language = eir::Language::Vhdl;
-    // The library the entity was analysed into, which a design names it by (section 8.2).
+    // The library the entity was analysed into, which a design names it by.
     result.library = simpleName(ident_until(tree_ident(entity), '.'));
     result.location = locate(specialisation.architecture);
 
@@ -2382,8 +2382,8 @@ void ArchitectureTranslator::instance(tree_t statement) {
 
 void ArchitectureTranslator::moduleInstance(tree_t statement, tree_t component,
                                             const std::string& module) {
-    // The component's generics are the module's parameters of their names (DESIGN_GUIDE.md
-    // section 18, M7), and its ports' bounds fold with them.
+    // The component's generics are the module's parameters of their names, and its ports'
+    // bounds fold with them.
     const std::optional<Folder> local = design.bindGenerics(component, statement, folding);
     if (!local) return;
     std::vector<eir::UnitRequest::Parameter> parameters;

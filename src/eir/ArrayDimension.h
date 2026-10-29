@@ -11,8 +11,8 @@ namespace enzan::eir {
 ///
 /// Kept for what reads the array as an array — VPI's `vpiRegArray`, a waveform file's leaving
 /// memories out, a wave window's showing one — and not for simulating it. Storage is flat: the
-/// array's elements are one vector of its bits, left element highest, as a packed array's are
-/// (DESIGN_GUIDE.md section 4.3), so every operation on it is an operation on bits.
+/// array's elements are one vector of its bits, left element highest, as a packed array's are,
+/// so every operation on it is an operation on bits.
 ///
 /// In a header of its own, which needs nothing else, because the dimensions cross to the GUI and
 /// a header moc reads must not reach the rest of EIR: the moc of Qt 6.4 cannot parse what

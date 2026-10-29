@@ -78,9 +78,9 @@ public:
         // The top instance is named for the module as the source names it, so that a design
         // elaborated with `tb` as its top has `/tb/...` paths — which is what a user typing a
         // hierarchical path like /tb/u_dut/count names. The source's name rather than the
-        // definition's, because a parameterised top's definition is named for its values
-        // (section 8.2), and `/counter$WIDTH_8/count` is a path nobody would write. The design
-        // reports its top by the same name, since that is the name a front end shows.
+        // definition's, because a parameterised top's definition is named for its values, and
+        // `/counter$WIDTH_8/count` is a path nobody would write. The design reports its top by
+        // the same name, since that is the name a front end shows.
         const eir::ModuleDefinition& top = design.module(*topIndex);
         const std::string& topName = top.sourceName.empty() ? top.name : top.sourceName;
 
@@ -346,7 +346,7 @@ private:
 
                 // Equal widths of different encodings, std_logic_vector(7 downto 0) and logic
                 // [63:0] say, are a connection between languages that nothing converted: joined,
-                // one side would read the other's codes as bits (DESIGN_GUIDE.md section 3.5).
+                // one side would read the other's codes as bits.
                 if (portObject.encoding != parentSlotOf.encoding) {
                     diagnostics.report(DiagCode::PortEncodingMismatch, port.location, port.name,
                                        child.definitionName, eir::toString(portObject.encoding),
@@ -434,8 +434,8 @@ private:
 
     /// Gives each definition a call reaches into, and that holds objects, an instance at the
     /// root as a package has, so that the subprograms called there have slots for their
-    /// objects (DESIGN_GUIDE.md section 4.1). A definition holding none needs no instance: what
-    /// its subprograms touch is their parameters and registers.
+    /// objects. A definition holding none needs no instance: what its subprograms touch is
+    /// their parameters and registers.
     ///
     /// The instances' own bodies may call further, so the list is walked as it grows.
     bool instantiateCalledDefinitions() {
@@ -548,7 +548,7 @@ private:
     }
 
     /// Binds every call a process can reach to a subprogram instance, and records what each
-    /// process's callees read and write (DESIGN_GUIDE.md section 4.1).
+    /// process's callees read and write.
     ///
     /// A subprogram of the caller's own definition runs on the caller's instance; one of
     /// another definition runs on that definition's instance at the root, or on none when it
@@ -648,7 +648,7 @@ private:
     }
 
     /// Binds each VHDL resolution function whose translation is known, as a call from nowhere
-    /// is: the kernel calls it, not a process (DESIGN_GUIDE.md section 3.7).
+    /// is: the kernel calls it, not a process.
     bool bindResolutions() {
         for (ResolutionCall& call : result->resolutionList) {
             if (!call.answered()) continue;
@@ -734,10 +734,10 @@ private:
     /// Reports the first write a process's callees make into a bit something drives, and
     /// returns false if there was one.
     ///
-    /// A subprogram's stores are immediate and go to no driver (DESIGN_GUIDE.md section 4.1), so
-    /// one landing on a resolved signal would bypass its resolution, and one on a variable that
-    /// a continuous assignment drives is the procedural write beside a continuous driver that
-    /// `MixedDriverKinds` refuses of a process.
+    /// A subprogram's stores are immediate and go to no driver, so one landing on a resolved
+    /// signal would bypass its resolution, and one on a variable that a continuous assignment
+    /// drives is the procedural write beside a continuous driver that `MixedDriverKinds` refuses
+    /// of a process.
     bool checkCalleeWrites(const std::vector<std::vector<DriverRange>>& rangesBySlot,
                            const std::vector<bool>& resolved) {
         for (std::uint32_t processIndex = 0; processIndex < calleeWriters.size(); ++processIndex) {
@@ -769,8 +769,7 @@ private:
     }
 
     /// Finds bits with more than one driver, reports those the language does not allow, and
-    /// builds the drivers and segments of the signals that resolve (DESIGN_GUIDE.md section
-    /// 3.7).
+    /// builds the drivers and segments of the signals that resolve.
     ///
     /// Overlap is what counts, not sharing a signal: `N` instances each driving one bit of an
     /// array are `N` drivers of disjoint ranges and no conflict at all. Several procedural
@@ -811,7 +810,7 @@ private:
             std::vector<DriverRange>& ranges = rangesBySlot[slotIndex];
 
             // Stable, so that ranges starting at one bit keep process order and the pair a
-            // diagnostic names is the same on every run (section 3.8).
+            // diagnostic names is the same on every run.
             std::ranges::stable_sort(ranges, {}, &DriverRange::lowBit);
             if (!checkSlotDrivers(slotIndex, ranges)) {
                 ok = false;
@@ -905,7 +904,7 @@ private:
 
         // A VHDL resolved signal resolves its drivers' values with its function however many
         // there are, since a user's function need not return a lone driver's value; one proven
-        // to return it is bypassed where no bit has two drivers (section 3.7).
+        // to return it is bypassed where no bit has two drivers.
         if (slot.resolution.resolved() && !slot.resolution.loneDriverIdentity)
             return std::ranges::any_of(ranges, &DriverRange::continuous);
         if (slot.kind != eir::ObjectKind::Net && !slot.resolution.resolved()) return false;
@@ -925,8 +924,7 @@ private:
     /// arena, and splits each resolved slot into segments.
     ///
     /// Drivers are made in process order, and within a process in write-set order, so that a
-    /// process's drivers through one object are contiguous: that run is what a store is routed
-    /// to (section 3.7).
+    /// process's drivers through one object are contiguous: that run is what a store is routed to.
     void buildDrivers(const std::vector<bool>& resolved) {
         std::vector<std::vector<std::uint32_t>> driversBySlot(result->slotList.size());
 

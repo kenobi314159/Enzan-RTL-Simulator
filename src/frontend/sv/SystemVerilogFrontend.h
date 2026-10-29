@@ -23,8 +23,8 @@ class SourceManager;
 /// A frontend's only job is to turn source text into EIR (DESIGN_GUIDE.md section 5). It
 /// MUST NOT flatten hierarchy, make scheduling decisions or allocate runtime state, and
 /// nothing slang-specific may leak past this directory — keeping frontend-specific code
-/// confined is a standing invariant (section 17.4), and a slang type in an EIR header
-/// would make every downstream component depend on slang.
+/// confined is a standing invariant, and a slang type in an EIR header would make every
+/// downstream component depend on slang.
 namespace enzan::frontend::sv {
 
 /// What to analyse.
@@ -69,7 +69,7 @@ struct Options {
     std::int8_t timeUnitExponent = -12;
 
     /// Whether the run's unit is the finest precision an element of the design declares, where
-    /// that is finer than `timeUnitExponent` (DESIGN_GUIDE.md section 3.1).
+    /// that is finer than `timeUnitExponent`.
     ///
     /// Off when `--timescale` or a library fixes the unit. A delay that is no whole number of a
     /// fixed unit is rounded to it and reported.
@@ -79,13 +79,13 @@ struct Options {
     std::int8_t* runTimeUnit = nullptr;
 
     /// The run's unit when something other than this analysis fixed it: VHDL's femtoseconds, in a
-    /// design of both languages (DESIGN_GUIDE.md section 3.1). `refineTimeUnit` is then ignored,
-    /// and a delay that is no whole number of it is rounded and reported.
+    /// design of both languages. `refineTimeUnit` is then ignored, and a delay that is no whole
+    /// number of it is rounded and reported.
     std::optional<std::int8_t> fixedRunTimeUnit;
 
     /// Modules that another language's units instantiate, each specialised as its request asks
-    /// and translated with the rest of the design (section 18, M7). The name of the definition
-    /// each became goes into `requestAnswers`, in the order they were asked for.
+    /// and translated with the rest of the design. The name of the definition each became goes
+    /// into `requestAnswers`, in the order they were asked for.
     std::vector<eir::UnitRequest> requests;
     std::vector<std::string>* requestAnswers = nullptr;
 
@@ -110,7 +110,7 @@ struct Options {
     /// The sources handed in *and* the files they included, which is the part a caller cannot
     /// work out for itself: an `` `include `` is resolved by the preprocessor against the
     /// include path, and a build that does not know which header a source actually opened
-    /// cannot rebuild when that header changes (DESIGN_GUIDE.md section 8.3).
+    /// cannot rebuild when that header changes.
     std::vector<std::filesystem::path>* filesRead = nullptr;
 };
 
@@ -123,8 +123,8 @@ struct Options {
 ///
 /// Returns nullptr having reported diagnostics when the sources do not analyse, or when
 /// they use a construct the frontend does not support yet. A partially translated design
-/// is never returned: it would simulate and give the wrong answer, which section 1.2 ranks
-/// as the worst possible outcome.
+/// is never returned: it would simulate and give the wrong answer, which is the worst
+/// possible outcome.
 std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sources,
                                      DiagnosticEngine& diagnostics);
 

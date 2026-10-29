@@ -25,9 +25,9 @@ constexpr std::string_view Magic = "ENZANEIR";
 /// FNV-1a over the payload, written after it.
 ///
 /// A checksum rather than nothing, because the failure it catches is the one that matters: a
-/// truncated write — an interrupted build, a full disk — leaves a file that decodes into
-/// plausible garbage, and section 4.4 requires a mismatch to cause clean re-analysis rather
-/// than silent misbehaviour. It is not a defence against tampering and is not meant as one.
+/// truncated write — an interrupted build, a full disk — leaves a file that decodes into plausible
+/// garbage, and a mismatch has to cause clean re-analysis rather than silent misbehaviour. It is
+/// not a defence against tampering and is not meant as one.
 constexpr std::uint64_t FnvOffsetBasis = 0xcbf2'9ce4'8422'2325ULL;
 constexpr std::uint64_t FnvPrime = 0x0000'0100'0000'01b3ULL;
 
@@ -178,7 +178,7 @@ private:
     std::vector<std::string> names;
 
     /// Ordered rather than hashed so that two encodings of the same design are byte-identical,
-    /// which is what makes a content-addressed library entry stable (section 3.8).
+    /// which is what makes a content-addressed library entry stable.
     std::map<std::string, std::uint32_t, std::less<>> indices;
 };
 

@@ -34,11 +34,11 @@ namespace enzan::frontend::vhdl {
 /// so a value of a subtype and one of its base share one: a subtype's narrower range is a check,
 /// not a narrower storage.
 ///
-/// An array is its elements end to end, the left element in the highest bits, as a packed array
-/// is (section 4.3): `std_logic_vector(7 downto 0)` is 64 bits, element 7 in bits 56 to 63, and
-/// `bit_vector(0 to 3)` is 32, element 0 in the top byte. Its bounds are static, since the adapter
-/// folds what they depend on (section 5.2). A record is its fields end to end in the order they
-/// are declared, the first in the highest bits, as a packed struct is.
+/// An array is its elements end to end, the left element in the highest bits, as a packed array is:
+/// `std_logic_vector(7 downto 0)` is 64 bits, element 7 in bits 56 to 63, and `bit_vector(0 to 3)`
+/// is 32, element 0 in the top byte. Its bounds are static, since the adapter folds what they
+/// depend on. A record is its fields end to end in the order they are declared, the first in the
+/// highest bits, as a packed struct is.
 struct Layout {
     eir::Type storage;
 
@@ -124,7 +124,7 @@ arrayLayout(const Folder::Range& index, type_t elementType, const Folder& folder
 
 /// What an object of `type` shows as outside the simulation: `std_ulogic`'s codes, and arrays of
 /// them, as four-state bits; `bit`'s and `boolean`'s as two-state ones; a real as the number it
-/// is; anything else, an array of reals among it, as its own bits (DESIGN_GUIDE.md section 3.6).
+/// is; anything else, an array of reals among it, as its own bits.
 [[nodiscard]] eir::Encoding encodingOf(type_t type);
 
 /// What a signal of `type` resolves with: the resolution function of its subtype, or of its

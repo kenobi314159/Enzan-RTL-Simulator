@@ -93,10 +93,10 @@ public:
             visitDefault(node);
     }
 
-    // An instance slang found to duplicate another's body, parameterisation and connections
-    // alike, has the same dead code as that one, which is walked where it is the body. Walking
-    // the duplicate would make slang bind every one of them, which is the cost its instance
-    // cache exists to avoid and the one M3.1 removed from translation.
+    // An instance slang found to duplicate another's body, parameterisation and connections alike,
+    // has the same dead code as that one, which is walked where it is the body. Walking the
+    // duplicate would make slang bind every one of them, which is the cost its instance cache
+    // exists to avoid, and the one translation avoids too.
     void handle(const ast::InstanceSymbol& instance) {
         if (instance.getCanonicalBody() != nullptr) return;
         visitDefault(instance);

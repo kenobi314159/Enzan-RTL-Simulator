@@ -13,8 +13,8 @@ namespace enzan::eir {
 ///
 /// The catalogue, including each opcode's operand convention and its required LLVM
 /// lowering sketch, is Opcodes.def. EIR-B is a control-flow graph of three-address
-/// instructions over typed values (DESIGN_GUIDE.md section 4.1); it is not the
-/// executable form, which `codegen` produces from it.
+/// instructions over typed values; it is not the executable form, which `codegen`
+/// produces from it.
 enum class Opcode : std::uint8_t {
 #define ENZAN_OPCODE(name, mnemonic, hasResult, sources, lowering) name,
 #include "eir/Opcodes.def"
@@ -51,8 +51,7 @@ bool isTerminator(Opcode opcode) noexcept;
 /// Most operations forbid it: the four-state implementations in BitOps write the
 /// destination as they go, so an aliased source is read after it has been overwritten,
 /// which silently corrupts carry propagation and shifts. Requiring distinct registers is
-/// cheaper than copying into a temporary, which would allocate on the hot path
-/// (DESIGN_GUIDE.md section 13.4).
+/// cheaper than copying into a temporary, which would allocate on the hot path.
 ///
 /// The exceptions are the operations that are element-wise or deliberately
 /// read-modify-write: a move, a width change, a two-state coercion, and `SplicePart`,
@@ -145,7 +144,7 @@ private:
 
 /// One EIR-B instruction: an opcode, a destination and up to three sources.
 ///
-/// Three-address form throughout, as section 4.1 requires. Operand roles are fixed
+/// Three-address form throughout. Operand roles are fixed
 /// per opcode and documented in Opcodes.def; nothing infers them from context,
 /// because an instruction that means different things in different places cannot be
 /// lowered mechanically.
@@ -163,7 +162,7 @@ struct Instruction {
     Operand c;
 
     /// The statement this instruction came from, for source stepping and for
-    /// breakpoints on HDL source lines (DESIGN_GUIDE.md section 10.4).
+    /// breakpoints on HDL source lines.
     ///
     /// Carried here, on EIR-B, and **not** on the bytecode instruction the VM
     /// executes: codegen turns these into a line table of one entry per change

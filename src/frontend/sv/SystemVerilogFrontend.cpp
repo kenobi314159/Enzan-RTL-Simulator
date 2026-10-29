@@ -173,10 +173,10 @@ std::string instanceName(const ast::InstanceSymbol& instance) {
 }
 
 /// The name `symbol` has in the module that declares it, its generate blocks joined to it with
-/// dots as `collectScope` names a hoisted object or an instance (DESIGN_GUIDE.md section 5.1),
-/// and the body that module's instance has; null for the top level's instance, which no body
-/// holds. Nothing when the symbol is somewhere a name cannot reach, a package, or a subroutine
-/// for anything but its static variables.
+/// dots as `collectScope` names a hoisted object or an instance, and the body that module's
+/// instance has; null for the top level's instance, which no body holds. Nothing when the
+/// symbol is somewhere a name cannot reach, a package, or a subroutine for anything but its
+/// static variables.
 std::optional<std::string> nameWithinBody(const ast::Symbol& symbol,
                                           const ast::InstanceBodySymbol*& owner) {
     std::string prefix;
@@ -389,9 +389,9 @@ private:
 
     /// Reports a drive strength other than the default and returns false.
     ///
-    /// Enzan resolves drivers without a strength model (DESIGN_GUIDE.md section 3.7), which
-    /// gives the right answer only when every driver is strong: a `weak` driver contending with
-    /// a strong one would resolve to X where the strong one should win.
+    /// Enzan resolves drivers without a strength model, which gives the right answer only when
+    /// every driver is strong: a `weak` driver contending with a strong one would resolve to X
+    /// where the strong one should win.
     bool checkDriveStrength(
         std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
         slang::SourceLocation location);
@@ -571,10 +571,10 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
     }
 
     // A fixed-size unpacked array and an unpacked struct are stored flat, as the vector of all
-    // their bits (DESIGN_GUIDE.md section 4.3): every operation the language allows on one as
-    // a whole — assignment, equality, a port connection — is then the same operation on bits.
-    // Reals, strings, unions, dynamic arrays and classes are none of these, and are reported
-    // where they are used, so that the diagnostic points at the user's line.
+    // their bits: every operation the language allows on one as a whole — assignment,
+    // equality, a port connection — is then the same operation on bits. Reals, strings,
+    // unions, dynamic arrays and classes are none of these, and are reported where they are
+    // used, so that the diagnostic points at the user's line.
     const ast::Type& canonical = type.getCanonicalType();
     std::uint64_t width = 0;
     bool fourState = false;
@@ -1401,13 +1401,12 @@ private:
     ///
     /// **The suffix is a function of the parameter values, and of the interfaces the body's
     /// ports are connected to, not a counter.** A counter numbers the parameterisations in the
-    /// order *this* compilation happened to walk them, which makes the name meaningless
-    /// outside it: `counter$1` from one analysis and `counter$1` from
-    /// another would be different modules wearing one name, and a design assembled from two
-    /// libraries (DESIGN_GUIDE.md section 8.2) would resolve an instance to the wrong body with
-    /// nothing to say so. Deriving it from the values instead gives a specialisation the same
-    /// name wherever it is produced, which is what lets a library be instantiated with
-    /// parameters chosen by whoever uses it.
+    /// order *this* compilation happened to walk them, which makes the name meaningless outside
+    /// it: `counter$1` from one analysis and `counter$1` from another would be different
+    /// modules wearing one name, and a design assembled from two libraries would resolve an
+    /// instance to the wrong body with nothing to say so. Deriving it from the values instead
+    /// gives a specialisation the same name wherever it is produced, which is what lets a
+    /// library be instantiated with parameters chosen by whoever uses it.
     static std::string specialisedModuleName(const ast::InstanceBodySymbol& body);
 
     eir::Design* design;
@@ -2103,7 +2102,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
 
     // A module another language's units instantiate is specialised through a top level of its own
     // instantiating it, which makes it no top level itself, as an instance from the other
-    // language would (DESIGN_GUIDE.md section 18, M7).
+    // language would.
     std::vector<std::string> requestModules;
     for (std::size_t index = 0; index < options.requests.size(); ++index)
         requestModules.push_back(requestModuleName(index));
@@ -2145,9 +2144,9 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         compilation.addSyntaxTree(tree);
 
     // slang's diagnostics are dramatically better than most commercial tools', and
-    // preserving that quality end to end is a genuine selling point rather than polish
-    // (DESIGN_GUIDE.md section 10.6). They are translated into Enzan's engine so that the
-    // transcript is uniform regardless of which phase produced a message.
+    // preserving that quality end to end is a genuine selling point rather than polish.
+    // They are translated into Enzan's engine so that the transcript is uniform
+    // regardless of which phase produced a message.
     const slang::DiagnosticEngine slangEngine(slangSources);
     bool hasError = false;
 
@@ -2205,8 +2204,8 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     // Collected whether or not the analysis succeeded: a build that failed because a header
     // was wrong still has to rebuild when that header is fixed.
     if (options.filesRead != nullptr) {
-        // Sorted, because slang hands them back in whatever order it opened them and section
-        // 3.8 puts observable ordering beyond that. Duplicates dropped: one file included
+        // Sorted, because slang hands them back in whatever order it opened them and nothing
+        // observable may depend on that. Duplicates dropped: one file included
         // twice is one prerequisite.
         //
         // Only the sources handed in and what they included are files. slang parses each `-G`
@@ -2260,7 +2259,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     }
 
     // Every delay counts the run's unit, which a design asking for a finer precision than the
-    // default refines unless something fixed it (DESIGN_GUIDE.md section 3.1).
+    // default refines unless something fixed it.
     std::int8_t runTimeUnit = options.fixedRunTimeUnit.value_or(options.timeUnitExponent);
     if (options.refineTimeUnit && !options.fixedRunTimeUnit) {
         FinestPrecision finest(runTimeUnit);
@@ -2311,10 +2310,10 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         design = std::move(kept);
     }
 
-    // A frontend's output is verified before it is accepted. Section 4.2's core invariant —
-    // a process is a pure function over a declared slice of the arena — is exactly the kind
-    // of property a translator gets quietly wrong, and catching it here means the defect is
-    // a diagnostic rather than a mysterious wrong value.
+    // A frontend's output is verified before it is accepted. The core invariant — a process is a
+    // pure function over a declared slice of the arena — is exactly the kind of property a
+    // translator gets quietly wrong, and catching it here means the defect is a diagnostic rather
+    // than a mysterious wrong value.
     if (!eir::verify(*design, diagnostics)) return nullptr;
 
     return design;

@@ -20,14 +20,13 @@ namespace enzan::eir {
 ///
 /// The distinction is not cosmetic. A bit of a net may have several drivers and
 /// resolves them; a bit of a variable may have one continuous driver, and a second is
-/// an error rather than a resolution (DESIGN_GUIDE.md section 3.7). Elaboration
-/// decides which applies from this.
+/// an error rather than a resolution. Elaboration decides which applies from this.
 enum class ObjectKind : std::uint8_t { Net, Variable };
 
 std::string_view toString(ObjectKind kind) noexcept;
 
 /// What an object's bits mean outside the simulation: in a waveform, to a display, across a
-/// language boundary (DESIGN_GUIDE.md section 3.6).
+/// language boundary.
 ///
 /// The kernel never looks: a VHDL value is a code, and every operation on it is an operation on
 /// bits. Only what shows a value to someone converts it, each element of one byte to the bit it
@@ -43,8 +42,8 @@ enum class Encoding : std::uint8_t {
     /// `bit` or `boolean` codes, a byte each: 0 or 1.
     VhdlBit,
 
-    /// An IEEE 754 double's 64 bits, a real's (section 3.6), which a waveform shows as the
-    /// number rather than as bits.
+    /// An IEEE 754 double's 64 bits, a real's, which a waveform shows as the number rather than
+    /// as bits.
     Real,
 };
 
@@ -61,8 +60,8 @@ void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept;
 [[nodiscard]] bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
 
 /// As `storeShown`, for a value that has to arrive whatever it holds, as one crossing from
-/// SystemVerilog into VHDL does (section 3.5): an unknown or high-impedance bit becomes a `bit`'s
-/// or a `boolean`'s 0, as assigning one to a two-state variable makes it.
+/// SystemVerilog into VHDL does: an unknown or high-impedance bit becomes a `bit`'s or a
+/// `boolean`'s 0, as assigning one to a two-state variable makes it.
 void encode(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
 
 /// What an object stored as `encoding` holds, for a diagnostic: `std_ulogic codes`.
@@ -72,12 +71,11 @@ void encode(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
 ///
 /// Nothing about simulating a definition depends on it: what its bits mean is its objects'
 /// encodings. It says where a port crosses from one language into the other, which is connected by
-/// a conversion that consumes a delta cycle (DESIGN_GUIDE.md section 3.5), and which procedural
-/// interface shows the definition (section 9.7).
+/// a conversion that consumes a delta cycle, and which procedural interface shows the definition.
 enum class Language : std::uint8_t { SystemVerilog, Vhdl };
 
 /// Which kind of net a net is, which decides how a bit with several drivers resolves and what
-/// a bit with none holds (DESIGN_GUIDE.md section 3.7).
+/// a bit with none holds.
 ///
 /// `tri` is kept apart from `wire`, and `triand` and `trior` from `wand` and `wor`, although
 /// each pair behaves identically: a reader is shown the kind they declared.
@@ -123,18 +121,18 @@ struct EnumMember {
 /// EIR does not model enumerations as *types* — an enumeration is a packed vector as far as
 /// every operation on it is concerned, and pretending otherwise would put a distinction into
 /// the value engine that nothing there acts on. What is kept is the mapping, because a reader
-/// looking at `3'd2` on a waveform wants to be told it is `S_SEND` (DESIGN_GUIDE.md section
-/// 10.7) and only the frontend ever knew that.
+/// looking at `3'd2` on a waveform wants to be told it is `S_SEND` and only the frontend ever
+/// knew that.
 ///
 /// Held per definition rather than per design, and copied into each definition that uses one,
-/// so that a definition stays an independently usable analysed unit (section 4.4).
+/// so that a definition stays an independently usable analysed unit.
 struct EnumDefinition {
     /// What the type is called, for a tooltip and for diagnostics. May be empty: an anonymous
     /// enumeration still names its values.
     std::string name;
 
     /// In declaration order, which is the order a reader wrote them and the order anything
-    /// listing them must use (section 3.8).
+    /// listing them must use.
     std::vector<EnumMember> members;
 
     /// The name for `value`, or an empty view when no member has it.
@@ -146,9 +144,9 @@ struct EnumDefinition {
 };
 
 /// A VHDL type as the design declares it, for what reads a VHDL object from outside the
-/// simulation: VHPI's types, bounds and subelements (DESIGN_GUIDE.md section 9.7). Like an
-/// enumeration's table, it changes nothing about how the object behaves; its bits are laid out as
-/// the VHDL adapter lays them out, an array's left element and a record's first field highest.
+/// simulation: VHPI's types, bounds and subelements. Like an enumeration's table, it changes
+/// nothing about how the object behaves; its bits are laid out as the VHDL adapter lays them out,
+/// an array's left element and a record's first field highest.
 struct VhdlType {
     enum class Kind : std::uint8_t { Enumeration, Integer, Physical, Floating, Array, Record };
 
@@ -181,9 +179,9 @@ struct VhdlType {
 
     std::uint32_t width = 0;
 
-    /// What a scalar's bits mean, as an object's encoding says (section 3.6): std_ulogic codes, a
-    /// bit's or a boolean's, or the value itself. `Bits` for an array or a record, whose elements
-    /// and fields say for themselves.
+    /// What a scalar's bits mean, as an object's encoding says: std_ulogic codes, a bit's or a
+    /// boolean's, or the value itself. `Bits` for an array or a record, whose elements and fields
+    /// say for themselves.
     Encoding encoding = Encoding::Bits;
 
     /// A scalar's range, or each dimension of an array, the first first.
@@ -203,8 +201,8 @@ struct VhdlType {
 
 /// What a VHDL resolved signal's drivers resolve with (IEEE 1076 section 4.6): a resolution
 /// function, applied to each subelement of the signal it resolves, `elementBits` wide, over the
-/// values its drivers give it (DESIGN_GUIDE.md section 3.7). The subelement is a scalar, or for a
-/// function of composite values an array or a record, which each driver drives whole.
+/// values its drivers give it. The subelement is a scalar, or for a function of composite values
+/// an array or a record, which each driver drives whole.
 ///
 /// The function is named as the design names it, by its library, package and signature as NVC
 /// mangles them, `IEEE.STD_LOGIC_1164.RESOLVED(Y)U`, rather than as a subprogram of EIR: its one
@@ -216,7 +214,7 @@ struct Resolution {
 
     /// True when the function is proven to return a lone driver's value unchanged, having been
     /// run on each value of its subelement, an enumeration of sixteen values or fewer, as
-    /// `ieee.std_logic_1164.resolved` is. Bits with one driver then bypass it (section 3.7).
+    /// `ieee.std_logic_1164.resolved` is. Bits with one driver then bypass it.
     bool loneDriverIdentity = false;
 
     [[nodiscard]] bool resolved() const noexcept { return !function.empty(); }
@@ -238,9 +236,9 @@ struct Object {
     /// The value at time zero, when the declaration supplied one.
     ///
     /// Absent means "the default for the type": X for a four-state object and zero
-    /// for a two-state one (section 3.9). It is left absent rather than filled in
-    /// here so that elaboration can initialise a whole arena region at once instead
-    /// of copying a vector per object.
+    /// for a two-state one. It is left absent rather than filled in here so that
+    /// elaboration can initialise a whole arena region at once instead of copying a
+    /// vector per object.
     std::optional<BitVector> initialValue;
 
     /// True when the object is only a name for another object's storage, which is
@@ -268,7 +266,7 @@ struct Object {
     /// one element when the object is also an unpacked array. Empty when it is no packed array.
     ///
     /// Like `unpackedDimensions`, only for what reads the object from outside: a waveform shows
-    /// `logic [3:0][7:0]` as four bytes rather than as 32 bits (DESIGN_GUIDE.md section 10.7).
+    /// `logic [3:0][7:0]` as four bytes rather than as 32 bits.
     std::vector<ArrayDimension> packedDimensions;
 
     /// For a VHDL object, its type, an index into its definition's `vhdlTypes`, or
@@ -299,9 +297,9 @@ struct Object {
     ///
     /// The path is relative to the instance holding this object — `dut/core/state` down,
     /// `../u_peer/ready` up and across — because one definition serves every instance of a
-    /// parameterisation (DESIGN_GUIDE.md section 18, M3.1), and a path from the root would be
-    /// right for only one of them. A path beginning `@port/` goes through an interface port of
-    /// the instance holding it, to whichever interface that instance's parent connected.
+    /// parameterisation, and a path from the root would be right for only one of them. A path
+    /// beginning `@port/` goes through an interface port of the instance holding it, to
+    /// whichever interface that instance's parent connected.
     std::string hierarchicalPath;
 
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
@@ -311,10 +309,10 @@ struct Object {
 ///
 /// Parameters are resolved away before EIR exists: a parameterised module becomes one
 /// definition per parameterisation, which is what keeps an analysed unit free of them and
-/// reusable without re-evaluating anything (DESIGN_GUIDE.md section 4.4). What is kept here is
-/// the *record* of what each was resolved to, because a reader debugging a design built out of
-/// three differently-parameterised copies of one module needs to see which copy they are
-/// looking at, and nothing downstream of the frontend could work that out.
+/// reusable without re-evaluating anything. What is kept here is the *record* of what each was
+/// resolved to, because a reader debugging a design built out of three
+/// differently-parameterised copies of one module needs to see which copy they are looking at,
+/// and nothing downstream of the frontend could work that out.
 struct Parameter {
     std::string name;
 
@@ -378,8 +376,7 @@ struct PortConnection {
     /// effective value and drives its driving value, which differ (IEEE 1076 section 14.7.3):
     /// what the instance drives is one source of the actual, and what it reads is the actual
     /// resolved, converted back. The frontend connects the two objects to the actual by
-    /// processes of its own (DESIGN_GUIDE.md section 5.2); elaboration only routes the
-    /// instance's stores.
+    /// processes of its own; elaboration only routes the instance's stores.
     std::uint32_t driveObjectIndex = Unconnected;
 
     static constexpr std::uint32_t Unconnected = 0xFFFF'FFFFU;
@@ -412,10 +409,10 @@ struct Instance {
     /// The definition this instantiates, resolved against the Design by name.
     ///
     /// A name rather than an index because analysis is per-design-unit and
-    /// cacheable (section 2.1): a module may be analysed before the thing it
-    /// instantiates exists in any library, so the reference cannot be an index into
-    /// a table that is not yet complete. Elaboration resolves it and reports an
-    /// unresolved reference as a diagnostic.
+    /// cacheable: a module may be analysed before the thing it instantiates exists
+    /// in any library, so the reference cannot be an index into a table that is not
+    /// yet complete. Elaboration resolves it and reports an unresolved reference as
+    /// a diagnostic.
     std::string definitionName;
 
     std::vector<PortConnection> connections;
@@ -429,10 +426,10 @@ struct Instance {
 /// One analysed design unit: a module, with its objects, ports, instances and
 /// processes.
 ///
-/// This is EIR-S, the structural layer (section 4.1), and it is the unit that
-/// analysis produces and a library stores. It describes the module as written, with
-/// parameters already resolved but with **no** hierarchy flattening: flattening is
-/// an elaboration-time optimisation and never a frontend's job (section 17.4).
+/// This is EIR-S, the structural layer, and it is the unit that analysis produces
+/// and a library stores. It describes the module as written, with parameters
+/// already resolved but with **no** hierarchy flattening: flattening is an
+/// elaboration-time optimisation and never a frontend's job.
 struct ModuleDefinition {
     /// The name this definition is instantiated by.
     ///
@@ -452,8 +449,8 @@ struct ModuleDefinition {
     /// Carried on the unit rather than held beside the design, because a design
     /// assembled from several libraries must be able to say which of them each unit
     /// came from: two libraries may define one name, and resolving that by whichever
-    /// was loaded last — which is what a design keyed on the bare name does — is the
-    /// failure mode section 1.2 ranks worst. Section 8.2 has the resolution rules.
+    /// was loaded last — which is what a design keyed on the bare name does — is a wrong
+    /// result with nothing to say so. `Design::findModule` has the resolution rules.
     std::string library;
 
     /// True for a package's variables rather than a module (IEEE 1800 section 26): one
@@ -487,7 +484,7 @@ struct ModuleDefinition {
     /// Returns the index of the object called `name`, or nothing.
     ///
     /// A linear scan: an object table is small, and a map would add a container
-    /// whose iteration order could leak into output ordering (section 3.8).
+    /// whose iteration order could leak into output ordering.
     [[nodiscard]] std::optional<std::uint32_t> findObject(std::string_view wanted) const;
 
     /// Adds an object and returns its index.
@@ -512,10 +509,10 @@ struct ModuleDefinition {
 /// SystemVerilog identifier may hold a `$` all the same, and one that does is taken for made up:
 /// the price of a rule nothing needs to be told about.
 ///
-/// The one rule for it, since nothing that shows the design to its reader shows one: VPI and
-/// VHPI (DESIGN_GUIDE.md section 9.2), a waveform (section 7.1) and the GUI's lists. Such an object
-/// is storage the simulation needs and the reader never wrote, and its value is always also under
-/// a name they did write, the port's or the signal referred to.
+/// The one rule for it, since nothing that shows the design to its reader shows one: VPI and VHPI,
+/// a waveform and the GUI's lists. Such an object is storage the simulation needs and the reader
+/// never wrote, and its value is always also under a name they did write, the port's or the signal
+/// referred to.
 [[nodiscard]] bool isIntroducedName(std::string_view objectName) noexcept;
 
 /// Every dimension `object` is declared with, outermost first, as its source counts them: a
@@ -523,13 +520,13 @@ struct ModuleDefinition {
 /// down to an element that is no array, a scalar or a record. Empty for an object that is no
 /// array.
 ///
-/// What a waveform shows the object as (DESIGN_GUIDE.md section 10.7): the dimensions divide
-/// its bits as they are shown, `presentedWidth` of them, into equal elements, the left one
-/// highest, so `std_logic_vector(7 downto 0)` has the one dimension `7 downto 0` and elements
-/// of one bit. They are read from what the frontend already records, the object's dimensions
-/// or its VHDL type, rather than kept a second time. Empty too when they do not divide the bits
-/// evenly or a bound does not fit 32 bits, which a VHDL array of a null range would make: such
-/// an object is shown as the bits it is.
+/// What a waveform shows the object as: the dimensions divide its bits as they are shown,
+/// `presentedWidth` of them, into equal elements, the left one highest, so
+/// `std_logic_vector(7 downto 0)` has the one dimension `7 downto 0` and elements of one bit.
+/// They are read from what the frontend already records, the object's dimensions or its VHDL
+/// type, rather than kept a second time. Empty too when they do not divide the bits evenly or a
+/// bound does not fit 32 bits, which a VHDL array of a null range would make: such an object is
+/// shown as the bits it is.
 [[nodiscard]] std::vector<ArrayDimension> declaredDimensions(const ModuleDefinition& definition,
                                                              const Object& object);
 

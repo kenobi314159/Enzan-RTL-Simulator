@@ -27,10 +27,10 @@ namespace enzan::elab {
 struct Slot {
     /// Offset of this slot's storage in the state arena, in Words.
     ///
-    /// Words rather than bytes because every value is Word-aligned by construction
-    /// and a Word index keeps the arithmetic in the value engine's units. Section 4.3
-    /// requires state to be addressed by offset and never by pointer, so that
-    /// checkpointing is a memcpy and a JIT can burn the offset in as a constant.
+    /// Words rather than bytes because every value is Word-aligned by construction and a Word index
+    /// keeps the arithmetic in the value engine's units. State is addressed by offset and never by
+    /// pointer (DESIGN_GUIDE.md section 4.3), so that checkpointing is a memcpy and a JIT can burn
+    /// the offset in as a constant.
     std::uint32_t wordOffset = 0;
 
     eir::Type type;
@@ -44,7 +44,7 @@ struct Slot {
 
     /// For a net, the bits some continuous assignment drives, as merged extents of this slot.
     /// They start at X, as a variable does, until their driver first runs; the bits outside
-    /// them hold the net's undriven value for good (DESIGN_GUIDE.md section 3.7).
+    /// them hold the net's undriven value for good.
     std::vector<eir::WriteExtent> drivenBits;
 
     /// The unpacked dimensions and element width of the object that declared this slot, when
@@ -68,7 +68,7 @@ struct Slot {
     /// display is told the names once however many signals share them.
     std::uint32_t enumIndex = NoEnum;
 
-    /// What the bits mean outside the simulation (DESIGN_GUIDE.md section 3.6).
+    /// What the bits mean outside the simulation.
     eir::Encoding encoding = eir::Encoding::Bits;
 
     /// For a VHDL resolved signal, the function its drivers resolve with; empty otherwise.
@@ -77,9 +77,9 @@ struct Slot {
     static constexpr std::uint32_t NoEnum = 0xFFFF'FFFFU;
 };
 
-/// A VHDL resolution function for a number of drivers, which segments resolve with
-/// (DESIGN_GUIDE.md section 3.7). Elaboration counts the drivers and leaves `definition` and
-/// `subprogram` empty for whoever asks the frontend for the function to fill in.
+/// A VHDL resolution function for a number of drivers, which segments resolve with.
+/// Elaboration counts the drivers and leaves `definition` and `subprogram` empty for whoever
+/// asks the frontend for the function to fill in.
 struct ResolutionCall {
     std::string function;
     std::uint32_t drivers = 0;
@@ -129,7 +129,7 @@ struct Instance {
     /// because a collapsed port makes an object's storage live in an ancestor's block
     /// rather than in this instance's. The interpreter pays one extra load per state
     /// access; a JIT specialises a process per instance and burns the resulting
-    /// absolute offsets in as constants, which is what section 4.3 anticipates.
+    /// absolute offsets in as constants.
     std::vector<std::uint32_t> objectSlots;
 
     /// Slot index the instance's drivers of each object write, indexed by object index: the
@@ -161,14 +161,14 @@ struct ProcessInstance {
     std::vector<std::uint32_t> calls;
 
     /// The slots the process's callees read, through any depth of calls, sorted and each once:
-    /// what it reaches beyond its own read set (DESIGN_GUIDE.md section 4.2).
+    /// what it reaches beyond its own read set.
     std::vector<std::uint32_t> calleeReads;
 
     /// The bits of slots its callees write, likewise.
     std::vector<SlotRange> calleeWrites;
 };
 
-/// A subprogram bound to the instance whose objects it reaches (DESIGN_GUIDE.md section 4.1).
+/// A subprogram bound to the instance whose objects it reaches.
 ///
 /// One declared by a module is bound to the instance whose process calls it; a package's to the
 /// package's one instance; one whose definition holds no objects to no instance at all. A pair
@@ -189,8 +189,7 @@ struct SubprogramInstance {
     static constexpr std::uint32_t NoInstance = 0xFFFF'FFFFU;
 };
 
-/// One driver of a resolved signal: one continuous process's write of one range of it
-/// (DESIGN_GUIDE.md section 3.7).
+/// One driver of a resolved signal: one continuous process's write of one range of it.
 ///
 /// Only a signal with a bit driven more than once, or a pulled or supply net with any driver,
 /// has drivers at all. Every other signal is written straight into its slot, which is how a
@@ -242,8 +241,8 @@ struct Segment {
 /// The result of elaborating one top level.
 ///
 /// Elaboration is per-design and cannot be cached across top levels or
-/// parameterisations (DESIGN_GUIDE.md section 2.1), so this object is built fresh for
-/// each run and owns nothing the analysed Design needs.
+/// parameterisations, so this object is built fresh for each run and owns nothing the
+/// analysed Design needs.
 class ElaboratedDesign {
 public:
     [[nodiscard]] std::span<const Instance> instances() const noexcept { return instanceList; }
@@ -310,8 +309,8 @@ public:
     /// design's signal count, which on the designs Enzan targets is the difference between a
     /// command and a hang.
     ///
-    /// Ordered by path, so that a search reproduces (DESIGN_GUIDE.md section 3.8), and
-    /// containing *both* names of a collapsed port because both are real.
+    /// Ordered by path, so that a search reproduces, and containing *both* names of a
+    /// collapsed port because both are real.
     [[nodiscard]] const std::map<std::string, std::uint32_t, std::less<>>&
     namesByPath() const noexcept {
         return slotsByPath;
@@ -335,7 +334,7 @@ private:
 
     /// Hierarchical path to slot, and to instance. Ordered containers: the GUI's
     /// hierarchy tree, `find` and any diagnostic that lists names must produce the
-    /// same order on every run (section 3.8).
+    /// same order on every run.
     std::map<std::string, std::uint32_t, std::less<>> slotsByPath;
     std::map<std::string, std::uint32_t, std::less<>> instancesByPath;
 };

@@ -16,9 +16,8 @@ namespace enzan::eir {
 /// A process must be expressible as a pure function over an explicit state arena
 /// with a declared read set and write set; the verifier checks that every object an
 /// instruction touches is declared, which is the part a frontend is most likely to
-/// get quietly wrong. Section 4.2 says code that lets a process reach arbitrary
-/// global state "MUST be rejected in review" — review is unreliable, so it is
-/// rejected here instead.
+/// get quietly wrong. Code that lets a process reach arbitrary global state must be
+/// rejected, and review is unreliable, so it is rejected here instead.
 ///
 /// The verifier also checks the structural properties downstream components assume
 /// and would otherwise read past the end of a vector discovering: block, register,

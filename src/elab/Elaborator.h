@@ -26,10 +26,9 @@ using ResolutionAnswers =
 /// Builds an executable image's structure from analysed design units.
 ///
 /// Elaboration takes a named top level plus the analysed library, expands the
-/// instance tree, binds ports and computes the flat state layout (DESIGN_GUIDE.md
-/// section 2.1). It is inherently per-design and cannot be cached across top levels
-/// or parameterisations, which is why it is a separate phase from analysis rather
-/// than something a frontend does.
+/// instance tree, binds ports and computes the flat state layout. It is inherently
+/// per-design and cannot be cached across top levels or parameterisations, which is
+/// why it is a separate phase from analysis rather than something a frontend does.
 ///
 /// What this phase deliberately does **not** do: evaluate parameters or expand
 /// generate constructs. Both happen in the frontend, which emits one EIR definition
@@ -49,8 +48,7 @@ public:
     ///
     /// `resolutions` says where each VHDL resolution function already translated is, by its name
     /// and its number of drivers; a segment resolving with one it does not have is left with an
-    /// unanswered call for the caller to have translated and to elaborate again with
-    /// (DESIGN_GUIDE.md section 3.7).
+    /// unanswered call for the caller to have translated and to elaborate again with.
     std::unique_ptr<ElaboratedDesign> elaborate(std::string_view topModuleName,
                                                 const ResolutionAnswers& resolutions = {});
 

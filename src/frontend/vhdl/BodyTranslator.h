@@ -26,11 +26,11 @@ namespace enzan::frontend::vhdl {
 /// The shape a call gives the subprogram it calls, one entry per formal parameter in order: the
 /// bounds of an array actual, and the value of a scalar one when it is static.
 ///
-/// A subprogram is translated once per shape it is called with (DESIGN_GUIDE.md section 4.1), so
-/// that inside it the bounds of its unconstrained parameters are static, as everything an EIR
-/// body holds has to be: `l'length` folds, and a guard for a null array that cannot be one folds
-/// away with it. A scalar's value is part of the shape only when the subprogram's bounds depend on
-/// it, as `to_unsigned(arg, size)`'s result does on `size`; which those are is the callee's to say.
+/// A subprogram is translated once per shape it is called with, so that inside it the bounds of its
+/// unconstrained parameters are static, as everything an EIR body holds has to be: `l'length`
+/// folds, and a guard for a null array that cannot be one folds away with it. A scalar's value is
+/// part of the shape only when the subprogram's bounds depend on it, as `to_unsigned(arg, size)`'s
+/// result does on `size`; which those are is the callee's to say.
 struct Shape {
     std::vector<std::optional<Folder::Range>> bounds;
     std::vector<std::optional<std::int64_t>> values;
@@ -133,14 +133,15 @@ using ShapeCache = std::map<tree_t, ShapeParameters>;
 /// is left is lowering statements to blocks and expressions to registers.
 ///
 /// The process is a loop, as VHDL's is: its declarations are initialised once, on entry, and its
-/// statements then run round for ever, giving the simulation back only at a `wait` (section 11.3).
-/// A process with a sensitivity list arrives with the equivalent `wait on` at its end.
+/// statements then run round for ever, giving the simulation back only at a `wait` (IEEE 1076
+/// section 11.3). A process with a sensitivity list arrives with the equivalent `wait on` at its
+/// end.
 ///
 /// Its variables are registers. A process's frame lasts as long as the process, so a register
 /// keeps its value from one resumption to the next as a variable has to.
 ///
-/// A construct it cannot translate is reported and the process abandoned, never emitted in part:
-/// a process missing a statement simulates and gives a wrong answer (DESIGN_GUIDE.md section 1.2).
+/// A construct it cannot translate is reported and the process abandoned, never emitted in part: a
+/// process missing a statement simulates and gives a wrong answer.
 class BodyTranslator {
 public:
     /// A translator of the process `statement`.
@@ -224,7 +225,7 @@ private:
         std::optional<Value> result;
 
         /// For a function whose string result has a length only the run shows, the register of
-        /// the line its `return`s write into instead (DESIGN_GUIDE.md section 4.3).
+        /// the line its `return`s write into instead.
         std::optional<std::uint32_t> lineSink;
     };
 
@@ -290,7 +291,7 @@ private:
     [[nodiscard]] std::optional<Place> drivenPrefix(tree_t name) const;
 
     /// Records that the process writes `place`: the bits it designates when they are known, and
-    /// the whole object when an index is not (DESIGN_GUIDE.md section 3.7).
+    /// the whole object when an index is not.
     void noteWrite(const Place& place);
 
     bool fail(tree_t where, std::string_view what);
@@ -367,9 +368,9 @@ private:
 
     // --- std.textio and files, run natively (Textio.cpp) -----------------------------------------
 
-    /// std.textio's procedures and the predefined file operations, which the runtime runs over
-    /// the heap of DESIGN_GUIDE.md section 4.3 rather than the adapter translating textio's body.
-    /// Nothing when `declaration` is not one of them, so that the call is translated as any other.
+    /// std.textio's procedures and the predefined file operations, which the runtime runs over its
+    /// heap of access values rather than the adapter translating textio's body. Nothing when
+    /// `declaration` is not one of them, so that the call is translated as any other.
     std::optional<bool> nativeProcedure(tree_t call, tree_t declaration);
 
     /// `endfile(f)`.
@@ -614,11 +615,11 @@ private:
     std::vector<Folder> folders;
 
     /// The scalar variables of subprograms whose values are followed while they fold, bound in
-    /// the folder where translation is (DESIGN_GUIDE.md section 4.1): a variable computed from
-    /// what a specialisation binds, `data_width := v'length / items`, is as static as that, and
-    /// a call that takes it as a bound can be specialised for it. Only a subprogram's, which is
-    /// declared anew at each call and which nothing but the subprogram assigns; a process's keeps
-    /// what it held when the process last suspended.
+    /// the folder where translation is: a variable computed from what a specialisation binds,
+    /// `data_width := v'length / items`, is as static as that, and a call that takes it as a
+    /// bound can be specialised for it. Only a subprogram's, which is declared anew at each call
+    /// and which nothing but the subprogram assigns; a process's keeps what it held when the
+    /// process last suspended.
     std::set<tree_t> followed;
 
     /// The line the next inlined function's `return`s write into, which its frame takes.

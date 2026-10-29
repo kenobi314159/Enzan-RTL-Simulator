@@ -19,8 +19,8 @@ namespace enzan::detail {
 /// Reserved for invariants whose violation means the process is already in an
 /// unrecoverable state — a corrupt state arena, an out-of-range arena offset —
 /// where continuing would produce wrong simulation results rather than a crash.
-/// Wrong results are the worst failure mode this project has (DESIGN_GUIDE.md
-/// section 1.2), so paying for the check is the right trade even in release.
+/// Wrong results are the worst failure mode this project has, so paying for the
+/// check is the right trade even in release.
 ///
 /// This is not the mechanism for reporting user errors: a malformed design or a
 /// bad command line is a diagnostic (see Diagnostics.h), never an assertion.
