@@ -686,70 +686,50 @@ around.
 
 ### 6.1 Bytecode virtual machine
 
-EIR-B is compiled to a **register-based bytecode**. Register-based, not
-stack-based: it produces fewer instructions per operation and maps far more
-directly onto both real registers and LLVM IR.
+EIR-B is compiled to a **register-based bytecode**, not a stack-based one: it takes fewer
+instructions per operation and maps directly onto both real registers and LLVM IR.
 
-Requirements:
-
-- Each process has its own register file. Wide vectors that do not fit in a
-  register spill to a per-process scratch area.
-- A call pushes the callee's register file onto the kernel's one call stack (4.1)
-  and a return pops it. The lowering is an LLVM function per subprogram body and
-  a `call` to it, which is why a subprogram never suspends: an LLVM function
-  cannot return to the scheduler half-way and be resumed.
-- A register file starts as its body's image: zero, but for each register whose
-  one writer is a constant load, which holds the constant from the start and
-  whose load is not emitted. A body's bounds, widths and offsets are such
-  constants, and a load left in runs every time it is reached.
-- The dispatch loop SHOULD use computed goto (threaded dispatch) rather than a
-  `switch`.
-- **Every opcode MUST have an obvious, documented lowering to LLVM IR.** The JIT
-  backend (6.3) is intended to be a mechanical translation of the interpreter,
-  and an opcode that cannot be lowered mechanically blocks that. Adding an
-  opcode without recording its lowering sketch is incomplete work.
+- Each process has its own register file, which holds wide values too.
+- A call pushes the callee's register file onto the kernel's one call stack (4.1), and a return pops
+  it. The lowering is an LLVM function per subprogram and a `call` to it, which is why a subprogram
+  never suspends: an LLVM function cannot return to the scheduler half-way and be resumed.
+- A register file starts as its body's image: zero, but for each register whose one writer is a
+  constant load, which holds the constant from the start.
+- The dispatch loop SHOULD use computed goto rather than a `switch`.
+- **Every opcode MUST have an obvious, documented lowering to LLVM IR.** The JIT (6.3) is meant to
+  be a mechanical translation of the interpreter, and an opcode that cannot be lowered mechanically
+  blocks it. An opcode added without its lowering sketch is incomplete work.
 - Opcodes address state by arena offset (4.3).
 
 ### 6.2 Scheduler
 
-The scheduler implements section 3. Structure:
+The scheduler implements section 3:
 
-- A time wheel for future events, with a hierarchical or calendar-queue
-  structure sized for the common case of many events at few distinct times.
+- A time wheel for future events, hierarchical or a calendar queue once a benchmark justifies one.
 - Per-region FIFO queues within the current time slot.
-- Signal update is **activity-based**: a process is scheduled only when a signal
-  in its sensitivity list actually changes value, not merely when it is
-  assigned. Value-change filtering before scheduling is one of the largest
-  single performance wins available and MUST be present from the start.
+- **Activity-based** signal update: a process is scheduled only when a signal it is sensitive to
+  actually changes value, not merely when it is assigned. This is one of the largest single
+  performance wins available and MUST be present.
 
 ### 6.3 JIT (deferred to M8)
 
-An LLVM ORC-based JIT backend is the intended path to the performance target.
-It is deliberately deferred: the interpreter must exist first, both to validate
-semantics and to serve as the reference the JIT is differentially tested
-against. The JIT is a backend behind a flag, never a replacement for the
-interpreter.
+An LLVM ORC-based JIT backend is the intended path to the performance target. The interpreter comes
+first, both to validate semantics and to be the reference the JIT is differentially tested against.
+The JIT is a backend behind a flag, never a replacement for the interpreter.
 
 ### 6.4 Parallelism — realistic expectations
 
-The original proposed idea aims for parallel execution. This needs calibrating,
-because thread-parallel event-driven RTL simulation has a thirty-year research
-history of disappointing results: synchronisation cost typically exceeds the
-work performed per event.
-
-What actually pays, in order of confidence:
+Thread-parallel event-driven RTL simulation has a thirty-year record of disappointing results:
+synchronisation costs more than the work performed per event. What pays, in order of confidence:
 
 1. **Parallel analysis and elaboration.** Design units analyse independently.
-   This is a straightforward, real win and SHOULD be done early.
-2. **Static partitioning of the synchronous subset**, in the manner of
-   Verilator's threaded mode. Realistically 2–4× on large designs. Viable at M8
-   once the EIR read/write sets of 4.2 exist.
-3. **Thread-parallel event-driven simulation** (conservative Chandy–Misra or
-   optimistic Time Warp). Research-grade; rarely pays off on RTL. Not planned.
+2. **Static partitioning of the synchronous subset**, as Verilator's threaded mode does: perhaps
+   2–4× on large designs, viable once the read and write sets of 4.2 exist.
+3. **Thread-parallel event-driven simulation** (Chandy–Misra, Time Warp): research-grade, rarely
+   pays on RTL, not planned.
 
-**The kernel is single-threaded in the initial arc.** A cache-friendly
-single-threaded loop outperforms a naively parallel one, and determinism (3.8)
-comes free. The purpose of the EIR invariant in 4.2 is to keep option 2 open,
+**The kernel is single-threaded.** A cache-friendly single-threaded loop outperforms a naively
+parallel one, and determinism (3.8) comes free. The invariant of 4.2 exists to keep option 2 open,
 not to justify threading the kernel now.
 
 ---
@@ -758,75 +738,49 @@ not to justify threading the kernel now.
 
 ### 7.1 Requirements
 
-- **Selective capture.** Only signals within an active logging scope are
-  recorded. On a 100k-LUT design, recording everything exhausts memory within
-  seconds of simulated time. Logging scope is user-controlled (`log -r /*` and
-  equivalents), and is a *list* of paths rather than one: a reader builds a
-  selection out of a subtree and a handful of individual signals, which is what
-  `log -r` and `add wave` respectively name. A path that is a signal's own path
-  selects that signal, so the two cases need no distinction in the writer. A
-  signal the GUI shows is recorded too, from when it is first shown, whatever the
-  scope, because the GUI reads what it shows from the database (2.2); a signal
-  outside the scope therefore has no trace before it was added.
-- **Live reading.** The GUI displays a waveform while the simulation
-  progresses, so the database MUST support concurrent append and read. It is
-  where a change waits until the GUI takes it (2.2).
-- **Random access by time**, to redraw an arbitrary zoom window without
-  replaying from the start.
-- **A configurable memory budget**, with spill to disk when exceeded rather than
-  unbounded growth.
-- **Only the names the reader wrote.** A frontend introduces objects of its own — the storage
-  of a port connected to an expression, a hierarchical reference's name here for another
-  instance's object, the halves of a VHDL inout — and names each with a `$` (9.2). A waveform
-  declares none of those names, and records a signal under the names the source gave it: the
-  storage behind `.count(count_lin[I])` is the counter's own `count`, and is found there.
-  Storage that no written name reaches is not recorded at all. A name made up for the
-  simulation's sake is a line in the window the reader cannot place and never asked for.
-- **A width limit.** A change is recorded as the signal's whole value however few of its
-  bits moved, so a memory written a word at a time costs its whole width at every write. No
-  signal wider than a limit is recorded, 65536 bits unless `--wave-max-bits` says otherwise
-  (0 records any width), and whatever opened the file or the database warns of what it left
-  out (ENZ7001), naming the first few. A signal missing from a waveform looks exactly like one
-  nobody asked for, so leaving one out silently would send the reader looking for a mistake
-  of their own. The Objects window says it too, showing such a signal as *too wide to log*
-  rather than *not logged*, because widening the logging scope would not bring it back, and
-  a wave row of one says in its tooltip that its trace begins only where it was added.
-- **Edge navigation.** Given a signal and a time, the next and the previous
-  transition. Snapping a cursor to an edge and stepping it from edge to edge
-  (10.7) are the two things a reader does most in a wave window, and both have
-  to be one query rather than a scan.
+- **Selective capture.** Only signals in the logging scope are recorded: on a large design,
+  recording everything exhausts memory within seconds of simulated time. The scope is a *list* of
+  paths, each a subtree or a single signal. A signal the GUI shows is recorded from when it is first
+  shown, whatever the scope, because the GUI reads what it shows from the database (2.2).
+- **Live reading.** The GUI displays a waveform while the simulation progresses, so the database
+  MUST support concurrent append and read. It is where a change waits until the GUI takes it.
+- **Random access by time**, to redraw any zoom window without replaying from the start.
+- **A configurable memory budget**, with spill to disk rather than unbounded growth.
+- **Only the names the reader wrote.** An object a frontend introduces is named with a `$` and never
+  declared; a signal is recorded under the names the source gave it, and storage no written name
+  reaches is not recorded at all.
+- **A width limit.** A change records the signal's whole value, so no signal wider than a limit is
+  recorded, 65536 bits unless `--wave-max-bits` says otherwise, and whatever opened the file or the
+  database warns of what it left out: a signal missing from a waveform otherwise looks like one
+  nobody asked for.
+- **Edge navigation.** The next and the previous transition of a signal from a time are one query
+  each, not a scan: snapping a cursor and stepping it from edge to edge (10.7) are what a reader
+  does most.
 
 ### 7.2 Structure
 
-Per-signal append-only chunks of value changes, plus a time index for random
-access. Values are read from the state arena (4.3) at capture time.
+Per-signal append-only chunks of value changes, plus a time index for random access. Values are read
+from the state arena (4.3) at capture time, so the changes within a time slot collapse into the
+value it settles on.
 
 ### 7.3 Export formats
 
-- **VCD** — universal interchange, human-readable, required for interoperability
-  and for the differential testing in 14.3. Available from M1.
-- **FST** — compressed, far more practical for large designs, readable by
-  GTKWave and Surfer. Available from M1.
+- **VCD**: universal interchange, human-readable, and what differential testing compares (14.3).
+- **FST**: compressed, far more practical for large designs, readable by GTKWave and Surfer.
 
-Export is not an afterthought: for milestone M1 the external viewer *is* the
-GUI, and VCD/FST remain the interchange path permanently.
+Export is not an afterthought: VCD and FST remain the interchange path permanently, whatever the GUI
+can do. A waveform file leaves memories out, as VCD does.
 
 ---
 
 ## 8. The command line
 
-**The command line is Enzan's control interface, and there is no other.** No
-embedded scripting language, and no vocabulary of the tool's own for driving a
-simulation: what composes invocations is the shell, `make`, or whatever the user
-already builds with. This is a deliberate reversal of the obvious arrangement, and
-the reason is that an interface only the tool can speak has to be kept in step with
-everything the tool can do, while a parameterised command is composable the moment
-it exists.
-
-A consequence worth stating, because it is the thing a reader will look for: there
-is no way to stop a running simulation and poke at it from a script. Interactive
-inspection is the graphical front end's job (8.4), and programmatic control is
-VPI's (section 9). A third way to do it would be a third set of semantics.
+**The command line is Enzan's control interface, and there is no other.** No embedded scripting
+language and no command vocabulary of the tool's own: what composes invocations is the shell,
+`make`, or whatever the user already builds with. An interface only the tool can speak has to be
+kept in step with everything the tool can do, while a parameterised command is composable the moment
+it exists. So there is no way to stop a running simulation and poke at it from a script: interactive
+inspection is the graphical front end's job (8.4), and programmatic control is VPI's (section 9).
 
 ### 8.1 Shape
 
@@ -840,45 +794,30 @@ One executable with subcommands, rather than one per phase:
 | `enzan lib create\|list\|clean <dir>` | manages an analysis library |
 | `enzan [options] <sources…>` | analyses and runs in one process |
 
-The last form takes no subcommand and is the shorthand every small case wants;
-the first word is read as a subcommand only when it is one of the names above, so
-a source file called `run.sv` is still a source file.
+The last form is the shorthand every small case wants. The first word is read as a subcommand only
+when it is one of the names above, so a source file called `run.sv` is still a source file.
 
-**`elaborate` persists nothing.** It exists to answer "does this design build",
-which is what a CI job and a `make check` want, and it MUST NOT be a prerequisite
-of `run`: an elaboration on disk would be a second serialised format to version
-and a second thing to invalidate, and elaboration is not the expensive phase.
+- **`elaborate` persists nothing.** It answers "does this design build", and MUST NOT be a
+  prerequisite of `run`: an elaboration on disk would be a second serialised format to version and
+  invalidate, and elaboration is not the expensive phase.
+- **An option is refused where it means nothing.** A simulation's options given to `analyse` or
+  `elaborate`, `--wave-list` without `--gui`, and a command line that gives nothing to work on are
+  usage errors, each with a message saying which, rather than taken and dropped: a waveform asked
+  for and never written looks exactly like one written somewhere else.
+- **A top level's parameters are set with `-G NAME=VALUE`**, or `-GNAME=VALUE`. slang applies an
+  override while analysing, so it is in a library entry's key. One that names no parameter is
+  reported, since a misspelt override is otherwise invisible.
+- **Random numbers are drawn from `--seed N`**, 0 by default (3.8). `$random` is IEEE 1364's
+  reference generator, bit for bit, so a seed draws in Enzan what it draws elsewhere. `$urandom` and
+  `$urandom_range` draw from a generator per process, derived from the seed and the process's name,
+  so what one process draws does not change when another starts drawing (IEEE 1800 section 18.14).
+- **`--run` takes a length of simulated time**: a count of the run's time unit, `--run 100`, or a
+  time with its own unit, `--run 10ns`. The run's unit is the design's to settle (3.1), so a time
+  with a unit is converted once it is known, and one that is no whole number of it is refused rather
+  than rounded. `--run all` runs until the design finishes, as no `--run` does.
 
-**A simulation's options are refused where nothing is simulated.** `analyse` and `elaborate`
-run nothing, so `--run`, `--vcd`, `--fst`, `--seed`, `--wave-scope`, `--wave-max-bits`,
-`--delta-limit`, `--assert-level`, `--gui`, `--listen` and `--dump-stats` given to them are
-a usage error, as `--vpi` is (9.1), rather than taken and dropped: a waveform asked for and
-never written looks exactly like one written somewhere else.
-
-**A top level's parameters are set with `-G NAME=VALUE`**, or `-GNAME=VALUE` as Verilator and
-cocotb's makefiles spell it. slang applies an override while analysing, so it is in a library
-entry's key as a define is (4.4). One that names no parameter of a top level changes nothing,
-and is reported rather than ignored, since a misspelt override is otherwise invisible.
-
-**Random numbers are drawn from `--seed N`**, 0 by default (3.8). `$random` is IEEE 1364's
-reference generator, bit for bit, so a seed draws in Enzan what it draws in other simulators
-that follow it: Icarus Verilog's `$random` starts from 0 as well. `$urandom` and
-`$urandom_range` draw from a generator each process has of its own, derived from the seed and
-the process's name, so what one process draws does not change when another starts drawing (IEEE
-1800 section 18.14).
-
-**`--run` takes a length of simulated time**: a count of the run's time unit, `--run 100`, or a
-time with its own unit, `--run 10ns` or `--run 1.5us`. Which unit a count counts is the
-design's and its libraries' to settle (3.1), which a reader writing the command line seldom
-knows, so a time with a unit is turned into a count once the run's unit is known, and one that
-is no whole number of that unit is refused rather than rounded: a run that stopped at another
-time than the one asked for would look like the design stopping there. `--run all` runs until
-the design finishes, which is what a run given no `--run` does; it is there to be said to a window,
-which runs nothing until asked (8.4). The wave window's run length takes the same spellings, read
-by the same function in `runtime` (8.5).
-
-**Exit statuses are distinct enough to branch on**, because a Makefile and a CI
-job need to tell a broken invocation from a broken design:
+**Exit statuses are distinct enough to branch on**, because a Makefile and a CI job need to tell a
+broken invocation from a broken design:
 
 | Status | Meaning |
 |---|---|
@@ -888,30 +827,14 @@ job need to tell a broken invocation from a broken design:
 | 3 | the simulation ran and the design failed |
 | 4 | the window `--gui` started crashed or exited with an error |
 
-Conflating 2 and 3 is the mistake to avoid: a regression script that cannot
-distinguish "the tool could not compile this" from "the testbench reported an
-error" reports both as the same red square. 4 is a case of its own: a window that
-crashed is no broken invocation, analysis or design, and 0 would say the session
-worked when its reader may never have seen it (8.4).
-
-**A command line that gives nothing to work on is wrong, not a design that failed**: `lib`
-with no subcommand of its own, `run` or `elaborate` given neither a library nor a file list,
-and a source file where `run` or `elaborate` takes the name of a top level are each status 1,
-with a message saying which. Read as a design, each was reported as one that analysed nothing
-or lacked a top, which sends the reader looking at the sources.
+Conflating 2 and 3 is the mistake to avoid: a regression script that cannot tell "the tool could not
+compile this" from "the testbench reported an error" reports both as the same red square. 4 is a
+case of its own, since a window that crashed is no broken invocation, analysis or design, and 0
+would say the session worked when its reader may never have seen it.
 
 ### 8.2 Analysis libraries
 
-A library is a directory of serialised design units, as section 4.4 describes.
-This section is about naming them and reaching them.
-
-**Libraries are optional and there is no implicit one.** With no `--out-lib`,
-analysis output lives and dies with the process and a simulation runs from a
-one-time analysis. A directory that appeared because the user ran the tool would be
-a cache they did not ask for, and section 4.4 explains why that is worse than no
-cache: it can change a result, and they would have to find it before they could
-stop using it. VHDL's `std`, `ieee` and `nvc` are not caches and are found without
-being named (4.4); `--in-lib ieee=<dir>` replaces them.
+A library is a directory of analysed units (4.4). This section is about naming and reaching them.
 
 ```
 enzan lib create [--name <n>] <dir>   creates a library and fixes its logical name
@@ -924,482 +847,129 @@ enzan lib clean <dir>                 empties it, keeping the library
 --context <file>                      analysed so references resolve; not stored
 ```
 
-**The logical name lives in the library, not in the command line.** It is fixed
-when the library is created and read from the library thereafter, so the two ends
-cannot disagree — a name restated at every use is a name that will eventually be
-restated differently, and a design analysed into `uart` and then read back as
-`work` fails to find its own units. `--out-lib` on a directory that does not exist
-creates one named after the basename, and refuses when the basename is not usable
-as an identifier. `<name>=<dir>` exists for the cases a stored name cannot cover:
-two vendors each shipping a directory called `work`, or a path whose basename is
-not the name the design refers to.
-
-**A library therefore carries an index**, holding its logical name and the format
-version. The version belongs there rather than only in each entry so that
-`lib list` can report a library written by an incompatible build without decoding
-an entry to discover it. **A directory with no index is not a library**: libraries
-are opt-in, so a directory that was never created is a mistake to report rather than
-a library to invent.
-
-**A library carries the time unit it was analysed in**, in its index beside its name. A
-delay is stored as a count of the unit, so `#5` analysed in nanoseconds is five
-nanoseconds and nothing else. An analysis into a library takes no finer unit from a precision
-a module asks for (3.1): a later analysis into it takes its unit as the one a module stating no
-time scale is in, which has to be the one the first used. A run, or an analysis against or into
-a library, therefore takes its unit from the libraries that hold units, and `--timescale` may be
-left out. Given anyway, it must agree: a run that relabelled the library's counts in another unit
-would report every time wrongly, so a conflict is an error (ENZ6028), and so are two libraries in
-different units (ENZ6027). A library emptied by `lib clean` holds no units, and can be
-filled in another unit.
-
-**Libraries are named because a design refers to them by name.** VHDL requires it —
-`library ieee;` resolves against a name rather than a path — so the map exists from
-the start rather than being retrofitted at M6. For SystemVerilog the same map gives
-the search order for a module nothing analysed defines.
-
-**`--in-lib` is an elaboration-time facility.** It resolves an instantiation of a
-module this design does not define. It **cannot** resolve an analysis-time
-reference — a package import, an interface named in a port list — because slang
-type-checks from syntax and EIR does not feed back into it. Commercial tools manage
-this because their compiled library is a semantic artifact their own front end
-re-consumes; ours is not. A reader who assumes otherwise will write a library split
-that cannot be analysed. **VHDL is the exception**, because a VHDL entry holds NVC's
-analysed units (4.4): `use uart.uart_pkg.all` resolves against a library on
-`--in-lib` as the language requires, with no source read again.
-
-**Libraries are searched in the order given**, left to right.
-
-**VHDL is analysed into a library by the name the library carries.** With `--out-lib`, the work
-library is that library, which `library uart;` and `work.` resolve to, and a `--work` naming
-another is an error (ENZ6029). A run given only libraries translates a VHDL top from the one
-whose VHDL declares it, or from the one `lib.top` names.
-
-**A name that two libraries both define is an error, not a silent choice.** The
-message names both, and the fix is to qualify: `uart.fifo`. Picking whichever was
-loaded first is the failure mode 1.2 ranks worst, and it is what happens today —
-`Design::findModule` takes a bare name and `addModule` is additive, so **EIR MUST
-carry the logical library on every unit** for any of this to hold.
-
-**Two copies of one unit are not two definitions.** Libraries analysed against one
-IP each store the parameterisations they needed (below), so two of them can both hold
-`fifo$Width_8`; and a design analysed and run in one go against a library reproduces
-the units it reads from that library's sources. Where every copy of a name encodes
-identically once its source locations are left out, the copies are one unit, and the
-name resolves. A copy that differs in anything, as one from another version of the
-source or from other defines can, or another module that happens to share the name, is
-a different unit, and the name is an error as above. Comparing what the units are rather than where they came
-from is what makes this safe: a stale library is refused, not chosen.
-
-**An entry's path MUST be derivable from the source it holds**, not from a hash of
-that source's text. Entries are per source file (4.4), because that is what the
-frontend produces in one piece, so the name comes from the file rather than from any
-one unit inside it. A short digest of the file's *path* disambiguates two sources
-sharing a basename; it never covers the text, so editing a file rewrites its entry
-in place instead of leaving the previous one behind on every save. The text belongs
-in the staleness key *inside* the entry, where it says whether the entry is current
-rather than where it lives.
-
-#### Where a library boundary may fall
-
-**A library records the sources it was analysed from**, and a design analysed against
-it reads them. That is what makes the boundary crossable at all: slang type-checks
-from syntax, so a unit instantiating one from another library needs that unit's
-declaration however it was analysed before, and EIR does not feed back into slang.
-Paths rather than text, because duplicating the RTL into every library that uses it
-would make a library a copy of the design instead of an index of it. This is the
-SystemVerilog rule; a VHDL library carries NVC's analysed units instead (4.4), and a
-design needing a VHDL unit at generic values its library does not hold translates it
-from those, parsing nothing again.
-
-**A file is analysed once however often it is named.** Two libraries built on one IP
-both record its sources, and a file can be a source, a context file and a library's
-source at once. Two readings of one file would define every module in it twice, so a
-repeat — by path, after `.`, `..` and symbolic links are resolved — is dropped, and the
-first naming keeps its role: a file named as context stays unstored.
-
-So `--in-lib` on `analyse` means *read these libraries' declarations*, and `--in-lib`
-on `run` means *resolve against these libraries' units*. The two are the same option
-because they name the same thing; what differs is which half of it is wanted.
-
-**A library is instantiable with parameters chosen by whoever uses it.** A
-parameterised module becomes one unit per parameterisation, so a unit is not baked
-with the parameters its library happened to be analysed with: the design that needs
-`Width=8` creates that specialisation from the declarations it read, and stores it in
-its own library. A specialisation the input library already holds is **not** stored a
-second time, since a second copy of it would only be a second thing to keep current.
-
-This is what makes a library usable rather than what makes it save work. Reading the
-other library's sources means re-analysing them, so the boundary costs what it would
-have cost without the library. Removing that would take a unit generic over its
-parameters, which 2.1 explains SystemVerilog analysis does not produce.
-
-**So a split is for names, not for speed.** Splitting a SystemVerilog design across
-libraries saves no analysis and adds some. An edit to a library's sources rebuilds
-that library and every library analysed against it, each reading those sources again.
-A library analysed on its own holds its modules at their default values, which a
-consumer using other values never instantiates and creates again for itself, while a
-run still loads both. Measured on 3000 parameterised modules used at a width other
-than their default, a two-library build cost 554 ms against 260 ms for one library,
-an edit to the testbench rebuilt in 295 ms against 268 ms, and a run took 79 ms
-against 46 ms. **A design is therefore built as one library** unless names have to be
-kept apart: two vendors' modules sharing a name, the `library` clauses of a VHDL
-design (M6), or units whose owner and build are not the design's.
-
-**A specialisation's name MUST be a function of its parameter values.** A counter
-numbers the parameterisations in the order one compilation walked them, which makes
-the name meaningless outside it — `counter$1` from one analysis and `counter$1` from
-another are different modules wearing one name, and an instance binds to the wrong
-body with nothing on screen to say so. Naming it for the values gives a
-specialisation one identity wherever it is produced, which is the whole of what makes
-libraries composable.
-
-**The interfaces a body is given are among those values.** A module reads an interface's
-parameters through its port — `localparam W = bus.W` — so two instances setting none of
-their own can differ in every width that depends on the bus. Where an interface port is
-connected to a parameterised interface, to an array of them, or is generic, the name
-carries what it is connected to, as it carries a parameter.
-
-**A parameterised top is named for its values too**, so the name a user writes is the
-one the *source* gave it. A top is therefore resolved by source name when no unit has
-that exact name, and more than one parameterisation of it is reported rather than
-guessed. Its instance takes the source's name as well, so that every hierarchical path
-under it — in a waveform, in the front end, through VPI — starts `/counter` rather than
-with the specialisation's.
-
-**`--context` remains for a source no library holds.** It names a source analysed for
-resolution whose units are not stored — a package shared by libraries that do not
-depend on each other, or a vendor header compiled against but not redistributed. A
-context file is a dependency of the library that names it: changing it makes that
-library stale without being stored in it, so it MUST appear in `--depfile` (8.3). It
-buys correct ownership and not speed, since the file is re-parsed by every analysis
-that names it.
+- **Libraries are optional and none is implicit** (4.4). VHDL's standard libraries are found without
+  being named, and `--in-lib ieee=<dir>` replaces them.
+- **The logical name lives in the library, not on the command line**, so that the two ends of a
+  build cannot disagree. `--out-lib` on a directory that does not exist creates a library named
+  after it; `<name>=<dir>` covers what a stored name cannot, such as two vendors each shipping a
+  `work`.
+- **A library carries an index**: its name, its format version and the time unit it was analysed in.
+  A directory with no index is not a library. A run, or an analysis against or into a library, takes
+  its time unit from the libraries that hold one, and a `--timescale` that disagrees, or two
+  libraries in different units, is an error.
+- **Libraries are searched in the order given, and a name two libraries both define is an error**,
+  resolved by qualifying it, `uart.fifo`, so **EIR carries the logical library on every unit**.
+  Copies of one unit, identical but for their source locations, are one unit; anything that differs
+  is another, so a stale library is refused rather than chosen.
+- **For SystemVerilog, `--in-lib` is an elaboration-time facility**: slang type-checks from syntax
+  and EIR does not feed back into it, so a library records the sources it was analysed from and a
+  design analysed against it reads them again. **VHDL is the exception**: a VHDL library holds NVC's
+  units, so `use uart.uart_pkg.all` resolves against `--in-lib` with no source read again.
+- **A specialisation is created by the design that needs it**, from the sources it read, and stored
+  in its own library unless an input library holds it. **Its name MUST be a function of its
+  parameter values**, and of the interfaces its ports connect to, never a counter, which would give
+  two different modules one name. A parameterised top is named by its source name, and so is its
+  instance.
+- **A split is for names, not for speed.** Crossing a library boundary re-reads the other library's
+  sources, so a design is built as one library unless names have to be kept apart.
+- **`--context` names a source analysed for resolution whose units are not stored**, such as a
+  package shared by libraries that do not depend on each other. It is still a dependency of the
+  library that names it, and MUST appear in `--depfile` (8.3).
 
 ### 8.3 File lists
 
-`.f` files are the de-facto industry standard and nearly every open-source design
-ships one. Enzan reads them; it does not write them. Generating a list is what the
-user's own build already does, and a generator here would be a second opinion
-about their source tree.
+`.f` files are the de-facto industry standard. Enzan reads them and does not write them: generating
+a list is what the user's own build already does. Supported: `-f` and `-F` including nested, `-v`,
+`-y`, `+incdir+`, `+define+`, `+libext+`, `-sv`, `//` and `/* */` comments, double-quoted arguments,
+and `$VAR` and `${VAR}` from the environment.
 
-Supported: `-f` and `-F` including nested, `-v`, `-y`, `+incdir+`, `+define+`,
-`+libext+`, `-sv`, `//` and `/* */` comments, double-quoted arguments, and `$VAR`
-and `${VAR}` substitution from the environment.
-
-**Relative paths follow the convention the existing files were written against.**
-A path inside a list reached by `-f` resolves against the process's working
-directory; one inside a list reached by `-F` resolves against that list's own
-directory. Resolving everything against the containing file would be the better
-rule and would break the designs this feature exists to read. **The two spellings
-MUST differ at the point they are given on the command line as well as when nested**,
-or `-F` becomes a synonym for `-f` exactly where a user is most likely to type it.
-
-**An option the reader does not recognise is an error.** File lists carry
-tool-specific switches that change what is compiled — a timescale, a
-compilation-unit mode, a language version — and skipping one produces a design
-that analyses differently from what was asked for, with nothing on screen to say
-so. The position of the option is reported, so the fix is a visible edit rather
-than a hunt. `-sv` is the one switch accepted and dropped, since it asks for the
-only language the reader reads.
-
-**`$VAR` and `${VAR}` are substituted from the environment, and an unset variable
-is an error.** An empty expansion turns `$RTL_ROOT/cpu.sv` into `/cpu.sv`, which
-is reported as a missing source rather than as the missing variable that caused it.
-
-Two options exist because a list is something a user has to debug:
-
-**`--dry-run` prints the expanded list, in order, and exits.** The first question
-anyone asks of a misbehaving list is what the tool thinks it names, and the answer
-should not require a build.
-
-**`--depfile <file>` writes a `make`-style dependency file**, as a C compiler's
-`-MMD` does. It names **every file the analysis read** — the sources a list expanded
-to, the headers they included, and the context files of 8.2 — not only the includes.
-Listing all of them is what lets a Makefile name a `.f` file as the single
-prerequisite it can see and get the rest back after the first build, exactly as a C
-build bootstraps from a source file to its header dependencies. Without it a build
-cannot know that editing an included header should trigger re-analysis, and the
-incremental build is wrong in the one way that is both silent and expensive.
-
-**`--depfile-target <name>` names the target those prerequisites attach to.** A
-compiler can default this to the object file it is writing; analysis has no single
-output file, so the target has to be given. When it is omitted the `--out-lib`
-directory is used, which is right for a build that treats the library as its output
-and wrong for one that uses a stamp file, so a Makefile should say. With neither there is
-no target, and a rule for none is one `make` refuses to read, so `--depfile` is refused
-then, as `--depfile-target` is without a `--depfile` and `--depfile` is where no sources
-are analysed. The file is written by whatever analyses sources, the one-shot form and `run`
-as well as `analyse`.
-
-#### A design driven from `make`
-
-The workflow this section exists to serve, in full. Three things are worth reading
-out of it: the library is the unit of rebuild, the `.f` file is the only
-prerequisite written by hand, and the two `run` forms differ by nothing but a flag.
-
-It is split into three libraries to show the boundary of 8.2 at work, which is the
-shape for a design with names to keep apart: two IP blocks, a UART and an SPI
-controller, that share a package and do not depend on each other, and a testbench
-that instantiates both. A design without that reason is better built as one library
-(8.2): the same Makefile with one stamp and one `.f` file.
-
-```make
-ENZAN ?= enzan
-PKG   := rtl/pkg/types_pkg.sv
-
-# The time unit is fixed when a library is analysed, and a run takes it from there (8.2).
-UNIT  := --timescale ns
-
-# Libraries are opt-in (8.2), so creating one is a step of its own rather than
-# something that happens because analysis ran.
-libs/%/.created:
-	$(ENZAN) lib create libs/$*
-	@touch $@
-
-# One stamp per library rather than one target per unit: within a library a hit is
-# all or nothing (4.4), so the library is the smallest thing make can rebuild.
-#
-# Neither IP library stores the package: each reads it for resolution only, so
-# there is exactly one of it to resolve against at elaboration (8.2).
-libs/uart/.stamp: rtl/uart.f | libs/uart/.created
-	$(ENZAN) analyse $(UNIT) --out-lib libs/uart -f rtl/uart.f --context $(PKG) \
-	         --depfile libs/uart/deps.d --depfile-target $@
-	@touch $@
-
-libs/spi/.stamp: rtl/spi.f | libs/spi/.created
-	$(ENZAN) analyse $(UNIT) --out-lib libs/spi -f rtl/spi.f --context $(PKG) \
-	         --depfile libs/spi/deps.d --depfile-target $@
-	@touch $@
-
-# The testbench's list names the package as a source of its own, so the package is
-# stored here, with the design that ties the two IPs together. The testbench
-# instantiates both, so it is analysed against both libraries, which reads their
-# sources (8.2) and names them in its dependency file.
-libs/tb/.stamp: rtl/tb.f libs/uart/.stamp libs/spi/.stamp | libs/tb/.created
-	$(ENZAN) analyse $(UNIT) --out-lib libs/tb -f rtl/tb.f \
-	         --in-lib libs/uart --in-lib libs/spi \
-	         --depfile libs/tb/deps.d --depfile-target $@
-	@touch $@
-
-# Every file each analysis read. Until these exist a `.f` file is the only
-# prerequisite make knows about, which is enough, because nothing is built yet.
--include $(wildcard libs/*/deps.d)
-
-IN     := --in-lib libs/uart --in-lib libs/spi --in-lib libs/tb
-STAMPS := libs/uart/.stamp libs/spi/.stamp libs/tb/.stamp
-
-sim: $(STAMPS)
-	$(ENZAN) run $(IN) --fst wave.fst tb
-
-gui: $(STAMPS)
-	$(ENZAN) run --gui $(IN) tb
-
-check: $(STAMPS)
-	$(ENZAN) elaborate $(IN) tb
-
-clean:
-	rm -rf libs
-```
-
-Editing a file in `rtl/tb` rebuilds `libs/tb` alone, though that analysis reads both
-IPs' sources again; editing one in `rtl/uart` rebuilds `libs/uart` and `libs/tb`,
-which read it, and leaves `libs/spi` alone; editing `types_pkg.sv` rebuilds all
-three, because each named it. None of these is cheaper than rebuilding one library
-holding the whole design. `make check` is the elaboration-only form of 8.1, which is
-what a CI job wants when it only needs to know that the design still builds.
+- **Relative paths follow the convention existing lists were written against**: inside a list read
+  with `-f`, against the working directory; with `-F`, against the list's own directory. The two
+  spellings MUST differ on the command line as well as when nested.
+- **An option the reader does not recognise is an error**, reported with its position. File lists
+  carry tool-specific switches that change what is compiled, and skipping one silently analyses a
+  different design. `-sv` is accepted and dropped.
+- **An unset variable is an error**, not an empty expansion that turns `$RTL_ROOT/cpu.sv` into
+  `/cpu.sv`.
+- **`--dry-run`** prints the expanded list, in order, and exits.
+- **`--depfile <file>` writes a `make` dependency file naming every file the analysis read** — the
+  sources a list expanded to, the headers they included, and the context files — so that a Makefile
+  names the `.f` file as its only prerequisite and learns the rest after the first build.
+  `--depfile-target` names the target, by default the `--out-lib` directory; with neither,
+  `--depfile` is refused, since `make` refuses a rule for nothing.
 
 ### 8.4 The graphical front end
 
-**`--gui` is an option of `enzan`, not a second program to learn.** Starting a
-window is not a different activity from starting a simulation — in nearly every
-case the window exists *because* a run was started — so the user says
-`enzan run --gui <top>` and the socket, the listening and the attaching are
-arranged out of sight.
+**`--gui` is an option of `enzan`, not a second program to learn.** A window exists because a run
+was started, so the user says `enzan run --gui <top>`, and the socket and the attaching are arranged
+out of sight.
 
-**It remains two processes, and that MUST NOT be collapsed.** Section 2.2's
-reasons are unchanged: the kernel must be usable with no display attached, a
-stalled front end must never stall the kernel, and a local window must be able to
-drive a kernel elsewhere. `--gui` therefore starts the front end rather than
-becoming it, and the kernel binary MUST NOT link Qt — a headless server and a CI
-runner would otherwise install a GUI toolkit to run a batch simulation.
-
-**With `--gui` the design is elaborated and handed over, not run.** The front end
-drives every run. This is not only a preference: serving a session puts the design
-back to time zero and begins recording there, so anything run beforehand would be
-discarded rather than shown. `--run` alongside `--gui` is therefore not a run made
-here but one the window is asked to make: it is forwarded, and the window asks the
-kernel for it once the kernel has welcomed it. Not merely once attached, because a
-time with a unit is counted in the run's time unit (8.1), which the window learns
-from the kernel's greeting; counted before it, the run would be of another length
-than the one asked for. With `--gui --attach` it is asked of the kernel the window
-finds.
-
-**`--vcd` and `--fst` are allowed with `--gui`.** Someone debugging in a window
-who then wants a file for later should not have to run the design again, so a
-served session records into both the live database and any writer that was opened.
-
-**The kernel parses the command line; the window only attaches.** `--gui` does not
-hand the user's arguments to the front end — it analyses and elaborates here, binds
-a socket the user is not made to think about, starts a window attached to it, and
-ends when that window does. The front end therefore needs to know nothing about
-libraries, file lists or any option added later, and the kernel binary still links
-no Qt.
-
-**The front end's own options travel through `enzan` too.** The signal list it starts with
-(10.8) and how long it first runs the design are what a user chooses about one run of it, so
-`--wave-list` and `--run` are options of `enzan` that are forwarded. An option reachable only by
-running the front end directly would make it the second program this section exists to avoid. Its
-theme is not an option at all: it belongs to the person at the screen rather than to the run, so
-the window finds it in the configuration directory (10.9), and `enzan --help` says where that is.
-
-**The front end is a separate executable and not a second entry point.** It remains
-a separate *binary* because the kernel MUST NOT link Qt, and a separate *process*
-for 2.2's reasons; neither makes it something to invoke. Its command line is
-therefore only what `enzan` sends it, and it is installed in `libexec` rather than on
-a user's `PATH` (11.5). `enzan` starts the front end of its own installation and no
-other: one found on the `PATH` could be another version's. A package of Enzan carries
-the front end as a package of its own (11.7), so that a machine installs the kernel
-without Qt as the kernel binary runs without it.
-
-**The lifetime of the kernel follows how the session was started.** The flag a
-user chose is the decision, so there is nothing further to configure:
-
-- **`enzan run --gui <top>`** — the window started the kernel, so closing the
-  window ends the kernel too, and the process's exit status is the simulation's
-  (8.1) rather than the window's. A run nobody is watching, that nobody asked to
-  keep, is a leak. A window that crashed or exited with an error is not one that
-  was closed: it is reported, and the status is 4 when the run gave no other. A
-  front end that cannot be started at all is status 1, as under `--attach`.
-- **`enzan --gui --attach <socket>`** — the window did not start the kernel, so
-  closing it only detaches. **`--attach` requires `--gui`**: it is a window that
-  attaches to a running kernel, a kernel has nothing to attach to, and accepting it
-  without one would start a second simulation while the user waited to be shown the
-  first. This is what makes a long run something that can be
-  looked in on and left alone again, and it is the case that the shared lifetime
-  above deliberately gives up.
-
-**A served kernel removes its socket when it is signalled.** An unhandled signal
-ends a process without running a destructor, so the listener's own cleanup never
-happens and the path is left on disk; `SIGINT`, `SIGTERM` and `SIGHUP` are handled
-for that reason. `SIGKILL` cannot be — it is not deliverable to a handler by design
-— so a kernel killed with it always leaves its socket behind. That MUST cost
-nothing: **binding probes an existing path and reclaims one nothing is listening
-on**, refusing only when a live kernel is there. A leftover path is then a file to
-be taken back rather than a state a user has to clear by hand.
-
-`enzan run --listen <socket>` is the other half of the second form: it elaborates
-and waits without starting a window. Between them the two forms cover the two
-things the explicit spelling is for — a kernel that outlives its window, and a
-window on a different machine from its kernel — and nothing else needs it.
+- **It remains two processes** (2.2), and **the kernel binary MUST NOT link Qt**: a headless server
+  and a CI runner would otherwise install a GUI toolkit to run a batch simulation. The front end is
+  a separate executable in `libexec`, which `enzan` starts from its own installation and no other,
+  and a package of its own (11.7).
+- **The kernel parses the command line; the window only attaches.** `--gui` analyses and elaborates
+  here and hands the design over, so the front end knows nothing about libraries or file lists. Its
+  own options travel through `enzan`: `--wave-list` (10.8), and `--run`, which the window asks the
+  kernel for once the kernel has said what unit the run counts. Its theme is the reader's and is
+  found in the configuration directory (10.9).
+- **With `--gui` the design is handed over, not run**, and the front end drives every run. `--vcd`
+  and `--fst` are allowed, so that a session debugged in a window also writes a file.
+- **The lifetime of the kernel follows how the session was started**:
+  - **`enzan run --gui <top>`**: the window started the kernel, so closing the window ends the
+    kernel too, and the exit status is the simulation's. A window that crashed or exited with an
+    error is reported, and the status is 4 when the run gave no other. A front end that cannot be
+    started is status 1.
+  - **`enzan --gui --attach <socket>`**: the window did not start the kernel, so closing it only
+    detaches. `--attach` requires `--gui`. `enzan run --listen <socket>` is the other half: it
+    elaborates and waits without starting a window. Together they cover a kernel that outlives its
+    window and a window on another machine.
+- **A served kernel removes its socket when it is signalled**, and binding reclaims a path nothing
+  is listening on, so a kernel killed with `SIGKILL` leaves nothing a user has to clear by hand.
 
 ### 8.5 One tool, one spelling
 
-Each executable's command line is small, and it is still an interface. The rules
-below exist because the programs had already drifted apart without anyone deciding
-that they should.
-
-**An option two executables share MUST be spelled the same in both**, short forms
-included. `--top`, `--timescale` and `--wave-scope` mean one thing whichever is
-given them, and a user who learns `-t` on one and is refused it by the other has
-been taught something untrue about the tool.
-
-**An option that takes one value takes it once.** Given twice with two values, it is two
-answers to one question, and taking the last of them silently was choosing between them for
-the user; it is refused, as `-G` naming one parameter twice with two values is. The same value
-again is the same answer, as a Makefile appending its own flags to a user's can give it, and is
-accepted. So is a top level given both with `--top` and as `run`'s word, when they agree.
-
-**A value the window and the command line both take is read by one function.** The wave
-window's run length and `--run` are one question asked in two places, so `10ns` and `all` mean
-the same in each, and an answer one refuses the other refuses too.
-
-**`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` is not a synonym:
-`.f` lists spell a library file that way (8.3), and binding it to something else on
-one command line invites the two meanings to collide.
-
-**One definition of what `--version` prints**, in `common` rather than in each
-executable. Two copies is how one of them came to print its own name in front of a
-line that already named the simulator.
-
-**A generated usage text is not automatically the right one.** Qt's parser will
-write a help message from the options it was given, and it will not match the one
-beside it: a different wrap width, argv[0] as the program name, and its own
-options offered as though they were Enzan's. Where a generated text and a
-consistent one differ, consistency wins and the text is written out.
+- **An option two executables share MUST be spelled the same in both**, short forms included.
+- **An option that takes one value takes it once.** Given again with the same value, as a Makefile
+  appending its own flags can give it, it is accepted; with another, it is refused rather than the
+  last one silently winning.
+- **A value the window and the command line both take is read by one function**, so `10ns` and `all`
+  mean the same in each.
+- **`--version` is `-V`, and `--help` is `-h`, everywhere.** `-v` names a library file in `.f` lists
+  (8.3) and nothing else. What `--version` prints is defined once, for every executable.
+- **A generated usage text is not automatically the right one.** Where Qt's generated help would
+  differ from the rest of the tool's, the text is written out.
 
 ---
 
 ## 9. External API: VPI, VHPI and cocotb
 
-**cocotb support is a higher priority than advanced SystemVerilog verification
-features.** It gives Enzan a full Python-driven verification environment
-without Enzan having to implement classes, randomisation, coverage or UVM — an
-extremely high return for the effort, and a strong differentiator.
-
-**VPI** (IEEE 1364/1800) is the introspection and callback API that cocotb
-drives simulations through. **VHPI** (IEEE 1076-2019) is the VHDL equivalent.
-cocotb uses VPI, VHPI and FLI. Enzan implements VPI first.
-
-The required subset is small and well-bounded:
-
-- Handle lookup: `vpi_handle_by_name`, `vpi_handle`, `vpi_iterate`, `vpi_scan`.
-- Properties: `vpi_get`, `vpi_get_str`.
-- Values: `vpi_get_value`, `vpi_put_value`. The two-plane value encoding of 3.6
-  was chosen to make these nearly free.
-- Time: `vpi_get_time`.
-- Callbacks: `vpi_register_cb` / `vpi_remove_cb` for `cbValueChange`,
-  `cbReadWriteSynch`, `cbReadOnlySynch`, `cbNextSimTime`, `cbAfterDelay`,
-  `cbStartOfSimulation`, `cbEndOfSimulation`.
-
-Callbacks MUST fire at the correct point in the region ordering of 3.3:
-`cbReadWriteSynch` in the Re-NBA/reactive area, `cbReadOnlySynch` in Postponed.
-
-**cocotb's own regression suite is the acceptance test for this milestone**,
-which makes M4 objectively gated rather than a matter of opinion. NVC's VHPI
-subset, sized specifically for cocotb, is useful precedent for the VHDL side
-later.
-
-The implementation lives in `src/pli/`, and the header applications compile against in
-`include/enzan/` (section 12).
+**cocotb support is a higher priority than advanced SystemVerilog verification features**: it gives
+Enzan a full Python verification environment without classes, randomisation, coverage or UVM. cocotb
+drives a simulation through **VPI** (IEEE 1364/1800) for SystemVerilog and **VHPI** (IEEE 1076-2019)
+for VHDL. The VPI subset is cocotb's: handle lookup and iteration, properties, values, time, and the
+callbacks of 9.3. **cocotb's own regression suite is the acceptance test** (14.6).
 
 ### 9.1 Loading an application
 
-`--vpi <library>[:<entry>]` loads a VPI application into the kernel. It is repeatable, and
-libraries are loaded in the order given. With an entry the named function is called; without
-one, the library's `vlog_startup_routines` array is, which is what the standard names and what
-every application provides. A library offering neither is reported, rather than being a library
-that was loaded and silently did nothing.
+`--vpi <library>[:<entry>]` loads an application, repeatably and in the order given, calling the
+entry or else the library's `vlog_startup_routines`. Libraries are opened `RTLD_NOW | RTLD_GLOBAL`:
+*now*, so that a routine the kernel lacks fails at load and is named; *global*, so that an
+application can load further libraries against itself, as cocotb loads Python.
 
-Libraries are opened with `RTLD_NOW | RTLD_GLOBAL`. *Now*, so that an application calling a
-routine the kernel lacks fails as it is loaded and names the routine, rather than part-way
-through a run. *Global*, because an application commonly loads further libraries that resolve
-symbols against it — cocotb embeds Python that way.
-
-**Applications resolve the `vpi_*` routines against the `enzan` executable, which exports
-those and nothing else.** Exporting everything would put slang's symbols, and the standard
-library's, where an application's own copies of them could collide.
-
-**Every routine the standard declares is defined.** One Enzan does not support fails and
-says why through `vpi_chk_error`, rather than being absent: an absent one would make an
-application unloadable over a routine it might never call.
-
-**Loading precedes analysis**, so that a library that cannot be loaded is reported before a
-long analysis rather than after it, and so that startup routines run before the design exists,
-as the standard orders it. Elaboration then binds the design and raises `cbStartOfSimulation`;
-everything an application does to the design happens from that callback onwards.
-
-**Plusargs.** A command-line word beginning with `+` that is not one of the analysis options
-(`+incdir+`, `+define+`, `+libext+`) is a plusarg. It is accepted, and reaches an application
-through `vpi_get_vlog_info`, which reports the whole command line as it was given. Plusargs
-belong to the design and to its applications; refusing the ones Enzan does not itself
-understand would be refusing all of them.
-
-`--vpi` is an option of `run` and of the one-shot form (8.1). `analyse` and `elaborate` refuse
-it, because neither runs anything an application could observe.
+- **`enzan` exports the `vpi_*` routines and nothing else**, so that slang's and the standard
+  library's symbols cannot collide with an application's own.
+- **Every routine the standard declares is defined.** One Enzan does not support fails and says why
+  through `vpi_chk_error`, rather than leaving the application unloadable.
+- **Loading precedes analysis**, so that a library that cannot load is reported before a long
+  analysis. Everything an application does to the design starts at `cbStartOfSimulation`.
+- A command-line word beginning with `+` that is not an analysis option is a plusarg, passed on
+  through `vpi_get_vlog_info`. `analyse` and `elaborate` refuse `--vpi`: nothing they do could be
+  observed.
 
 ### 9.2 The object model
 
-What VPI shows is the elaborated design, named the way the standard names it: dot-separated
-from the top, as in `tb.u_dut.count`.
+What VPI shows is the elaborated design, named the way the standard names it: `tb.u_dut.count`.
 
 | Enzan | VPI type |
 |---|---|
@@ -1413,45 +983,19 @@ from the top, as in `tb.u_dut.count`.
 | element of an array | as a vector, or an array again while dimensions remain, from `vpi_handle_by_index` by declared index or by iterating |
 | parameter, localparam | `vpiParameter`, with `vpiLocalParam` telling them apart |
 
-**Objects a frontend introduced are not visible.** A port connected to an expression becomes
-an extra object and a continuous assignment, named with a `$` so that it cannot collide with
-anything the user wrote, and VPI keeps it out of the user's namespace for the same reason, as a
-waveform does (7.1): one rule, `eir::isIntroducedName`, serves both.
-
-**One storage may have several names.** A collapsed port is one slot reachable as the child's
-port and as the parent's signal; both names resolve, and a value-change callback on either
-fires when the slot changes, because they are the same signal.
-
-Two things EIR does not record yet are visible to an application, and are stated so that
-nobody mistakes them for VPI defects:
-
-- **Declared ranges are not kept**, so every vector reports `[width-1:0]`, and a
-  `logic [0:7]` reports `[7:0]`.
-- **Integer atom types are not distinguished.** An `int` is a 32-bit signed two-state vector
-  and is reported as `vpiBitVar` rather than `vpiIntVar`; an `integer` is reported as
-  `vpiReg`.
-
-Both are changes to EIR's type rather than to VPI, and belong with M5's type work.
-
-**A bit is a signal of its own to an application, and so is an element.** Each reads and
-writes its own bits, and a value-change callback on one fires when those bits change and not
-when others of the signal do — the kernel reports changes of whole signals, and
-`RisingEdge(dut.bus[0])` that fired on every change of `bus` would be wrong in exactly the
-testbenches that use it. A force holds a whole signal (10.4), so a bit or an element is forced
-by forcing its signal. An array has elements and no value of its own: reading or writing one
-is an error that says to use its elements.
-
-**Handles to design objects are interned.** Asking for one twice returns the same handle, and
-freeing one does nothing: a handle names something that exists for the whole elaboration.
-Iterators and callback handles are freed as the standard says.
-
-**Every handle is checked before it is used.** One that is stale or was never issued fails the
-call and is reported through `vpi_chk_error`, rather than being dereferenced. A defect in a
-plugin must not become a crash that the user reports as one in the simulator.
+- **Objects a frontend introduced are not visible**, as in a waveform (7.1). One storage may have
+  several names, a collapsed port's and its actual's, and a value-change callback on either fires
+  when it changes.
+- **A bit or an element is a signal of its own**: its value-change callback fires when its bits
+  change and not when others of the signal do, or `RisingEdge(dut.bus[0])` would be wrong in exactly
+  the testbenches that use it.
+- **Handles to design objects are interned, and every handle is checked before it is used**, a bad
+  one reported through `vpi_chk_error`: a defect in a plugin must not become a crash that the user
+  reports as one in the simulator.
 
 ### 9.3 Callbacks and the region ordering
 
-Section 3.3 allows the PLI regions to be hook points rather than queues. These are the points:
+The PLI regions are hook points rather than queues (3.3). These are the points:
 
 | Reason | Fires |
 |---|---|
@@ -1463,32 +1007,16 @@ Section 3.3 allows the PLI regions to be hook points rather than queues. These a
 | `cbReadOnlySynch` | after the last read-write pass of a slot, before Postponed |
 | `cbEndOfSimulation` | once, when the simulation ends, after `final` blocks |
 
-**A callback registered for the phase that is running runs at that phase's next
-occurrence.** A `cbReadWriteSynch` registered from a read-write callback runs in the next
-read-write pass of the same slot, once what the first one woke has settled; a
-`cbReadOnlySynch` registered from a read-only callback runs in the next slot; a `cbAfterDelay`
-of zero registered mid-slot runs before the Active region is next drained. Running any of them
-in the pass that registered it would make the order depend on where in a list a callback
-happened to be appended.
-
-**A read-write pass counts as a delta cycle**, against the limit of 3.2. An application that
-asks for read-write from read-write without ever letting time move is a delta loop, and the
-limit is what finds one.
-
-**A pending timed callback keeps the simulation running.** A design with nothing scheduled
-and a `cbAfterDelay` outstanding has not finished: a testbench written in Python is exactly a
-design that schedules nothing of its own.
-
-**Value-change callbacks are delivered synchronously and may re-enter.** A callback that
-writes a signal with `vpiNoDelay` runs that signal's callbacks before its own write returns,
-as every other simulator does; cocotb queues for exactly this reason.
-
-Callbacks of one reason fire in the order they were registered (3.8).
+- **A callback registered for the phase that is running runs at its next occurrence**, never in the
+  pass that registered it, so the order cannot depend on where in a list a callback was appended.
+- **A read-write pass counts as a delta cycle** (3.2), and **a pending timed callback keeps the
+  simulation running**: a testbench written in Python schedules nothing of its own.
+- **Value-change callbacks are delivered synchronously and may re-enter**, as in every other
+  simulator. Callbacks of one reason fire in registration order (3.8).
 
 ### 9.4 Writing values
 
-`vpi_put_value` is the kernel's write operations of 10.4, not a second implementation of
-them:
+`vpi_put_value` is the kernel's write operations of 10.4, not a second implementation of them:
 
 | Flag | Effect |
 |---|---|
@@ -1498,117 +1026,53 @@ them:
 | `vpiForceFlag` | a force |
 | `vpiReleaseFlag` | a release; `value_p` receives the value the signal keeps |
 
-**The three delay modes are not told apart.** Each schedules its write and none cancels a write
-already pending, so an inertial write behaves as a transport one. Modelling the cancellation
-needs a per-signal record of pending writes that nothing in the M4 subset would exercise;
-cocotb writes with no delay.
-
-`vpiCancelEvent` and `vpiReturnEvent` are refused, and so is any write during
-`cbReadOnlySynch`, as the standard requires: a read-only phase that could be written would
-report values that depend on the order its callbacks ran in.
+The three delay modes are not told apart yet: each schedules its write, and none cancels one already
+pending. `vpiCancelEvent`, `vpiReturnEvent` and any write during `cbReadOnlySynch` are refused, as
+the standard requires.
 
 ### 9.5 Ending
 
-**`vpi_control(vpiFinish)` is `$finish`.** The run ends when the current callback returns,
-`final` blocks run, `cbEndOfSimulation` fires and the exit status is 0.
-
-**`vpi_control(vpiStop)` stops the run at the next time-slot boundary**, exactly as the
-front end's Stop does, and for the same reason: that is the only boundary a run can be resumed
-from with the same result (section 2.2, and `RunInterrupt`). A served session then waits for
-its client. A batch run has nothing that could resume it, so it ends there.
-
-**`cbEndOfSimulation` fires once, whichever way the simulation ends**: by `$finish`, by
-running out of events, by an error, or by the process ending while the simulation could still
-have continued — a batch run's `--run` limit. An application that writes its results from
-that callback, as cocotb does, otherwise never writes them.
-
-**A design cannot be restarted while an application is loaded.** Putting it back to time zero
-would leave the application holding the state of a simulation that no longer exists, and
-there is no callback in the standard that tells it so.
+`vpi_control(vpiFinish)` is `$finish`. `vpi_control(vpiStop)` stops the run at the next time-slot
+boundary, the only one a run can be resumed from with the same result: a served session then waits
+for its client, and a batch run ends. **`cbEndOfSimulation` fires once, whichever way the simulation
+ends**, a batch run's `--run` limit included, since cocotb writes its results from it. A design
+cannot be restarted while an application is loaded: the application would hold the state of a
+simulation that no longer exists.
 
 ### 9.6 cocotb
 
-cocotb chooses a simulator by the name of a makefile in its own directory and has no way to
-add one from outside. `tools/cocotb/Makefile.enzan` is that makefile, and
-`tools/cocotb/makefiles.sh <dir>` writes a copy of cocotb's makefile directory with it added,
-for `make SIM=enzan COCOTB_MAKEFILES_DIR=<dir>`. The harness of 14.6 runs cocotb's own suite
-this way, so what is tested is what a user runs.
+cocotb chooses a simulator by the name of a makefile in its own directory, so Enzan ships
+`Makefile.enzan` and a script that adds it to a copy of cocotb's makefiles, for `make SIM=enzan`.
+cocotb's own suite runs the same way, so what is tested is what a user runs.
 
-**The VPI library is `libcocotbvpi_dsim`**, which is cocotb's VPI layer compiled with no
-simulator-specific workaround in it. Enzan is held to what cocotb expects of a standard
-simulator rather than to whatever another simulator's quirks taught it to tolerate.
-
-`COCOTB_HDL_TIMEPRECISION` becomes `--timescale`, since Enzan counts every delay in one unit
-(3.1). It must name a single unit, `1ns` and not `10ns`, which is all `--timescale` accepts.
-Each library `VHDL_LIB_ORDER` names is analysed from its `VHDL_SOURCES_<library>` into an Enzan
-library of its own, and the run reads them (8.2).
-
-**A module stating no time scale is in that unit too** (3.1), where cocotb's other simulators
-take `COCOTB_HDL_TIMEUNIT`: its `#10` is ten of the precision. A module with a `` `timescale ``
-or a `timeunit` counts its own, as everywhere.
+**The VPI library is cocotb's build with no simulator-specific workaround in it**, so that Enzan is
+held to what cocotb expects of a standard simulator. The VHPI library is the build for NVC, whose
+one workaround, comparing names without their case, answers the one way Enzan's VHPI differs from
+the standard (9.7). `COCOTB_HDL_TIMEPRECISION` becomes `--timescale`. In a design of both languages,
+the toplevel's language's library is loaded with `--vpi` or `--vhpi` and the other through
+`GPI_EXTRA`, as cocotb does elsewhere.
 
 ### 9.7 VHPI
 
-VHPI is how cocotb reaches a VHDL toplevel (M6), as VPI is how it reaches a SystemVerilog one.
-What VHPI names that VPI does not is the VHDL type of everything: a signal's type and its base
-type, an array's bounds, direction and element type, a record's fields, an enumeration's
-literals, a scalar's range. cocotb reads them to decide what a handle is, `std_logic` or a
-vector of it, an integer, a record whose fields it can name, before it reads a value.
+VHPI is how cocotb reaches a VHDL toplevel. What it names that VPI does not is the VHDL type of
+everything — base types, bounds, element types, record fields, enumeration literals — which cocotb
+reads to decide what a handle is before it reads a value.
 
-**The types live in EIR**, as `eir::VhdlType` in a table of each definition's that its objects
-and generics index, filled by the VHDL adapter from the layouts it gives them (5.2). They change
-nothing about how a design behaves, as an enumeration's table changes nothing; they say what
-the bits mean to something outside the simulation, and are serialized with the definition, so a
-library holds them. The analysis that knows them runs in a child process (5.2) and is gone by
-the time an application asks, so EIR is the only place they can be kept.
+- **The types live in EIR**, in a table of each definition's, filled by the VHDL adapter and
+  serialised with the definition. They change nothing about how a design behaves. The analysis that
+  knows them runs in a child process (5.2), so EIR is the only place they can be kept.
+- **VHPI is VPI's context with a second set of routines.** `--vhpi` loads an application into the
+  same context, so that an application using both interfaces sees one simulation, and the two share
+  one dispatch of callbacks. The header is the IEEE working group's, which NVC carries, so VHPI is
+  built only with the VHDL frontend.
+- **A declared object's case name** is read from its declaration, since NVC's analysis keeps no
+  case; a region's name is in upper case, since EIR keeps no position of a block's label.
 
-**VHPI is VPI's context with a second set of routines.** `--vhpi <library>[:<entry>]` loads an
-application as `--vpi` does, running its `vhpi_startup_routines`, into the one `PliContext`: the
-kernel calls one set of hooks, and cocotb loads both its layers for a design of both languages,
-which must see one simulation. Its header is the IEEE P1076 working group's `vhpi_user.h`, which
-the NVC the VHDL frontend is built on carries, so VHPI is built only with that frontend.
-
-- **Regions** are VPI's scopes: the root instance, named for its entity; component instances;
-  and the blocks and generate iterations the frontend flattens into names, an indexed one
-  (`g(0)`) a for-generate iteration and any other a block.
-- **Objects** are a region's signals and ports, every one with a VHDL type, a real's included,
-  its generics, and its constants whose values fold, a for-generate iteration's parameter among
-  them. An element of an array is an indexed name and a field of a record a
-  selected one, each a window of its object's bits; an array's elements are numbered row by
-  row from the left, which is its highest bits.
-- **Types** come from the table: `vhpiBaseType` a type declaration of the type's kind, with an
-  array's base type unconstrained, `vhpiType` the object's subtype with its bounds,
-  `vhpiElemType` an array's element, `vhpiConstraints` its ranges, `vhpiEnumLiterals` an
-  enumeration's literals. `vhpiNameP` gives a basic identifier in upper case. `vhpiCaseNameP`
-  gives a declared object's name as its declaration spells it, read from the source where the
-  object is declared, since NVC's analysis keeps no case, and a region's in upper case, since
-  EIR keeps no position of a block's or a generate statement's label. An extended identifier,
-  `\weird.name\`, is given as it is written, its case being part of it, and is one name however
-  many dots it holds. A string `vhpi_get_str` returns lives with its handle, as VPI's do, so an
-  application may hold several at once.
-- **Values** are read from and written to the bits in VHPI's formats by the type: a
-  std_logic or a bit and arrays of them in the Logic formats, other enumerations' positions,
-  integers, reals, strings of characters, binary strings. A record is read and written field by
-  field.
-- **A deposit is an update of the time step**, applied after the callback that made it returns,
-  as VPI's write with no delay is: a deposit applied inside the call would wake what watches the
-  signal inside the application's own call, which cocotb, writing a batch of values, does not
-  expect. A force and a release are of the whole signal.
-- **Callbacks** share VPI's dispatch: the last known delta cycle of a time step is VPI's
-  read-write synchronisation, its end the read-only one, and the next time step VPI's next
-  simulation time. A repetitive callback, `vhpiCbRep...`, fires at each occurrence until it is
-  removed, waiting for the next time step after each.
-
-**cocotb's VHPI library is `libcocotbvhpi_nvc`**, whose one workaround, to compare names
-without their case, answers the one way Enzan differs from the standard, the declared case of a
-region's name, which it does not keep (section 9.6 chose the VPI library by the same rule). The
-toplevel's language decides which is loaded, `--vpi` or `--vhpi`; in a design of both languages
-cocotb loads the other's itself, named in `GPI_EXTRA`, as it does elsewhere, and each interface
-shows its own language (M7).
-
-A VHDL signal of a null range holds nothing, and a bit vector has at least one bit, so its
-object has a placeholder bit that nothing reads, writes or records (`eir::Object::holdsNothing`);
-VHPI shows it as the empty array its type says it is.
+**Each interface shows its own language.** VPI finds no VHDL object by name, and returns a VHDL
+instance it meets in an iteration as a named `vpiUnknown`; VHPI shows a SystemVerilog region as one
+of class `vhpiVerilog` with nothing in it. cocotb requires this — its mixed-language test asserts
+that VPI alone does not find the VHDL instance — and a VHDL region shown through VPI would lose its
+types.
 
 ---
 
