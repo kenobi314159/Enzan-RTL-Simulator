@@ -2,30 +2,36 @@
 
 **Status:** Living specification. Revised as the project evolves.
 **Audience:** AI coding agents and maintainers working in this repository.
-**Authority:** This document is the single normative specification for Enzan.
-Human-facing documentation (user manual, tutorials, installation guide) lives
-separately under `docs/` and is derived from this document, never the reverse.
+**Authority:** This document is the single normative specification for Enzan. Documentation for
+users lives separately and is derived from it, never the reverse.
 
 ---
 
 ## 0. How to use this document
 
-Agents working in this repository MUST read sections 0, 12, 13 and 17 before
-making any change, and MUST read the section covering the component they are
-modifying.
+Agents working in this repository MUST read sections 0, 12, 13 and 17 before making any change, and
+MUST read the section covering the component they are modifying.
 
-The keywords **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT** and **MAY** are
-used in their normal RFC 2119 sense. A **MUST** is an invariant: if you find
-yourself writing code that violates one, stop and raise the conflict rather
-than working around it.
+The keywords **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT** and **MAY** are used in their RFC
+2119 sense. A **MUST** is an invariant: code that would violate one is a conflict to raise, not to
+work around.
 
-**The update rule.** If a change alters behaviour that this document describes,
-the corresponding section MUST be updated in the same commit. A commit that
-makes this document wrong is a defect, regardless of whether the code works.
+**The update rule.** A change that alters behaviour this document describes updates the
+corresponding section in the same commit. A commit that makes this document wrong is a defect,
+whether or not the code works.
 
-**The escalation rule.** This document deliberately leaves some decisions open
-and marks them *(open)*. If your task depends on an open decision, do not
-silently pick one. State the options and ask.
+**The escalation rule.** A decision this document leaves open is marked *(open)*. A task that
+depends on one states the options and asks rather than picking one silently.
+
+**What this document holds** is the design: its decisions, the reasons for them and the rules that
+follow from them. How a finished feature works in detail is for the code and its comments to say;
+this document is not a second copy of them.
+
+**Citing this document.** A comment states its own reason. It also cites this document, as
+`DESIGN_GUIDE.md section N.M`, only where the code enforces a rule made here and a change made
+locally could break it unknowingly. Documentation, and anything a user reads, never cites it.
+Section numbers are stable: a change that renumbers a section updates every citation of it in the
+same commit.
 
 ---
 
@@ -33,83 +39,64 @@ silently pick one. State the options and ask.
 
 ### 1.1 What Enzan is
 
-Enzan is an event-driven, mixed-language RTL simulator for SystemVerilog and
-VHDL, with an interactive graphical debugging environment.
+Enzan is an event-driven, mixed-language RTL simulator for SystemVerilog and VHDL, with an
+interactive graphical debugging environment. The name is Japanese and carries two readings: *distant
+peaks* (遠山), for the horizon of a screen full of waveforms, and *calculation* (演算), for the work the
+simulator performs.
 
-The name is from Japanese and carries two readings: *distant peaks* (遠山), for
-the mountain-like horizon of a screen full of waveforms, and *calculation*
-(演算), for the computational work the simulator performs.
-
-The gap Enzan targets is real and currently unfilled. Questa, VCS and Xcelium
-are excellent and prohibitively expensive. Verilator is fast but is a cycle-based
-translator rather than a true event-driven simulator, is Verilog-only, and has
-no debugging GUI. Icarus Verilog is event-driven and free but slow and
-Verilog-only. GHDL and NVC are strong VHDL simulators with no SystemVerilog and
-no GUI. Nothing in the open-source world offers *fast, event-driven,
-mixed-language simulation behind a usable interactive GUI*. That combination is
-Enzan's reason to exist.
+Commercial simulators are excellent and prohibitively expensive. In the open-source world, Verilator
+is a fast cycle-based translator with no debugging GUI, Icarus Verilog is event-driven but slow, and
+GHDL and NVC simulate VHDL alone. Nothing offers *fast, event-driven, mixed-language simulation
+behind a usable interactive GUI*, and that combination is Enzan's reason to exist.
 
 ### 1.2 Design priorities, in order
 
 When two goals conflict, resolve the conflict in this order:
 
-1. **Correctness of simulation semantics.** A fast simulator that computes the
-   wrong answer is worthless, and semantic bugs are the hardest class of defect
-   for users to detect. Language semantics are not negotiable for speed.
-2. **Usability and debuggability.** The GUI, the diagnostics and the scripting
-   interface are the product as much as the kernel is.
+1. **Correctness of simulation semantics.** A wrong answer is worse than none, and semantic bugs are
+   the hardest defects for users to detect. Language semantics are not traded for speed, and
+   anything unsupported is refused by name rather than mistranslated.
+2. **Usability and debuggability.** The GUI, the diagnostics and the command line are the product as
+   much as the kernel is.
 3. **Performance.** Enzan must handle real designs, but never by guessing.
-4. **Language breadth.** Coverage of exotic language features comes last.
+4. **Language breadth.** Exotic language features come last.
 
 ### 1.3 Explicit non-goals
 
-The following are **out of scope** and MUST NOT be implemented without an
-explicit decision to change this list. They are recorded here so that scope
-does not creep into them by accident:
+The following are **out of scope** and MUST NOT be implemented without an explicit decision to
+change this list:
 
 - Gate-level simulation, SDF back-annotation and timing checks.
-- Power-aware simulation (UPF/CPF).
-- Mixed-signal simulation (Verilog-AMS, VHDL-AMS).
+- Power-aware (UPF/CPF) and mixed-signal (Verilog-AMS, VHDL-AMS) simulation.
 - IP encryption (IEEE 1735).
 - Windows and macOS support. Enzan targets Linux only.
 - Synthesis, formal verification, equivalence checking.
-- UVM, constrained-random stimulus and functional coverage in the initial
-  development arc. These are deferred to M9+ (see section 18) and constrained
-  random additionally requires a constraint solver, which is a project in
-  itself.
+- UVM, constrained-random stimulus and functional coverage, until M9+ (section 18).
 
 ### 1.4 Licensing
 
-Enzan is licensed **GPLv3**. This is a consequence of linking NVC, which is
-GPLv3, to provide the VHDL frontend.
+Enzan is licensed **GPLv3**, as a consequence of linking NVC, which is GPLv3, for the VHDL frontend.
+The licence follows from the choice of 5.2 and does not justify it: GHDL, the only serious
+alternative, is copyleft too. A re-examination of the VHDL frontend is argued on the grounds of 5.2,
+and the licence follows.
 
-**This is a consequence of the choice, not a reason for it.** The licence
-follows from the engineering decision in 5.2 and does not justify it. The only
-serious alternative VHDL frontend, GHDL, is GPL-2.0-or-later and therefore also
-copyleft: it would not have bought a permissive licence, only the freedom to be
-GPLv2-or-later instead of GPLv3. Any future re-examination of the VHDL frontend
-must be argued on the grounds in 5.2, and the licence adjusted to follow.
+| Dependency | License |
+|---|---|
+| NVC (VHDL frontend) | GPLv3, which sets the project's licence |
+| slang (SystemVerilog frontend) | MIT |
+| Qt 6 | LGPLv3 |
+| Tcl (GUI theme and signal lists) | BSD-style |
+| GoogleTest | BSD-3 |
+| FST | permissive |
 
-The dependency stack is internally consistent under GPLv3:
-
-| Dependency | License | Compatible |
-|---|---|---|
-| NVC (VHDL frontend) | GPLv3 | yes, and what sets the project's licence |
-| slang (SystemVerilog frontend) | MIT | yes |
-| Qt 6 | LGPLv3 | yes |
-| Tcl (GUI theme and signal lists) | BSD-style | yes |
-| GoogleTest | BSD-3 | yes |
-| FST / libfst | permissive | yes |
-
-Every source file MUST begin with an SPDX identifier:
+Every source file MUST begin with an SPDX identifier, in its language's comment syntax:
 
 ```cpp
 // SPDX-License-Identifier: GPL-3.0-or-later
 ```
 
-Third-party code vendored into `third_party/` MUST retain its original license
-text and MUST be recorded in `docs/third_party.md` with its license, upstream
-URL and pinned revision.
+Third-party code vendored into `third_party/` MUST keep its original license text and MUST be
+recorded, in the user documentation, with its license, upstream URL and pinned revision.
 
 ---
 
@@ -117,63 +104,33 @@ URL and pinned revision.
 
 ### 2.1 The three phases
 
-Enzan separates the work into three phases. Conflating them is the most common
-architectural mistake in simulators, and the separation is what makes the
-"reusable compiled libraries" goal coherent.
+**Analysis** turns one design unit at a time — a module, package, interface, entity or architecture
+— into Enzan's internal representation (EIR, section 4), and may store the result in a library. Its
+output is independent of any particular top level, and so is reusable across runs and designs.
 
-**Analysis** operates on one design unit at a time (a module, package,
-interface, entity or architecture). It parses, type-checks and lowers the unit
-to Enzan's internal representation, then stores the result in a library
-directory. Analysis output is *independent of any particular top-level design*
-and is therefore cacheable and reusable across runs and across designs. This is
-the phase Questa exposes as `vlog`/`vcom`.
+**A parameterised unit is analysed once per set of values the design uses.** slang is an elaborating
+frontend: it type-checks a body in the context of the values it is given, because a type can depend
+on a parameter, and offers no body generic over them. The VHDL adapter folds generics the same way
+(5.2). So a unit becomes one unit per set of values, named for them (8.2): the same values make the
+same unit wherever it is produced, but a library is re-runnable rather than reusable at values it
+has never seen. Rebuilding a generic unit out of slang's elaborations was rejected: it would be
+checked against slang only at the values slang saw, and trusted at the others.
 
-**A parameterised SystemVerilog module is analysed once per parameterisation the
-design uses.** slang is an elaborating frontend (5.1): it type-checks a body in the
-context of the values it is given, because a type can depend on a parameter, and it
-offers no body generic over them. So parameter resolution and generate expansion
-happen in analysis, inside slang, and a parameterised module becomes one unit per
-set of values, named for them (8.2). Each unit is still independent of the top
-level — the same values make the same unit wherever it is produced — but which
-units exist depends on what the design instantiates, so a library is re-runnable
-rather than reusable at values it has never seen: a design that needs new ones
-reads the sources again.
-
-Enzan does not rebuild that elaboration to make a unit generic. Doing so would
-spare Enzan's own translation of each parameterisation and a library's sources at
-the boundary, but slang would still elaborate every parameterisation of the design
-being analysed. And a unit derived from one of slang's bodies would be checked
-against slang only at the values slang saw, and trusted at the others; 1.2 ranks a
-slower analysis above a result that is trusted rather than checked.
-
-**VHDL generics take the same shape** (5.2). An entity and its architecture become one
-unit per set of generic values, and of the bounds its ports of unconstrained types take from
-their actuals, named for them, with the values folded by the VHDL adapter rather than by
-elaboration.
-
-**Elaboration** takes a named top level plus the libraries, binds each instance
-to the unit for its values, resolves whatever parameters and generics analysis
-left open, builds the instance tree, binds ports, computes the flat state layout,
-and produces an executable image.
-Elaboration is inherently per-design and **cannot** be cached across different
-top levels or parameterisations. Optimisation passes — inlining, selective
-flattening, process merging, partitioning — belong here.
+**Elaboration** takes a top level and the analysed units, binds each instance to the unit for its
+values, builds the instance tree, binds ports, computes the flat state layout and produces an
+executable image. It is per-design and cannot be cached across top levels. Optimisation passes —
+inlining, selective flattening, process merging, partitioning — belong here.
 
 **Execution** runs the elaborated image under the simulation kernel.
 
-*Analysis* MUST remain per-design-unit and modular. Flattening at
-elaboration time is a legitimate optimisation and MUST remain available, because
-it is where a large fraction of achievable performance lives.
+Analysis MUST remain per-unit and modular. Flattening at elaboration MUST remain available, because
+a large fraction of achievable performance lives there.
 
 ### 2.2 Process separation
 
-The simulation kernel and the GUI are **separate processes**. This MUST NOT be
-collapsed into a single process for convenience.
-
-The reasons are concrete: the kernel must be testable and scriptable with no
-display attached; a stalled or slow GUI must never stall the kernel; and
-attaching a local GUI to a kernel running on a remote compute server is a
-feature users of commercial tools rely on daily and will expect.
+The simulation kernel and the GUI are **separate processes**, and MUST NOT be collapsed into one.
+The kernel must be testable and scriptable with no display attached; a stalled or slow GUI must
+never stall the kernel; and a local GUI must be able to drive a kernel on a remote compute server.
 
 ```
    ┌──────────────────────┐        Unix domain socket        ┌──────────────────┐
@@ -183,26 +140,18 @@ feature users of commercial tools rely on daily and will expect.
    └──────────────────────┘                                  └──────────────────┘
 ```
 
-The GUI MUST be able to attach to an already-running kernel and to detach
-without terminating it.
+The GUI MUST be able to attach to an already-running kernel and to detach without terminating it.
 
-**The front end pulls what it shows; the kernel never pushes a value.** A design
-whose clock toggles every few nanoseconds records changes faster than any window
-draws them. A kernel sending every change would either queue them on the socket,
-without bound for as long as the window lags, or wait for the window, which is
-the stall forbidden above. So while it runs the kernel only says how far it has
-recorded, and the front end asks for the changes it lacks of the signals it
-shows, one request at a time, each answered with a bounded number of bytes. It
-asks by a change's number in its signal's record rather than by time, because a
-signal can change twice at one time. What the window has not taken yet waits in
-the waveform database, which has a budget and spills to disk (7.1). A window
-that has fallen behind draws its traces only as far as it holds every change of
-every signal it shows (10.7), and catches up when it can.
+**The front end pulls what it shows; the kernel never pushes a value.** A design records changes
+faster than any window draws them, and a kernel sending every change would either queue them on the
+socket without bound or wait for the window, which is the stall forbidden above. So while it runs
+the kernel only says how far it has recorded, and the front end asks for the changes it lacks of the
+signals it shows, one request at a time, each answered with a bounded number of bytes. It asks by a
+change's number in its signal's record rather than by time, because a signal can change twice at one
+time. What the window has not taken yet waits in the waveform database (7.1).
 
-**The user does not invoke the two separately.** `enzan --gui` starts the front
-end, which is a second process and an implementation detail rather than a second
-program to learn (8.4). Two processes is the architecture; two commands was never
-the point.
+**The user does not invoke the two separately.** `enzan --gui` starts the front end (8.4). Two
+processes is the architecture; two commands was never the point.
 
 ### 2.3 Component map
 
@@ -235,71 +184,56 @@ the point.
 
 ## 3. Simulation semantics
 
-**This section is normative and is the highest-risk part of the project.** Most
-homebrew simulators produce plausible-looking but subtly wrong results because
-their event scheduling does not match the language standards. Changes here MUST
-be accompanied by tests that pin the behaviour.
+**This section is normative and is the highest-risk part of the project.** A simulator whose event
+scheduling does not match the language standards produces plausible-looking but wrong results.
+Changes here MUST be accompanied by tests that pin the behaviour.
 
 ### 3.1 Time model
 
-Simulated time is a **64-bit unsigned integer** counting units of a single
-global time precision. Time MUST NOT be represented in floating point anywhere
-in the kernel.
+Simulated time is a **64-bit unsigned integer** counting units of a single global time precision.
+Time MUST NOT be represented in floating point anywhere in the kernel.
 
-The global precision is the finest precision requested anywhere in the design —
-SystemVerilog `timeprecision`/`` `timescale `` directives and the VHDL resolution
-limit — with a floor of 1 fs, and never coarser than the unit a SystemVerilog
-module stating no time scale is in: `--timescale`'s, the libraries', or else
-picoseconds. `--timescale` or a library fixes it instead (8.2), and a delay that is
-no whole number of a fixed unit is rounded to the nearest and reported. Delays are
-converted to this unit as they are translated, so the kernel never performs unit
-conversion at run time. A SystemVerilog delay counts the unit of the scope stating
-it, a task's that of the module or package declaring the task, rounded to that
-scope's precision first (IEEE 1800 section 3.14.2.1), and `$time` counts the
-calling module's unit.
+The precision is the finest one the design asks for — SystemVerilog's `timeprecision` and
+`` `timescale ``, and femtoseconds for a design with VHDL in it — with a floor of 1 fs, and never
+coarser than the unit of a SystemVerilog module stating no time scale: `--timescale`'s, the
+libraries', or else picoseconds. `--timescale` or a library fixes it instead (8.2), and a delay that
+is no whole number of a fixed unit is rounded to the nearest and reported. Delays are converted as
+they are translated, so the kernel never converts units at run time. A SystemVerilog delay counts
+the unit of the scope stating it, rounded to that scope's precision first (IEEE 1800 section
+3.14.2.1), and `$time` counts the calling module's unit.
 
-Note the practical range: at 1 fs precision the 64-bit counter covers about 5.1
-hours of simulated time; at 1 ps it covers about 213 days. Overflow MUST be
-detected and reported as an error rather than wrapping silently.
+At 1 fs the counter covers about 5.1 hours of simulated time; at 1 ps, about 213 days. Overflow MUST
+be reported as an error rather than wrap silently.
 
 ### 3.2 Delta cycles
 
-A delta cycle is a **zero-duration** iteration used to order evaluations that
-occur at the same simulated time. An unbounded number of delta cycles may occur
-at a single timestamp.
-
-A delta-cycle iteration limit MUST be enforced, defaulting to 10,000 and
-configurable. On exceeding it the kernel MUST abort with a diagnostic naming
-the processes and signals still active, because a delta loop with no diagnostic
-is one of the most frustrating failures a user can hit.
+A delta cycle is a **zero-duration** iteration ordering evaluations at one simulated time, and any
+number of them may occur at one time. A delta-cycle limit MUST be enforced, 10,000 by default and
+configurable. On exceeding it the kernel MUST stop with a diagnostic naming the processes and
+signals still active: a delta loop with no diagnostic is one of the most frustrating failures a user
+can hit.
 
 ### 3.3 SystemVerilog event regions
 
-Enzan implements the IEEE 1800 stratified event queue. The regions, in order
-within a single time slot:
+Enzan implements the IEEE 1800 stratified event queue. The regions, in order within a time slot:
 
 ```
   Preponed  →  Active  ⇄  Inactive  ⇄  NBA  →  Observed  →  Reactive  ⇄  Re-Inactive  ⇄  Re-NBA  →  Postponed
 ```
 
-Iteration rules: the kernel drains Active fully; if Active is empty it promotes
-Inactive (`#0`) events to Active and repeats; if both are empty it promotes NBA
-events to Active and repeats. Only when Active, Inactive and NBA are all empty
-does it advance to Observed. The Reactive family iterates by the same rule.
-Exhausting all regions ends the time slot after Postponed, and time advances.
+The kernel drains Active fully; when Active is empty it promotes Inactive (`#0`) events to Active
+and repeats; when both are empty it promotes NBA events. Only when Active, Inactive and NBA are all
+empty does the slot move to Observed. The Reactive family iterates by the same rule, and the slot
+ends after Postponed.
 
-For the initial development arc, Preponed, Active, Inactive, NBA, Observed,
-Reactive and Postponed MUST be implemented. The PLI-specific regions
-(Pre-Active, Pre-NBA, Post-NBA, Pre-Observed, Post-Observed, Pre-Postponed)
-MAY be represented as callback hook points rather than as fully separate queues,
-provided the callbacks fire at the correct point in the ordering. Section 9.3 says where each
-VPI callback fires.
+Preponed, Active, Inactive, NBA, Observed, Reactive and Postponed MUST be implemented. The
+PLI-specific regions MAY be callback hook points rather than separate queues, provided the callbacks
+fire at the correct point in the ordering (9.3).
 
-A delayed write is scheduled for its time, not for a process. A nonblocking `a <= #d b`
-joins the NBA region of the time step `d` later. A continuous assignment with a delay
-writes at the start of that step's Active region. Its delay is inertial: a newer write
-from the same assignment replaces one still pending, which is taken out of the schedule,
-so a pulse shorter than the delay leaves no time step behind (IEEE 1800 section 10.3.3).
+A delayed write is scheduled for its time, not for a process. `a <= #d b` joins the NBA region of
+the time step `d` later, and a continuous assignment with a delay writes at the start of that step's
+Active region. That delay is inertial: a newer write from the same assignment replaces one still
+pending, so a pulse shorter than the delay leaves no time step behind (IEEE 1800 section 10.3.3).
 
 ### 3.4 VHDL simulation cycle
 
@@ -307,87 +241,75 @@ Per IEEE 1076, a VHDL simulation cycle is:
 
 1. Current time `Tc` is set to the next time `Tn`.
 2. Every active signal is updated; events occur where the new value differs.
-3. Processes sensitive to those events resume, as do processes whose `wait`
-   timeout has expired.
+3. Processes sensitive to those events resume, as do processes whose `wait` timeout has expired.
 4. Each resumed process executes until it suspends.
-5. `Tn` is computed as the minimum of the next driver activation time and the
-   next process timeout.
+5. `Tn` is computed as the minimum of the next driver activation time and the next process timeout.
 6. If `Tn == Tc`, the next cycle is a delta cycle.
 
-**A signal assignment is a transaction of its process's driver.** A VHDL process has one
-driver for each signal it assigns, and each driver a projected waveform of transactions
-waiting for their time (IEEE 1076 section 14.7.2). The kernel keeps that waveform per
-driver, because the language defines an assignment by what it does to it (section
-10.5.2.2): the driver's transactions at or after the new one's time are deleted, so of a
-process's assignments to one signal in one run the last is what happens and the others
-leave no event; and an inertial assignment also deletes those within its rejection limit
-before it, but for a run of its own value ending there, so a pulse shorter than the
-limit never reaches the signal. Treating an assignment as a SystemVerilog non-blocking
-update instead gives every one of them its own event, and a design whose clock stops by
-reassigning it toggles once more.
+**A signal assignment is a transaction of its process's driver.** A process has one driver for each
+scalar subelement it assigns, and each driver a projected waveform of transactions (IEEE 1076
+section 14.7.2), which the kernel keeps, because the language defines an assignment by what it does
+to that waveform (section 10.5.2.2). The driver's transactions at or after the new one's time are
+deleted, so of a process's assignments to one signal in one run the last is what happens; and an
+inertial assignment also deletes those within its rejection limit before it, so a pulse shorter than
+the limit never reaches the signal. An assignment to an element or a slice affects only the bits it
+assigns. Treating each assignment as a SystemVerilog non-blocking update instead would give every
+one of them its own event.
 
-The drivers are of scalar subelements, so a transaction is of the bits it assigns: an
-assignment to an element or a slice deletes what is pending for those bits and leaves the
-rest of a pending transaction to happen, cut down to what it still assigns.
+**A cycle begins with each batch of updates**, a delta cycle's or a time step's. A signal's `'event`
+is whether it last changed in the running cycle, and its `'last_value` is what it held before that
+change, which the kernel keeps only for the signals something reads it of.
 
-**A cycle begins with each batch of updates**, a delta cycle's or a time step's, and the
-kernel numbers them. A signal's `'event` is whether it last changed in the cycle now
-running, and its `'last_value` is what it held before that change, which the kernel copies
-aside only for the signals some body reads it of: a shadow of every signal would double the
-state of a design that never asks.
-
-A transaction for the current time takes effect in the next delta cycle, after every
-process of this one has run. A later one takes effect when its time step begins, before
-any process resumes in it, which is step 2 coming before step 3: a process woken by a
-timeout sees the values signals take at that time, not the ones they had before it.
+A transaction for the current time takes effect in the next delta cycle, after every process of this
+one has run. A later one takes effect when its time step begins, before any process resumes in it,
+so a process woken by a timeout sees the values signals take at that time.
 
 ### 3.5 Mixed-language interleaving
 
-**This is the single hardest correctness problem in the project and it is
-under-specified in every public source.** The rules below are Enzan's
-definition and MUST be treated as normative; where they prove to disagree with
-commercial tools on real designs, this section is what gets updated.
+**This is the single hardest correctness problem in the project, and it is under-specified in every
+public source.** The rules below are Enzan's definition and are normative; where they prove to
+disagree with commercial tools on real designs, this section is what gets updated.
 
-- There is **one** unified kernel and **one** event queue. VHDL and
-  SystemVerilog are not simulated by separate engines that synchronise.
-- The VHDL signal-update phase (3.4 step 2) is mapped to the beginning of the
-  SystemVerilog **Active** region. VHDL process execution (3.4 steps 3–4)
-  occurs within Active.
-- VHDL has no non-blocking-assignment region. A VHDL delta cycle therefore
-  corresponds to one full Active/Inactive/NBA iteration of the SystemVerilog
-  time slot.
-- A VHDL process's `wait for 0 ns` is not `#0`: it resumes in the next delta
-  cycle, after that cycle's signal update, where `#0` resumes in Inactive
-  before the NBA updates. The kernel holds such a process until the delta
-  cycle's transactions are applied and then schedules it in Active with the
-  processes those updates wake.
-- A VHDL wait with a timeout and a sensitivity or a condition arms both under one
-  wait generation (`WaitEventsFor`): whichever comes first resumes the process and
-  makes the other stale, and an event that comes first takes the timeout back, so
-  its time is not a step the run stops at. The process waits again for what is left
-  of the timeout while its condition is false.
-- A VHDL postponed process resumes in the **Postponed** region, so it runs
-  once the time step has settled and sees the values the step ends with. At
-  initialization it runs in Inactive, after the other processes and before the
-  first delta cycle (IEEE 1076 section 14.7.5.2).
-- A port connection crossing a language boundary is modelled as a zero-delay
-  continuous assignment and **consumes one delta cycle**. This MUST be
-  documented in the user manual (`docs/mixed-language.md`), because it is
-  observable and will surprise people.
-- Value conversion at the boundary follows the mapping in 3.6.
+- There is **one** kernel and **one** event queue. VHDL and SystemVerilog are not simulated by
+  separate engines that synchronise.
+- VHDL's signal update (3.4 step 2) is the beginning of the SystemVerilog **Active** region, and
+  VHDL processes run within Active. A VHDL delta cycle is one full Active/Inactive/NBA iteration.
+- A VHDL `wait for 0 ns` is not `#0`: it resumes in the next delta cycle, after that cycle's signal
+  update, where `#0` resumes in Inactive before the NBA updates.
+- A VHDL wait with a timeout and a sensitivity or a condition arms both: whichever comes first
+  resumes the process and makes the other stale, and a timeout taken back is not a time step the run
+  stops at.
+- A VHDL postponed process resumes in **Postponed**. At initialisation it runs after the other
+  processes and before the first delta cycle (IEEE 1076 section 14.7.5.2).
+- **A port connection crossing the language boundary is a zero-delay continuous assignment that
+  converts the value and consumes one delta cycle**, in each direction its mode needs: into VHDL by
+  a transaction, into SystemVerilog through the NBA region and then a continuous assignment, so that
+  a net it drives still resolves its drivers. Elaboration makes it from what the VHDL side's type is
+  made of, so neither frontend converts anything. The delta is observable and will surprise people,
+  so it MUST be documented for users.
+- Values convert as 3.6 maps them: `std_ulogic` to four-state bits and back, `bit` and `boolean` to
+  two-state bits, vectors of these left element to most significant bit, integers to `int` or
+  `longint` by their range, arrays to unpacked arrays and records to packed structs field by field
+  where the shapes agree. A port no rule covers is refused by name.
+- **An `inout` port across the boundary is two conversions**, split as 3.7 splits a port's driving
+  value from its effective value: the inner port's driving value goes out as one driver of the outer
+  signal, which resolves it by its own language's rule, and the outer signal comes back as the inner
+  port's effective value, not as a driver. Were each side's value a driver of the other, a value
+  driven once would be held for ever.
 
-Mixed-language behaviour MUST be covered by golden tests comparing against a
-reference simulator before it is considered working (see 14.3).
+Mixed-language behaviour MUST be covered by tests against a reference simulator before it is
+considered working. No free simulator runs both languages, so a design is checked by moving the
+boundary: the DUT in one language driven by a testbench in the other must match the DUT under its
+own language's testbench in Icarus Verilog or GHDL, transcript for transcript, the boundary's delta
+aside (14.3).
 
 ### 3.6 Value representation
 
-**The value representation MUST be four-state-shaped from the first line of
-code written**, even though full four-state support is scheduled later (M5).
-Retrofitting a second value plane onto a single-plane implementation is a
-rewrite of the entire runtime, not an extension.
+**The value representation MUST be four-state-shaped from the first line of code.** Retrofitting a
+second value plane onto a single-plane implementation is a rewrite of the runtime, not an extension.
 
-**Packed bit vectors** use two parallel bit planes, `aval` and `bval`, stored as
-arrays of `uint64_t`:
+**Packed bit vectors** use two parallel bit planes, `aval` and `bval`, stored as arrays of
+`uint64_t`:
 
 | `aval` | `bval` | value |
 |---|---|---|
@@ -396,61 +318,32 @@ arrays of `uint64_t`:
 | 0 | 1 | `Z` |
 | 1 | 1 | `X` |
 
-This is deliberately the same encoding as VPI's `s_vpi_vecval`, which makes
-`vpi_get_value` and `vpi_put_value` close to free — a direct benefit given
-cocotb's priority (section 9).
+This is deliberately the encoding of VPI's `s_vpi_vecval`, which makes `vpi_get_value` and
+`vpi_put_value` close to free.
 
-**Two-state fast path:** a vector whose `bval` words are all zero is
-two-state. The runtime SHOULD branch to specialised two-state operations in
-that case. Two-state is an optimisation of the four-state representation, never
-a separate engine. The interpreter does so for the commonest operations on
-values of one word (arithmetic, bitwise operations, comparisons, extension,
-part selects and branches), which is nearly everything VHDL computes, its values
-being two-state codes.
+**Two-state is an optimisation of the four-state representation, never a separate engine.** A vector
+whose `bval` words are all zero is two-state, and the runtime SHOULD branch to specialised
+operations in that case, as the interpreter does for the commonest operations on one-word values.
 
-**VHDL's values are codes in the same vectors.** `std_logic` has nine values
-(`U X 0 1 Z W L H -`) and does not fit two planes as a value, so it is not stored
-as one: a VHDL scalar is a two-state code in EIR's packed vector type. An
-enumeration, `std_ulogic` among them, is its position in as many whole bytes as
-its values need — **one byte per element** for `std_ulogic`, `bit`, `boolean` and
-`character`, holding the enumeration value — and an integer or a physical value
-such as `time` is signed, 32 or 64 bits as its range needs. A real, VHDL's or
-SystemVerilog's, is its IEEE 754 double's 64 bits in EIR's real type, held as 64 bits
-are; arithmetic and comparison read them as the double, and Convert goes between it
-and an integer, rounding halfway away from zero as both languages round. Records and
-constrained arrays are flat, as SystemVerilog's aggregates are (4.3), so a
-`std_logic_vector(7 downto 0)` is a 64-bit vector of eight codes.
+**VHDL's values are codes in the same vectors.** An enumeration, `std_ulogic` among them, is its
+position in as many whole bytes as its values need — one byte for `std_ulogic`, `bit`, `boolean` and
+`character` — and an integer or a physical value such as `time` is signed, 32 or 64 bits as its
+range needs. A real, of either language, is its IEEE 754 double's 64 bits. Records and arrays are
+flat (4.3), so a `std_logic_vector(7 downto 0)` is a 64-bit vector of eight codes, and everything
+built on bit ranges — drivers, part stores, change detection, waveforms, VPI — serves VHDL
+unchanged. What the bits mean is the object's encoding, which travels with it.
 
-So everything built on bit ranges serves VHDL unchanged: drivers per range and
-resolved segments (3.7), part stores, change detection, waveform capture and
-VPI. What VHDL adds is what a code means, which the type carries — for display,
-for conversion at language boundaries and for range checks. The second plane of
-such a vector is always zero, so a `std_logic` costs two bytes of arena rather
-than one until two-state values are packed into one plane, an optimisation
-`Type::storageWords` already anticipates.
-
-Conversion to the four-state form happens at language boundaries, in the
-waveform database and in the PLI, with `L`→`0`, `H`→`1`, `W`/`U`/`-`→`X`. An EIR
-object carries what its bits mean as its encoding, `std_ulogic` codes, `bit` or `boolean`
-codes, or the value itself, so that what converts needs nothing of VHDL but that: a
-`std_logic_vector(7 downto 0)` shows in a waveform as eight four-state bits.
-
-A new kind of storage for VHDL was rejected because each of the mechanisms above
-would have needed a second path kept in step with the first, which is the
-second engine this section exists to forbid.
-
-Integers, reals, strings and aggregate types use native representations
-described in the EIR type system (section 4).
+Conversion to four-state form happens at language boundaries, in the waveform database and in the
+PLI, with `L`→`0`, `H`→`1` and `W`, `U`, `-`→`X`: a `std_logic_vector(7 downto 0)` shows in a
+waveform as eight four-state bits. A separate kind of storage for VHDL was rejected, because each
+mechanism above would have needed a second path kept in step with the first.
 
 ### 3.7 Drivers and resolution
 
-**A driver owns a bit range of a signal, not the whole signal.** Each process that
-assigns to a signal owns a driver covering exactly the bits it assigns. A bit with
-one driver takes that driver's value directly; a bit with more than one computes its
-value with a resolution function.
-
-Granularity is the whole of what makes this section non-trivial, and getting it
-wrong rejects legal designs. The pattern that forces it is the ordinary one:
+**A driver owns a bit range of a signal, not the whole signal.** Each process that assigns a signal
+owns a driver covering exactly the bits it assigns. A bit with one driver takes that driver's value;
+a bit with more than one computes its value with a resolution function. The pattern that forces this
+granularity is the ordinary one:
 
 ```systemverilog
 logic [N-1:0] ready;
@@ -458,141 +351,84 @@ for (genvar i = 0; i < N; i++)
     channel u (.ready(ready[i]));
 ```
 
-Every instance drives one bit and no other. Were a driver to own the whole signal,
-these would be `N` drivers of `ready` and resolution would have to invent what each
-contributes to the bits it never touches — so a parameterised number of instances
-connected to an array could not be expressed at all.
+Every instance drives one bit and no other. Were a driver to own the whole signal, a parameterised
+number of instances connected to an array could not be expressed at all.
 
-**Overlap is what makes a signal multiply driven, not sharing a signal.** Two
-drivers of one signal whose ranges are disjoint are not in conflict and MUST NOT be
-treated as though they were. This distinction is load-bearing in SystemVerilog
-rather than a convenience:
+**Overlap is what makes a signal multiply driven, not sharing a signal.** Drivers of one signal
+whose ranges are disjoint are not in conflict and MUST NOT be treated as though they were.
 
-- A **variable** (`logic`, `bit`, `reg`) may be continuously driven by at most one
-  driver *per bit*. Disjoint part-drivers of one variable are legal; overlapping
-  ones are not, and are an error rather than something to resolve.
-- A **net** (`wire`, `wand`, `wor`, `tri`, `triand`, `trior`, `tri0`, `tri1`,
-  `supply0`, `supply1`) may have any number of overlapping drivers, resolved per bit
-  by the built-in table for its kind.
-- A bit of a net with no driver at all is its default — `z` for `wire` and `tri`,
-  and the pull value for `tri0`, `tri1`, `supply0` and `supply1` — and not the value
-  a neighbouring bit happened to resolve to. A bit that has a driver is X until that
-  driver first runs, as a variable is: before then it holds no value the design gave
-  it, and `z` would claim that nothing drives it.
+- A **variable** (`logic`, `bit`, `reg`) has at most one continuous driver *per bit*. Disjoint
+  part-drivers are legal; overlapping ones are an error rather than something to resolve.
+- A **net** may have any number of overlapping drivers, resolved per bit by the table for its kind.
+- A bit of a net that nothing drives holds its kind's default — `z`, or the pull value of `tri0`,
+  `tri1`, `supply0` and `supply1` — not what a neighbouring bit resolves to. A driven bit is X until
+  its driver first runs.
+- A driver's range is fixed at elaboration. A part-select at a position that is not constant writes
+  through the driver of every bit it could reach.
 
-Further requirements:
+**VHDL resolution functions are user code**, compiled to EIR like any subprogram, and the runtime
+MUST NOT assume resolution is a table. A function's parameter is an array as long as the bit has
+drivers, which only elaboration knows, so elaboration counts the drivers and the frontend then
+specialises the function for each count. The kernel calls it with the drivers' values, the first
+driver's leftmost; a VHDL driver starts at the initial value of the signal its process names. A
+function of composite values resolves whole values, so a process driving part of one is refused.
 
-- VHDL resolution functions are arbitrary user code. They are compiled to EIR like
-  any other subprogram and invoked by the runtime. The runtime MUST NOT assume
-  resolution is a built-in table.
-- **Elaboration asks for a resolution function by its driver count.** Its one parameter
-  is an array as long as the bit has drivers, which only elaboration knows, while the
-  adapter specialises a subprogram for a static shape (5.2). So an EIR object names
-  its function as the design does, by library, the package, entity or architecture declaring
-  it, and signature, with the width of the subelement it resolves, and once elaboration has
-  counted the drivers the session
-  asks the frontend, in a second child over the same sources, for the function
-  specialised to each count, a definition of its own even where an architecture declares
-  it, links what comes back into the design, and elaborates
-  again with it, which binds each segment to its function. The kernel calls it for each
-  subelement with its drivers' values, the first driver's left; a VHDL driver starts at
-  the initial value of the signal its process names, which for an out port is the port's
-  default rather than that of the signal connected to it, and is what the function sees
-  of it until it first runs. Before the run begins the kernel resolves each such signal
-  from its drivers' starting values, which is where the signal starts. A function of
-  composite values, of arrays or of records, resolves each whole value, so a process
-  driving only part of one is refused at elaboration: the function would be given a
-  value no process assigned.
-- **Single-driver bits MUST bypass resolution entirely** where resolving a lone
-  driver is known to return its value unchanged, and a signal all of whose bits
-  are such MUST bypass it as a whole rather than bit by bit. This is the common
-  case and it is on the hot path (13.4). It is known of the built-in tables of
-  every net kind but the pulled and supply ones, and of a VHDL resolution
-  function proven to be the identity on a lone driver by calling it once with each
-  value of its element type, where that is an enumeration of sixteen values or fewer,
-  as NVC does; `ieee.std_logic_1164.resolved` is one. The adapter proves it as it
-  translates, running the function on each as a constant function (5.2), and an EIR
-  object's resolution records it.
-- **Any other resolution function is called for a lone driver too.** VHDL defines a
-  resolved signal's value as its resolution function applied to its sources,
-  however many there are (IEEE 1076 section 14.7.3.2), and a user's function need
-  not return a lone driver's value. Bypassing it would be a different language.
-- A driver's range is fixed at elaboration. A part-select whose bounds are not
-  constant does not create a driver over the bits it might touch; it is a write
-  through the driver that owns them, and a design that drives one signal from two
-  processes through variable selects is multiply driven for every bit either could
-  reach.
+**Resolution is bypassed for a lone driver only where it is known to change nothing**: the built-in
+table of every net kind but the pulled and supply ones, and a VHDL function proven to return a lone
+driver's value by calling it once with each value of an element type of sixteen values or fewer, as
+`ieee.std_logic_1164.resolved` is. Single-driver bits are the hot path (13.4), and a signal all of
+whose bits bypass resolution MUST bypass it as a whole. **Any other function is called for a lone
+driver too**: VHDL defines a resolved signal's value as its function applied to its sources, however
+many there are (IEEE 1076 section 14.7.3.2).
 
-**A driver is a range and nothing more until two of them overlap.** It is the signal,
-the lowest bit it drives and its width. A process's write set records the same thing
-— each entry is an object and the bits written, by the rule above for a variable
-select — so the drivers of a signal are known before anything runs, and elaboration
-finds where they overlap. The runtime keeps no record of which driver owns which bit, because nothing
-about ownership changes once elaboration is done.
+**Drivers are known before anything runs.** A process's write set records each object and the bits
+it writes, so elaboration finds where drivers overlap, and the runtime keeps no record of which
+driver owns which bit.
 
-- **A signal none of whose bits has two drivers carries no driver state at all**,
-  unless its resolution must still be applied to a lone driver, as above. Every
-  legal variable is one, and so is most of every net. A write goes straight into
-  the signal, which is how such a signal bypasses resolution as a whole.
-- **A signal with a bit driven more than once is split into segments**: maximal runs
-  of bits driven by the same set of drivers. Each driver of such a signal has its own
-  value in the arena, in both planes, over its range; each segment lists its drivers
-  and the resolution it applies — the built-in table for the net's kind, or a call to
-  a compiled VHDL resolution function. A write through one of these drivers updates
-  the driver's value, resolves the segments that driver covers and no others, and
-  writes the result into the signal through the ordinary change-detected path (6.2),
-  so a contended bit wakes nothing unless its resolved value moves.
-- **Whether a store goes through a driver depends on the instance, not the body.** A
-  compiled body is shared by every instance of its module, and one instance's output
-  may land on a resolved net where another's does not. A store therefore names its
-  target by the position of its object among the objects the process writes, and each
-  bound process carries a table from that position to the signal itself or to its
-  drivers of it — more than one when it writes separate ranges of the object, in which
-  case a part store goes through the one holding its bits. A JIT, which specialises a
-  process per instance, burns the answer in as a constant.
-- **What a store writes need not be what a read of the same name reads.** A port connection
-  may name a second object for the instance's drivers of the port, and elaboration binds the
-  port to the slot it reads and the slot its drivers write, a port collapsed onto it taking
-  both. Every driver of the port at any depth then drives that slot, and every read sees the
-  other. It is how a VHDL inout port associated through a conversion or with part of a signal
-  keeps its driving value apart from its effective value (5.2), which no single slot can hold.
+- **A signal with no bit driven twice carries no driver state**, unless its resolution applies to a
+  lone driver: a write goes straight into the signal.
+- **A signal with a bit driven more than once is split into segments**, maximal runs of bits with
+  one set of drivers. Each of its drivers has its own value in the arena over its range. A write
+  through a driver resolves the segments it covers and no others, and writes the result through the
+  ordinary change-detected path, so a contended bit wakes nothing unless its resolved value moves.
+- **Whether a store goes through a driver depends on the instance, not the body.** One compiled body
+  serves every instance, and only some of them may land on a resolved net, so a store names its
+  target by its object's position among the objects the process writes, and each bound process maps
+  that position to the signal or to its drivers of it.
+- **What a port's drivers write may differ from what it reads.** A connection may name a second
+  object for the instance's drivers of a port, and elaboration binds the port's reads to one slot
+  and its drivers to the other. That is how a VHDL `inout` associated through a conversion or with
+  part of a signal keeps its driving value apart from its effective value (5.2).
 
-A per-bit table of owning drivers was rejected because it holds at run time a fact
-that is fixed at elaboration, and pays a lookup on every write, single-driver ones
-included. Routing every write through a driver whether or not anything overlaps it
-puts a step on the path this section requires to be bypassed.
+A per-bit table of owning drivers was rejected because it holds at run time a fact fixed at
+elaboration and pays a lookup on every write. Routing every write through a driver, whether or not
+anything overlaps it, puts a step on the path this section requires to be bypassed.
 
 ### 3.8 Determinism
 
-**Simulation results MUST be bit-identical across runs of the same build on the
-same inputs.** Determinism is not a nicety: without it, waveform diffing and
-regression triage are impossible, and intermittent failures cannot be
-reproduced.
+**Simulation results MUST be bit-identical across runs of the same build on the same inputs.**
+Without it, waveform diffing and regression triage are impossible and intermittent failures cannot
+be reproduced.
 
-Concrete invariants:
-
-- Process execution order within a region MUST be a stable insertion order
-  (FIFO). It MUST NOT depend on pointer values, allocation addresses, or the
-  iteration order of hash-based containers.
-- Code MUST NOT iterate `std::unordered_map`/`std::unordered_set` in any way
-  that affects simulation results, diagnostic ordering, or generated output.
-  Use ordered containers or sort explicitly where order is observable.
-- All randomisation MUST draw from an explicit seeded generator. The seed
-  MUST be settable from the command line.
-- The kernel is single-threaded in the initial arc, which makes determinism
-  achievable. Any later parallelism MUST preserve it.
+- Process execution order within a region MUST be a stable insertion order (FIFO). It MUST NOT
+  depend on pointer values, allocation addresses, or the iteration order of hash-based containers.
+- Code MUST NOT iterate `std::unordered_map` or `std::unordered_set` in any way that affects
+  simulation results, diagnostic ordering or generated output. Use ordered containers or sort
+  explicitly where order is observable.
+- All randomisation MUST draw from an explicit seeded generator, and the seed MUST be settable from
+  the command line.
+- The kernel is single-threaded. Any later parallelism MUST preserve determinism.
 
 ### 3.9 Initialisation and X-propagation
 
-At time zero, four-state variables and signals start at `X` (SystemVerilog) or
-`U` (VHDL `std_logic`) unless explicitly initialised. X-propagation follows the
-language standards: pessimistic in expressions, with the standard-defined
-exceptions for `case`/`casex`/`casez` and conditional operators.
+At time zero, four-state variables and signals start at `X` (SystemVerilog) or `U` (VHDL
+`std_logic`) unless explicitly initialised. X-propagation follows the language standards:
+pessimistic in expressions, with the standard-defined exceptions for `case`, `casex`, `casez` and
+the conditional operator.
 
-A two-state simulation mode, where `X` is replaced by a deterministic `0`, MAY
-be offered as an explicit user-selected mode for performance. It MUST NOT be
-the default and MUST be announced in the transcript when active, because silent
-X-suppression hides real design bugs.
+A two-state simulation mode, where `X` is replaced by a deterministic `0`, MAY be offered as an
+explicit user-selected mode. It MUST NOT be the default and MUST be announced in the transcript when
+active, because silent X-suppression hides real design bugs.
 
 ---
 
