@@ -87,7 +87,7 @@ view, design structure and transcript.
 
 %files
 %license LICENSE
-%doc README.md docs/third_party.md docs/mixed-language.md
+%doc README.md docs/third_party.md docs/mixed-language.md docs/libraries.md docs/signal-lists.md
 %{_bindir}/enzan
 %{_prefix}/lib/enzan/
 %{_includedir}/enzan/
