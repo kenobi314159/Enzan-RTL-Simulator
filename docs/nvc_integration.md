@@ -1,8 +1,7 @@
 # NVC integration
 
-How Enzan uses NVC as its VHDL frontend: which revision, which files, how they are driven, and
-what the M6 spike measured before the milestone committed to the boundary of DESIGN_GUIDE.md
-section 5.2. The guide is normative; this file records what was found and how to repeat it.
+How Enzan uses NVC as its VHDL frontend: which revision, which files, how they are driven, what
+was measured before the frontend was built on that boundary, and how to repeat it.
 
 ## Revision
 
@@ -14,7 +13,7 @@ revision before the pin moves (see *Upgrading*).
 
 Enzan uses NVC's lexer, parser, semantic analysis, simplification and bounds checking, and
 consumes the `tree_t` each design unit leaves behind. It does not use NVC's elaboration, lowering,
-code generation, JIT, runtime or scheduler (section 5.2).
+code generation, JIT, runtime or scheduler.
 
 Analysing a file is the sequence NVC's own `nvc -a` runs, and nothing else:
 
@@ -108,8 +107,8 @@ files NVC's tree carries beside each library's sources, which name every unit, t
 from and the units it needs first, and analyses each file with `enzan-vhdl-library`, a build-time
 tool around the frontend, into `lib/enzan/vhdl` beside `bin/`. It builds the libraries of 1993,
 which serve 2000 and 2002 as well, 2008 and 2019, with the Synopsys packages NVC puts in `ieee`
-and without VITAL, the gate-level timing library section 1.3 rules out: 129 analyses, a few
-seconds of a build.
+and without VITAL, the gate-level timing library, gate-level simulation being out of scope: 129
+analyses, a few seconds of a build.
 
 **Each `ieee` file is analysed by a separate run**, as NVC's own build does. Analysing several of
 them in one run reports eight errors in `numeric_std`'s body, eight `?=` and `?/=` operators on
@@ -144,8 +143,8 @@ and call user functions 61 times, such as `index_size_f(IMEM_SIZE)` in a subtype
 memory model initialises a signal from an impure function that opens a file when it is given a name,
 which it is not by default.
 
-Whichever way generics are folded (section 5.2), something has to evaluate those 61 calls with the
-generics' values, and 5.2 rules out NVC's evaluator for it.
+Whichever way generics are folded, something has to evaluate those 61 calls with the generics'
+values, and NVC's evaluator is not built.
 
 ## Embedding
 
@@ -154,12 +153,12 @@ generics' values, and 5.2 rules out NVC's evaluator for it.
 - **Threads.** `thread_init` is required, and analysis starts no thread.
 - **Diagnostics.** `diag_set_consumer` receives every error, warning and note as a `diag_t`, with
   its level, text, location and hints through `diag_get_text`, `diag_get_loc`, `diag_hints` and
-  `diag_get_hint`, which is what translating them into ENZ2000–2999 needs (section 10.6).
+  `diag_get_hint`, which is what translating them into Enzan's ENZ2000–2999 needs.
 - **Fatal errors end the process.** `fatal`, `fatal_at`, `fatal_errno` and `fatal_trace` detach the
   consumer, print to standard error and call `exit(1)`, which is Enzan's status for a wrong command
-  line (section 8.1). Not all of them are NVC's internal errors: a design whose `library` clause
-  names a library nobody built reaches one, and so does an unreadable source, which Enzan's own
-  reading of the file forestalls.
+  line. Not all of them are NVC's internal errors: a design whose `library` clause names a library
+  nobody built reaches one, and so does an unreadable source, which Enzan's own reading of the file
+  forestalls.
 
 So the adapter runs NVC's analysis in a child process, forked for each analysis: a fatal error
 ends the child, and every analysis starts from NVC's initial state. The child writes each
@@ -175,5 +174,5 @@ ends it before they can run.
 2. Link a driver doing only the sequence above, with `enzan_nvc_seam.c` in place of `eval.c`, against
    `lib/libnvc.a` with `-Wl,-Map=<file>`. The archive members the map lists as included are the
    file list; compare them with the list above.
-3. Repeat the NEORV32 measurements above, and run the VHDL golden tests (section 5.2 relies on them
-   to catch drift).
+3. Repeat the NEORV32 measurements above, and run the VHDL golden tests, which are what catch
+   drift.

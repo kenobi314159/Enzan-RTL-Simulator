@@ -1,7 +1,7 @@
 # `src/codegen` — EIR-B to bytecode
 
 Lowers the behavioural layer of EIR to the register-based bytecode the virtual machine
-executes (DESIGN_GUIDE.md section 6.1).
+executes.
 
 ## Responsibility
 
@@ -12,18 +12,18 @@ executes (DESIGN_GUIDE.md section 6.1).
 - Write every width the operation needs into the instruction, so that the interpreter's
   inner loop needs nothing but the instruction and the data.
 - Resolve system task arguments to frame offsets and constant indices.
-- Compile every subprogram's body as a process's is (DESIGN_GUIDE.md section 4.1). A call keeps
-  the caller's half — where its arguments are and where the result goes — and the callee's body
-  keeps where its parameters and result live; which binding of the callee a call reaches is
-  elaboration's to say, so nothing here resolves one to the other.
+- Compile every subprogram's body as a process's is. A call keeps the caller's half — where its
+  arguments are and where the result goes — and the callee's body keeps where its parameters and
+  result live; which binding of the callee a call reaches is elaboration's to say, so nothing here
+  resolves one to the other.
 
 ## What this component deliberately does not do
 
 **No optimisation at all** — no constant folding, no dead code elimination, no register
-coalescing. Optimisation belongs in elaboration (section 2.1) or in the JIT (section
-6.3). While the interpreter is still the reference the JIT will be differentially
-tested against, an optimising bytecode compiler would be a third place for a semantic
-bug to hide, and section 1.2 puts correctness above performance.
+coalescing. Optimisation belongs in elaboration or in the JIT. While the interpreter is
+still the reference the JIT will be differentially tested against, an optimising
+bytecode compiler would be a third place for a semantic bug to hide, and correctness
+comes before performance.
 
 **No knowledge of instances.** A compiled body refers to state by EIR object index, and
 the runtime resolves those per instance. That is what keeps compiled code proportional

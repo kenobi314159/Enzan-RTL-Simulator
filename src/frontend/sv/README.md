@@ -1,6 +1,6 @@
 # `src/frontend/sv` — the SystemVerilog frontend
 
-Turns SystemVerilog source text into EIR, and nothing else (DESIGN_GUIDE.md section 5).
+Turns SystemVerilog source text into EIR, and nothing else.
 
 ## Responsibility
 
@@ -10,18 +10,17 @@ Turns SystemVerilog source text into EIR, and nothing else (DESIGN_GUIDE.md sect
   body.
 - Translate procedural blocks, continuous assignments and expressions into EIR-B.
 - Specialise the modules another language's units instantiate, as each `eir::UnitRequest` asks,
-  through a module of its own instantiating the one asked for, which is dropped after
-  (DESIGN_GUIDE.md section 18, M7); and list the modules the sources declare, and the names they
-  instantiate and declare nowhere, from their syntax alone, for the other frontend.
+  through a module of its own instantiating the one asked for, which is dropped after; and list
+  the modules the sources declare, and the names they instantiate and declare nowhere, from their
+  syntax alone, for the other frontend.
 - Check an instance of another language's unit against a module standing for it, built from its
   `eir::UnitInterface`, and make it ask for the unit with its values rather than translate it.
 
 ## What a frontend must not do
 
-Section 5 is explicit: a frontend MUST NOT flatten hierarchy, make scheduling decisions or
-allocate runtime state. Section 17.4 adds that slang-specific code stays confined to this
-directory — **no slang type may appear in an EIR header**, because that would make every
-downstream component depend on slang.
+A frontend MUST NOT flatten hierarchy, make scheduling decisions or allocate runtime state,
+and slang-specific code stays confined to this directory — **no slang type may appear in an
+EIR header**, because that would make every downstream component depend on slang.
 
 If this component ever needs something from the rest of Enzan beyond `common` and `eir`,
 that is a design smell and should be raised rather than worked around.
@@ -31,21 +30,21 @@ that is a design smell and should be raised rather than worked around.
 slang resolves names and types, evaluates parameters and expands generate constructs, and
 hands back an elaborated AST. Enzan then runs its *own* elaboration over the EIR. The two
 are not the same job: slang's produces a typed tree per parameterisation, Enzan's produces
-an instance tree and a state arena layout for one chosen top level (section 2.1).
+an instance tree and a state arena layout for one chosen top level.
 
 The consequence for this component is that **a parameterised module becomes one EIR
-definition per distinct parameterisation**, with a numeric suffix distinguishing them. That
-keeps parameters out of EIR entirely, which is what makes an analysed unit reusable without
-re-evaluating anything. The suffixes are assigned in hierarchy-walk order, so they are the
-same on every run (section 3.8).
+definition per distinct parameterisation**, named for its parameter values and for the
+interfaces its ports are connected to. That keeps parameters out of EIR entirely, which is
+what makes an analysed unit reusable without re-evaluating anything, and it gives a
+parameterisation the same name wherever it is produced.
 
 ## Deliberate translation decisions
 
-**A delay counts the time unit of the scope stating it** and is translated into a count of
-the run's unit (DESIGN_GUIDE.md section 3.1): the module's `` `timescale `` or `timeunit`, or a
-task's package's, rounded to that scope's precision and then, where the run's unit is fixed and
-coarser, to the run's with a warning (ENZ1009). `$time` is divided back into the calling
-module's unit, and a system task call carries that unit for `%t`.
+**A delay counts the time unit of the scope stating it** and is translated into a count of the run's
+unit: the module's `` `timescale `` or `timeunit`, or a task's package's, rounded to that scope's
+precision and then, where the run's unit is fixed and coarser, to the run's with a warning
+(ENZ1009). `$time` is divided back into the calling module's unit, and a system task call carries
+that unit for `%t`.
 
 **A block header's event control becomes the process's sensitivity list**, not a statement
 inside its body. The scheduler re-arms a process, so the body has to begin after the wait.
@@ -61,16 +60,16 @@ a signal as wide as it; the assignment extends or truncates as one written out w
 1800 section 23.3.3.7). An `inout` cannot be, since its assignment would run both ways.
 
 **A construct that is not supported abandons the whole process.** A partially translated
-body would produce a design that simulates and gives the wrong answer, which section 1.2
-ranks as the worst possible outcome. Refusing to elaborate is the safe failure.
+body would produce a design that simulates and gives the wrong answer, which is the worst
+possible outcome. Refusing to elaborate is the safe failure.
 
 **A reference into another instance is a hierarchical reference**, an object with a relative
 path and no storage, which elaboration binds. Creating storage for it instead would make
 `dut.state` a copy nothing ever writes.
 
 **A package variable is a reference too**, with the absolute path `/<package>/<variable>`. The
-variables modules refer to make up a definition of the package's own, `<package>::`, built
-once every module has been translated (DESIGN_GUIDE.md section 5.1).
+variables modules refer to make up a definition of the package's own, `<package>::`, built once
+every module has been translated.
 
 **An interface is an instance, and a member through an interface port is a reference through
 the port** (`@in/data`); each instance records what its interface ports are connected to.
@@ -85,11 +84,10 @@ time zero. It is marked `subroutineStatic` in the EIR, so that a call inlined in
 assignment is not its continuous driver and no inferred sensitivity list watches it; callers
 watching what one another write there would wake each other for ever.
 
-**A select or member access is a window of bits.** Unpacked arrays and structs are stored
-flat (DESIGN_GUIDE.md section 4.3), so `mem[i].field[3:0]` composes into one offset into one
-object and is read with `ReadObjectPart` and written with a part store. An index that could
-land past an inner dimension is checked, and outside it the offset is X, which reads as X and
-writes nothing.
+**A select or member access is a window of bits.** Unpacked arrays and structs are stored flat, so
+`mem[i].field[3:0]` composes into one offset into one object and is read with `ReadObjectPart` and
+written with a part store. An index that could land past an inner dimension is checked, and outside
+it the offset is X, which reads as X and writes nothing.
 
 **Declarations are hoisted, keeping their scope in their name.** A generate block's
 variables become module objects called `genblk1.q`, and block-local variables are created
@@ -98,14 +96,13 @@ variable to be found first matters for upgrades: block-local and loop variables 
 scopes slang has moved between releases, and a frontend that depends on where they are
 attached breaks when it is rebased.
 
-**Code a constant condition rules out is not translated.** The branch of a procedural `if`
-whose condition the parameters fix, and the arm of a `?:` whose condition is known, can never
-run, so only the live one is translated. That is also what lets a construct the parameters make
-degenerate there be excused: `DeadCode` walks every instance, records the dead branches and
-arms, and slang's errors of that family that lie in one in every instance become ENZ1008
-warnings (DESIGN_GUIDE.md section 10.6). slang wraps a statement or expression around a bad
-one in an invalid node, so the translator unwraps those and reaches the live branch through
-them.
+**Code a constant condition rules out is not translated.** The branch of a procedural `if` whose
+condition the parameters fix, and the arm of a `?:` whose condition is known, can never run, so only
+the live one is translated. That is also what lets a construct the parameters make degenerate there
+be excused: `DeadCode` walks every instance, records the dead branches and arms, and slang's errors
+of that family that lie in one in every instance become ENZ1008 warnings. slang wraps a statement or
+expression around a bad one in an invalid node, so the translator unwraps those and reaches the live
+branch through them.
 
 ## Not yet supported
 

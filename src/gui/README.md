@@ -1,18 +1,17 @@
 # `src/gui` — the Qt 6 front end
 
 The interactive debugging environment: the design hierarchy, the objects in a scope, the
-waveform view and the transcript (DESIGN_GUIDE.md section 10).
+waveform view and the transcript.
 
 ## Responsibility
 
 - **The theme** (`Theme.h`) — the colours everything here paints with, loaded from a Tcl script.
 - **The configuration directory** (`Configuration.h`) — `~/.config/enzan`, which the window makes
   the first time it opens and reads each time it does: `config`, naming the theme, and the themes
-  in `themes/` (DESIGN_GUIDE.md section 10.9), which *View → Theme* chooses between, with the
-  built-in themes, adds to and reads again, and `layout.ini`, where the docks were. The kernel
-  never reads it.
+  in `themes/`, which *View → Theme* chooses between, with the built-in themes, adds to and reads
+  again, and `layout.ini`, where the docks were. The kernel never reads it.
 - **Signal lists** (`SignalList.h`) — reading, resolving and writing the wave window's list as a
-  file (DESIGN_GUIDE.md section 10.8).
+  file.
 - **Tcl's syntax** (`TclSyntax.h`) — splitting a file into commands with Tcl's parser, evaluating
   nothing, and quoting a word so that it reads back. Signal lists are read with it.
 - **The session** (`KernelSession.h`) — the GUI's end of the connection, on Qt's event loop, and
@@ -28,20 +27,19 @@ waveform view and the transcript (DESIGN_GUIDE.md section 10).
 
 `common`, `eir`, `ipc`, `wavedb`, Qt 6 and Tcl.
 
-**Not `runtime`, `elab`, `codegen` or the frontends.** The GUI is a separate process from the
-kernel (section 2.2) and must stay separable from it: everything it knows about a simulation
-arrives over the socket. It uses `wavedb` for the client-side copy of the traces it is drawing —
-the same database class the kernel fills, fed from the protocol instead of from an arena.
+**Not `runtime`, `elab`, `codegen` or the frontends.** The GUI is a separate process from the kernel
+and must stay separable from it: everything it knows about a simulation arrives over the socket. It
+uses `wavedb` for the client-side copy of the traces it is drawing — the same database class the
+kernel fills, fed from the protocol instead of from an arena.
 
 ## Design notes
 
-**Every colour comes from the theme file, and there is no fallback in C++.** Section 10.5
-forbids colour literals in widget code, and a default written in C++ would be exactly that. The
-shipped themes, `themes/dark.tcl` and `themes/light.tcl`, are compiled in as resources and named
-for their files; the dark one is loaded first, and a user theme is layered over it, so a file
-that sets three colours changes three colours. A key added to `ThemeColors.def` without being
-added to every shipped theme fails a test rather than producing a black rectangle on someone's
-screen.
+**Every colour comes from the theme file, and there is no fallback in C++.** Widget code holds no
+colour literals, and a default written in C++ would be exactly that. The shipped themes,
+`themes/dark.tcl` and `themes/light.tcl`, are compiled in as resources and named for their files;
+the dark one is loaded first, and a user theme is layered over it, so a file that sets three colours
+changes three colours. A key added to `ThemeColors.def` without being added to every shipped theme
+fails a test rather than producing a black rectangle on someone's screen.
 
 **A theme can change while the window is open**, so it reaches the window one way only:
 `MainWindow::applyTheme`, which opening the window calls too. Whatever keeps a colour past the
@@ -50,10 +48,10 @@ the transcript's lines, which remember which of the theme's colours they are in 
 colour, and the highlight swatches. Sizes are worked out from the desktop's fonts each time, never
 from the window's, so that a theme setting none gives the desktop's back.
 
-**The theme is Tcl** because section 10.5 says so, rather than inventing a settings format for
-one purpose. The script gets one command and nothing else: a theme is a
-list of colours, and an interpreter that also offered file access would make "copy this theme
-from the internet" a more exciting decision than it should be.
+**The theme is Tcl** rather than a settings format invented for one purpose. The script gets two
+commands and nothing else, `theme` for a colour and `font` for a size: a theme is a list of
+settings, and an interpreter that also offered file access would make "copy this theme from the
+internet" a more exciting decision than it should be.
 
 **A signal list is not even that.** It is split into commands by `Tcl_ParseCommand`, through
 `splitTclCommands`, and never evaluated, so there is no interpreter for a list to reach. That is
@@ -67,13 +65,13 @@ loading a list all go through them and through `insertSignalRows`. The Structure
 *Add to Wave* entries go further: they run the signal list command `add wave ?-r? <scope>`, so
 the menu and the file cannot come to disagree about what a scope adds.
 
-**Rendering is bounded by pixels, not by transitions** (section 10.3). Each trace is drawn by
-asking the waveform database for one summary per pixel column, which it answers from its resident
-time index by binary search, so a column spanning a million transitions costs what an empty one
-costs. Values are read only for the columns quiet enough to print one, which bounds those reads
-by the pixel count too. This is why the database was built the way it was before a single pixel
-was drawn: it is very hard to retrofit, and getting it wrong makes the viewer unusable on exactly
-the large designs Enzan is for.
+**Rendering is bounded by pixels, not by transitions.** Each trace is drawn by asking the waveform
+database for one summary per pixel column, which it answers from its resident time index by binary
+search, so a column spanning a million transitions costs what an empty one costs. Values are read
+only for the columns quiet enough to print one, which bounds those reads by the pixel count too.
+This is why the database was built the way it was before a single pixel was drawn: it is very hard
+to retrofit, and getting it wrong makes the viewer unusable on exactly the large designs Enzan is
+for.
 
 **Row geometry comes from the tree beside the canvas.** The names and the traces are two widgets
 in a splitter, and the canvas reads its row positions from the tree's `visualRect`. Scrolling,
@@ -87,10 +85,9 @@ and each of them collides with a name the rest of Enzan uses correctly — `Imag
 front end.
 
 **Nothing here blocks.** The session sits on Qt's event loop through a socket notifier: a busy
-kernel never freezes the interface, which is the mirror image of section 2.2's requirement that a
-slow interface never stall the kernel. Both come from the same arrangement — neither side waits
-for the other.
+kernel never freezes the interface, the mirror image of the rule that a slow interface never stalls
+the kernel. Both come from the same arrangement — neither side waits for the other.
 
 ## What this milestone does not include
 
-The **Source** and **Processes** windows of section 10.2 are absent.
+The **Source** and **Processes** windows are absent.

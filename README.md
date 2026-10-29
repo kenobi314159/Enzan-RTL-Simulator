@@ -104,7 +104,8 @@ enzan --top tb counter.vhd counter_tb.vhd
 enzan --work neorv32 --top neorv32_tb -f neorv32_files.f --ieee-asserts disable --assert-level error
 ```
 
-`enzan --help` lists the options.
+`enzan --help` lists the options. A larger build keeps its analysed units in libraries and drives
+Enzan from `make`; [`docs/libraries.md`](docs/libraries.md) shows how.
 
 ### Running a simulation under the GUI
 
@@ -140,7 +141,7 @@ reads as the list of them, `{001122}{112233}`, nesting as `{{11}{22}}{{22}{33}}`
 type is an `enum` shows the name of its value — `S_SEND`, not `3'h2` — and picking a radix shows
 the number instead. A scope's parameters and localparams are listed in **Objects** after its
 signals and drop into the wave window as constant rows, so `ACK_DELAY` can sit beside the traces
-it explains. The full model is [`DESIGN_GUIDE.md` §10.7](DESIGN_GUIDE.md).
+it explains.
 
 The kernel and the GUI are separate processes and talk over a Unix domain socket, so a window on
 your machine can drive a simulation on another one:
@@ -187,7 +188,7 @@ group "The FIFO" {
 ```
 
 Adding signals in the window writes the matching command into the transcript, ready to copy.
-DESIGN_GUIDE.md section 10.8 has the whole format.
+[`docs/signal-lists.md`](docs/signal-lists.md) has the whole format.
 
 ### Running a cocotb testbench
 
@@ -281,8 +282,7 @@ cmake --install build/gcc-release --prefix ~/.local
 puts `enzan` in `~/.local/bin` and the rest of Enzan where it finds it from there: the front end
 in `libexec/enzan`, VHDL's standard libraries in `lib/enzan`, the VPI and VHPI headers in
 `include/enzan` and the cocotb makefile in `share/enzan/cocotb`. An installation can be moved, and
-versions installed side by side each run their own parts. `DESIGN_GUIDE.md` section 11.5 has the
-layout.
+versions installed side by side each run their own parts.
 
 ### Presets
 
@@ -313,8 +313,8 @@ cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF -DENZAN_ENABLE_VHDL=OF
 | Option | Default | Effect |
 |---|---|---|
 | `ENZAN_BUILD_TESTS` | `ON` | build the unit test suites |
-| `ENZAN_ENABLE_SYSTEMVERILOG` | `ON` | build the slang-based frontend (M1) |
-| `ENZAN_ENABLE_VHDL` | `ON` | build the NVC-based frontend (M6); needs flex, zstd and the `third_party/nvc` submodule |
+| `ENZAN_ENABLE_SYSTEMVERILOG` | `ON` | build the slang-based frontend |
+| `ENZAN_ENABLE_VHDL` | `ON` | build the NVC-based frontend; needs flex, zstd and the `third_party/nvc` submodule |
 | `ENZAN_BUILD_GUI` | `ON` | build the Qt 6 front end; needs Qt 6 and Tcl |
 | `ENZAN_ENABLE_JIT` | `OFF` | build the LLVM JIT backend (M8) |
 | `ENZAN_WERROR` | `OFF` | treat warnings as errors, as CI does |
@@ -322,12 +322,6 @@ cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF -DENZAN_ENABLE_VHDL=OF
 | `ENZAN_SANITIZERS` | empty | semicolon-separated sanitizer list |
 
 ## Contributing
-
-Before changing anything, read [`DESIGN_GUIDE.md`](DESIGN_GUIDE.md). It is the
-normative specification, not background reading: it fixes the simulation
-semantics, the coding standards, the testing requirements and the definition of
-done, and a commit that makes it wrong is a defect regardless of whether the code
-works.
 
 The checks CI runs are all runnable locally:
 
@@ -358,13 +352,15 @@ cmake --build --preset gcc-release --target enzan-bench
 ```
 
 Every source file begins with `// SPDX-License-Identifier: GPL-3.0-or-later`.
-Commit messages carry a category prefix; see section 17.1 of the design guide.
+Commit messages carry a category prefix, followed by the path of the area when the change is
+confined to one: `runtime: scheduler: Drain the NBA region before Observed`.
 
 ## Documentation
 
-- [`DESIGN_GUIDE.md`](DESIGN_GUIDE.md) — the normative specification and
-  development guide: architecture, simulation semantics, coding standards,
-  testing strategy and roadmap. Start here.
+- [`docs/libraries.md`](docs/libraries.md) — analysis libraries, file lists, and
+  building a design with `make`.
+- [`docs/signal-lists.md`](docs/signal-lists.md) — the file a wave window's
+  signals are saved to and loaded from.
 - [`docs/third_party.md`](docs/third_party.md) — dependencies, their licenses
   and their pinned revisions.
 - [`docs/mixed-language.md`](docs/mixed-language.md) — simulating a design of
@@ -372,8 +368,6 @@ Commit messages carry a category prefix; see section 17.1 of the design guide.
 - [`docs/installing.md`](docs/installing.md) — installing a release's packages,
   or its source tarball.
 - [`docs/releasing.md`](docs/releasing.md) — making a release, for maintainers.
-- `docs/` — human-facing documentation (user manual, tutorials), to be
-  derived from the design guide as the project matures.
 
 ## Status and roadmap
 
@@ -384,8 +378,7 @@ command line, file lists and analysis libraries (M3), with analysis costing one 
 parameterisation (M3.1); VPI and cocotb (M4); four-state completion and language breadth (M5);
 VHDL via NVC (M6); and mixed-language simulation (M7).
 
-Next is M8, performance. See [`DESIGN_GUIDE.md` §18](DESIGN_GUIDE.md#18-roadmap) for the full
-roadmap and the exit criteria of each milestone.
+Next is M8, performance.
 
 ## License
 

@@ -1,8 +1,7 @@
 # `packaging/`
 
 The recipes Enzan's packages are built from, one per distribution's own format, and the scripts
-that build and test them. DESIGN_GUIDE.md section 11.7 is normative; `docs/releasing.md` says when
-they run.
+that build and test them. `docs/releasing.md` says when they run.
 
 | File | What it is |
 |---|---|

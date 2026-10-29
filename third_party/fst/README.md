@@ -12,17 +12,17 @@ from `gtkwave3-gtk3/src/helpers/fst/`.
 | `block_format.txt` | GTKWave — the on-disk format, kept because it is the only documentation of it | MIT |
 | `fst_config.h` | **Enzan's own**, stands in for GTKWave's autoconf `config.h` | GPL-3.0-or-later |
 
-All are compatible with Enzan's GPLv3 (DESIGN_GUIDE.md section 1.4), and each is recorded in
-`docs/third_party.md` with its upstream URL and pinned revision.
+All are compatible with Enzan's GPLv3, and each is recorded in `docs/third_party.md` with its
+upstream URL and pinned revision.
 
 ## Why this is vendored at all
 
-Section 11.2 reserves vendoring for cases where it is unavoidable, and this is one. FST is not
-released as a library: no distribution packages a `libfst` with headers, and GTKWave ships it as
-source inside its own tree. Verilator vendors the same files for the same reason. The alternative
-— writing an FST writer from scratch — means reimplementing a compressed block container with a
-hierarchy blob and variable-length value encoding, which is a large amount of work to arrive at a
-format a reader might still reject.
+Vendoring is reserved for cases where it is unavoidable, and this is one. FST is not released as a
+library: no distribution packages a `libfst` with headers, and GTKWave ships it as source inside its
+own tree. Verilator vendors the same files for the same reason. The alternative — writing an FST
+writer from scratch — means reimplementing a compressed block container with a hierarchy blob and
+variable-length value encoding, which is a large amount of work to arrive at a format a reader might
+still reject.
 
 ## Rules for this directory
 
