@@ -434,593 +434,251 @@ active, because silent X-suppression hides real design bugs.
 
 ## 4. The Enzan Internal Representation (EIR)
 
-EIR is Enzan's own language-neutral representation. It is the contract between
-the frontends and everything downstream.
-
-**hdlConvertor was considered as a shared representation and rejected.** It is
-an ANTLR-based *parser*: it produces a syntax tree with no elaboration, no type
-resolution, no parameter or generic evaluation and no generate expansion.
-Elaboration is the difficult part of a frontend, not parsing. EIR is built
-in-house instead.
+EIR is Enzan's own language-neutral representation, the contract between the frontends and
+everything downstream. A shared representation such as hdlConvertor was considered and rejected: it
+is a parser, with no elaboration, type resolution or generic evaluation, and elaboration is the
+difficult part of a frontend.
 
 ### 4.1 Layers
 
-**EIR-S (structural)** describes design units and hierarchy: modules and
-entities, ports and their directions and types, parameters and generics,
-instances, signals and nets, processes, continuous assignments, subprograms.
-Language-neutral.
+**EIR-S (structural)** describes design units and hierarchy: modules and entities, ports, parameters
+and generics, instances, signals and nets, processes, continuous assignments, subprograms.
 
-**EIR-B (behavioural)** describes process and subprogram bodies as a
-control-flow graph of three-address instructions over typed values. Operations
-cover arithmetic, logical and bitwise ops, part- and bit-selects, concatenation,
-comparison, branching, calls, signal reads, blocking and non-blocking drives,
-and the suspension primitives (`wait` on event, on time, on condition).
+**EIR-B (behavioural)** describes process and subprogram bodies as a control-flow graph of
+three-address instructions over typed values, including signal reads, blocking and non-blocking
+drives, and the suspension primitives (`wait` on an event, a time or a condition).
 
-**A subprogram is a body that is called rather than scheduled.** It is the same
-control-flow graph a process is, over registers of its own, with parameters, a
-result, and the read and write sets of what it reaches beyond its parameters
-(4.2). It belongs to the definition that declares it — a package's to the
-package, an architecture's to the architecture — and a call names it by its
-definition and its name, resolved when the design is compiled as an instance is
-resolved at elaboration. Nothing in it is particular to VHDL: a SystemVerilog
-function is the same thing, and the frontend that inlines one today can call it
-instead without anything downstream changing.
+**A subprogram is a body that is called rather than scheduled**: the same control-flow graph a
+process is, over registers of its own, with parameters, a result, and the read and write sets of
+what it reaches beyond its parameters (4.2). It belongs to the definition declaring it, and a call
+names it by that definition and its name. Nothing in it is particular to VHDL.
 
-- **A subprogram is specialised by the lengths of its unconstrained
-  parameters**, as a unit is by its generics (5.2), so that every width in EIR
-  stays fixed: `numeric_std."+"` called on 8-bit and on 32-bit operands is two
-  bodies, each named for its lengths. So it is by the values of the scalars its
-  own widths are computed from, which a call has to give statically, and of
-  those it passes on to what it calls as widths, where the call has them:
-  `slv_array_deser(v, items)` is a body for each number of items it is called
-  with. A variable of a subprogram folds where every path reaching it leaves it
-  a static value, so that a width computed into one, `width := v'length /
-  items`, is as static as what it is computed from.
-- **A call's frame lives on one stack the kernel owns.** A subprogram never
-  suspends — a VHDL procedure that waits, like a SystemVerilog task with a delay,
-  is inlined into its caller, and so is one with a signal parameter, whose body
-  needs to know which signal it is — so every frame a process pushes is popped
-  before the process suspends, and one stack serves every process of a
-  single-threaded kernel (6.4). It is laid out at elaboration, sized for the
-  deepest chain of calls the design can make, and a recursive design is given a
-  depth limit, configurable, past which the run stops with a diagnostic naming the
-  subprogram, as the delta limit does (3.2).
-- **A caller's sets include its callees'.** A process declares what it touches
-  itself; elaboration adds what its callees touch, bound to the instances they
-  touch it in, so the bound process's sets are exactly what a run of it can reach
-  (4.2).
-- **A value whose length is known only when it is computed** — `integer'image`,
-  `to_string`, a concatenation of either — lives in scratch the kernel resets
-  whenever a process suspends. It is a temporary of one activation, which is all
-  a VHDL expression of unconstrained type is; anything that has to outlive it is
-  stored in an object of fixed size or in the heap of 4.3.
+- **A subprogram is specialised by the lengths of its unconstrained parameters**, and by the scalar
+  values its own widths are computed from, so that every width in EIR stays fixed: `numeric_std."+"`
+  on 8-bit and on 32-bit operands is two bodies.
+- **A call's frame lives on one stack the kernel owns.** A subprogram never suspends — one that
+  waits, or takes a signal parameter, is inlined into its caller instead — so every frame is popped
+  before its process suspends, and one stack serves the single-threaded kernel. It is sized at
+  elaboration for the deepest chain of calls the design can make; a recursive design is given a
+  configurable depth limit, past which the run stops with a diagnostic, as the delta limit does.
+- **A caller's read and write sets include its callees'**, bound to the instances they touch.
+- **A value whose length is known only when it is computed** — `integer'image`, `to_string` — lives
+  in scratch the kernel resets whenever a process suspends.
 
 ### 4.2 The core invariant
 
-**Every EIR process MUST be expressible as a pure function over an explicit
-state arena, with a declared read set and write set.**
+**Every EIR process MUST be expressible as a pure function over an explicit state arena, with a
+declared read set and write set.**
 
-This is the single most important structural rule in the project. It is what
-keeps later optimisation open: static partitioning for threading, JIT
-compilation, activity-based scheduling and checkpointing all depend on knowing
-exactly what a process touches. Code that lets a process reach arbitrary global
-state closes those doors permanently and MUST be rejected in review.
+This is the single most important structural rule in the project. It keeps later optimisation open:
+static partitioning for threading, JIT compilation, activity-based scheduling and checkpointing all
+depend on knowing exactly what a process touches. Code that lets a process reach arbitrary global
+state closes those doors permanently and MUST be rejected.
 
 ### 4.3 State layout
 
-The elaborated design's entire mutable state lives in a **single contiguous
-arena**. Every signal, variable and driver is assigned a byte offset at
-elaboration. EIR and bytecode refer to state by offset, never by pointer.
+The elaborated design's entire mutable state lives in a **single contiguous arena**. Every signal,
+variable and driver is given a byte offset at elaboration, and EIR and bytecode refer to state by
+offset, never by pointer. Checkpoint and restore become a memcpy; the waveform database reads values
+in place; a JIT burns offsets in as constants; and locality can be tuned by reordering the layout.
 
-The consequences are all deliberate: checkpoint and restore become a memcpy of
-the arena; the waveform database reads values directly out of it without
-indirection; a JIT can burn offsets into generated code as constants; and cache
-locality becomes something that can be optimised by reordering the layout.
+**Aggregates are stored flat.** A fixed-size unpacked array or struct, like a VHDL array or record,
+is the vector of all its bits, the left element and the first field highest, exactly as its packed
+equivalent would be. An element or a field is a window of those bits, so every rule about bits
+applies to it unchanged and an element is read in place. The declared dimensions are kept beside the
+object, down to a packed array's element, for VPI, the waveform database and the wave window.
 
-**A fixed-size unpacked array or an unpacked struct is stored flat**, as the vector of all
-its bits, the left element and the first field highest, exactly as the packed equivalent
-would be. An element, a field or a select of one is a window of those bits at an offset, so
-every rule about bits — drivers per bit range (3.7), part stores, change detection — applies
-to it unchanged, and an element is read in place rather than by copying the array. What the
-flat vector loses, the declared dimensions, is kept beside it for VPI and the waveform
-database, which present an array as an array. A packed array's dimensions are kept the same
-way, down to the element they are dimensions of, so that a wave window shows `logic
-[3:0][7:0]` as four bytes rather than as 32 bits (10.7). A waveform file leaves memories
-out, as a VCD does; the database a wave window reads records an unpacked array as it does any
-other signal, up to the width limit of 7.1.
+**Driver state** occupies the arena only where 3.7 gives a driver a value of its own. The segment
+tables and the store routing are fixed at elaboration and belong to the image rather than to the
+arena. Nothing about drivers is sized at run time.
 
-A driver occupies the arena only where 3.7 gives it a value of its own: on a signal
-with a bit driven more than once, each of its drivers holds both planes over its
-range, laid out at elaboration beside the signal. A signal with at most one driver per
-bit has nothing here but itself. The segment tables and the store routing of 3.7 are
-fixed at elaboration and only read during a run, so they belong to the image rather
-than to the arena, and a checkpoint has nothing of theirs to save. Nothing about
-drivers is sized at run time, which on the write path 13.4 forbids.
+**An access value is a handle.** What VHDL's `new` allocates has a number and size known only as the
+design runs, so it lives in a heap the kernel owns beside the arena, and an access value is an
+integer handle into it, numbered in allocation order with the last freed reused first, so that a run
+allocates the same handles every time (3.8). The heap is state a process reaches, so a process that
+dereferences a handle has it in its read or write set (4.2).
 
-**An access value is a handle.** What VHDL's `new` allocates — a textio `line`, a
-VUnit queue — has a number and a size known only as the design runs, which is
-what the arena cannot hold. It lives in a heap the kernel owns, beside the arena,
-and an access value in the arena is a handle into that heap: an integer, numbered
-in the order the allocations happen, so that a run allocates the same handles
-every time (3.8) and change detection, waveforms and VPI see an integer like any
-other. Allocating and deallocating are calls into the runtime from a process,
-which RTL's write path never makes; textio is where they happen. The heap is
-state a process reaches, so a process that dereferences a handle has the heap in
-its read or write set (4.2), and a checkpoint (M9) saves it with the arena. A
-freed handle is reused, the last freed first, which keeps a run's handles the same
-every time without the heap growing with every line written.
-
-**std.textio runs natively.** NVC's textio body grows a line through accesses to strings
-of run-time lengths, which registers of fixed width cannot hold, so it is not translated:
-`write`, `writeline`, `readline`, `read` and `endfile` are system functions the runtime
-runs over its heap and its files, as NVC's runtime runs its foreign subprograms, and the
-adapter calls them for textio's subprograms and VHDL's predefined file operations. A file
-of a type other than text holds its values' bits in whole bytes, the lowest first: Enzan's
-own format, as each simulator has its own, which a run reads back as it wrote it. A file a
-subprogram declares is closed as the subprogram returns (IEEE 1076 section 6.4.2.5), so
-that what it wrote is there for whatever reads the file next. A value
-of an unconstrained array type goes with its count of elements, so that `read(f, v, n)`
-gives `v` as many of its leftmost elements as fit, leaves the rest of `v` as it was, and
-gives `n` how many it read, as GHDL does. A
-string whose length only the run shows, which a function builds from images and writes,
-is built in a line of its own: the function is inlined with its `return`s appending
-their pieces to that line, and the line is appended to the one written.
+**std.textio runs natively.** Its body grows lines through strings of run-time lengths, which
+fixed-width registers cannot hold, so textio's subprograms and VHDL's predefined file operations are
+system functions the runtime runs over its heap and its files. A file of a type other than text
+holds its values' bits in Enzan's own format, as each simulator has its own.
 
 ### 4.4 Libraries
 
-Analysis output is serialised into a library directory, named by the user
-(`work/` is the conventional choice, not a default — see 8.2). Entries carry a
-key over the source text plus the analysis options that affect the result, so
-unchanged units are never re-analysed.
+Analysis output may be serialised into a library directory (8.2).
 
-**A library has a logical name as well as a path**, because that is what a design
-refers to: `library ieee;` resolves against a name. The name is fixed when the
-library is created and stored in the library's own index, so that the two ends of a
-build cannot disagree about it; 8.2 covers how it is set and overridden.
+**A library has a logical name as well as a path**, because a design refers to a library by name:
+`library ieee;` resolves against a name. The name is fixed when the library is created and stored in
+the library's own index, so that the two ends of a build cannot disagree about it.
 
-**An entry's file name comes from the unit it holds, and its key lives inside
-it.** The two are separate on purpose. A path that were a hash of the source could
-not be named by a Makefile, and a build that cannot predict its own outputs cannot
-be incremental; a key that were only the path could not tell a stale entry from a
-current one. So the name is what `make` depends on and the key is what Enzan
-checks.
+**An entry is named for the source it holds, and its key lives inside it.** A path that were a hash
+of the source could not be named by a Makefile, and a build that cannot predict its own outputs
+cannot be incremental; a key that were only the path could not tell a stale entry from a current
+one. So the name is what `make` depends on, and the key is what Enzan checks.
 
-**Everything that changes what analysis produces belongs in the key**, not only
-the source text: the macro definitions, the include path, the time unit, the
-serialised format version and Enzan's own version. A define that is outside the key is a define
-whose change the library cannot see, and the result is a simulation that runs
-and is wrong.
+**Everything that changes what analysis produces belongs in the key**: the source text, the files it
+included, the macro definitions, the include path, the time unit, the format version and Enzan's own
+version. A define outside the key is a change the library cannot see, and the result is a simulation
+that runs and is wrong.
 
-The serialised form MUST carry a format version, and a version mismatch MUST
-cause clean re-analysis rather than a crash or, worse, silent misbehaviour. The
-same applies to a truncated or corrupted entry, which a checksum detects: an
-interrupted write leaves a file that would otherwise decode into plausible
-nonsense.
+**The format version MUST be bumped when the frontend's translation changes**, not only when the
+encoding does: a unit from an older translator decodes perfectly and simulates differently. A
+version mismatch, or a truncated or corrupted entry, which a checksum detects, MUST cause clean
+re-analysis, never a crash or a half-decoded result.
 
-**The format version MUST be bumped when the frontend's translation changes**,
-not only when the encoding does. A unit produced by an older translator decodes
-perfectly and simulates differently, which is the harder failure to notice of
-the two.
+**Using a library is opt-in, and there is no implicit one.** Nothing is written or consulted until
+the user names a library. A cache that can change a simulation result must be one a user can stop
+using without first having to find it.
 
-**Using a library is opt-in, and there is no implicit one.** Nothing is written
-and nothing is consulted until the user names a library (8.2), so a simulation runs
-from a one-time analysis by default. The version is in the key and the format
-version is disciplined, but a cache that can change a simulation result is a thing
-a user must be able to stop doing without having to find it first — and a cache
-that appeared without being asked for is one they would have to find first.
+**VHDL's standard libraries are part of the tool, not a cache.** `std`, `ieee` and NVC's own `nvc`
+are analysed from NVC's sources when Enzan is built and found from the executable's own directory
+(11.5), without being named, since `library ieee;` has to resolve with no flag. Nothing a user does
+writes to them. A library the user names `ieee` replaces them.
 
-**VHDL's standard libraries are part of the tool, not a cache.** `std`, `ieee` and
-NVC's own `nvc`, which NVC's 2008 `ieee` bodies use, are analysed from the sources
-NVC ships when Enzan is built, and are found from the executable's own directory, in
-the installation or build tree it belongs to (11.5), without being named. Nothing a
-user does writes to them, they change only when Enzan does, and
-`library ieee;` has to resolve with no flag in every VHDL tool, so none of the
-reasons above applies; they are to a VHDL design what a compiler's standard headers
-are to a C one. A library the user names `ieee` replaces them (8.2).
+**A library holds VHDL as NVC's analysed units, not as EIR.** A VHDL unit is analysed against the
+units analysed before it, which only NVC's units can serve, and a design is translated into EIR for
+the generic values its run gives it (5.2), which no library can know. An entry holds a source's key
+and the units it declares. As in NVC and GHDL, a library accumulates: analysing a source again
+replaces its units, and a unit no source declares any more stays until `lib clean`.
 
-**A library holds VHDL as NVC's analysed units, not as EIR.** VHDL is analysed one unit at a
-time against units already analysed — `use work.pkg.all`, an entity bound to a component —
-so a library holding only EIR could not be analysed against; and a design is translated
-into EIR for the generic values its run gives it (5.2), which no library can know. NVC's
-units live in the library's `vhdl/` directory, in NVC's own format, and a run translates
-from them, parsing nothing again. A VHDL source's entry holds its key — its text, the VHDL
-standard, the library it went into, the state of the libraries it was analysed against, and
-Enzan's version, which names the NVC revision — and the units it declares, for `lib list`.
-It holds no delays, so it fixes no time unit (8.2). As NVC's and GHDL's do, the library
-accumulates: analysing a source again replaces its units, and a unit no source declares any
-more stays until `lib clean`. The entries are written once NVC's analysis of the sources
-succeeds, whatever the translation after it does, because NVC's units are in the library by
-then, and units no entry records would be units a run from the library is told are not there.
-A run naming a unit that only NVC's files hold, as an analysis ended part-way leaves one, says
-so (ENZ6031).
-
-A hit is currently all or nothing, and that is a property of the frontend rather
-than of the store. SystemVerilog analysis hands every source to one slang
-compilation, because a module cannot be type-checked without the packages it
-imports; so either every file's entry is present and current, in which case
-nothing is analysed at all, or one is missing and everything is analysed and
-every entry rewritten. Entries are nonetheless kept **per source file**, because
-that is the shape this section describes and the shape a per-unit frontend will
-want. Only the hit rule changes when one arrives.
+**A SystemVerilog hit is all or nothing**, a property of the frontend rather than of the store.
+Every source goes to one slang compilation, because a module cannot be type-checked without the
+packages it imports, so either every entry is current and nothing is analysed, or everything is.
+Entries are kept per source file nonetheless, the shape a per-unit frontend would want; only the hit
+rule would change.
 
 ---
 
 ## 5. Frontends
 
-A frontend's only job is to turn source text into EIR. Frontends MUST NOT
-flatten hierarchy, make scheduling decisions, or allocate runtime state.
+A frontend's only job is to turn source text into EIR. Frontends MUST NOT flatten hierarchy, make
+scheduling decisions, or allocate runtime state.
 
 ### 5.1 SystemVerilog via slang
 
-[slang](https://sv-lang.com/) is MIT-licensed and explicitly designed to serve
-as a frontend for simulators. It is the most standards-compliant open-source
-SystemVerilog frontend available and carries no licensing constraints. It is
-used for lexing, preprocessing, parsing, type checking and elaboration.
+[slang](https://sv-lang.com/) is MIT-licensed, designed to serve as a frontend for simulators, and
+the most standards-compliant open-source SystemVerilog frontend. It lexes, preprocesses, parses,
+type-checks and elaborates; Enzan's adapter walks its elaborated AST and emits EIR, and everything
+from EIR onwards is Enzan's own work. slang requires **C++20**, which sets the project's language
+floor.
 
-slang provides an elaborated AST with parameters resolved and generate blocks
-expanded. `src/frontend/sv/` walks that AST and emits EIR. slang performs no
-simulation, so everything from EIR onwards is Enzan's own work.
-
-**A generate block is part of the name of everything inside it**, objects and instances
-alike, joined with a dot: `/tb/gen[0].q` and `/tb/gen[0].u_dut/count`. A block is named as
-IEEE 1800 section 27.6 names it — its label, `genblk<n>` when it has none, and for one
-iteration of a loop the loop's label and the iteration's index. Without the block, two
-iterations instantiating `u_dut` would be two instances with one path, and nothing in a
-waveform, the front end or VPI could tell them apart. Changing how a block is named changes
-the EIR the frontend produces, so it bumps the serialisation version of 4.4.
-
-**A hierarchical reference is an object with a path and no storage.** A testbench reading
-`dut.core.state` gets an object whose path leads from the referencing instance to the one
-that declares `state`, and elaboration binds it to that object's slot once the whole tree
-exists, so reads, writes, sensitivity and drivers all see the real signal. The path is
-relative — down as `core/state`, up and across as `../u_peer/ready` — because one
-definition serves every instance of a parameterisation (M3.1), and a path from the root
-would be right for only one of them. A path that names nothing is an elaboration error.
-
-**A package variable is one variable however many modules use it** (IEEE 1800 section 26).
-Its package's variables are a definition of their own, named `<package>::` so that no
-module can share the name, and with one instance at the root beside the top level,
-`/<package>`, created only when something refers to one. A module's reference to one is a
-reference with the only absolute path there is, `/<package>/<variable>`, since a package has
-no position in the hierarchy for a relative path to start from. Only the variables a module
-refers to are in the definition. A package's constants, types, functions and tasks need no
-instance: slang resolves the first two, and a call is inlined like any other. A package is
-never a top level, and VPI's root does not list it as a module.
-
-**An interface instance is an instance**, its body a definition like a module's and its signals
-stored under its own path, `/tb/bus/data`. A member a module reaches through an interface port
-is a reference through that port, `@in/data`, and each instance records what its interface
-ports are connected to — an interface instance of its parent, or the parent's own port, which
-is how an interface is passed down. An element of an array of instances or interfaces is an
-instance named with its index, `u[2]`, and a port that takes an array reaches its elements as
-`@in[2]/data`. Elaboration follows those bindings, so two instances of
-one definition on two interfaces each reach their own. A modport restricts what a module may
-touch, which slang checks, and changes nothing about where a signal is.
-
-**A function or task is inlined into the process that calls it.** The body is translated in
-place, its variables bound to registers, so a task's delays suspend the caller as its own
-statements would, the caller's read and write sets are exactly what the call touches (4.2),
-and nothing at run time keeps a call stack. A recursive call is refused, since an inlined
-body cannot contain itself; slang folds a recursive call with constant arguments before
-Enzan sees it, which is where recursion in RTL usually is. EIR has callable subprograms
-(4.1), which the VHDL frontend uses; calling a SystemVerilog function rather than inlining it
-is a change to this frontend alone, and a task with a delay stays inlined either way.
-
-slang requires **C++20**, which sets the project's language floor.
+- **A generate block is part of the name of everything inside it**, joined with a dot:
+  `/tb/gen[0].u_dut/count`, the block named as IEEE 1800 section 27.6 names it. Without it, two
+  iterations instantiating `u_dut` would be two instances with one path. Changing how a block is
+  named changes the EIR produced, so it bumps the format version (4.4).
+- **A hierarchical reference is an object with a path and no storage**, bound by elaboration to the
+  object it names, so reads, writes, sensitivity and drivers all see the real signal. The path is
+  relative — `core/state`, `../u_peer/ready` — because one definition serves every instance of a
+  parameterisation.
+- **A package's variables are a definition of their own, `<package>::`**, with one instance at the
+  root, `/<package>`, created when something refers to one, and are referred to by the absolute path
+  `/<package>/<variable>`. A package's constants, types and subroutines need no instance.
+- **An interface instance is an instance**, its signals stored under its own path. A member reached
+  through an interface port is a reference through that port, and each instance records what its
+  interface ports are connected to, so two instances of one definition on two interfaces each reach
+  their own. A modport restricts what a module may touch and changes nothing about where a signal
+  is.
+- **A function or task is inlined into the process that calls it**, so a task's delays suspend the
+  caller and the caller's read and write sets are exactly what the call touches. A recursive call is
+  refused, unless slang folds it to a constant. Calling a SystemVerilog function as an EIR
+  subprogram instead would be a change to this frontend alone.
 
 ### 5.2 VHDL via NVC
 
-[NVC](https://github.com/nickg/nvc) provides the VHDL frontend. It supports
-almost all of VHDL-2008 and is actively maintained.
+[NVC](https://github.com/nickg/nvc) provides the VHDL frontend. It supports almost all of VHDL-2008
+and is actively maintained.
 
-**Why NVC and not GHDL.** [GHDL](https://github.com/ghdl/ghdl) is the other
-credible open-source VHDL frontend, and on one axis it is the better candidate:
-it deliberately exposes its analysis frontend as a shared library, `libghdl`,
-which already has third-party consumers — `pyGHDL` and the language server,
-`pyVHDLModel`, and `ghdl-yosys-plugin`, a C++ tool that walks GHDL's analysed
-VHDL and emits an unrelated IR. That last one is almost exactly the job
-`src/frontend/vhdl/` has to do, with years of evidence that it is possible. The
-API-drift risk recorded in section 19 is genuinely lower for GHDL, and this
-section should not pretend otherwise.
+**Why NVC and not GHDL.** GHDL exposes its analysis as a library with third-party consumers, and its
+risk of API drift is genuinely lower. NVC wins on everything else. GHDL is Ada, which brings GNAT
+into every build and the Ada runtime into a C++20 binary, while NVC is C11. NVC's analysis can be
+built in part, without LLVM, where `libghdl` is built whole or not at all. NVC's `tree_t` has
+uniform, checked accessors, where GHDL's `Iir` is an untyped handle over hundreds of aliased node
+kinds. And NVC covers nearly all of VHDL-2008, with a maintainer responsive on frontend defects.
 
-NVC wins on everything else, and the balance is not close:
+**The integration.** NVC is a complete simulator, not a frontend library, with no stable API for
+"give me the elaborated VHDL". So:
 
-- **GHDL is written in Ada.** Using it puts GNAT in the dependency set for CI
-  and for every contributor, and links the Ada runtime into a C++20 binary —
-  elaboration ordering, a secondary stack, and exceptions at the boundary. It
-  also degrades the sanitiser configuration of 11.4, which would no longer see
-  into the frontend. NVC is C11: one toolchain, one runtime, `extern "C"`.
-- **Only NVC can be consumed in part.** Its analysis stage pulls in no LLVM, and
-  with NVC's constant evaluator replaced (see the integration plan below) it is 34
-  of NVC's C files, about 66,000 of its 172,000 lines. GHDL has no equivalent
-  subset; `libghdl` is built whole, with GNAT, or not at all.
-- **`tree_t` is a better tree to walk.** It is arena-allocated behind uniform
-  accessors that assert node kinds at runtime with usable messages. GHDL's `Iir`
-  is an untyped integer handle over several hundred node kinds with heavy field
-  aliasing, and its generated bindings are maintained for Python, not C++.
-- **Coverage and momentum.** NVC covers nearly all of VHDL-2008 except PSL and
-  has VHDL-2019 work landing; GHDL targets VHDL-2008. NVC releases steadily and
-  its maintainer is responsive on frontend-level defects, which matters when the
-  dependency is on internals nobody has promised to keep.
+- NVC is a git submodule pinned to a revision, and Enzan builds the subset of its files that
+  analysis needs with its own CMake rather than NVC's autotools.
+- Its lexer, parser and semantic analysis are used, and the `tree_t` is consumed after its
+  simplification and bounds checking. Its lowering, code generation, JIT, runtime and scheduler are
+  not.
+- **Its constant evaluator is replaced.** NVC folds locally static expressions by running them on
+  its JIT; Enzan supplies the two functions the simplifier calls instead, so the trees keep those
+  expressions and the adapter folds them as it translates.
 
-The VHDL designs Enzan is measured against — NEORV32 in M6, VUnit and OSVVM in M9+ —
-are all first-class NVC targets.
+Two costs follow, and neither is an API problem. NVC's runtime implements much of the standard
+packages as builtins and foreign functions, so **Enzan supplies its own implementation of whatever
+the trees leave predefined or foreign**. And **semantics that settle at elaboration** — generic
+folding, subtype resolution, arrays sized by generics — are Enzan's work rather than NVC's.
 
-**Understand the integration honestly before working on it.** NVC is not a
-frontend library; it is a complete simulator written in C that lowers VHDL
-through its own `vcode` IR to LLVM and runs it on its own scheduler with its own
-VHPI runtime. There is no stable public API for "give me the elaborated VHDL".
+**The adapter folds generics.** An entity and its architecture are translated once per set of
+generic values a design gives them, and of the bounds its unconstrained ports take from their
+actuals, into a unit named for them as a SystemVerilog specialisation is (8.2): subtypes sized,
+generate statements expanded and constant functions run as it goes, from the top down the hierarchy.
+EIR holds no expression over a generic. The alternative, units carrying expressions over their
+generics for elaboration to evaluate, would have made every width an expression and generate
+statements conditional structure — the largest change to EIR, elaboration and VPI anything could
+make — to buy libraries reusable at values no design asked for. A VHDL library keeps NVC's units
+instead (4.4).
 
-The integration plan is therefore:
+**NVC runs in a child process**, forked for each analysis. NVC keeps its state in globals and ends
+the process on a fatal error, which a design naming a library nobody built is enough to cause; in a
+child that is a diagnostic, and every analysis starts from NVC's initial state. **The child
+translates as well**, and sends the parent EIR in its serialised form (4.4), so NVC's trees never
+reach the process that simulates. It translates the hierarchy under the top, so a unit nothing
+instantiates cannot stop a design; with no top named it is the one entity nothing instantiates, and
+with several it names them and translates nothing.
 
-- Vendor NVC as a git submodule pinned to a specific revision.
-- Use its lexer, parser and semantic analysis, consuming the resulting `tree_t`
-  after its simplification and bounds-check passes.
-- **Do not** use its `lower`/`vcode`/LLVM path, its runtime, or its scheduler.
-- **Replace its constant evaluator.** NVC's simplification folds locally static
-  expressions by lowering them and running them on its JIT interpreter, so
-  analysis as NVC builds it links 80 of its 102 objects, the path the previous
-  point rules out among them. Enzan does not compile `eval.c` and supplies the
-  two functions the simplifier calls instead, so a tree arrives with those
-  expressions unfolded and the adapter folds them as it translates. On NEORV32
-  that is 159 expressions, 135 of them implicit type conversions, and the
-  analysis is otherwise unchanged.
-- `src/frontend/vhdl/` walks the analysed tree and emits EIR, exactly as the
-  SystemVerilog adapter does.
+**Sources are analysed in dependency order**: each after the sources declaring the primary units it
+names, in the order given otherwise, so a file list need not put a package before its users.
 
-NVC builds with autotools, which does not compose with the build of 11.1. Since
-the plan uses only the analysis stage, the spike SHOULD establish that Enzan can
-compile that file subset directly with its own CMake target, and record the file
-list in `docs/nvc_integration.md`; driving NVC's `configure` from
-`ExternalProject` is the fallback if it cannot.
+What a VHDL design becomes in EIR, in outline:
 
-**Two costs are larger than they look, and neither is an API problem.**
+- **A process** loops for ever, its variables registers. It is a **driver** of each signal it
+  assigns (3.7), so two processes assigning one unresolved signal are refused.
+- **Arrays and records are flat** (4.3), and an index known only at run time is checked against the
+  bounds, as VHDL's index check is.
+- **A function is a subprogram translated once per shape** it is called with (4.1); a procedure, a
+  subprogram taking a signal, and a pure function that is a single `return` are inlined.
+- **Generate statements and blocks are flattened** into their architecture and named inside it,
+  `g(0).u`. **A component binds by default** (IEEE 1076 section 7.3.3), or as a configuration
+  specification says.
+- **A port associated with a whole signal is that signal's storage.** Any other association goes
+  through an object of the instantiating unit, kept equal to its actual by a process the kernel runs
+  as part of the signal update. An `inout` so associated has two such objects, its driving value and
+  its effective value (3.7). A port of mode out, inout or buffer is always a source of its actual.
+- **Constant functions run in the adapter.** A call that does not fold where a static value is
+  needed is refused, naming the call and the statement its run stopped at.
+- **The IEEE packages are translated from their own bodies.** `report` and a failed `assert` report
+  their severity, and failure, or the severity `--assert-level` names, ends the run.
 
-*Predefined and foreign subprograms.* NVC implements much of `std.standard`,
-`std_logic_1164`, `numeric_std`, `std.textio` and `std.env` as builtins,
-intrinsics or foreign functions that its **runtime** resolves. Discarding that
-runtime means Enzan MUST supply its own implementation of everything the
-analysed tree leaves predefined or foreign, and the set is discovered only by
-walking it. This is more certain than any drift risk and is not avoided by
-choosing a different frontend — GHDL is built the same way — so it is scope for
-M6 rather than an argument about 5.2.
+**Across the language boundary.** Both frontends analyse into one design. An instance of the other
+language's unit names a placeholder and asks the other frontend for the unit its values make, and
+the session links the two by port name.
 
-*Semantics that settle only at elaboration.* Consuming trees after
-simplification and bounds checking is the right boundary: it is what section 5
-means by a frontend that does not flatten hierarchy, and Enzan elaborates for
-itself. The consequence is that generic folding, subtype resolution and
-unconstrained arrays sized by a generic are Enzan's work, not NVC's, and Enzan
-reimplements them rather than reusing NVC's `elab`. The spike sized this
-(`docs/nvc_integration.md`), and the adapter does it, as the next paragraph decides.
+- SystemVerilog instantiates a VHDL entity by its name, the entity's interface given to slang as the
+  module it would otherwise not find, so that the instance type-checks. The architecture is the
+  entity's default one, since choosing another takes a `config`, which Enzan does not read.
+- VHDL instantiates a SystemVerilog module through a component of the module's name, bound to the
+  module when no entity of that name exists — the default binding of IEEE 1076 extended to the other
+  language, as commercial tools extend it. The component's generics are the module's parameters.
+- Each side specialises for the values the other gives, so the session alternates between the
+  frontends until neither asks for a unit the other has not given, with a bound on the rounds so
+  that a hierarchy recursing through both languages is reported rather than followed for ever. A
+  VHDL port whose width depends on generics takes the width the translation for the instance's
+  values gives it.
 
-**The adapter folds generics.** That was the spike's to decide, since 2.1 had left it
-open for VHDL. Unlike slang, NVC hands over a tree with the expressions over
-generics still in it, so the adapter can either fold them as it translates each
-instance — one unit per set of values, as SystemVerilog has — or emit units that
-carry those expressions for elaboration to evaluate per instance. The second gives VHDL the
-reusable library of 2.1, at the cost of EIR holding expressions over a unit's
-generics, an elaborator that specialises units by them, and constant functions
-run at elaboration; the first needs neither of the first two. Subtypes, generate statements
-and constant functions that depend on a generic are what the spike sizes the two
-against.
-
-Measured on NEORV32 (`docs/nvc_integration.md`): 60 of its 77 entities have
-generics, 610 in all; outside processes and subprograms its architectures refer to
-them 802 times, hold 209 generate statements, and call user functions 61 times,
-such as `index_size_f(IMEM_SIZE)` in a subtype. Since NVC's evaluator is replaced,
-**both choices run those functions with the generics' values** — the first in the
-adapter, the second at elaboration — so constant functions are not what tells them
-apart.
-
-The first was chosen. The adapter translates an entity and its architecture once per
-set of generic values a design gives them, into a unit named for the values as a
-SystemVerilog specialisation is (8.2): subtypes sized, generate statements expanded and
-constant functions run as it goes, starting from the units a design names as its top
-and following its instances down. EIR holds no expression over a generic, and
-elaboration specialises nothing. The second would have made generate statements
-conditional structure in EIR and every width an expression, the largest change to
-EIR, elaboration and VPI that anything in M6 would make, to buy libraries reusable at
-values no design has asked for; what a VHDL library keeps for those values instead is
-NVC's analysed units (4.4), from which a design that needs them translates them
-without parsing anything again.
-
-Known risks, to be confirmed by a spike at the start of M6: NVC's internal APIs
-are not stability-guaranteed and will drift; NVC is C and uses its own arena
-allocators and global state, so reentrancy and ownership need checking; and the
-C/C++20 boundary needs careful `extern "C"` wrapping. The spike found one
-analysis context per process, no threads started by analysis, and fatal errors
-that end the process with status 1 rather than reaching Enzan's diagnostics; its
-findings are in `docs/nvc_integration.md`.
-
-**So NVC runs in a child process**, forked for each analysis. A fatal error, which
-a design naming a library nobody built is enough to cause, then ends the child and
-is reported as a diagnostic, and every analysis starts from NVC's initial state
-rather than the previous one's. The child reports each of NVC's diagnostics back as
-NVC gives it, so what the user sees is what one process would have shown.
-
-**The child translates as well.** A design to simulate is analysed and translated in
-one child, which sends the parent the result in EIR's own encoding (4.4), so NVC's
-trees, and NVC's memory, never reach the process that runs the simulation. What the
-child translates is the hierarchy under the top, so that a unit nothing instantiates cannot
-stop a design for using something the adapter lacks. When no top is named it is the one
-entity of the sources that none of them instantiates, and with several the child translates
-nothing and names them, as elaboration names the candidates for a top among modules: which
-one is the top is the user's to say, and an entity nothing instantiates need not be a top at
-its defaults at all, as a wrapper whose default generics overflow an integer is not.
-`enzan analyse` with no top translates nothing, since a library holds NVC's units rather
-than EIR (4.4).
-
-**Sources are analysed in dependency order.** A unit is analysed against the units
-analysed before it (IEEE 1076 section 13.1), and a file list need not name a package
-before what uses it, as GHDL's `-m` and Questa's `-autoorder` let it not. So each
-source is scanned for the primary units it declares and those of the work library it
-names, and analysed after the sources declaring them, in the order given otherwise:
-one already in an order VHDL can analyse is kept, and sources naming each other's
-units, which no order of whole files satisfies, stay as given.
-
-What a VHDL unit becomes in EIR:
-
-- An entity's ports and its architecture's signals are objects holding codes (3.6),
-  each starting at its declared value or its type's left bound, as VHDL's objects do.
-- A process is an EIR process that loops for ever, its declarations initialised on
-  entry; its variables are registers, which keep their values while it waits. It is
-  marked as **driving** the signals it assigns, so that elaboration counts each as a
-  driver as it counts a continuous assignment (3.7), and two processes assigning one
-  unresolved signal are refused. A process that cannot suspend is refused too, since it
-  would never let time advance.
-- A signal assignment is `Drive`, or `DriveTransport` for a transport assignment and
-  for each element of a waveform after the first: the transactions of 3.4. One to an
-  element or a slice is `DrivePart`, at the offset of its bits, or after a delay
-  `DrivePartAfter` and `DriveTransportPart`, whose one operand holds the offset and the
-  delay together.
-- An array is its elements end to end, the left element highest (3.6), with bounds the
-  adapter has folded; a record is its fields end to end, the first highest. A field is
-  at an offset its type fixes, so a field of a signal is a part of it like a slice. An
-  element or a slice of a variable is spliced into its register;
-  an index known only at run time is checked against the bounds, and one outside them
-  ends the run with a failure, as VHDL's index check does. An index that cannot leave
-  the bounds is not checked: a loop's parameter over a static range within them, or
-  an enumeration whose literals the bounds span, since its value is always one of
-  its literals' positions (`'val`, `'succ` and `'pred` check theirs, and VHPI
-  refuses any other). A slice is a part of a fixed
-  width, so one whose bounds move with a loop's parameter, `d(4*i+3 downto 4*i)`, unrolls
-  that loop, each copy with its value bound. One whose bounds move with any other value but
-  stay as far apart, `d((x+1)*8-1 downto x*8)`, as a testbench drives one input of a
-  multiplexer, is a part of that width at an offset the run computes, with both bounds
-  checked; the adapter folds each bound into a constant and multiples of what does not fold,
-  so the length is static exactly when the multiples cancel, and a process assigning such a
-  slice drives the static part it lies in (3.7). Nothing is selected within one, since its
-  layout counts from 0 rather than from its bounds. A variable's slice whose length is known only
-  at run time, as numeric_std's shifts by a count assign, is its value shifted into place
-  and merged under a mask of the slice's bits.
-- An alias of an object is a name of what it names: of a signal or a part of one, a window of
-  its bits like any other, seen through the alias's own subtype when it gives one, so `alias top
-  is x(7)` is read, driven and waited on as `x(7)` is, and a port associated with an alias of a
-  whole signal is that signal. An architecture's alias names a static part, the same wherever it
-  is used; a process's names what its name does as it is declared, an element chosen by a
-  variable's value then among it. An alias of anything else, a constant, a subprogram or a type,
-  is what it names wherever it is used.
-- A function is a callable subprogram (4.1), translated once for each shape it is called
-  with: the bounds of its unconstrained parameters, and the values of the scalar ones its
-  own bounds are computed from. Inside a shape those bounds are static, so `l'length`
-  folds and a branch on a condition that folds is translated alone, as a generate
-  statement is: a guard for a null array that cannot be one leaves nothing behind. A
-  package's subprograms are a definition `<package>::` of their own, which a call needs no
-  instance of. A procedure, a subprogram taking a signal, and one a process declares are
-  inlined into their caller, since a body of its own could not wait, assign a signal, read
-  a signal's attributes or reach the process's variables. So is a pure function that is
-  one `return` of an expression, which costs less than a call of it: std_logic_1164's
-  operators on a `std_ulogic` are each a table looked up, and a design calls them for
-  every element of every vector it computes.
-- A generate statement is flattened into the architecture it is in, as SystemVerilog's
-  are (5.1): the alternative whose condition folds true, or each iteration of a loop with
-  its parameter bound, and what each declares is named inside it, `g(0).u`. A block is the
-  same, named by its label: its generics are bound by its generic map, as an instance's
-  are, and fold where it is; each of its ports is the signal associated with it as a
-  whole, or else a signal of its own, `b.p`, connected to its actuals as an instance's
-  port is, and one left unassociated keeps its default.
-- A component instance is an instance of the entity the component is bound to by default
-  (IEEE 1076 section 7.3.3): the one of its name a use clause makes directly visible where it is
-  instantiated, or else the one in the library of the package declaring the component, or in
-  the library of the unit instantiating it, or else in the work library. A component a package
-  declares is bound in the package's library in every revision, as NVC binds it and GHDL does
-  but in its strict VHDL-93. The entity's generics take the values of the component's of the
-  same names, or their own defaults, and its ports match the component's by name. A
-  configuration specification, `for u : c use entity work.e(a);`, names the entity and
-  the architecture instead, and its binding maps the entity's generics and ports to
-  the component's. A configuration declaration is not translated yet.
-- A port of an unconstrained array type takes its bounds from its actual (IEEE 1076 section
-  6.5.6.3): a whole actual's own; for a port associated in parts, the lowest to the highest
-  index its formals name, running the way its index subtype does (section 5.3.2.2); for an
-  input left open, its default's; and from a component's port of a constrained type, that
-  port's. The entity is translated once for each set of bounds its ports take, as for its
-  generics' values, and named for them, `reverser$d_7downto0_q_7downto0`, so that what its
-  architecture computes from them folds as a subprogram's does in its shape. A port of more
-  than one dimension takes no bounds from its actual yet.
-- A port associated with a whole signal is that signal's storage. One associated with
-  part of a signal, with an expression, or in parts is connected through an object of
-  the instantiating definition, `u$port`, which a process for each association keeps
-  equal to its actual: into it for an input, out of it for an output. Where the
-  association is a name or a conversion of one, the process is the connection itself
-  (`eir::Process::connectsPort`): the kernel runs it as part of the signal update,
-  applying what it drives in the same delta cycle as what it copies, and once at
-  initialization, so neither side lags the other, as a collapsed port does not. An
-  expression actual is a signal of its own, assigned a delta later (IEEE 1076 section
-  6.5.6.3), and its process is an ordinary one.
-- An inout port so associated has two such objects, since what it drives and what it reads
-  differ (IEEE 1076 section 14.7.3): its driving value, `u$port$driving`, which the instance's
-  drivers of it drive (3.7) and a connection takes out to the actual, converted, as one of the
-  actual's sources; and its effective value, `u$port`, which it reads, and which a connection
-  brings the actual back into once resolved, converted the other way. So a pad cell on one bit
-  of a bus sees the bus as every driver of it makes it, its own included. A block's inout port
-  is associated with a whole signal only, yet.
-- A port of mode out, inout or buffer is a source of its actual whatever its architecture does
-  (IEEE 1076 section 14.7.3.2), so each bit of one that nothing in the architecture drives, no
-  process and no instance's port, is given a process that drives it at the port's default and
-  never runs again. An unresolved signal a parent drives as well is then driven twice, which is
-  an error, and an inout port a design only reads puts its default on a resolved bus: `'U'`,
-  unless it declares `'Z'`. A record port with a field of a resolved subtype is not given one
-  yet, since a record's fields are not resolved yet and a second driver of one would be refused.
-- A constant function is run as the adapter folds: a call of a pure function of the
-  design or of the IEEE packages whose arguments fold runs its body's variables, scalar
-  or composite, `if`, `case`, loops and `return` over their values, with an
-  architecture's generics in view, as `index_size_f(MEM_SIZE/4)` sizing a memory needs.
-  A signal's initial value is computed once at elaboration, so an impure function folds
-  there too when what it runs is static, as a memory that reads a file only when given
-  its name does when given none; elsewhere an impure function never folds, `now` least
-  of all. What it returns is folded where it
-  returned, a scalar or an array, so a function choosing between two vectors folds too.
-  A call that does anything else, or runs a million statements, does not fold, and its
-  use is refused where a static value is needed. The value is static by the language, which
-  NVC's analysis checks, so it is the adapter that could not compute it, and the refusal says
-  so: it names the call and the statement of its body the run stopped at, a procedure call
-  most often, rather than calling the value not static. Elements and slices of static arrays
-  fold as well, so a generate statement can be conditioned on a constant list, and so do
-  strings built from them and from the `'image` of static scalars: a string generic
-  naming a log file, or a report announcing a configuration, which is its text then.
-- A null array, a generic left at `""` most often, has no bits to hold, so it is its bounds:
-  a comparison or an attribute of it folds, and a call given one is inlined, where its
-  uses can fold too. A testbench that reads a file only when a name is given needs no
-  files when none is.
-- An architecture's constant is folded where it is used, and one whose value folds is also
-  recorded beside the generics as a parameter local to the definition, which VHPI shows as a
-  constant (9.7); so is each for-generate iteration's parameter.
-- A deferred constant, which a package declares without a value, has the one its full
-  declaration in the package body gives it (IEEE 1076 section 4.8), folded or computed as any
-  constant's is.
-- A generic of a record type is bound to its value's bits, the first field highest, as an array
-  generic is, and a field of it folds as an element of a static array does, so a configuration
-  record can size a port or choose a generate statement's alternative.
-- The IEEE packages are translated from their own bodies like any other VHDL. What NVC's
-  versions of them take from its runtime instead, Enzan supplies: numeric_std's warnings
-  are on, as they are in GHDL and in the IEEE's own packages, unless `--ieee-asserts
-  disable` turns them off as GHDL's option of the name does.
-- `report` and a failed `assert` are one system task taking the severity as an
-  argument: note, warning and error are reported and the run goes on, and failure ends
-  it with a failing status, as GHDL's default does; `--assert-level` names another
-  severity to end it at, as GHDL's option of the name does. `wait;` waits on an empty event list,
-  which nothing ever wakes.
-- Time is a count of femtoseconds, VHDL's resolution limit, and a design with VHDL in it
-  is simulated in femtoseconds unless `--timescale` names another unit (3.1). A delay that
-  is no whole number of that unit is rounded to the nearest, half up, as a simulator run at
-  a coarser resolution rounds, and one the design states is reported as it is translated.
-
-Mitigations: pin the revision, keep the adapter thin and confined to one
-directory, document the rebase procedure in `docs/nvc_integration.md`, and rely
-on golden tests to catch drift on upgrade.
-
-**Documented fallback.** If the adapter proves untenable, the alternative is
-co-simulation with NVC as a separate process over VHPI. This is slower and makes
-the mixed-language delta semantics of 3.5 considerably harder, so it is a
-fallback and not a plan.
+**Fallback.** If the adapter proved untenable, the alternative would be co-simulation with NVC as a
+separate process over VHPI. That is slower and makes the delta semantics of 3.5 considerably harder,
+so it is a fallback and not a plan.
 
 ### 5.3 Adding a frontend
 
-A new language frontend consists of exactly one directory under
-`src/frontend/`, exposing a single entry point that takes source files plus
-options and returns EIR design units or diagnostics. If a frontend needs
-anything else from the rest of Enzan, that is a design smell and should be
-raised rather than worked around.
+A new language frontend is exactly one directory under `src/frontend/`, exposing a single entry
+point that takes source files plus options and returns EIR design units or diagnostics. A frontend
+that needs anything else from the rest of Enzan is a design smell, to be raised rather than worked
+around.
 
 ---
 
