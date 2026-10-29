@@ -1080,9 +1080,8 @@ types.
 
 ### 10.1 Technology
 
-**Qt 6 Widgets**, not QML. QML is a poor fit for dense, data-heavy desktop
-tooling and for the custom high-performance painting the waveform view needs.
-Qt 6 is used under LGPLv3 via dynamic linking.
+**Qt 6 Widgets**, not QML: QML is a poor fit for dense, data-heavy desktop tooling and for the
+custom painting the waveform view needs. Qt 6 is used under LGPLv3 via dynamic linking.
 
 ### 10.2 Windows
 
@@ -1097,762 +1096,179 @@ The layout follows Modelsim, which is what users expect:
 | Transcript | command entry, `$display`/`report` output, diagnostics |
 | Processes | active processes and their state |
 
-Docking uses `QDockWidget`. Layout is persisted, in the configuration directory (10.9), and is
-definable from a Tcl configuration script.
+Docking uses `QDockWidget`, and the layout is kept in the configuration directory (10.9). Wave and
+Source share the central area as tabs, since each wants the whole width.
 
-**A served kernel's own output is part of its transcript.** A VPI application prints to the
-process's standard output, never through Enzan — cocotb's whole log is written that way — so a
-transcript holding only `$display` and diagnostics would show a cocotb run as silence. While it
-serves a front end, the kernel therefore captures its standard output, and its standard error
-when that is the same file, and gives the window what the terminal gets. Five rules make it
-behave:
+**A served kernel's own output is part of its transcript.** A VPI application prints to standard
+output, never through Enzan, so while serving a front end the kernel captures its standard output,
+and its standard error when that is the same file, and gives the window a copy. The terminal loses
+nothing. A terminal is replaced by a pseudo-terminal rather than a pipe, so an application keeps its
+line buffering. Enzan's own diagnostics stay out of the capture, since they reach the window as
+diagnostics. A thread that touches no simulation state drains the capture, because one callback can
+write more than a pseudo-terminal holds. A batch run captures nothing.
 
-- **The terminal loses nothing.** Everything captured is written on to where it was going, as
-  written; the window gets a copy.
-- **An application sees the kind of output it had.** A terminal is replaced by a
-  pseudo-terminal, not a pipe: a program writing to a pipe buffers in large blocks, Python does,
-  and its lines would reach the window long after the events they describe. Colour codes stay on
-  the terminal and are stripped from the window's copy.
-- **Standard error is merged only when it already was.** Errors the user had sent somewhere
-  other than standard output stay there, and Enzan's own diagnostics stay out of the capture
-  altogether, because they reach the window as diagnostics.
-- **One route, in one order.** The kernel's own transcript is written to the captured standard
-  output and flushed as it is written, so `$display` lines and an application's lines reach the
-  window in the order they reached the terminal.
-- **A thread drains the capture.** One callback can write more than a pseudo-terminal holds, and
-  a write that cannot complete blocks its thread; if that thread were also the one draining the
-  capture, it would wait for itself. The thread copies bytes and touches no simulation state, so
-  the kernel is single-threaded in every sense section 6.4 means.
-
-A batch run captures nothing: with no window, the terminal is the transcript.
-
-**Wave and Source share the central area as tabs**, rather than one of them
-being a dock beside the other. Each wants the whole width: a waveform squeezed
-next to an eighty-column listing leaves too little of either to read, and a
-reader is looking at one or the other. The Source tab is raised automatically
-when the design stops at a line, because the reader asked to stop somewhere and
-the point is to see it.
-
-**A command is one action wherever it is offered.** The menu bar, the toolbar and a pane's
-own menu share it, so a command has one name and one key in all of them; the wave list's menu
-is the window's Edit menu, entry for entry. A pane's keys act while the focus is in that pane
-and nowhere else, so that Delete in the Structure window cannot remove a wave row. The run's
-keys are the window's, a debugger's: F5 runs and Shift+F5 stops. *Help → Keyboard Shortcuts*,
-F1, lists every key, read from the actions each time it opens so that it cannot disagree with
-them, and the mouse's gestures, which are not actions, from a table beside their handlers.
+**A command is one action wherever it is offered**, with one name and one key in the menu bar, the
+toolbar and a pane's own menu. A pane's keys act only while the focus is in that pane. F5 runs and
+Shift+F5 stops; F1 lists every key, read from the actions themselves, and the mouse's gestures.
 
 ### 10.3 Waveform view
 
 A custom `QWidget` with manual painting.
 
-**The rendering cost MUST be a function of visible pixels, not of the number of
-value changes in the visible time range.** When zoomed out, a single pixel
-column may span millions of transitions; the renderer MUST use per-signal
-downsampling with min/max bucketing rather than iterating transitions. Getting
-this wrong makes the viewer unusable on exactly the large designs Enzan targets,
-and it is difficult to retrofit.
+**The rendering cost MUST be a function of visible pixels, not of the number of value changes in the
+visible time range.** Zoomed out, one pixel column may span millions of transitions, so a trace is
+drawn from one summary per column, answered from the change index, rather than by iterating
+transitions. Getting this wrong makes the viewer unusable on exactly the large designs Enzan
+targets, and it is difficult to retrofit.
 
-**One exception, and it is a defect to be paid off rather than a design.** A row
-showing a *bit range* of a signal — an unpacked bit, an extracted slice — cannot
-be summarised from the change index, because that index counts changes of the
-signal and records nothing about which bits each of them moved. Summarising the
-whole signal for such a row is wrong in the way that matters: every column in
-which any bit of a bus moved reported a transition, so a bit that never changed
-was drawn as a solid busy bar for the width of the window and became the flat
-line it always was only once the reader zoomed in far enough for each column to
-hold a single value. The same went for the unknown flag — one X bit made every
-bit of the bus look unknown.
+**One exception is a defect to be paid off, not a design**: a row showing a bit range of a signal is
+summarised from the values, because the index counts changes of the whole signal and would draw a
+bit that never moved as busy wherever its bus moved. A wrong picture is worse than a slow one (1.2).
+The way back to the pixel bound is a per-bit change index.
 
-So a sliced row is summarised from the values, at a cost proportional to the
-changes in the range, and section 1.2 is what decides that: a wrong picture is
-worse than a slow one. It is bounded twice over — the renderer keeps a summary
-until the time range changes, so scrolling and repainting pay nothing, and only a
-row the reader has deliberately sliced or unpacked takes the path at all.
+**A vertical scroll MUST NOT repaint what it has not changed.** Summaries and drawn traces are kept
+between repaints, and the canvas moves the pixels it has by a distance measured from the list
+itself. Anything the geometry cannot account for repaints instead: traces beside the wrong names
+would be a window that looks plausible and lies.
 
-The way back to the pixel bound is a per-bit change index, which is not built
-because it costs memory for every bit of every recorded signal whether or not
-anyone ever looks at one. Anyone finding this in a profile should build it rather
-than reinstate the whole-signal summary.
-
-That bounds a repaint. What bounds *scrolling* is a second rule: **a vertical
-scroll MUST NOT repaint what it has not changed.** Scrolling moves where each
-trace sits and changes not one of them, so the window moves the pixels it
-already has and paints only the strip that has come into view — which is what
-the signal list beside it already did, and the reason the two used to feel so
-different. Three things make it hold, and each is worth stating because each was
-a separate cost in the same place:
-
-- A row's *summary* — one entry per pixel column — depends on the row, the time
-  range and the width, and none of those change when the list scrolls, so it is
-  kept between repaints.
-- A row's *drawn trace* depends on the same three, so it too is kept, as a
-  picture, and blitted rather than drawn again. Drawing a bus means a segment, a
-  value measured against the font and a string laid out for every run of columns
-  across the window; that is the expensive half and it was being repeated to put
-  the same traces one line up. Nor does a trace depend on the cursor, so moving
-  the cursor draws none of them again.
-- The distance to move by is **measured from the list**, by asking where a row
-  the canvas has drawn sits now, rather than worked out from the scroll bar.
-  Deriving it would mean assuming whether the bar counts items or pixels and
-  whether every row is the same height, and a blit that moved by the wrong
-  amount leaves traces sitting against the wrong names — a window that looks
-  entirely plausible and is lying. Anything the geometry cannot account for
-  repaints instead: slow is recoverable, wrong is not.
-
-One-pixel rules — the grid, the ruler ticks, the line between rows — are
-*filled*, not stroked. The pixels are the same either way and the fill path
-writes them directly, where the stroker sets up a pen and a clip per call; on a
-wide window with a line per row it was a third of what the ruler cost, paid on
-every repaint.
-
-**The ruler's unit follows the zoom.** Its labels are written in the coarsest of
-s, ms, us, ns, ps and fs in which the step between ticks is at least a tenth of a
-unit, so a window zoomed out to microseconds reads `1.5us` rather than
-`1500000ps`. The unit is chosen once for the whole ruler, from the step, so every
-label on it is in the same unit; and a tenth is the finest it goes, so a label has
-at most one decimal place. It is computed on integers, never rounded. A cursor's
-label and the status bar keep the time precision, because there the reader wants
-the instant itself rather than a round number near it.
-
-Required features: multiple named cursors, cursor locking, zoom and pan, signal
-grouping, extracting a bit range of a signal into a separate displayed signal,
-and per-signal value radix selection.
-
-**A radix may be ASCII**, for a vector holding a string. It shows the bytes as
-characters, the most significant first, and drops leading NUL bytes as `%s` does.
-A byte that is no printable character is an escape, `\n` or `\x07`. A byte with an
-X or Z bit is U+FFFD rather than the character `%s` would make of it by reading the
-unknown bits as 0, since a waveform must not show an unknown value as a known one.
-
-A bit range is *extracted* rather than dialled in. The window reaches one by
-unpacking the signal, removing the bits that are not wanted and, when the range
-should read as one value, grouping what is left — each step being a thing the
-reader can already do to any row, and the result being a row that shows the
-range on its own line (10.7). A dialog asking for `high:low` was the first way
-this worked and has been withdrawn: it was a second way to reach the same place,
-it could only ever produce a contiguous range, and it put a number between the
-reader and a thing they can point at. The model keeps the operation, because the
-a front end asks for a range as text and will call it.
-
-Defaults, as specified: multi-bit values display in **hexadecimal**; single-bit
-values display as a line high or low.
-
-What the mouse and the keyboard do with all of this is section 10.7.
+Required features: multiple named cursors, cursor locking, zoom and pan, grouping, extracting a bit
+range into its own row, and a radix per row — hexadecimal for multi-bit values by default, a line
+high or low for one bit, and ASCII, in which a byte with an X or Z bit is U+FFFD rather than a known
+character. The ruler's labels are in the coarsest unit in which the step between ticks is at least a
+tenth of a unit.
 
 ### 10.4 Writing signals from outside
 
-The waveform is the headline feature but not the whole product. Also required:
-run/continue controls, and `examine`, `force` and `deposit` on signals from the
-GUI.
+Run controls, and `examine`, `force` and `deposit` on signals, are required alongside the waveform.
+**These operations live on the kernel**, and the GUI and VPI both use them there: a second
+implementation of writing a signal from outside would be a second set of semantics.
 
-**These operations live on the kernel.** The GUI does not reach them through any
-intermediate layer and VPI will not either, and a second implementation of "write
-a signal from outside" would be a second set of semantics to keep in step.
-
-**A force outranks the design; a deposit does not.** Every subsequent write to a
-forced signal is discarded until it is released, which is what makes a force
-useful for pinning a reset or a mode bit. A deposit is written once and whatever
-drives the signal next overwrites it.
-
-**Forcing costs an ordinary run nothing.** The table of forced signals is
-allocated when the first force in a run needs it, so the check on the signal
-write path is a test of one size against zero until then — which is what keeps
-13.4 intact.
+**A force outranks the design; a deposit does not.** Every write to a forced signal is discarded
+until it is released, while a deposit is overwritten by whatever drives the signal next. Forcing
+costs an ordinary run nothing: the table of forced signals is allocated by the first force (13.4).
 
 ### 10.5 Theme
 
-Dark by default. **Every colour MUST come from a theme file**; no colour literals in widget
-code.
+**Every colour MUST come from a theme**; no colour literals in widget code. Dark by default, and the
+waveform view a high-contrast black background with light green traces.
 
-Waveform view defaults: high-contrast black background, light green traces.
-
-**Two themes are built in**: `dark`, the default, and `light`, for a reader who wants one. Each is a
-file of its own compiled into the front end, and each sets every colour itself: the light theme is
-not the dark one with some colours changed, because a colour it forgot would then be the dark
-theme's, a dark patch in a light window, and a test holds every built-in theme to setting every
-key. The light theme keeps the dark one's distinctions — its own colours for unknown and high
-impedance, a shade between the background and the traces for time not yet simulated — turned to
-read on white. Both are held to one bar of readability: text at the contrast WCAG asks of body
-text, traces and cursors at the contrast it asks of what is not text.
-
-**A theme is the default one with a script over it, taken whole or not at all.** A script that
-sets three colours changes three colours, and the rest are the default theme's rather than
-undefined. A script that fails — a key this build does not know, a colour that is not one —
-changes nothing, the lines before the mistake included, and the error names the file and the line
-it stopped at. A window coloured partly by a theme that did not load takes its colours from two
-places with nothing to say which came from where, and a signal list follows the same rule for the
-same reason (10.8). Which theme the window uses is named in the configuration directory (10.9).
-
-**A theme is chosen, written and reloaded from the window.** *View → Theme* offers the built-in
-themes, the default first, and every file in the configuration directory's `themes/`, and
-choosing one colours the window and names it in `config` for the next. *New Theme…* writes a copy
-of the theme in use to a file of its own there — the built-in theme's text, or the file's —
-refusing a name already taken: what the reader is looking at is what they go on to edit. *Reload
-Theme* reads the theme in use again for a reader who has just edited it — asked for, rather than
-done whenever the file changes, because an editor saves in steps and a theme loaded halfway
-through a save is one that failed. The built-in themes are always among them: they are the ones a
-newer Enzan has improved, which a copy written out by an older one never sees, and the ones that
-work when the directory does not.
-
-**A new theme reaches everything already drawn.** Nothing in the window keeps a colour or a size
-past the moment it was painted without being told when the theme changes: the canvas's drawn
-traces (10.3), the transcript's lines, each of which remembers which of the theme's colours it is
-in rather than the colour, and the highlight swatches. A window that showed half its traces in the
-old theme until they happened to be drawn again would look broken, and would be. Sizes are worked
-out from the desktop's fonts every time, so a theme that sets none gives the desktop's back after
-one that set them. Nothing else changes — not the rows, the cursors, the zoom or the run.
-
-**The colours reach the widgets through a `QPalette`, not a style sheet.** This
-is a performance rule wearing a presentation rule's clothes. A Qt style sheet
-rule that gives a widget a background — or a border — makes Qt draw that widget
-through the style sheet's box model, and a widget drawn that way can no longer
-scroll by moving the pixels it already has: it repaints them. On a signal list
-of two hundred rows in a tall window that was the difference between 1.7 ms and
-6.2 ms for every line scrolled, and a single `QAbstractScrollArea { border }`
-rule was nearly all of it. A palette is read by the ordinary style and costs
-nothing.
-
-So: **the style sheet MUST NOT style a scrolling surface**, meaning `QWidget`,
-`QAbstractScrollArea`, or any item view, in background or in border. What a
-palette can say goes in the palette; the style sheet keeps only what has no
-palette entry — padding, the dock title, the parts of the scroll bar. A test
-asserts this, because the rule is invisible in the result: a style sheet that
-breaks it looks exactly right and scrolls four times slower.
-
-**Font sizes are the desktop's unless the theme gives one.** A theme sets them beside its
-colours, `font <area> <points>`, for four areas: `window`, everything not named after it;
-`wave`, the signal list and the traces beside it, one size for both so that each name stays
-level with its trace, which sets how tall a row is; `transcript`; and `source`, the Source
-window's. An area left unset takes the window's size, and the window the desktop's. The shipped
-theme sets none, because how large text should be is the reader's screen's and eyes' to say,
-and lists the four commented out.
+- **Two themes are built in**, `dark` and `light`, each setting every colour itself, so that a
+  forgotten key cannot leave a dark patch in a light window. A test holds both to every key, and
+  both meet WCAG's contrast for text and for what is not text.
+- **A theme file is the default theme with a Tcl script over it, applied whole or not at all.** A
+  script that sets three colours changes three; one that fails changes nothing, and names its file
+  and line. *View → Theme* chooses a theme, writes a copy of the one in use, and reloads it when
+  asked. A new theme reaches everything already drawn.
+- **The colours reach the widgets through a `QPalette`, not a style sheet.** A style sheet that
+  gives a scrolling surface a background or a border makes Qt draw it through the style sheet's box
+  model, which cannot scroll by moving the pixels it has: a signal list scrolled four times slower.
+  **The style sheet MUST NOT style a scrolling surface**, in background or in border, and a test
+  asserts it, because the breakage is invisible in the result.
+- **Font sizes are the desktop's** unless a theme gives one, `font <area> <points>`. The signal list
+  and its traces share one size, so that each name stays level with its trace.
 
 ### 10.6 Diagnostics as a feature
 
-slang's diagnostics are dramatically better than those of most commercial
-tools, and preserving that quality end-to-end is a genuine selling point rather
-than polish.
+slang's diagnostics are dramatically better than most commercial tools', and preserving that quality
+end to end is a selling point. **A single diagnostic engine serves the whole tool**: a diagnostic
+carries a severity, a file, line and column, a source snippet with a caret, optional notes and a
+stable code (`ENZ1234`), and slang's and NVC's diagnostics are translated into it, so output is
+uniform whatever the source language.
 
-A single diagnostic engine serves the whole tool. Diagnostics carry a severity,
-a source location with file, line and column, a source snippet with a caret,
-optional attached notes, and a stable error code (`ENZ1234`) that can be
-referenced in documentation and suppressed selectively. Frontend diagnostics
-from slang and NVC are translated into this engine so that output is uniform
-regardless of source language.
-
-**One family of slang's errors is a warning in code a constant condition rules out.**
-A parameter can make a construct degenerate: a part-select of width 0, a replication
-count below 0, or zero outside a concatenation, a zero-width cast, a zero replication
-in an assignment pattern. IEEE 1800 makes each an error even in a branch that can never
-run, and slang and Verilator report it; but parameterised RTL often guards one with an
-`if` or a `?:` on a parameter, and Icarus Verilog accepts it there. Enzan accepts it as
-ENZ1008 when it lies in the branch of a procedural `if` that a constant condition does
-not take, or the arm of a `?:` that a known condition does not select, in every
-instance that elaborated it. The same construct live in any instance stays an error,
-and a `case` item passed over by a constant selector is not dead. Such code is never
-translated, so nothing of it reaches the simulation.
-
-**Error codes are permanent.** A code appears in user documentation, in
-suppression lists in users' scripts, and in bug reports, so reusing a number for
-a different meaning silently changes what a user's suppression suppresses. A code
-is retired by deleting it and never reusing the number; codes are not renumbered.
-Numbers are allocated in ranges by the component that emits the diagnostic — 1–999
-for the driver and source handling, 1000–1999 for the SystemVerilog frontend,
-2000–2999 for VHDL, 3000–3999 for elaboration, 4000–4999 for codegen, 5000–5999
-for the runtime, 6000–6999 for the session, 7000–7999 for the waveform
-database, 8000–8999 for the PLI, and 9000–9999 for internal errors. The catalogue
-itself is `src/common/DiagnosticCodes.def`.
-
-A diagnostic whose default severity is `Fatal` MUST NOT be downgradable or
-suppressible. Fatal means continuing is unsafe, and letting a user turn one into
-a warning converts a clean stop into wrong results, which priority 1 of section
-1.2 forbids.
+- **Error codes are permanent.** A code appears in documentation, in suppression lists and in bug
+  reports, so a retired code is deleted and its number never reused, and codes are never renumbered.
+  They are allocated in ranges by the emitting component: 1–999 driver and source handling, 1000s
+  SystemVerilog frontend, 2000s VHDL, 3000s elaboration, 4000s codegen, 5000s runtime, 6000s
+  session, 7000s waveform database, 8000s PLI, 9000s internal errors.
+- **A diagnostic whose default severity is `Fatal` MUST NOT be downgradable or suppressible**:
+  turning one into a warning converts a clean stop into wrong results (1.2).
+- **A degenerate construct in code a constant condition rules out is a warning.** A parameter can
+  make a construct degenerate — a part-select of width 0, a negative replication — in a branch of a
+  procedural `if` or an arm of a `?:` that its constant condition never selects. IEEE 1800 makes
+  each an error even there; Enzan, as Icarus Verilog, warns when it is dead in every instance, and
+  never translates it.
 
 ### 10.7 Waveform view interaction
 
-The gestures below are normative. A wave window is read for hours at a time and
-driven almost entirely by hand, so what the mouse and the keyboard do is part of
-the product rather than a detail of the widget. They are written down so that
-they are decided once, and so that the next person to touch the view does not
-quietly swap two of them for the pair that feel more natural to them — both pairs
-feel natural, and a tool that changes which is which between releases is worse
-than either choice. They arrive with M2.1 (section 18).
+**These gestures are normative.** A wave window is driven by hand for hours at a time; both choices
+of most pairs feel natural, and a tool that swaps them between releases is worse than either, so
+they are decided here.
 
-**Where the traces stop.** Every trace stops at the same time, and the time axis
-beyond it is shaded: where the kernel has recorded to, or short of that while
-the window is still fetching a signal's changes (2.2). Drawing a signal's last
-known value on past that point would read as "this signal is flat here" when
-the truth is "nothing is known here yet", and a signal still catching up would
-be drawn holding a value it may already have left. The time axis reaches as far
-as the traces have, so that following the tail follows them, and the status bar
-says how far the kernel has got, which a window behind a fast clock can be well
-short of. A signal added part-way through a run stops the traces where its past
-is still to come, but does not pull the axis back with them, which would move
-the view under the reader.
-
-**The wheel.**
-
-- **Wheel** scrolls the signal list vertically, wherever the pointer is.
-- **Ctrl+wheel** zooms the time axis about the pointer.
-- **Shift+wheel** pans the time axis.
-
-The names and the traces are two widgets and one window. A wheel that scrolled
-over the names and zoomed over the traces would make an internal boundary the
-reader has no reason to think about decide what their wheel does; one wheel, one
-meaning, across the whole window.
-
-**The right button.** Dragging with the right button is two gestures told apart
-by their direction, with no mode to select first:
-
-- **Right to left** — zoom to the time range the drag covered.
-- **Left to right** — zoom to fit the whole run.
-
-While a drag is in progress the range it covers is shown, so that the reader sees
-what they are about to get. A drag of only a few pixels is not a gesture at all:
-a plain right-click must not zoom anywhere, or every mis-click costs the reader
-their place.
-
-**The left button.** A click on the trace area does three things at once:
-
-- moves the active cursor, unless it is locked;
-- selects the signal whose row was clicked;
-- snaps the cursor to a transition of that signal when one is close to the click.
-
-Selecting a row **in the list** means the same thing, with the cursor's own time
-standing in for where the click landed. Picking a signal by name and picking it
-by trace are the same act, and a reader who did the first and found that Tab did
-nothing would reasonably conclude the key was broken.
-
-The snap radius is measured in **pixels, not in time units**, so the gesture
-behaves the same at every zoom: close enough to click is close enough to snap.
-With no transition in range the cursor goes exactly where it was put, because a
-cursor that jumped to a distant edge would be worse than one that did not snap at
-all.
-
-Which signal is selected is not decoration: it is what Tab steps along below.
-
-**Cursors.**
-
-- Every cursor shows its time beside its name.
-- Clicking a cursor's label makes it the active cursor.
-- Double-clicking a label renames it.
-- Right-clicking a label opens that cursor's own menu: rename, lock or unlock,
-  remove. That is the mouse's way, and it names the cursor by pointing at it. A key
-  cannot point, so the keyboard acts on the active cursor, which is drawn heavier
-  than the rest: Ctrl+L locks or unlocks it, `,` and `.` make the cursor to its left
-  or right active, and Ctrl+Home and Ctrl+End move it, unless it is locked, to time
-  zero and to where the traces stop.
-- A cursor is added from the toolbar, beside the zoom controls, because adding
-  one is part of measuring rather than part of configuring the window; or with
-  Insert. The new cursor is the active one, at the active one's time.
-- **Tab** moves the active cursor to the next transition of the selected row,
-  **Shift+Tab** to the previous one. It does so wherever the focus is — the
-  signal list must not spend the key on its own focus navigation.
-- A *transition of the row* means a time at which what the row displays differs
-  from what it displayed an instant earlier. Not every change of the underlying
-  signal: a row showing one bit of a counter must not stop at every count, and a
-  group's transitions are its children's put together. There is no index of when
-  a single bit turns over, so the search walks the signal's transitions and gives
-  up after a bounded number of them; past that the cursor lands on a real
-  transition of something in the row, which is worse than the exact answer and
-  far better than a frozen window.
-
-Together these are the measuring workflow, and the reason cursor locking (10.3)
-exists: pin a cursor on the edge you are measuring from, select the signal, and
-step the active cursor along it. Reading both times off the labels is what makes
-that worth doing, which is why the times are on the labels and not in a status
-bar where only one of them would fit.
-
-A readout of the interval between two cursors is the obvious companion and is
-deliberately **not** part of this. It needs a decision about which pair of
-cursors it measures, and making that decision before anyone has used the stepping
-it would sit beside is how a tool acquires a number nobody reads.
+- **The traces stop where the window's knowledge stops**: where the kernel has recorded to, or short
+  of it while a signal's changes are still being fetched (2.2), with the axis beyond shaded. A trace
+  drawn past that point would claim a value nobody knows yet.
+- **The wheel** scrolls the signal list, wherever the pointer is; **Ctrl+wheel** zooms the time axis
+  about the pointer; **Shift+wheel** pans it. One wheel, one meaning, across the whole window. Ctrl
+  never pans, and dragging to pan is the middle button's.
+- **Dragging with the right button** right to left zooms to the range covered, left to right to the
+  whole run. A drag of a few pixels is no gesture, so a plain right-click costs nothing.
+- **A left click** on the traces moves the active cursor, unless it is locked, selects the row, and
+  snaps to a transition of it within a radius in **pixels**, so that it behaves the same at every
+  zoom. Selecting a row in the list is the same act.
+- **Cursors** show their times on their labels. The keyboard acts on the active cursor: Ctrl+L locks
+  it, `,` and `.` change which one is active, Insert adds one. **Tab** and **Shift+Tab** step the
+  active cursor to the next or previous transition of the selected row — a change in what the row
+  *displays* — wherever the focus is.
+- **The keys follow the wheel**: Ctrl zooms, Shift pans, and a key without a modifier is the signal
+  list's own. **Typing the start of a name finds a row**, so a command MUST NOT take a key that
+  types a letter or a digit in the Wave tab.
 
 **The signal list.**
 
-- **Reordering.** Selected rows move by being dragged, including into and out of
-  groups. The order is the reader's, and nothing may re-sort it behind them.
-- **Renaming.** A row is renamed in place, by editing its name. The row's own
-  menu offers it as well, and opens the same editor rather than a dialog of its
-  own: a name is the contents of a cell, and offering it twice in two shapes
-  would be two things to keep in step for nothing.
-- **Packing and unpacking from the menu.** One entry, not two. A row is either
-  packed or unpacked, so a menu offering both would always have one entry that
-  did nothing; the entry toggles every selected row that has contents to show.
-  It is the same act as the disclosure arrow, which is what creates a vector's
-  bits the first time, so the two can never disagree about what a row is showing.
-- **Copy and paste.** Ctrl+C copies the selected rows, with everything below
-  them, and Ctrl+V pastes them after whatever is current, at its level, a group
-  included; dragging is what puts rows inside a group. A copy keeps its radix, its highlight and how far it was unpacked,
-  because a row that had been set up and then pasted back as a bare default
-  would be a worse answer than copying nothing. The clipboard also carries the
-  hierarchical paths as plain text, so that a copy is worth something outside
-  this window.
-- **Adding or pasting a row changes nothing else.** A new row arrives packed,
-  and whatever was unpacked or collapsed stays as it was. Worth stating twice
-  over, because both obvious implementations get it wrong: expanding the tree so
-  the new row is visible unpacks every bus in the window, and rebuilding the
-  model to insert a pasted subtree makes the view forget every expansion in it.
-  Either way the reader loses the arrangement they had built, every time they
-  add a signal.
-- **Anything that changes which rows are on screen redraws the traces.**
-  Expanding, collapsing, pasting, deleting. The names and the traces are two
-  widgets, and only one of them is told by Qt.
-- **Unpacking.** A multi-bit signal carries an expander that shows its bits as
-  rows of their own, which then behave like any other row — radix, highlight,
-  removal and all. Unpacking is a property of the display and creates no new
-  subscription: the window fetches the signal once however many of its bits are
-  on screen, exactly as it already does for an extracted bit range (10.3).
-
-  **An array unpacks by its dimensions**, outermost first, one level at a time:
-  `logic [63:0][17:0] count` into sixty-four rows of eighteen bits, `count[63]`
-  down to `count[0]`, each of which unpacks into its bits in turn. Packed and
-  unpacked dimensions behave alike in this, and so do a VHDL array's, where an
-  array of arrays and an array of two dimensions are indexed down to the same
-  bits. The dimensions are the ones the source declares (4.3), and the kernel lists
-  each name with its own, since a port collapsed onto its actual may be declared
-  flat where the actual is not. A row is named by the index its source gives it, not
-  by where its bits sit in the flat vector: `logic [0:7] v` unpacks into `v[0]`
-  first, its most significant bit, because that is what `v[0]` means in the code. An
-  element with no dimensions of its own — an `int`, a packed struct, a record —
-  unpacks into its bits.
-- **A row with children shows what its children show, joined together.** One
-  rule, and it is doing three jobs. A bus that has been unpacked and had some of
-  its bits deleted shows what is left of it, in the order the rows are in. A
-  group whose children are one-bit signals behaves as a vector, on its line and
-  in its trace, which is how a bus assembled by hand out of separate signals
-  becomes readable. And because the rule is recursive, a group of equal-width
-  groups is a dimension above that — which is what makes multi-dimensional
-  arrays fall out of nesting rather than needing a mechanism of their own.
-
-  The first child is the most significant, which is the order the list shows
-  them in and the order unpacking creates them in. A bus whose bits have *all*
-  been deleted shows nothing, rather than quietly reverting to the value the
-  reader just took apart.
-
-  **How it reads depends on what is in it.** Children that are single bits make
-  one number, which is what lets an unpacked bus read as the bus. Children wider
-  than a bit make a *list* of them — `{001122}{112233}` — and because that
-  recurses, a group of such groups reads `{{11}{22}}{{22}{33}}`. Joining a vector
-  of vectors into one number files off exactly the boundaries that are the reason
-  it has that shape. The list form also means a group of unlike signals is
-  readable rather than being either nonsense or nothing, so no group is refused a
-  value for the widths it happens to contain.
-
-  An array reads the same way before it is unpacked as after, as the list of its
-  elements, on its line, in its trace and in the Objects window: `count` reads
-  `{00a}{00a}…` whether its rows are open or not, and a vector, whose elements are
-  bits, stays one number.
-
-  A multi-bit signal is therefore a group whose children happen to be its own
-  bits, and the only thing that distinguishes it is that those children are made
-  on demand rather than up front. Making them eagerly would cost a thousand rows
-  for a thousand-bit vector nobody had asked to look inside.
-
-- **A signal whose type is an enumeration shows the name, not the number.**
-  `S_SEND` is what the reader wrote; `3'h2` is what the compiler made of it, and
-  a reader watching a state machine should not have to hold the encoding in their
-  head to follow it. This is a display rule and nothing more: EIR models an
-  enumeration as the packed vector every operation on it treats it as, and the
-  mapping is carried alongside, from the frontend that alone knew it, through
-  elaboration and the protocol, to the row.
-
-  Three things follow from the rule being about a *whole value of that type*. A
-  slice is not named, because an enumeration names values and bit 1 of `S_SEND`
-  is not a state. A row that has lost some of its bits is not named, because
-  naming what is left would be naming a value other than the one on screen. And
-  a group is not named, because a join of several signals is not of any one
-  enumerated type — though what is inside the group keeps its own name.
-
-  A value the enumeration does not name falls back to the number rather than to
-  nothing. An X is such a value, and so is an encoding outside the declared set,
-  and both are things the reader needs to see rather than be shielded from.
-
-  **The naming can be turned off**, and choosing any radix turns it off. The
-  encoding is sometimes exactly what is being debugged; more to the point, a
-  radix menu that silently did nothing to a state register would read as a fault
-  rather than as a choice. The way back is a `Symbolic` entry in the same menu,
-  listed first, since it is where an enumerated row starts.
-
-- **Parameters and localparams are rows like any other.** The objects window
-  lists a scope's parameters after its signals, and one dropped into the wave
-  window shows its value across the whole width of it. A design built out of
-  three differently-configured copies of one module is a thing a reader has to
-  be able to tell apart, and the way they do that is by putting `ACK_DELAY`
-  beside the traces it explains.
-
-  A parameter is **immutable and constant**, and those are two statements rather
-  than one. Constant: its value is the same at every time, so it has no edges to
-  step between and it is *not* clipped where the window's traces stop — a trace
-  stopping there says "nothing is known here yet", which is true of a signal and
-  false of a parameter, and before the first run the clip would hide it
-  altogether. Immutable: it has nothing behind it to unpack into, so it offers
-  no expander; a `+` that did nothing would be worse than no `+`.
-
-  It has no slot, no trace and nothing to subscribe to, so its value travels with
-  the row — including onto the clipboard, because there is nowhere for the other
-  end to look it up. A parameterised module is already one analysed definition
-  per parameterisation (4.4), so what each one resolved to is a fact the frontend
-  records about that definition and nothing else could reconstruct.
-
-- **What a scope lists is what the reader wrote.** The Objects window, and so every *Add to
-  wave*, leaves out two things a reader did not write. One is the objects a frontend
-  introduced (7.1, 9.2), whose storage it lists under the names the source gave it: the
-  storage behind `.count(count_lin[I])` is the counter's `count`, inside the counter. The
-  other is the copy a generate loop makes of its genvar in each block, `gen[3].I`, whose
-  value is already the index in the block's name; a loop of sixty iterations would bury the
-  signals beside it under sixty of them. VPI still shows a genvar in its block, as other
-  simulators do, since an application may look one up.
-
-- **An unpacked vector is a group in every respect, including what may be put in
-  it.** Rows may be dragged out of one and back into it, and rows from elsewhere
-  may be dragged in. Half a container — one that lets a bit be taken out but
-  never put back — is not the same kind of thing as a group, and a bit removed by
-  mistake could never be recovered.
-
-  The cost is that a row labelled `count` can be made to show something that is
-  not count's. That bargain was already struck the moment deleting a bit was
-  allowed to narrow the row: the label names where the row came from, and the
-  value says what is actually in it. A row whose children *are* exactly its own
-  bits, in order, is recognised as the signal again — which is both what makes
-  unpacking free to look at and what tells a reader they have put it back
-  together.
-
-- **Making a group must not disturb the rest of the window.** The same trap as
-  adding and pasting, in a third place: rebuilding the model to re-parent a row
-  makes the view forget every expansion in it. Rows that move are re-expanded by
-  the window, because Qt tracks expansion by position and a row that moves loses
-  it.
-
-- **Highlighting.** A row may be given a background colour from a palette of
-  five, or returned to the default. **The palette lives in the theme file**
-  (10.5), as `wave.highlight.1` through `wave.highlight.5`; five colour literals
-  in widget code would be five violations of the same rule. A highlight covers
-  the whole row in both panes, the name and the trace, because they are one row
-  to the reader and a highlight that stopped at the splitter would read as a
-  rendering fault. The name and value on a highlighted row of the signal list
-  are drawn in a colour of their own, `wave.highlight.text`, one for all five
-  backgrounds: a theme that makes its highlights strong enough to find at a
-  glance can then keep the text on them readable, rather than leaving it in the
-  panel's colour, chosen for a background the highlight has replaced. A row
-  with no highlight keeps the panel's text, and a selected one the selection's.
-
-**The keyboard.** A modifier means what it means on the wheel: Ctrl zooms, Ctrl+`+` and
-Ctrl+`-` by a step, Ctrl+F to fit the run and Ctrl+Shift+F to the cursors; Shift pans, with
-Shift+← and Shift+→. A key without one is the signal list's own, as Qt's tree gives it: the
-arrows move, pack and unpack, `+`, `-` and `*` pack and unpack, and typing the start of a name
-jumps to the row. The traces hand such a key to the list, so it means one thing across the Wave
-tab, and the window's wave keys act only while the focus is there.
-
-**Finding a row by typing its name is kept on purpose.** It is why the keys above carry a
-modifier or are punctuation, and a command MUST NOT take a key that types a letter or a digit in
-the Wave tab: it would take away a way of finding a row that a reader may rely on without
-knowing it has a name.
-
-Panning is the middle button's alone. Ctrl+drag used to pan as well, and no
-longer does: Ctrl means *zoom* on the wheel, and a modifier that meant zoom under
-one hand and pan under the other is a coin toss every time it is reached for.
+- Rows are reordered by dragging, renamed in place, and packed and unpacked by one toggling entry.
+  Nothing re-sorts them, and **adding or pasting a row changes nothing else**: nothing already shown
+  expands or collapses. A copy keeps its radix, highlight and unpacking.
+- **Unpacking** shows a vector's elements as rows, outermost dimension first, each named by the
+  index its source declares: `logic [0:7] v` unpacks into `v[0]` first, its most significant bit.
+- **A row with children shows what its children show, joined, the first most significant.** Children
+  of one bit make one number, so a bus with bits removed shows what is left of it and a group of
+  one-bit signals reads as a vector; wider children make a list, `{001122}{112233}`, which nests. An
+  unpacked vector is a group in every respect.
+- **An enumeration shows the name of a whole value of its type**, `S_SEND` rather than `3'h2`, and
+  the number for a slice, a group, or a value it does not name. Choosing a radix shows the number.
+- **Parameters are rows**, constant, so drawn across the whole window and never clipped where the
+  traces stop.
+- **A scope lists what the reader wrote**, without the objects a frontend introduced (7.1).
+- A row may be **highlighted** with one of five colours from the theme, covering its name and trace.
 
 ### 10.8 Signal list files
 
-What the wave window shows can be saved to a file and loaded again, from the window or
-when it starts. A reader who has spent twenty minutes arranging a large design's signals
-must not have to do it again after every run, and a team must be able to keep the
-arrangement for a block beside its sources.
+What the wave window shows can be saved and loaded again, from the window or with `--wave-list`
+(8.4). The commands and their options are user documentation; these are the rules the format keeps.
 
-**The syntax is Tcl's; the language is not.** A signal list is split into commands by
-Tcl's own parser (`Tcl_ParseCommand`, from the library the theme already needs) and is
-never evaluated. Quoting, braces, backslashes, line continuation and comments therefore
-behave as in Tcl, without a lexer of Enzan's to keep in step with it. Nothing else does:
-
-- **There are two commands**, below, and any other word in command position is an error.
-  `set`, `foreach`, `proc` and `source` are not Tcl that is not supported yet; they are not
-  part of the format. A signal list is a list, not a program — which is what lets the
-  window write one back out, and what makes loading a list someone sent you a read rather
-  than running their code.
-- **There is no substitution.** `$` and `[…]` are ordinary characters, so a path through a
-  generate block, `/tb/gen[0].q`, is written as it is printed and needs no braces.
-- **`#` starts a comment only where a command could start**, as in Tcl. A comment after a
-  command on the same line is written `;# …`.
-
-**Two commands.**
-
-```tcl
-add wave ?options? path ?path …?
-group ?options? name body
-```
-
-```tcl
-# The control signals, then the counters.
-add wave /tb/clk /tb/rst_n
-add wave -radix dec -label lin0 /tb/cntr_lin_gen[0].count
-group "Recursive counters" {
-    add wave -r /tb/cntr_rec_i
-    add wave -radix bin -contents {
-        add wave /tb/bus[7]
-        add wave -highlight 2 /tb/bus[3]
-    } /tb/bus
-}
-```
-
-What `add wave` adds depends on what the path names:
-
-- **A signal or a parameter**, by the path the Objects window shows for it, adds one row.
-- **A signal with selects after it** adds a row showing what they select, by the indices the
-  design declares, as its source would write them (10.7). Of `logic [63:0][17:0] count`,
-  `/tb/count[3]` is element 3, `/tb/count[3][7:4]` four bits of it and `/tb/count[7:4]` four
-  elements, still an array; `/tb/v[0]` is the most significant bit of `logic [0:7] v`. A VHDL
-  array is indexed as it is declared too. A part-select is the last select and runs in its
-  dimension's direction, as the languages require, and what has no dimensions of its own, an
-  `int` or a record, is indexed by its bits from 0. A select outside its dimension is a
-  warning, naming the ranges the signal is declared with. The whole path is looked up as a
-  signal first, then with one select fewer at a time, so a name that itself ends in brackets is
-  never taken for a select.
-- **A scope** adds what *Add to Wave* on that scope in the Structure window adds: a group
-  named by the scope's path, holding its signals. With `-r` it adds what *Add to Wave
-  Recursive* adds: the subtree's groups, nested as its instances are, in the Structure
-  window's order. A scope with instances below it becomes a group holding its own signals in
-  a group called `$top`, then a group for each instance below it, named by the instance's
-  name; one without is the group of its signals. A group that would hold nothing is left out,
-  so a subtree with no signals adds nothing. Both are defined as those menu entries rather
-  than beside them, so that the two cannot come to disagree.
-
-`group` adds a group named `name` holding the rows its body describes. The body is a
-signal list of its own — `add wave` and `group` commands — and it may be empty, which is
-why a group is a block rather than an option on each of the lines inside it.
-
-| Option | Meaning |
-|---|---|
-| `-radix bin\|oct\|dec\|hex\|ascii` | the radix, and the number rather than an enumeration's name, as choosing a radix from the menu does; `ascii` shows the bytes as characters |
-| `-symbolic` | an enumeration's names after all; applied after `-radix` wherever it is written |
-| `-label <text>` | the row's name, for a single signal or a non-recursive scope |
-| `-highlight <1–5>` | the row's background (10.7) |
-| `-expand` | unpacked into its elements or its bits, exactly as unpacking leaves it |
-| `-contents <body>` | unpacked, with exactly the rows `body` describes beneath it |
-| `-r` | for a scope path, the whole subtree |
-
-An option applies to every row its command adds. `group` takes `-radix`, `-symbolic` and
-`-highlight`, which are what a group's own line carries.
-
-An unpacked signal is a body rather than a list of bit numbers because that is what the
-window lets it become: its bits can be deleted and reordered, and other rows can be dragged
-into it (10.7). `-contents` describes any of that with the same two commands, each bit with
-its own radix, label and highlight, so nothing the window can show is beyond the file.
-
-**Saving writes what the window shows.** *Save Signal List* writes every row, top to
-bottom, back to the file the list was last loaded from or saved to, asking only when there is
-none, and *Save Signal List As…* to another; arranging, saving and running again is the loop
-the file exists for. Loading the file rebuilds the same list:
-
-- a label only where the row was renamed, `-expand` for a signal exactly as unpacking left
-  it and `-contents` for one that has been changed since;
-- signals, selects and parameters by path, never a scope or `-r`, because by then the rows
-  exist one by one and may have been rearranged; a range of bits no select can name, part of
-  one element and part of the next, is left out rather than written as something else;
-- words quoted as Tcl quotes a list element, and only when they must be;
-- nothing that varies from one save to the next — no date, no time, no user — so that
-  saving an unchanged window writes the same bytes, and a list kept in version control
-  shows a change only when the list changed.
-
-Cursors, zoom and which groups are collapsed are not part of a signal list. They are where
-the reader is looking rather than what they are looking at, and may follow as commands of
-their own.
-
-**Loading is pasting.** A file is read into the same pending rows a paste builds, and they
-go into the window the way a paste puts them there. So:
-
-- nothing already in the window collapses or expands (10.7);
-- rows arrive in file order, whatever order the kernel answers in — a scope's objects come
-  from the kernel, which may be on another machine (2.2);
-- the whole file is read, and every path looked up, before any row is added, so a file
-  with a mistake in it changes nothing rather than half of the window.
-
-*Load Signal List…* replaces the window's list. Adding one list to another is what copying
-and pasting are for.
-
-**A mistake in the file is an error; a path the design lacks is not.** An unknown command,
-an unknown option, a bad value or an unbalanced brace is reported with its file and line,
-and nothing is loaded. A path that names nothing in this design is a warning, with its file
-and line, and that row is skipped while the rest load. A list outlives the version of the
-design it was saved from, and refusing a whole arrangement because one signal was renamed
-would make the file useless at exactly the moment it is needed.
-
-**From the command line, `--wave-list <file>`**, an option of `enzan` forwarded to the front
-end (8.4): `enzan run --gui --wave-list <file> <top>`, or with `--gui
---attach`. Without `--gui` it is refused, because there is no window to show the list in.
-A file that cannot be read is reported and the window comes up empty, as a theme that
-cannot be read leaves the built-in colours.
-
-**The window says what it did.** Adding signals from the Structure or Objects window writes
-the `add wave` command that does the same into the transcript. The format is learnt by
-using the window, and a line can be copied straight into a file. Only additions from the
-design are echoed: moving, renaming and unpacking change rows already there, and saving is
-how a whole arrangement is captured.
-
-**It is not ModelSim's `wave.do`.** The commands are shaped like ModelSim's so that they
-read familiarly, but its files are not loaded. A `wave.do` is a Tcl program, written by its
-window, full of that window's own commands (`WaveRestoreCursors`, `configure wave`), and its
-paths separate a generate block with `/` where Enzan's use `.` (5.1). Loading some of them
-would be promising all of them.
+- **The syntax is Tcl's; the language is not.** A list is split into commands by Tcl's own parser
+  and never evaluated, and it has two commands, `add wave` and `group`. A list is a list, not a
+  program: loading one someone sent you reads it rather than running their code, and the window can
+  write one back out.
+- **`add wave` on a scope is defined as** *Add to Wave*, and with `-r` as *Add to Wave Recursive*,
+  so that the two cannot come to disagree.
+- **Saving writes what the window shows**, signals by path, and nothing that varies between saves,
+  so an unchanged window saves the same bytes. **Loading is pasting**: the whole file is read and
+  every path looked up before any row is added.
+- **A mistake in the file is an error; a path the design lacks is not.** A syntax error loads
+  nothing, while a path the design lacks is a warning that skips its row, since a list outlives the
+  version of the design it was saved from.
+- Adding signals from the design echoes the matching `add wave` command into the transcript.
+  ModelSim's `wave.do` files are not loaded: they are Tcl programs, and loading some of them would
+  promise all of them.
 
 ### 10.9 The configuration directory
 
-The window keeps what its reader has chosen about it in one directory, `$XDG_CONFIG_HOME/enzan`,
-which is `~/.config/enzan` when that variable is unset. `enzan --help` says where it is, because a
-setting kept in a file nobody can find might as well not be kept.
+The window keeps what its reader has chosen in `$XDG_CONFIG_HOME/enzan`, `~/.config/enzan` when that
+is unset, and `enzan --help` says where.
 
-**Nothing in it may change what a simulation computes or records.** It holds how a window shows a
-run, never what the run does. A run is reproduced from its command line and its files (3.8), and
-a setting in someone's home directory that changed a result would be the cache section 8.2
-refuses: found only after it had been trusted, and on a second machine not at all. So the kernel
-reads nothing from it, and anything that would change a result belongs on the command line however
-often a user gives it.
-
-**Only the front end reads or writes it**, on the machine its window is on. A window attached to
-a kernel on a compute server (2.2) is coloured by the settings of the person looking at it, and a
-headless run makes no directory.
-
-**The window makes it the first time it opens**: `config`, naming the theme, and
-`themes/dark.tcl`, the default theme written out as a starting point. Each is written only when
-it is missing, and nothing Enzan writes there replaces a file that exists: the directory is the
-reader's, and a file they have edited is theirs. When it cannot be made — no home directory, a
-file system that is read-only — the window opens with the default theme and says why in the
-transcript. Settings are a convenience, and a window that refused to open without them would put
-them before the design.
-
-**`config` has Tcl's syntax and is not Tcl**, as a signal list is not (10.8): it is split into
-commands by Tcl's parser, nothing is substituted and nothing evaluated. It has one command, which
-names the theme as a file, relative to the directory or as an absolute path, or as one of the
-themes built in:
-
-```tcl
-theme themes/dark.tcl
-theme -builtin light
-```
-
-A built-in theme is named by an option rather than by a word of its own, so that no file,
-whatever it is called, can be taken for one. Without a `theme` command the window uses the
-default built-in theme, and `theme -builtin dark` says the same. A theme that cannot be read or
-does not load leaves the default theme too, as 10.5 says, and so does a built-in theme this build
-lacks — one a newer Enzan has — and the transcript names the file and the line.
-
-**A command this build does not know is a warning, and the rest applies.** This is the one place
-`config` departs from a signal list's rules, and it is deliberate: a newer Enzan may write a
-setting an older one has never heard of, and a directory shared between the two must not lose its
-theme in the older one. A mistake in a command that is known — `theme` naming no theme, or two —
-and text that cannot be split into commands are errors, and then nothing in the file is used.
-
-**The window's layout is kept there too**, in `layout.ini`: where the docks are and how large the
-window is, written as it closes and read as it opens. It is Qt's own record of the docks rather
-than a setting anyone writes, which is why it is a file of its own, in Qt's format, rather than a
-command in `config`; deleting it opens the window as it first opened.
-
-**The window changes `config` in place.** Choosing a theme rewrites the `theme` command where it
-stands, adds one when there is none, or takes its line out for the default theme, and keeps
-every other byte of the file, comments and unknown commands included: a file the reader has
-annotated stays theirs. A file with a mistake in it is not rewritten, since where its theme is
-would be a guess, and the theme chosen is then used until the window closes and said not to be
-kept.
+- **Nothing in it may change what a simulation computes or records.** A run is reproduced from its
+  command line and its files (3.8), and a setting in a home directory that changed a result would be
+  a cache found only after it had been trusted (4.4). The kernel reads nothing from it; only the
+  front end, on the machine its window is on, reads or writes it.
+- **The window makes it the first time it opens**, with `config` naming the theme and the default
+  theme written out under `themes/`, and never replaces a file that exists. When it cannot be made,
+  the window opens with the default theme and says why.
+- **`config` has Tcl's syntax and is not Tcl.** Its one command names the theme,
+  `theme themes/dark.tcl` or `theme -builtin light`. A command this build does not know is a warning
+  and the rest applies, so that a directory shared with a newer Enzan keeps working in an older one.
+  The window rewrites the `theme` command in place and keeps every other byte of the file.
+- The dock layout is kept beside it, in Qt's own `layout.ini`.
 
 ---
 
@@ -1861,27 +1277,19 @@ kept.
 ### 11.1 Toolchain
 
 - **C++20** (required by slang). GCC 13+ or Clang 17+.
-- **CMake 3.24+**, with `CMakePresets.json` providing reproducible
-  configurations.
-- Linux only (section 1.3).
+- **CMake 3.24+**, with `CMakePresets.json` providing reproducible configurations.
+- Linux only (1.3).
 - `ccache` supported when present.
 
 ### 11.2 Dependency policy
 
-**System packages are the primary acquisition method**, with `FetchContent` as
-a fallback when a dependency is absent or too old. Every dependency MUST be
-discoverable through a `find_package` call that produces a clear, actionable
-error naming the package when it is missing. "Clearly recognisable
-dependencies" means a user reading the CMake output knows exactly what to
-install.
+**System packages are the primary acquisition method**, with `FetchContent` as the fallback when a
+dependency is absent or too old. Every dependency MUST be found through a `find_package` call that
+fails with an error naming the package to install. Vendoring in `third_party/` is reserved for what
+cannot be acquired otherwise, such as NVC, which is consumed at a pinned revision of its internals.
 
-Vendoring in `third_party/` is reserved for cases where it is unavoidable — NVC
-is the expected case, since it is consumed at a pinned revision of its internals
-rather than as a released library.
-
-Adding a dependency requires: an entry in this section, a `find_package` path
-with a good error message, a `FetchContent` fallback, CI installation, and a
-license check against section 1.4.
+Adding a dependency requires an entry in 11.3, a `find_package` path with a good error message, a
+`FetchContent` fallback where one is possible, installation in CI, and a license check against 1.4.
 
 ### 11.3 Current dependencies
 
@@ -1896,21 +1304,16 @@ license check against section 1.4.
 | GoogleTest | unit tests | system, FetchContent fallback |
 | LLVM | JIT backend (M8, optional) | system, off by default |
 | zlib | FST compression | system |
-| cocotb | the cocotb golden test and regression suite (M4); never linked | `pip`, pinned in `tests/conformance/cocotb/requirements.txt` |
+| cocotb | the cocotb golden test and regression suite (M4); never linked | `pip`, pinned in one requirements file |
 
 ### 11.4 Build configurations
 
-`Debug`, `Release`, `RelWithDebInfo`, plus an `ASan+UBSan` sanitiser
-configuration used by CI. A `TSan` configuration is added when threading
-arrives.
+`Debug`, `Release` and `RelWithDebInfo`, plus an `ASan+UBSan` configuration that CI runs; a `TSan`
+configuration arrives with threading.
 
-**Performance is measured in an optimised build, never in `Debug`.** A debug build of the
-kernel runs an order of magnitude slower than an optimised one, and not uniformly: what
-dominates its profile is what the optimiser removes, so tuning against it tunes the wrong code.
-The profiling configuration is `RelWithDebInfo` with frame pointers kept throughout, the
-dependencies included, so that a sampling profiler can walk a stack cheaply and without
-recording each one whole. It is a local configuration rather than a CI job: a profile is read
-by the person who took it.
+**Performance is measured in an optimised build, never in `Debug`.** What dominates a debug build's
+profile is what the optimiser removes, so tuning against it tunes the wrong code. Profiling uses
+`RelWithDebInfo` with frame pointers kept throughout, the dependencies included.
 
 ### 11.5 Installation
 
@@ -1925,111 +1328,57 @@ include/enzan/                 vpi_user.h, sv_vpi_user.h and vhpi_user.h (9.1, 9
 share/enzan/cocotb/            Makefile.enzan and makefiles.sh (9.6)
 ```
 
-**Nothing else is installed.** `enzan-vhdl-library` builds the standard libraries and has no use
-afterwards, and the themes are compiled into the front end (10.5). A dependency built in the tree
-installs nothing either: its own install rules would put a library's headers into every package
-of Enzan, so the `golden.install` test fails on any file the table does not list. Documentation
-and the licence are left to each package, which puts them where its distribution keeps them.
+**Nothing else is installed**: not the tool that builds the standard libraries, not the themes,
+which are compiled into the front end, and not a dependency built in the tree, whose own install
+rules would put a library's headers into every package. A test fails on any installed file this
+table does not list.
 
-**`enzan` finds the rest of Enzan from where it is itself**, through `/proc/self/exe`, by paths
-relative to its own directory that are compiled in. An installation therefore works wherever it is
-moved, and two versions installed side by side each run their own parts. Every directory is held
-relative to the prefix, including one a distribution's build macros give as an absolute path, and
-one outside the prefix is refused when CMake configures, since no relative path made at build time
-could be relied on to reach it.
+**`enzan` finds the rest of Enzan from where it is itself**, by paths relative to its own directory
+that are compiled in, so an installation works wherever it is moved and two versions side by side
+each run their own parts. A directory outside the prefix is refused when CMake configures. **The
+build tree is laid out as an installation is**, so the one lookup serves both and a build runs its
+own parts rather than an installed copy's. The standard libraries are in `lib/enzan`, not the
+distribution's library directory, which is for libraries other programs link.
 
-**The build tree is laid out as an installation is.** A build directory is a prefix that has not
-been installed: `enzan-gui` is built into its `libexec/enzan/` and the standard libraries into
-its `lib/enzan/vhdl/`. The one lookup then serves both, and a build always runs its own parts
-rather than an installed copy's.
-
-**`lib/enzan`, not the distribution's library directory.** The standard libraries are compiled
-files only Enzan reads, and `CMAKE_INSTALL_LIBDIR` is for libraries other programs link:
-`lib/x86_64-linux-gnu` on Debian, `lib64` on Fedora. Both keep a package's private files in
-`/usr/lib/<package>`.
-
-**An installation is never written to.** Nothing Enzan does at run time writes beside its
-executable — a library a user names is where they name it (8.2), and settings are in the
-configuration directory (10.9) — so an installation its user cannot write to works as one they
-can. `golden.install` runs one that has been moved and made read-only.
+**An installation is never written to.** A library a user names is where they name it (8.2) and
+settings are in the configuration directory (10.9), so an installation its user cannot write to
+works as one they can.
 
 ### 11.6 Releases
 
-**A release is a tag, `vX.Y.Z`, on a commit whose version is `X.Y.Z` with no suffix.** The release
-commit sets `project(VERSION)` and clears the default of `ENZAN_VERSION_SUFFIX`, so that anyone
-who builds its tarball is told the version it is, rather than every package having to pass
-`-DENZAN_VERSION_SUFFIX=` and anyone else building a `-dev`. The commit after it moves to the next
-version, with `-dev` again.
-
-**Its source tarball is made by `scripts/make-dist.sh`, not by GitHub.** The archive GitHub makes
-of a tag leaves submodules out, so it holds no NVC, and building it downloads slang, which no
-distribution packages. A distribution's builder has no network — Debian's, Fedora's and
-openSUSE's do not, nor Launchpad's — so the tarball carries both: every submodule at the commit
-the tag pins, and in `third_party/bundled/` the sources FetchContent downloads, slang's, the fmt
-slang builds and GoogleTest's, which RHEL 9 packages older than the 1.12 the tests need. The
-script finds them by configuring the tag with every download forced and copying what CMake
-fetched, so the revisions slang pins for its own dependencies are restated nowhere.
-
-**A bundled source stands where its download would.** A system package is still preferred where
-one is found (11.2), and a checkout, which has no such directory, downloads as before. Nothing is
-vendored by it: the directory exists only in a tarball. `ENZAN_ALLOW_FETCH=OFF` admits a bundled
-source, since building one downloads nothing.
-
-**The tarball records the revision it was made from**, in `.tarball-revision`, and `--version`
-reports that rather than asking git. A tarball is not a checkout, and one unpacked inside a
-distribution's packaging repository would be given that repository's revision.
-
-**The same tag gives the same tarball**: its files in name order, owned by no one, dated at the
-commit and compressed by one `xz` thread. A tarball can therefore be checked by making it again.
-
-**A release is made by pushing its tag**, and the release workflow (16) does the rest but
-publish. It makes the tarball and refuses a tag that is not the tarball's version, so a tag on a
-`-dev` commit fails before anything is built; builds and tests every distribution's packages
-(11.7); and attaches the tarball, the packages and their checksums to a draft release. A
-maintainer reads the draft over and publishes it. Nothing is published unattended, because a
-published release is never replaced: its tarball's checksum is in every recipe that names it.
-`docs/releasing.md` has the steps in order.
+- **A release is a tag, `vX.Y.Z`, on a commit whose version is `X.Y.Z` with no suffix.** The commit
+  after it moves to the next version with `-dev` again.
+- **Its source tarball is Enzan's own, not GitHub's archive**, which leaves submodules out. A
+  distribution's builder has no network, so the tarball carries every submodule at the commit the
+  tag pins and the sources a build would otherwise download, each standing where its download would;
+  a system package is still preferred where one is found. They are found by configuring with every
+  download forced, so no revision is restated.
+- **The tarball records the revision it was made from**, and `--version` reports that rather than
+  asking git. **The same tag gives the same tarball**, byte for byte, so it can be checked by making
+  it again.
+- **A release is made by pushing its tag.** The release workflow (16) makes the tarball, refuses a
+  tag that is not the tarball's version, builds and tests every distribution's packages, and
+  attaches them with their checksums to a draft release. A maintainer reads it over and publishes
+  it: nothing is published unattended, because a published release is never replaced.
 
 ### 11.7 Packages
 
-**Enzan is packaged for the distributions its toolchain floor reaches**: Ubuntu 24.04, Debian 13,
-Fedora, RHEL 9 and its rebuilds with gcc-toolset-13 and EPEL, and Arch Linux. Ubuntu 22.04 and
-Debian 12 are not, their GCC being 12, below 11.1's floor; Ubuntu 22.04's Qt is 6.2 besides.
-
-**The recipes are each distribution's own**, `packaging/debian/`, `packaging/rpm/enzan.spec` and
-`packaging/arch/PKGBUILD`, not CPack's. A distribution's own tools build with its compiler flags,
-hardening and LTO included, split the debug symbols into packages of their own and work out the
-dependencies; and only a recipe in a distribution's format can later be built into a repository,
-by Launchpad, COPR, OBS or the AUR. CPack makes binary packages and nothing a repository builds
-from, and has no format for Arch at all.
-
-**The packages are attached to a release, not served from a repository.** A repository, from
-which a new release arrives with the system's other updates, is a later step, and the recipes are
-what it would be built from.
-
-**Every recipe builds from the release tarball** (11.6), never from a checkout or GitHub's
-archive: with no network, and with `ENZAN_ALLOW_FETCH=OFF`, so that a download is an error rather
-than an attempt. It runs the test suite, `golden.install` included, and installs with
-`cmake --install`. Its version comes from the tarball's name, so the version is set in one place,
-`project()`. A suffix is spelled `~dev` for dpkg and RPM and run on, `dev`, for pacman, which is
-how each sorts `0.2.0-dev` before `0.2.0`.
-
-**The front end is a package of its own, `enzan-gui`**, which depends on `enzan` at the same
-version. The simulator's package depends on no GUI toolkit, so a compute server or a CI runner
-installs Enzan without Qt (8.4). It suggests the front end rather than recommending it, since
-apt and dnf install what is recommended; `enzan --gui` without it says it is not installed and
-names its package.
-
-**What a distribution packages, Enzan is built against.** The tarball's bundled sources are used
-only where the distribution's package is missing or too old; Arch's mimalloc is used, and on
-Fedora its Tcl 9.
-
-**`packaging/build-package.sh <target> <tarball>` builds one distribution's packages in a
-container of it**, as the release workflow does and as anyone can with Docker or Podman. What the
-build needs is installed from the recipe into an image of its own; the build then runs with no
-network; and the packages are installed into a fresh container, the simulator's alone first.
-There `packaging/smoke-test.sh` runs a design of each language from them, shows that no Qt came
-with the simulator, and starts the front end through `enzan --gui`.
+- **Enzan is packaged for the distributions its toolchain floor reaches**: Ubuntu 24.04, Debian 13,
+  Fedora, RHEL 9 and its rebuilds with gcc-toolset-13 and EPEL, and Arch Linux.
+- **The recipes are each distribution's own**, not CPack's: the distribution's tools build with its
+  flags, split the debug symbols and work out the dependencies, and only a recipe in its format can
+  later be built into a repository. The packages are attached to a release; serving them from a
+  repository is a later step.
+- **Every recipe builds from the release tarball** (11.6), with no network and with downloads turned
+  off, so a download is an error rather than an attempt. It runs the test suite and installs with
+  `cmake --install`. The version is set in one place, `project()`.
+- **The front end is a package of its own**, depending on the simulator's at the same version and
+  suggested rather than recommended by it, so that a compute server installs Enzan without Qt (8.4).
+- **What a distribution packages, Enzan is built against**; the tarball's sources stand in only
+  where the distribution's package is missing or too old.
+- **Each distribution's packages are built and tested in a container of it**: the build with no
+  network, then the packages installed into a fresh container, the simulator's alone first, and run
+  there.
 
 ---
 
@@ -2040,7 +1389,7 @@ Enzan-RTL-Simulator/
 ├── CMakeLists.txt            top-level build
 ├── CMakePresets.json         reproducible configurations
 ├── LICENSE                   GPLv3
-├── README.md                 short orientation, points here
+├── README.md                 short orientation for users
 ├── DESIGN_GUIDE.md           this document — the normative specification
 ├── .clang-format
 ├── .clang-tidy
@@ -2049,8 +1398,8 @@ Enzan-RTL-Simulator/
 ├── cmake/                    find modules and helper functions
 ├── include/
 │   └── enzan/                ONLY headers third parties compile against
-│                             (vpi_user.h, sv_vpi_user.h, later vhpi_user.h and
-│                             svdpi.h)
+│                             (vpi_user.h, sv_vpi_user.h; NVC's vhpi_user.h is
+│                             installed beside them)
 ├── src/
 │   ├── common/               diagnostics, source manager, small utilities
 │   ├── eir/                  the internal representation and its type system
@@ -2069,14 +1418,14 @@ Enzan-RTL-Simulator/
 │   ├── enzan/                headless kernel CLI
 │   ├── enzan-gui/            Qt 6 front end, started by `enzan --gui`
 │   ├── vhdl-libraries/       builds VHDL's standard libraries at build time (4.4)
-│   └── cocotb/               cocotb's simulator makefile for Enzan (section 9.6)
+│   └── cocotb/               cocotb's simulator makefile for Enzan (9.6)
 ├── tests/
 │   ├── unit/                 GoogleTest, mirrors src/ layout
 │   ├── golden/               self-checking HDL cases and expected output
-│   ├── conformance/          harnesses for cocotb, sv-tests, ivtest, VHDL suites
+│   ├── conformance/          harnesses for cocotb, sv-tests and the VHDL suites
 │   └── designs/              scripts fetching external RTL — NEVER vendored
 ├── bench/                    performance benchmarks and result tracking
-├── docs/                     human documentation, derived from this guide
+├── docs/                     documentation for users
 ├── packaging/                each distribution's recipe, and the scripts that build them (11.7)
 ├── scripts/                  repository checks and release tooling, runnable locally and by CI
 └── third_party/              vendored dependencies where unavoidable
@@ -2084,21 +1433,16 @@ Enzan-RTL-Simulator/
 
 Rules:
 
-- Headers live **beside** their sources inside each `src/` component.
-  `include/enzan/` is reserved for the small set of headers that code outside
-  this repository compiles against. Do not mirror the whole tree into
-  `include/`.
-- `tests/unit/` mirrors the `src/` layout so that the test for a file is always
-  findable at the corresponding path.
-- `tests/designs/` contains *scripts that fetch* external RTL at pinned
-  revisions. External designs MUST NOT be committed to this repository: they
-  are large, and they carry their own licenses.
-- Each `src/` component has a `README.md` describing its responsibility and its
-  allowed dependencies on other components. The build enforces its presence.
-- `scripts/` holds checks that CI runs and that a contributor MUST be able to run
-  locally with no arguments. A check that exists only inside a CI workflow cannot
-  be run before pushing, so it gets discovered as a red default branch instead of
-  as a local failure.
+- Headers live **beside** their sources inside each `src/` component. `include/enzan/` is reserved
+  for the headers that code outside this repository compiles against.
+- `tests/unit/` mirrors the `src/` layout, so the test for a file is at the corresponding path.
+- `tests/designs/` holds *scripts that fetch* external RTL at pinned revisions. External designs
+  MUST NOT be committed: they are large, and they carry their own licenses.
+- Each `src/` component has a `README.md` describing its responsibility and its allowed dependencies
+  on other components. The build enforces its presence.
+- `scripts/` holds checks that CI runs and that a contributor MUST be able to run locally with no
+  arguments: a check that exists only inside a CI workflow is discovered as a red default branch
+  instead of as a local failure.
 
 ---
 
@@ -2106,8 +1450,8 @@ Rules:
 
 ### 13.1 Naming
 
-Conventions follow slang's, since slang code and Enzan code sit side by side
-and mixing two styles in one translation unit is worse than either style alone.
+Conventions follow slang's, since slang code and Enzan code sit side by side and mixing two styles
+in one translation unit is worse than either alone.
 
 | Element | Convention | Example |
 |---|---|---|
@@ -2123,25 +1467,21 @@ and mixing two styles in one translation unit is worse than either style alone.
 
 ### 13.2 Style
 
-- `.clang-format` is authoritative. Formatting is not a matter of judgement and
-  is enforced in CI.
-- `.clang-tidy` is enforced in CI. Suppressions require a comment giving the
-  reason.
-- Prefer `enum class` over plain enums, `std::span` over pointer+length,
-  `std::string_view` over `const char*`, and RAII over manual cleanup
-  everywhere.
-- Exceptions are used for genuinely exceptional conditions only, never for
-  control flow in the kernel hot path.
-- No raw `new`/`delete` outside arena and allocator implementations.
+- `.clang-format` is authoritative. Formatting is not a matter of judgement and is enforced in CI.
+- `.clang-tidy` is enforced in CI. Suppressions require a comment giving the reason.
+- Prefer `enum class` over plain enums, `std::span` over pointer and length, `std::string_view` over
+  `const char*`, and RAII over manual cleanup everywhere.
+- Exceptions are for genuinely exceptional conditions only, never for control flow in the kernel's
+  hot path.
+- No raw `new` or `delete` outside arena and allocator implementations.
 
 ### 13.3 Documentation comments
 
-Every public class and every non-trivial public method MUST carry
-a Doxygen `///` comment.
+Every public class and every non-trivial public method MUST carry a Doxygen `///` comment.
 
-A good comment explains the **contract and the reasoning** — preconditions,
-invariants, ownership, why this approach was chosen. A comment restating the
-signature in prose is noise and should not be written:
+A good comment explains the **contract and the reasoning** — preconditions, invariants, ownership,
+why this approach was chosen — and states its reason itself; section 0 says when it cites this
+document as well. A comment restating the signature in prose is noise and should not be written:
 
 ```cpp
 /// Schedules `process` into `region` for the current time slot.
@@ -2155,195 +1495,88 @@ void schedule(Process& process, Region region);
 ### 13.4 Performance discipline
 
 - No allocation on the simulation hot path. Pre-allocate at elaboration.
-- Prefer contiguous structures over pointer-chasing ones; the state arena
-  (4.3) exists for this reason.
-- Do not optimise without a measurement. `bench/` exists so that performance
-  claims can be checked rather than asserted.
+- Prefer contiguous structures over pointer-chasing ones; the state arena (4.3) exists for this.
+- Do not optimise without a measurement. `bench/` exists so that performance claims are checked
+  rather than asserted.
 
 ---
 
 ## 14. Testing
 
-Testing is continuous, not a phase. **Every feature ships with its tests in the
-same commit.**
+Testing is continuous, not a phase. **Every feature ships with its tests in the same commit.**
 
 ### 14.1 Unit tests
 
-GoogleTest, under `tests/unit/`, mirroring `src/`. Cover the feature and its
-error paths, not just the happy path.
+GoogleTest, under `tests/unit/`, mirroring `src/`. Cover the feature and its error paths, not just
+the happy path.
 
 ### 14.2 Golden tests
 
-Small HDL cases under `tests/golden/`. **Self-checking testbenches are strongly
-preferred** — a testbench that calls `$fatal`/`report failure` on mismatch needs
-no golden file to drift out of date. Where output comparison is genuinely
-needed, compare transcripts or VCD.
+Small HDL cases under `tests/golden/`. **Self-checking testbenches are strongly preferred**: a
+testbench that calls `$fatal` or `report failure` on a mismatch needs no golden file to drift out of
+date. Where output comparison is genuinely needed, compare transcripts or waveforms.
 
 ### 14.3 Differential testing
 
-Running the same design under Enzan and under a reference simulator (Icarus
-Verilog, Verilator, NVC, GHDL) and comparing results is **the single
-highest-value testing strategy available** and MUST exist from M1.
+Running the same design under Enzan and under a reference simulator and comparing the results is
+**the single highest-value testing strategy available**, and MUST be part of the suite.
 
-One practical caution: two correct simulators may legitimately differ in
-delta-level ordering. Comparisons MUST be made at settled time boundaries, not
-at every delta, or the suite will produce constant false failures and be
-switched off.
-
-**The VHDL references are not interchangeable.** Because NVC supplies Enzan's
-VHDL frontend (5.2), NVC is not an independent oracle for anything the frontend
-decides: a shared parsing or semantic-analysis defect produces the same wrong
-answer on both sides and the comparison passes. **GHDL is therefore the primary
-VHDL differential reference and MUST be part of the suite**, with NVC kept as a
-secondary reference that is still meaningful for everything downstream of EIR.
-The same reasoning will apply to any future frontend dependency.
-
-A VHDL golden case is compared with GHDL on two things: what the design reported, as each
-report's severity and message in order, and every signal GHDL records, as the value it
-settled on at each time step. GHDL writes `std_logic` as its nine values, which are mapped
-as 3.6 maps them before comparing; and the time step a run finishes in is left out, since
-GHDL stops before it writes that step and Enzan writes it.
+- Two correct simulators may differ in delta-level ordering, so **comparisons MUST be made at
+  settled time boundaries**, not at every delta, or the suite produces constant false failures and
+  is switched off.
+- **The VHDL references are not interchangeable.** NVC supplies Enzan's VHDL frontend, so a shared
+  analysis defect gives the same wrong answer on both sides and the comparison passes. **GHDL is
+  therefore the primary VHDL reference and MUST be part of the suite**; NVC remains a meaningful
+  reference for everything downstream of EIR. The same reasoning applies to any future frontend
+  dependency.
+- SystemVerilog is compared with Icarus Verilog. VHDL is compared with GHDL on what the design
+  reported, in order, and on every signal GHDL records, as the value it settled on at each time
+  step, GHDL's nine values mapped as 3.6 maps them.
 
 ### 14.4 Conformance suites
 
-Run against public suites and **track the pass rate as a number over time**:
-`sv-tests` (CHIPS Alliance) for SystemVerilog, `ivtest` for Verilog, and for VHDL
-the VESTs suite and GHDL's and NVC's own test suites. A published compliance
-percentage is also a credible public signal of maturity.
+Public suites are run against Enzan and **the pass rate is tracked as a number over time**: sv-tests
+for SystemVerilog; VESTs and GHDL's and NVC's own regression suites for VHDL, both of the latter for
+the reason given in 14.3; NVC's tests of VHDL with Verilog; and cocotb's suite (14.6).
 
-The GHDL and NVC suites are both run for the reason given in 14.3: NVC's suite
-cannot exercise a defect Enzan inherited from NVC's own frontend. VESTs is
-GPL-2.0 and ships inside GHDL's test suite, and every one of its compliant cases
-checks itself, reporting `PASSED TEST` or `FAILED TEST`.
-
-**The pass rate MUST NOT regress.** This is a ratchet: a change that lowers it
-is a defect unless the regression is explicitly justified.
-
-`tests/conformance/sv-tests/run-suite.sh` runs sv-tests. It fetches the suite at the revision
-named in `revision.txt` beside it, the one place that revision is written, and runs every case
-under the suite's `tests/` through **sv-tests' own driver** with an Enzan runner. So a case
-passes by sv-tests' rules — the tool succeeding or failing as the case expects, and every
-`:assert:` a simulation prints holding — rather than by a reading of them. A preprocessing-only
-case is skipped, as sv-tests skips a case of a kind a tool does not run, and is in neither
-count. A case that expects the tool to fail passes whenever Enzan fails, an unsupported construct
-included; those passes count, being sv-tests' definition, and are reported as a second number.
-
-`tests/conformance/vests/run-suite.sh` runs VESTs from GHDL's test suite, fetched at the
-revision its `revision.txt` names: every compliant VHDL-93 case the suite's own `.exp` files
-run, by their rules as GHDL's `testsuite.sh` reads them — the units an `.exp` builds before a
-case analysed with it, the top its `ENTITY=` names or else the last entity named as a top, its
-`STOP=` time, `--assert-level error`. A case passes when Enzan runs it to its end and it reports
-no `FAILED TEST`. The cases run in parallel but for those using files, which run one after
-another in the suite's order, since the suite reads back in a later case what a simulator wrote
-in its own format in an earlier one, and gives several pairs of cases one file name.
-
-`tests/conformance/nvc/run-suite.sh` runs NVC's own regression tests, from the NVC vendored
-under `third_party/nvc` and so at its revision: every test `test/regress/testlist.txt` lists,
-by its options as NVC's `run_regr.c` reads them — the revision of the language, `stop=`, `fail`
-for a test that must fail, `gold` for one whose transcript must hold each line of its gold file
-in order. NVC writes a message's time and delta before it, which Enzan does not, so a gold line
-is matched without them. A test of what only NVC has, VHPI, its shell, PSL, coverage, waveform
-dumps, Verilog or its relaxed rules, or one setting generics on the command line, is in neither
-count. Its `mixed` tests, VHDL with Verilog, are run apart, `run-suite.sh ... mixed`, by a build
-with both frontends and against `passing-mixed.txt` (M7). Several fail by design: NVC shows
-Verilog's `x` as `'U'` where 3.6 shows `'X'`, and counts a delta for each Verilog net a value
-crosses where 3.5 counts one for the boundary.
-
-`tests/conformance/ghdl/run-suite.sh` runs GHDL's own regression tests, its `testsuite/gna`, from
-GHDL at the revision VESTs is run from. Each test's `testsuite.sh` runs unchanged under GHDL's
-`testenv.sh`, with `ghdl-shim.sh` as the `ghdl` it calls: each GHDL library is an Enzan library
-(8.2), the shim's `-a` analyses into the one `--work` names against the others, and `-e` and `-r`
-elaborate or run a top from them, `--expect-failure` inverting what Enzan's exit says. A test
-passes when its script exits 0. A test of what only GHDL has, synthesis, VPI or VHPI, GHW
-waveforms, PSL, a C compiler or a feature it probes for, is in neither count; one comparing
-GHDL's own messages or using its vendors' IEEE packages fails. So does one expecting an analysis
-error that NVC, which Enzan analyses with, does not report until elaboration or not at all.
-
-The ratchet is a list for each suite, as 14.6 describes, and one script,
-`tests/conformance/ratchet.sh`, holds every suite to its list.
+- **Each suite runs by its own rules**, through its own driver where it has one, so that a pass is
+  the suite's definition of one. A case that tests what only another tool has is in neither count. A
+  case that passes without exercising Enzan — one expecting a failure, or skipping itself — counts,
+  being the suite's definition, and is reported as a second number.
+- **The pass rate MUST NOT regress.** The ratchet is a list per suite rather than a number, so that
+  one case starting to pass cannot hide another that stopped. A case that newly passes is added to
+  the list in the same commit as the change that made it pass.
+- **A suite's revision is named in one place**, and the harness fetches the suite at it.
 
 ### 14.5 Design regression
 
-Real designs, fetched at pinned revisions:
+Real designs, fetched at pinned revisions and never committed: secworks `aes`, fpganinja `taxi` and
+PULP `common_cells` for SystemVerilog; NEORV32 for VHDL and, through its testbench rewritten in
+Verilog, for both languages; and later the processors picorv32, VexRiscv, Ibex and CVA6, SLAC
+`surf`, and the VUnit and OSVVM suites, which need M9+.
 
-- SystemVerilog: secworks `aes`, fpganinja `taxi`, PULP `common_cells`; then the
-  processors picorv32, VexRiscv (generated), Ibex and CVA6, which each need a program
-  compiled for them.
-- VHDL: NEORV32; then SLAC `surf`, an IP library whose cocotb testbenches exercise its RTL as
-  `taxi`'s do, and the VUnit and OSVVM suites, which need the verification-library language of
-  M9+.
-
-Start with the small ones and add larger designs as capability grows.
-
-NEORV32's is held to GHDL's reports and to the CPU trace and UART logs its testbench writes, for
-the 160 us its on-chip debugger sequence takes, since those hold every instruction each core
-retired, and so is the same testbench in Verilog around its VHDL (M7); on the main branch only,
-as it takes minutes.
-
-Each design is a directory under `tests/designs/` holding the revision it is pinned at and a
-`run.sh` that fetches it there (`tests/fetch-revision.sh`, which every suite shares), runs its
-own testbenches and says PASS or FAIL for each. A testbench passes when it reports success
-and, where the reference simulator runs it — Icarus Verilog for SystemVerilog, GHDL for VHDL
-(14.3) — when Enzan's transcript is the reference's line for line, so
-a pass is a design checking its own answers and two simulators agreeing on them. Testbenches
-the reference cannot run are held to their own verdicts alone, and the harness says why. A
-testbench or a case that cannot pass for a reason outside Enzan — a design slang rightly
-refuses, a testbench that assumes a two-state simulator — is named, with the reason, in the
-design's `expected.txt`; any other failure fails the run.
-
-Where a design's own testbenches leave a module out, or reach it only through constructs Enzan
-does not have yet, self-checking testbenches for it sit in the design's `tb/`. Each compares
-the module against a model of what it should do, and exits non-zero on a mismatch. A
-testbench written here can be wrong as easily as the simulator. Before it is committed it is
-run under a second simulator, and it must pass there too; one that none runs, a testbench in one
-language around a design in the other that NVC cannot instantiate, is a translation of the
-design's own, and its transcript must be that one's under the reference.
+- A testbench passes when it reports success and, where the reference simulator can run it, when its
+  transcript is the reference's line for line: a design checking its own answers and two simulators
+  agreeing on them. NEORV32 is held to GHDL's reports and to the CPU trace and UART logs its
+  testbench writes.
+- A testbench that cannot pass for a reason outside Enzan is named, with the reason, beside the
+  design; any other failure fails the run.
+- **A testbench written here can be wrong as easily as the simulator.** Before it is committed it is
+  run under a second simulator, and it must pass there too.
 
 ### 14.6 cocotb regression
 
-Once VPI lands (M4), cocotb's own regression suite runs in CI and its pass rate
-is tracked like any other conformance number.
-
-`tests/conformance/cocotb/run-suite.sh` runs it: it fetches cocotb's source at the tag of
-the cocotb installed beside it, runs every directory of `tests/test_cases` with `SIM=enzan`
-exactly as cocotb's own CI runs them, and prints one line per case and a pass rate. A case
-passes when its `make` succeeds, which is cocotb's own definition.
-
-**A pass that never ran a test is said to be one.** Many cases skip themselves for anything
-that is not a VHDL simulator or Verilator, and the ones that expect a run to fail pass when it
-fails at analysis. Both count, because that is cocotb's definition, and both are marked, with a
-second number for the passes in which cocotb actually ran under Enzan: only those say anything
-about VPI.
-
-**The cocotb version lives in one file**, `tests/conformance/cocotb/requirements.txt`, which
-CI installs from. The suite is fetched to match whatever is installed rather than restating
-the version, so the two cannot disagree.
-
-**The ratchet of 14.4 is a list, not a number.** `tests/conformance/cocotb/passing.txt` names
-every case that passes, and the run fails when one of them stops passing; the check is
-`tests/conformance/ratchet.sh`, which sv-tests uses too. A pass rate alone
-would let one case start passing while another stopped and report no change at all. A case
-that newly passes is reported, and is added to the list in the same commit as the change that
-made it pass.
-
-The rate is low until M5, and that is expected rather than a defect of M4: most of cocotb's
-cases share one design that uses unpacked arrays, structs, `real`, `string` and interfaces,
-and a design that does not analyse fails every test in it. The cases that do analyse are what
-exercise VPI, and the golden cocotb test of `tests/golden/` pins the VPI behaviour cocotb
-relies on whatever the rate is.
-
-**A VHDL toplevel is a second run of the same suite**, through VHPI (M6, section 9.7). Most of
-cocotb's cases have a VHDL design beside the Verilog one, chosen by `TOPLEVEL_LANG=vhdl`, so the
-suite runs twice, `run-suite.sh <enzan> <work> vhdl` the second time, and each run has its own
-pass list, `passing.txt` and `passing-vhdl.txt`: a case passing in one language says nothing
-about the other. The golden cocotb test has a VHDL twin, `tests/golden/vhdl/cocotb`, which pins
-the VHPI behaviour cocotb relies on as the other pins VPI's.
+cocotb's own regression suite runs with `SIM=enzan`, exactly as cocotb's CI runs it, and its pass
+list is ratcheted as 14.4 describes. **The cocotb version is named in one file**, which CI installs
+from, and the suite is fetched to match what is installed rather than restating the version. Most of
+cocotb's cases have a VHDL design beside the Verilog one, so the suite runs once for each toplevel
+language, each with its own list. A golden cocotb test for each language pins the VPI and VHPI
+behaviour cocotb relies on, whatever the pass rate is.
 
 ### 14.7 Sanitisers and fuzzing
 
-ASan and UBSan run over the unit and golden suites in CI. TSan is added when
-threading arrives. Frontend fuzzing with mutated HDL input is added once the
-frontends are stable.
+ASan and UBSan run over the unit and golden suites in CI. TSan is added when threading arrives.
+Frontend fuzzing with mutated HDL input is added once the frontends are stable.
 
 ---
 
@@ -2351,84 +1584,48 @@ frontends are stable.
 
 ### 15.1 Target
 
-**The target is provisional.** It will be replaced with a measured, committed
-figure once M1 produces real numbers; setting a hard number before any
-measurement exists would be guesswork.
+**The target is provisional**: on the order of 10,000 simulated clock cycles per second on a design
+of roughly 100k FPGA LUTs on a single core, and within about 5× of Verilator on the purely
+synchronous subset. It will be replaced with a measured, committed figure (M8).
 
-Provisional: on the order of 10,000 simulated clock cycles per second on a
-design of roughly 100k FPGA LUTs on a single core, and within about 5× of
-Verilator on the purely synchronous subset.
-
-**The binding requirement for M0–M2 is not the number — it is that `bench/`
-exists and records cycles/sec per commit from the very first milestone.** A
-performance goal without continuous measurement is decoration, and performance
-regressions are invisible without a baseline.
+**The binding requirement is continuous measurement, not the number**: `bench/` records cycles per
+second per commit. A performance goal without continuous measurement is decoration, and regressions
+are invisible without a baseline.
 
 ### 15.2 Honest expectations
 
-A tree-walking interpreter will not approach this target. The bytecode VM is a
-large step up; the JIT (6.3) is what is expected to reach it. This is why the
-execution model was decided before implementation began: it constrains EIR
-design, and discovering the constraint later means a rewrite.
+A tree-walking interpreter will not approach the target. The bytecode VM is a large step up, and the
+JIT (6.3) is what is expected to reach it. This is why the execution model was decided before
+implementation began: it constrains EIR, and discovering the constraint later means a rewrite.
 
 ### 15.3 Benchmarks
 
-`bench/` holds a fixed set of pinned designs with fixed stimulus. CI records
-cycles/sec per commit. Once a threshold is agreed, a regression beyond it should fail CI,
-in a nightly job if one is added (16).
+`bench/` holds a fixed set of designs with fixed stimulus, which CI runs as a step of its own. Once
+a threshold is agreed, a regression beyond it should fail CI, in a nightly job if one is added (16).
 
 ---
 
 ## 16. Continuous integration
 
-**GitHub Actions.**
+**GitHub Actions.** The workflow is the record of which job runs what; these are the rules it keeps.
 
-**What runs on a development branch or a pull request must be fast.** GitHub gives the
-project a monthly allowance of CI time, and every push to every branch spends it. A job or
-step that takes long runs on `main` only, with `if: github.ref == 'refs/heads/main'`.
+- **What runs on a development branch or a pull request must be fast.** Every push spends the
+  project's monthly allowance of CI time, so a job or step that takes long runs on `main` only.
+- **Everything still runs before a pull request is merged**: whoever merges runs the main-only jobs
+  locally first, with the commands the workflow uses, since a main-only check that fails after the
+  merge leaves `main` red.
+- **Code compiled only with a component, or only without one, is compiled somewhere with warnings as
+  errors.** One job builds every optional component, as a contributor's plain configure does, and is
+  the only one to build the SystemVerilog frontend, since one is enough to prove it; another builds
+  the GUI with neither language frontend.
+- **The release workflow** runs on a tag or by hand (11.6). Run by hand on a branch, it tries the
+  packaging and releases nothing.
+- **There is no scheduled job.** A nightly run would be worth adding once there is somewhere to
+  publish its results: conformance pass rates over time, the benchmark series (15.3) and the design
+  regressions too long for every commit.
 
-**Everything still runs before a pull request is merged, locally.** A main-only check that
-fails after the merge leaves `main` red. So whoever merges runs the main-only jobs on their
-own machine first, with the same commands the workflow uses.
-
-Jobs on every branch and pull request:
-
-- Build matrix: {GCC, Clang} × {Debug, Release}.
-- Unit and golden test suites.
-- Sanitiser build (ASan+UBSan) over unit and golden suites.
-- `clang-format` check.
-- cocotb's regression suite (14.6) and sv-tests (14.4), in the job that already builds the
-  SystemVerilog frontend, since a second job would build slang a second time to run them; and
-  there, the one build with both frontends, NVC's `mixed` tests and the mixed golden cases.
-- VESTs, GHDL's and NVC's suites and cocotb's with VHDL toplevels (14.4, 14.6), in the build
-  matrix's GCC Release job.
-- The design regression of 14.5 for the designs that run quickly: `aes` and `common_cells`.
-
-Each job builds a configuration chosen so that code compiled only with a component, or only
-without one, is compiled somewhere with warnings as errors. The job that builds slang builds the
-defaults, every optional component on, which is what a contributor's plain configure gives. The
-build matrix and the sanitiser build the defaults but for the SystemVerilog frontend, which one
-job is enough to prove. One job builds the GUI with neither language frontend, since what is
-compiled only without them is compiled nowhere else.
-
-Jobs on `main` only:
-
-- `clang-tidy`, which analyses every source file.
-- The design regression for `taxi`, whose cocotb testbenches take minutes, and for NEORV32,
-  under its VHDL testbench and the Verilog one (14.5).
-
-The release workflow runs on a tag only, `vX.Y.Z`, and by hand: it makes the source tarball,
-builds and tests the packages of every distribution of 11.7, each in a container of its own, and
-from a tag creates a draft release with them (11.6). Run by hand on a branch it tries the
-packaging and releases nothing, which is how a change to it is tried before a release depends on
-it.
-
-There is no scheduled job. A nightly run would be a useful addition once there is somewhere to
-publish its results: conformance pass rates over time, the benchmark series of 15.3, and the
-design regressions too long for every commit.
-
-Dependency builds and `ccache` are cached. The default branch MUST stay green;
-a red default branch is fixed or reverted before other work continues.
+Dependency builds and `ccache` are cached. **The default branch MUST stay green**; a red default
+branch is fixed or reverted before other work continues.
 
 ---
 
@@ -2436,22 +1633,19 @@ a red default branch is fixed or reverted before other work continues.
 
 ### 17.1 Commit messages
 
-Every commit carries a category prefix. When a change is confined to a
-particular directory or file, the path follows the category as further
-colon-separated segments:
+Every commit carries a category prefix. When a change is confined to a particular directory or file,
+the path follows the category as further colon-separated segments:
 
 ```
 <category>: [<dir1>: [<dir2>: [<file>: ]]]<Subject line>
 ```
 
-Path segments are lowercase and mirror the source tree, even though source
-files are named in PascalCase. The path prefix is used only when the change
-genuinely touches just that area; a change spanning several components carries
-the category alone.
+Path segments are lowercase and mirror the source tree, even though source files are named in
+PascalCase. The path prefix is used only when the change genuinely touches just that area; a change
+spanning several components carries the category alone.
 
-Categories: `build`, `ci`, `design`, `docs`, `eir`, `elab`, `frontend`, `gui`,
-`session`, `ipc`, `wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`,
-`perf`, `refactor`, `license`.
+Categories: `build`, `ci`, `design`, `docs`, `eir`, `elab`, `frontend`, `gui`, `session`, `ipc`,
+`wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`, `perf`, `refactor`, `license`.
 
 Examples:
 
@@ -2463,18 +1657,15 @@ test: golden: picorv32: Add differential VCD comparison
 docs: Describe the mixed-language delta mapping
 ```
 
-The subject line is imperative, capitalised, and under 72 characters. The body
-explains **why**, not what — the diff already shows what.
+The subject line is imperative, capitalised, and under 72 characters. The body explains **why**, not
+what — the diff already shows what.
 
 ### 17.2 Commit granularity
 
-**Commit incrementally.** Each logical change is its own commit with its own
-descriptive message. Do not accumulate unrelated work into a large commit.
-
-The project is built largely by AI agents, which makes the commit log the
-primary record of what was changed and why. A single large commit destroys that
-record and makes bisecting a semantic regression — the hardest class of bug
-here — effectively impossible.
+**Commit incrementally.** Each logical change is its own commit with its own descriptive message.
+The project is built largely by AI agents, which makes the commit log the primary record of what was
+changed and why; a single large commit destroys that record and makes bisecting a semantic
+regression effectively impossible.
 
 ### 17.3 Definition of done
 
@@ -2482,400 +1673,100 @@ A feature is not done until all of the following hold:
 
 1. The implementation exists.
 2. Unit tests cover the feature **and its error paths**.
-3. If it affects simulation semantics, a golden or differential test pins the
-   behaviour.
+3. If it affects simulation semantics, a golden or differential test pins the behaviour.
 4. New public classes and non-trivial public methods carry `///` comments.
 5. `clang-format` and `clang-tidy` are clean.
 6. CI is green, including the sanitiser job.
-7. If behaviour described in this guide changed, this guide was updated **in
-   the same commit**.
+7. If behaviour described in this guide changed, this guide was updated **in the same commit**.
 8. Conformance pass rates did not regress.
 9. Benchmark results did not regress beyond the agreed threshold.
 
 ### 17.4 Standing invariants
 
-These are the rules most easily broken by accident. Violating one is a defect
-even if tests pass:
+These are the rules most easily broken by accident. Violating one is a defect even if tests pass:
 
-- **Determinism** (3.8). Never let hash container iteration order, pointer
-  values or allocation addresses affect simulation results or output ordering.
-- **Process purity** (4.2). A process reads and writes only its declared sets
-  in the state arena. Never reach arbitrary global state from a process.
-- **Four-state shape** (3.6). Never write a value path that assumes a single
-  bit plane, even while only two-state is implemented.
-- **No flattening in frontends** (5). Flattening is an elaboration-time
-  optimisation only.
-- **Thin frontend adapters** (5.2). Keep slang- and NVC-specific code confined
-  to its own directory. It must not leak into EIR or downstream.
-- **Opcodes carry their lowering** (6.1). A new bytecode opcode without a
-  documented LLVM lowering sketch is incomplete.
+- **Determinism** (3.8). Never let hash container iteration order, pointer values or allocation
+  addresses affect simulation results or output ordering.
+- **Process purity** (4.2). A process reads and writes only its declared sets in the state arena.
+- **Four-state shape** (3.6). Never write a value path that assumes a single bit plane.
+- **No flattening in frontends** (5). Flattening is an elaboration-time optimisation only.
+- **Thin frontend adapters** (5.2). slang- and NVC-specific code stays in its own directory and does
+  not leak into EIR or downstream.
+- **Opcodes carry their lowering** (6.1). A new opcode without a documented LLVM lowering sketch is
+  incomplete.
 - **No colour literals in GUI code** (10.5). Colours come from the theme.
 - **No allocation on the hot path** (13.4).
 
 ### 17.5 Repository hygiene
 
-Never commit: build directories, generated files, external RTL designs
-(`tests/designs/` fetches them), waveform dumps, or simulation libraries.
+Never commit build directories, generated files, external RTL designs (`tests/designs/` fetches
+them), waveform dumps, or simulation libraries.
 
 ### 17.6 When to stop and ask
 
-Stop and ask rather than guessing when: a task depends on a decision this guide
-marks *(open)*; an implementation would require violating a **MUST**; a new
-dependency seems necessary; or the language standards appear to conflict with
-what this guide specifies. In the last case, the standard is probably right and
-this guide needs fixing — but that is a decision to surface, not to make
-silently.
+Stop and ask rather than guessing when a task depends on a decision this guide marks *(open)*; an
+implementation would require violating a **MUST**; a new dependency seems necessary; or the language
+standards appear to conflict with what this guide specifies. In the last case the standard is
+probably right and this guide needs fixing, but that is a decision to surface, not to make silently.
 
 ---
 
 ## 18. Roadmap
 
-Milestones are gated by their exit criteria. Do not begin the next milestone
-while the current one's exit criteria are unmet.
+Milestones are gated by their exit criteria. Do not begin the next milestone while the current one's
+exit criteria are unmet.
 
-### M0 — Foundation *(first)*
+### Done
 
-Build system and test infrastructure before any simulator code.
-
-CMake skeleton and `CMakePresets.json`; dependency discovery with good error
-messages; GoogleTest wired up; `.clang-format` and `.clang-tidy`; GitHub
-Actions running build, test, sanitiser and format jobs; the `common/` component
-with the diagnostic engine and source manager; `enzan --version`.
-
-**Exit:** CI green on all jobs; at least one real unit test; a contributor can
-clone, configure and build from the README alone.
-
-### M1 — SystemVerilog subset simulating, waveform out
-
-slang integration; EIR-S and EIR-B; elaboration and the state arena; bytecode
-compiler and VM; scheduler with Active, Inactive, NBA and Postponed; four-state
-value representation with a two-state fast path; `always_ff`, `always_comb`,
-`always @`, `initial`, `assign`, `if`/`case`, arithmetic, packed vectors,
-hierarchy; `#delay`; `$display`, `$time`, `$finish`; VCD and FST writers;
-`bench/` recording cycles/sec.
-
-The GUI is deliberately **not** in this milestone. Waveforms are viewed in
-GTKWave or Surfer. This reaches a visibly working simulator far sooner and
-de-risks the kernel independently of the GUI, and the export path is needed
-permanently regardless.
-
-**Exit:** a counter and a FIFO testbench simulate correctly; waveforms open in
-GTKWave; results match a reference simulator; cycles/sec recorded.
-
-### M2 — Interactive GUI
-
-Kernel/GUI process split and IPC protocol; Qt 6 application with Structure,
-Objects, Wave and Transcript windows; live waveform database; downsampled
-waveform rendering; cursors, zoom, grouping, radix selection; dark theme from
-Tcl configuration.
-
-**Exit:** a design runs interactively with signals added from the GUI and the
-waveform progressing live.
-
-### M2.1 — Waveform interaction
-
-The mouse and keyboard model of section 10.7: the wheel scrolling with Ctrl to
-zoom, right-drag to zoom to a range or to fit, left-click selecting a signal and
-snapping the cursor to a nearby edge, cursors that carry their time and can be
-renamed and stepped from edge to edge, and a signal list whose rows can be
-reordered, unpacked into their bits and highlighted. With the database query the
-last of those needs (7.1).
-
-Placed here, straight after the GUI, for three reasons. It is contained entirely
-in the components M2 has just built, while that code is still warm. Nothing later
-blocks on it, so putting it first costs no other milestone anything. And design
-priority 1.2 puts usability above both performance and language breadth: the
-wave window is the part of Enzan a user touches most, and leaving its controls
-until after the VHDL frontend would be ordering the work for everything except
-the person using it.
-
-It is a point release rather than a milestone of its own because none of it
-changes what Enzan can simulate, record or export. Every item is about how the
-window is driven.
-
-**Exit:** every gesture in section 10.7 works and is covered by a test; a reader
-can lock one cursor on an edge, step a second along the same signal with Tab, and
-read both times off their labels without touching the mouse.
-
-### M2.2 — Signal list files
-
-The signal list files of section 10.8: saving the wave window's list and loading it again
-from the window or with `--wave-list`, and the `add wave` echo in the transcript.
-
-Numbered with the window it belongs to, and placed after M4 because that is when large
-designs made it needed: arranging two hundred signals by hand on every run is the cost a
-reader pays for not having it. Like M2.1 it is a point release — it changes nothing Enzan
-can simulate, record or export — and it is contained in the front end and one forwarded
-option, so nothing waits on it or is held up by it.
-
-**Exit:** a list saved from the window and loaded into a fresh one gives the same rows, with
-the same labels, radices, highlights, ranges and unpacked contents, and saving that again
-writes the same bytes; a file written by hand with a scope, `-r` and a nested group loads;
-a path the design lacks is skipped with a warning naming its line, and a syntax error loads
-nothing; `enzan run --gui --wave-list` opens with the list in place.
-
-### M3 — Command line, file lists and libraries
-
-The subcommands and exit statuses of 8.1. File lists with `--dry-run`, `--depfile`
-and `--depfile-target` (8.3). Named, opt-in analysis libraries with `lib create`,
-`lib list`, `lib clean`, `--out-lib`, `--in-lib` and `--context` (8.2, 4.4), which
-requires two things EIR does not have yet: **a logical library on every unit**, so
-that two libraries defining one name collide loudly rather than silently, and **an
-entry path derived from the unit name** rather than from a hash, so that `make` can
-depend on it. A library index carrying the logical name and the format version.
-`--gui` as an option of `enzan`, with the lifetimes of 8.4.
-
-The per-source hit rule of 4.4 is **not** in scope. It is a property of the frontend
-rather than of the store — a module cannot be type-checked without the packages it
-imports, so today one changed file re-analyses all of them — and changing it is
-frontend work that a library's shape does not depend on. What M3 owes is a library
-whose entries `make` can name and a boundary rule a user can follow, so that finer
-incrementality is a frontend change later rather than a redesign.
-
-**Exit:** the Makefile of 8.3 builds and simulates a design split across three
-libraries; editing one library's source rebuilds that library and the libraries
-analysed against it and no other, editing a context file rebuilds every library that
-named it, and editing nothing rebuilds nothing; two libraries defining one name are
-reported rather than silently resolved; `enzan run --gui` opens a window on a design
-it elaborated, and closing that window ends the kernel, while closing a window that
-reached the kernel through `--gui --attach` leaves it running.
-
-### M3.1 — Analysis cost proportional to the design
-
-One translation per parameterisation rather than per instance. slang creates a
-separate body symbol for each instance, so a module was translated once per
-instance and every translation but one discarded; a hundred instances of one module
-cost a hundred translations of it.
-
-Placed here rather than deferred to M8 because it is not an optimisation of the
-simulation, it is analysis doing a hundred times the work it needs to on any design
-that instantiates anything more than once — which is every real design. M8's subject
-is how fast a *run* is, and none of the measurement discipline there is what this
-needed.
-
-A port map keyed on the frontend's own symbols is what made the naive version
-unsafe: such a map belongs to one instance's body, and sharing it binds no
-connections while leaving the design elaborable and runnable. **A frontend
-structure shared between instances MUST be keyed by something the source names**,
-not by a pointer the frontend happened to produce.
-
-**Exit:** analysing a design whose instances share a parameterisation costs what
-one of them costs, and a test pins each instance reaching its own port storage
-rather than pinning the sharing.
-
-### M4 — VPI and cocotb
-
-VPI subset per section 9; `vpi_user.h`; callback plumbing into the scheduler
-regions; loading PLI shared objects.
-
-**Exit:** cocotb's own regression suite runs with a recorded pass rate.
-
-### M5 — Four-state completion and language breadth
-
-Full four-state throughout; X-propagation; nets, drivers and resolution per 3.7;
-tasks, functions, packages, interfaces, generate, structs, enums, arrays; the top
-level's parameters set from the command line; `sv-tests` pass rate tracked.
-
-**`string` stays a literal.** A string variable has no fixed size, while 4.3 lays out
-all state at elaboration and 13.4 forbids allocating on the write path, so storing one
-is a design of its own. The exit designs below are chosen to need none, and the cocotb
-cases whose shared design declares one keep failing until it is taken up (14.6).
-
-**The exit designs need no program to run.** A processor tests a simulator only as
-well as the software it is given, and running one would bring a cross-compiler into CI
-and, for a core iverilog cannot read, a second reference simulator. Three designs cover
-the language M5 adds without either:
-
-- **secworks `aes`**: Verilog with functions and memories, and a self-checking
-  testbench against the NIST vectors that iverilog also runs, so it is compared
-  differentially (14.3).
-- **The AXI-stream components of fpganinja `taxi`**: interfaces and modports, enums
-  and generate. Each is tested by its own cocotb testbench, which needs
-  `cocotbext-axi` beside cocotb and sets the top level's parameters from its makefile.
-- **PULP `common_cells`**: packages and packed structs, which `taxi` does not use.
-  Tested by those of its own testbenches that use no classes, queues, `randomize` or
-  `real` variables, and by self-checking ones kept beside its fetch script for further
-  modules. Its concurrent assertions are SVA, which comes later, and are compiled out
-  with its own `ASSERTS_OFF`; its immediate ones run.
-
-**Driving disjoint parts of one signal is the case to get right**, not an edge. A
-parameterised number of instances with ports connected to an array is ordinary RTL.
-Overlap, not sharing a signal, is what multiple driving means, and a variable driven
-in disjoint parts is legal where an overlapping one is an error.
-
-**Exit:** `aes` matches iverilog; the `taxi` AXI-stream tests and the `common_cells`
-testbenches above pass under Enzan; a design whose instance count is a
-parameter and whose ports are bits of one array simulates, while two drivers of one
-bit are still refused — a variable with an error and a net by resolving them.
-
-### M6 — VHDL via NVC
-
-NVC integration spike first, to confirm the approach in 5.2 before committing
-to it; NVC vendored at a pinned revision; NVC tree to EIR adapter; `std_logic` value model;
-VHDL generic and subtype elaboration, with generics folded by the adapter (5.2); Enzan's own implementations of the predefined and foreign subprograms NVC's
-runtime would have resolved; VHDL simulation cycle; VHPI subset for cocotb.
-
-**M6 is cut at the language designs are written in, not the language verification
-libraries are written in.** Synthesisable VHDL and the testbenches shipped beside it use
-almost nothing of what VUnit and OSVVM are built from: protected types, generic packages,
-configurations, external names, and access types used as a general heap. Measured over
-their sources, VUnit allocates in 37 files and OSVVM declares protected types in 31 and
-configurations in 389, while NEORV32 does none of these. The verification libraries come
-with the other verification features in M9+, so that the VHDL frontend, the simulation cycle
-and VHPI are proven on designs before they are asked to carry a library's runtime.
-
-**Access types are in M6 only as far as `std.textio` needs them.** NEORV32 cannot be
-simulated without `line`: its UART prints what the program sends through `write` and
-`writeline` in every simulation, from its RTL rather than its testbench, and the testbench
-logs both UARTs to files and can load a memory from one. So M6 builds the heap of 4.3 —
-access values are handles in the arena into a heap the kernel owns, since 4.3 lays out every
-piece of state at elaboration and 13.4 forbids allocating on the write path — and makes it
-work for an access to an array, as `std.textio` uses one, with textio's subprograms run
-natively over it (4.3). M9+ uses the same heap for everything else.
-
-The exit designs need no program compiled for them, for the reason M5 gives:
-
-- **NEORV32**, simulated by its own testbench with the program image its repository
-  commits. The testbench drives the on-chip debugger over JTAG — halting the CPU, writing
-  memory through it, resetting and resuming it — and asserts each step.
-- **cocotb's VHDL designs**, through its own test cases with a VHDL toplevel (14.6). These
-  are what VHPI is measured by, as cocotb's suite measured VPI in M4.
-- **VESTs and GHDL's and NVC's own suites** (14.4). Most of each needs nothing M9+ brings,
-  and a pass list per suite lets the rest wait without hiding a regression.
-
-**Exit:** NEORV32's testbench completes its debugger sequence under Enzan with no assertion
-failing, and its transcript is GHDL's line for line; cocotb's suite runs with a VHDL
-toplevel with a recorded pass rate; VESTs and GHDL's and NVC's suites run with recorded pass
-rates.
-
-### M7 — Mixed language
-
-A design whose hierarchy crosses between SystemVerilog and VHDL, in either direction and at
-any depth, simulated by the one kernel of 3.5. Everything below the frontends already serves
-both: EIR, elaboration, drivers and resolution (3.7), the kernel, the waveform database and
-the PLI context hold one design whatever language each definition came from. What M7 adds is
-the meeting of the two frontends and of the two interfaces.
-
-**SystemVerilog's time units come first.** A design with VHDL in it counts femtoseconds (5.2),
-so a SystemVerilog delay counted in the run's unit rather than its module's would make every delay
-of a mixed design wrong. Delays, `$time` and `%t` follow each module's time unit (3.1), and a
-module stating no time scale takes `--timescale`'s unit, or picoseconds.
-
-**Analysis of both languages in one session.** The session analyses SystemVerilog through
-slang and VHDL through the NVC child into one `eir::Design`. An instance of the other language's
-unit names a placeholder and an `eir::UnitRequest`, which the other frontend answers, slang through
-a module instantiating the one asked for and the adapter by translating the entity for the values;
-the session links the two by port name. A design of both is not stored in a library yet, nor
-given `-G` overrides. VHDL goes into Enzan's libraries as SystemVerilog does, `--out-lib` and
-`--in-lib` (8.2), and a design may draw on several VHDL libraries at once, not only the one `--work` names, since a mixed design is
-usually built as a testbench in one library and its DUT in another. Both are also what the GHDL suite's multi-library tests and cocotb's VHDL designs in
-their own libraries need (14.4, 14.6).
-
-**Instances across the boundary.**
-
-- *SystemVerilog instantiating a VHDL entity.* The entities' interfaces, their generics and
-  ports with their types, are given to slang as the modules it would otherwise not find, so
-  that the instance type-checks; its parameter values are the generics' values, and the
-  architecture is the entity's default one (5.2), since choosing another from SystemVerilog takes
-  a `config`, which Enzan does not read.
-- *VHDL instantiating a SystemVerilog module.* A component with no VHDL entity to bind is
-  bound to the module of its name (the default binding of IEEE 1076 section 7.3.3 extended
-  to the other language, as commercial tools extend it); the component's generics are the
-  module's parameter overrides. `entity work.m` does not name a module: NVC's analysis looks
-  for an entity of that name and finds none.
-- *Specialisation across the boundary.* VHDL generics are folded by the adapter (5.2) and
-  SystemVerilog parameters by slang, so each side's instance asks the other's frontend for
-  the specialisation its values make. The session alternates between the frontends until
-  neither asks for one the other has not given, as elaboration asks the VHDL frontend for
-  resolution functions (3.7), with a bound on the rounds so that a hierarchy recursing
-  through both languages is reported rather than followed for ever. A port's width may depend on
-  generics in any way VHDL can say, so the module an entity stands in as has ports as wide as a
-  translation for the instance's values made them, from a table each translation adds a row to,
-  and one bit wide until one has: instantiating VHDL from SystemVerilog takes a second round.
-
-**Ports across the boundary.** A port whose two sides are of different languages is
-connected by a zero-delay continuous assignment that converts between them and consumes one
-delta cycle (3.5), in each direction its mode needs. Elaboration makes them, from what the VHDL
-side's type is made of, so neither frontend converts anything: into VHDL by a transaction, and
-into SystemVerilog through the non-blocking region and then a continuous assignment, so that a
-net it drives still resolves its drivers:
-
-- `std_ulogic` codes to four-state bits with `L`→`0`, `H`→`1` and `W`, `U`, `-`→`X` (3.6),
-  and `0`, `1`, `X`, `Z` back to their codes; `bit` and `boolean` to two-state bits and back;
-- `std_logic_vector` and its kin to packed vectors, left element to the most significant bit;
-  integers to `int` or `longint` by their range; arrays of these to unpacked arrays and records
-  to packed structs, field by field, where the shapes agree;
-- an `inout` port as two conversions, split as 3.7 splits a port's driving value from its
-  effective value: the inner port's driving value, what its own drivers resolve to, goes out as
-  one driver of the outer signal, which resolves it by its own language's rule — a `std_logic`
-  signal's function, a net's table — and the outer signal's value comes back as the inner port's
-  effective value, not as a driver. Were each side's value a driver of the other, a value driven
-  once would be held for ever: a port released to `Z` would go on seeing its own `1`.
-
-A port no rule covers is refused by name: a real, until the SystemVerilog frontend has `real`; a
-VHDL port of an unconstrained type instantiated from SystemVerilog, whose bounds nothing there
-gives; and enumeration, time and physical ports other than those above.
-
-**The interfaces across the boundary.** VPI and VHPI share the one PLI context (9.7), and each
-shows its own language. VHPI shows a SystemVerilog region as one of kind `vhpiVerilog`, cocotb's
-number for it, which cocotb leaves to VPI, and has no root instance under a SystemVerilog top.
-VPI finds no VHDL object by name, and an iteration that meets a VHDL instance returns it as a
-`vpiUnknown`, named, which cocotb then asks VHPI for by name. A name either is asked for may
-begin in the other's hierarchy, the VHDL part of it in any case. cocotb requires this: for a
-Verilog toplevel, its mixed-language test asserts that VPI alone does not find the VHDL instance
-and that VHPI does, and a VHDL region shown through VPI would lose the types 9.7 gives it.
-cocotb runs a mixed design as it does elsewhere: the toplevel's language's library is loaded
-with `--vpi` or `--vhpi`, and the other's is named in `GPI_EXTRA`, which `Makefile.enzan` sets
-(9.7).
-
-**Reference simulation.** No free simulator takes SystemVerilog and VHDL together. NVC
-simulates Verilog beneath VHDL, not VHDL beneath Verilog, and only its analysis is built here, so
-CI runs no NVC: its own `mixed` regression tests check themselves and run under Enzan alone
-(14.4), and a mixed testbench written for Enzan is run under a locally built NVC before it is
-committed, where NVC can run it (14.5). Results are checked by splitting: the same design with
-the boundary moved — the DUT in one language driven by a testbench in the other, against the DUT
-in its own language's testbench under iverilog or GHDL — matches transcript for transcript, the
-boundary's delta aside.
-
-The exit designs need no program compiled for them, for the reason M5 gives:
-
-- **NEORV32** in a testbench in Verilog that drives it as its VHDL one does, its reports and
-  its CPU trace and UART logs against the VHDL testbench's run under GHDL (14.5).
-- **An M5 SystemVerilog design in a VHDL testbench**: secworks' `aes` core, its test vectors
-  driven from VHDL, against its own testbench under iverilog.
-- **cocotb's mixed-language test cases**, and its VHDL cases whose designs sit in libraries
-  of their own (14.6); **NVC's `mixed` regression tests**.
-
-**Exit:** a SystemVerilog testbench drives a VHDL DUT and a VHDL testbench a SystemVerilog
-one, each matching its reference; cocotb's mixed-language cases run with a recorded pass rate;
-NVC's mixed tests run with one.
+| Milestone | Scope |
+|---|---|
+| M0 | Build system, test infrastructure and CI; the diagnostic engine |
+| M1 | A SystemVerilog subset simulating, with VCD and FST output and benchmarks recorded |
+| M2 | The interactive GUI: the process split, the live waveform database and the wave window |
+| M2.1 | The wave window's mouse and keyboard model (10.7) |
+| M2.2 | Signal list files (10.8) |
+| M3 | Subcommands, exit statuses, file lists and analysis libraries (8) |
+| M3.1 | One translation per parameterisation rather than per instance |
+| M4 | VPI and cocotb (9) |
+| M5 | Four-state completion and language breadth: nets, drivers and resolution, packages, interfaces, generate, structs, enums, arrays |
+| M6 | VHDL via NVC, the VHDL simulation cycle and VHPI |
+| M7 | Designs of both languages (3.5) |
 
 ### M8 — Performance
 
-LLVM JIT backend behind a flag; profiling and hot-path work; activity-based
-scheduling refinements; optional static partitioning for threading; the
-performance target replaced with a measured, committed figure.
+LLVM JIT backend behind a flag; profiling and hot-path work; activity-based scheduling refinements;
+optional static partitioning for threading; the performance target replaced with a measured,
+committed figure.
 
 **Exit:** the committed performance target is met.
 
 ### M9+ — Verification features
 
-SVA and PSL assertions; functional coverage; constrained random (requires a
-constraint solver); save and restore; multiple clock domain tooling; UVM.
+SVA and PSL assertions; functional coverage; constrained random (which requires a constraint
+solver); save and restore; multiple-clock-domain tooling; UVM.
 
-**The VHDL verification libraries, VUnit and OSVVM**, and what they are built from: access
-types as a general heap, with `deallocate`; protected types and shared variables of them;
-generic packages and their instantiation; configurations; external names. VUnit's simulator
-interface for Enzan, which VUnit chooses by name as cocotb chooses a makefile (9.6). They are
-done when VUnit's own suite and OSVVM's regression each run with a recorded pass rate.
+**The VHDL verification libraries, VUnit and OSVVM**, and what they are built from: access types as
+a general heap, with `deallocate`; protected types and shared variables of them; generic packages
+and their instantiation; configurations; external names; and VUnit's simulator interface for Enzan,
+which VUnit chooses by name as cocotb chooses a makefile. They also need values whose length only
+the run knows, beyond the scratch of 4.1, and a VHDL top level's generics set from the command line,
+as `-G` sets a SystemVerilog one's parameters. They are done when VUnit's own suite and OSVVM's
+regression each run with a recorded pass rate.
 
-They need three things the RTL milestones do not build. Values whose length only the run knows
-— a message built with `to_string`, a function returning what an access value designates, a
-local sized by an unconstrained parameter — which 4.1 places in scratch the kernel resets when
-a process suspends, where EIR today gives every value a width fixed at translation. Several
-VHDL libraries at once, `vunit_lib` and `osvvm` beside a design's own, which M7 brings. And a
-VHDL top level's generics set from the command line, as `-G` sets a SystemVerilog one's
-parameters (8.1), since VUnit hands each test its `runner_cfg` as one.
+### Known gaps
+
+Left out of the milestones above, and refused by name where a design uses them rather than
+mistranslated:
+
+- SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
+  classes, unpacked unions, and strengths other than strong.
+- VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
+- A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
+  across the language boundary; a VHDL port of an unconstrained type instantiated from
+  SystemVerilog; storing a design of both languages in a library, and `-G` for one.
+- In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, part-select handles,
+  struct members, user system tasks, and the difference between the delay modes (9.4).
+- The Processes and Source windows (10.2), and a per-bit change index (10.3).
 
 ---
 
@@ -2883,41 +1774,34 @@ parameters (8.1), since VUnit hands each test its `runner_cfg` as one.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| NVC internal APIs drift or prove unusable as a frontend | High — blocks VHDL | Spike first in M6; pin the revision; thin adapter in one directory; documented co-simulation fallback (5.2) |
-| The predefined and foreign subprograms NVC's runtime resolved are a larger body of work than estimated | High — inflates M6 | Enumerate the set during the M6 spike by walking the analysed tree, before the milestone is planned (5.2) |
-| VHDL generic and subtype elaboration must be reimplemented rather than reused from NVC | Medium — inflates M6 | Sized by the M6 spike, which also decides whether generics are folded by the adapter or by elaboration (5.2); the tree boundary is reconsidered if it proves worse than the alternative (5.2) |
-| A defect inherited from NVC's frontend is invisible to differential testing against NVC | High — silent wrong results | GHDL is the primary VHDL reference and both conformance suites are run (14.3, 14.4) |
-| Mixed-language delta semantics differ from commercial tools | High — silent wrong results | Specify explicitly (3.5) and document it (`docs/mixed-language.md`); golden tests against references before declaring it working, the design split at the boundary since no free simulator runs both (M7) |
-| Event-driven interpretation misses the performance target | Medium | Bytecode VM from the start; JIT-ready EIR; continuous benchmarking from M1 |
+| NVC's internal APIs drift on an upgrade | High — blocks VHDL | Pinned revision; a thin adapter in one directory; golden tests to catch drift; co-simulation over VHPI as the fallback (5.2) |
+| A defect inherited from NVC's frontend is invisible to differential testing against NVC | High — silent wrong results | GHDL is the primary VHDL reference, and both suites are run (14.3, 14.4) |
+| Mixed-language delta semantics differ from commercial tools | High — silent wrong results | Specified (3.5), documented for users, and tested by moving the boundary, since no free simulator runs both languages |
+| Event-driven interpretation misses the performance target | Medium | Bytecode VM from the start; JIT-ready EIR; continuous benchmarking |
 | Waveform memory exhaustion on large designs | Medium | Selective capture and a memory budget with disk spill (7.1) |
-| Waveform rendering does not scale when zoomed out | Medium | Pixel-bounded rendering with downsampling (10.3), specified before implementation |
+| Waveform rendering does not scale when zoomed out | Medium | Pixel-bounded rendering (10.3) |
 | Scope creep into verification features | Medium | Explicit non-goals (1.3) and milestone gating |
-| Parallelism delivers less speedup than hoped | Low | Expectations calibrated in 6.4; single-threaded kernel is the plan, not a fallback |
+| Parallelism delivers less speedup than hoped | Low | Expectations calibrated in 6.4; the single-threaded kernel is the plan, not a fallback |
 
 ---
 
 ## 20. Glossary
 
-**Delta cycle** — a zero-duration iteration used to order evaluations at the
-same simulated time.
+**Analysis**: compiling one design unit to EIR, independent of any top level; a parameterised unit
+once per set of values the design uses (2.1). Cacheable and reusable.
 
-**EIR** — Enzan Internal Representation. EIR-S is structural, EIR-B behavioural.
+**Delta cycle**: a zero-duration iteration ordering evaluations at the same simulated time.
 
-**Elaboration** — building the instance tree and state layout for a specific
-top level. Not cacheable across designs.
+**EIR**: the Enzan Internal Representation. EIR-S is structural, EIR-B behavioural.
 
-**Analysis** — compiling one design unit to EIR, independent of any top level;
-a parameterised SystemVerilog module, or a VHDL entity with generics, once per
-parameterisation the design uses (2.1). Cacheable and reusable.
+**Elaboration**: building the instance tree and state layout for a specific top level. Not cacheable
+across designs.
 
-**Region** — one of the ordered phases within a SystemVerilog time slot.
+**Region**: one of the ordered phases within a SystemVerilog time slot.
 
-**State arena** — the single contiguous allocation holding all mutable
-simulation state.
+**State arena**: the single contiguous allocation holding all mutable simulation state.
 
-**Time precision** — the global integer unit in which simulated time is
-counted.
+**Time precision**: the global integer unit in which simulated time is counted.
 
-**VPI / VHPI / DPI** — VPI and VHPI are introspection and callback APIs used by
-tools such as cocotb to drive a simulation. DPI is the separate mechanism for
-calling C from SystemVerilog.
+**VPI / VHPI / DPI**: VPI and VHPI are the introspection and callback APIs tools such as cocotb
+drive a simulation through. DPI is the separate mechanism for calling C from SystemVerilog.
