@@ -180,7 +180,7 @@ TEST_F(InteractionTest, CtrlWheelZoomsAboutThePointer) {
     const SimTime spanBefore = view->axis().span();
     const SimTime under = view->axis().timeAt(200.0);
 
-    wheel(QPoint(200, 200), 1, Qt::ControlModifier);
+    wheel(QPoint(200, 200), -1, Qt::ControlModifier);
 
     EXPECT_LT(view->axis().span(), spanBefore);
 
@@ -194,7 +194,7 @@ TEST_F(InteractionTest, CtrlWheelTheOtherWayZoomsOut) {
     populate();
 
     const SimTime spanBefore = view->axis().span();
-    wheel(QPoint(400, 200), -1, Qt::ControlModifier);
+    wheel(QPoint(400, 200), 1, Qt::ControlModifier);
     EXPECT_GT(view->axis().span(), spanBefore);
 }
 

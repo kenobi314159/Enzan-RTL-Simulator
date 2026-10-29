@@ -1327,7 +1327,7 @@ void WaveformView::wheelEvent(QWheelEvent* event) {
     }
 
     if (event->modifiers().testFlag(Qt::ControlModifier)) {
-        timeAxis.zoom(notches > 0 ? 1.0 / ZoomStep : ZoomStep, event->position().x());
+        timeAxis.zoom(notches < 0 ? 1.0 / ZoomStep : ZoomStep, event->position().x());
     } else if (event->modifiers().testFlag(Qt::ShiftModifier)) {
         timeAxis.pan(notches > 0 ? -60.0 : 60.0);
     } else {
