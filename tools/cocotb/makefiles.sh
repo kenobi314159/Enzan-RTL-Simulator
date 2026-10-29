@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Writes a copy of cocotb's makefile directory, with Enzan's simulator makefile added, into the
-# directory given (DESIGN_GUIDE.md section 9.6). Then:
+# directory given. Then:
 #
 #   make SIM=enzan COCOTB_MAKEFILES_DIR=<directory>
 #

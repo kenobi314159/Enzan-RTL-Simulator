@@ -370,8 +370,8 @@ QPalette Theme::palette() const {
 QString Theme::styleSheet() const {
     const auto name = [this](ThemeColor which) { return color(which).name(QColor::HexArgb); };
 
-    // Written out here rather than shipped as a resource because a style sheet with colours in
-    // it would be a second place colours live, and section 10.5 allows exactly one.
+    // Written out here rather than shipped as a resource because a style sheet with colours in it
+    // would be a second place colours live, and there is exactly one.
     //
     // **Nothing here may style a scrolling surface — not its background, not its border.**
     // Either one makes Qt draw that widget through the style sheet's box model, and a widget

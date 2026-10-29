@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// enzan-vhdl-library: analyses files into one of VHDL's standard libraries, as the build does
-// for each of their files in turn (DESIGN_GUIDE.md section 4.4). A build-time tool, not something
-// a user runs; CMakeLists.txt beside it says in which order and why.
+// enzan-vhdl-library: analyses files into one of VHDL's standard libraries, as the build does for
+// each of their files in turn. A build-time tool, not something a user runs; CMakeLists.txt
+// beside it says in which order and why.
 //
 //   enzan-vhdl-library --standard 1993|2008|2019 --library NAME:DIRECTORY
 //                      [--search DIRECTORY]... [--bootstrap] FILE...
 //
 // Exit status 0 when every file analysed, 1 for a wrong command line, 2 when analysis failed, as
-// the statuses of section 8.1.
+// `enzan`'s are.
 
 #include "common/Diagnostics.h"
 #include "common/SourceManager.h"

@@ -21,8 +21,7 @@ class QDataStream;
 
 namespace enzan::gui {
 
-/// One select of a signal list path, `[3]` or `[7:4]`, by the index the design declares
-/// (DESIGN_GUIDE.md section 10.8).
+/// One select of a signal list path, `[3]` or `[7:4]`, by the index the design declares.
 struct IndexSelect {
     std::int64_t left = 0;
     std::int64_t right = 0;
@@ -33,7 +32,7 @@ struct IndexSelect {
 
 /// How `value` reads as an array of `dimensions`, in either window: the list of its elements
 /// along the outermost, `{11}{22}`, each read by the dimensions below it, or one number once
-/// the elements are single bits or there are no dimensions left (DESIGN_GUIDE.md section 10.7).
+/// the elements are single bits or there are no dimensions left.
 [[nodiscard]] QString renderArray(const eir::BitVector& value,
                                   const std::vector<eir::ArrayDimension>& dimensions,
                                   eir::Radix radix);
@@ -46,7 +45,7 @@ struct WaveRow {
     /// it has no signal index, nothing to subscribe to, and the same value at every time. It
     /// earns a kind of its own rather than a flag because every question the window asks a row
     /// — what does it show, when does it change, can it be taken apart — has a different and
-    /// simpler answer for one (DESIGN_GUIDE.md section 10.7).
+    /// simpler answer for one.
     enum class Kind : std::uint8_t { Group, Signal, Parameter };
 
     Kind kind = Kind::Signal;
@@ -58,8 +57,8 @@ struct WaveRow {
 
     /// Where a signal or parameter row's value comes from, by the path the Objects window
     /// showed for it. Kept on the row rather than looked up, because a slot reachable under two
-    /// names has one index, and a saved signal list must name the one the reader chose
-    /// (DESIGN_GUIDE.md section 10.8). Empty for a group.
+    /// names has one index, and a saved signal list must name the one the reader chose. Empty
+    /// for a group.
     QString path;
 
     std::uint32_t signalIndex = 0;
@@ -80,14 +79,14 @@ struct WaveRow {
 
     /// Set when this row shows only part of the signal.
     ///
-    /// Section 10.3 requires extracting a bit range into a separately displayed signal. It is a
-    /// property of the row rather than a new trace, so the kernel streams the signal once
-    /// however many slices of it are on screen.
+    /// A bit range can be extracted into a separately displayed signal. It is a property of the row
+    /// rather than a new trace, so the kernel streams the signal once however many slices of it are
+    /// on screen.
     bool sliced = false;
     std::uint32_t highBit = 0;
     std::uint32_t lowBit = 0;
 
-    /// Background slot 1 through `HighlightSlots`, or 0 for the default (section 10.7).
+    /// Background slot 1 through `HighlightSlots`, or 0 for the default.
     int highlight = 0;
 
     /// True once a signal row's elements, or its bits, have been created as children below it.
@@ -95,8 +94,8 @@ struct WaveRow {
 
     /// The dimensions of what the row shows, outermost first, dividing its bits into equal
     /// elements, the left one highest: a whole signal's as it is declared, an element's those
-    /// below the one it was taken from (DESIGN_GUIDE.md section 10.7). Empty for a row whose bits
-    /// are no array, which unpacks into its bits.
+    /// below the one it was taken from. Empty for a row whose bits are no array, which unpacks
+    /// into its bits.
     std::vector<eir::ArrayDimension> dimensions;
 
     /// The dimensions the whole signal is declared with under `path`, whatever part of it the
@@ -121,17 +120,17 @@ struct WaveRow {
 
 /// The contents of the Wave window.
 ///
-/// A tree rather than a list, because grouping is one of section 10.3's required features and a
-/// group that could not be collapsed would not earn its place. Rows are held in one flat vector
-/// with parent and child indices: a `QModelIndex` then carries a stable row number rather than
-/// a pointer, so adding a signal does not invalidate the indices of the ones already there.
+/// A tree rather than a list, because grouping is a required feature and a group that could not be
+/// collapsed would not earn its place. Rows are held in one flat vector with parent and child
+/// indices: a `QModelIndex` then carries a stable row number rather than a pointer, so adding a
+/// signal does not invalidate the indices of the ones already there.
 ///
-/// **A row with children shows what its children show, joined together** (section 10.7). One
-/// rule covers three things that would otherwise be three special cases: a bus that has been
-/// unpacked and had some of its bits deleted shows what is left of it; a group of one-bit
-/// signals behaves as a vector; and a group of equal-width vectors is a dimension above that,
-/// which is what makes multi-dimensional arrays fall out of nesting rather than needing their
-/// own mechanism. A group whose children are not all the same width shows nothing, because a
+/// **A row with children shows what its children show, joined together**. One rule covers
+/// three things that would otherwise be three special cases: a bus that has been unpacked and
+/// had some of its bits deleted shows what is left of it; a group of one-bit signals behaves
+/// as a vector; and a group of equal-width vectors is a dimension above that, which is what
+/// makes multi-dimensional arrays fall out of nesting rather than needing their own
+/// mechanism. A group whose children are not all the same width shows nothing, because a
 /// number joined out of unrelated signals is noise rather than information.
 ///
 /// The model holds only what to draw. The values come from the session's database, which is why
@@ -155,8 +154,8 @@ public:
 
     /// `session` and `theme` must both outlive the model.
     ///
-    /// The theme is here because Qt asks a model for `Qt::BackgroundRole` and
-    /// `Qt::ForegroundRole`, and section 10.5 allows exactly one place for a colour to come from.
+    /// The theme is here because Qt asks a model for `Qt::BackgroundRole` and `Qt::ForegroundRole`,
+    /// and there is exactly one place for a colour to come from.
     WaveformModel(const KernelSession& session, const Theme& theme, QObject* parent = nullptr);
 
     /// A subtree not yet in the model: read off the clipboard, or out of a signal list.
@@ -303,7 +302,7 @@ public:
     QVector<int> insertSignalRows(const std::vector<PendingRow>& pending, int targetGroup,
                                   int position);
 
-    /// The whole list as a signal list file, top to bottom (DESIGN_GUIDE.md section 10.8).
+    /// The whole list as a signal list file, top to bottom.
     ///
     /// Deterministic: the same rows always give the same text, so that a list kept in version
     /// control changes only when the list does.
@@ -331,8 +330,8 @@ public:
     /// unpacked bus read as the bus. A row whose children are wider than a bit renders as the
     /// list of them, `{001122}{112233}`, and because that recurses a group of such groups
     /// reads `{{11}{22}}{{22}{33}}` — the shape of the thing rather than a number with the
-    /// boundaries filed off (DESIGN_GUIDE.md section 10.7). An array row reads the same way
-    /// whether it is unpacked or not, as the list of its elements.
+    /// boundaries filed off. An array row reads the same way whether it is unpacked or not,
+    /// as the list of its elements.
     [[nodiscard]] QString renderValue(int rowId, runtime::SimTime time) const;
 
     /// The next time after `time` at which anything the row shows changes, or `NoTime`.
@@ -428,9 +427,9 @@ private:
 
     /// Tells `fromRow` and everything above it that the value they show has changed.
     ///
-    /// A row's value is part of every value above it (section 10.7), so a structural change
-    /// anywhere below has to travel up. Without this, deleting a bit would leave its bus
-    /// showing the value it had while the bit was still there.
+    /// A row's value is part of every value above it, so a structural change anywhere below
+    /// has to travel up. Without this, deleting a bit would leave its bus showing the value
+    /// it had while the bit was still there.
     void notifyValueChangedUpwards(int fromRow);
 
     void writeRow(QDataStream& stream, int rowId) const;

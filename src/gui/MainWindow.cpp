@@ -50,7 +50,7 @@ constexpr const char* GeometryKey = "layout/geometry";
 constexpr const char* WindowStateKey = "layout/state";
 
 /// Radix names, in the order the menus offer them. Hexadecimal is first because it is the
-/// default for multi-bit values (section 10.3).
+/// default for multi-bit values.
 struct RadixChoice {
     const char* name;
     eir::Radix radix;
@@ -210,9 +210,9 @@ void MainWindow::buildDocks() {
     connect(addToWave, &QAction::triggered, this, &MainWindow::addSelectedObjectsToWave);
     scopeTo(addToWave, objectsView);
 
-    // `examine`, `force` and `deposit` are required from the GUI as well as from Tcl (section
-    // 10.4). Examining is what the window already does — the value column *is* an examine that
-    // keeps itself up to date — so what is added here is the two that write.
+    // `examine`, `force` and `deposit` are available from the GUI as well as through VPI. Examining
+    // is what the window already does — the value column *is* an examine that keeps itself up to
+    // date — so what is added here is the two that write.
     auto* writeSeparator = new QAction(objectsView);
     writeSeparator->setSeparator(true);
     objectsView->addAction(writeSeparator);
@@ -260,7 +260,7 @@ void MainWindow::buildDocks() {
     waveRowsView->setColumnWidth(WaveformModel::NameColumn, 220);
 
     // Rows are reordered by dragging them, including into and out of groups. The order is the
-    // reader's and nothing re-sorts it behind them (section 10.7).
+    // reader's and nothing re-sorts it behind them.
     waveRowsView->setDragEnabled(true);
     waveRowsView->setAcceptDrops(true);
     waveRowsView->setDropIndicatorShown(true);
@@ -294,7 +294,7 @@ void MainWindow::buildDocks() {
     // The wave list's commands, which are both its own menu and the window's Edit menu: one set
     // of actions in one order, so that the two menus cannot come to differ. Each acts on the
     // selected rows, and its key works while the focus is anywhere in the Wave tab, because the
-    // names and the traces are one window to the reader (section 10.7).
+    // names and the traces are one window to the reader.
     const auto addWaveAction = [this](const QString& text, const QKeySequence& shortcut,
                                       auto slot) {
         auto* action = new QAction(text, waveRowsView);
@@ -335,9 +335,8 @@ void MainWindow::buildDocks() {
     }
     waveRowsView->addAction(radixMenu->menuAction());
 
-    // The palette is the theme's (section 10.5), so each entry carries its actual colour, which
-    // `applyTheme` paints, and is numbered as `-highlight` numbers it in a signal list file
-    // (section 10.8).
+    // The palette is the theme's, so each entry carries its actual colour, which `applyTheme`
+    // paints, and is numbered as `-highlight` numbers it in a signal list file.
     auto* highlightMenu = new QMenu(tr("Highlight"), waveRowsView);
     for (int slot = 1; slot <= HighlightSlots; ++slot) {
         QAction* entry = highlightMenu->addAction(QString::number(slot));
@@ -372,7 +371,7 @@ void MainWindow::applyTheme() {
     // The palette carries nearly all of the theme, and the style sheet only what a palette
     // cannot say. Keeping backgrounds out of the style sheet is what lets the signal list and
     // the wave canvas move what they have already drawn when they scroll, rather than drawing
-    // it all again (DESIGN_GUIDE.md section 10.5).
+    // it all again.
     QApplication::setPalette(theme.palette());
     qApp->setStyleSheet(theme.styleSheet());
 
@@ -558,9 +557,9 @@ void MainWindow::buildMenus() {
     file->addSeparator();
 
     // Closing the window only ever detaches, and is safe to give a key: whether the kernel goes
-    // with it is decided by how the session was started (section 8.4). Ending the simulation is
-    // an entry of its own with no key, because a kernel found with `--attach` is one somebody
-    // meant to outlive the window.
+    // with it is decided by how the session was started. Ending the simulation is an entry of
+    // its own with no key, because a kernel found with `--attach` is one somebody meant to
+    // outlive the window.
     file->addAction(tr("Close Window"), this, [this] { close(); })
         ->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Q));
     file->addAction(tr("End Simulation and Close"), this, [this] {
@@ -576,8 +575,8 @@ void MainWindow::buildMenus() {
 
     // --- View --------------------------------------------------------------
 
-    // Ctrl zooms and Shift pans, from the keyboard as on the wheel (section 10.7), which leaves
-    // the bare keys to the signal list: `+` and `-` pack and unpack there, and letters find a row.
+    // Ctrl zooms and Shift pans, from the keyboard as on the wheel, which leaves the bare keys to
+    // the signal list: `+` and `-` pack and unpack there, and letters find a row.
     QMenu* view = menuBar()->addMenu(tr("&View"));
     scopeTo(view->addAction(tr("Zoom In"), waveView, &WaveformView::zoomIn), waveTab)
         ->setShortcuts(
@@ -601,7 +600,7 @@ void MainWindow::buildMenus() {
     view->addSeparator();
 
     // The themes in the configuration directory, the built-in one first, and the two things a
-    // reader editing one needs: a new file to edit, and the file in use read again (section 10.5).
+    // reader editing one needs: a new file to edit, and the file in use read again.
     themeMenu = view->addMenu(tr("Theme"));
     themeChoices = new QActionGroup(themeMenu);
     reloadThemeAction = new QAction(tr("Reload Theme"), this);
@@ -618,7 +617,7 @@ void MainWindow::buildMenus() {
 
     // The keyboard's way to the cursors. A key cannot point at a cursor the way a right-click on
     // its label does, so these act on the active one, which is drawn heavier than the rest and is
-    // the one Tab is already moving (section 10.7).
+    // the one Tab is already moving.
     QMenu* cursor = menuBar()->addMenu(tr("&Cursor"));
     cursor->addAction(addCursorAction);
     cursor->addSeparator();
@@ -1031,9 +1030,9 @@ void MainWindow::finishLoad(const PendingLoad& load) {
 
     if (load.replace) waveModel->clear();
 
-    // Inserted the way a paste inserts, so nothing already in the window collapses or expands
-    // (DESIGN_GUIDE.md section 10.7). Groups are not expanded either: a list of two hundred
-    // signals opened all at once is a wall, and the groups are there to be opened one by one.
+    // Inserted the way a paste inserts, so nothing already in the window collapses or
+    // expands. Groups are not expanded either: a list of two hundred signals opened all at
+    // once is a wall, and the groups are there to be opened one by one.
     static_cast<void>(waveModel->insertSignalRows(resolved.rows, -1, -1));
 
     if (!load.file.isEmpty()) {
@@ -1050,8 +1049,8 @@ void MainWindow::depositOrForceSelectedObject(bool force) {
     if (info == nullptr) return;
 
     if (info->isParameter()) {
-        // A parameter is a fact about the elaborated design rather than a piece of its state
-        // (section 10.7); there is no storage to write.
+        // A parameter is a fact about the elaborated design rather than a piece of its
+        // state; there is no storage to write.
         note(tr("%1 is a parameter, so it has no value to write").arg(info->path));
         return;
     }
@@ -1262,7 +1261,7 @@ void MainWindow::runActionExec() {
 
 void MainWindow::run(const QString& text) {
     // Read as `--run` reads its value, by the same function, so that what the one takes the other
-    // does too (DESIGN_GUIDE.md section 8.5).
+    // does too.
     const std::optional<runtime::RunLength> length = runtime::parseRunLength(text.toStdString());
     if (!length) {
         note(tr("'%1' is not a length of time: a count of the run's time unit, 100, or a number "
@@ -1335,8 +1334,8 @@ void MainWindow::updateActions() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::restoreLayout() {
-    // From the configuration directory (section 10.9). A window with none opens at its first
-    // size, which is also what a test's window does, whoever runs it.
+    // From the configuration directory. A window with none opens at its first size, which is
+    // also what a test's window does, whoever runs it.
     QByteArray geometry;
     QByteArray state;
     if (const QString file = configuration.layoutFile(); !file.isEmpty()) {
@@ -1365,10 +1364,10 @@ void MainWindow::saveLayout() {
 void MainWindow::closeEvent(QCloseEvent* event) {
     saveLayout();
 
-    // Detached from and never ended. A window only ever attaches now (DESIGN_GUIDE.md section
-    // 8.4), so whether the kernel should outlive it is the kernel's decision: one started by
-    // `--gui` waits on this process and goes when it does, and one found with `--attach` keeps
-    // running. Ending it from here would take that decision away from the flag the user chose.
+    // Detached from and never ended. A window only ever attaches, so whether the kernel should
+    // outlive it is the kernel's decision: one started by `--gui` waits on this process and goes
+    // when it does, and one found with `--attach` keeps running. Ending it from here would take
+    // that decision away from the flag the user chose.
     if (session->isAttached()) session->detach();
 
     QMainWindow::closeEvent(event);

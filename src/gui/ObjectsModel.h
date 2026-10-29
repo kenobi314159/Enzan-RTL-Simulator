@@ -45,7 +45,7 @@ public:
     /// Redraws the value column, for when new values have arrived.
     void refreshValues();
 
-    /// The radix every value is shown in. Hexadecimal by default, as section 10.3 specifies.
+    /// The radix every value is shown in. Hexadecimal by default.
     void setRadix(eir::Radix radix);
 
     [[nodiscard]] eir::Radix radix() const noexcept { return valueRadix; }

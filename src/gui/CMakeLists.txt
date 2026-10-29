@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The Qt 6 Widgets front end (DESIGN_GUIDE.md section 10).
+# The Qt 6 Widgets front end.
 
 # Qt's code generators are selected per target from these, so they must be set before the
 # component's library is created. AUTOUIC is off: the layouts here are built in code, because a
@@ -42,10 +42,10 @@ enzan_add_component(
           WaveformView.h
   DEPENDS enzan::common enzan::eir enzan::ipc enzan::wavedb Qt6::Widgets Qt6::Gui Qt6::Core)
 
-# The themes are compiled in rather than installed beside the binary. Section 10.5 makes the theme
-# files the only place colours live, so they have to be there whatever the installation looks
-# like; the window writes copies of them into the configuration directory for a user to change.
-# A theme listed here is a built-in theme, named for its file: nothing else names them.
+# The themes are compiled in rather than installed beside the binary. The theme files are the only
+# place colours live, so they have to be there whatever the installation looks like; the window
+# writes copies of them into the configuration directory for a user to change. A theme listed here
+# is a built-in theme, named for its file: nothing else names them.
 qt_add_resources(enzan_gui "enzan_gui_themes" PREFIX "/enzan" FILES themes/dark.tcl
                  themes/light.tcl)
 

@@ -41,7 +41,7 @@ QString renderShaped(const eir::BitVector& value, std::span<const eir::ArrayDime
             QString rendered;
             eir::BitVector element = eir::BitVector::filled(width, eir::Logic::Zero);
             for (std::uint32_t position = 0; position < count; ++position) {
-                // The left element is the highest (DESIGN_GUIDE.md section 4.3).
+                // The left element is the highest.
                 const std::uint32_t low = (count - 1 - position) * width;
                 for (std::uint32_t bit = 0; bit < width; ++bit)
                     element.set(bit, value.get(low + bit));
@@ -1328,8 +1328,8 @@ void WaveformModel::fetchMore(const QModelIndex& parent) {
 }
 
 Qt::DropActions WaveformModel::supportedDropActions() const {
-    // Move only. A copy would put two rows over one signal with no way to tell them apart,
-    // which is what the bit-range extraction of section 10.3 is for and does properly.
+    // Move only. A copy would put two rows over one signal with no way to tell them apart, which is
+    // what extracting a bit range is for and does properly.
     return Qt::MoveAction;
 }
 

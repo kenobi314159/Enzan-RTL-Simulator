@@ -2,10 +2,10 @@
 //
 // Entry point for the graphical front end.
 //
-// The GUI is a separate process from the kernel (DESIGN_GUIDE.md section 2.2) and talks to it
-// over a socket. Nothing here links the simulator: the two are built apart, and a change that
-// made this executable depend on `runtime` or on a frontend would quietly undo the separation
-// that lets a local window drive a kernel on a compute server.
+// The GUI is a separate process from the kernel and talks to it over a socket. Nothing here
+// links the simulator: the two are built apart, and a change that made this executable depend
+// on `runtime` or on a frontend would quietly undo the separation that lets a local window
+// drive a kernel on a compute server.
 
 #include "common/Version.h"
 #include "gui/Configuration.h"
@@ -28,9 +28,8 @@ namespace {
 /// What `--help` prints.
 ///
 /// Short because this is not a program a user drives. `enzan --gui` starts it and passes it a
-/// socket; the options here are the ones that reach it that way (DESIGN_GUIDE.md section 8.4).
-/// Written out rather than generated for the reason 8.5 gives: a generated text does not match
-/// the one beside it.
+/// socket; the options here are the ones that reach it that way. Written out rather than
+/// generated, because a generated text does not match the one beside it.
 constexpr std::string_view UsageText =
     R"(Usage: enzan-gui --attach <socket>
 
@@ -52,7 +51,7 @@ Options:
 ///
 /// Ahead of `QCommandLineParser` because this calls neither `addHelpOption` nor
 /// `addVersionOption`: those generate the divergent help text and bind `-v`, where the rest of
-/// the tool spells it `-V` (8.5).
+/// the tool spells it `-V`.
 std::optional<int> answerHelpOrVersion(int argc, char** argv) {
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
@@ -101,7 +100,7 @@ int main(int argc, char** argv) {
     parser.addOption(runOption);
     // `enzan run --gui ...` forwards its command word, which this process has no use for: it
     // starts a kernel, and the kernel is the thing that runs. Dropped rather than refused, so
-    // that both spellings of the same request work (DESIGN_GUIDE.md section 8.4).
+    // that both spellings of the same request work.
     QStringList forwarded;
     for (const QString& argument : QCoreApplication::arguments()) {
         if (argument == QStringLiteral("run") || argument == QStringLiteral("elaborate")) continue;
@@ -111,9 +110,9 @@ int main(int argc, char** argv) {
 
     // --- the settings ------------------------------------------------------
 
-    // Made the first time a window opens and read each time one does (DESIGN_GUIDE.md section
-    // 10.9). Neither is fatal: a mistyped colour should not stop someone debugging, and whatever
-    // goes wrong leaves the built-in theme and is said in the transcript.
+    // Made the first time a window opens and read each time one does. Neither is fatal: a
+    // mistyped colour should not stop someone debugging, and whatever goes wrong leaves the
+    // built-in theme and is said in the transcript.
     const enzan::gui::ConfigurationDirectory settings(
         enzan::gui::ConfigurationDirectory::standardPath());
     QString settingsError;
@@ -153,8 +152,7 @@ int main(int argc, char** argv) {
 
     // After attaching, though the rows wait for the design to arrive: the file is read and
     // checked now, so that a mistake in it is reported as the window opens. One that cannot be
-    // loaded leaves the window empty, as a theme that cannot be read leaves the built-in
-    // colours (DESIGN_GUIDE.md section 10.8).
+    // loaded leaves the window empty, as a theme that cannot be read leaves the built-in colours.
     if (parser.isSet(waveListOption) && !window.loadSignalList(parser.value(waveListOption))) {
         QTextStream(stderr) << "enzan-gui: " << parser.value(waveListOption)
                             << ": not loaded; the window's transcript says why\n";

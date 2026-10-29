@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The graphical front end (DESIGN_GUIDE.md section 10).
+# The graphical front end.
 #
-# It links the GUI component and nothing from the simulator: the kernel is a separate process
-# (section 2.2), and a dependency on `runtime` or on a frontend here would undo the separation
-# that lets a local window drive a kernel on another machine.
+# It links the GUI component and nothing from the simulator: the kernel is a separate process,
+# and a dependency on `runtime` or on a frontend here would undo the separation that lets a
+# local window drive a kernel on another machine.
 
 set(CMAKE_AUTOMOC ON)
 
@@ -13,7 +13,7 @@ target_link_libraries(enzan-gui PRIVATE enzan::compile_options enzan::common enz
                                         Qt6::Widgets)
 
 # In libexec rather than beside `enzan`, in the build tree as in an installation: it is started only
-# by `enzan --gui` (section 8.4), and `enzan` finds it the same way in both (section 11.5).
+# by `enzan --gui`, and `enzan` finds it the same way in both.
 set_target_properties(enzan-gui PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ENZAN_BUILD_LIBEXECDIR}")
 install(
   TARGETS enzan-gui
