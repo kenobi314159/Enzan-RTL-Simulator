@@ -7,6 +7,9 @@ on nothing inside Enzan themselves.
 
 - **Version information** (`Version.h`) — the version and source revision the
   binary was built from, as reported by `enzan --version`.
+- **Installation layout** (`Installation.h`) — where the front end and VHDL's
+  standard libraries are, found from the directory of the running executable,
+  per DESIGN_GUIDE.md section 11.5.
 - **Source management** (`SourceManager.h`) — loading source text into buffers
   and mapping byte offsets back to files, lines and columns.
 - **Diagnostics** (`Diagnostics.h`) — the single diagnostic engine that serves

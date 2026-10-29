@@ -7,19 +7,21 @@
 # than run as if the option had been taken. An option that changes nothing and says nothing is
 # indistinguishable from one that worked.
 #
-#   run-cli-check.sh <enzan>
+#   run-cli-check.sh <enzan> <front end>
 #
-# Every build runs it: a command line is checked before any frontend is reached. What needs a
+# <front end> is where `enzan` looks for the graphical front end, relative to its own directory
+# (section 11.5). Every build runs it: a command line is checked before any frontend is reached. What needs a
 # design to analyse runs in the languages the build has, which `enzan --version` lists.
 
 set -uo pipefail
 
-if [[ $# -ne 1 ]]; then
-    echo "usage: $0 <enzan>" >&2
+if [[ $# -ne 2 ]]; then
+    echo "usage: $0 <enzan> <front end>" >&2
     exit 2
 fi
 
 enzan=$1
+front_end=$2
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -142,14 +144,17 @@ fi
 
 # The window's own options are forwarded as they were written, and none it was not given: the
 # window reads `--run` again, by the same function, once the kernel has said what unit it counts.
-# `enzan` starts the front end beside itself, so a copy of it is put beside a stand-in that says
-# what it was given, with the build's lib/ beside the copy's bin/ for VHDL's standard libraries;
-# `--attach` starts no kernel, so this needs no design and no display.
+# `enzan` starts the front end it finds from its own directory (11.5), so a copy of it is put where
+# that leads to a stand-in that says what it was given, with the build's lib/ beside the copy's bin/
+# for VHDL's standard libraries; `--attach` starts no kernel, so this needs no design and no
+# display.
 mkdir -p window/bin
 cp "$enzan" window/bin/enzan
 ln -s "$(cd "$(dirname "$enzan")/.." && pwd)/lib" window/lib
-printf '#!/bin/sh\necho "front end: $*"\n' >window/bin/enzan-gui
-chmod +x window/bin/enzan-gui
+stand_in_path=window/bin/$front_end
+mkdir -p "$(dirname "$stand_in_path")"
+printf '#!/bin/sh\necho "front end: $*"\n' >"$stand_in_path"
+chmod +x "$stand_in_path"
 expect 0 "front end: --attach k.sock" window/bin/enzan --gui --attach k.sock
 expect 0 "front end: --run 10ns --attach k.sock" window/bin/enzan --gui --attach k.sock --run 10ns
 expect 0 "front end: --run all --attach k.sock" window/bin/enzan --gui --attach k.sock -r all
@@ -159,8 +164,8 @@ expect 0 "front end: --run all --attach k.sock" window/bin/enzan --gui --attach 
 # said to be at once. SIGTERM rather than a crash's signal, so that no core is dumped.
 if [[ ${#sources[@]} -gt 0 ]]; then
     stand_in() {
-        printf '#!/bin/sh\n%s\n' "$1" >window/bin/enzan-gui
-        chmod +x window/bin/enzan-gui
+        printf '#!/bin/sh\n%s\n' "$1" >"$stand_in_path"
+        chmod +x "$stand_in_path"
     }
     stand_in 'exit 0'
     expect 0 "" window/bin/enzan --gui "${sources[0]}"
@@ -168,9 +173,14 @@ if [[ ${#sources[@]} -gt 0 ]]; then
     expect 4 "the graphical front end ended on signal 15" window/bin/enzan --gui "${sources[0]}"
     stand_in 'exit 7'
     expect 4 "the graphical front end exited with status 7" window/bin/enzan --gui "${sources[0]}"
-    rm window/bin/enzan-gui
+    # Missing, and not looked for anywhere else: a front end on the PATH could be another
+    # version's.
+    rm "$stand_in_path"
+    mkdir -p elsewhere
+    printf '#!/bin/sh\necho "a front end on the PATH"\n' >elsewhere/enzan-gui
+    chmod +x elsewhere/enzan-gui
     expect 1 "could not start the graphical front end" \
-        env PATH="$work/nowhere" window/bin/enzan --gui "${sources[0]}"
+        env PATH="$work/elsewhere:$PATH" window/bin/enzan --gui "${sources[0]}"
 fi
 
 # --- a dependency file (8.3) ---------------------------------------------------------------------

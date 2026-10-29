@@ -12,6 +12,14 @@ add_executable(enzan-gui Main.cpp)
 target_link_libraries(enzan-gui PRIVATE enzan::compile_options enzan::common enzan::gui
                                         Qt6::Widgets)
 
+# In libexec rather than beside `enzan`, in the build tree as in an installation: it is started only
+# by `enzan --gui` (section 8.4), and `enzan` finds it the same way in both (section 11.5).
+set_target_properties(enzan-gui PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ENZAN_BUILD_LIBEXECDIR}")
+install(
+  TARGETS enzan-gui
+  RUNTIME DESTINATION "${ENZAN_INSTALL_LIBEXECDIR}"
+  COMPONENT enzan-gui)
+
 if(ENZAN_BUILD_TESTS)
   # End-to-end checks on the executable, which run with no display because they exit before a
   # window is shown. The offscreen platform keeps them runnable on a CI machine with no X or

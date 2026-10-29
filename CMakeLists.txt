@@ -79,9 +79,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # the cost and the failure, and must be revisited if Enzan ever adopts modules.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
+list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
+
 # Keep binaries and libraries in one predictable place per build directory, so
-# that scripts and documentation can name a stable path.
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/bin")
+# that scripts and documentation can name a stable path. The executables are
+# where an installation puts them, bin/ by default, because the build tree is
+# laid out as the installation is (DESIGN_GUIDE.md section 11.5).
+include(EnzanInstallDirs)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${ENZAN_BUILD_BINDIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 
@@ -108,8 +113,6 @@ option(ENZAN_ALLOW_FETCH
 set(ENZAN_SANITIZERS
     ""
     CACHE STRING "Sanitizers to enable (address, undefined, thread, ...)")
-
-list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 include(EnzanCompilerOptions)
 include(EnzanDependencies)

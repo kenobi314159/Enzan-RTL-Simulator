@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Arch Linux packages of Enzan (DESIGN_GUIDE.md section 11.7). The @...@ fields are filled in from
+# the tarball by packaging/container.sh.
+#
+# Maintainer: @PACKAGER@
+
+pkgbase=enzan
+pkgname=(enzan enzan-gui)
+_upstream=@UPSTREAM_VERSION@
+pkgver=@PACKAGE_VERSION@
+pkgrel=1
+pkgdesc='Event-driven mixed-language RTL simulator for SystemVerilog and VHDL'
+arch=(x86_64)
+url='https://github.com/kenobi314159/Enzan-RTL-Simulator'
+license=('GPL-3.0-or-later' 'Apache-2.0' 'LGPL-3.0-or-later' 'MIT' 'ISC' 'BSD-2-Clause' 'BSL-1.0'
+         'LicenseRef-public-domain')
+# Arch packages a mimalloc as recent as slang asks for, so slang uses it rather than none.
+makedepends=(cmake ninja flex gtest mimalloc qt6-base tcl zlib zstd)
+source=("$url/releases/download/v$_upstream/enzan-$_upstream.tar.xz")
+sha256sums=('@SHA256@')
+
+build() {
+  # The tarball carries every source a build would download (section 11.6), and a download now is
+  # a dependency the tarball lacks, so it is an error rather than an attempt.
+  cmake -S "enzan-$_upstream" -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DENZAN_ALLOW_FETCH=OFF \
+    -DFETCHCONTENT_FULLY_DISCONNECTED=ON
+  cmake --build build
+}
+
+check() {
+  ctest --test-dir build --output-on-failure
+}
+
+package_enzan() {
+  depends=(gcc-libs glibc mimalloc zlib zstd)
+  optdepends=('enzan-gui: the graphical debugging environment enzan --gui opens')
+  DESTDIR="$pkgdir" cmake --install build --component enzan
+  install -Dm644 "enzan-$_upstream/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 -t "$pkgdir/usr/share/doc/$pkgname" "enzan-$_upstream/README.md" \
+    "enzan-$_upstream/docs/third_party.md" "enzan-$_upstream/docs/mixed-language.md"
+}
+
+package_enzan-gui() {
+  pkgdesc='Event-driven mixed-language RTL simulator for SystemVerilog and VHDL - graphical front end'
+  depends=("enzan=$pkgver-$pkgrel" gcc-libs glibc qt6-base tcl)
+  DESTDIR="$pkgdir" cmake --install build --component enzan-gui
+  install -Dm644 "enzan-$_upstream/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

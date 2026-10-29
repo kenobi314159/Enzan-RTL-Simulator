@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Generated from src/common/InstallationInfo.h.in by CMake. Do not edit the
+// generated copy; edit the template.
+//
+// The paths are relative to the directory of the running executable, and the
+// same in a build tree as in an installation, since the build tree is laid out
+// as one (DESIGN_GUIDE.md section 11.5). cmake/EnzanInstallDirs.cmake sets them.
+
+#pragma once
+
+/// The graphical front end, from the directory of `enzan`.
+#define ENZAN_FRONT_END_FROM_PROGRAM "@ENZAN_FRONT_END_FROM_PROGRAM@"
+
+/// VHDL's standard libraries, from the directory of `enzan`.
+#define ENZAN_VHDL_LIBRARIES_FROM_PROGRAM "@ENZAN_VHDL_LIBRARIES_FROM_PROGRAM@"

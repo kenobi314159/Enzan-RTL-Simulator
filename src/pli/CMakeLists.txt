@@ -25,6 +25,23 @@ if(ENZAN_ENABLE_VHDL)
   target_include_directories(enzan_pli SYSTEM PUBLIC "${PROJECT_SOURCE_DIR}/third_party/nvc/src/vhpi")
 endif()
 
+# The headers an application is compiled against to be loaded with `--vpi`, and with `--vhpi` the
+# working group's, which Enzan's VHPI is compiled against too (section 11.5). An application loads
+# into a simulator with a frontend, so a build without one installs none.
+if(ENZAN_ENABLE_SYSTEMVERILOG OR ENZAN_ENABLE_VHDL)
+  install(
+    FILES "${PROJECT_SOURCE_DIR}/include/enzan/vpi_user.h"
+          "${PROJECT_SOURCE_DIR}/include/enzan/sv_vpi_user.h"
+    DESTINATION "${ENZAN_INSTALL_INCLUDEDIR}"
+    COMPONENT enzan)
+endif()
+if(ENZAN_ENABLE_VHDL)
+  install(
+    FILES "${PROJECT_SOURCE_DIR}/third_party/nvc/src/vhpi/vhpi_user.h"
+    DESTINATION "${ENZAN_INSTALL_INCLUDEDIR}"
+    COMPONENT enzan)
+endif()
+
 # ---------------------------------------------------------------------------
 # enzan_export_vpi(<target>)
 # ---------------------------------------------------------------------------

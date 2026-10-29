@@ -17,7 +17,8 @@
 /// Full version, including any pre-release suffix, for example "0.1.0-dev".
 #define ENZAN_VERSION_STRING "@ENZAN_VERSION_STRING@"
 
-/// Abbreviated git revision, or "unknown" outside a git checkout.
+/// Abbreviated git revision, as a release tarball records it or a checkout has it,
+/// or "unknown".
 #define ENZAN_SOURCE_REVISION "@ENZAN_SOURCE_REVISION@"
 
 /// Compiler identification the binary was built with, for bug reports.

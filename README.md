@@ -202,7 +202,8 @@ make SIM=enzan COCOTB_MAKEFILES_DIR=$PWD/build/cocotb-makefiles
 
 run in the directory of an ordinary cocotb testbench, with `TOPLEVEL_LANG=vhdl` for a VHDL
 toplevel, which cocotb reaches through VHPI (`--vhpi`, in a build with the VHDL frontend).
-`ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`. The run counts
+`ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`. In an
+installation the script is `share/enzan/cocotb/makefiles.sh` under its prefix. The run counts
 time in the unit `COCOTB_HDL_TIMEPRECISION` names, which is also the unit of a module that states
 no `` `timescale ``.
 
@@ -266,6 +267,22 @@ The binary lands at `build/gcc-debug/bin/enzan`:
 ```sh
 ./build/gcc-debug/bin/enzan --version
 ```
+
+### Installing
+
+Each release has packages for Ubuntu 24.04, Debian 13, Fedora, RHEL 9 and Arch Linux, and a source
+tarball that builds with no network; [`docs/installing.md`](docs/installing.md) says how to install
+either. From a build directory:
+
+```sh
+cmake --install build/gcc-release --prefix ~/.local
+```
+
+puts `enzan` in `~/.local/bin` and the rest of Enzan where it finds it from there: the front end
+in `libexec/enzan`, VHDL's standard libraries in `lib/enzan`, the VPI and VHPI headers in
+`include/enzan` and the cocotb makefile in `share/enzan/cocotb`. An installation can be moved, and
+versions installed side by side each run their own parts. `DESIGN_GUIDE.md` section 11.5 has the
+layout.
 
 ### Presets
 
@@ -352,6 +369,9 @@ Commit messages carry a category prefix; see section 17.1 of the design guide.
   and their pinned revisions.
 - [`docs/mixed-language.md`](docs/mixed-language.md) — simulating a design of
   both SystemVerilog and VHDL: what crosses between them, and at what cost.
+- [`docs/installing.md`](docs/installing.md) — installing a release's packages,
+  or its source tarball.
+- [`docs/releasing.md`](docs/releasing.md) — making a release, for maintainers.
 - `docs/` — human-facing documentation (user manual, tutorials), to be
   derived from the design guide as the project matures.
 

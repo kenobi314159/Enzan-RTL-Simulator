@@ -34,6 +34,34 @@ function(enzan_mark_includes_system target)
   endif()
 endfunction()
 
+# ---------------------------------------------------------------------------
+# Sources a release's tarball carries
+# ---------------------------------------------------------------------------
+#
+# A release's source tarball carries, in third_party/bundled/, the sources FetchContent would
+# otherwise download: slang, what slang fetches in turn, and GoogleTest (DESIGN_GUIDE.md section
+# 11.6). A
+# distribution's builder has no network, so a tarball that downloaded would build on none of
+# them. Each directory stands in for its download, so a system package is still preferred where
+# one is found, as section 11.2 has it. A checkout has no such directory and downloads as before.
+set(_enzan_bundled "${PROJECT_SOURCE_DIR}/third_party/bundled")
+if(IS_DIRECTORY "${_enzan_bundled}")
+  file(
+    GLOB _enzan_bundled_names
+    LIST_DIRECTORIES true
+    RELATIVE "${_enzan_bundled}"
+    "${_enzan_bundled}/*")
+  foreach(_name IN LISTS _enzan_bundled_names)
+    if(IS_DIRECTORY "${_enzan_bundled}/${_name}")
+      string(TOUPPER "${_name}" _upper)
+      set(FETCHCONTENT_SOURCE_DIR_${_upper}
+          "${_enzan_bundled}/${_name}"
+          CACHE PATH "The source of ${_name} the release tarball carries")
+      message(STATUS "${_name} is built, if it is not found, from the source the tarball carries")
+    endif()
+  endforeach()
+endif()
+
 # FETCHCONTENT_BASE_DIR is deliberately left at its default, one per build
 # directory. Pointing several build trees at a shared base directory would share
 # not only the downloaded sources but also the dependency *build* trees, and two
@@ -87,7 +115,8 @@ endfunction()
 if(ENZAN_BUILD_TESTS)
   find_package(GTest 1.12 QUIET)
   if(NOT GTest_FOUND)
-    if(ENZAN_ALLOW_FETCH)
+    # Building the source a release tarball carries downloads nothing.
+    if(ENZAN_ALLOW_FETCH OR FETCHCONTENT_SOURCE_DIR_GOOGLETEST)
       message(STATUS "GoogleTest not found on the system; building it from source")
       FetchContent_Declare(
         googletest
@@ -95,7 +124,8 @@ if(ENZAN_BUILD_TESTS)
         GIT_TAG v1.17.0
         GIT_SHALLOW TRUE
         EXCLUDE_FROM_ALL
-        FIND_PACKAGE_ARGS NAMES GTest)
+        # The same floor as above, or FetchContent would take the GoogleTest just refused.
+        FIND_PACKAGE_ARGS 1.12 NAMES GTest)
       # GoogleTest's own install and mock targets are not wanted here.
       set(INSTALL_GTEST OFF)
       set(BUILD_GMOCK ON)
@@ -182,7 +212,8 @@ set(ENZAN_SLANG_GIT_TAG
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   find_package(slang ${ENZAN_SLANG_VERSION} QUIET CONFIG)
   if(NOT slang_FOUND)
-    if(NOT ENZAN_ALLOW_FETCH)
+    # Building the source a release tarball carries downloads nothing.
+    if(NOT ENZAN_ALLOW_FETCH AND NOT FETCHCONTENT_SOURCE_DIR_SLANG)
       enzan_dependency_missing(
         NAME slang
         PURPOSE
@@ -218,9 +249,21 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
     # interceptors and produces both false negatives and spurious reports. The
     # sanitizer job is a correctness gate, so it wins over slang's allocator
     # speed there.
+    #
+    # Otherwise it is used where the system has it, and never built from source.
+    # slang uses it for nothing but replacing the allocator, and the copy slang
+    # builds replaces malloc inside the executable, statically: built so with GCC
+    # 16 against glibc 2.44, every program linking slang crashed in free() before
+    # main, from glibc's own newlocale. A system's shared mimalloc does not.
     if(ENZAN_SANITIZERS)
       set(SLANG_USE_MIMALLOC OFF)
       message(STATUS "slang: mimalloc disabled because sanitizers are enabled")
+    else()
+      find_package(mimalloc QUIET CONFIG)
+      if(NOT mimalloc_FOUND)
+        set(SLANG_USE_MIMALLOC OFF)
+        message(STATUS "slang: mimalloc is not installed, and is not built from source")
+      endif()
     endif()
 
     FetchContent_Declare(
@@ -230,7 +273,15 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
       GIT_SHALLOW TRUE
       EXCLUDE_FROM_ALL
       FIND_PACKAGE_ARGS ${ENZAN_SLANG_VERSION} CONFIG)
+
+    # slang follows BUILD_SHARED_LIBS, which a distribution's build macros may turn on: Fedora's
+    # %cmake does. A shared slang would be a library nothing installs (DESIGN_GUIDE.md section
+    # 11.5), and an installed `enzan` would fail to start without it, so it is built static
+    # whatever was asked, as every Enzan component is.
+    set(_enzan_build_shared_libs ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
     FetchContent_MakeAvailable(slang)
+    set(BUILD_SHARED_LIBS ${_enzan_build_shared_libs})
 
     # slang and the dependencies it brings with it are third-party code; their headers must
     # not be held to Enzan's warning set.

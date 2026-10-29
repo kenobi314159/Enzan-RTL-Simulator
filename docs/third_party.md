@@ -51,7 +51,10 @@ The build prefers a system package and falls back to building from source. See
 | [cocotb](https://github.com/cocotb/cocotb) | `2.1.0`, pinned in `tests/conformance/cocotb/requirements.txt` | BSD-3-Clause | the cocotb golden test and regression suite (M4); loaded with `--vpi`, never linked | `pip`; its test suite is fetched at the matching tag and never vendored |
 
 slang itself builds against fmt, Boost headers and mimalloc, which it acquires
-on its own terms; all three are permissively licensed.
+on its own terms; all three are permissively licensed. Enzan has slang use
+mimalloc only where the system has one, and never build it: the static copy
+slang builds crashed every program linking it, in glibc's own start-up (see
+`cmake/EnzanDependencies.cmake`).
 
 ## Pinned revisions
 
@@ -66,6 +69,22 @@ cmake --preset gcc-debug -DENZAN_SLANG_GIT_TAG=v10.0 -DENZAN_SLANG_VERSION=10.0
 Changing the default pinned revision is a deliberate act. Upgrading slang or NVC
 is expected to break the adapters in `src/frontend/`, which is what the golden
 tests exist to catch (DESIGN_GUIDE.md section 5.2).
+
+## Bundled in a release's source tarball
+
+A release's tarball carries, in `third_party/bundled/`, the sources FetchContent downloads to
+build slang, and GoogleTest, because a distribution's builder has no network (DESIGN_GUIDE.md
+section 11.6) and RHEL 9 packages GoogleTest 1.11. `scripts/make-dist.sh` copies whatever CMake
+fetched rather than restating it, so this list is a record of the current revisions rather than a
+second place they are set:
+
+| Dependency | Version | License | Brought in by |
+|---|---|---|---|
+| slang | `v11.0` | MIT | Enzan, `ENZAN_SLANG_GIT_TAG` |
+| [fmt](https://github.com/fmtlib/fmt) | `12.1.0` | MIT | slang, which builds its own (see `cmake/EnzanDependencies.cmake`) |
+| [GoogleTest](https://github.com/google/googletest) | `v1.17.0` | BSD-3-Clause | Enzan's unit tests, where no GoogleTest 1.12 or later is installed |
+
+None of them is in the repository, and each keeps its own licence text in the tarball.
 
 ## Adding a dependency
 

@@ -20,3 +20,8 @@ target_link_libraries(enzan PRIVATE enzan::session)
 
 # VPI applications loaded with `--vpi` resolve the routines against this executable.
 enzan_export_vpi(enzan)
+
+install(
+  TARGETS enzan
+  RUNTIME DESTINATION "${ENZAN_INSTALL_BINDIR}"
+  COMPONENT enzan)
