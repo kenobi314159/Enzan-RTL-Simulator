@@ -54,8 +54,8 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   message(
     FATAL_ERROR
       "Enzan targets Linux only; CMAKE_SYSTEM_NAME is '${CMAKE_SYSTEM_NAME}'.\n"
-      "Windows and macOS support are explicit non-goals (DESIGN_GUIDE.md\n"
-      "section 1.3). Changing that is a design decision, not a build fix.")
+      "Windows and macOS support are explicit non-goals. Changing that is a\n"
+      "design decision, not a build fix.")
 endif()
 
 # ---------------------------------------------------------------------------

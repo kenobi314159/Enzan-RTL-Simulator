@@ -30,8 +30,8 @@ function(enzan_add_component name)
     message(
       FATAL_ERROR
         "Component '${name}' has no README.md.\n"
-        "DESIGN_GUIDE.md section 12 requires each src/ component to document\n"
-        "its responsibility and its allowed dependencies on other components.\n"
+        "Each src/ component documents its responsibility and its allowed\n"
+        "dependencies on other components in a README.md.\n"
         "Expected at: ${CMAKE_CURRENT_SOURCE_DIR}/README.md")
   endif()
 

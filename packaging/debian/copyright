@@ -5,8 +5,8 @@ Source: https://github.com/kenobi314159/Enzan-RTL-Simulator
 Comment:
  The source tarball carries NVC as a submodule and, in third_party/bundled/,
  the sources a build of Enzan would otherwise download: slang, the fmt slang
- builds, and GoogleTest (DESIGN_GUIDE.md section 11.6).
- docs/third_party.md records each of them with its revision.
+ builds, and GoogleTest. docs/third_party.md records each of them with its
+ revision.
 
 Files: *
 Copyright: 2026 the Enzan authors

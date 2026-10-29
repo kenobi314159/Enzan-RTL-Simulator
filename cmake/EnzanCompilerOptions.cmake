@@ -21,7 +21,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     message(
       FATAL_ERROR
         "GCC ${CMAKE_CXX_COMPILER_VERSION} is too old; Enzan requires GCC "
-        "${_enzan_min_gcc} or later (DESIGN_GUIDE.md section 11.1).\n"
+        "${_enzan_min_gcc} or later.\n"
         "Select a newer compiler with -DCMAKE_CXX_COMPILER=g++-${_enzan_min_gcc} "
         "or use the clang presets.")
   endif()
@@ -30,7 +30,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(
       FATAL_ERROR
         "Clang ${CMAKE_CXX_COMPILER_VERSION} is too old; Enzan requires Clang "
-        "${_enzan_min_clang} or later (DESIGN_GUIDE.md section 11.1).\n"
+        "${_enzan_min_clang} or later.\n"
         "Select a newer compiler with -DCMAKE_CXX_COMPILER=clang++-${_enzan_min_clang} "
         "or use the gcc presets.")
   endif()

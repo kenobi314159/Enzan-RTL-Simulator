@@ -25,8 +25,7 @@ function(_enzan_inside_prefix out directory)
       FATAL_ERROR
         "Enzan installs everything inside its prefix, '${CMAKE_INSTALL_PREFIX}', and this\n"
         "directory is outside it: '${directory}'. The executable finds the rest of Enzan\n"
-        "relative to itself (DESIGN_GUIDE.md section 11.5), which a directory elsewhere\n"
-        "would defeat.")
+        "relative to itself, which a directory elsewhere would defeat.")
   endif()
   set(${out}
       "${directory}"

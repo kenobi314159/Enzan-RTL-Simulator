@@ -756,8 +756,8 @@ QVector<int> WaveformModel::insertSignalRows(const std::vector<PendingRow>& pend
 
 QString WaveformModel::writeSignalList() const {
     // Nothing that varies between saves — no date, no user — so that saving an unchanged window
-    // writes the same bytes (DESIGN_GUIDE.md section 10.8).
-    QString text = QStringLiteral("# Enzan signal list (DESIGN_GUIDE.md section 10.8)\n");
+    // writes the same bytes.
+    QString text = QStringLiteral("# Enzan signal list\n");
     for (const int root : roots) writeSignalListRow(text, root, 0);
     return text;
 }

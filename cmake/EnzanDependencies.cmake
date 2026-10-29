@@ -105,7 +105,7 @@ function(enzan_dependency_missing)
       "  If it is installed somewhere unusual, point CMake at it with\n"
       "  -DCMAKE_PREFIX_PATH=<prefix> or -D${arg_NAME}_ROOT=<prefix>.\n"
       "${fallback}"
-      "  Dependencies are listed in DESIGN_GUIDE.md section 11.3.")
+      "  docs/third_party.md lists every dependency.")
 endfunction()
 
 # ---------------------------------------------------------------------------

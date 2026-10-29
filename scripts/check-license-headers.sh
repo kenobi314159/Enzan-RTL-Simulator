@@ -45,7 +45,6 @@ done
 if [[ ${#missing[@]} -gt 0 ]]; then
     printf 'Missing "%s" in the first 5 lines of:\n' "$expected" >&2
     printf '  %s\n' "${missing[@]}" >&2
-    printf '\nSee DESIGN_GUIDE.md section 1.4.\n' >&2
     exit 1
 fi
 
