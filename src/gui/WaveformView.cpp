@@ -259,7 +259,8 @@ void WaveformView::zoomToCursors() {
 }
 
 void WaveformView::panStep(bool later) {
-    timeAxis.pan(later ? PanStepPixels : -PanStepPixels);
+    const double delta = std::max(PanStepPixels, 1 / timeAxis.unitsPerPixel());
+    timeAxis.pan(later ? delta : -delta);
     following = false;
     syncScrollBar();
     update();
@@ -1214,7 +1215,7 @@ void WaveformView::mousePressEvent(QMouseEvent* event) {
     // toss every time.
     if (event->button() == Qt::MiddleButton) {
         panning = true;
-        panFrom = event->pos();
+        panFromX = static_cast<double>(event->pos().x());
         setCursor(Qt::ClosedHandCursor);
         return;
     }
@@ -1273,9 +1274,9 @@ void WaveformView::mouseMoveEvent(QMouseEvent* event) {
     }
 
     if (panning) {
-        const int delta = panFrom.x() - event->pos().x();
-        timeAxis.pan(delta);
-        panFrom = event->pos();
+        const double delta = panFromX - static_cast<double>(event->pos().x());
+        const double applied = timeAxis.pan(delta);
+        panFromX = panFromX - applied;
         syncScrollBar();
         update();
         Q_EMIT rangeChanged();
@@ -1329,7 +1330,9 @@ void WaveformView::wheelEvent(QWheelEvent* event) {
     if (event->modifiers().testFlag(Qt::ControlModifier)) {
         timeAxis.zoom(notches < 0 ? 1.0 / ZoomStep : ZoomStep, event->position().x());
     } else if (event->modifiers().testFlag(Qt::ShiftModifier)) {
-        timeAxis.pan(notches > 0 ? -60.0 : 60.0);
+        panStep(notches < 0);
+        event->accept();
+        return;
     } else {
         // A bare wheel scrolls the list, wherever the pointer is. The names and the traces are
         // two widgets and one window, and a wheel that meant different things on either side

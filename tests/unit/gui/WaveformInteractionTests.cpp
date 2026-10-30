@@ -790,6 +790,27 @@ TEST_F(InteractionTest, APanStepMovesTheViewAndKeepsTheZoom) {
     EXPECT_EQ(view->axis().start(), 100U);
 }
 
+TEST_F(InteractionTest, TinyUnapplicablePanStepsAccumulateToAnActualStep) {
+    populate();
+    view->axis().setRange(0, 8);
+
+    press(Qt::MiddleButton, QPoint(300, 200));
+
+    EXPECT_EQ(view->axis().start(), 0U);
+    EXPECT_EQ(view->axis().span(), 8U);
+    move(Qt::MiddleButton, QPoint(266, 200));
+    EXPECT_EQ(view->axis().start(), 0U);
+    EXPECT_EQ(view->axis().span(), 8U);
+    move(Qt::MiddleButton, QPoint(233, 200));
+    EXPECT_EQ(view->axis().start(), 0U);
+    EXPECT_EQ(view->axis().span(), 8U);
+    move(Qt::MiddleButton, QPoint(199, 200));
+    EXPECT_EQ(view->axis().start(), 1U);
+    EXPECT_EQ(view->axis().span(), 8U);
+
+    release(Qt::MiddleButton, QPoint(199, 200));
+}
+
 TEST_F(InteractionTest, PlacingTheActiveCursorBringsItIntoView) {
     populate();
     view->axis().setRange(0, 100);

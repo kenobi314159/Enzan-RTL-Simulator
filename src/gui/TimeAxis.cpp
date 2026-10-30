@@ -72,18 +72,22 @@ void TimeAxis::zoom(double factor, double anchorX) noexcept {
     setRange(anchorTime > offset ? anchorTime - offset : 0, newSpan);
 }
 
-void TimeAxis::pan(double deltaPixels) noexcept {
+double TimeAxis::pan(double deltaPixels) noexcept {
     const double shift = deltaPixels * unitsPerPixel();
-    if (shift >= 0.0) {
-        const auto forward = static_cast<runtime::SimTime>(shift);
+    const auto appliedShift = static_cast<std::int64_t>(shift);
+    const auto appliedDelta = static_cast<double>(appliedShift) / unitsPerPixel();
+    if (appliedShift >= 0) {
+        const auto forward = static_cast<runtime::SimTime>(appliedShift);
         setRange(rangeStart > maximumStart(rangeSpan) - forward ? maximumStart(rangeSpan)
                                                                 : rangeStart + forward,
                  rangeSpan);
-        return;
+        return appliedDelta;
     }
 
-    const auto backward = static_cast<runtime::SimTime>(-shift);
+    const auto backward = static_cast<runtime::SimTime>(-appliedShift);
     setRange(rangeStart > backward ? rangeStart - backward : 0, rangeSpan);
+
+    return appliedDelta;
 }
 
 void TimeAxis::fit() noexcept {

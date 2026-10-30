@@ -395,7 +395,7 @@ private:
     static constexpr int SampleCacheGrace = 2;
 
     bool panning = false;
-    QPoint panFrom;
+    double panFromX = 0.0;
 
     /// Set while the right button is down. The two x coordinates are the whole gesture: their
     /// order decides whether the release zooms to a range or to fit.
