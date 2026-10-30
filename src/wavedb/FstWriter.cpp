@@ -42,19 +42,19 @@ void FstWriter::writeHeader() {
     const std::string version = std::string("Enzan ") + std::string(enzan::version());
     fstWriterSetVersion(context, version.c_str());
 
-    // The file type tells a viewer which language's conventions to display names under. VHDL and
-    // mixed designs arrive at M6 and M7, and this becomes a property of the elaborated design
-    // rather than a constant.
+    // The file type tells a viewer which language's conventions to display names under. Every file
+    // says Verilog, VHDL and mixed designs included, until the type is taken from the elaborated
+    // design.
     fstWriterSetFileType(context, FST_FT_VERILOG);
 
     // LZ4 rather than zlib: it compresses a value-change block several times faster for a file a
-    // few per cent larger, and a writer that slows the simulation down is a writer people turn
-    // off. Section 7.1 wants recording to be affordable enough to leave on.
+    // few per cent larger, and a writer that slows the simulation down is a writer people turn off.
+    // Recording has to be affordable enough to leave on.
     fstWriterSetPackType(context, FST_WR_PT_LZ4);
 
     // Explicitly off. The parallel writer would compress blocks on another thread; the kernel is
-    // single-threaded by design (section 6.4) and waveform output is byte-compared against a
-    // reference, so a background thread would put determinism at risk for an unmeasured gain.
+    // single-threaded by design and waveform output is byte-compared against a reference, so a
+    // background thread would put determinism at risk for an unmeasured gain.
     fstWriterSetParallelMode(context, 0);
 }
 

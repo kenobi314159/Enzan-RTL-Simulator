@@ -29,10 +29,9 @@ struct Signal {
     /// Processes whose static sensitivity includes this signal, with the edge each one
     /// wants.
     ///
-    /// Resolved once when the image is built rather than searched at run time. Section
-    /// 6.2 requires signal update to be activity-based — a process is scheduled only
-    /// when a signal it is sensitive to actually changes value — and that is only cheap
-    /// if the signal already knows its subscribers.
+    /// Resolved once when the image is built rather than searched at run time. Signal update is
+    /// activity-based — a process is scheduled only when a signal it is sensitive to actually
+    /// changes value — and that is only cheap if the signal already knows its subscribers.
     struct Subscriber {
         std::uint32_t processIndex = 0;
         eir::EdgeKind edge = eir::EdgeKind::AnyChange;
@@ -78,9 +77,9 @@ struct ProcessState {
 
     /// Word offset of this process's register frame in the shared frame storage.
     ///
-    /// One allocation for every frame rather than one per process: section 13.4 forbids
-    /// allocation on the hot path, and a process that suspends must keep its registers,
-    /// so the frame has to persist for the whole run anyway.
+    /// One allocation for every frame rather than one per process: nothing allocates on the hot
+    /// path, and a process that suspends must keep its registers, so the frame has to persist for
+    /// the whole run anyway.
     std::uint32_t frameOffset = 0;
 
     /// Object index to arena Word offset, for this instance.
@@ -148,8 +147,7 @@ struct BoundSubprogram {
     std::span<const std::uint32_t> calls;
 };
 
-/// What sizing the kernel's call stack needs to know of a design's calls (DESIGN_GUIDE.md
-/// section 4.1).
+/// What sizing the kernel's call stack needs to know of a design's calls.
 struct CallStackShape {
     /// The deepest chain of calls a process can make, in calls and in Words of their frames,
     /// when no call can reach itself again.
@@ -207,9 +205,8 @@ public:
     /// Writes every object's time-zero value into `arena`.
     ///
     /// A four-state object with no declared initialiser becomes X and a two-state one
-    /// becomes zero (section 3.9). Applied as a separate step rather than folded into
-    /// arena construction so that `restart` can reset state without rebuilding the
-    /// image.
+    /// becomes zero. Applied as a separate step rather than folded into arena
+    /// construction so that `restart` can reset state without rebuilding the image.
     void initializeState(Arena& arena) const;
 
     /// Returns the signal index for a hierarchical path, or `NoSignal`.

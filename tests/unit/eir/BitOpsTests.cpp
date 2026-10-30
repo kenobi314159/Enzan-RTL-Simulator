@@ -3,7 +3,7 @@
 // These tests are the specification of Enzan's four-state semantics as much as
 // BitOps.cpp is. Where a case looks surprising, the comment says which IEEE 1800
 // rule produces it, because the surprising cases are exactly the ones a future
-// change is likely to break (DESIGN_GUIDE.md section 3).
+// change is likely to break.
 
 #include "eir/BitOps.h"
 
@@ -920,7 +920,7 @@ TEST(BitOpsPower, WideValuesGiveTheSameAnswerAsNarrowOnes) {
 }
 
 // ---------------------------------------------------------------------------
-// Resolution (DESIGN_GUIDE.md section 3.7; IEEE 1800 tables 6-2 to 6-4)
+// Resolution (IEEE 1800 tables 6-2 to 6-4)
 // ---------------------------------------------------------------------------
 
 /// A resolution table as the standard prints it: the row is the first driver and the column

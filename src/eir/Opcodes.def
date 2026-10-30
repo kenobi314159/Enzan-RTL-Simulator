@@ -9,8 +9,8 @@
 //
 // `llvmLowering` is not documentation for its own sake. DESIGN_GUIDE.md section
 // 6.1 makes it a standing invariant that **every opcode MUST have an obvious,
-// documented lowering to LLVM IR**, because the JIT backend of M8 is intended to
-// be a mechanical translation of the interpreter, and an opcode that cannot be
+// documented lowering to LLVM IR**, because the JIT backend is intended to be a
+// mechanical translation of the interpreter, and an opcode that cannot be
 // lowered mechanically blocks it. An opcode added without a lowering sketch is
 // incomplete work, and a unit test enforces that the string is not empty.
 //
@@ -53,7 +53,7 @@ ENZAN_OPCODE(Convert, "conv", true, 1,
              "out of one; an unknown bit of an integer source converts as zero")
 ENZAN_OPCODE(Present, "present", true, 2,
              "the codes of the encoding the immediate second operand names, a byte each, to "
-             "the four-state bits they stand for, one each (DESIGN_GUIDE.md section 3.6): a "
+             "the four-state bits they stand for, one each: a "
              "load from a 256-entry table of aval and bval pairs per byte, a shufflevector to "
              "gather each byte's pair, then a pack of the bits; a runtime helper call when wide")
 ENZAN_OPCODE(Encode, "encode", true, 2,
@@ -65,8 +65,8 @@ ENZAN_OPCODE(Encode, "encode", true, 2,
 // --- State access ----------------------------------------------------------
 //
 // Every access names its object by an index that elaboration has already resolved
-// to a byte offset in the state arena (DESIGN_GUIDE.md section 4.3), so a JIT can
-// burn the offset into the generated code as a constant.
+// to a byte offset in the state arena, so a JIT can burn the offset into the
+// generated code as a constant.
 
 ENZAN_OPCODE(ReadObject, "read", true, 1,
              "getelementptr on the arena base with a constant offset, then a load "
@@ -274,9 +274,9 @@ ENZAN_OPCODE(SysFunction, "sysfunc", true, 1,
 
 // --- Calls -----------------------------------------------------------------
 //
-// A call runs a subprogram's body to its return (DESIGN_GUIDE.md section 4.1). It never
-// suspends: a subprogram that waits is inlined into its caller instead, which is what lets the
-// callee be an ordinary LLVM function and its registers live on one stack.
+// A call runs a subprogram's body to its return. It never suspends: a subprogram that waits is
+// inlined into its caller instead, which is what lets the callee be an ordinary LLVM function
+// and its registers live on one stack.
 
 ENZAN_OPCODE(Call, "call", false, 1,
              "a `call` of the LLVM function the callee's body is compiled to, the call site "

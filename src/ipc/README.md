@@ -1,16 +1,16 @@
 # `src/ipc` — the kernel/GUI protocol
 
 The wire format and the transport that carry a simulation between the headless kernel and the
-graphical front end (DESIGN_GUIDE.md section 2.2).
+graphical front end.
 
 ## Why there is a protocol at all
 
-The kernel and the GUI are **separate processes**, and section 2.2 forbids collapsing them into
-one for convenience. The reasons are concrete: the kernel must be testable and scriptable with
-no display attached, a stalled or slow GUI must never stall the kernel, and attaching a local
-GUI to a kernel on a remote compute server is something users of commercial tools do daily.
-Everything in this directory exists to serve those three, and a change that makes any of them
-harder is a change in the wrong direction.
+The kernel and the GUI are **separate processes**, and they must not be collapsed into one for
+convenience. The reasons are concrete: the kernel must be testable and scriptable with no display
+attached, a stalled or slow GUI must never stall the kernel, and attaching a local GUI to a kernel
+on a remote compute server is something users of commercial tools do daily. Everything in this
+directory exists to serve those three, and a change that makes any of them harder is a change in the
+wrong direction.
 
 ## Responsibility
 
@@ -27,14 +27,14 @@ harder is a change in the wrong direction.
 
 This directory builds **two** libraries, and the split is the point rather than a build detail.
 
-`enzan::ipc` — the protocol and the transport — depends on `common` and `eir` and nothing else.
-Both ends of a connection link it, and the GUI has no business linking the simulation kernel: the
-separation of section 2.2 is only real if the two halves can be built apart. Values cross the
-socket as `eir::BitVector`, in the same two-plane layout the state arena uses (section 3.6), so a
-value is copied rather than converted. A VHDL signal's are sent as the bits its codes stand for, as
-every waveform shows them, and so its width is given as that too: a client told the width of the
-codes would hold a trace that none of the values sent for it fits. A value a client deposits or
-forces comes the same way, and the session stores the codes it stands for.
+`enzan::ipc` — the protocol and the transport — depends on `common` and `eir` and nothing else. Both
+ends of a connection link it, and the GUI has no business linking the simulation kernel: the
+separation of the two is only real if they can be built apart. Values cross the socket as
+`eir::BitVector`, in the same two-plane layout the state arena uses, so a value is copied rather
+than converted. A VHDL signal's are sent as the bits its codes stand for, as every waveform shows
+them, and so its width is given as that too: a client told the width of the codes would hold a trace
+that none of the values sent for it fits. A value a client deposits or forces comes the same way,
+and the session stores the codes it stands for.
 
 `enzan::ipc_server` — the kernel end — depends on `ipc`, `runtime`, `wavedb` and `elab`, because
 by its nature it owns a kernel and a waveform database. Only the `enzan` executable links it.
@@ -47,15 +47,13 @@ An encoder and a decoder written separately drift, and a field added to one and 
 other is a defect that only shows up when the two ends are different builds — which is precisely
 the case a remote attach creates.
 
-**Version mismatch is refused, never negotiated.** `ProtocolVersion` is compared in the
-handshake and a difference ends the connection with a message saying so. A GUI and a kernel that
-half-understand each other would display wrong values, and section 1.2 puts correctness above
-convenience.
+**Version mismatch is refused, never negotiated.** `ProtocolVersion` is compared in the handshake
+and a difference ends the connection with a message saying so. A GUI and a kernel that
+half-understand each other would display wrong values, and correctness comes before convenience.
 
-**Message numbers are permanent**, for the same reason diagnostic codes are (section 10.6): a
-peer built against an older header decodes by number. Requests are numbered from 1 and events
-from 128, so a message travelling in the wrong direction is visible in a trace instead of being
-silently misread.
+**Message numbers are permanent**, for the same reason diagnostic codes are: a peer built against an
+older header decodes by number. Requests are numbered from 1 and events from 128, so a message
+travelling in the wrong direction is visible in a trace instead of being silently misread.
 
 **Everything read off the socket is untrusted**, even from a friendly peer, because a half-written
 frame or a version skew produces plausible-looking nonsense. Lengths are capped, counts are
@@ -71,7 +69,7 @@ which spills to disk past its budget, rather than in a queue on the socket that 
 as the client lags. A client asks by change number, not by time, because a signal can change twice
 at one time and a range of times would repeat or lose one of the two. The changes are the
 database's, recorded per settled time slot: a GUI shown delta-level intermediate values would draw
-transitions that no waveform file contains (section 14.3).
+transitions that no waveform file contains.
 
 **Nothing blocks.** A blocking write is precisely how a slow GUI stalls a kernel: a client that
 stops reading fills the socket buffer and the kernel sits in `write` until it comes back. Output
@@ -115,6 +113,6 @@ like the simulator having lost an event.
 clients would need the kernel to serve two logging scopes and two subscription sets over one run,
 and nothing asks for that yet.
 
-**A client leaving is not an error.** A kernel with a socket to listen on carries on simulating
-and waits for the next one, which is what `detach` means in section 2.2; a kernel that was handed
-its client directly has nowhere for another to come from and stops for that reason alone.
+**A client leaving is not an error.** A kernel with a socket to listen on carries on simulating and
+waits for the next one, which is what detaching means; a kernel that was handed its client directly
+has nowhere for another to come from and stops for that reason alone.

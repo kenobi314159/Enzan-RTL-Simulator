@@ -57,9 +57,9 @@ struct ServerOptions {
 
 /// Serves one elaborated design to one attached client.
 ///
-/// This is the kernel end of the split described in section 2.2. The simulation belongs to a
-/// `session::Session` and the server adds the live
-/// waveform database, the recorder filling it and the answers to a client's requests.
+/// This is the kernel end of the split between the kernel and the front end. The simulation belongs
+/// to a `session::Session` and the server adds the live waveform database, the recorder filling it
+/// and the answers to a client's requests.
 ///
 /// **One session, whichever surface is driving.** A served kernel, a `-do` script and a batch
 /// run are the same pipeline; a server that built a kernel of its own would mean two, and a
@@ -146,7 +146,7 @@ public:
     [[nodiscard]] std::ostream& transcript() noexcept { return transcriptStream; }
 
     /// Makes what this process writes to its standard output part of the transcript, as well
-    /// as of the terminal (section 10.2). Returns false having filled `error`.
+    /// as of the terminal. Returns false having filled `error`.
     ///
     /// What a VPI application prints goes to the process's standard output and never through
     /// Enzan, so without this a front end shows none of it. Called once any child process that

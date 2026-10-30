@@ -4,8 +4,7 @@
 #
 # `ipc` is the protocol and the transport. Both ends of a connection link it, so it depends on
 # `common` and `eir` and nothing else: the GUI has no business linking the simulation kernel,
-# and a build file that let it would quietly undo the process separation of DESIGN_GUIDE.md
-# section 2.2.
+# and a build file that let it would quietly undo the separation of the two processes.
 #
 # `ipc_server` is the kernel end, which by its nature owns a kernel and a waveform database.
 # Only the `enzan` executable links it.

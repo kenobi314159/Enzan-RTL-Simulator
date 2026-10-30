@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The `ghdl` GHDL's own test suite calls, standing in for it with Enzan (DESIGN_GUIDE.md section
-# 14.4), so that the suite's testsuite.sh scripts run unchanged. ENZAN names the Enzan to run.
+# The `ghdl` GHDL's own test suite calls, standing in for it with Enzan, so that the suite's
+# testsuite.sh scripts run unchanged. ENZAN names the Enzan to run.
 #
-# Each GHDL library is an Enzan library in the test's directory, .enzan-shim/libs/<name>
-# (sections 4.4 and 8.2): `-a` analyses its files into the library `--work` names, against every
-# other, as GHDL does; `-i` records them, to be analysed so before the next elaboration; `-e` and
-# `-m`, `-r` and `--elab-run` elaborate or run a top from the libraries, `lib.top` or a top of the
-# `--work` library; and `--remove` removes the `--work` library. `--expect-failure` asks for the
-# step to fail, and inverts what Enzan's exit says. Anything GHDL does that Enzan does not fails
-# with a line saying so.
+# Each GHDL library is an Enzan library in the test's directory, .enzan-shim/libs/<name>: `-a`
+# analyses its files into the library `--work` names, against every other, as GHDL does; `-i`
+# records them, to be analysed so before the next elaboration; `-e` and `-m`, `-r` and
+# `--elab-run` elaborate or run a top from the libraries, `lib.top` or a top of the `--work`
+# library; and `--remove` removes the `--work` library. `--expect-failure` asks for the step to
+# fail, and inverts what Enzan's exit says. Anything GHDL does that Enzan does not fails with a
+# line saying so.
 
 set -uo pipefail
 

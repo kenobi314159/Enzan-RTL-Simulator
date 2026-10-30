@@ -8,14 +8,12 @@ on nothing inside Enzan themselves.
 - **Version information** (`Version.h`) — the version and source revision the
   binary was built from, as reported by `enzan --version`.
 - **Installation layout** (`Installation.h`) — where the front end and VHDL's
-  standard libraries are, found from the directory of the running executable,
-  per DESIGN_GUIDE.md section 11.5.
+  standard libraries are, found from the directory of the running executable.
 - **Source management** (`SourceManager.h`) — loading source text into buffers
   and mapping byte offsets back to files, lines and columns.
 - **Diagnostics** (`Diagnostics.h`) — the single diagnostic engine that serves
-  the whole tool, per DESIGN_GUIDE.md section 10.6. Frontend diagnostics from
-  slang and NVC are translated into it so that output is uniform regardless of
-  source language.
+  the whole tool. Frontend diagnostics from slang and NVC are translated into it
+  so that output is uniform regardless of source language.
 - Small shared utilities that genuinely have no better home.
 
 ## Allowed dependencies

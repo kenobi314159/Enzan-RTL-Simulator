@@ -97,7 +97,7 @@ ShortcutSheet::ShortcutSheet(QWidget* parent) : QDialog(parent) {
 
 void ShortcutSheet::setSections(const QVector<ShortcutSection>& sections) {
     // No colour and no font in the markup: the browser draws it with the palette and the font the
-    // theme gave the window (section 10.5).
+    // theme gave the window.
     QString html;
     for (const ShortcutSection& section : sections) {
         if (section.entries.isEmpty()) continue;

@@ -70,10 +70,9 @@ constexpr bool isUnknown(Logic value) noexcept {
 // Views over packed storage
 // ---------------------------------------------------------------------------
 //
-// Simulation values live in the state arena and are addressed by byte offset
-// (DESIGN_GUIDE.md section 4.3), so the operations below act on non-owning views
-// rather than on objects that own memory. Nothing on the hot path allocates
-// (section 13.4).
+// Simulation values live in the state arena and are addressed by byte offset, so
+// the operations below act on non-owning views rather than on objects that own
+// memory. Nothing on the hot path allocates.
 //
 // A view's storage holds the `aval` plane first and the `bval` plane immediately
 // after it, so a signal needs one arena offset rather than two.
@@ -110,7 +109,7 @@ public:
     [[nodiscard]] Logic get(std::uint32_t index) const noexcept;
 
     /// True when no bit is X or Z, which is the case the two-state fast path
-    /// exists for (DESIGN_GUIDE.md section 3.6).
+    /// exists for.
     [[nodiscard]] bool isTwoState() const noexcept;
 
     /// True when at least one bit is X or Z.
@@ -207,8 +206,8 @@ public:
     /// Constructs a vector of `bitWidth` bits, every bit X.
     ///
     /// X rather than 0 is the default because that is what an uninitialised
-    /// four-state variable holds at time zero (DESIGN_GUIDE.md section 3.9), and
-    /// because a value that defaults to zero hides the bugs X exists to reveal.
+    /// four-state variable holds at time zero, and because a value that defaults
+    /// to zero hides the bugs X exists to reveal.
     explicit BitVector(std::uint32_t bits);
 
     static BitVector filled(std::uint32_t bits, Logic value);

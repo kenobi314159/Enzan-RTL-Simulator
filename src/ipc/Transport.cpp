@@ -139,9 +139,9 @@ bool Connection::flush() {
     while (outOffset < outgoing.size()) {
         const std::size_t remaining = outgoing.size() - outOffset;
 
-        // MSG_NOSIGNAL rather than a SIGPIPE handler: a peer that goes away must make the
-        // write fail, not kill the kernel. A simulation lost because a GUI was closed would
-        // be the exact failure section 2.2 separates the processes to avoid.
+        // MSG_NOSIGNAL rather than a SIGPIPE handler: a peer that goes away must make the write
+        // fail, not kill the kernel. A simulation lost because a GUI was closed would be the exact
+        // failure the two processes are separated to avoid.
         const ssize_t written =
             ::send(handle.get(), outgoing.data() + outOffset, remaining, MSG_NOSIGNAL);
 
@@ -321,8 +321,8 @@ bool Listener::listen(const std::filesystem::path& socketPath, std::string& erro
         return false;
     }
 
-    // One client at a time is what M2 serves, but the backlog is what decides whether a second
-    // attach is refused promptly or hangs, so it is not zero.
+    // One client at a time is what a kernel serves, but the backlog is what decides whether a
+    // second attach is refused promptly or hangs, so it is not zero.
     if (::listen(socket.get(), 4) < 0) {
         error = describeErrno("could not listen on the socket", errno);
         std::error_code ignored;

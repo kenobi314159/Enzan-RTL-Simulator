@@ -37,26 +37,25 @@ struct LibrarySource {
 
 /// The analysis library: a directory of serialised design units (DESIGN_GUIDE.md section 4.4).
 ///
-/// `work/` by default, mirroring the convention users know from Questa. An entry is one source
-/// file's analysed units, named by a hash of that file's text together with everything else
-/// that changes what analysis produces — the macro definitions, the include path, the format
-/// version and Enzan's own version.
+/// An entry is one source file's analysed units, named for the file — its basename and a short
+/// digest of its path — so that a build can name it. The key it is checked against is inside it:
+/// a digest of the file's text together with everything else that changes what analysis
+/// produces — the macro definitions, the include path, the format version and Enzan's own
+/// version.
 ///
-/// **A hit is all or nothing, and that is a property of the frontend rather than of the
-/// store.** SystemVerilog analysis today hands every source to one slang compilation, because
-/// a module cannot be type-checked without the packages it imports; so either every file's
-/// entry is present and current, in which case nothing is analysed at all, or one is missing
-/// and everything is analysed and every entry rewritten. The entries are nonetheless kept per
-/// file, because that is the shape section 4.4 describes and the shape a per-unit frontend
-/// will want; only the hit rule would change.
+/// **A hit is all or nothing, and that is a property of the frontend rather than of the store.**
+/// SystemVerilog analysis today hands every source to one slang compilation, because a module
+/// cannot be type-checked without the packages it imports; so either every file's entry is present
+/// and current, in which case nothing is analysed at all, or one is missing and everything is
+/// analysed and every entry rewritten. The entries are nonetheless kept per file, because that is
+/// the shape a per-unit frontend will want; only the hit rule would change.
 ///
-/// **The library is opt-in.** Nothing uses it until a session opens one, exactly as Questa
-/// requires a library to be created before it is used. That is not only convention: a cache
-/// that silently served EIR
-/// produced by a different translator would give a different simulation result, and section
-/// 1.2 ranks that worst of all. The version is in the key, and the format version must be
-/// bumped whenever the translation changes (see Serialization.h), but an opt-in cache means a
-/// user who suspects one has an obvious thing to stop doing.
+/// **The library is opt-in.** Nothing uses it until a session opens one, exactly as Questa requires
+/// a library to be created before it is used. That is not only convention: a cache that silently
+/// served EIR produced by a different translator would give a different simulation result with
+/// nothing to say so. The version is in the key, and the format version must be bumped whenever the
+/// translation changes (see Serialization.h), but an opt-in cache means a user who suspects one has
+/// an obvious thing to stop doing.
 class Library {
 public:
     /// Creates a library at `directory` and fixes its logical name.
@@ -65,7 +64,7 @@ public:
     /// their directory after their library means. The name is stored in the library's index so
     /// that every later use reads it rather than restating it: a name given twice is a name
     /// that will eventually be given differently, and a design analysed into one name and read
-    /// back under another fails to find its own units (DESIGN_GUIDE.md section 8.2).
+    /// back under another fails to find its own units.
     ///
     /// Returns false having reported when the path is not usable, or the name is not an
     /// identifier. Creating over an existing library rewrites its index and keeps its entries.
@@ -75,7 +74,7 @@ public:
     /// Opens an existing library, reading its logical name from its index.
     ///
     /// Returns false having reported when there is no library there. A directory that merely
-    /// exists is not one: libraries are opt-in (8.2), so something that was never created is a
+    /// exists is not one: libraries are opt-in, so something that was never created is a
     /// mistake to report rather than a library to invent.
     [[nodiscard]] bool open(const std::filesystem::path& directory, DiagnosticEngine& diagnostics);
 
@@ -145,7 +144,7 @@ public:
     [[nodiscard]] std::size_t entriesLoaded() const noexcept { return loadedCount; }
 
     /// Adds every unit this library holds to `design`, for a library being read rather than
-    /// written (`--in-lib`, section 8.2).
+    /// written (`--in-lib`).
     ///
     /// No staleness key is checked, because there is nothing to check it against: the sources
     /// belong to whoever analysed this library, and this caller is consuming what they produced
@@ -164,9 +163,9 @@ public:
     ///
     /// A design analysed *against* this library reads these so that slang has the declarations
     /// it needs: slang type-checks from syntax, so an instantiation of a unit in another library
-    /// needs that unit's source however it was analysed before (8.2). Paths rather than text,
-    /// because duplicating the RTL into every library that uses it would make a library a copy
-    /// of the design instead of an index of it.
+    /// needs that unit's source however it was analysed before. Paths rather than text, because
+    /// duplicating the RTL into every library that uses it would make a library a copy of the
+    /// design instead of an index of it.
     [[nodiscard]] std::span<const std::filesystem::path> sources() const noexcept {
         return recordedSources;
     }
@@ -185,7 +184,7 @@ public:
     /// nothing when it holds no units, or was written before libraries recorded one.
     ///
     /// Their delays are counts of it, so they are simulated in it and in nothing else: a design
-    /// run from this library takes its unit from here (DESIGN_GUIDE.md section 8.2).
+    /// run from this library takes its unit from here.
     [[nodiscard]] std::optional<std::int8_t> timeUnit() const;
 
     /// The units this library holds, by the source each came from, for `lib list`: its units of
@@ -197,16 +196,15 @@ public:
     [[nodiscard]] std::vector<std::string> unitNames() const;
 
     // -----------------------------------------------------------------------
-    // VHDL (DESIGN_GUIDE.md section 4.4)
+    // VHDL
     // -----------------------------------------------------------------------
 
     /// Where NVC's analysed units of this library's VHDL are, in NVC's own format, which NVC
     /// reads and writes itself.
     ///
-    /// A VHDL design is translated into EIR for the generic values each run gives it (section
-    /// 5.2), so what a library keeps of a VHDL source is NVC's analysis of it rather than EIR:
-    /// the units a later analysis is analysed against and a run translates from, parsing nothing
-    /// again.
+    /// A VHDL design is translated into EIR for the generic values each run gives it, so what a
+    /// library keeps of a VHDL source is NVC's analysis of it rather than EIR: the units a later
+    /// analysis is analysed against and a run translates from, parsing nothing again.
     [[nodiscard]] std::filesystem::path vhdlDirectory() const { return directory / "vhdl"; }
 
     /// True when this library holds analysed VHDL.
@@ -251,7 +249,7 @@ private:
     [[nodiscard]] std::filesystem::path entryPath(const LibrarySource& source) const;
 
     /// The staleness key for `source`: the text and everything else that changes what analysis
-    /// produces. Stored inside the entry rather than in its name (4.4).
+    /// produces. Stored inside the entry rather than in its name.
     [[nodiscard]] std::string entryKey(const LibrarySource& source,
                                        const SourceManager& sourceManager,
                                        std::span<const std::filesystem::path> dependencies);

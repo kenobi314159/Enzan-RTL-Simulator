@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# cocotb's simulator makefile for Enzan (DESIGN_GUIDE.md section 9.6).
+# cocotb's simulator makefile for Enzan.
 #
 # cocotb includes this as simulators/Makefile.enzan when SIM=enzan, after its own Makefile.inc,
 # so everything cocotb's makefiles define is available here. `makefiles.sh` beside this file
@@ -24,16 +24,15 @@ else
     CMD := $(call find_command,enzan)
 endif
 
-# cocotb's VPI layer compiled with no simulator-specific workaround in it, so that Enzan is held
-# to what cocotb expects of a standard simulator (section 9.6); and its VHPI layer as built for
-# NVC, whose one workaround is to compare names without their case, which Enzan does not keep
-# for VHDL any more than NVC does (section 9.7).
+# cocotb's VPI layer compiled with no simulator-specific workaround in it, so that Enzan is held to
+# what cocotb expects of a standard simulator; and its VHPI layer as built for NVC, whose one
+# workaround is to compare names without their case, which Enzan does not keep for VHDL any more
+# than NVC does.
 ENZAN_VPI_LIBRARY := $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vpi dsim)
 ENZAN_VHPI_LIBRARY := $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vhpi nvc)
 
 # The toplevel's language's layer is loaded, and in a design of both languages cocotb loads the
-# other's, which GPI_EXTRA names with its entry point, as it does for every simulator of both
-# (DESIGN_GUIDE.md section 18, M7).
+# other's, which GPI_EXTRA names with its entry point, as it does for every simulator of both.
 GPI_EXTRA :=
 ifeq ($(TOPLEVEL_LANG),verilog)
     ENZAN_PLI := --vpi $(ENZAN_VPI_LIBRARY)
@@ -53,8 +52,7 @@ ifneq ($(strip $(VHDL_SOURCES)),)
 endif
 
 # Each library VHDL_LIB_ORDER names is analysed from its VHDL_SOURCES_<library> into an Enzan
-# library of its own, in that order and against those before it, and the run reads them all
-# (DESIGN_GUIDE.md section 8.2).
+# library of its own, in that order and against those before it, and the run reads them all.
 ENZAN_LIBRARIES := $(SIM_BUILD)/enzan-libraries
 ENZAN_IN_LIBS := $(foreach LIB,$(VHDL_LIB_ORDER),--in-lib $(ENZAN_LIBRARIES)/$(LIB))
 
@@ -66,8 +64,8 @@ endif
     TOPMODULE_ARG := --top $(TOPLEVELS)
 endif
 
-# Enzan counts every delay in one unit (section 3.1), so the precision is the unit, and it has
-# to be one `--timescale` names: 1ns rather than 10ns.
+# Enzan counts every delay in one unit, so the precision is the unit, and it has to be one
+# `--timescale` names: 1ns rather than 10ns.
 ENZAN_TIMESCALE := $(patsubst 1%,%,$(strip $(COCOTB_HDL_TIMEPRECISION)))
 ifeq ($(filter s ms us ns ps fs,$(ENZAN_TIMESCALE)),)
     $(error Enzan cannot count time in COCOTB_HDL_TIMEPRECISION=$(COCOTB_HDL_TIMEPRECISION); it takes 1s, 1ms, 1us, 1ns, 1ps or 1fs)

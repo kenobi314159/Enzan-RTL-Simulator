@@ -16,12 +16,11 @@ namespace enzan::codegen {
 
 /// One executable instruction.
 ///
-/// The opcode is EIR-B's own, deliberately: DESIGN_GUIDE.md section 6.1 wants the JIT
-/// to be a mechanical translation of the interpreter, and sharing the opcode space
-/// keeps the correspondence one-to-one instead of introducing a second vocabulary to
-/// map between. What the bytecode adds is *resolution*: virtual registers become Word
-/// offsets into the process's frame, blocks become instruction indices, and every
-/// width the operation needs is present in the instruction.
+/// The opcode is EIR-B's own, deliberately: the JIT is to be a mechanical translation of the
+/// interpreter, and sharing the opcode space keeps the correspondence one-to-one instead of
+/// introducing a second vocabulary to map between. What the bytecode adds is *resolution*: virtual
+/// registers become Word offsets into the process's frame, blocks become instruction indices, and
+/// every width the operation needs is present in the instruction.
 ///
 /// **Nothing here requires a lookup in a side table.** That is what lets the
 /// interpreter's inner loop touch only the instruction and the data, and what lets a
@@ -52,7 +51,7 @@ struct Instruction {
     /// A store has no destination register, and its `dst` is instead the position of its
     /// object among the objects the process writes (`eir::writtenObjects`): the index into
     /// the bound process's routes, which say whether the store goes straight into the
-    /// signal or through drivers to be resolved (DESIGN_GUIDE.md section 3.7).
+    /// signal or through drivers to be resolved.
     std::uint32_t dst = 0;
     std::uint32_t a = 0;
     std::uint32_t b = 0;
@@ -157,9 +156,9 @@ struct CompiledBody {
 
     /// Size of the register frame, in Words.
     ///
-    /// The frame holds every virtual register, wide ones included, which is what
-    /// section 6.1 means by spilling wide vectors to a per-process scratch area: there
-    /// is only one place values live, so nothing has to decide when to spill.
+    /// The frame holds every virtual register, wide ones included, so it is also the
+    /// per-process scratch area wide vectors spill to: there is only one place values
+    /// live, so nothing has to decide when to spill.
     std::uint32_t frameWords = 0;
 
     /// What the frame holds as the body starts, `frameWords` long: zero, but for the registers
@@ -250,7 +249,7 @@ private:
 
     /// (definitionIndex, processIndex) to body index. A flat sorted vector rather than
     /// a hash map: it is built once, queried once per elaborated process, and its
-    /// iteration order must not vary between runs (DESIGN_GUIDE.md section 3.8).
+    /// iteration order must not vary between runs.
     struct Key {
         std::uint32_t definitionIndex;
         std::uint32_t processIndex;

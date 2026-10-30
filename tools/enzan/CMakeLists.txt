@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The headless kernel. It must remain usable with no display attached
-# (DESIGN_GUIDE.md section 2.2), so it must never gain a dependency on Qt or on
-# anything under src/gui.
+# The headless kernel. It must remain usable with no display attached, so it
+# must never gain a dependency on Qt or on anything under src/gui.
 
 add_executable(enzan Main.cpp)
 target_link_libraries(enzan PRIVATE enzan::compile_options enzan::common)

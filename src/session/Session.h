@@ -59,8 +59,8 @@ namespace enzan::session {
 /// same pipeline: two of them would mean two simulations, and a front end would then be showing
 /// a different one from whatever else was driving it.
 ///
-/// The three phases of section 2.1 are three distinct states here, and the state machine is
-/// what the commands enforce rather than discover:
+/// The three phases, analysis, elaboration and execution, are three distinct states here, and the
+/// state machine is what the commands enforce rather than discover:
 ///
 /// - **analysed**: `analyse` has produced EIR. Elaboration needs this.
 /// - **elaborated**: `elaborate` has produced an instance tree, an arena and a kernel. Everything
@@ -70,8 +70,8 @@ namespace enzan::session {
 ///   inside it.
 ///
 /// Every method reports through the diagnostic engine and returns a bool, rather than
-/// throwing: an unanalysable design is an ordinary user error (section 13.2), and a script
-/// that wants to carry on after one is entitled to.
+/// throwing: an unanalysable design is an ordinary user error, and a script that wants to
+/// carry on after one is entitled to.
 class Session {
 public:
     /// `sources` and `diagnostics` must outlive the session.
@@ -97,7 +97,7 @@ public:
     ///
     /// Exposed so that a command which opens a file of its own — a file list, a do script —
     /// reports its failure exactly as an analysis failure is reported, through one engine
-    /// (section 10.6) rather than as a bare string.
+    /// rather than as a bare string.
     [[nodiscard]] DiagnosticEngine& diagnosticEngine() const noexcept { return diagnostics; }
 
     /// Sets the time unit delays are counted in. Takes effect at the next elaboration.
@@ -110,10 +110,10 @@ public:
     /// hold no units; with neither, it is picoseconds.
     ///
     /// A library's delays are counts of the unit it was analysed in, so a design run from it,
-    /// or analysed against it or into it, is in that unit and no other (DESIGN_GUIDE.md section
-    /// 8.2). Returns false having reported when two libraries disagree, or `requested` names
-    /// another unit: taking either would label every time in the run wrongly. Called once the
-    /// libraries are open and before anything is analysed.
+    /// or analysed against it or into it, is in that unit and no other. Returns false having
+    /// reported when two libraries disagree, or `requested` names another unit: taking either
+    /// would label every time in the run wrongly. Called once the libraries are open and before
+    /// anything is analysed.
     [[nodiscard]] bool chooseTimeScale(std::optional<runtime::TimeScale> requested);
 
     [[nodiscard]] runtime::TimeScale timeScale() const noexcept { return scale; }
@@ -131,7 +131,7 @@ public:
     /// run; 4 never does. Takes effect at the next elaboration.
     void setStopSeverity(std::uint8_t severity) noexcept { stopSeverity = severity; }
 
-    /// The seed random draws start from (DESIGN_GUIDE.md section 3.8).
+    /// The seed random draws start from.
     void setSeed(std::uint32_t value) noexcept { seed = value; }
 
     // -----------------------------------------------------------------------
@@ -143,7 +143,7 @@ public:
         std::vector<std::filesystem::path> files;
 
         /// Sources analysed so that `files` resolve against them, whose units are **not**
-        /// stored in the library (`--context`, section 8.2).
+        /// stored in the library (`--context`).
         ///
         /// slang type-checks from syntax, so a unit importing a package needs that package's
         /// source however the package was analysed before. Storing it here as well would put
@@ -155,7 +155,7 @@ public:
         /// Read for the same reason as `contextFiles`, but a *specialisation* created from them
         /// is stored: a parameterisation the other library does not hold was created for this
         /// design, and nothing else would hold it. One the other library already has is
-        /// excluded rather than duplicated (8.2).
+        /// excluded rather than duplicated.
         std::vector<std::filesystem::path> libraryFiles;
         std::vector<std::string> defines;
         std::vector<std::filesystem::path> includeDirectories;
@@ -167,15 +167,14 @@ public:
         ///
         /// VHDL's adapter translates the hierarchy under its top rather than every unit analysed,
         /// so that a unit nothing instantiates cannot stop a design for using something the
-        /// adapter lacks (DESIGN_GUIDE.md section 5.2); without one it translates the one entity
-        /// that nothing instantiates, and refuses several. SystemVerilog's analysis does not use
-        /// it.
+        /// adapter lacks; without one it translates the one entity that nothing instantiates, and
+        /// refuses several. SystemVerilog's analysis does not use it.
         std::string top;
 
         /// Whether VHDL is translated as well as analysed. A library holds VHDL as NVC's
-        /// analysed units rather than as EIR (section 4.4), so an analysis that runs nothing and
-        /// names no top, `enzan analyse` without `--top`, has nothing to translate: which entity
-        /// is the top is for a run to say.
+        /// analysed units rather than as EIR, so an analysis that runs nothing and names no top,
+        /// `enzan analyse` without `--top`, has nothing to translate: which entity is the top is
+        /// for a run to say.
         bool translateVhdl = true;
 
         /// The library VHDL sources are analysed into, by the name they refer to it by
@@ -193,10 +192,10 @@ public:
 
     /// Analyses `request` together with everything analysed before it.
     ///
-    /// Together, rather than incrementally, because analysis currently hands every source to
-    /// one slang compilation. A design that is really analysed once per unit and cached is
-    /// section 4.4's library store; until that exists, re-analysing is the behaviour that is
-    /// *correct*, and the only thing wrong with it is that it is slower than it will be.
+    /// Together, rather than incrementally, because analysis currently hands every source to one
+    /// slang compilation. A design that is really analysed once per unit and cached is what the
+    /// library store is for; until that exists, re-analysing is the behaviour that is *correct*,
+    /// and the only thing wrong with it is that it is slower than it will be.
     ///
     /// When a library is open (`openLibrary`) and every source has a current entry in it, the
     /// units are loaded from there and the frontend does not run at all. Otherwise everything
@@ -204,16 +203,16 @@ public:
     bool analyse(const AnalysisRequest& request);
 
     /// True when a library this session resolves against holds analysed VHDL, from which a run
-    /// given no sources translates its top (DESIGN_GUIDE.md section 8.2).
+    /// given no sources translates its top.
     [[nodiscard]] bool hasVhdlLibraries() const;
 
 private:
     /// `analyse` for a design whose sources are VHDL, or that has none and libraries of VHDL.
     bool analyseVhdl(const AnalysisRequest& request);
 
-    /// `analyse` for a design whose sources are of both languages (DESIGN_GUIDE.md section 18,
-    /// M7): the VHDL translated under its top, each SystemVerilog module it instantiates
-    /// specialised as it asks, and the two linked into one design.
+    /// `analyse` for a design whose sources are of both languages: the VHDL translated under
+    /// its top, each SystemVerilog module it instantiates specialised as it asks, and the two
+    /// linked into one design.
     bool analyseMixed(const AnalysisRequest& request);
 
 #ifdef ENZAN_WITH_VHDL
@@ -233,12 +232,12 @@ private:
 
     /// Reports, and returns true, when an input library holds `top` among NVC's units without
     /// recording it, which a VHDL analysis into the library that stopped part-way leaves: a run
-    /// would otherwise be told the top is not there at all (DESIGN_GUIDE.md section 4.4).
+    /// would otherwise be told the top is not there at all.
     [[nodiscard]] bool reportUnrecordedTop(std::string_view top) const;
 
     /// Asks the VHDL frontend for each resolution function `tree` needs and no translation has
     /// given yet, each for the number of drivers elaboration counted, links what comes back into
-    /// the design, and records where each is (DESIGN_GUIDE.md section 3.7).
+    /// the design, and records where each is.
     bool answerResolutions(const elab::ElaboratedDesign& tree);
 
 public:
@@ -247,7 +246,7 @@ public:
     /// Every file the last `analyse` read: the sources, the files they included, and the
     /// context and library sources read for resolution.
     ///
-    /// What `--depfile` writes (8.3). Sorted and free of duplicates.
+    /// What `--depfile` writes. Sorted and free of duplicates.
     ///
     /// **Empty when the analysis was served from the library.** Nothing ran the frontend, so
     /// nothing knows what was included, and a caller MUST write no dependency file rather than
@@ -261,8 +260,8 @@ public:
     ///
     /// The seam for a design that came from somewhere other than this session's own analysis:
     /// units loaded from a library, a design assembled from two frontends once mixed-language
-    /// simulation arrives (section 3.5), and a test that builds EIR by hand to exercise the
-    /// kernel without depending on a frontend.
+    /// simulation arrives, and a test that builds EIR by hand to exercise the kernel without
+    /// depending on a frontend.
     ///
     /// Everything elaborated from the previous design is torn down, because a session holding
     /// a kernel built from a design it no longer has would be a use-after-free waiting for the
@@ -272,12 +271,12 @@ public:
     /// Opens `path` as the library analysis is written into, creating it when it is absent.
     ///
     /// Creating on absence is what `--out-lib <dir>` means: the library takes the directory's
-    /// own name, and a name that is not an identifier is reported rather than adjusted (8.2).
+    /// own name, and a name that is not an identifier is reported rather than adjusted.
     ///
-    /// Opt-in. Section 4.4's store is a cache of what the frontend produced, and a cache that
-    /// served units produced by a different translator would give a different simulation — so a
-    /// user who suspects one has an obvious thing to stop doing. The format version and Enzan's
-    /// version are both in every entry's key, which is the belt to that pair of braces.
+    /// Opt-in. A library is a cache of what the frontend produced, and a cache that served units
+    /// produced by a different translator would give a different simulation — so a user who
+    /// suspects one has an obvious thing to stop doing. The format version and Enzan's version are
+    /// both in every entry's key, which is the belt to that pair of braces.
     bool openOutputLibrary(const std::filesystem::path& path);
 
     /// Opens `path` as a library to resolve against, which MUST already exist.
@@ -291,9 +290,9 @@ public:
     ///
     /// What `analyse --in-lib` reads as context: a unit instantiating one from another library
     /// needs that unit's declaration, because slang type-checks from syntax and EIR does not
-    /// feed back into it (8.2). Reading the declaration is also what keeps a library
-    /// parametrisable — the instantiation resolves its parameters here, rather than being
-    /// limited to whatever parameterisation the other library happened to store.
+    /// feed back into it. Reading the declaration is also what keeps a library parametrisable
+    /// — the instantiation resolves its parameters here, rather than being limited to whatever
+    /// parameterisation the other library happened to store.
     [[nodiscard]] std::vector<std::filesystem::path> inputLibrarySources() const;
 
     /// The include directories and macros those sources need, in the same order.
@@ -309,7 +308,7 @@ public:
     // VPI applications
     // -----------------------------------------------------------------------
 
-    /// Loads a VPI application and runs its startup routines (DESIGN_GUIDE.md section 9.1).
+    /// Loads a VPI application and runs its startup routines.
     ///
     /// Called before analysis, so that a library that cannot be loaded is reported before a
     /// long analysis rather than after it, and so that its startup routines run before the
@@ -320,9 +319,8 @@ public:
     bool loadVpiApplication(std::string_view specification,
                             std::span<const std::string> commandLine);
 
-    /// Loads a VHPI application into the same context (section 9.7), which a design of both
-    /// languages shows to both interfaces as one simulation. Only a build with the VHDL frontend
-    /// has VHPI.
+    /// Loads a VHPI application into the same context, which a design of both languages shows to
+    /// both interfaces as one simulation. Only a build with the VHDL frontend has VHPI.
     bool loadVhpiApplication(std::string_view specification,
                              std::span<const std::string> commandLine);
 
@@ -370,8 +368,8 @@ public:
 
     /// Puts the design back to time zero, keeping the elaboration and the waveform files.
     ///
-    /// Refused while a VPI application is loaded (section 9.5): it would still hold the state
-    /// of the simulation being discarded.
+    /// Refused while a VPI application is loaded: it would still hold the state of the
+    /// simulation being discarded.
     bool restart();
 
     [[nodiscard]] runtime::SimTime time() const noexcept;
@@ -397,10 +395,10 @@ public:
     /// Renders a signal's current value in `radix`.
     ///
     /// An enumerated signal whose value has a name is rendered by that name when `radix` is
-    /// absent, matching what the wave window shows (section 10.3): a reader who asked what a
-    /// state register holds wants `S_SEND`, and gets `3'h2` by asking for a radix. Anything else
-    /// is rendered as it shows (section 3.6), a std_logic_vector as the bits its codes stand for,
-    /// and a VHDL signal of a null range, which has no value, as nothing.
+    /// absent, matching what the wave window shows: a reader who asked what a state register
+    /// holds wants `S_SEND`, and gets `3'h2` by asking for a radix. Anything else is rendered as
+    /// it shows, a std_logic_vector as the bits its codes stand for, and a VHDL signal of a null
+    /// range, which has no value, as nothing.
     [[nodiscard]] std::string examine(std::uint32_t signalIndex,
                                       std::optional<eir::Radix> radix) const;
 
@@ -411,10 +409,10 @@ public:
     /// number of bits without the user counting them.
     bool deposit(std::uint32_t signalIndex, std::string_view literal, std::string& error);
 
-    /// Writes `shown` once: a value as the signal shows it (section 3.6), which a VHDL signal
-    /// stores as the codes its bits stand for, `1` a std_logic's '1'. Widened or narrowed to the
-    /// width the signal shows at; false having filled `error` when it is no value of the signal,
-    /// an unknown `bit` or anything of a null range.
+    /// Writes `shown` once: a value as the signal shows it, which a VHDL signal stores as the
+    /// codes its bits stand for, `1` a std_logic's '1'. Widened or narrowed to the width the
+    /// signal shows at; false having filled `error` when it is no value of the signal, an
+    /// unknown `bit` or anything of a null range.
     bool deposit(std::uint32_t signalIndex, eir::ConstBitRef shown, std::string& error);
 
     /// Parses `literal` and holds the signal at it until `release`.
@@ -445,8 +443,8 @@ public:
     /// Adds `path` and what is inside it to what waveform files record.
     ///
     /// This is `log -r` and `add wave`: a selection is built up out of subtrees and individual
-    /// signals, and a signal's own path is a scope holding exactly that signal (section 7.1).
-    /// An empty path means the whole design and replaces everything selected so far.
+    /// signals, and a signal's own path is a scope holding exactly that signal. An empty path
+    /// means the whole design and replaces everything selected so far.
     ///
     /// Refused once a file is open, because the signals a file declares are written into its
     /// header and cannot be added to afterwards.
@@ -455,8 +453,8 @@ public:
     [[nodiscard]] std::span<const std::string> waveformScopes() const noexcept { return scopes; }
 
     /// Records no signal wider than `bits` in a waveform file opened from now on, or one of any
-    /// width when `bits` is 0, rather than the writer's default (section 7.1). Opening a file
-    /// that leaves one out warns, naming it.
+    /// width when `bits` is 0, rather than the writer's default. Opening a file that leaves one
+    /// out warns, naming it.
     void setWaveformWidthLimit(std::uint32_t bits) noexcept { widthLimit = bits; }
 
     /// Opens a VCD file and records into it from now on. Returns false having reported.
@@ -487,7 +485,7 @@ private:
     bool loadApplication(std::string_view specification, std::span<const std::string> commandLine,
                          bool vhpi);
 
-    /// Tells a loaded application the simulation is over, once (section 9.5).
+    /// Tells a loaded application the simulation is over, once.
     void endVpiSimulation();
 
     /// Parses `literal`, reporting through `error`.
@@ -557,7 +555,7 @@ private:
     runtime::TimeScale scale;
 
     /// The unit a SystemVerilog design element with no time scale of its own is in, as `scale`
-    /// was chosen; `scale` is finer where the design asks for a finer precision (section 3.1).
+    /// was chosen; `scale` is finer where the design asks for a finer precision.
     runtime::TimeScale defaultScale;
 
     /// True when the unit was chosen, by `--timescale` or by a library holding units, rather than

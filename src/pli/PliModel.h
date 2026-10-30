@@ -32,8 +32,8 @@ struct PliContext::Object {
         Constant,
         Iterator,
         Callback,
-        /// A VHPI handle, which `vhpiClass` says the class of (DESIGN_GUIDE.md section 9.7). The
-        /// two interfaces' handles never stand for one another: each refuses the other's.
+        /// A VHPI handle, which `vhpiClass` says the class of. The two interfaces' handles never
+        /// stand for one another: each refuses the other's.
         Vhpi
     };
 
@@ -157,10 +157,10 @@ struct PliContext::Scope {
     /// does not find a package instead.
     bool isPackage = false;
 
-    /// Whether it is of a VHDL definition. Each interface shows its own language (DESIGN_GUIDE.md
-    /// section 18, M7): VPI finds nothing of VHDL by name, and an iteration of a SystemVerilog
-    /// scope returns a VHDL instance in it as an object of a type VPI does not describe; VHPI shows
-    /// a SystemVerilog instance as a region of class `vhpiVerilog` and nothing in it.
+    /// Whether it is of a VHDL definition. Each interface shows its own language: VPI finds nothing
+    /// of VHDL by name, and an iteration of a SystemVerilog scope returns a VHDL instance in it as
+    /// an object of a type VPI does not describe; VHPI shows a SystemVerilog instance as a region
+    /// of class `vhpiVerilog` and nothing in it.
     bool vhdl = false;
     std::uint32_t instance = 0;
     std::uint32_t parent = NoScope;
@@ -181,7 +181,7 @@ struct PliContext::Scope {
     std::vector<std::uint32_t> parameters;
 
     /// The objects VHPI shows here: every one with a VHDL type, a real's among them, which VPI
-    /// does not show (section 9.7).
+    /// does not show.
     std::vector<std::uint32_t> vhdlObjects;
 };
 

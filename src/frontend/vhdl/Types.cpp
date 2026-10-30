@@ -315,11 +315,11 @@ std::optional<eir::Type> scalarStorage(type_t type) {
 
     case T_PHYSICAL: return eir::Type::bits(64, true, false);
 
-    // An IEEE 754 double, as a real's code is its bits (DESIGN_GUIDE.md section 3.6).
+    // An IEEE 754 double, as a real's code is its bits.
     case T_REAL: return eir::Type::real();
 
     // An access to a string, std.textio's line, is a handle into the runtime's heap, and 0 is
-    // `null` (section 4.3). Accesses to anything else are not held yet.
+    // `null`. Accesses to anything else are not held yet.
     case T_ACCESS: {
         type_t designated = type_designated(base);
         if (!type_is_array(designated)) return std::nullopt;
@@ -510,7 +510,7 @@ FoundResolution findResolution(type_t type, const Folder& folder) {
         }
 
         // Proven to return a lone driver's value by running it on each value of an
-        // enumeration of sixteen or fewer (DESIGN_GUIDE.md section 3.7).
+        // enumeration of sixteen or fewer.
         bool identity = false;
         type_t base = type_base_recur(element);
         const std::optional<Folder::Range> lone = driversRange(function, 1);

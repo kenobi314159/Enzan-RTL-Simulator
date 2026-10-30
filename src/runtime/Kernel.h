@@ -48,15 +48,15 @@ std::string_view toString(RunStatus status) noexcept;
 
 /// Asked between time slots whether the current run should stop.
 ///
-/// Section 2.2 requires the GUI to be able to stop a running kernel, and requires that a
-/// stalled or slow GUI never stall the kernel. Both fall out of polling rather than being
-/// signalled: the kernel asks when it is between time slots and therefore in a state it can
-/// be resumed from, and nothing outside the kernel ever touches its state.
+/// The GUI must be able to stop a running kernel, and a stalled or slow GUI must never stall the
+/// kernel. Both fall out of polling rather than being signalled: the kernel asks when it is between
+/// time slots and therefore in a state it can be resumed from, and nothing outside the kernel ever
+/// touches its state.
 ///
-/// The poll is deliberately at a time-slot boundary and not finer. All the state a run holds
-/// lives in the scheduler and the arena, so stopping there and calling `run` again produces
-/// exactly the results an uninterrupted run would have produced — which is what section 3.8
-/// requires, and which would not be true of an interruption part-way through a region.
+/// The poll is deliberately at a time-slot boundary and not finer. All the state a run holds lives
+/// in the scheduler and the arena, so stopping there and calling `run` again produces exactly the
+/// results an uninterrupted run would have produced, which would not be true of an interruption
+/// part-way through a region.
 class RunInterrupt {
 public:
     RunInterrupt() = default;
@@ -88,7 +88,7 @@ public:
     virtual ~ValueChangeListener() = default;
 
     /// Called after a signal's new value is in the arena. Only called for changes, never
-    /// for a write of the value a signal already held (section 6.2).
+    /// for a write of the value a signal already held.
     virtual void onValueChange(std::uint32_t signalIndex, eir::ConstBitRef value) = 0;
 
     /// Called when simulated time advances, before anything at the new time runs.
@@ -104,10 +104,10 @@ public:
 
 /// The points in the region ordering at which a PLI application runs.
 ///
-/// Section 3.3 lets the PLI regions be hook points rather than queues, and section 9.3 says
-/// where each callback fires; this is the kernel's half of that table. An interface rather
-/// than a dependency for the reason `ValueChangeListener` is one: `runtime` must not depend on
-/// `pli`, and a kernel with no application loaded pays one null test per hook and nothing else.
+/// The PLI regions are hook points rather than queues, and DESIGN_GUIDE.md section 9.3 says where
+/// each callback fires; this is the kernel's half of that table. An interface rather than a
+/// dependency for the reason `ValueChangeListener` is one: `runtime` must not depend on `pli`, and
+/// a kernel with no application loaded pays one null test per hook and nothing else.
 ///
 /// Every hook may re-enter the kernel — write a signal, schedule a non-blocking update, ask
 /// for the run to finish — because that is what an application's callbacks do.
@@ -154,8 +154,8 @@ public:
 struct KernelOptions {
     /// Delta cycles allowed at one timestamp before the run is abandoned.
     ///
-    /// Section 3.2 sets the default at 10,000 and requires the limit to exist: a delta
-    /// loop with no diagnostic is one of the most frustrating failures a user can hit.
+    /// The limit has to exist: a delta loop with no diagnostic is one of the most frustrating
+    /// failures a user can hit.
     std::uint32_t deltaLimit = 10'000;
 
     TimeScale timeScale;
@@ -163,16 +163,16 @@ struct KernelOptions {
     /// Where `$display` and the severity tasks write. Null means the standard output.
     std::ostream* transcript = nullptr;
 
-    /// What every random draw starts from (section 3.8): `$random`'s own seed, and what each
-    /// process's `$urandom` generator is derived from. Zero by default, which is where other
-    /// simulators start `$random` too.
+    /// What every random draw starts from (DESIGN_GUIDE.md section 3.8): `$random`'s own
+    /// seed, and what each process's `$urandom` generator is derived from. Zero by default,
+    /// which is where other simulators start `$random` too.
     std::uint32_t seed = 0;
 
-    /// Calls one process may have in progress at once, in a design where a call can reach
-    /// itself again (DESIGN_GUIDE.md section 4.1). The call stack is laid out for this many when
-    /// the kernel is built, and a run that would go deeper stops with a diagnostic naming the
-    /// subprogram, as the delta limit stops a design that does not settle. A design that cannot
-    /// recurse is given exactly the stack its deepest chain of calls needs, and no limit.
+    /// Calls one process may have in progress at once, in a design where a call can reach itself
+    /// again. The call stack is laid out for this many when the kernel is built, and a run that
+    /// would go deeper stops with a diagnostic naming the subprogram, as the delta limit stops a
+    /// design that does not settle. A design that cannot recurse is given exactly the stack its
+    /// deepest chain of calls needs, and no limit.
     std::uint32_t callDepthLimit = 10'000;
 
     /// The severity, as a position of VHDL's `severity_level`, at which a report or a failed
@@ -199,14 +199,12 @@ struct Activation {
 
 /// The simulation kernel: one time wheel, one event queue, one arena.
 ///
-/// Section 3.5 requires that there be exactly one of each even once VHDL arrives —
-/// VHDL and SystemVerilog are not simulated by separate engines that synchronise — so
-/// nothing here is specific to a source language. The kernel sees compiled bodies,
-/// signals and slots, and has no idea which frontend produced them.
+/// There is exactly one of each whatever the languages — VHDL and SystemVerilog are not simulated
+/// by separate engines that synchronise — so nothing here is specific to a source language. The
+/// kernel sees compiled bodies, signals and slots, and has no idea which frontend produced them.
 ///
-/// The kernel is single-threaded, which is the plan and not a fallback (section 6.4): a
-/// cache-friendly single-threaded loop outperforms a naively parallel one, and
-/// determinism comes free.
+/// The kernel is single-threaded, which is the plan and not a fallback: a cache-friendly
+/// single-threaded loop outperforms a naively parallel one, and determinism comes free.
 class Kernel {
 public:
     /// `image` and `diagnostics` must outlive the kernel.
@@ -248,10 +246,9 @@ public:
     // Operations a front end performs on a stopped kernel
     // -----------------------------------------------------------------------
     //
-    // These are the `examine`, `force` and `deposit` of DESIGN_GUIDE.md section 10.4, which
-    // are required from both Tcl and the GUI. They are on the kernel rather than in the
-    // the kernel rather than above it, because a second implementation of
-    // "write a signal from outside" would be a second set of semantics.
+    // These are `examine`, `force` and `deposit`, which the GUI and VPI both use. They are on
+    // the kernel rather than above it, because a second implementation of "write a signal
+    // from outside" would be a second set of semantics.
     //
     // All of them are meant to be called between runs. Calling one from inside a process
     // would write state the running process may be holding a view of.
@@ -269,27 +266,24 @@ public:
     /// is discarded while the force stands, which is what distinguishes a force from a
     /// deposit and what makes it useful for pinning a reset or a mode bit.
     ///
-    /// Forcing costs one branch on the signal write path and nothing at all until the first
-    /// force in a run: the table is allocated when it is first needed, so section 13.4's ban
-    /// on hot-path allocation is not in question.
+    /// Forcing costs one branch on the signal write path and nothing at all until the first force
+    /// in a run: the table is allocated when it is first needed, so nothing allocates on the hot
+    /// path.
     void force(std::uint32_t signalIndex, eir::ConstBitRef value);
 
     /// Releases a forced signal, returning false if it was not forced.
     ///
-    /// The value stays where the force left it until something drives the signal again.
-    /// Recomputing what the drivers would now say needs driver resolution, which is M5; until
-    /// then a released signal keeps its value rather than reverting to a number Enzan would
-    /// have had to invent.
+    /// The value stays where the force left it until something drives the signal again, rather than
+    /// being recomputed from what the drivers now say.
     bool release(std::uint32_t signalIndex);
 
     [[nodiscard]] bool isForced(std::uint32_t signalIndex) const noexcept;
 
     /// Registers a listener, which must outlive the kernel or be removed first.
     ///
-    /// More than one is supported, and delivered to in registration order, because that is what
-    /// the design calls for rather than a generalisation for its own sake: a batch run writes a
-    /// VCD and an FST at once, and section 2.2 requires the GUI to attach and detach while a
-    /// simulation is running.
+    /// More than one is supported, and delivered to in registration order, because that is what the
+    /// design calls for rather than a generalisation for its own sake: a batch run writes a VCD and
+    /// an FST at once, and the GUI attaches and detaches while a simulation is running.
     void addListener(ValueChangeListener& newListener);
 
     /// Removes the first registration of `listener`. Does nothing if it was never registered.
@@ -313,19 +307,19 @@ public:
     /// Registers the PLI application's hooks, or clears them with a null pointer.
     ///
     /// `hooks` must outlive the kernel or be cleared first. One rather than a list, because
-    /// one VPI implementation serves every application a process loads (section 9).
+    /// one VPI implementation serves every application a process loads.
     void setPliHooks(PliHooks* hooks) noexcept { pliHooks = hooks; }
 
     /// Ends the simulation as `$finish` does, once whatever is running returns.
     ///
-    /// `vpi_control(vpiFinish)` (section 9.5). The exit status is untouched, so a run an
-    /// application finishes ends successfully unless something else failed.
+    /// `vpi_control(vpiFinish)`. The exit status is untouched, so a run an application
+    /// finishes ends successfully unless something else failed.
     void requestFinish() noexcept { finishRequested = true; }
 
     /// Stops the run at the next time-slot boundary, as a `RunInterrupt` would.
     ///
-    /// `vpi_control(vpiStop)` (section 9.5). The boundary is the one a run can be resumed
-    /// from with the same result, which is the whole reason `RunInterrupt` polls there.
+    /// `vpi_control(vpiStop)`. The boundary is the one a run can be resumed from with the
+    /// same result, which is the whole reason `RunInterrupt` polls there.
     void requestStop() noexcept { stopRequested = true; }
 
     /// The unit every time the kernel reports is counted in.
@@ -385,7 +379,8 @@ public:
     /// Suspends a process for `delay` time units, resuming at `resumePc`.
     ///
     /// A zero delay goes to the Inactive region, which is what `#0` means: the process
-    /// resumes in this timestamp but after everything currently Active (section 3.3).
+    /// resumes in this timestamp but after everything currently Active
+    /// (DESIGN_GUIDE.md section 3.3).
     void suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint32_t resumePc);
 
     /// Schedules a write of `value` to `signalIndex` `delay` time units from now: the write
@@ -478,7 +473,7 @@ public:
     void unwindCalls() noexcept;
 
 private:
-    /// Runs one timestamp to completion, iterating the regions per section 3.3.
+    /// Runs one timestamp to completion, iterating the regions as IEEE 1800 orders them.
     /// Returns false when the run must stop.
     bool runTimeSlot();
 
@@ -584,7 +579,7 @@ private:
 
     Arena stateArena;
 
-    /// Every process's registers, then the call stack (DESIGN_GUIDE.md section 4.1).
+    /// Every process's registers, then the call stack.
     std::vector<eir::Word> frameStorage;
 
     /// A call in progress: the activation that made it, the call it made, and where to resume.
@@ -596,7 +591,7 @@ private:
 
     /// The calls in progress, innermost last. Empty whenever no process is running, since a
     /// subprogram never suspends; reserved for the deepest the stack allows, so that a call
-    /// does not allocate (section 13.4).
+    /// does not allocate.
     std::vector<CallInProgress> callsInProgress;
 
     /// Where the call stack starts in `frameStorage`, and where its next frame goes.
@@ -622,9 +617,9 @@ private:
     std::uint32_t runningProcess = NoProcess;
     static constexpr std::uint32_t NoProcess = 0xFFFF'FFFFU;
 
-    /// Scratch for resolution, sized once for the widest driver: the resolved range, the
-    /// segment being folded, and the driver being folded into it. Resolution runs on the
-    /// write path, which section 13.4 forbids allocating on.
+    /// Scratch for resolution, sized once for the widest driver: the resolved range, the segment
+    /// being folded, and the driver being folded into it. Resolution runs on the write path, which
+    /// must not allocate.
     std::vector<eir::Word> resolvedScratch;
 
     std::vector<eir::Word> segmentScratch;
@@ -649,10 +644,9 @@ private:
     std::uint32_t nextFileNumber = 3;
     std::uint32_t nextChannel = 1;
 
-    /// The heap of DESIGN_GUIDE.md section 4.3: what VHDL allocates, std.textio's lines so far,
-    /// by handle. Handle `n` is entry `n - 1`, and 0 is `null`; a freed entry is empty until an
-    /// allocation reuses it, the last freed first, so that a run allocates the same handles every
-    /// time.
+    /// The heap of access values: what VHDL allocates, std.textio's lines so far, by handle. Handle
+    /// `n` is entry `n - 1`, and 0 is `null`; a freed entry is empty until an allocation reuses it,
+    /// the last freed first, so that a run allocates the same handles every time.
     std::vector<std::optional<std::string>> heap;
     std::vector<std::uint64_t> freedHandles;
 
@@ -690,8 +684,8 @@ private:
 
     /// A write scheduled by `scheduleDelayedWrite`, waiting for its time.
     ///
-    /// Each holds its own copy of the value. The time wheel allocates per entry as it is, so
-    /// a pool would save nothing until both move to the calendar queue section 6.2 calls for.
+    /// Each holds its own copy of the value. The time wheel allocates per entry as it is, so a pool
+    /// would save nothing until both move to a calendar queue.
     struct DelayedWrite {
         std::uint32_t processIndex = 0;
         std::uint32_t position = 0;
@@ -851,7 +845,7 @@ private:
     void armWaiter(std::uint32_t signalIndex, const EdgeWaiter& waiter);
 
     /// Non-owning, in registration order. Ordered rather than hash-based because what a listener
-    /// records is observable and section 3.8 makes observable ordering reproducible.
+    /// records is observable and observable ordering must be reproducible.
     std::vector<ValueChangeListener*> listeners;
 
     /// Polled between time slots, or null. Non-owning.

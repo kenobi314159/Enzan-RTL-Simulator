@@ -56,7 +56,7 @@ struct ThemeName {
     friend bool operator==(const ThemeName&, const ThemeName&) = default;
 };
 
-/// What a `config` file says (DESIGN_GUIDE.md section 10.9).
+/// What a `config` file says.
 struct ParsedConfiguration {
     /// The theme `config` names; the default built-in one when it names none.
     ThemeName theme;
@@ -97,7 +97,7 @@ struct ConfiguredTheme {
     QVector<ConfigurationMessage> problems;
 };
 
-/// The directory the window keeps its settings in (DESIGN_GUIDE.md section 10.9).
+/// The directory the window keeps its settings in.
 ///
 /// Only the front end reads or writes it. Nothing in it may change what a simulation computes or
 /// records, so the kernel never looks at it, and a run is reproduced from its command line and

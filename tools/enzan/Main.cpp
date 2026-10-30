@@ -2,12 +2,12 @@
 //
 // Entry point for the headless simulation kernel.
 //
-// The kernel and the GUI are separate processes (DESIGN_GUIDE.md section 2.2). This
-// executable must stay usable with no display attached, so nothing here may reach into
-// src/gui or link Qt.
+// The kernel and the GUI are separate processes. This executable must stay usable with
+// no display attached, so nothing here may reach into src/gui or link Qt.
 //
 // The command line is deliberately minimal: enough to analyse, elaborate and run one design,
-// or to serve it to a front end. Section 8 holds the rules it shares with `enzan-gui`.
+// or to serve it to a front end. An option it shares with `enzan-gui` is spelled the same in
+// both.
 
 #include "common/Diagnostics.h"
 #include "common/Installation.h"
@@ -53,9 +53,9 @@
 
 namespace {
 
-/// Exit statuses. `Usage` is distinct from a simulation failure so that scripts can tell
-/// "you invoked me wrongly" from "the design failed".
-/// Exit statuses, distinct enough for a Makefile to branch on (DESIGN_GUIDE.md section 8.1).
+/// Exit statuses, distinct enough for a Makefile to branch on. `Usage` is distinct from a
+/// simulation failure so that scripts can tell "you invoked me wrongly" from "the design
+/// failed".
 ///
 /// `AnalysisFailed` and `SimulationFailed` are separate because a regression script that
 /// cannot tell "the tool could not compile this" from "the testbench reported an error"
@@ -68,7 +68,7 @@ enum class ExitStatus : std::uint8_t {
 
     /// The window `--gui` started crashed or exited with an error. Not a window its reader closed,
     /// which is how such a session ends: a status of 0 would say that the session worked when the
-    /// reader may never have seen it (8.4).
+    /// reader may never have seen it.
     FrontEndFailed = 4,
 };
 
@@ -87,7 +87,7 @@ enum class Command : std::uint8_t {
 /// A library named on the command line, with the name it is to be known by.
 ///
 /// An empty `name` means the one the library carries, which is the usual case: the name lives
-/// in the library so that the two ends of a build cannot disagree about it (8.2).
+/// in the library so that the two ends of a build cannot disagree about it.
 struct NamedLibrary {
     std::string name;
     std::filesystem::path path;
@@ -95,13 +95,13 @@ struct NamedLibrary {
 
 /// How long `--run` runs, as the run's precision will count it (`runtime::RunLength`), and as it
 /// was written, for saying what is wrong with it and for handing to a window, which reads it again
-/// by the same function (8.5).
+/// by the same function.
 struct RunOption {
     enzan::runtime::RunLength length;
     std::string text;
 };
 
-/// A file list and the rule its relative paths resolve by (8.3).
+/// A file list and the rule its relative paths resolve by.
 struct FileListRequest {
     std::filesystem::path path;
     enzan::session::FileListAnchor anchor = enzan::session::FileListAnchor::WorkingDirectory;
@@ -237,7 +237,7 @@ struct Invocation {
     std::filesystem::path attachPath;
     std::string libraryName;
 
-    /// A signal list the window starts with (DESIGN_GUIDE.md section 10.8).
+    /// A signal list the window starts with.
     std::filesystem::path waveListPath;
     std::vector<std::string> defines;
     std::vector<std::filesystem::path> includeDirectories;
@@ -268,8 +268,7 @@ struct Invocation {
     std::uint32_t seed = 0;
     bool dumpStatistics = false;
 
-    /// VPI and VHPI applications to load, each in the order given (DESIGN_GUIDE.md sections 9.1
-    /// and 9.7).
+    /// VPI and VHPI applications to load, each in the order given.
     std::vector<std::string> vpiApplications;
     std::vector<std::string> vhpiApplications;
 
@@ -312,8 +311,8 @@ enum class ParseOutcome : std::uint8_t { Run, PrintedHelp, BadUsage };
 /// words that was; nothing, having said why, for `lib` without one of its own.
 ///
 /// The first word is a subcommand only when it is one of these names, so a source file called
-/// `run.sv` is still a source file (8.1). `lib` is one, whatever follows it: reading it as a
-/// source when what follows is not `create`, `list` or `clean` reported a file nobody named.
+/// `run.sv` is still a source file. `lib` is one, whatever follows it: reading it as a source
+/// when what follows is not `create`, `list` or `clean` reported a file nobody named.
 std::optional<std::size_t> readCommand(std::span<char*> arguments, Invocation& invocation) {
     if (arguments.empty()) return 0;
 
@@ -736,10 +735,10 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "-sv") continue;
 
         // Any other `+` word is a plusarg. It belongs to the design and its VPI applications,
-        // which read it from the command line `vpi_get_vlog_info` reports (section 9.1), so it
-        // is accepted here and needs nothing further. The analysis options above are the
-        // exception, and `+libext+` stays refused below because it names a file-list feature
-        // that this command line does not have.
+        // which read it from the command line `vpi_get_vlog_info` reports, so it is accepted
+        // here and needs nothing further. The analysis options above are the exception, and
+        // `+libext+` stays refused below because it names a file-list feature that this
+        // command line does not have.
         if (argument.starts_with('+') && !argument.starts_with("+libext+")) continue;
 
         if (argument.starts_with('-') || argument.starts_with('+')) {
@@ -754,8 +753,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
     return ParseOutcome::Run;
 }
 
-/// The front end executable, where this one's installation, or build tree, keeps it (8.4, 11.5),
-/// and nowhere else: one found on the PATH could be another version's.
+/// The front end executable, where this one's installation, or build tree, keeps it, and nowhere
+/// else: one found on the PATH could be another version's.
 std::filesystem::path frontEndProgram() {
     return enzan::frontEndProgram(enzan::programDirectory());
 }
@@ -804,13 +803,12 @@ void removeSocketWhenSignalled(const std::filesystem::path& socketPath) {
 
 /// The window's own options, as the front end spells them.
 ///
-/// `--gui` is the only way in (8.4), so anything the window needs has to travel through here.
-/// The signal list it starts with and how long it runs the design are what a user chooses about one
-/// run of it, and leaving them reachable only by running the front end directly would make it a
-/// second program to learn after all. The run length is forwarded as it was written, because the
-/// window reads it again by the same function and counts it in the unit the kernel tells it. Its
-/// theme is the reader's rather than the run's, and the window finds it itself (DESIGN_GUIDE.md
-/// section 10.9).
+/// `--gui` is the only way in, so anything the window needs has to travel through here. The signal
+/// list it starts with and how long it runs the design are what a user chooses about one run of it,
+/// and leaving them reachable only by running the front end directly would make it a second program
+/// to learn after all. The run length is forwarded as it was written, because the window reads it
+/// again by the same function and counts it in the unit the kernel tells it. Its theme is the
+/// reader's rather than the run's, and the window finds it itself.
 std::vector<std::string> frontEndOptions(const Invocation& invocation) {
     std::vector<std::string> options;
     if (!invocation.waveListPath.empty()) {
@@ -881,8 +879,8 @@ void reportFrontEndNotStarted(const std::string& program, int failure) {
 ///
 /// `--gui` is an option of `enzan` rather than a second program to learn, but the two remain
 /// two processes and the kernel binary links no Qt: a headless server and a CI runner must not
-/// install a GUI toolkit to run a batch simulation (2.2). The kernel is what parses the command
-/// line, analyses and elaborates; the window only ever attaches, which is why it needs to know
+/// install a GUI toolkit to run a batch simulation. The kernel is what parses the command line,
+/// analyses and elaborates; the window only ever attaches, which is why it needs to know
 /// nothing about libraries or file lists.
 ///
 /// The command line is built before the fork, so that the child does nothing but replace itself.
@@ -983,11 +981,11 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
 
 /// Builds the session every path shares: analysis and elaboration, once.
 ///
-/// One pipeline for the batch run, the served kernel and the script. Three copies of it was
-/// where the differences between them started: a `--listen` that resolved a file differently
+/// One pipeline for the batch run, the served kernel and the script. Three copies of it was where
+/// the differences between them started: a `--listen` that resolved a file differently
 /// differently from another, or a batch run that put the waveform somewhere a served one did not.
 /// Opens the libraries this invocation writes into and reads from, and settles the time unit,
-/// which the libraries fix when they hold units (8.2).
+/// which the libraries fix when they hold units.
 bool openLibraries(const Invocation& invocation, enzan::session::Session& session) {
     if (!invocation.outputLibrary.empty() && !session.openOutputLibrary(invocation.outputLibrary))
         return false;
@@ -1002,7 +1000,7 @@ bool openLibraries(const Invocation& invocation, enzan::session::Session& sessio
     return session.chooseTimeScale(requested);
 }
 
-/// Writes a `make`-style dependency file naming every file the analysis read (8.3).
+/// Writes a `make`-style dependency file naming every file the analysis read.
 ///
 /// One target and its prerequisites, continued across lines the way a compiler writes them.
 /// Nothing is written when the analysis came from the library: see `Session::filesRead`.
@@ -1053,7 +1051,7 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
 
     // An input library's own sources supply the declarations this analysis instantiates, which
     // is what lets those units be instantiated with whatever parameters are wanted here rather
-    // than only the ones the library stored (8.2).
+    // than only the ones the library stored.
     request.libraryFiles = session.inputLibrarySources();
 
     // Ahead of this analysis's own, so that a library's own include path and macros are what
@@ -1090,8 +1088,8 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
     if (hasSources && !analyseOnly(invocation, session, sources, diagnostics)) return false;
     if (!hasSources && !openLibraries(invocation, session)) return false;
 
-    // A VHDL design is translated for the run that needs it (section 5.2), so a run given only
-    // libraries holding VHDL translates its top from them.
+    // A VHDL design is translated for the run that needs it, so a run given only libraries
+    // holding VHDL translates its top from them.
     if (!hasSources && session.hasVhdlLibraries()) {
         enzan::session::Session::AnalysisRequest request;
         if (!collectSources(invocation, sources, diagnostics, request)) return false;
@@ -1109,14 +1107,14 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
 /// Serves an elaborated session to a graphical front end instead of running it here.
 ///
 /// The client drives the run, so nothing happens until one attaches, and the kernel survives
-/// its departure: section 2.2 requires a GUI to be able to detach from a long simulation on a
-/// compute server without ending it.
+/// its departure: a GUI must be able to detach from a long simulation on a compute server
+/// without ending it.
 /// Serves until the client is finished, or until a window this process started has closed.
 ///
 /// `serve()` returns only when a client asks the simulation to stop, which is right for
 /// `--listen`: a kernel that outlives its window is the whole point of that spelling. With
-/// `--gui` the kernel exists *for* the window it started, so its closing ends the kernel too
-/// (8.4). Stepping rather than serving is what lets both be true of one server.
+/// `--gui` the kernel exists *for* the window it started, so its closing ends the kernel
+/// too. Stepping rather than serving is what lets both be true of one server.
 ///
 /// `windowStatus` is set to how the window ended, as `waitpid` says it, when it has; it is left
 /// alone when the server stopped first.
@@ -1130,7 +1128,7 @@ int serveUntilDone(enzan::ipc::KernelServer& server, ::pid_t window, int& window
 
 /// Whether a window that ended with `status`, as `waitpid` says it, failed, having said how.
 ///
-/// Its reader closing it is not failing, and leaves the exit status to the simulation (8.4).
+/// Its reader closing it is not failing, and leaves the exit status to the simulation.
 bool reportFailedWindow(int status) {
     if (WIFSIGNALED(status)) {
         std::cerr << "enzan: the graphical front end ended on signal " << WTERMSIG(status) << '\n';
@@ -1222,7 +1220,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     enzan::session::Session session(sources, diagnostics);
 
     // Before analysis, so that a library that cannot be loaded is reported before a long
-    // analysis rather than after it (section 9.1).
+    // analysis rather than after it.
     for (const std::string& application : invocation.vpiApplications) {
         if (!session.loadVpiApplication(application, invocation.commandLine))
             return ExitStatus::AnalysisFailed;
@@ -1236,7 +1234,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
 
     // Opened before serving as well as before running: a served session records into the live
     // database *and* into any writer that was asked for, so that someone debugging in a window
-    // who wants a file for later does not have to run the design again (8.4).
+    // who wants a file for later does not have to run the design again.
     if (!invocation.vcdPath.empty() && !session.openVcd(invocation.vcdPath))
         return ExitStatus::AnalysisFailed;
     if (!invocation.fstPath.empty() && !session.openFst(invocation.fstPath))
@@ -1261,7 +1259,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
         return serve(invocation, invocation.listenPath, session, diagnostics);
 
     // A time with a unit is a count only once the run's precision is known, which the design and
-    // its libraries settle (section 3.1).
+    // its libraries settle.
     std::optional<std::uint64_t> until;
     if (invocation.runUntil.has_value() && !invocation.runUntil->length.untilFinished) {
         until = runCount(*invocation.runUntil, session.timeScale());
@@ -1282,7 +1280,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     }
 
     // Analysis and elaboration have succeeded by here, so an error reported since — an `$error`,
-    // a failed assertion — is the design failing in simulation, which is status 3 (8.1).
+    // a failed assertion — is the design failing in simulation, which is status 3.
     if (status == enzan::runtime::RunStatus::Error || session.exitStatus() != 0
         || diagnostics.hasErrors())
         return ExitStatus::SimulationFailed;
@@ -1326,7 +1324,7 @@ ExitStatus runLibCommand(const Invocation& invocation, enzan::DiagnosticEngine& 
     return ExitStatus::Success;
 }
 
-/// Prints what the file lists expanded to, in order, and nothing else (`--dry-run`, 8.3).
+/// Prints what the file lists expanded to, in order, and nothing else (`--dry-run`).
 ExitStatus printExpandedSources(const Invocation& invocation, enzan::SourceManager& sources,
                                 enzan::DiagnosticEngine& diagnostics) {
     enzan::session::Session::AnalysisRequest request;
@@ -1399,7 +1397,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // An application observes a simulation, and these commands run none (section 9.1).
+    // An application observes a simulation, and these commands run none.
     if ((!invocation.vpiApplications.empty() || !invocation.vhpiApplications.empty())
         && invocation.command != Command::Run && invocation.command != Command::OneShot) {
         std::cerr << "enzan: '--vpi' and '--vhpi' need a simulation to load into; give them to "
@@ -1452,7 +1450,7 @@ int main(int argc, char** argv) {
     }
 
     // With neither libraries nor sources there is no design to elaborate, which is a command line
-    // that asked for nothing rather than a design that failed (8.1).
+    // that asked for nothing rather than a design that failed.
     const bool elaborates =
         invocation.command == Command::Run || invocation.command == Command::Elaborate;
     if (elaborates && invocation.fileLists.empty() && invocation.inputLibraries.empty()) {
@@ -1462,9 +1460,9 @@ int main(int argc, char** argv) {
         return static_cast<int>(ExitStatus::Usage);
     }
 
-    // A macro, an include directory and a parameter override apply while sources are analysed
-    // (8.2). A run from libraries alone analyses nothing, so it would run what the libraries hold
-    // as if the option had been taken.
+    // A macro, an include directory and a parameter override apply while sources are analysed. A
+    // run from libraries alone analyses nothing, so it would run what the libraries hold as if
+    // the option had been taken.
     if (invocation.files.empty() && invocation.fileLists.empty()) {
         std::vector<std::string_view> analysisOptions;
         if (!invocation.defines.empty()) analysisOptions.emplace_back("'-D'");
@@ -1485,8 +1483,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    // The rule a dependency file holds is for its target, the one named or the output library
-    // (8.3): with neither it would be a rule for nothing, which make refuses to read.
+    // The rule a dependency file holds is for its target, the one named or the output
+    // library: with neither it would be a rule for nothing, which make refuses to read.
     if (!invocation.depfileTarget.empty() && invocation.depfilePath.empty()) {
         std::cerr << "enzan: '--depfile-target' names the target of the file '--depfile' "
                      "writes, and no '--depfile' was given\n";

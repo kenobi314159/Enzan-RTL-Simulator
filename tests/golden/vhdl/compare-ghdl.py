@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Compare a run of a VHDL design under Enzan against the same under GHDL.
 
-Differential testing against a reference simulator is what section 14.3 of DESIGN_GUIDE.md asks of
-every golden case, and GHDL is M6's reference for VHDL. Three things are compared:
+Every golden case is compared against a reference simulator, and GHDL is the reference for VHDL.
+Three things are compared:
 
 * **What the design reported**, in order: each `report` and failed `assert`, as its severity and
   its message. Where each simulator prints it, and how, is its own business; what the design said
@@ -13,18 +13,19 @@ every golden case, and GHDL is M6's reference for VHDL. Three things are compare
   once its reports and its own `ghdl:` lines are taken out.
 * **What every signal GHDL records did**, as a waveform: the value it settled on at each time step.
   A VCD records settled values, so two correct simulators agree on it whatever order they ran their
-  processes in within a step (section 14.3). A generate block is a scope of GHDL's, `g(0)`, and part
-  of a name of Enzan's, `g(0).u`, so both are paths `g(0)/u`.
+  processes in within a step. A generate block is a scope of GHDL's, `g(0)`, and part of a name of
+  Enzan's, `g(0).u`, so both are paths `g(0)/u`.
 
 With `--scope`, only the signals declared directly in that scope are compared: a design of two
 languages is compared with the same design all in VHDL, whose units inside hold signals of their own
 names, so only what the testbench sees of them is the same design.
 
 GHDL writes `std_logic` as its nine values and Enzan as the four-state bits they stand for, L as 0,
-H as 1, and U, W and - unknown (section 3.6), so GHDL's are mapped the same way before comparing.
-GHDL also shortens a vector whose leading bits are 0, which VCD allows; both are padded back to the
-declared width. A real is compared as the number it is, whatever digits each wrote it in. A signal GHDL does not record, an enumeration or a time, is not compared. Nor is the
-time step a run finishes in: GHDL stops before it writes that step out, and Enzan writes it.
+H as 1, and U, W and - unknown, so GHDL's are mapped the same way before comparing. GHDL also
+shortens a vector whose leading bits are 0, which VCD allows; both are padded back to the declared
+width. A real is compared as the number it is, whatever digits each wrote it in. A signal GHDL does
+not record, an enumeration or a time, is not compared. Nor is the time step a run finishes in: GHDL
+stops before it writes that step out, and Enzan writes it.
 
 Exits non-zero with every difference listed.
 """

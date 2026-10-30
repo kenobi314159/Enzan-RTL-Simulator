@@ -20,11 +20,11 @@ namespace enzan::wavedb {
 ///
 /// This is `WaveformWriter` with the database standing in for a file format. That is not a
 /// convenience: deciding which signals are in scope, walking the hierarchy to declare them,
-/// collapsing the changes within a time slot into the value it settles on, and attributing
-/// those changes to the slot that is *ending* are the same four problems for VCD, for FST and
-/// for the live database, and they are where the subtle mistakes live. Section 7's database and
-/// section 7.3's exporters must agree about every value at every timestamp, and the only way to
-/// be sure of that is for them to share the code that decides it.
+/// collapsing the changes within a time slot into the value it settles on, and attributing those
+/// changes to the slot that is *ending* are the same four problems for VCD, for FST and for the
+/// live database, and they are where the subtle mistakes live. The database and the exporters must
+/// agree about every value at every timestamp, and the only way to be sure of that is for them to
+/// share the code that decides it.
 class WaveformRecorder final : public WaveformWriter {
 public:
     /// `image`, `arena` and `database` must all outlive the recorder.
@@ -42,8 +42,8 @@ public:
 
     /// Records `signalIndex` from now on as well, beginning with the value it holds at `now`,
     /// whatever the scope and the width limit chose: what a reader puts in a wave window is
-    /// recorded from the moment they do (DESIGN_GUIDE.md section 7.1). Nothing for a signal
-    /// recorded already or one with no value, a VHDL signal of a null range.
+    /// recorded from the moment they do. Nothing for a signal recorded already or one with no
+    /// value, a VHDL signal of a null range.
     ///
     /// Between time slots only, as the kernel's listeners are called: `now` is the slot being
     /// recorded.

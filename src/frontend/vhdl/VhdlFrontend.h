@@ -25,14 +25,14 @@ struct ModuleDefinition;
 /// The VHDL frontend.
 ///
 /// A frontend's only job is to turn source text into EIR (DESIGN_GUIDE.md section 5). This one is
-/// built on NVC's analysis (section 5.2), and nothing NVC-specific may leak past this directory:
-/// keeping frontend-specific code confined is a standing invariant (section 17.4).
+/// built on NVC's analysis, and nothing NVC-specific may leak past this directory: keeping
+/// frontend-specific code confined is a standing invariant.
 namespace enzan::frontend::vhdl {
 
 /// The revision of IEEE 1076 a design is analysed against.
 ///
-/// Part of what an analysis produces, so part of a library entry's key (section 4.4), and it
-/// chooses which of the standard libraries' revisions a unit is analysed against.
+/// Part of what an analysis produces, so part of a library entry's key, and it chooses which
+/// of the standard libraries' revisions a unit is analysed against.
 enum class Standard : std::uint8_t { Vhdl1993, Vhdl2000, Vhdl2002, Vhdl2008, Vhdl2019 };
 
 /// A library that NVC's analysis writes units into.
@@ -59,8 +59,8 @@ struct UnitOptions {
     UnitLibrary work;
 
     /// Libraries a design refers to by name, each where its units are: the VHDL of the Enzan
-    /// libraries a design is analysed against (`--in-lib`, DESIGN_GUIDE.md section 8.2). Found
-    /// before anything in `searchDirectories`.
+    /// libraries a design is analysed against (`--in-lib`). Found before anything in
+    /// `searchDirectories`.
     std::vector<UnitLibrary> libraries;
 
     /// Directories holding the other libraries a design refers to, searched in order.
@@ -80,7 +80,7 @@ struct UnitOptions {
 ///
 /// This is analysis as VHDL defines it: each unit parsed, checked and stored, against the units
 /// stored before it. It produces no EIR; the adapter translates units into EIR when a design
-/// names them, once per set of generic values (section 5.2).
+/// names them, once per set of generic values.
 ///
 /// **NVC runs in a child process**, one per call. NVC keeps its state in globals that last for
 /// the life of a process, and it ends the process on a fatal error — a library a design names that
@@ -111,8 +111,8 @@ struct DesignOptions {
     bool ieeeWarnings = true;
 
     /// The SystemVerilog modules of a design of both languages, by their names as declared: a
-    /// component with no entity to be bound to is bound to the module of its name, in any case
-    /// (DESIGN_GUIDE.md section 18, M7).
+    /// component with no entity to be bound to is bound to the module of its name, in any
+    /// case.
     std::vector<std::string> modules;
 
     /// The entities SystemVerilog instantiates, each translated with the values it asks for, the
@@ -128,7 +128,7 @@ struct DesignOptions {
 };
 
 /// What a translation of the VHDL of a design of both languages exchanges with the SystemVerilog
-/// side (DESIGN_GUIDE.md section 18, M7).
+/// side.
 struct Exchange {
     /// The SystemVerilog modules the design instantiates, which its instances name placeholders of.
     std::vector<eir::UnitRequest> asked;
@@ -141,7 +141,7 @@ struct Exchange {
     std::vector<eir::UnitInterface> interfaces;
 };
 
-/// Analyses `options.units` and translates the design under the top into EIR (section 5.2).
+/// Analyses `options.units` and translates the design under the top into EIR.
 ///
 /// In the child process `analyseUnits` describes, which hands the parent the translated design as
 /// EIR's own encoding: NVC's trees live in the child and end with it, and nothing of NVC reaches
@@ -154,13 +154,13 @@ struct Exchange {
 /// Returns nothing having reported why, when a source does not analyse or the design uses
 /// something the adapter does not translate yet. `analysed`, when given, is set to whether the
 /// sources analysed, which leaves their units in the work library even where the translation
-/// after it failed (DESIGN_GUIDE.md section 4.4).
+/// after it failed.
 std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceManager& sources,
                                      DiagnosticEngine& diagnostics, Exchange* exchange = nullptr,
                                      bool* analysed = nullptr);
 
-/// A resolution function asked for by how many drivers it resolves (DESIGN_GUIDE.md section 3.7):
-/// `function` names it as `eir::Resolution` does.
+/// A resolution function asked for by how many drivers it resolves: `function` names it as
+/// `eir::Resolution` does.
 struct ResolutionRequest {
     std::string function;
     std::uint32_t drivers = 0;
@@ -182,9 +182,9 @@ struct ResolvedFunctions {
 };
 
 /// Analyses `options.units` again and translates each of `requests`, its function specialised to
-/// an array of as many values as it has drivers, indexed from 0 (section 3.7), in a child as
-/// `analyse` translates a design. Elaboration asks for these once it has counted a resolved
-/// signal's drivers, which the first translation could not know.
+/// an array of as many values as it has drivers, indexed from 0, in a child as `analyse`
+/// translates a design. Elaboration asks for these once it has counted a resolved signal's
+/// drivers, which the first translation could not know.
 ///
 /// Returns nothing having reported why, when a source does not analyse again or a function is
 /// not one the adapter can translate.
@@ -198,7 +198,7 @@ std::optional<ResolvedFunctions> resolutions(const DesignOptions& options,
 [[nodiscard]] std::vector<std::string> declaredUnits(BufferId source, const SourceManager& sources);
 
 /// Where the standard libraries built with Enzan are, found from the directory of the running
-/// program, which is where a build puts them and an installation keeps them (sections 4.4, 11.5).
+/// program, which is where a build puts them and an installation keeps them.
 std::filesystem::path standardLibraryDirectory();
 
 } // namespace enzan::frontend::vhdl

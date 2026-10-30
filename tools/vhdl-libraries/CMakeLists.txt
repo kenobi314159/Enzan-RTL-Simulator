@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # VHDL's standard libraries, `std`, `ieee` and NVC's own `nvc`, analysed when Enzan is built and
-# found beside the executable at run time (DESIGN_GUIDE.md section 4.4).
+# found beside the executable at run time.
 #
-# They live in lib/enzan/vhdl, beside bin/, in the build tree as in an installation (section 11.5),
-# one directory per library and standard as NVC lays them out: `std` and `ieee` for 1993, which serve 2000 and 2002 as well, then `std.08`, `std.19`
-# and so on. A library is analysed from the sources NVC ships, by enzan-vhdl-library, one source
-# file per run as NVC's own build does (docs/nvc_integration.md).
+# They live in lib/enzan/vhdl, beside bin/, in the build tree as in an installation, one directory
+# per library and standard as NVC lays them out: `std` and `ieee` for 1993, which serve 2000 and
+# 2002 as well, then `std.08`, `std.19` and so on. A library is analysed from the sources NVC ships,
+# by enzan-vhdl-library, one source file per run as NVC's own build does (docs/development/nvc_integration.md).
 
 add_executable(enzan-vhdl-library Main.cpp)
 target_link_libraries(enzan-vhdl-library PRIVATE enzan::compile_options enzan::common
@@ -55,7 +55,7 @@ foreach(_standard 1993 2008 2019)
       set(_source "${CMAKE_MATCH_3}")
       string(STRIP "${CMAKE_MATCH_4}" _needs)
 
-      # VITAL is the gate-level timing library, out of scope by section 1.3.
+      # VITAL is the gate-level timing library, and gate-level simulation is out of scope.
       if(_source MATCHES "^lib/vital/")
         continue()
       endif()
@@ -118,7 +118,7 @@ endforeach()
 add_custom_target(enzan-vhdl-libraries ALL DEPENDS ${_all})
 
 # Every library the steps above wrote, as they wrote it. An installation's copy is one nothing
-# writes to (section 4.4), and usually one its user cannot.
+# writes to, and usually one its user cannot.
 install(
   DIRECTORY "${ENZAN_VHDL_LIBRARY_ROOT}/"
   DESTINATION "${ENZAN_INSTALL_VHDLDIR}"

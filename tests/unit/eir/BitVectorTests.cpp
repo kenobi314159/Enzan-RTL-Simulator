@@ -76,9 +76,8 @@ TEST(LogicValues, CharactersAndUnknownPredicate) {
 // ---------------------------------------------------------------------------
 
 TEST(BitVector, DefaultsToUnknown) {
-    // Not zero: an uninitialised four-state variable is X at time zero
-    // (DESIGN_GUIDE.md section 3.9), and defaulting to zero would hide exactly the
-    // bugs X exists to reveal.
+    // Not zero: an uninitialised four-state variable is X at time zero, and
+    // defaulting to zero would hide exactly the bugs X exists to reveal.
     const BitVector value(8);
 
     EXPECT_EQ(value.width(), 8U);

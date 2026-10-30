@@ -156,8 +156,8 @@ TEST_F(ElaboratorTest, ElaboratesASingleModule) {
 }
 
 TEST_F(ElaboratorTest, AParameterisedTopIsNamedAsTheSourceNamesIt) {
-    // Its definition is named for its parameter values (section 8.2); its instance, and so
-    // every path under it, is named for what the user wrote.
+    // Its definition is named for its parameter values; its instance, and so every path
+    // under it, is named for what the user wrote.
     ModuleDefinition top;
     top.name = "counter$WIDTH_8";
     top.sourceName = "counter";
@@ -270,7 +270,7 @@ TEST_F(ElaboratorTest, TheSameModuleMayAppearManyTimes) {
 TEST_F(ElaboratorTest, EnumerationsAreInternedOnceForTheWholeElaboration) {
     // Every instance of a module declares its enumerated signals again, and a design has far
     // more enumerated signals than it has enumerations. One table for the elaboration means a
-    // display is told the names once however many slots share them (DESIGN_GUIDE.md 10.7).
+    // display is told the names once however many slots share them.
     ModuleDefinition leaf;
     leaf.name = "leaf";
     const std::uint32_t leafEnum = leaf.addEnum(enzan::eir::EnumDefinition{
@@ -506,8 +506,8 @@ TEST_F(ElaboratorTest, RejectsADrivenObjectOfAnotherWidthThanItsPort) {
 
 TEST_F(ElaboratorTest, RejectsAPortOfAnotherEncodingThanItsObject) {
     // Eight std_ulogic codes and 64 four-state bits are as wide, and joined, one side would read
-    // the other's codes as bits: a connection between languages has to convert its values
-    // (DESIGN_GUIDE.md section 3.5), and EIR asking for one that does not is refused.
+    // the other's codes as bits: a connection between languages has to convert its values, and
+    // EIR asking for one that does not is refused.
     buildPortedPair(design, 64, 64);
     ModuleDefinition child = *design.findModule("child");
     child.objects[0].encoding = enzan::eir::Encoding::VhdlLogic;
@@ -622,9 +622,9 @@ TEST_F(ElaboratorTest, SeveralProceduralWritersOfOneObjectAreAllowed) {
 }
 
 TEST_F(ElaboratorTest, RejectsTwoContinuousAssignmentsDrivingOneObject) {
-    // Two continuous drivers need resolution, which is an M5 feature. Catching it here
-    // is the difference between a clear error and a design that simulates to a
-    // plausible wrong answer.
+    // A variable has at most one continuous driver per bit, and a second is an error rather
+    // than something to resolve. Catching it here is the difference between a clear error
+    // and a design that simulates to a plausible wrong answer.
     ModuleDefinition top;
     top.name = "tb";
     top.addObject(Object{.name = "src", .type = Type::logic()});
@@ -755,7 +755,7 @@ TEST_F(ElaboratorTest, ACollapsedPortDrivenFromBothSidesIsDetected) {
 }
 
 // ---------------------------------------------------------------------------
-// Drivers per bit (DESIGN_GUIDE.md section 3.7)
+// Drivers per bit
 // ---------------------------------------------------------------------------
 
 /// A module `tb` with a one-bit source and an eight-bit target of the given kind.
@@ -902,7 +902,7 @@ TEST_F(ElaboratorTest, ANetWithOneDriverPerBitHasNoDrivers) {
 }
 
 TEST_F(ElaboratorTest, PortsOfManyInstancesDrivingBitsOfOneArrayAreAllowed) {
-    // The pattern section 3.7 is written around, after collapsing: each instance's output is
+    // The pattern drivers of bit ranges exist for, after collapsing: each instance's output is
     // its own slot, copied into one bit of the parent's array by its own connection.
     ModuleDefinition child;
     child.name = "channel";
@@ -1095,7 +1095,7 @@ TEST_F(ElaboratorTest, APackageNamedAsTheTopLevelIsReported) {
 }
 
 // ---------------------------------------------------------------------------
-// Calls of subprograms (DESIGN_GUIDE.md section 4.1)
+// Calls of subprograms
 // ---------------------------------------------------------------------------
 
 /// A process of `definition` that calls `subprogram` of `callee` with no arguments.

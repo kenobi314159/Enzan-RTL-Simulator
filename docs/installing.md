@@ -2,8 +2,7 @@
 
 Enzan runs on Linux only. Each release is published with packages for the distributions below,
 built and tested on each of them, and with a source tarball that builds anywhere the toolchain
-does. DESIGN_GUIDE.md is normative (sections 11.5 to 11.7); this file is what someone installing
-Enzan needs from it.
+does.
 
 ## From a release's packages
 
@@ -56,5 +55,6 @@ Enzan from where it is itself. Two versions installed side by side, in `/opt/enz
 
 ## From a checkout
 
-As the README says: configure, build, and `cmake --install` the build directory the same way. A
-checkout downloads slang and its dependencies the first time it is configured.
+As [CONTRIBUTING.md](../CONTRIBUTING.md) says: configure, build, and `cmake --install` the build
+directory the same way. A checkout downloads slang and its dependencies the first time it is
+configured.

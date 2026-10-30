@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Builds and tests Enzan's packages inside a container of the distribution they are for
-# (DESIGN_GUIDE.md section 11.7). packaging/build-package.sh runs it once for each phase:
+# Builds and tests Enzan's packages inside a container of the distribution they are for.
+# packaging/build-package.sh runs it once for each phase:
 #
 #   container.sh deps  <tarball>          installs what building the packages needs
 #   container.sh build <tarball> <out>    builds them into <out>; run with no network
@@ -192,7 +192,7 @@ test_packages() {
             ;;
     esac
 
-    # The simulator alone first: a machine without a display installs no GUI toolkit (8.4).
+    # The simulator alone first: a machine without a display installs no GUI toolkit.
     install_packages "$kernel"
     if ldconfig -p | grep -q libQt6Core; then fail "installing $kernel installed Qt"; fi
     "$here/smoke-test.sh" kernel

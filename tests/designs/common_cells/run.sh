@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs PULP's common_cells through testbenches under Enzan (DESIGN_GUIDE.md section 14.5; the
-# third exit design of M5).
+# Runs PULP's common_cells through testbenches under Enzan.
 #
 #   run.sh <enzan> <work-directory>
 #
@@ -10,14 +9,14 @@
 # revision.txt. Two sets of testbenches run against every source file of common_cells:
 #
 # - Its own, those that need neither classes nor queues, `randomize` nor `real` variables, none
-#   of which M5 has: cc_addr_decode_tb, cc_graycode_tb and cc_sub_per_hash_tb. These check
+#   of which Enzan has: cc_addr_decode_tb, cc_graycode_tb and cc_sub_per_hash_tb. These check
 #   themselves with immediate assertions, which report an error and so make Enzan exit with 3.
 # - The ones in tb/ beside this script, for modules its own testbenches leave out or reach only
 #   through classes. Each compares a module against a model, says PASS or FAIL, and ends with
 #   `$fatal` on a failure.
 #
 # A testbench passes when Enzan exits with 0 and nothing reported an error. Concurrent
-# assertions are SVA, which M5 does not have, so common_cells' own are compiled out with
+# assertions are SVA, which Enzan does not have, so common_cells' own are compiled out with
 # ASSERTS_OFF, the switch its sources provide for simulators without them.
 
 set -uo pipefail

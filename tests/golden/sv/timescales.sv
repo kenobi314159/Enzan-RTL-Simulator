@@ -2,9 +2,9 @@
 //
 // Delays and `$time` in the time unit of the scope that states them (IEEE 1800 section 3.14):
 // each module's own `timescale`, a package task's the package's, a delay rounded to its module's
-// precision, and the run counting the finest precision anything asks for (DESIGN_GUIDE.md section
-// 3.1). Every module states its time scale, and the case runs without `--timescale`, so that the
-// unit is the one the design asks for.
+// precision, and the run counting the finest precision anything asks for. Every module states its
+// time scale, and the case runs without `--timescale`, so that the unit is the one the design
+// asks for.
 
 `timescale 1ns / 1ps
 package waits;

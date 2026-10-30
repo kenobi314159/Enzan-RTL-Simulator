@@ -121,7 +121,7 @@ void Design::mergeIdenticalDefinitions(
 
 std::vector<std::string> Design::candidateTopModules() const {
     // An ordered set, so that the result is the same on every run even though it is
-    // built by iterating instances (section 3.8).
+    // built by iterating instances.
     std::set<std::string, std::less<>> instantiated;
     for (const ModuleDefinition& definition : definitions) {
         for (const Instance& instance : definition.instances)

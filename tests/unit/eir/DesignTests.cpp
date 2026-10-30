@@ -85,8 +85,7 @@ TEST(Design, CandidateTopModulesExcludesAnythingInstantiated) {
 
 TEST(Design, CandidateTopModulesIsOrderedByName) {
     // A driver picking a default top, or a diagnostic listing the choices, must be
-    // reproducible across runs (DESIGN_GUIDE.md section 3.8), so the result is name
-    // ordered rather than insertion ordered.
+    // reproducible across runs, so the result is name ordered rather than insertion ordered.
     Design design;
     design.addModule(makeModule("zulu"));
     design.addModule(makeModule("alpha"));

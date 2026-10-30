@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Arch Linux packages of Enzan (DESIGN_GUIDE.md section 11.7). The @...@ fields are filled in from
-# the tarball by packaging/container.sh.
+# Arch Linux packages of Enzan. The @...@ fields are filled in from the tarball by
+# packaging/container.sh.
 #
 # Maintainer: @PACKAGER@
 
@@ -21,8 +21,8 @@ source=("$url/releases/download/v$_upstream/enzan-$_upstream.tar.xz")
 sha256sums=('@SHA256@')
 
 build() {
-  # The tarball carries every source a build would download (section 11.6), and a download now is
-  # a dependency the tarball lacks, so it is an error rather than an attempt.
+  # The tarball carries every source a build would download, and a download now is a dependency
+  # the tarball lacks, so it is an error rather than an attempt.
   cmake -S "enzan-$_upstream" -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=None \
     -DCMAKE_INSTALL_PREFIX=/usr \
@@ -41,7 +41,7 @@ package_enzan() {
   DESTDIR="$pkgdir" cmake --install build --component enzan
   install -Dm644 "enzan-$_upstream/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 -t "$pkgdir/usr/share/doc/$pkgname" "enzan-$_upstream/README.md" \
-    "enzan-$_upstream/docs/third_party.md" "enzan-$_upstream/docs/mixed-language.md"
+    "enzan-$_upstream"/docs/{installing,gui,signal-lists,libraries,mixed-language,cocotb,third_party}.md
 }
 
 package_enzan-gui() {

@@ -201,10 +201,10 @@ std::uint32_t ProcessTranslator::newBlock(std::string label) {
 
 void ProcessTranslator::emit(const eir::Instruction& instruction) {
     // Every instruction is stamped with the statement being translated, which is the whole of
-    // what source stepping and a line breakpoint need (DESIGN_GUIDE.md section 10.4). Doing it
-    // here rather than at each of the hundred call sites is the only way it stays true: a
-    // single emission that forgot would be a line the debugger can never stop on, and nothing
-    // about the simulation would look wrong.
+    // what source stepping and a line breakpoint need. Doing it here rather than at each of
+    // the hundred call sites is the only way it stays true: a single emission that forgot
+    // would be a line the debugger can never stop on, and nothing about the simulation would
+    // look wrong.
     eir::Instruction stamped = instruction;
     stamped.location = currentStatement;
     process.blocks[current].instructions.push_back(stamped);
@@ -836,7 +836,7 @@ bool ProcessTranslator::translateImmediateAssertion(const ast::Statement& statem
     if (assertion.ifFalse != nullptr) {
         if (!translateStatement(*assertion.ifFalse)) return false;
     } else if (!cover) {
-        // With no action of its own, a failing assertion is an `$error` (section 16.3).
+        // With no action of its own, a failing assertion is an `$error` (IEEE 1800 section 16.3).
         eir::SysTaskCall report;
         report.kind = eir::SysTaskKind::Error;
         report.formatIndex = addString(std::string(
@@ -2094,10 +2094,10 @@ ProcessTranslator::Value ProcessTranslator::widenForOffsetArithmetic(const Value
 //
 // Every select and member access is a window of bits: an element of an array, a field of a
 // struct, a bit or a part of a vector. An unpacked aggregate is stored flat, left element and
-// first field highest, as a packed one is (DESIGN_GUIDE.md section 4.3), so one rule places a
-// window whatever it is a window of, and a chain of them — `mem[i].field[3:0]` — composes into
-// one offset. A window in an object is read in place and written with a part store; a window
-// in a value that is not an object, a parameter for instance, is selected from a register.
+// first field highest, as a packed one is, so one rule places a window whatever it is a window
+// of, and a chain of them — `mem[i].field[3:0]` — composes into one offset. A window in an
+// object is read in place and written with a part store; a window in a value that is not an
+// object, a parameter for instance, is selected from a register.
 
 namespace {
 
@@ -2529,8 +2529,8 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
 
     if (refuseDelayedWrite(target)) return false;
 
-    // The bits written, for the driver this process is (section 3.7): exactly the window when
-    // it is constant, and everything it could reach when it moves.
+    // The bits written, for the driver this process is: exactly the window when it is
+    // constant, and everything it could reach when it moves.
     const bool written =
         location.constantLow.has_value()
             ? noteWrite(location.objectIndex, *location.constantLow, location.type.bitWidth())

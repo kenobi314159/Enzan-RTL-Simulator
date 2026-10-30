@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# An installation of this build, moved and made read-only, runs as the build does (DESIGN_GUIDE.md
-# section 11.5). It installs nothing that is not Enzan's: a dependency built in the tree may bring
-# install rules of its own, and those would put a library's headers into every package.
+# An installation of this build, moved and made read-only, runs as the build does. It installs
+# nothing that is not Enzan's: a dependency built in the tree may bring install rules of its own,
+# and those would put a library's headers into every package.
 #
 #   run-install-check.sh <cmake> <build directory> <gui ON|OFF> <bin> <libexec> <vhdl> <include> <data>
 #
@@ -85,8 +85,8 @@ if has systemverilog; then
     run "PASS install sv" --top tb tb.sv
 fi
 
-# The standard libraries are what a VHDL design finds without naming them (4.4), so the design uses
-# one of each library a run reads them from: std, and ieee's 2008 numeric_std.
+# The standard libraries are what a VHDL design finds without naming them, so the design uses one
+# of each library a run reads them from: std, and ieee's 2008 numeric_std.
 if has vhdl; then
     {
         printf 'library ieee;\nuse ieee.numeric_std.all;\nuse std.textio.all;\n'

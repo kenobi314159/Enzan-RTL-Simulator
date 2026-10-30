@@ -1,18 +1,17 @@
 # `src/session` — the simulation pipeline
 
-One object holding the three phases of DESIGN_GUIDE.md section 2.1: analysis,
-elaboration, and the kernel with its waveform files.
+One object holding the three phases: analysis, elaboration, and the kernel with its waveform files.
 
 Allowed dependencies: `enzan::common`, `enzan::eir`, `enzan::elab`,
 `enzan::codegen`, `enzan::runtime`, `enzan::wavedb`, `enzan::pli`, and the frontends.
 
 A loaded VPI application is part of the simulation rather than something that watches it, so
 the session holds it beside the kernel: loaded before analysis, shown each elaboration, and told
-when the simulation ends however that happens (DESIGN_GUIDE.md section 9).
+when the simulation ends however that happens.
 
-It owns a kernel, so the GUI must not link it: a front end that linked the
-simulator would quietly undo the process separation of section 2.2. Only the
-`enzan` executable and `ipc`'s server end link it.
+It owns a kernel, so the GUI must not link it: a front end that linked the simulator would quietly
+undo the separation of the two processes. Only the `enzan` executable and `ipc`'s server end link
+it.
 
 ## What belongs here and what does not
 

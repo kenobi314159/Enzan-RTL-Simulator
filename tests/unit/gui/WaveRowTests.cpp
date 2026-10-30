@@ -2,11 +2,11 @@
 //
 // Tests for what a row of the wave window shows, and for the clipboard.
 //
-// The rule being pinned here is the one in section 10.7 that a row with children shows what its
-// children show, joined together. It looks like a small thing and it is doing three jobs at
-// once: a bus that has had some of its bits deleted, a group of one-bit signals standing in for
-// a vector, and the nesting of those two that gives multi-dimensional arrays. Written as three
-// features it would have been three sets of edge cases; written as one rule it needs one.
+// The rule being pinned here is that a row with children shows what its children show, joined
+// together. It looks like a small thing and it is doing three jobs at once: a bus that has had
+// some of its bits deleted, a group of one-bit signals standing in for a vector, and the
+// nesting of those two that gives multi-dimensional arrays. Written as three features it would
+// have been three sets of edge cases; written as one rule it needs one.
 
 #include "gui/WaveformModel.h"
 
@@ -106,7 +106,7 @@ TEST_F(WaveRowTest, AnUnpackedBusStillShowsItsOwnValue) {
 }
 
 TEST_F(WaveRowTest, RemovingABitNarrowsWhatTheBusShows) {
-    // Section 10.7: the parent shows what is left of it. The counter holds 40 at 400ns —
+    // The parent shows what is left of it. The counter holds 40 at 400ns —
     // 0b00101000 — so dropping bit 3, the set bit, leaves 0b0010000, which is 0x10.
     const int bus = model->addSignal(counter);
     model->unpack(bus);
@@ -264,7 +264,7 @@ TEST_F(WaveRowTest, AVectorOfVectorsReadsAsNestedLists) {
 // ---------------------------------------------------------------------------
 
 TEST_F(WaveRowTest, AGroupHasTheEdgesOfEverythingInIt) {
-    // Section 10.7: a group shows a value on its line, so it has edges to step between. They
+    // A group shows a value on its line, so it has edges to step between. They
     // are its children's put together.
     const int group = model->addGroup(QStringLiteral("both"));
     model->addSignal(clock, group);
@@ -322,9 +322,9 @@ TEST_F(WaveRowTest, TheNearestEdgeIsFoundFromEitherSide) {
 // ---------------------------------------------------------------------------
 
 TEST_F(WaveRowTest, AnUnpackedVectorAcceptsRowsLikeAGroup) {
-    // Section 10.7 calls a multi-bit signal a group whose children happen to have been made
-    // for it. A container that let rows be dragged out but not back in would not be the same
-    // kind of thing at all, and a bit taken out by mistake could never be put back.
+    // A multi-bit signal is a group whose children happen to have been made for it. A container
+    // that let rows be dragged out but not back in would not be the same kind of thing at all, and
+    // a bit taken out by mistake could never be put back.
     const int bus = model->addSignal(counter);
     model->unpack(bus);
 
@@ -900,7 +900,7 @@ TEST_F(WaveWindowTest, PasteGoesAfterTheCurrentRowAtItsLevel) {
 }
 
 TEST_F(WaveWindowTest, TheBitRangeDialogIsGone) {
-    // Section 10.3: a range is reached by unpacking and removing what is not wanted, not by
+    // A range is reached by unpacking and removing what is not wanted, not by
     // typing `high:low` into a box. The entry that did is not there to be found.
     addToWave(QStringLiteral("count"));
     EXPECT_FALSE(triggerWaveAction(QStringLiteral("Extract")));
@@ -1009,7 +1009,7 @@ TEST_F(WaveWindowTest, TheWaveListsKeysActOnlyInTheWaveWindow) {
 TEST_F(WaveWindowTest, TheWaveKeysLeaveTheListsTypingAlone) {
     // NOLINTBEGIN(clang-analyzer-cplusplus.NewDelete)
     // The wave window's own keys carry a modifier or are punctuation, so that a letter typed in
-    // the list still finds a row by its name (section 10.7), and they act only in the Wave tab.
+    // the list still finds a row by its name, and they act only in the Wave tab.
     addToWave(QStringLiteral("clk"));
     addToWave(QStringLiteral("count"));
     ASSERT_EQ(waveModel->rowCount(), 2);

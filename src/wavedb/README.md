@@ -1,20 +1,18 @@
 # `src/wavedb` — the waveform database
 
-Records value changes, and exports them in the formats external viewers understand
-(DESIGN_GUIDE.md section 7).
+Records value changes, and exports them in the formats external viewers understand.
 
 ## Responsibility
 
 - **The shared recording machinery** (`WaveformWriter.h`) — which signals to record, walking the
   hierarchy to declare them, coalescing the changes within a time slot, and attributing those
-  changes to the right timestamp. All of that is the same problem for VCD, for FST and for the
-  live database, and it is where the subtle mistakes live, so there is one copy of the answer.
-  It is also where a VHDL signal's codes become the bits they stand for (DESIGN_GUIDE.md section
-  3.6), so that every format and the database show one value, and where a real is told apart, which
-  VCD and FST each hold as the number in a variable of their own real type.
+  changes to the right timestamp. All of that is the same problem for VCD, for FST and for the live
+  database, and it is where the subtle mistakes live, so there is one copy of the answer. It is also
+  where a VHDL signal's codes become the bits they stand for, so that every format and the database
+  show one value, and where a real is told apart, which VCD and FST each hold as the number in a
+  variable of their own real type.
 - **VCD export** (`VcdWriter.h`) — the universal interchange format. Human-readable, understood by
-  every viewer, and required both for interoperability and for the differential testing of section
-  14.3.
+  every viewer, and required both for interoperability and for differential testing.
 - **FST export** (`FstWriter.h`) — compressed and seekable, and what anyone recording a real design
   will actually use. Produced by GTKWave's own library, vendored in `third_party/fst`.
 - **The live database** (`WaveformDatabase.h`) — the in-memory store the GUI draws from, with
@@ -46,8 +44,8 @@ would force the GUI to wait for a flush. What they do share is the part that has
 
 ## How the database is laid out, and why
 
-Section 7.2 fixes the structure: per-signal append-only chunks of value changes, plus a time
-index for random access. Where the split falls is what the rest of the requirements turn on.
+The structure is per-signal append-only chunks of value changes, plus a time index for random
+access. Where the split falls is what the rest of the requirements turn on.
 
 **The time index is resident; the values spill.** Per signal the database keeps the change
 times and a prefix count of changes to an unknown value in memory always, and the value payload
@@ -55,13 +53,13 @@ in fixed-size chunks that are written to a scratch file and freed once the memor
 exceeded. The index costs twelve bytes per change against sixteen or more for the payload, so
 the budget governs the part that actually grows.
 
-The more important consequence is for rendering. Section 10.3 requires the cost of drawing a
-window to be a function of visible pixels rather than of the value changes in it, and every
-question the view asks per pixel column — how many transitions fall inside it, was anything
-unknown, which change is in effect at its left edge — is answered from the resident index by a
-binary search and a subtraction. A column spanning a million transitions costs exactly what an
-empty one costs, and no value is read at all. Values are fetched only for the columns quiet
-enough to print one, which bounds chunk reloads by the pixel count too.
+The more important consequence is for rendering. The cost of drawing a window must be a function of
+visible pixels rather than of the value changes in it, and every question the view asks per pixel
+column — how many transitions fall inside it, was anything unknown, which change is in effect at its
+left edge — is answered from the resident index by a binary search and a subtraction. A column
+spanning a million transitions costs exactly what an empty one costs, and no value is read at all.
+Values are fetched only for the columns quiet enough to print one, which bounds chunk reloads by the
+pixel count too.
 
 **A scratch file that cannot be created is not fatal.** The chunk stays in memory and leaves the
 eviction order. Losing a waveform silently is worse than exceeding a budget.
@@ -79,16 +77,15 @@ timestamp, because VCD does not define an order there and the two paths legitima
 
 ## Design notes
 
-**Values are read from the state arena at capture time** (section 7.2), not copied when a
-change is reported. That is what makes coalescing free: several changes to one signal within
-a time slot collapse into the value the slot settles on, which is what every other
-simulator records and what stops a diff of two VCD files from drowning in delta-level
-noise. Section 14.3 warns that comparisons must be made at settled time boundaries, and
-this is where that starts.
+**Values are read from the state arena at capture time**, not copied when a change is reported. That
+is what makes coalescing free: several changes to one signal within a time slot collapse into the
+value the slot settles on, which is what every other simulator records and what stops a diff of two
+VCD files from drowning in delta-level noise. A differential comparison has to be made at settled
+time boundaries, and this is where that starts.
 
-**Selective capture is a requirement, not a convenience** (section 7.1). On a 100k-LUT
-design, recording everything exhausts memory within seconds of simulated time. The scope
-filter is a path prefix for now.
+**Selective capture is a requirement, not a convenience.** On a 100k-LUT design, recording
+everything exhausts memory within seconds of simulated time. The scope filter is a list of path
+prefixes, so a reader can select a subtree and a handful of single signals at once.
 
 **Every name a signal has is declared.** A collapsed port gives one slot two hierarchical
 names and both are real, so both are emitted as `$var` declarations sharing one identifier.

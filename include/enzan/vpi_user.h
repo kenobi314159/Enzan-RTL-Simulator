@@ -4,15 +4,14 @@
  * The Verilog Procedural Interface, as IEEE 1364 and IEEE 1800 define it.
  *
  * This is the header a VPI application compiles against to be loaded into Enzan with
- * `--vpi` (DESIGN_GUIDE.md section 9). The constants, structures and routines are the
- * standard's: an application built against another simulator's copy of this header loads
- * into Enzan unchanged, which is the point of a standard interface, and every number here
- * MUST stay equal to the standard's or such an application silently asks for something else.
+ * `--vpi`. The constants, structures and routines are the standard's: an application built
+ * against another simulator's copy of this header loads into Enzan unchanged, which is the
+ * point of a standard interface, and every number here MUST stay equal to the standard's or
+ * such an application silently asks for something else.
  *
- * Everything the standard declares is declared here, including what Enzan does not support,
- * because an application that names a constant must compile whether or not it ever uses
- * it. What is supported is section 9 of the design guide; a routine that is not fails and
- * reports why through `vpi_chk_error`.
+ * Everything the standard declares is declared here, including what Enzan does not support, because
+ * an application that names a constant must compile whether or not it ever uses it. A routine that
+ * is not supported fails and reports why through `vpi_chk_error`.
  *
  * The SystemVerilog additions of IEEE 1800 are in `sv_vpi_user.h`.
  */
@@ -499,7 +498,7 @@ typedef struct t_vpi_delay {
  * ------------------------------------------------------------------------------------------ */
 
 /* One 32-bit slice of a four-state vector, in the same two-plane encoding Enzan stores
- * values in (DESIGN_GUIDE.md section 3.6): aval/bval 00 is 0, 10 is 1, 01 is Z and 11 is X. */
+ * values in: aval/bval 00 is 0, 10 is 1, 01 is Z and 11 is X. */
 #ifndef VPI_VECVAL
 #define VPI_VECVAL
 

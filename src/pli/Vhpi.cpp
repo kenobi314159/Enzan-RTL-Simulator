@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The VHDL Procedural Interface of PliContext (DESIGN_GUIDE.md section 9.7): the design's
-// regions and objects as VHPI names them, their VHDL types from the definitions' tables, their
-// values in VHPI's formats, and VHPI's callbacks on the same dispatch as VPI's.
+// The VHDL Procedural Interface of PliContext: the design's regions and objects as VHPI names
+// them, their VHDL types from the definitions' tables, their values in VHPI's formats, and
+// VHPI's callbacks on the same dispatch as VPI's.
 
 #include "pli/PliContext.h"
 #include "pli/PliModel.h"
@@ -57,10 +57,9 @@ std::string lowerOutsideExtended(std::string_view text) {
     return result;
 }
 
-/// The class of a SystemVerilog instance in VHPI, which shows nothing in it (DESIGN_GUIDE.md
-/// section 18, M7): what cocotb's VHPI header names a private vendor extension, `vhpiVerilog`,
-/// and leaves to VPI. The header Enzan is built with gives the number to `vhpiConcAssertStmtK`, a
-/// class Enzan shows nothing of.
+/// The class of a SystemVerilog instance in VHPI, which shows nothing in it: what cocotb's VHPI
+/// header names a private vendor extension, `vhpiVerilog`, and leaves to VPI. The header Enzan is
+/// built with gives the number to `vhpiConcAssertStmtK`, a class Enzan shows nothing of.
 constexpr std::int32_t VerilogRegion = 1117;
 
 const char* className(std::int32_t kind) {
@@ -326,7 +325,7 @@ std::unique_ptr<PliContext::Object> PliContext::vhpiElement(const Object& parent
     if (flatIndex >= count) return nullptr;
     const eir::VhdlType& element = definitionOf(parent.instance).vhdlTypes[type->element];
 
-    // Row by row from the left, which is the highest bits (section 3.6).
+    // Row by row from the left, which is the highest bits.
     auto indexed = std::make_unique<Object>();
     indexed->kind = Object::Kind::Vhpi;
     indexed->vhpiClass = vhpiIndexedNameK;
@@ -748,7 +747,7 @@ const vhpiCharT* PliContext::vhpiGetStr(vhpiStrPropertyT property, vhpiHandleT o
     };
     switch (property) {
     // A VHDL name is a basic identifier, given in upper case; a tool's and an argument's are not.
-    // A declared object's CaseName is its name as its declaration spells it (section 9.7).
+    // A declared object's CaseName is its name as its declaration spells it.
     case vhpiNameP:
     case vhpiCaseNameP:
         // A SystemVerilog instance is named as SystemVerilog names it, which VPI finds it by.
@@ -805,7 +804,7 @@ vhpiPhysT PliContext::vhpiGetPhys(vhpiPhysPropertyT property, vhpiHandleT /*obje
                                    static_cast<int>(property)));
         return result;
     }
-    // Femtoseconds in one of the kernel's units, which every time is counted in (section 3.1).
+    // Femtoseconds in one of the kernel's units, which every time is counted in.
     const int exponent = kernel != nullptr ? kernel->timeScale().precisionExponent() : -15;
     std::uint64_t femtoseconds = 1;
     for (int power = -15; power < exponent; ++power) femtoseconds *= 10;
@@ -1082,10 +1081,10 @@ int PliContext::vhpiPutValue(vhpiHandleT object, vhpiValueT* value, vhpiPutValue
 
 bool PliContext::vhpiWrite(const Object& object, const eir::BitVector& bits,
                            vhpiPutValueModeT mode) {
-    // The kernel's own writes (section 9.4), as VPI's are. A deposit is an update of this time
-    // step, which VPI's write with no delay is too: applied after the callback that made it
-    // returns, so that what it wakes runs then rather than inside the call. A force or a release
-    // is of the whole signal, which a part is forced within.
+    // The kernel's own writes, as VPI's are. A deposit is an update of this time step, which
+    // VPI's write with no delay is too: applied after the callback that made it returns, so that
+    // what it wakes runs then rather than inside the call. A force or a release is of the whole
+    // signal, which a part is forced within.
     switch (mode) {
     case vhpiDeposit:
     case vhpiDepositPropagate:
@@ -1173,8 +1172,8 @@ vhpiHandleT PliContext::vhpiRegisterCallback(vhpiCbDataT* data, std::int32_t fla
         break;
     }
     // The last delta cycle of a time step is VPI's read-write synchronisation, the end of the
-    // step its read-only one, and the next step its next simulation time (section 9.3); the
-    // repetitive kinds fire at each occurrence until removed.
+    // step its read-only one, and the next step its next simulation time; the repetitive
+    // kinds fire at each occurrence until removed.
     case vhpiCbRepLastKnownDeltaCycle:
     case vhpiCbLastKnownDeltaCycle:
         callback->repeats = data->reason == vhpiCbRepLastKnownDeltaCycle;

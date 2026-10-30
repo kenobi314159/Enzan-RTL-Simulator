@@ -2,7 +2,7 @@
 //
 // VPI as an application sees it: the routines of vpi_user.h, called on a design built by hand
 // and run by a real kernel. The test is the application here, calling the routines exactly as
-// a loaded library would; DESIGN_GUIDE.md section 9 is what is being pinned.
+// a loaded library would.
 
 #include "pli/PliContext.h"
 
@@ -43,8 +43,8 @@ using enzan::test::literal;
 using enzan::test::ProcessBuilder;
 using enzan::test::Simulation;
 
-/// `tb`, with a clock toggling every five units, one object of each kind section 9.2 maps,
-/// a generate block two deep, an object a frontend made up, a child whose port is collapsed
+/// `tb`, with a clock toggling every five units, one object of each kind VPI shows, a
+/// generate block two deep, an object a frontend made up, a child whose port is collapsed
 /// onto `data`, and a second child inside the generate block.
 Design makeDesign() {
     ModuleDefinition child;
@@ -187,7 +187,7 @@ protected:
 };
 
 // ---------------------------------------------------------------------------
-// The object model (section 9.2)
+// The object model
 // ---------------------------------------------------------------------------
 
 TEST_F(Vpi, TheTopLevelIsFoundFromTheRoot) {
@@ -449,7 +449,7 @@ TEST_F(Vpi, ABitCannotBeForcedOnItsOwn) {
 }
 
 // ---------------------------------------------------------------------------
-// Writing (section 9.4)
+// Writing
 // ---------------------------------------------------------------------------
 
 TEST_F(Vpi, ANoDelayWriteLandsNow) {
@@ -490,7 +490,7 @@ TEST_F(Vpi, AForceHoldsAgainstTheDesignUntilReleased) {
 }
 
 // ---------------------------------------------------------------------------
-// Callbacks (section 9.3)
+// Callbacks
 // ---------------------------------------------------------------------------
 
 /// What a test's callbacks write down.

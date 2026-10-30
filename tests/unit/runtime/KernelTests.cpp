@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// End-to-end scheduling tests: EIR is built by hand, verified, elaborated, compiled and
-// run. This is where the semantics of DESIGN_GUIDE.md section 3 are pinned, and section
-// 3 says changes there MUST be accompanied by tests that do exactly this.
+// End-to-end scheduling tests: EIR is built by hand, verified, elaborated, compiled and run.
+// This is where the simulation semantics are pinned, and a change to them MUST come with
+// tests that do exactly this.
 //
 // Building EIR by hand rather than parsing SystemVerilog is deliberate at this point: it
 // tests the kernel without depending on the frontend, so a scheduling bug and a frontend
@@ -100,7 +100,7 @@ Design designOf(ModuleDefinition definition) {
 // ---------------------------------------------------------------------------
 
 TEST(Kernel, FourStateObjectsStartAsXAndTwoStateOnesAsZero) {
-    // Section 3.9. A four-state object that defaulted to zero would hide exactly the bugs
+    // A four-state object that defaulted to zero would hide exactly the bugs
     // X exists to reveal.
     ModuleDefinition definition =
         makeTop({}, {Object{.name = "fourstate", .type = Type::bits(4, false, true)},
@@ -322,8 +322,8 @@ TEST(Kernel, RunStopsAtATimeLimitAndResumes) {
 
 TEST(Kernel, AZeroDelayRunsAfterEverythingAlreadyActive) {
     // `#0` resumes in this timestamp but after the Active region drains, which is exactly
-    // what the Inactive region is for (section 3.3). The second process writes last, so
-    // its value is the one that survives.
+    // what the Inactive region is for. The second process writes last, so its value is
+    // the one that survives.
     ProcessBuilder first(ProcessKind::Initial, "zero-delay");
     const std::uint32_t firstDelay = first.reg(Type::bits(32, false, false));
     const std::uint32_t firstValue = first.reg(Type::bits(8, false, true));
@@ -478,8 +478,8 @@ TEST(Kernel, NegedgeFiresOnATransitionTowardsZero) {
 }
 
 TEST(Kernel, AWriteOfTheSameValueWakesNothing) {
-    // Value-change filtering before scheduling. Section 6.2 calls this one of the largest
-    // single performance wins available and requires it from the start.
+    // Value-change filtering before scheduling, one of the largest single performance wins
+    // available.
     Simulation simulation(makeClockedDesign(EdgeKind::AnyChange, "1'b1", "1'b1"), "tb");
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
 
@@ -728,7 +728,7 @@ Design makeLineWriter() {
 
 TEST(Kernel, TextioLinesLiveInTheHeapAndAreWrittenWhole) {
     // The first write allocates a line, the second appends to it, and writeline prints it and
-    // leaves a new empty one, the handle the first freed (DESIGN_GUIDE.md section 4.3).
+    // leaves a new empty one, the handle the first freed.
     Simulation simulation(makeLineWriter(), "tb");
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     simulation.run();
@@ -775,7 +775,7 @@ TEST(Kernel, FatalReportsAndStopsWithAFailureStatus) {
 
 TEST(Kernel, SeverityTasksReportThroughTheDiagnosticEngine) {
     // A self-checking testbench's `$error` must reach the same diagnostic engine as a
-    // compile error, so that one transcript shows everything (section 10.6).
+    // compile error, so that one transcript shows everything.
     ProcessBuilder builder(ProcessKind::Initial, "checker");
     const std::uint32_t format = builder.string("check failed");
     SysTaskCall call;
@@ -1192,9 +1192,8 @@ TEST(Kernel, FinalBlocksRunWhenTheSimulationEnds) {
 // ---------------------------------------------------------------------------
 
 TEST(Kernel, ADeltaLoopIsReportedRatherThanHanging) {
-    // Section 3.2: the limit must exist and the diagnostic must name what is still
-    // active, because a delta loop with no diagnostic is one of the most frustrating
-    // failures a user can hit.
+    // The limit must exist and the diagnostic must name what is still active, because a delta loop
+    // with no diagnostic is one of the most frustrating failures a user can hit.
     //
     // The loop here is a bare `always` with no time control, which spins in the Active
     // region. Counting each immediate re-arm as a delta is what lets the same limit catch
@@ -1277,8 +1276,8 @@ public:
 };
 
 TEST(Kernel, EveryRegisteredListenerIsNotified) {
-    // A batch run writes a VCD and an FST from one simulation, and section 2.2 requires the GUI to
-    // attach while a run is in progress. Both need more than one listener.
+    // A batch run writes a VCD and an FST from one simulation, and the GUI attaches while a run is
+    // in progress. Both need more than one listener.
     ProcessBuilder builder(ProcessKind::Initial, "writer");
     const std::uint32_t delay = builder.reg(Type::bits(32, false, false));
     const std::uint32_t value = builder.reg(Type::bits(8, false, true));
@@ -1347,12 +1346,12 @@ TEST(Kernel, RemovingAListenerThatWasNeverAddedIsHarmless) {
 // ---------------------------------------------------------------------------
 
 TEST(Kernel, ACollapsedPortKeepsTheDeclaredInitialValue) {
-    // Elaboration collapses a connected port onto the parent's slot, so one slot is reached
-    // through two objects — and a child's port declaration carries no initialiser. Initialising
-    // per object rather than per slot let the child's default overwrite the parent's declared
-    // value with X, depending only on which instance came last. The design then simulated and
-    // produced a plausible wrong answer, which is the failure mode section 1.2 ranks above all
-    // others, and it is exactly what happened on the first hierarchical design that was tried.
+    // Elaboration collapses a connected port onto the parent's slot, so one slot is reached through
+    // two objects — and a child's port declaration carries no initialiser. Initialising per object
+    // rather than per slot let the child's default overwrite the parent's declared value with X,
+    // depending only on which instance came last. The design then simulated and produced a
+    // plausible wrong answer, the worst failure there is, and it is exactly what happened on the
+    // first hierarchical design that was tried.
     ModuleDefinition child;
     child.name = "child";
     child.sourceName = "child";
@@ -1606,10 +1605,10 @@ TEST(Kernel, ClearingTheInterruptLetsTheRunFinish) {
 }
 
 TEST(Kernel, ResumingAfterAnInterruptMatchesAnUninterruptedRun) {
-    // The invariant the interrupt exists to preserve. Section 3.8 requires results to be
-    // bit-identical across runs of the same build on the same inputs, and a GUI that could
-    // change a simulation by pausing it would break that in the least debuggable way
-    // imaginable: the waveform would depend on when the user clicked.
+    // The invariant the interrupt exists to preserve. Results are bit-identical across runs of the
+    // same build on the same inputs, and a GUI that could change a simulation by pausing it would
+    // break that in the least debuggable way imaginable: the waveform would depend on when the user
+    // clicked.
     Simulation straight(freeRunningClock(), "tb");
     ASSERT_TRUE(straight.ready()) << straight.messages().front();
     EXPECT_EQ(straight.run(100), RunStatus::TimeLimitReached);
@@ -1642,7 +1641,7 @@ TEST(Kernel, ResumingAfterAnInterruptMatchesAnUninterruptedRun) {
 }
 
 // ---------------------------------------------------------------------------
-// examine, deposit, force and release (section 10.4)
+// examine, deposit, force and release
 // ---------------------------------------------------------------------------
 
 /// The clock-generator design again, so that a force has something to fight with.
@@ -1873,11 +1872,11 @@ TEST(Kernel, ReinitialisingAfterASuspensionDoesNotResumeTheOldRun) {
 }
 
 // ---------------------------------------------------------------------------
-// PLI hooks (section 9.3)
+// PLI hooks
 // ---------------------------------------------------------------------------
 
 /// A PLI application reduced to what the kernel sees of one: queues of things to run at the
-/// points section 9.3 names, plus a log of when each point was reached.
+/// points the kernel's hooks name, plus a log of when each point was reached.
 class ScriptedHooks final : public PliHooks {
 public:
     using Action = std::function<void()>;
@@ -2205,7 +2204,7 @@ TEST(Kernel, AWindowAtAnUnknownOffsetIsX) {
 }
 
 // ---------------------------------------------------------------------------
-// Resolution (DESIGN_GUIDE.md section 3.7)
+// Resolution
 // ---------------------------------------------------------------------------
 
 /// A continuous assignment of all of one one-bit object to another.
@@ -2231,7 +2230,7 @@ Simulation twoDrivers(std::string_view a, std::string_view b) {
 
 TEST(Kernel, ADrivenNetIsXUntilItsDriverRunsAndAnUndrivenOneIsItsDefault) {
     // Before anything runs: a driven bit holds no value the design gave it, so X, as a variable
-    // would; `z` would claim nothing drives it (DESIGN_GUIDE.md section 3.7).
+    // would; `z` would claim nothing drives it.
     const Simulation driven = twoDrivers("1'b1", "1'bz");
     ASSERT_TRUE(driven.ready()) << driven.messages().front();
     EXPECT_EQ(driven.value("/tb/n"), "x");
@@ -2278,7 +2277,7 @@ TEST(Kernel, ADepositOnAResolvedNetHoldsOnlyUntilADriverChanges) {
 }
 
 // ---------------------------------------------------------------------------
-// Calls of subprograms (DESIGN_GUIDE.md section 4.1)
+// Calls of subprograms
 // ---------------------------------------------------------------------------
 
 /// Every message a simulation reported, one per line, for a failed assertion to show.
@@ -2494,9 +2493,8 @@ TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
 }
 
 TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {
-    // What crosses a language boundary (DESIGN_GUIDE.md section 3.5): std_ulogic's '1', '0', 'H'
-    // and 'Z' as the bits 1 0 1 z, and the bits 1 0 x z as std_ulogic's '1', '0', 'X' and 'Z' and
-    // as bits' 1, 0, 0 and 0.
+    // What crosses a language boundary: std_ulogic's '1', '0', 'H' and 'Z' as the bits 1 0 1 z,
+    // and the bits 1 0 x z as std_ulogic's '1', '0', 'X' and 'Z' and as bits' 1, 0, 0 and 0.
     ProcessBuilder builder(ProcessKind::Initial, "boundary");
     const Type codes = Type::bits(32, false, false);
     const Type bits = Type::bits(4, false, true);

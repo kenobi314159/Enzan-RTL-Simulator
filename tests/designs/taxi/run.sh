@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Runs the AXI-stream components of fpganinja's taxi through their own cocotb testbenches under
-# Enzan (DESIGN_GUIDE.md section 14.5; the second exit design of M5).
+# Enzan.
 #
 #   run.sh <enzan> <work-directory>
 #

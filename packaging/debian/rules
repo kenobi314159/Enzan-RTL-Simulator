@@ -1,14 +1,14 @@
 #!/usr/bin/make -f
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Debian and Ubuntu packages of Enzan (DESIGN_GUIDE.md section 11.7).
+# Debian and Ubuntu packages of Enzan.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 %:
 	dh $@ --buildsystem=cmake+ninja
 
-# The tarball carries every source a build would download (section 11.6), and a download now is a
-# dependency the tarball lacks, so it is an error rather than an attempt.
+# The tarball carries every source a build would download, and a download now is a dependency the
+# tarball lacks, so it is an error rather than an attempt.
 override_dh_auto_configure:
 	dh_auto_configure -- -DENZAN_ALLOW_FETCH=OFF

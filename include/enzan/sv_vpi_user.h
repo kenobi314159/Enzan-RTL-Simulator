@@ -6,9 +6,9 @@
  * The object types, relationships and properties an application uses to navigate a
  * SystemVerilog design, with the standard's numbers (see `vpi_user.h` for why those numbers
  * are not Enzan's to choose). The assertion and coverage interfaces of IEEE 1800 chapter 39
- * and 40 are not declared: Enzan has no assertions or coverage to report on (DESIGN_GUIDE.md
- * section 18, M9), and declaring routines nothing implements would only move the failure from
- * an application's compiler to its run.
+ * and 40 are not declared: Enzan has no assertions or coverage to report on, and declaring
+ * routines nothing implements would only move the failure from an application's compiler to
+ * its run.
  */
 
 #ifndef ENZAN_SV_VPI_USER_H

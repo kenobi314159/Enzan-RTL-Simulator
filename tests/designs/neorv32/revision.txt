@@ -1,3 +1,2 @@
-# The NEORV32 revision the design regression runs against (DESIGN_GUIDE.md section 14.5).
-# The one place it is named.
+# The NEORV32 revision the design regression runs against. The one place it is named.
 84743cdbeefccb531f836d66933c8478f1d9bf71

@@ -19,8 +19,8 @@ namespace enzan::frontend::vhdl {
 
 namespace {
 
-/// A real's code is its IEEE 754 double's bits (DESIGN_GUIDE.md section 3.6), which is how the
-/// Folder carries one where it carries every other scalar.
+/// A real's code is its IEEE 754 double's bits, which is how the Folder carries one where it
+/// carries every other scalar.
 std::int64_t realCode(double value) {
     return std::bit_cast<std::int64_t>(value);
 }
@@ -123,7 +123,7 @@ std::int64_t modulo(std::int64_t left, std::int64_t right) {
 bool ieeeWarningsReported = true;
 
 /// The value of a deferred constant whose full declaration computes it with one of NVC's foreign
-/// functions, which Enzan supplies (DESIGN_GUIDE.md section 5.2), or nothing for any other.
+/// functions, which Enzan supplies, or nothing for any other.
 std::optional<std::int64_t> foreignConstant(tree_t declaration) {
     tree_t unit = tree_container(declaration);
     if (tree_kind(unit) != T_PACKAGE) return std::nullopt;
@@ -1097,7 +1097,7 @@ std::optional<std::int64_t> Folder::element(tree_t expression) const {
     const std::int64_t position = *index;
     if (position < bounds.low() || position > bounds.high()) return std::nullopt;
 
-    // The left element is in the highest bits (DESIGN_GUIDE.md section 3.6).
+    // The left element is in the highest bits.
     const auto length = static_cast<std::uint64_t>(bounds.length());
     if (length == 0 || bits->width() % length != 0) return std::nullopt;
     const std::uint64_t elementBits = bits->width() / length;

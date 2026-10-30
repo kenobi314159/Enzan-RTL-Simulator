@@ -28,7 +28,7 @@ enum class ThemeColor : std::uint8_t {
 /// Returns the theme-script key for `color`, for example `"wave.trace"`.
 [[nodiscard]] const char* themeKey(ThemeColor color) noexcept;
 
-/// How many backgrounds a wave row may be highlighted with (section 10.7).
+/// How many backgrounds a wave row may be highlighted with.
 constexpr int HighlightSlots = 5;
 
 /// Returns the colour of highlight slot `slot`, which must be 1 through `HighlightSlots`.
@@ -46,7 +46,7 @@ enum class ThemeFont : std::uint8_t {
     Wave,
     /// The transcript.
     Transcript,
-    /// The Source window (DESIGN_GUIDE.md section 10.2).
+    /// The Source window.
     Source,
     Count,
 };
@@ -59,9 +59,8 @@ enum class ThemeFont : std::uint8_t {
 /// loaded before any user theme. A default written in C++ would be exactly the literal the rule
 /// forbids, and it would let a half-applied theme go unnoticed.
 ///
-/// Tcl rather than a settings format of its own, because section 10.5 commits to Tcl as *the*
-/// configuration language with no second format anywhere in the tool. The script gets two
-/// commands:
+/// Tcl rather than a settings format of its own, because Tcl is *the* configuration language, with
+/// no second format anywhere in the tool. The script gets two commands:
 ///
 /// ```tcl
 /// theme wave.background #000000

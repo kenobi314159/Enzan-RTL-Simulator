@@ -2,9 +2,8 @@
 --
 -- secworks' tb_aes_core.v in VHDL, around the core's own Verilog: the NIST vectors driven and the
 -- same lines printed, step for step, so that its transcript is the Verilog testbench's under Icarus
--- Verilog (DESIGN_GUIDE.md section 18, M7). What that testbench reads inside the core through
--- hierarchical names, the key memory and the encipher state, VHDL cannot reach, and those lines
--- are left out on both sides (run.sh).
+-- Verilog. What that testbench reads inside the core through hierarchical names, the key memory and
+-- the encipher state, VHDL cannot reach, and those lines are left out on both sides (run.sh).
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;

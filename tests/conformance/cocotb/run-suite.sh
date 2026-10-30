@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs cocotb's own regression suite against Enzan (DESIGN_GUIDE.md section 14.6).
+# Runs cocotb's own regression suite against Enzan.
 #
 #   run-suite.sh <enzan> <work-directory> [verilog|vhdl]
 #
 # The last is the toplevel's language, TOPLEVEL_LANG, `verilog` unless given: most cases have a
-# design in each, and cocotb reaches a VHDL one through VHPI (section 9.7), so the suite runs once
-# for each language, each with its own pass list, passing.txt and passing-vhdl.txt: a case
-# passing in one says nothing about the other.
+# design in each, and cocotb reaches a VHDL one through VHPI, so the suite runs once for each
+# language, each with its own pass list, passing.txt and passing-vhdl.txt: a case passing in one
+# says nothing about the other.
 #
 # The cocotb used is the one installed for $COCOTB_PYTHON, or for python3; `pip install -r
 # requirements.txt` beside this script installs the pinned one. Its source is fetched at the

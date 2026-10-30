@@ -18,8 +18,7 @@ class Design;
 namespace enzan::elab {
 
 /// Links each instance of `design` naming one of `requests`' placeholders as its definition to the
-/// definition `answers` names for that request, in the same order (`eir::UnitRequest`,
-/// DESIGN_GUIDE.md section 18, M7).
+/// definition `answers` names for that request, in the same order (`eir::UnitRequest`).
 ///
 /// A connection's port index, an index into the request's ports, becomes the index of the
 /// definition's port of that name: the one of exactly that name, or else the one of it in another

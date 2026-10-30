@@ -12,8 +12,7 @@ namespace enzan {
 /// A default-constructed BufferId is invalid, which lets an absent buffer be
 /// represented without an optional. Identifiers are assigned in the order
 /// buffers are added, never derived from a pointer or a hash, so that anything
-/// ordered by BufferId is ordered reproducibly — diagnostic output included
-/// (DESIGN_GUIDE.md section 3.8).
+/// ordered by BufferId is ordered reproducibly — diagnostic output included.
 class BufferId {
 public:
     constexpr BufferId() noexcept = default;

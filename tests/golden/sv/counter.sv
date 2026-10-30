@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // A parameterised synchronous counter with an asynchronous reset, driven by a self-checking
-// testbench. Self-checking is strongly preferred over golden output files (DESIGN_GUIDE.md
-// section 14.2): a testbench that calls $fatal on mismatch cannot drift out of date.
+// testbench. Self-checking is strongly preferred over golden output files: a testbench that
+// calls $fatal on mismatch cannot drift out of date.
 
 module counter #(
     parameter int WIDTH = 8

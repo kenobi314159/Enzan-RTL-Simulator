@@ -173,9 +173,9 @@ private:
             return;
         }
 
-        // The core invariant of section 4.2. A process that touches an object it did
-        // not declare is not a pure function over a known slice of the arena, and
-        // every optimisation that depends on read/write sets would then be unsound.
+        // The core invariant. A process that touches an object it did not declare is
+        // not a pure function over a known slice of the arena, and every optimisation
+        // that depends on read/write sets would then be unsound.
         const bool declared = isWrite ? writesObject(body.writeSet, operand.index())
                                       : std::ranges::binary_search(body.readSet, operand.index());
         if (!declared) {
@@ -211,9 +211,9 @@ private:
     /// extent lies inside its object.
     ///
     /// The form is checked rather than restored, because elaboration finds overlapping drivers
-    /// by comparing extents (section 3.7): two touching extents of one process would be read as
-    /// two drivers of that process, and an extent past the end of its object would claim bits
-    /// that do not exist.
+    /// by comparing extents: two touching extents of one process would be read as two drivers
+    /// of that process, and an extent past the end of its object would claim bits that do not
+    /// exist.
     void checkWriteSet(const ModuleDefinition& definition, const Body& body) {
         const WriteExtent* previous = nullptr;
         for (const WriteExtent& extent : body.writeSet) {
@@ -643,10 +643,10 @@ private:
 
     void checkOpcodeSpecifics(const ModuleDefinition& definition, const Body& body,
                               const Instruction& instruction, const std::string& where) {
-        // A subprogram runs to its return on the kernel's one call stack (section 4.1), which a
-        // suspension would leave holding its frame; and its stores go straight to objects no
-        // driver resolves, which a non-blocking or delayed write, scheduled through the drivers
-        // of a process, is not.
+        // A subprogram runs to its return on the kernel's one call stack, which a suspension
+        // would leave holding its frame; and its stores go straight to objects no driver
+        // resolves, which a non-blocking or delayed write, scheduled through the drivers of a
+        // process, is not.
         if (currentProcess == nullptr) {
             if (suspends(instruction.opcode)) {
                 reportBody(definition, body,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// std.textio and VHDL's files, run natively by the runtime (DESIGN_GUIDE.md section 4.3).
+// std.textio and VHDL's files, run natively by the runtime.
 //
 // NVC's textio body grows a line through access values to strings of run-time length, which EIR's
 // registers of fixed width cannot hold. So its subprograms are not translated: a line is a handle

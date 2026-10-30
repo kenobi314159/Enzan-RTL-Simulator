@@ -17,9 +17,9 @@ namespace enzan::gui {
 /// a point, panning without drifting, and clamping a 64-bit time range to a few hundred pixels
 /// are all easy to get subtly wrong and impossible to notice by eye.
 ///
-/// Time is a 64-bit integer (section 3.1) and pixels are not, so the conversion is the one
-/// place a floating-point value is allowed to appear: it converts *for display*, and nothing
-/// here feeds back into the simulation.
+/// Time is a 64-bit integer and pixels are not, so the conversion is the one place a
+/// floating-point value is allowed to appear: it converts *for display*, and nothing here
+/// feeds back into the simulation.
 class TimeAxis {
 public:
     /// The narrowest span the axis will show, in time units.

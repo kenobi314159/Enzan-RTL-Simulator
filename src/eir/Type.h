@@ -12,11 +12,10 @@ namespace enzan::eir {
 
 /// The type of an EIR value.
 ///
-/// A small value type rather than an interned pointer. Types in the M1 subset are
-/// fully described by a kind, a width and two flags, so interning would add a
-/// store, a lifetime and an indirection to save four bytes. When aggregate types
-/// arrive (M5) this becomes a handle into a type store, and the accessors here are
-/// the interface that change has to preserve.
+/// A small value type rather than an interned pointer. A type is fully described by
+/// a kind, a width and two flags, so interning would add a store, a lifetime and an
+/// indirection to save four bytes. An aggregate is stored flat, as the bits of its
+/// elements, and its dimensions are kept beside the object rather than here.
 class Type {
 public:
     enum class Kind : std::uint8_t {
@@ -27,12 +26,12 @@ public:
         /// An IEEE 754 double. `real` and `shortreal` both map here; Enzan does not
         /// model the reduced precision of `shortreal`, and says so in the manual.
         ///
-        /// Held as 64 Bits are, in both planes with the second zero, so that a move, a
-        /// store and change detection have the one value path of section 17.4 for it too;
-        /// only arithmetic, comparison and Convert read the bits as the double.
+        /// Held as 64 Bits are, in both planes with the second zero, so that a move, a store and
+        /// change detection have the one value path of every other value; only arithmetic,
+        /// comparison and Convert read the bits as the double.
         Real,
         /// A character string. Held in the constant pool rather than the state
-        /// arena in the M1 subset, which is enough for `$display` format strings.
+        /// arena, which is enough for `$display` format strings.
         String,
     };
 
@@ -108,10 +107,10 @@ public:
     ///
     /// A Bits object always carries both bit planes, even when its language type is
     /// two-state. Uniform storage means one value path rather than two, which is the
-    /// standing four-state-shape invariant (DESIGN_GUIDE.md section 17.4); the
-    /// second plane of a two-state object stays zero, so the two-state fast path
-    /// triggers on it for free. Packing two-state objects into one plane is a
-    /// possible later optimisation and is not worth the second code path now.
+    /// standing four-state-shape invariant; the second plane of a two-state object
+    /// stays zero, so the two-state fast path triggers on it for free. Packing
+    /// two-state objects into one plane is a possible later optimisation and is not
+    /// worth the second code path now.
     [[nodiscard]] constexpr std::uint32_t storageWords() const noexcept {
         switch (typeKind) {
         case Kind::Void:

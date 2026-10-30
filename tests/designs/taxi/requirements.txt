@@ -1,5 +1,5 @@
 # What taxi's cocotb testbenches import beside cocotb itself, whose version is named once, in
-# the cocotb conformance suite's requirements (DESIGN_GUIDE.md section 14.6).
+# the cocotb conformance suite's requirements.
 -r ../../conformance/cocotb/requirements.txt
 cocotbext-axi==0.1.28
 cocotb-test==0.3.0

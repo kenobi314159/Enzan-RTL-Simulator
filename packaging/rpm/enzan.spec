@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Fedora and RHEL 9 packages of Enzan (DESIGN_GUIDE.md section 11.7). The @...@ fields are filled
-# in from the tarball by packaging/container.sh.
+# Fedora and RHEL 9 packages of Enzan. The @...@ fields are filled in from the tarball by
+# packaging/container.sh.
 
 %global upstream_version @UPSTREAM_VERSION@
 
@@ -17,8 +17,8 @@ License:        GPL-3.0-or-later AND Apache-2.0 AND LGPL-3.0-or-later AND MIT AN
 URL:            https://github.com/kenobi314159/Enzan-RTL-Simulator
 Source0:        %{url}/releases/download/v%{upstream_version}/enzan-%{upstream_version}.tar.xz
 
-# RHEL 9's GCC is 11, and Enzan needs 13 (DESIGN_GUIDE.md section 11.1). RHEL's build flags load
-# the annobin plugin, which the toolset's compiler has only from a package of its own.
+# RHEL 9's GCC is 11, and Enzan needs 13. RHEL's build flags load the annobin plugin, which the
+# toolset's compiler has only from a package of its own.
 %if 0%{?rhel} == 9
 BuildRequires:  gcc-toolset-13-gcc
 BuildRequires:  gcc-toolset-13-gcc-c++
@@ -36,15 +36,15 @@ BuildRequires:  qt6-qtbase-devel
 BuildRequires:  tcl-devel
 BuildRequires:  gtest-devel
 
-# What the tarball carries, built into the binaries (DESIGN_GUIDE.md section 11.6).
+# What the tarball carries, built into the binaries.
 Provides:       bundled(slang) = 11.0
 Provides:       bundled(fmt) = 12.1.0
 Provides:       bundled(nvc) = 1.23.0
 Provides:       bundled(fstapi)
 Provides:       bundled(lz4)
 Provides:       bundled(fastlz)
-# The front end is suggested, not recommended, since dnf installs what is recommended (section
-# 11.7): a machine without a display installs no GUI toolkit.
+# The front end is suggested, not recommended, since dnf installs what is recommended: a
+# machine without a display installs no GUI toolkit.
 Suggests:       %{name}-gui
 
 %description
@@ -74,8 +74,8 @@ view, design structure and transcript.
 %if 0%{?rhel} == 9
 . /opt/rh/gcc-toolset-13/enable
 %endif
-# The tarball carries every source a build would download (section 11.6), and a download now is
-# a dependency the tarball lacks, so it is an error rather than an attempt.
+# The tarball carries every source a build would download, and a download now is a dependency
+# the tarball lacks, so it is an error rather than an attempt.
 %cmake -G Ninja -DENZAN_ALLOW_FETCH=OFF -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 %cmake_build
 
@@ -87,7 +87,8 @@ view, design structure and transcript.
 
 %files
 %license LICENSE
-%doc README.md docs/third_party.md docs/mixed-language.md
+%doc README.md docs/installing.md docs/gui.md docs/signal-lists.md docs/libraries.md
+%doc docs/mixed-language.md docs/cocotb.md docs/third_party.md
 %{_bindir}/enzan
 %{_prefix}/lib/enzan/
 %{_includedir}/enzan/

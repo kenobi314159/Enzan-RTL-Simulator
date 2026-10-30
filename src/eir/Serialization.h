@@ -24,10 +24,10 @@ namespace enzan::eir {
 /// or removed. It also covers a change to how the frontend *translates* source into EIR: a
 /// stored unit produced by an older translator is as wrong as one whose fields moved, and it
 /// is far harder to notice because it decodes cleanly and simulates to a different answer.
-/// Section 1.2 ranks that above everything, and a version bump costs one re-analysis.
+/// A version bump costs one re-analysis.
 ///
-/// A mismatch makes the reader refuse the bytes, which makes the library re-analyse (section
-/// 4.4). It never crashes and never half-decodes.
+/// A mismatch makes the reader refuse the bytes, which makes the library re-analyse
+/// (DESIGN_GUIDE.md section 4.4). It never crashes and never half-decodes.
 constexpr std::uint32_t SerializationFormatVersion = 60;
 
 /// Encodes design units into a self-describing byte string.
@@ -52,8 +52,8 @@ constexpr std::uint32_t SerializationFormatVersion = 60;
 ///
 /// Returns false, having written nothing, when the bytes are not a library of this format
 /// version, are truncated, or fail their checksum. Every one of those means "analyse it
-/// again" and none of them means "carry on with what was decoded so far" — section 4.4
-/// requires a mismatch to cause clean re-analysis rather than silent misbehaviour.
+/// again" and none of them means "carry on with what was decoded so far": a mismatch causes
+/// clean re-analysis rather than silent misbehaviour.
 [[nodiscard]] bool decodeModules(std::string_view bytes,
                                  const std::function<BufferId(std::string_view)>& resolveBuffer,
                                  std::vector<ModuleDefinition>& modules);
@@ -61,9 +61,9 @@ constexpr std::uint32_t SerializationFormatVersion = 60;
 /// Encodes what `definition` is, leaving out where it came from.
 ///
 /// Two copies of one unit agree on this byte for byte however each reached the caller: one a
-/// session analysed, with its source locations, and one an input library decoded, without them
-/// (section 8.2). Anything else that differs — a width, a statement, a name — makes the bytes
-/// differ, so equal bytes are the same unit and not merely the same name.
+/// session analysed, with its source locations, and one an input library decoded, without
+/// them. Anything else that differs — a width, a statement, a name — makes the bytes differ,
+/// so equal bytes are the same unit and not merely the same name.
 ///
 /// The locations are left out by the route a library read takes: the unit is encoded, decoded
 /// without resolving a buffer, and encoded again, so nothing has to list where a unit keeps a

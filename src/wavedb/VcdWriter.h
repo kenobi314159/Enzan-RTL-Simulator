@@ -14,11 +14,9 @@ namespace enzan::wavedb {
 /// Writes value changes as a VCD stream.
 ///
 /// VCD is the universal interchange format: human-readable, understood by every viewer, and
-/// required both for interoperability and for the differential testing of DESIGN_GUIDE.md section
-/// 14.3. Section 7.3 makes it available from M1 precisely because at M1 the external viewer *is*
-/// the GUI.
+/// required both for interoperability and for differential testing.
 ///
-/// Compared with FST it is large and slow to read, which is why section 7.3 lists both: VCD for
+/// Compared with FST it is large and slow to read, which is why both are written: VCD for
 /// interchange and diffing, FST for anything big enough to care.
 ///
 /// Everything that is not the format itself — selecting signals, walking the hierarchy, coalescing

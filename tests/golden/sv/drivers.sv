@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Drivers of disjoint bits of one signal, which DESIGN_GUIDE.md section 3.7 requires to be
-// accepted rather than reported as multiple driving.
+// Drivers of disjoint bits of one signal, which are accepted rather than reported as multiple
+// driving: overlap, not sharing a signal, is what makes a signal multiply driven.
 //
 // The case that forces it is ordinary RTL: a parameterised number of instances whose outputs
 // are bits, and slices, of one array. Every instance drives its own bits and no other, so none

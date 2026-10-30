@@ -95,7 +95,7 @@
     {
       "name": "clang-sanitize",
       "displayName": "Clang ASan+UBSan",
-      "description": "The sanitizer configuration CI runs over the unit and golden suites (DESIGN_GUIDE.md section 11.4). RelWithDebInfo rather than Debug so the suites still finish in reasonable time while keeping line numbers in sanitizer reports.",
+      "description": "The sanitizer configuration CI runs over the unit and golden suites. RelWithDebInfo rather than Debug so the suites still finish in reasonable time while keeping line numbers in sanitizer reports.",
       "inherits": "clang",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",

@@ -101,7 +101,7 @@ public:
     [[nodiscard]] virtual const slang::ast::Symbol& evaluationScope() const = 0;
 
     /// The run's time unit, as a power of ten of a second, which every delay in the design is
-    /// converted to count (DESIGN_GUIDE.md section 3.1).
+    /// converted to count.
     [[nodiscard]] virtual std::int8_t runTimeUnit() const = 0;
 
     /// Reports that a delay its scope states is no whole number of the run's unit and is rounded
@@ -118,8 +118,8 @@ public:
 ///
 /// A construct the translator does not handle is reported and the whole process is
 /// abandoned. Emitting a partially translated body would produce a design that simulates
-/// and gives the wrong answer, which DESIGN_GUIDE.md section 1.2 ranks as the worst
-/// possible outcome; refusing to elaborate is the safe failure.
+/// and gives the wrong answer, which is the worst possible outcome; refusing to elaborate
+/// is the safe failure.
 class ProcessTranslator {
 public:
     ProcessTranslator(ModuleContext& owner, eir::ProcessKind kind, std::string name,
@@ -219,10 +219,9 @@ private:
     /// width.
     ///
     /// A driver's range is fixed at elaboration, so a variable select drives every bit it
-    /// could reach (DESIGN_GUIDE.md section 3.7). What it could reach is bounded by the
-    /// index's type: a two-bit index into a byte reaches four positions, not eight. An index
-    /// of 32 bits or more reaches anything, since no object is wider than a 32-bit count of
-    /// bits.
+    /// could reach. What it could reach is bounded by the index's type: a two-bit index into
+    /// a byte reaches four positions, not eight. An index of 32 bits or more reaches
+    /// anything, since no object is wider than a 32-bit count of bits.
     ///
     /// `downward` is the `-:` form, whose low bit is `width - 1` below its base.
     [[nodiscard]] static std::pair<std::int64_t, std::int64_t>
@@ -341,8 +340,8 @@ private:
     ///
     /// Inlined rather than called: the body becomes part of the process that calls it, so a
     /// task's delays suspend that process as any of its own statements would, its read and
-    /// write sets are exactly what the call touches (DESIGN_GUIDE.md section 4.2), and nothing
-    /// at run time keeps a call stack. A recursive call is refused, as is a `ref` argument.
+    /// write sets are exactly what the call touches, and nothing at run time keeps a call
+    /// stack. A recursive call is refused, as is a `ref` argument.
     std::optional<Value> inlineCall(const slang::ast::CallExpression& call,
                                     const slang::ast::Expression& expression);
 
@@ -485,8 +484,7 @@ private:
     /// The registers the locals of the subroutines being inlined are bound to.
     ///
     /// Keyed on slang's symbols, which is sound here and only here: the map lives for one
-    /// translation of one body and is never shared between instances (DESIGN_GUIDE.md section
-    /// 18, M3.1).
+    /// translation of one body and is never shared between instances.
     std::map<const slang::ast::ValueSymbol*, Value> locals;
 
     ModuleContext* module;

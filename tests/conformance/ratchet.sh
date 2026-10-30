@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The ratchet a conformance suite's pass list is held to (DESIGN_GUIDE.md sections 14.4 and 14.6).
+# The ratchet a conformance suite's pass list is held to.
 #
 #   ratchet.sh <passing-list> <passed>
 #

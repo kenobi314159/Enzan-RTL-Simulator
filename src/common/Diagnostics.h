@@ -170,7 +170,7 @@ private:
 ///
 /// Every component reports through one engine so that output is uniform
 /// regardless of which frontend or phase produced it, including diagnostics
-/// translated in from slang and NVC (DESIGN_GUIDE.md section 10.6).
+/// translated in from slang and NVC.
 ///
 /// The engine formats the message, applies any severity remapping, maintains the
 /// counts, enforces the error limit, and hands the result to each registered
@@ -225,8 +225,8 @@ public:
     }
 
     /// Prepares a diagnostic of `code` whose message is already formatted: one another engine
-    /// made, in a process of its own, and handed over (DESIGN_GUIDE.md section 5.2). Severity
-    /// overrides, suppression, counting and the error limit apply to it as to `report`.
+    /// made, in a process of its own, and handed over. Severity overrides, suppression,
+    /// counting and the error limit apply to it as to `report`.
     DiagnosticBuilder reportFormatted(DiagCode code, SourceLocation location, std::string message) {
         const DiagnosticSeverity effective = severity(code);
         if (effective == DiagnosticSeverity::Ignored || limitReached) return {};
@@ -244,8 +244,8 @@ public:
     /// code whose default severity is Fatal cannot be remapped: a Fatal
     /// diagnostic means continuing is unsafe, and letting a user downgrade one
     /// to a warning would turn a clean stop into wrong results, which is the
-    /// failure mode this project weighs most heavily (DESIGN_GUIDE.md section
-    /// 1.2). Returns false when the request was refused for that reason.
+    /// failure mode this project weighs most heavily. Returns false when the
+    /// request was refused for that reason.
     bool setSeverity(DiagCode code, DiagnosticSeverity severity);
 
     /// Suppresses `code` entirely. Equivalent to setting its severity to
@@ -308,8 +308,7 @@ private:
     const SourceManager& sources;
 
     /// Non-owning, in registration order. Ordered rather than hash-based because
-    /// delivery order is observable in the transcript (DESIGN_GUIDE.md section
-    /// 3.8).
+    /// delivery order is observable in the transcript.
     std::vector<DiagnosticConsumer*> consumers;
 
     /// Ordered by code, so that iterating it — for example to print the active
@@ -329,13 +328,13 @@ private:
 /// Every phase that opens a file wants the same four-way mapping, and each one
 /// writing its own drifts: a missing file, an unreadable one and one too large
 /// to address are different problems with different codes, and collapsing them
-/// into "could not open" is exactly the diagnostic quality section 10.6 exists
-/// to protect. `path` is what the user asked for, so it is what is named.
+/// into "could not open" throws away exactly the precision a diagnostic is
+/// for. `path` is what the user asked for, so it is what is named.
 void reportFileReadFailure(DiagnosticEngine& diagnostics, const std::filesystem::path& path,
                            const FileReadResult& result);
 
-/// Renders diagnostics as text, in the style of DESIGN_GUIDE.md section 10.6:
-/// position, severity, message, stable code, then the source line with a caret.
+/// Renders diagnostics as text: position, severity, message, stable code, then
+/// the source line with a caret.
 ///
 /// ```text
 /// counter.sv:12:16: error: cannot open file 'fifo.sv': No such file or directory [ENZ0001]
@@ -344,8 +343,8 @@ void reportFileReadFailure(DiagnosticEngine& diagnostics, const std::filesystem:
 /// ```
 ///
 /// Colour is not applied here. The transcript in the GUI colours diagnostics
-/// from the theme configuration (DESIGN_GUIDE.md section 10.5), and a terminal
-/// transcript that is redirected to a file must not contain escape sequences.
+/// from the theme configuration, and a terminal transcript that is redirected
+/// to a file must not contain escape sequences.
 class TextDiagnosticConsumer final : public DiagnosticConsumer {
 public:
     /// Both `sourceManager` and `stream` must outlive the consumer.

@@ -1,8 +1,7 @@
 # Mixed-language designs
 
 How a design of both SystemVerilog and VHDL is simulated: what crosses between the languages,
-what the crossing costs, and what does not cross yet. DESIGN_GUIDE.md is normative (sections 3.5,
-3.6 and 18, M7); this file is what a user of a mixed design needs from it.
+what the crossing costs, and what does not cross yet.
 
 ## Running one
 
@@ -40,8 +39,8 @@ vector of these, a string, or a real. Any other kind of generic set from SystemV
 ## Ports across the boundary
 
 **Each crossing costs one delta cycle.** A port whose two sides are of different languages is
-connected by a zero-delay assignment that converts the value (section 3.5). Its far side changes
-one delta cycle after its near side, in each direction the port's mode needs.
+connected by a zero-delay assignment that converts the value. Its far side changes one delta
+cycle after its near side, in each direction the port's mode needs.
 
 A synchronous design does not see the delta: a clock that crosses arrives a delta late, and so does
 every value launched by its edge on the other side. What does see it is a clock that crosses and
@@ -62,7 +61,7 @@ has just taken, a cycle early. It is the hazard of a VHDL clock passed through a
 assignment. Clock every register from the same side of the boundary, or give a clock that has to
 come back a delay.
 
-**Values** convert as section 3.6 maps them:
+**Values** convert as follows:
 
 | VHDL | SystemVerilog |
 |---|---|
@@ -101,17 +100,17 @@ Each is refused by name rather than simulated wrongly:
 
 ## VPI and VHPI
 
-The two interfaces share one design, and each shows its own language (section 9.7):
+The two interfaces share one design, and each shows its own language:
 
 - VPI finds no VHDL object by name. An iteration that meets a VHDL instance returns it named,
   as a `vpiUnknown`.
-- VHPI shows a SystemVerilog region as an object of class 1117, cocotb's `vhpiVerilog`. Under a
-  SystemVerilog top there is no VHPI root instance.
+- VHPI shows a SystemVerilog region as one of cocotb's class `vhpiVerilog`. Under a SystemVerilog
+  top there is no VHPI root instance.
 - A name either is asked for may begin in the other language's hierarchy, and its VHDL part is
   matched without regard to case.
 
-This is what cocotb expects of a simulator of both languages. It takes a handle VPI cannot type
-and asks VHPI for it by name. For cocotb, `tools/cocotb/Makefile.enzan` loads the toplevel
+This is what cocotb expects of a simulator of both languages. It takes a handle VPI cannot type and
+asks VHPI for it by name. For cocotb, Enzan's makefile (see [cocotb](cocotb.md)) loads the toplevel
 language's library with `--vpi` or `--vhpi` and names the other in `GPI_EXTRA`.
 
 ## Diagnostics

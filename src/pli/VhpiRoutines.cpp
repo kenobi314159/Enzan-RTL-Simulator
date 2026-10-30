@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The routines of `vhpi_user.h`, as an application calls them (DESIGN_GUIDE.md section 9.7).
+// The routines of `vhpi_user.h`, as an application calls them.
 //
 // Each one finds the process's context and forwards to it; the work is in Vhpi.cpp. Every
 // routine the standard declares is defined here, the unsupported ones included, so that an

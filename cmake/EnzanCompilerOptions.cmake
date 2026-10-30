@@ -10,9 +10,9 @@
 # Compiler version floor
 # ---------------------------------------------------------------------------
 
-# DESIGN_GUIDE.md section 11.1. The floor is set by the C++20 library features
-# slang and Enzan both rely on; older compilers fail in confusing ways during
-# the build, so they are rejected here with the reason.
+# The floor is set by the C++20 library features slang and Enzan both rely
+# on; older compilers fail in confusing ways during the build, so they are
+# rejected here with the reason.
 set(_enzan_min_gcc 13)
 set(_enzan_min_clang 17)
 
@@ -21,7 +21,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     message(
       FATAL_ERROR
         "GCC ${CMAKE_CXX_COMPILER_VERSION} is too old; Enzan requires GCC "
-        "${_enzan_min_gcc} or later (DESIGN_GUIDE.md section 11.1).\n"
+        "${_enzan_min_gcc} or later.\n"
         "Select a newer compiler with -DCMAKE_CXX_COMPILER=g++-${_enzan_min_gcc} "
         "or use the clang presets.")
   endif()
@@ -30,7 +30,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(
       FATAL_ERROR
         "Clang ${CMAKE_CXX_COMPILER_VERSION} is too old; Enzan requires Clang "
-        "${_enzan_min_clang} or later (DESIGN_GUIDE.md section 11.1).\n"
+        "${_enzan_min_clang} or later.\n"
         "Select a newer compiler with -DCMAKE_CXX_COMPILER=clang++-${_enzan_min_clang} "
         "or use the gcc presets.")
   endif()
@@ -51,9 +51,9 @@ add_library(enzan::compile_options ALIAS enzan_compile_options)
 target_compile_features(enzan_compile_options INTERFACE cxx_std_20)
 
 # Component headers are included by their component-qualified path, for example
-# `#include "common/Diagnostics.h"`. Headers live beside their sources
-# (DESIGN_GUIDE.md section 12), and qualifying the include makes a component
-# boundary crossing visible at the top of every file.
+# `#include "common/Diagnostics.h"`. Headers live beside their sources, and
+# qualifying the include makes a component boundary crossing visible at the top
+# of every file.
 target_include_directories(enzan_compile_options INTERFACE "${PROJECT_SOURCE_DIR}/src")
 
 # Headers generated at configure time (common/VersionInfo.h) are laid out under
@@ -65,7 +65,7 @@ target_include_directories(enzan_compile_options INTERFACE "${PROJECT_BINARY_DIR
 # widths and offsets constantly, so -Wconversion and -Wsign-conversion are
 # carrying real weight here rather than being pedantry: a silent narrowing in
 # the value engine is exactly the class of defect that produces plausible but
-# wrong simulation results (DESIGN_GUIDE.md section 1.2).
+# wrong simulation results.
 set(_enzan_warnings
     -Wall
     -Wextra
@@ -131,10 +131,10 @@ endif()
 # Sanitizers
 # ---------------------------------------------------------------------------
 
-# The ASan+UBSan configuration is a CI job, not a build type (DESIGN_GUIDE.md
-# section 11.4), so it is expressed as flags on the options target and selected
-# by a preset. -fno-sanitize-recover makes a UBSan finding fail the test rather
-# than print a note that scrolls past in a green CI log.
+# The ASan+UBSan configuration is a CI job, not a build type, so it is
+# expressed as flags on the options target and selected by a preset.
+# -fno-sanitize-recover makes a UBSan finding fail the test rather than print a
+# note that scrolls past in a green CI log.
 if(ENZAN_SANITIZERS)
   list(JOIN ENZAN_SANITIZERS "," _enzan_sanitizer_list)
   set(_enzan_sanitizer_flags -fsanitize=${_enzan_sanitizer_list}
@@ -148,7 +148,7 @@ endif()
 # Compiler cache
 # ---------------------------------------------------------------------------
 
-# DESIGN_GUIDE.md section 11.1: supported when present, never required.
+# ccache: supported when present, never required.
 find_program(ENZAN_CCACHE_EXECUTABLE ccache)
 if(ENZAN_CCACHE_EXECUTABLE AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
   set(CMAKE_CXX_COMPILER_LAUNCHER "${ENZAN_CCACHE_EXECUTABLE}" CACHE STRING "" FORCE)

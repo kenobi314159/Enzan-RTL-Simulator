@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Validate that a VCD file is well formed.
 
-M1's exit criteria include waveforms opening in GTKWave (DESIGN_GUIDE.md section 18). A viewer
-needs a display and cannot run in CI, so this checks the properties a viewer relies on instead,
-which is both automatable and stricter than "it opened" — a viewer will happily skip a line it does
-not understand, which is exactly how a malformed writer goes unnoticed:
+A waveform has to open in GTKWave. A viewer needs a display and cannot run in CI, so this checks the
+properties a viewer relies on instead, which is both automatable and stricter than "it opened" — a
+viewer will happily skip a line it does not understand, which is exactly how a malformed writer goes
+unnoticed:
 
 * the header declares a timescale and ends with ``$enddefinitions``;
 * every ``$scope`` is closed by an ``$upscope``, and none is closed twice;

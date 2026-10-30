@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// A synchronous FIFO with a self-checking testbench. Together with counter.sv this is the
-// pair DESIGN_GUIDE.md section 18 names as M1's exit criterion.
+// A synchronous FIFO with a self-checking testbench.
 //
 // The storage is a *packed* array, `logic [DEPTH-1:0][WIDTH-1:0]`, because a packed type is
-// a bit vector and needs no aggregate support in the value engine. An unpacked `logic
-// [WIDTH-1:0] mem [DEPTH]` is the more idiomatic spelling and arrives with M5.
+// a bit vector and needs no aggregate support in the value engine. An unpacked
+// `logic [WIDTH-1:0] mem [DEPTH]` is the more idiomatic spelling, which arrays.sv covers.
 
 module fifo #(
     parameter int WIDTH = 8,

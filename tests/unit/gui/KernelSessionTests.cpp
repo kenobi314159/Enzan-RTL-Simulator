@@ -393,7 +393,7 @@ TEST_F(SessionFixture, ARefusedRequestIsReportedWithoutDroppingTheConnection) {
 }
 
 TEST_F(SessionFixture, DetachingLeavesTheKernelAlive) {
-    // Section 2.2's requirement: a front end must be able to leave a long run alone.
+    // A front end must be able to leave a long run alone.
     session->run(50);
     ASSERT_TRUE(pumpUntilCaughtUp(50));
 

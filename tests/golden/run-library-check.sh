@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The command line of DESIGN_GUIDE.md section 8, driven the way a Makefile drives it: separate
-# processes for analysis and for simulation, with a library between them. That separation is
-# the point — a library exists so that what one process analysed another can run — so it cannot
-# be checked from inside one invocation.
+# The command line, driven the way a Makefile drives it: separate processes for analysis and for
+# simulation, with a library between them. That separation is the point — a library exists so that
+# what one process analysed another can run — so it cannot be checked from inside one invocation.
 
 set -euo pipefail
 
@@ -35,17 +34,19 @@ status_of() {
 
 cd "$work"
 
-# --- a library is created before it is used -----------------------------------------------------
+# --- a library is created before it is used
+# ---------------------------------------------------------
 
-# Opt-in (8.2): a directory that was never created is not a library, so analysing into one that
-# does not exist creates it, and reading one that does not exist is an error.
+# Opt-in: a directory that was never created is not a library, so analysing into one that does
+# not exist creates it, and reading one that does not exist is an error.
 [[ $(status_of "$enzan" run --in-lib absent --timescale ns tb) -ne 0 ]] \
     || fail "reading a library that was never created was allowed"
 
 "$enzan" lib create libs/work >/dev/null || fail "a library could not be created"
 [[ -f libs/work/enzan.lib ]] || fail "a created library carries no index"
 
-# --- analysis and simulation are separate processes ----------------------------------------------
+# --- analysis and simulation are separate processes
+# -------------------------------------------------
 
 printf 'counter.sv\n' >rtl.f
 "$enzan" analyse --timescale ns --out-lib libs/work -f rtl.f || fail "analysis into a library failed"
@@ -61,7 +62,8 @@ run_output=$("$enzan" run --in-lib libs/work --timescale ns tb) \
     || fail "a design analysed by one process did not run in another"
 grep -q 'PASS counter' <<<"$run_output" || fail "the run did not reach the design's own check"
 
-# --- what only the kernel reads applies to a run from a library ----------------------------------
+# --- what only the kernel reads applies to a run from a library
+# -------------------------------------
 
 # A run from libraries alone analyses nothing, and the seed and the delta limit are the run's,
 # not the analysis's: given to `run`, they must take effect there.
@@ -100,7 +102,8 @@ grep -q 'limit of 5' <<<"$looped" \
 [[ $(status_of "$enzan" elaborate --in-lib libs/kernel --timescale ns +incdir+inc random_tb) -eq 1 ]] \
     || fail "+incdir+ given to an elaboration from a library was not refused"
 
-# --- a library is simulated in the time unit it was analysed in ------------------------------------
+# --- a library is simulated in the time unit it was analysed in
+# -------------------------------------
 
 # Its delays are counts of that unit, so a run from it takes the unit from it, and a
 # `--timescale` naming another would label every time wrongly. It is refused.
@@ -135,12 +138,14 @@ grep -q 'ENZ6027' <<<"$mixed" || fail "libraries in two units were combined: $mi
 grep -q 'at 5ps' <<<"$("$enzan" run --in-lib libs/timed_ns timed_tb)" \
     || fail "the cleaned library did not take its new unit"
 
-# --- the file list is expanded, and can be shown without building --------------------------------
+# --- the file list is expanded, and can be shown without building
+# -----------------------------------
 
 expanded=$("$enzan" analyse --dry-run -f rtl.f) || fail "--dry-run failed"
 [[ $expanded == "counter.sv" ]] || fail "--dry-run printed '$expanded'"
 
-# --- exit statuses a Makefile can branch on (8.1) ------------------------------------------------
+# --- exit statuses a Makefile can branch on
+# ---------------------------------------------------------
 
 [[ $(status_of "$enzan" --no-such-option counter.sv) -eq 1 ]] \
     || fail "a bad command line did not exit 1"
@@ -156,7 +161,8 @@ EOF
 [[ $(status_of "$enzan" failing.sv) -eq 3 ]] \
     || fail "a design that ran and failed did not exit 3"
 
-# --- two libraries, and a name defined by both ----------------------------------------------------
+# --- two libraries, and a name defined by both
+# ------------------------------------------------------
 
 mkdir -p split
 cat >split/one.sv <<'EOF'
@@ -179,8 +185,8 @@ both=$("$enzan" run --in-lib libs/one --in-lib libs/two --timescale ns two_tb) \
     || fail "two libraries could not be combined"
 grep -q 'PASS split' <<<"$both" || fail "the combined run did not reach the design's check"
 
-# One name for two different units in two libraries is reported rather than silently resolved
-# (8.2). A different body, since two copies of one unit are not a collision.
+# One name for two different units in two libraries is reported rather than silently
+# resolved. A different body, since two copies of one unit are not a collision.
 mkdir -p split/clash
 cat >split/clash/two.sv <<'EOF'
 module two_tb;
@@ -201,11 +207,12 @@ grep -q 'more than one library' <<<"$clash" \
 "$enzan" run --in-lib libs/two --in-lib libs/clash --timescale ns two.two_tb >/dev/null \
     || fail "a qualified name did not resolve the collision"
 
-# --- a library is parametrisable by whoever uses it ------------------------------------------------
+# --- a library is parametrisable by whoever uses it
+# -------------------------------------------------
 
-# The point of section 8.2's libraries: a unit is not baked with the parameters the library
-# happened to be analysed with. The consumer creates the parameterisation it needs, and it lands
-# in the consumer's library rather than being duplicated from the producer's.
+# The point of libraries: a unit is not baked with the parameters the library happened to be
+# analysed with. The consumer creates the parameterisation it needs, and it lands in the
+# consumer's library rather than being duplicated from the producer's.
 mkdir -p par
 cat >par/counter.sv <<'EOF'
 module pcounter #(parameter int Width = 4) (output logic [Width-1:0] q);
@@ -374,7 +381,8 @@ wait "$served" 2>/dev/null || true
 [[ $(status_of "$enzan" --attach "$work/nothing.sock") -eq 1 ]] \
     || fail "--attach without --gui was not refused"
 
-# --- cleaning keeps the library and removes its entries -------------------------------------------
+# --- cleaning keeps the library and removes its entries
+# ---------------------------------------------
 
 "$enzan" lib clean libs/work >/dev/null || fail "a library could not be cleaned"
 [[ -f libs/work/enzan.lib ]] || fail "cleaning removed the library itself"

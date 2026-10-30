@@ -688,9 +688,9 @@ TEST(MainWindowLayout, IsKeptInTheConfigurationDirectory) {
 }
 
 TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
-    // The spellings `--run` takes, read by the same function (section 8.5): a count of the run's
-    // unit, or a time with a unit of its own. The fixture's design runs in nanoseconds, and has an
-    // event every five of them, which is where a run that ends between events leaves the time.
+    // The spellings `--run` takes, read by the same function: a count of the run's unit, or a time
+    // with a unit of its own. The fixture's design runs in nanoseconds, and has an event every
+    // five of them, which is where a run that ends between events leaves the time.
     QLineEdit* length = runLength();
     QAction* run = nullptr;
     for (QAction* candidate : window->findChildren<QAction*>()) {
@@ -738,9 +738,9 @@ TEST_F(MainWindowTest, TheRunLengthTakesWhatRunTakes) {
 }
 
 TEST_F(MainWindowTest, AllInTheRunLengthRunsUntilTheDesignFinishes) {
-    // As `--run all` does (section 8.5). The fixture's clock never stops, so the run goes on until
-    // it is stopped, and the kernel serves on a thread of its own: a run is carried out within one
-    // step of it, and `pump` would never come back.
+    // As `--run all` does. The fixture's clock never stops, so the run goes on until it is
+    // stopped, and the kernel serves on a thread of its own: a run is carried out within one step
+    // of it, and `pump` would never come back.
     QLineEdit* length = runLength();
     QAction* run = actionCalled(QStringLiteral("Run"));
     ASSERT_NE(length, nullptr);

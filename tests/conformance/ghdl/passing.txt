@@ -1,6 +1,6 @@
-# The GHDL regression tests that pass (DESIGN_GUIDE.md section 14.4), each by its directory under
-# GHDL's testsuite/gna. ratchet.sh holds every run to this list: a test on it must pass, and a
-# test that newly passes is added in the same commit as the change that made it pass.
+# The GHDL regression tests that pass, each by its directory under GHDL's testsuite/gna.
+# ratchet.sh holds every run to this list: a test on it must pass, and a test that newly passes
+# is added in the same commit as the change that made it pass.
 bug010
 bug0103
 bug0106

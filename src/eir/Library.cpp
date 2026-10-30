@@ -29,8 +29,8 @@ namespace {
 /// 128 bits rather than 64 because a collision here is not a slow build but a wrong one: two
 /// different sources hashing alike would load one design and simulate another. At 128 bits the
 /// probability is not worth a sentence; at 64 it would be worth thinking about. `__uint128_t`
-/// is a compiler extension and Enzan is GCC-or-Clang on Linux only (section 1.3), so this
-/// costs nothing that is not already spent.
+/// is a compiler extension and Enzan is GCC-or-Clang on Linux only, so this costs nothing that
+/// is not already spent.
 class Digest {
 public:
     void add(std::string_view bytes) {
@@ -155,7 +155,7 @@ std::optional<VhdlEntry> readVhdlEntry(std::string_view contents) {
 }
 
 /// Every VHDL entry of the library at `directory` that can be read, in the order of their paths
-/// (section 3.8 keeps a directory's order out of anything observable).
+/// (a directory's order must not reach anything observable).
 std::vector<VhdlEntry> readVhdlEntries(const std::filesystem::path& directory) {
     std::vector<std::filesystem::path> paths;
     std::error_code failure;
@@ -263,9 +263,9 @@ bool Library::writeIndex(DiagnosticEngine& diagnostics) const {
     index += '\n';
 
     // The sources this library was analysed from *and the options they need*, so that a design
-    // analysed against it can read the declarations it wants (8.2). A source is no use without
-    // the include path that resolves its `` `include `` directives and the macros it was
-    // compiled with: reading it without them fails, or worse parses to something else.
+    // analysed against it can read the declarations it wants. A source is no use without the
+    // include path that resolves its `` `include `` directives and the macros it was compiled
+    // with: reading it without them fails, or worse parses to something else.
     //
     // Paths and not text: duplicating the RTL into every library that uses it would make a
     // library a copy of the design rather than an index of it.
@@ -305,7 +305,7 @@ bool Library::open(const std::filesystem::path& newDirectory, DiagnosticEngine& 
     const std::optional<std::string> index = readWholeFile(indexPath);
     if (!index.has_value()) {
         // A directory that merely exists is not a library. Reported rather than created,
-        // because a library nobody asked for is a cache nobody asked for (4.4).
+        // because a library nobody asked for is a cache nobody asked for.
         diagnostics.report(DiagCode::NotALibrary, SourceLocation(), newDirectory.string());
         return false;
     }
@@ -418,7 +418,7 @@ std::string Library::entryKey(const LibrarySource& source, const SourceManager& 
 
     // The dependencies' *contents*, so that editing an included header makes this entry stale.
     // In the order given, which the caller sorts, because a digest is order-dependent and
-    // section 3.8 keeps observable results off the order a directory happened to be read in.
+    // nothing observable may depend on the order a directory happened to be read in.
     for (const std::filesystem::path& dependency : dependencies) {
         digest.add(dependency.string());
         const std::optional<std::string> contents = readWholeFile(dependency);
@@ -446,8 +446,8 @@ bool Library::load(std::span<const LibrarySource> sources, const SourceManager& 
         const std::optional<EntryHeader> header = readEntryHeader(*contents);
         if (!header.has_value()) return false;
 
-        // The key is inside the entry rather than in its name (4.4), so a stale entry is one
-        // that is present and disagrees rather than one that is missing.
+        // The key is inside the entry rather than in its name, so a stale entry is one that
+        // is present and disagrees rather than one that is missing.
         const std::string wanted = entryKey(source, sourceManager, header->dependencies);
         if (contents->compare(header->keyOffset, wanted.size(), wanted) != 0) return false;
 
@@ -472,7 +472,7 @@ bool Library::load(std::span<const LibrarySource> sources, const SourceManager& 
         if (!decodeModules(payload, resolve, decoded)) return false;
 
     // Stamped on the way in rather than stored in the entry, so that the name a design refers
-    // to a unit by is the one the library carries and cannot disagree with it (8.2).
+    // to a unit by is the one the library carries and cannot disagree with it.
     for (ModuleDefinition& definition : decoded) {
         definition.library = logicalName;
         design.addModule(std::move(definition));
@@ -561,7 +561,7 @@ bool Library::loadAll(Design& design, DiagnosticEngine& diagnostics) const {
     if (!opened) return false;
 
     // Gathered and sorted before anything is decoded: a directory listing arrives in whatever
-    // order the filesystem gives, and section 3.8 puts observable ordering beyond that.
+    // order the filesystem gives, and nothing observable may depend on it.
     std::vector<std::filesystem::path> entries;
     std::error_code failure;
     for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
@@ -608,8 +608,7 @@ std::vector<std::string> Library::unitNames() const {
     if (!opened) return names;
 
     // Collected into an ordered set rather than reported in directory order: a directory
-    // listing is whatever the filesystem feels like, and section 3.8 puts observable ordering
-    // beyond the reach of that.
+    // listing is whatever the filesystem feels like, and nothing observable may depend on it.
     std::set<std::string, std::less<>> sorted;
 
     std::error_code failure;

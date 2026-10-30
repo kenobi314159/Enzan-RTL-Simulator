@@ -30,7 +30,7 @@ public:
 
     /// Resizes and clears the arena. Every Word becomes zero, which is the encoding of
     /// logic 0 in both planes; the caller then writes each object's time-zero value,
-    /// which for a four-state object is X (section 3.9).
+    /// which for a four-state object is X.
     void resize(std::uint32_t wordCount) { storage.assign(wordCount, 0); }
 
     [[nodiscard]] std::uint32_t words() const noexcept {

@@ -22,12 +22,12 @@ namespace enzan::runtime {
 ///            <-> Re-NBA -> Postponed
 /// ```
 ///
-/// Preponed and the PLI-specific regions are not separate queues. Section 3.3 permits
-/// representing them as callback hook points provided the callbacks fire at the right
-/// point in the ordering, and nothing in the M1 subset samples in Preponed. The
-/// enumerators for the Reactive family exist and iterate correctly even though only
-/// `program` blocks and `$monitor` will put anything in them, because retrofitting a
-/// region into a drained loop is how a scheduler ends up subtly wrong.
+/// Preponed and the PLI-specific regions are not separate queues. They may be callback
+/// hook points instead, provided the callbacks fire at the right point in the ordering,
+/// and nothing Enzan translates samples in Preponed. The enumerators for the Reactive
+/// family exist and iterate correctly even though only `program` blocks and `$monitor`
+/// will put anything in them, because retrofitting a region into a drained loop is how
+/// a scheduler ends up subtly wrong.
 enum class Region : std::uint8_t {
     Active,
     Inactive,
@@ -47,7 +47,7 @@ std::string_view toString(Region region) noexcept;
 ///
 /// The value is held in a side pool rather than in the record, so that a wide vector
 /// does not make every record wide and so that appending an update allocates nothing
-/// once the pool has grown (DESIGN_GUIDE.md section 13.4).
+/// once the pool has grown.
 struct NonBlockingUpdate {
     std::uint32_t signalIndex = 0;
 
@@ -73,15 +73,15 @@ struct NonBlockingUpdate {
 /// The event queues of one simulation.
 ///
 /// Holds no policy about what a process does — that is the kernel's job — only the
-/// ordering. Keeping the two apart is what makes the region iteration rules of section
-/// 3.3 testable on their own.
+/// ordering. Keeping the two apart is what makes the region iteration rules testable on
+/// their own.
 class Scheduler {
 public:
     /// Adds `processIndex` to the end of `region`.
     ///
     /// Insertion is strictly FIFO. Execution order within a region is observable and
-    /// must be reproducible across runs (section 3.8), so it must never depend on
-    /// pointer values, allocation addresses or hash iteration order.
+    /// must be reproducible across runs (DESIGN_GUIDE.md section 3.8), so it must
+    /// never depend on pointer values, allocation addresses or hash iteration order.
     void schedule(Region region, std::uint32_t processIndex);
 
     [[nodiscard]] bool empty(Region region) const noexcept;
@@ -130,11 +130,11 @@ public:
 
     /// Hands every pending update over to be applied, and leaves the pending list empty.
     ///
-    /// Two lists rather than one because applying an update can append another. A write
-    /// wakes no process directly, but it does run a VPI value-change callback, and a callback
-    /// that writes with an inertial delay schedules a non-blocking update (DESIGN_GUIDE.md
-    /// section 9.4). Appending to the list being applied would invalidate it; appending to
-    /// the pending one makes that update part of the next NBA pass, which is where it belongs.
+    /// Two lists rather than one because applying an update can append another. A write wakes
+    /// no process directly, but it does run a VPI value-change callback, and a callback that
+    /// writes with an inertial delay schedules a non-blocking update. Appending to the list
+    /// being applied would invalidate it; appending to the pending one makes that update part
+    /// of the next NBA pass, which is where it belongs.
     ///
     /// The returned updates and their values stay valid until the next call. Both lists keep
     /// their capacity, so swapping them allocates nothing once each has grown.
@@ -182,7 +182,7 @@ private:
         /// Only ever used to return a process that was taken and then not run to a stopping
         /// point — a breakpoint. Pushing it to the *back* instead would let the rest of the
         /// region overtake it, and the resumed run would then produce a different answer from
-        /// an uninterrupted one, which section 3.8 forbids.
+        /// an uninterrupted one.
         void pushFront(std::uint32_t value) {
             if (head > 0) {
                 entries[--head] = value;
@@ -203,8 +203,8 @@ private:
 
     /// Future events, ordered by time. An ordered map keeps both the time ordering and
     /// the insertion order within a timestamp, which together make the schedule
-    /// reproducible. Section 6.2 calls for a hierarchical or calendar queue once there
-    /// is a benchmark to justify it; this is the honest starting point.
+    /// reproducible. A hierarchical or calendar queue is for when there is a benchmark to
+    /// justify it; this is the honest starting point.
     struct Timed {
         std::uint32_t processIndex = 0;
         Region region = Region::Active;

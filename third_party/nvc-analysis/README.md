@@ -2,9 +2,8 @@
 
 [NVC](https://github.com/nickg/nvc) itself is the git submodule in `third_party/nvc`, at the
 revision recorded there and in `docs/third_party.md`. This directory holds Enzan's own files for
-building the part of it the VHDL frontend uses, which is NVC's analysis and nothing else
-(DESIGN_GUIDE.md section 5.2). They live beside the submodule rather than in it, so that NVC's tree
-stays exactly the pinned commit.
+building the part of it the VHDL frontend uses, which is NVC's analysis and nothing else. They live
+beside the submodule rather than in it, so that NVC's tree stays exactly the pinned commit.
 
 | File | What it is |
 |---|---|
@@ -13,7 +12,7 @@ stays exactly the pinned commit.
 | `enzan_nvc_seam.c` | the version string NVC's driver would define, and the replacement for NVC's constant evaluator |
 
 All three are Enzan's, GPL-3.0-or-later. Which files of NVC are built, why those, and how the list
-was measured is in `docs/nvc_integration.md`.
+was measured is in `docs/development/nvc_integration.md`.
 
 ## Rules for this directory
 
@@ -25,6 +24,5 @@ was measured is in `docs/nvc_integration.md`.
 - **The adapter includes C++ copies of NVC's headers**, generated at configure time from the
   pinned sources. NVC's headers are C that C++ rejects in three places, and the copies change only
   those; `CMakeLists.txt` says what and why.
-- **Built with the VHDL frontend**, which is on unless configured with
-  `-DENZAN_ENABLE_VHDL=OFF`, and needs flex and libzstd (DESIGN_GUIDE.md section 11.3) and the
-  submodule: `git submodule update --init third_party/nvc`.
+- **Built with the VHDL frontend**, which is on unless configured with `-DENZAN_ENABLE_VHDL=OFF`,
+  and needs flex and libzstd and the submodule: `git submodule update --init third_party/nvc`.

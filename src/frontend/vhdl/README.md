@@ -1,7 +1,7 @@
 # `src/frontend/vhdl` — the VHDL frontend
 
-Turns VHDL source text into EIR, and nothing else (DESIGN_GUIDE.md section 5), on top of NVC's
-analysis (section 5.2). Built unless configured with `-DENZAN_ENABLE_VHDL=OFF`.
+Turns VHDL source text into EIR, and nothing else, on top of NVC's analysis. Built unless
+configured with `-DENZAN_ENABLE_VHDL=OFF`.
 
 ## Responsibility
 
@@ -9,8 +9,8 @@ analysis (section 5.2). Built unless configured with `-DENZAN_ENABLE_VHDL=OFF`.
   and bounds checking — into NVC's units in a library, and translate NVC's diagnostics into
   Enzan's diagnostic engine (ENZ2001–ENZ2004).
 - Walk NVC's analysed trees and emit EIR, one unit per entity, architecture, set of generic
-  values and set of bounds its unconstrained ports take, folding generics as it goes (section
-  5.2), from the top down the hierarchy.
+  values and set of bounds its unconstrained ports take, folding generics as it goes, from the top
+  down the hierarchy.
 
 ## How NVC is run
 
@@ -28,15 +28,15 @@ same buffer every other diagnostic quotes.
 of the work library it names, and NVC analyses each after the sources declaring them, in the order
 given otherwise.
 
-**With its constant evaluator replaced**, by `third_party/nvc-analysis`, so analysis folds
-nothing through NVC's JIT and this adapter folds as it translates. `docs/nvc_integration.md`
+**With its constant evaluator replaced**, by `third_party/nvc-analysis`, so analysis folds nothing
+through NVC's JIT and this adapter folds as it translates. `docs/development/nvc_integration.md`
 measures what that changes.
 
 **Translating in the same child.** `analyse` runs the analysis and then the translation in one
 child, and the child sends the design back in EIR's own encoding: NVC's trees never reach the
 parent. A design's work library is NVC's in-memory one, written nowhere, unless analysis writes
 into an Enzan library, whose `vhdl/` directory then holds NVC's units; the libraries a design is
-analysed against reach NVC by name (`UnitOptions::libraries`, DESIGN_GUIDE.md section 4.4).
+analysed against reach NVC by name (`UnitOptions::libraries`).
 
 ## Files
 
@@ -50,7 +50,7 @@ analysed against reach NVC by name (`UnitOptions::libraries`, DESIGN_GUIDE.md se
 - `BodyTranslator.h/.cpp` — a process's or a subprogram's statements and expressions, as EIR-B,
   and calls: callable, or inlined.
 - `Folder.h/.cpp` — static evaluation: generics, constants, bounds and delays.
-- `Types.h/.cpp` — how a VHDL type is held in EIR (section 3.6).
+- `Types.h/.cpp` — how a VHDL type is held in EIR.
 
 ## What is translated
 
@@ -80,10 +80,10 @@ ENZ2005 naming it, never left out.
 ## Rules
 
 - **NVC's types stay in this directory.** Only `NvcApi.h` includes NVC's headers, and only files
-  here include it (section 17.4); `VhdlFrontend.h` is the whole of what the rest of Enzan sees.
+  here include it; `VhdlFrontend.h` is the whole of what the rest of Enzan sees.
 - **NVC's headers are the C++ copies** that `third_party/nvc-analysis` generates, never the
   originals, which C++ rejects.
 
 ## Allowed dependencies
 
-`common` and `eir`, as every frontend (section 5.3), and NVC's analysis (`enzan::nvc`).
+`common` and `eir`, as every frontend, and NVC's analysis (`enzan::nvc`).

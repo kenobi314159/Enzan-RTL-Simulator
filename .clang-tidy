@@ -1,5 +1,4 @@
-# Enforced in CI. Suppressions require a comment giving the reason
-# (DESIGN_GUIDE.md section 13.2).
+# Enforced in CI. Suppressions require a comment giving the reason.
 #
 # The check list is deliberately curated rather than a blanket `*`: a tidy
 # configuration that produces thousands of findings gets switched off, and a
@@ -7,8 +6,8 @@
 # codebase grows and the findings are triaged.
 #
 # readability-braces-around-statements is off because it contradicts the brace
-# style .clang-format enforces, which follows slang's (DESIGN_GUIDE.md section
-# 13.1). Two tools disagreeing about the same line is worse than either rule.
+# style .clang-format enforces, which follows slang's. Two tools disagreeing
+# about the same line is worse than either rule.
 ---
 Checks: >
   -*,
@@ -39,8 +38,8 @@ HeaderFilterRegex: '.*/(src|tools|tests)/.*\.h$'
 FormatStyle: file
 
 CheckOptions:
-  # Naming is mechanically enforced against the table in DESIGN_GUIDE.md
-  # section 13.1, so that review never has to spend attention on it.
+  # Naming is mechanically enforced, so that review never has to spend attention
+  # on it.
   - key: readability-identifier-naming.NamespaceCase
     value: lower_case
   - key: readability-identifier-naming.ClassCase

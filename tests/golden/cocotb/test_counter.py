@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The VPI behaviour cocotb relies on, pinned against a design Enzan can analyse
-# (DESIGN_GUIDE.md section 14.6): cocotb's own suite mostly cannot reach VPI until M5, and this
-# can whatever its pass rate is.
+# The VPI behaviour cocotb relies on, pinned against a design Enzan can analyse: cocotb's own suite
+# reaches VPI only through the designs Enzan analyses, and this does whatever its pass rate is.
 
 import cocotb
 from cocotb.clock import Clock
@@ -70,7 +69,7 @@ async def a_force_holds_until_released(dut):
 @cocotb.test()
 async def a_timer_alone_keeps_time_moving(dut):
     # Nothing in the design is scheduled while the clock is stopped, so only the pending timer
-    # keeps the simulation alive (section 9.3).
+    # keeps the simulation alive.
     start = get_sim_time("ns")
     await Timer(15, unit="ns")
     assert get_sim_time("ns") - start == 15

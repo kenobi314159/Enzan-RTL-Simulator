@@ -18,8 +18,8 @@
 
 namespace enzan::gui {
 
-/// One command of a signal list file (DESIGN_GUIDE.md section 10.8), as read, before anything
-/// in it has been looked up in a design.
+/// One command of a signal list file, as read, before anything in it has been looked up in a
+/// design.
 struct SignalListEntry {
     enum class Kind : std::uint8_t { AddWave, Group };
 
@@ -58,7 +58,7 @@ struct SignalListMessage {
 struct ParsedSignalList {
     std::vector<SignalListEntry> entries;
 
-    /// Mistakes in the file. When there are any, nothing in it is loaded (section 10.8).
+    /// Mistakes in the file. When there are any, nothing in it is loaded.
     QVector<SignalListMessage> errors;
 };
 
@@ -95,11 +95,10 @@ struct ResolvedSignalList {
 
 /// Builds the rows `entries` describe, from the objects of every scope `scopesNeededBy` named.
 ///
-/// A scope path produces exactly what the Structure window's *Add to Wave* produces: a group
-/// named by the scope's path holding every object of the scope, or nothing for a scope with no
-/// objects. With `-r` it produces what *Add to Wave Recursive* does: the subtree's groups,
-/// nested as its instances are. Section 10.8 defines the command as those menu entries, not
-/// beside them.
+/// A scope path produces exactly what the Structure window's *Add to Wave* produces: a group named
+/// by the scope's path holding every object of the scope, or nothing for a scope with no objects.
+/// With `-r` it produces what *Add to Wave Recursive* does: the subtree's groups, nested as its
+/// instances are. The command is defined as those menu entries, not beside them.
 [[nodiscard]] ResolvedSignalList
 resolveSignalList(const std::vector<SignalListEntry>& entries,
                   const QVector<ipc::InstanceEntry>& instances,

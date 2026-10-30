@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The VHPI behaviour cocotb relies on (DESIGN_GUIDE.md section 9.7), pinned against a VHDL design
-# Enzan can analyse, as test_counter.py beside the SystemVerilog design pins VPI's.
+# The VHPI behaviour cocotb relies on, pinned against a VHDL design Enzan can analyse, as
+# test_counter.py beside the SystemVerilog design pins VPI's.
 
 import cocotb
 from cocotb.clock import Clock

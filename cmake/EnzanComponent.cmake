@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Helpers for declaring the components of DESIGN_GUIDE.md section 12 and their
-# unit tests. Every component is declared the same way so that the build files
-# stay uniform and so that project-wide rules can be enforced in one place.
+# Helpers for declaring the components under src/ and their unit tests. Every component is declared
+# the same way so that the build files stay uniform and so that project-wide rules can be enforced
+# in one place.
 
 # ---------------------------------------------------------------------------
 # enzan_add_component(<name> SOURCES <...> [HEADERS <...>]
@@ -24,14 +24,14 @@ function(enzan_add_component name)
     message(FATAL_ERROR "enzan_add_component(${name}): no SOURCES given")
   endif()
 
-  # DESIGN_GUIDE.md section 12 requires a README per component. Enforcing it
-  # here rather than in review is the only way it stays true.
+  # Every component has a README. Enforcing it here rather than in review is the
+  # only way it stays true.
   if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
     message(
       FATAL_ERROR
         "Component '${name}' has no README.md.\n"
-        "DESIGN_GUIDE.md section 12 requires each src/ component to document\n"
-        "its responsibility and its allowed dependencies on other components.\n"
+        "Each src/ component documents its responsibility and its allowed\n"
+        "dependencies on other components in a README.md.\n"
         "Expected at: ${CMAKE_CURRENT_SOURCE_DIR}/README.md")
   endif()
 
@@ -61,7 +61,7 @@ endfunction()
 #
 # Declares one GoogleTest binary under tests/unit/. `name` is the component path
 # with slashes replaced by underscores, so that tests/unit/common/ produces
-# `enzan_unittest_common` and the mirroring required by section 12 is visible in
+# `enzan_unittest_common` and the mirroring of src/ by tests/unit/ is visible in
 # the target list.
 #
 # Tests are registered individually with gtest_discover_tests so that CI reports

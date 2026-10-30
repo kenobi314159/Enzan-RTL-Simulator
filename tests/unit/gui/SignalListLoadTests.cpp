@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Signal list files in a real window against the real session of SessionFixture
-// (DESIGN_GUIDE.md section 10.8).
+// Signal list files in a real window against the real session of SessionFixture.
 //
 // Through the window rather than the model, because what is worth testing is the join: a list
 // names scopes whose objects come from the kernel a message at a time, and the rows must end up

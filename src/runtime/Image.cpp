@@ -227,8 +227,8 @@ void Image::measureCallStack() {
         }
     }
 
-    // The kernel calls a VHDL resolution function itself, while no process's call is in progress
-    // (DESIGN_GUIDE.md section 3.7), so each is a chain of its own.
+    // The kernel calls a VHDL resolution function itself, while no process's call is in
+    // progress, so each is a chain of its own.
     for (const elab::ResolutionCall& call : elaborated->resolutionCalls()) {
         if (call.subprogramInstance >= subprogramList.size()) continue;
         stackShape.depth = std::max(stackShape.depth, depth[call.subprogramInstance]);
@@ -244,8 +244,8 @@ void Image::initializeState(Arena& arena) const {
     // through several objects. A single pass over objects would let whichever instance came
     // last overwrite the others — and since a child's port declaration carries no
     // initialiser, that meant a parent's `logic rst_n = 1'b0;` was quietly replaced by X.
-    // The design then simulated and produced a plausible wrong answer, which is the failure
-    // mode section 1.2 ranks above all others.
+    // The design then simulated and produced a plausible wrong answer, the worst failure
+    // there is.
     std::vector<bool> initialized(signalList.size(), false);
 
     const auto visit = [&](bool wantExplicit) {
@@ -274,11 +274,11 @@ void Image::initializeState(Arena& arena) const {
                 }
 
                 // No declared initialiser: a net's bits hold what an undriven bit of its kind
-                // holds, `z` or its pull, until a driver says otherwise (section 3.7). A
-                // variable is X when four-state and zero when two-state (section 3.9); one
-                // that defaulted to zero would hide exactly the bugs X exists to reveal. The
-                // slot's kind decides, not the object's, since a collapsed port's object is
-                // only another name for its parent's declaration.
+                // holds, `z` or its pull, until a driver says otherwise. A variable is X when
+                // four-state and zero when two-state; one that defaulted to zero would hide
+                // exactly the bugs X exists to reveal. The slot's kind decides, not the
+                // object's, since a collapsed port's object is only another name for its
+                // parent's declaration.
                 const elab::Slot& slot = elaborated->slots()[slotIndex];
                 if (slot.kind == eir::ObjectKind::Net) {
                     target.fill(eir::undrivenValue(slot.netKind));

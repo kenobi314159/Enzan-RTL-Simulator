@@ -40,9 +40,8 @@ public:
     /// replacing any selection already made.
     ///
     /// Selective capture is a requirement, not a convenience: on a 100k-LUT design, recording
-    /// everything exhausts memory within seconds of simulated time (DESIGN_GUIDE.md section 7.1).
-    /// An empty prefix records the whole design, which is the right default only because the
-    /// designs of M1 are small.
+    /// everything exhausts memory within seconds of simulated time. An empty prefix records the
+    /// whole design.
     ///
     /// Must be called before `open`.
     void setScope(std::string_view pathPrefix);
@@ -149,8 +148,8 @@ protected:
     /// codes converted to the bits they stand for (DESIGN_GUIDE.md section 3.6), and anything else
     /// as it is.
     ///
-    /// Read at flush time rather than copied when the change was reported, which is what section
-    /// 7.2 describes and what makes coalescing free. A converted value lives until the next call.
+    /// Read at flush time rather than copied when the change was reported, which is what makes
+    /// coalescing free. A converted value lives until the next call.
     [[nodiscard]] eir::ConstBitRef valueOf(std::uint32_t signalIndex) const;
 
     /// True when a signal is a real, which a waveform holds as a number rather than as bits.
@@ -165,7 +164,7 @@ protected:
 
     /// True when an unpacked array is recorded. A file leaves one out, as IEEE 1364 section 18
     /// leaves memories out of a VCD; the database a wave window reads records it, so that the
-    /// window can show an array as one (DESIGN_GUIDE.md section 7.1).
+    /// window can show an array as one.
     [[nodiscard]] virtual bool recordsArrays() const noexcept { return false; }
 
     // --- format hooks ------------------------------------------------------
@@ -222,8 +221,8 @@ private:
     mutable eir::BitVector shown{1};
     runtime::TimeScale scale;
 
-    /// What to record, or empty to record everything. Ordered, not a set: the declaration
-    /// order of a waveform file is observable, and section 3.8 requires it to reproduce.
+    /// What to record, or empty to record everything. Ordered, not a set: the declaration order of
+    /// a waveform file is observable, and has to reproduce.
     std::vector<std::string> scopePrefixes;
 
     std::vector<std::uint32_t> recorded;

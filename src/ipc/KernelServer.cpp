@@ -92,7 +92,7 @@ void KernelServer::DiagnosticRelay::consume(const Diagnostic& diagnostic) {
 
     // The parts travel separately rather than as rendered text, so that the GUI can show a
     // diagnostic the way its own windows want to — clicking through to the source line, for
-    // instance — which is the point of section 10.6's single engine.
+    // instance — which is the point of a single diagnostic engine.
     if (diagnostic.location.valid()) {
         message.file = std::string(sources->bufferName(diagnostic.location.buffer()));
         message.line = sources->lineNumber(diagnostic.location);
@@ -293,10 +293,10 @@ void KernelServer::closeClient(std::string reason) {
     greeted = false;
     shown.assign(shown.size(), false);
 
-    // Nothing else happens here, and that is the point. A kernel with a socket to listen on
-    // carries on with its simulation and waits for the next client, which is what `detach`
-    // means in section 2.2; one that was handed its client directly has nowhere for another to
-    // come from, and `step` stops for that reason rather than because leaving is fatal.
+    // Nothing else happens here, and that is the point. A kernel with a socket to listen on carries
+    // on with its simulation and waits for the next client, which is what detaching means; one that
+    // was handed its client directly has nowhere for another to come from, and `step` stops for
+    // that reason rather than because leaving is fatal.
 }
 
 // ---------------------------------------------------------------------------
@@ -826,7 +826,7 @@ void KernelServer::onRestart() {
     }
 
     // The same refusal as `Session::restart`, made here because a restart from the client puts
-    // the kernel back to time zero itself rather than through the session (section 9.5).
+    // the kernel back to time zero itself rather than through the session.
     if (session->hasVpiApplication()) {
         sendFailure("a design with a VPI application loaded cannot be restarted");
         return;

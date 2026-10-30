@@ -111,7 +111,7 @@ TEST_F(LibraryTest, ACreatedLibraryIsOpenedByName) {
 }
 
 TEST_F(LibraryTest, ADirectoryThatWasNeverCreatedIsNotALibrary) {
-    // Libraries are opt-in (8.2), so a directory that merely exists is a mistake to report
+    // Libraries are opt-in, so a directory that merely exists is a mistake to report
     // rather than a library to invent.
     const std::filesystem::path path = workspace / "work";
     std::filesystem::create_directories(path);
@@ -410,8 +410,7 @@ TEST_F(StoredLibraryTest, ACorruptEntryIsAMissRatherThanACrash) {
     library.setOptions({}, {}, {}, Picoseconds);
     ASSERT_TRUE(library.store({&file, 1}, sources, designWith("a", file.buffer), engine));
 
-    // Section 4.4 requires a mismatch to cause clean re-analysis rather than a crash or,
-    // worse, silent misbehaviour.
+    // A mismatch must cause clean re-analysis rather than a crash or, worse, silent misbehaviour.
     for (const std::filesystem::directory_entry& entry :
          std::filesystem::directory_iterator(library.path())) {
         std::ofstream corrupted(entry.path(), std::ios::binary | std::ios::trunc);
@@ -509,8 +508,8 @@ TEST_F(LibraryTest, AnOverrideThatIsNotAnIdentifierIsRefused) {
 }
 
 TEST_F(LibraryTest, ADamagedEntryFailsTheLoadRatherThanBeingSkipped) {
-    // A library read in part is a design missing modules it will never mention, which is the
-    // failure mode section 1.2 ranks worst.
+    // A library read in part is a design missing modules it will never mention, a wrong result
+    // with nothing to say so.
     const std::filesystem::path path = workspace / "work";
     const LibrarySource file = source("a.sv", "module a; endmodule\n");
     {
@@ -569,7 +568,7 @@ TEST_F(StoredLibraryTest, AnEntryIsNamedAfterItsSourceAndStaysThereWhenItChanges
 }
 
 // ---------------------------------------------------------------------------
-// VHDL (sections 4.4 and 8.2)
+// VHDL
 // ---------------------------------------------------------------------------
 
 /// The options a VHDL source is analysed with, as the session puts them in its key.

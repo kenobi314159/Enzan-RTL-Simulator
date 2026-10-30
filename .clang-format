@@ -1,7 +1,6 @@
-# Formatting is not a matter of judgement (DESIGN_GUIDE.md section 13.2).
-# The style deliberately follows slang's, because slang code and Enzan code sit
-# side by side and mixing two styles in one translation unit is worse than
-# either style alone.
+# Formatting is not a matter of judgement. The style deliberately follows
+# slang's, because slang code and Enzan code sit side by side and mixing two
+# styles in one translation unit is worse than either style alone.
 ---
 Language: Cpp
 BasedOnStyle: LLVM

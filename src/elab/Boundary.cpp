@@ -111,7 +111,7 @@ std::optional<std::vector<Leaf>> leavesOf(const eir::ModuleDefinition& definitio
         return std::nullopt;
     }
 
-    // The left element and the first field are the highest bits on both sides (section 4.3).
+    // The left element and the first field are the highest bits on both sides.
     std::ranges::sort(
         leaves, [](const Leaf& left, const Leaf& right) { return left.offset > right.offset; });
     std::vector<Leaf> merged;
@@ -457,7 +457,7 @@ bool bridge(eir::ModuleDefinition& parent, const eir::Instance& instance,
         return true;
     }
     case eir::PortDirection::InOut: {
-        // Read as the outer signal brought back, driven as one source of it (section 18, M7).
+        // Read as the outer signal brought back, driven as one source of it.
         const std::uint32_t read = effective(base);
         const std::uint32_t driven = add(standIn(inner, base + "$driving", instance.location));
         connection.objectIndex = read;

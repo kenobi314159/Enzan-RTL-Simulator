@@ -17,8 +17,8 @@ namespace enzan {
 /// Why a source file could not be turned into a buffer.
 ///
 /// The cause is returned as an enumerator rather than only as a message so that
-/// the caller can map it to a stable diagnostic code (DESIGN_GUIDE.md section
-/// 10.6). The human-readable system message is carried alongside it.
+/// the caller can map it to a stable diagnostic code. The human-readable system
+/// message is carried alongside it.
 enum class FileReadStatus : std::uint8_t {
     Success,
     NotFound,
@@ -59,9 +59,9 @@ struct FileReadResult {
 ///
 /// **Thread safety.** Not thread-safe, not even for concurrent `const` access:
 /// the line index is built lazily on first query and cached. Parallel analysis
-/// (DESIGN_GUIDE.md section 6.4) must therefore either use one manager per
-/// worker or serialise access; the constraint is recorded here because it is
-/// easy to violate accidentally once analysis is parallelised.
+/// must therefore either use one manager per worker or serialise access; the
+/// constraint is recorded here because it is easy to violate accidentally once
+/// analysis is parallelised.
 class SourceManager {
 public:
     SourceManager() = default;
@@ -95,7 +95,7 @@ public:
     /// translation, so offsets correspond exactly to the bytes on disk. Failure
     /// is reported in the returned result rather than by throwing, because a
     /// missing source file is an ordinary user error that becomes a diagnostic,
-    /// not an exceptional condition (DESIGN_GUIDE.md section 13.2).
+    /// not an exceptional condition.
     ///
     /// The same path read twice produces two independent buffers; the manager
     /// does not deduplicate, because the caller is better placed to decide

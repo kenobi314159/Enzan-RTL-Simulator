@@ -39,19 +39,19 @@ namespace enzan::gui {
 
 /// The Enzan window.
 ///
-/// The layout follows Modelsim, which is what users of this kind of tool expect (section 10.2):
-/// Structure, Objects, Wave and Transcript, docked with `QDockWidget` so the arrangement can be
-/// rearranged and is remembered between sessions.
+/// The layout follows Modelsim, which is what users of this kind of tool expect: Structure,
+/// Objects, Wave and Transcript, docked with `QDockWidget` so the arrangement can be rearranged
+/// and is remembered between sessions.
 ///
-/// The Processes window of section 10.2 is not here yet.
+/// There is no Processes window yet.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
     /// `kernelSession` must outlive the window. The window keeps its own copy of `initialTheme`,
     /// which `setTheme` replaces. `directory` is where the Theme menu finds themes and records the
-    /// one chosen, and where the layout is kept (DESIGN_GUIDE.md section 10.9); none at all leaves
-    /// the menu only the built-in theme and the window its first size.
+    /// one chosen, and where the layout is kept; none at all leaves the menu only the built-in
+    /// theme and the window its first size.
     MainWindow(KernelSession& kernelSession, const Theme& initialTheme,
                ConfigurationDirectory directory = ConfigurationDirectory(),
                QWidget* parent = nullptr);
@@ -70,12 +70,11 @@ public:
     /// Writes a note into the transcript, for the messages the front end makes itself.
     void note(const QString& text);
 
-    /// Reports a problem in the configuration directory (DESIGN_GUIDE.md section 10.9) in the
-    /// transcript, against the file and line it is in.
+    /// Reports a problem in the configuration directory in the transcript, against the file
+    /// and line it is in.
     void report(const ConfigurationMessage& problem);
 
-    /// Replaces the wave window's list with the signal list in `path` (DESIGN_GUIDE.md section
-    /// 10.8).
+    /// Replaces the wave window's list with the signal list in `path`.
     ///
     /// The file is read and checked here; its rows arrive once the kernel has described every
     /// scope it names, and not before the design itself has arrived, so this may be called
@@ -86,8 +85,8 @@ public:
     /// Writes the wave window's list to `path`. Returns false, having said why, when it cannot.
     bool saveSignalList(const QString& path);
 
-    /// Runs the design for `text`, read as `--run` reads it (DESIGN_GUIDE.md section 8.5): a count
-    /// of the run's time unit, a time with a unit of its own, or `all`, until the design finishes.
+    /// Runs the design for `text`, read as `--run` reads it: a count of the run's time unit, a
+    /// time with a unit of its own, or `all`, until the design finishes.
     ///
     /// What is no length of time is refused at once, with a note saying why. A run asked for
     /// before the kernel has welcomed the window waits for the welcome, because that is where the
@@ -121,9 +120,9 @@ private:
     /// group named by the scope's path. `recursive` takes everything below it as well, in
     /// groups nested the way the design nests its instances.
     ///
-    /// Performed as the signal list command `add wave ?-r? <scope>`, which section 10.8 defines
-    /// as this menu entry: the command is what runs, so the two cannot come to disagree, and it
-    /// is what the transcript shows.
+    /// Performed as the signal list command `add wave ?-r? <scope>`, which is defined as this menu
+    /// entry: the command is what runs, so the two cannot come to disagree, and it is what the
+    /// transcript shows.
     void insertScopeSignals(bool recursive);
 
     /// Asks for a signal list file to load or a place to save one.
@@ -133,8 +132,8 @@ private:
     /// Writes the list back to the file it was last loaded from or saved to, and asks for one
     /// only when there is none yet.
     ///
-    /// Arranging the window, saving it and running again is the loop a signal list exists for
-    /// (section 10.8), so after the first time saving asks nothing.
+    /// Arranging the window, saving it and running again is the loop a signal list exists
+    /// for, so after the first time saving asks nothing.
     void saveSignalListToItsFile();
 
     void groupSelectedWaves();
@@ -151,7 +150,7 @@ private:
     /// One action rather than two, because a row is either packed or unpacked and a menu
     /// offering both would always have one entry that did nothing. Unpacking a vector for the
     /// first time creates its bits; after that this is the same expand and collapse the
-    /// disclosure arrow does (DESIGN_GUIDE.md section 10.7).
+    /// disclosure arrow does.
     void togglePackSelectedWaves();
 
     void removeSelectedWaves();
@@ -166,8 +165,8 @@ private:
     /// the window is bound to now.
     void showShortcuts();
 
-    /// Shows the versions of both halves, which can come from two builds: a window attached to
-    /// a kernel on another machine is the case section 2.2 exists for.
+    /// Shows the versions of both halves, which can come from two builds: a window attached to a
+    /// kernel on another machine is what separating the two processes is for.
     void showAbout();
 
     void runActionExec();
@@ -181,7 +180,7 @@ private:
     void restartRun();
 
     /// Writes a signal list command into the transcript, as the command that does what the reader
-    /// just did, ready to be copied into a file (section 10.8).
+    /// just did, ready to be copied into a file.
     void echo(const QString& command);
 
     /// Reports a problem in a signal list, against the file and line it is on.
@@ -191,7 +190,7 @@ private:
     /// describe the scopes it names.
     ///
     /// Insertion cannot happen where it is asked for: the objects of a scope come from the
-    /// kernel, which may be on another machine (DESIGN_GUIDE.md section 2.2).
+    /// kernel, which may be on another machine.
     struct PendingLoad {
         /// The file it came from, or empty for a menu entry.
         QString file;

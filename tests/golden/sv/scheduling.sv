@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The time-zero and region-ordering rules of DESIGN_GUIDE.md section 3.
+// The time-zero and region-ordering rules of IEEE 1800.
 //
-// **This case is deliberately not compared against a reference simulator.** Section 14.3
-// warns that two correct simulators may legitimately differ in delta-level ordering, and
-// time zero is where that bites hardest: Icarus Verilog does not evaluate `always_comb` at
-// time zero, so it reports X here where IEEE 1800 section 9.2.2.2.1 says the process is
-// triggered once at time zero. Enzan follows the standard, and pinning that with a
-// differential comparison would only encode another tool's behaviour.
+// **This case is deliberately not compared against a reference simulator.** Two correct
+// simulators may legitimately differ in delta-level ordering, and time zero is where that
+// bites hardest: Icarus Verilog does not evaluate `always_comb` at time zero, so it
+// reports X here where IEEE 1800 section 9.2.2.2.1 says the process is triggered once at
+// time zero. Enzan follows the standard, and pinning that with a differential comparison
+// would only encode another tool's behaviour.
 
 module tb;
     int failures = 0;

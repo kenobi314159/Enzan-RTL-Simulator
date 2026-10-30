@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The verifier is how the core invariant of DESIGN_GUIDE.md section 4.2 — a process
-// is a pure function over a declared slice of the state arena — stops being a
-// statement in a document and becomes a rule the build enforces. These tests are
-// therefore as much about that invariant as about the verifier.
+// The verifier is how the core invariant — a process is a pure function over a
+// declared slice of the state arena — stops being a statement in a document and
+// becomes a rule the build enforces. These tests are therefore as much about
+// that invariant as about the verifier.
 
 #include "eir/Verifier.h"
 
@@ -220,7 +220,7 @@ TEST_F(VerifierTest, RejectsReadingAnObjectDeclaredOnlyAsWritten) {
 
 TEST_F(VerifierTest, RejectsAnUnsortedDeclaredSet) {
     // Sortedness is relied on by the binary search here and by set intersection in
-    // the scheduler, and it makes iteration order reproducible (section 3.8).
+    // the scheduler, and it makes iteration order reproducible.
     ModuleDefinition definition = makeValidModule();
     definition.processes[0].readSet = {1, 0};
     definition.processes[0].writeSet = {WriteExtent::whole(1, 8)};
@@ -640,7 +640,7 @@ TEST_F(VerifierTest, AcceptsAFunctionAndACallOfIt) {
 }
 
 TEST_F(VerifierTest, HoldsASubprogramToItsOwnDeclaredSets) {
-    // The invariant of section 4.2 is a body's, whichever kind of body it is.
+    // The core invariant is a body's, whichever kind of body it is.
     ModuleDefinition definition = makeModuleWithCall();
     Subprogram& doubler = definition.subprograms[0];
     doubler.registerTypes.push_back(Type::bits(8, false, true));

@@ -2,11 +2,10 @@
 #
 # Dependency acquisition.
 #
-# The policy (DESIGN_GUIDE.md section 11.2) is: system packages first,
-# FetchContent as a fallback, and a clear actionable error naming the package
-# when neither works. "Clearly recognisable dependencies" requirement means a
-# user reading the CMake output knows exactly what to install, so the diagnostic
-# text below is a feature and not boilerplate.
+# The policy is: system packages first, FetchContent as a fallback, and a clear
+# actionable error naming the package when neither works. "Clearly recognisable
+# dependencies" requirement means a user reading the CMake output knows exactly
+# what to install, so the diagnostic text below is a feature and not boilerplate.
 
 include(FetchContent)
 
@@ -21,7 +20,7 @@ include(FetchContent)
 # the same tree exports its includes as ordinary ones, so slang's headers — which use
 # C-style casts and shadow their own members, as is their prerogative — would fail our build
 # with errors in code we do not own. `add_subdirectory(... SYSTEM)` would be the direct fix
-# but needs CMake 3.25, above the 3.24 floor of section 11.1.
+# but needs CMake 3.25, above the 3.24 floor.
 function(enzan_mark_includes_system target)
   if(NOT TARGET ${target})
     return()
@@ -39,11 +38,10 @@ endfunction()
 # ---------------------------------------------------------------------------
 #
 # A release's source tarball carries, in third_party/bundled/, the sources FetchContent would
-# otherwise download: slang, what slang fetches in turn, and GoogleTest (DESIGN_GUIDE.md section
-# 11.6). A
-# distribution's builder has no network, so a tarball that downloaded would build on none of
-# them. Each directory stands in for its download, so a system package is still preferred where
-# one is found, as section 11.2 has it. A checkout has no such directory and downloads as before.
+# otherwise download: slang, what slang fetches in turn, and GoogleTest. A distribution's builder
+# has no network, so a tarball that downloaded would build on none of them. Each directory stands in
+# for its download, so a system package is still preferred where one is found. A checkout has no
+# such directory and downloads as before.
 set(_enzan_bundled "${PROJECT_SOURCE_DIR}/third_party/bundled")
 if(IS_DIRECTORY "${_enzan_bundled}")
   file(
@@ -105,11 +103,11 @@ function(enzan_dependency_missing)
       "  If it is installed somewhere unusual, point CMake at it with\n"
       "  -DCMAKE_PREFIX_PATH=<prefix> or -D${arg_NAME}_ROOT=<prefix>.\n"
       "${fallback}"
-      "  Dependencies are listed in DESIGN_GUIDE.md section 11.3.")
+      "  docs/third_party.md lists every dependency.")
 endfunction()
 
 # ---------------------------------------------------------------------------
-# GoogleTest — unit tests (DESIGN_GUIDE.md section 14.1)
+# GoogleTest — unit tests
 # ---------------------------------------------------------------------------
 
 if(ENZAN_BUILD_TESTS)
@@ -145,7 +143,7 @@ if(ENZAN_BUILD_TESTS)
 endif()
 
 # ---------------------------------------------------------------------------
-# zlib — FST waveform compression (DESIGN_GUIDE.md section 7.3)
+# zlib — FST waveform compression
 # ---------------------------------------------------------------------------
 
 find_package(ZLIB 1.2.11 QUIET)
@@ -160,14 +158,14 @@ endif()
 message(STATUS "Using zlib ${ZLIB_VERSION_STRING}")
 
 # ---------------------------------------------------------------------------
-# flex and zstd — building NVC's analysis (DESIGN_GUIDE.md section 5.2)
+# flex and zstd — building NVC's analysis
 # ---------------------------------------------------------------------------
 
 # Needed only by the VHDL frontend, and only to build the part of NVC it uses
-# (docs/nvc_integration.md). NVC's lexer is a flex source, so flex runs at build time and
-# nothing of it is linked. NVC compresses the analysed units it writes into a library with
-# zstd, whose header its file layer includes unconditionally. Neither has a source fallback:
-# both are packaged everywhere Enzan builds.
+# (docs/development/nvc_integration.md). NVC's lexer is a flex source, so flex runs at build
+# time and nothing of it is linked. NVC compresses the analysed units it writes into a library
+# with zstd, whose header its file layer includes unconditionally. Neither has a source
+# fallback: both are packaged everywhere Enzan builds.
 if(ENZAN_ENABLE_VHDL)
   find_package(FLEX QUIET)
   if(NOT FLEX_FOUND)
@@ -195,7 +193,7 @@ if(ENZAN_ENABLE_VHDL)
 endif()
 
 # ---------------------------------------------------------------------------
-# slang — SystemVerilog frontend (DESIGN_GUIDE.md section 5.1)
+# slang — SystemVerilog frontend
 # ---------------------------------------------------------------------------
 
 # slang is not packaged by any mainstream distribution, so in practice the
@@ -275,9 +273,9 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
       FIND_PACKAGE_ARGS ${ENZAN_SLANG_VERSION} CONFIG)
 
     # slang follows BUILD_SHARED_LIBS, which a distribution's build macros may turn on: Fedora's
-    # %cmake does. A shared slang would be a library nothing installs (DESIGN_GUIDE.md section
-    # 11.5), and an installed `enzan` would fail to start without it, so it is built static
-    # whatever was asked, as every Enzan component is.
+    # %cmake does. A shared slang would be a library nothing installs, and an installed
+    # `enzan` would fail to start without it, so it is built static whatever was asked, as
+    # every Enzan component is.
     set(_enzan_build_shared_libs ${BUILD_SHARED_LIBS})
     set(BUILD_SHARED_LIBS OFF)
     FetchContent_MakeAvailable(slang)
@@ -294,7 +292,7 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
 endif()
 
 # ---------------------------------------------------------------------------
-# Tcl — the GUI theme language (DESIGN_GUIDE.md section 10.5)
+# Tcl — the GUI theme language
 # ---------------------------------------------------------------------------
 
 # Needed only by the graphical front end, whose theme is a Tcl script.
@@ -318,7 +316,7 @@ if(ENZAN_BUILD_GUI)
 endif()
 
 # ---------------------------------------------------------------------------
-# Qt 6 — graphical front end (DESIGN_GUIDE.md section 10.1), milestone M2
+# Qt 6 — graphical front end
 # ---------------------------------------------------------------------------
 
 if(ENZAN_BUILD_GUI)
@@ -342,7 +340,7 @@ if(ENZAN_BUILD_GUI)
 endif()
 
 # ---------------------------------------------------------------------------
-# LLVM — JIT backend (DESIGN_GUIDE.md section 6.3), milestone M8
+# LLVM — JIT backend, milestone M8
 # ---------------------------------------------------------------------------
 
 if(ENZAN_ENABLE_JIT)

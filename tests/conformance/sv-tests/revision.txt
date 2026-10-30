@@ -1,3 +1,3 @@
-# The sv-tests revision the suite runs against (DESIGN_GUIDE.md section 14.4). The one place it
-# is named. Moving it is a commit of its own, with passing.txt updated for what it changes.
+# The sv-tests revision the suite runs against. The one place it is named. Moving it is a
+# commit of its own, with passing.txt updated for what it changes.
 c4229f3bd5220e6d3ba8f390e5d09c87e462e9c7

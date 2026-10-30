@@ -807,9 +807,9 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
 
     if (waveRow->children.isEmpty()) return false;
 
-    // Allocated per level rather than shared, because this recurses for a group of groups.
-    // Section 13.4's rule about allocation is about the simulation's hot path; a repaint is
-    // not one, and a buffer shared between levels would be overwritten by the level below.
+    // Allocated per level rather than shared, because this recurses for a group of groups. The rule
+    // against allocating is about the simulation's hot path; a repaint is not one, and a buffer
+    // shared between levels would be overwritten by the level below.
     std::vector<wavedb::Sample> child;
     std::vector<std::uint8_t> boundary(static_cast<std::size_t>(columns), 0);
     std::vector<std::uint8_t> missing(static_cast<std::size_t>(columns), 0);
@@ -926,9 +926,9 @@ void WaveformView::paintRow(QPainter& painter, const RowGeometry& geometry) {
     painter.fillRect(QRect(rowRect.left(), rowRect.bottom(), rowRect.width(), 1),
                      theme->color(ThemeColor::WaveRowSeparator));
 
-    // A group draws too, when its children make a value between them: section 10.7 has a row
-    // with children show what they show joined, and a vector assembled out of one-bit signals
-    // is worth as much on screen as one the design declared that way.
+    // A group draws too, when its children make a value between them: a row with children shows
+    // what they show joined, and a vector assembled out of one-bit signals is worth as much on
+    // screen as one the design declared that way.
     const std::uint32_t displayedWidth = waveModel->displayedWidth(geometry.rowId);
     if (displayedWidth == 0) return;
 
@@ -1036,7 +1036,7 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
         const eir::Logic bit = value.value().get(0);
 
         // An X or a Z sits on the midline in its own colour rather than being drawn as a
-        // level. A value that is not zero or one must not read as either (section 3.9).
+        // level. A value that is not zero or one must not read as either.
         int y = 0;
         QColor pen;
         switch (bit) {
@@ -1210,8 +1210,8 @@ void WaveformView::mousePressEvent(QMouseEvent* event) {
     setFocus(Qt::MouseFocusReason);
 
     // Panning is the middle button's, and only the middle button's. Ctrl means *zoom* on the
-    // wheel (section 10.7), and a modifier that meant zoom in one hand and pan in the other
-    // would be a coin toss every time.
+    // wheel, and a modifier that meant zoom in one hand and pan in the other would be a coin
+    // toss every time.
     if (event->button() == Qt::MiddleButton) {
         panning = true;
         panFrom = event->pos();
@@ -1333,8 +1333,8 @@ void WaveformView::wheelEvent(QWheelEvent* event) {
     } else {
         // A bare wheel scrolls the list, wherever the pointer is. The names and the traces are
         // two widgets and one window, and a wheel that meant different things on either side
-        // of the splitter would make an internal boundary decide what it did (section 10.7).
-        // The event is handed to the tree so that it scrolls exactly as the tree does.
+        // of the splitter would make an internal boundary decide what it did. The event is
+        // handed to the tree so that it scrolls exactly as the tree does.
         if (rows != nullptr) QCoreApplication::sendEvent(rows->viewport(), event);
         return;
     }

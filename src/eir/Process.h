@@ -54,8 +54,8 @@ enum class SysTaskKind : std::uint8_t {
     /// failure), and the format string with the rest is the message. A failure stops the run,
     /// as GHDL's default does; an error is reported and the run goes on to fail at its end.
     Report,
-    /// std.textio's `deallocate` of a line: frees what the argument's handle designates, a
-    /// handle into the heap of DESIGN_GUIDE.md section 4.3.
+    /// std.textio's `deallocate` of a line: frees what the argument's handle designates, a handle
+    /// into the kernel's heap of access values.
     LineDeallocate,
     /// VHDL's `write` to a file of a type other than text: writes the second argument's bits to
     /// the file the first names, in whole bytes, the lowest first. A third argument, for a file
@@ -78,9 +78,9 @@ enum class SysTaskKind : std::uint8_t {
     /// descriptor; 0 when the file cannot be opened.
     FileOpen,
 
-    // std.textio, run natively over the heap of section 4.3, whose lines are handles: 0 for
-    // `null`, and otherwise numbered as they are allocated, freed ones reused last first, so that
-    // a run allocates the same handles every time.
+    // std.textio, run natively over the kernel's heap, whose lines are handles: 0 for `null`, and
+    // otherwise numbered as they are allocated, freed ones reused last first, so that a run
+    // allocates the same handles every time.
 
     /// `write`: appends the message the format and the arguments after the first three make to
     /// the line the first argument designates, allocating one when it is null, justified as the
@@ -253,7 +253,7 @@ struct WriteExtent {
 ///
 /// Touching extents are merged as well as overlapping ones because both belong to one
 /// process, so splitting them distinguishes nothing, and one canonical form means two
-/// processes that write the same bits declare the same set (section 3.8).
+/// processes that write the same bits declare the same set.
 void normaliseWriteSet(std::vector<WriteExtent>& extents);
 
 /// True when `writeSet`, which must be normalised, has an extent of `objectIndex`.
@@ -262,9 +262,8 @@ void normaliseWriteSet(std::vector<WriteExtent>& extents);
 
 /// The objects `writeSet` writes, each once and in order.
 ///
-/// A store is routed by its object's position in this list (DESIGN_GUIDE.md section 3.7), so
-/// codegen, which numbers the stores, and the runtime, which routes them, both take the list
-/// from here.
+/// A store is routed by its object's position in this list, so codegen, which numbers the
+/// stores, and the runtime, which routes them, both take the list from here.
 [[nodiscard]] std::vector<std::uint32_t> writtenObjects(const std::vector<WriteExtent>& writeSet);
 
 /// How a subprogram's parameter passes its value.
@@ -333,7 +332,7 @@ struct CallSite {
 /// The invariant is not left to review. `verify()` in Verifier.h checks that every object an
 /// instruction touches appears in the declared sets, and the frontends' output is verified
 /// before it is accepted. A body's sets are its own: what its callees touch is theirs, and
-/// elaboration adds it to a process's when it binds the calls (section 4.1).
+/// elaboration adds it to a process's when it binds the calls.
 struct Body {
     /// A readable identifier such as `always_ff@counter.sv:14`, used in diagnostics, in the
     /// Processes window and in delta-loop reports. For a subprogram, the name calls name it by.
@@ -361,7 +360,7 @@ struct Body {
 
     /// Object indices this body reads. Sorted and duplicate-free, so that comparing or
     /// intersecting two bodies' sets is cheap and so that iteration order cannot vary between
-    /// runs (section 3.8).
+    /// runs.
     std::vector<std::uint32_t> readSet;
 
     /// The bits this body writes, normalised by `normaliseWriteSet` so that the same
@@ -379,7 +378,7 @@ struct Process : Body {
     /// A VHDL process is one (IEEE 1076 section 14.7.2): each signal it assigns has a driver of
     /// its own in that process, so two processes assigning one unresolved signal are an error and
     /// not a race the last write wins. Elaboration treats its writes as it treats a continuous
-    /// assignment's (DESIGN_GUIDE.md section 3.7).
+    /// assignment's.
     bool drivesSignals = false;
 
     /// True for a VHDL postponed process (IEEE 1076 section 11.3): past initialization, it
@@ -406,8 +405,8 @@ struct Process : Body {
     std::vector<std::vector<SensitivityEntry>> eventLists;
 };
 
-/// A body that is called rather than scheduled (DESIGN_GUIDE.md section 4.1): a VHDL function or
-/// procedure, and in time a SystemVerilog function.
+/// A body that is called rather than scheduled: a VHDL function or procedure, and in time a
+/// SystemVerilog function.
 ///
 /// It runs to its `Return` without suspending — a subprogram that waits is inlined into its
 /// caller instead, which is what lets every call's registers live on the kernel's one stack —

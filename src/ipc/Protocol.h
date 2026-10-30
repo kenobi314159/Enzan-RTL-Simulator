@@ -15,10 +15,9 @@ namespace enzan::ipc {
 
 /// The wire protocol's version.
 ///
-/// Bumped whenever a message's fields change in a way an older peer could misread. The
-/// handshake compares it and refuses rather than negotiating: a GUI and a kernel from
-/// different builds that half-understand each other would show wrong values, and section 1.2
-/// puts correctness above convenience.
+/// Bumped whenever a message's fields change in a way an older peer could misread. The handshake
+/// compares it and refuses rather than negotiating: a GUI and a kernel from different builds that
+/// half-understand each other would show wrong values, and correctness comes before convenience.
 constexpr std::uint32_t ProtocolVersion = 8;
 
 /// What a message is.
@@ -80,7 +79,7 @@ enum class Recording : std::uint8_t {
     Recorded,
     /// Outside the logging scope.
     OutsideScope,
-    /// Wider than the database records (DESIGN_GUIDE.md section 7.1).
+    /// Wider than the database records.
     TooWide,
 };
 
@@ -140,7 +139,7 @@ struct RestartMessage {};
 /// Asks the kernel to exit once it has stopped.
 struct QuitMessage {};
 
-/// Writes a signal once, from outside the simulation (section 10.4).
+/// Writes a signal once, from outside the simulation.
 struct DepositMessage {
     std::uint32_t signalIndex = 0;
 
@@ -175,9 +174,9 @@ struct ChangeCursor {
 /// **The client pulls, and the kernel never pushes a value.** The client asks again only once
 /// the answer to its last request has come, so at most one answer is ever on its way, and an
 /// answer is bounded in bytes. What a client has not fetched yet stays in the kernel's database,
-/// which spills to disk past its budget (DESIGN_GUIDE.md section 7.1), rather than in a queue on
-/// the socket; a client that falls behind costs the kernel nothing it would not spend recording
-/// anyway, and the kernel never waits for it (section 2.2).
+/// which spills to disk past its budget, rather than in a queue on the socket; a client that
+/// falls behind costs the kernel nothing it would not spend recording anyway, and the kernel
+/// never waits for it.
 ///
 /// By number rather than by time, because a signal can change twice at one time, as a deposit
 /// between runs and the next run's first slot do, and a range of times would either repeat or
@@ -188,9 +187,9 @@ struct FetchChangesMessage {
 
 /// Says the client is leaving and the kernel should keep running.
 ///
-/// The counterpart of Quit, and the reason both exist: section 2.2 requires the GUI to detach
-/// without terminating the kernel, which is how a long batch run on a compute server is
-/// looked in on and left alone again.
+/// The counterpart of Quit, and the reason both exist: the GUI must be able to detach without
+/// terminating the kernel, which is how a long batch run on a compute server is looked in on and
+/// left alone again.
 struct DetachMessage {};
 
 // ---------------------------------------------------------------------------
@@ -211,7 +210,7 @@ struct WelcomeMessage {
     SimulationState state = SimulationState::Idle;
 
     /// The widest signal the kernel's waveform database records, or 0 for any width, so that a
-    /// window can say why one it is not recording is not (DESIGN_GUIDE.md section 7.1).
+    /// window can say why one it is not recording is not.
     std::uint32_t widthLimit = 0;
 };
 
@@ -284,7 +283,7 @@ struct EnumMemberEntry {
 };
 
 /// An enumeration an object's type is, so that a display can show `S_SEND` where the trace
-/// holds `3'd2` (DESIGN_GUIDE.md section 10.7).
+/// holds `3'd2`.
 struct EnumEntry {
     /// The type's declared name, or empty for an anonymous enumeration.
     std::string name;
@@ -294,10 +293,9 @@ struct EnumEntry {
 
 /// One parameter or localparam of the queried scope.
 ///
-/// Separate from `ObjectEntry` because a parameter has no signal index, no trace and nothing
-/// to subscribe to: it is a fact about the elaborated design that holds at every time. What it
-/// does have is a name and a value, which is what a reader wants beside the signals they are
-/// watching (DESIGN_GUIDE.md section 10.7).
+/// Separate from `ObjectEntry` because a parameter has no signal index, no trace and nothing to
+/// subscribe to: it is a fact about the elaborated design that holds at every time. What it does
+/// have is a name and a value, which is what a reader wants beside the signals they are watching.
 struct ParameterEntry {
     std::string name;
     std::string path;
@@ -377,9 +375,9 @@ struct TranscriptMessage {
 
 /// A diagnostic, flattened for the wire.
 ///
-/// Section 10.6 requires one diagnostic engine for the whole tool and requires a diagnostic to
-/// carry its code, severity and location. The GUI re-renders them rather than showing the
-/// kernel's formatted text, which is why the parts arrive separately.
+/// One diagnostic engine serves the whole tool, and a diagnostic carries its code, severity and
+/// location. The GUI re-renders them rather than showing the kernel's formatted text, which is why
+/// the parts arrive separately.
 struct DiagnosticMessage {
     std::uint16_t code = 0;
     std::uint8_t severity = 0;

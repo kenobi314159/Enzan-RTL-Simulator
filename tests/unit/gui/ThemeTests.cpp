@@ -2,10 +2,10 @@
 //
 // Tests for the Tcl-driven theme.
 //
-// The one that matters most is the completeness check: DESIGN_GUIDE.md section 10.5 forbids
-// colour literals in widget code, so there is no fallback in C++ for a key a theme file forgot.
-// A key added to the catalogue without being added to every shipped theme would show up as an
-// invisible widget on somebody's screen, and this is what catches it instead.
+// The one that matters most is the completeness check: widget code holds no colour literals, so
+// there is no fallback in C++ for a key a theme file forgot. A key added to the catalogue
+// without being added to every shipped theme would show up as an invisible widget on somebody's
+// screen, and this is what catches it instead.
 
 #include "gui/Theme.h"
 
@@ -157,9 +157,9 @@ TEST(ThemeTests, AThemeNoneIsBuiltInUnderChangesNothing) {
     EXPECT_TRUE(Theme::builtInScript(QStringLiteral("../dark")).isEmpty());
 }
 
-TEST(ThemeTests, TheShippedThemeHonoursWhatTheGuideFixes) {
-    // Section 10.5 names two colours outright: a high-contrast black background for the
-    // waveform view and light green traces.
+TEST(ThemeTests, TheDefaultThemeHasABlackWaveBackgroundAndLightGreenTraces) {
+    // The waveform view's two colours that are part of the design: a high-contrast black
+    // background and light green traces.
     Theme theme;
     theme.loadBuiltIn();
 

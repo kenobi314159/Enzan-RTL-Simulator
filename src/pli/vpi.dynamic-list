@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 /* The symbols an executable hosting VPI and VHPI applications exports: the routines of
-   vpi_user.h and vhpi_user.h and nothing else (DESIGN_GUIDE.md sections 9.1 and 9.7). */
+   vpi_user.h and vhpi_user.h and nothing else. */
 {
   vpi_*;
   vhpi_*;

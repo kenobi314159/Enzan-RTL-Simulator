@@ -56,29 +56,28 @@ struct DesignRequest {
     const SourceManager* sources = nullptr;
 };
 
-/// Translates the design under `request.top` from NVC's analysed units into EIR (DESIGN_GUIDE.md
-/// section 5.2).
+/// Translates the design under `request.top` from NVC's analysed units into EIR.
 ///
 /// One definition per architecture and set of generic values: generics are folded here, as
-/// SystemVerilog's parameters are folded by its frontend, so EIR never holds one (section 4.4).
-/// What is translated is what the hierarchy under the top reaches, not every unit analysed, so a
-/// unit nothing instantiates cannot stop a design for using something the adapter lacks.
+/// SystemVerilog's parameters are folded by its frontend, so EIR never holds one. What is
+/// translated is what the hierarchy under the top reaches, not every unit analysed, so a unit
+/// nothing instantiates cannot stop a design for using something the adapter lacks.
 ///
 /// An instance bound to one of `request.modules` names a placeholder as its definition, and
 /// `exchange` receives what each asks for, in the order first met, with what is answered to
 /// SystemVerilog.
 ///
 /// Reports what it cannot translate to `diagnostics` and returns what it could. A caller checks
-/// the error count: a design with a construct left out simulates and gives a wrong answer, which
-/// section 1.2 ranks worst, so nothing partial may be run.
+/// the error count: a design with a construct left out simulates and gives a wrong answer, so
+/// nothing partial may be run.
 std::vector<eir::ModuleDefinition> translateDesign(const DesignRequest& request,
                                                    const Locate& locate,
                                                    DiagnosticEngine& diagnostics,
                                                    Exchange& exchange);
 
 /// Translates each of `requests`, a resolution function specialised to an array of as many values
-/// as it has drivers, indexed from 0 (DESIGN_GUIDE.md section 3.7), into the definitions of the
-/// packages that declare them, which it returns; `answers` receives where each is, in order.
+/// as it has drivers, indexed from 0, into the definitions of the packages that declare them,
+/// which it returns; `answers` receives where each is, in order.
 std::vector<eir::ModuleDefinition>
 translateResolutions(const DesignRequest& request, const std::vector<ResolutionRequest>& requests,
                      std::vector<ResolutionAnswer>& answers, const Locate& locate,

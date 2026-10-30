@@ -6,7 +6,7 @@ enzan_add_unit_test(
           VersionTests.cpp
   DEPENDS enzan::common)
 
-# Where the install rules put each part, and where this build put its own (section 11.5).
+# Where the install rules put each part, and where this build put its own.
 target_compile_definitions(
   enzan_unittest_common
   PRIVATE ENZAN_TEST_BUILD_BINDIR="${ENZAN_BUILD_BINDIR}"

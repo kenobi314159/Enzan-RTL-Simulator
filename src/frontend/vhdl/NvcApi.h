@@ -3,7 +3,7 @@
 #pragma once
 
 // NVC's own interface, for the files of this directory that drive NVC and walk its trees, and for
-// no other component (DESIGN_GUIDE.md section 17.4).
+// no other component.
 //
 // These are the C++ copies of NVC's headers that third_party/nvc-analysis generates at configure
 // time, not NVC's originals: those are C that C++ rejects in three places, and the copies change

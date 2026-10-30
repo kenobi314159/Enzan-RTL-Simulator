@@ -1,6 +1,6 @@
-# The NVC regression tests of VHDL with Verilog that pass (DESIGN_GUIDE.md sections 14.4 and 18,
-# M7), each by its name in NVC's test/regress/testlist.txt, run with `run-suite.sh ... mixed`.
-# ratchet.sh holds every such run to this list, as passing.txt holds the others.
+# The NVC regression tests of VHDL with Verilog that pass, each by its name in NVC's
+# test/regress/testlist.txt, run with `run-suite.sh ... mixed`. ratchet.sh holds every such run
+# to this list, as passing.txt holds the others.
 mixed8
 signed1
 timescale1

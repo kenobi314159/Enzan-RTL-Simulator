@@ -209,7 +209,7 @@ void Kernel::initialize() {
     // timestamp the design has not reached; a process still holding a resume point would
     // continue a simulation that no longer exists; an edge subscription would fire for an
     // edge nothing is waiting for any more. Each of those produces a design that runs and
-    // gives a different answer, which section 1.2 ranks as the worst possible outcome.
+    // gives a different answer, which is the worst possible outcome.
     scheduler.clear();
     delayedWrites.clear();
     pendingInertial.clear();
@@ -295,7 +295,7 @@ RunStatus Kernel::run(SimTime until) {
         // Asked here, between time slots, because that is the only point at which the whole of
         // the run's state is in the scheduler and the arena and nothing is half-done. Stopping
         // anywhere else would make resuming produce a different answer from running straight
-        // through, which section 3.8 forbids.
+        // through, and a result must not depend on where a run was paused.
         if (stopRequested || (interrupt != nullptr && interrupt->shouldInterrupt())) {
             stopRequested = false;
             lastStatus = RunStatus::Interrupted;
@@ -331,19 +331,19 @@ RunStatus Kernel::run(SimTime until) {
 }
 
 bool Kernel::runTimeSlot() {
-    // The region iteration rules of DESIGN_GUIDE.md section 3.3. Active is drained
-    // fully; only when Active, Inactive and NBA are all empty does the slot move on to
-    // Observed, and the Reactive family iterates by the same rule. Anything that
-    // schedules Active work sends control back to the top.
+    // IEEE 1800's region iteration rules. Active is drained fully; only when Active,
+    // Inactive and NBA are all empty does the slot move on to Observed, and the
+    // Reactive family iterates by the same rule. Anything that schedules Active work
+    // sends control back to the top.
     //
     // An application's timed events run first, before the Active region is drained, and its
-    // read-write callbacks once everything else has settled (section 9.3).
+    // read-write callbacks once everything else has settled.
     bool firstPass = true;
     while (true) {
         if (pliHooks != nullptr && pliHooks->nextTimedEvent() <= currentTime) {
             // On any pass but the first, what is due was scheduled during this slot with no
             // delay, and running it is a further iteration of the slot. Counting it keeps an
-            // application that does that forever inside the delta limit of section 3.2.
+            // application that does that forever inside the delta limit.
             if (!firstPass && !countDelta()) return false;
             pliHooks->runTimedEvents(currentTime);
             if (halted()) return false;
@@ -366,8 +366,8 @@ bool Kernel::runTimeSlot() {
         }
 
         // VHDL's transactions for the next delta cycle are applied with SystemVerilog's NBA
-        // updates: either way, after every process of this iteration has run (section 3.5). The
-        // processes waiting no time resume after them, in the cycle they begin.
+        // updates: either way, after every process of this iteration has run. The processes
+        // waiting no time resume after them, in the cycle they begin.
         if (scheduler.hasNonBlockingUpdates() || !deltaTransactions.empty()
             || !nextCycleResumes.empty()) {
             ++cycle;
@@ -423,7 +423,7 @@ bool Kernel::runTimeSlot() {
     }
 
     // Read-only synchronisation sees the slot's final values, before Postponed. Writes are
-    // refused while it runs (section 9.4), so it cannot send control back.
+    // refused while it runs, so it cannot send control back.
     if (pliHooks != nullptr && pliHooks->hasReadOnly()) {
         pliHooks->runReadOnly();
         if (halted()) return false;
@@ -637,10 +637,9 @@ void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
-    // Value-change filtering before scheduling. Section 6.2 calls this one of the
-    // largest single performance wins available and requires it from the start: a
-    // process is woken when a signal it watches actually changes, not merely when it is
-    // assigned.
+    // Value-change filtering before scheduling, one of the largest single performance
+    // wins available: a process is woken when a signal it watches actually changes, not
+    // merely when it is assigned.
     if (value.width() == target.width() && eir::ConstBitRef(target).identicalTo(value)) return;
 
     recordEvent(signalIndex, target);
@@ -683,7 +682,7 @@ void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
     // Change detection over the written window only, compared against the incoming value in
-    // place so that no temporary copy of the old value is needed on the hot path (section 13.4).
+    // place so that no temporary copy of the old value is needed on the hot path.
     if (bitops::holdsPartAt(target, value, lowBit)) return;
 
     recordEvent(signalIndex, target);
@@ -961,7 +960,7 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
             return;
         }
         // `#0` resumes in this timestamp but after everything currently Active, which is
-        // exactly what the Inactive region is for (section 3.3).
+        // exactly what the Inactive region is for.
         state.queued = true;
         scheduler.schedule(Region::Inactive, processIndex);
         return;
@@ -1303,7 +1302,7 @@ std::optional<Activation> Kernel::enterCall(std::uint32_t processIndex, const Ac
     }
 
     // The callee's registers start at zero on every call, so that nothing of an earlier call's
-    // can be read by this one (section 3.8).
+    // can be read by this one.
     const std::uint32_t frame = callStackTop;
     callStackTop += body.frameWords;
     startFrame(frame, body);
@@ -1880,9 +1879,9 @@ void Kernel::writeToDescriptor(std::uint32_t descriptor, std::string_view text,
 }
 
 void Kernel::reportDeltaLimit() {
-    // Section 3.2 requires the diagnostic to name the processes and signals still
-    // active: a delta loop with no diagnostic is one of the most frustrating failures a
-    // user can hit, and the names are the only way to find the loop.
+    // The diagnostic names the processes and signals still active: a delta loop with no
+    // diagnostic is one of the most frustrating failures a user can hit, and the names
+    // are the only way to find the loop.
     std::string active;
     unsigned listed = 0;
     for (const ProcessState& state : processes) {

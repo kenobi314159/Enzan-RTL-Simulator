@@ -199,8 +199,7 @@ TEST_F(DiagnosticEngineTest, MismatchedArgumentsProduceAPlaceholderInsteadOfThro
 // ---------------------------------------------------------------------------
 
 TEST_F(DiagnosticEngineTest, DeliversToConsumersInRegistrationOrder) {
-    // Order is observable in the transcript, so it is part of the determinism
-    // guarantee (DESIGN_GUIDE.md section 3.8).
+    // Order is observable in the transcript, so it is part of the determinism guarantee.
     std::vector<int> order;
 
     class RecordingConsumer final : public enzan::DiagnosticConsumer {
@@ -278,7 +277,7 @@ TEST_F(DiagnosticEngineTest, SuppressionDoesNotAffectOtherCodes) {
 
 TEST_F(DiagnosticEngineTest, FatalDiagnosticsCannotBeDowngradedOrSuppressed) {
     // Downgrading a Fatal turns a clean stop into wrong results, which is the
-    // failure mode the project weighs most heavily (DESIGN_GUIDE.md section 1.2).
+    // failure mode the project weighs most heavily.
     EXPECT_FALSE(engine.setSeverity(DiagCode::InternalError, DiagnosticSeverity::Warning));
     EXPECT_FALSE(engine.suppress(DiagCode::InternalError));
     EXPECT_EQ(engine.severity(DiagCode::InternalError), DiagnosticSeverity::Fatal);

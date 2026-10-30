@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Enzan's stand-in for the config.h NVC's autoconf would write, covering the files Enzan builds
- * of it (docs/nvc_integration.md). CMake fills it in from the checks in CMakeLists.txt beside it.
+ * of it (docs/development/nvc_integration.md). CMake fills it in from the checks in CMakeLists.txt beside it.
  */
 
 #ifndef ENZAN_NVC_CONFIG_H
@@ -26,7 +26,7 @@
 #define PACKAGE_BUGREPORT "https://github.com/nickg/nvc/issues"
 #define PACKAGE_URL "https://www.nickg.me.uk/nvc/"
 
-/* Linux's separators, the only system Enzan targets (DESIGN_GUIDE.md section 1.3). */
+/* Linux's separators, the only system Enzan targets. */
 #define DIR_SEP "/"
 #define PATH_SEP ":"
 
@@ -60,7 +60,7 @@
 #cmakedefine HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC 1
 #define HAVE_PTHREAD 1
 
-/* GCC and Clang, the only compilers Enzan builds with (DESIGN_GUIDE.md section 11.1), both have it. */
+/* GCC and Clang, the only compilers Enzan builds with, both have it. */
 #define HAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL 1
 
 /*

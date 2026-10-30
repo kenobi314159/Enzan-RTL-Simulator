@@ -1,42 +1,39 @@
 # `src/pli` — the Verilog and VHDL Procedural Interfaces
 
-What a VPI application loaded with `--vpi` sees of a simulation, and how it drives one
-(DESIGN_GUIDE.md section 9). cocotb is the application this exists for.
+What a VPI application loaded with `--vpi` sees of a simulation, and how it drives one.
+cocotb is the application this exists for.
 
 ## Responsibility
 
 - **Loading** (`PliContext::load`) — opening a library and running its startup routines.
 - **The object model** — modules, generate blocks, nets, variables and parameters of the
-  elaborated design, named and typed as section 9.2 says.
+  elaborated design, named and typed as the standard names them.
 - **Values** (`VpiValue.h`) — converting between Enzan's two-plane vectors and the formats of
-  `s_vpi_value`. The planes are the standard's own encoding (section 3.6), so most of this is
-  copying.
+  `s_vpi_value`. The planes are the standard's own encoding, so most of this is copying.
 - **Callbacks** — the registry, and the `runtime::PliHooks` that put each callback at its point
-  in the region ordering (section 9.3).
+  in the region ordering.
 - **VHPI** (`Vhpi.cpp`, `VhpiRoutines.cpp`), built with the VHDL frontend — the same context's
-  regions and objects as VHPI names them, their VHDL types from the definitions' tables,
-  values in VHPI's formats, and VHPI's callbacks on VPI's dispatch (section 9.7). The private
-  model both files share is in `PliModel.h`.
-- **Each interface shows its own language** in a design of both (section 18, M7): VPI finds
-  nothing of VHDL by name and returns a VHDL instance it meets as a `vpiUnknown`; VHPI shows a
-  SystemVerilog instance as a `vhpiVerilog` region with nothing in it. Each finds a name whose
-  start is a path in the other's hierarchy, which is how cocotb hands an object from one to the
-  other.
+  regions and objects as VHPI names them, their VHDL types from the definitions' tables, values in
+  VHPI's formats, and VHPI's callbacks on VPI's dispatch. The private model both files share is in
+  `PliModel.h`.
+- **Each interface shows its own language** in a design of both: VPI finds nothing of VHDL by name
+  and returns a VHDL instance it meets as a `vpiUnknown`; VHPI shows a SystemVerilog instance as a
+  `vhpiVerilog` region with nothing in it. Each finds a name whose start is a path in the other's
+  hierarchy, which is how cocotb hands an object from one to the other.
 - **The routines** (`VpiRoutines.cpp`) — every routine of `include/enzan/vpi_user.h`, with C
   linkage, forwarding to the context.
 
 ## Invariants this component is responsible for
 
 **Writes are the kernel's writes.** `vpi_put_value` deposits, forces, releases and schedules
-non-blocking updates through the same kernel operations the front end uses (sections 9.4 and
-10.4). A second implementation of writing a signal from outside would be a second set of
-semantics.
+non-blocking updates through the same kernel operations the front end uses. A second implementation
+of writing a signal from outside would be a second set of semantics.
 
 **A bad handle is an error, not a crash.** Every handle is looked up before it is used, and one
 the context did not issue or has freed fails the call and is reported through `vpi_chk_error`.
 
-**Callbacks fire in registration order** (section 3.8), and a callback registered for the phase
-that is running waits for its next occurrence (section 9.3).
+**Callbacks fire in registration order**, and a callback registered for the phase that is running
+waits for its next occurrence.
 
 **Nothing a callback may still hold is freed under it.** A callback that fires for the last
 time or is removed is retired and freed by a sweep once no dispatch is running, because a
@@ -57,7 +54,8 @@ implements, so that a kernel with nothing loaded pays one null test per hook.
   iterate.
 - **User system tasks.** `vpi_register_systf` fails: a call to one has to be compiled by the
   frontend, and it cannot be.
-- **The three delay modes behave alike** (section 9.4).
+- **The three delay modes behave alike.** Each schedules its write, and none cancels a write
+  already pending.
 - **VHPI's subset is cocotb's.** No drivers, loads, processes or statements, no
   `vhpi_schedule_transaction`, `vhpi_format_value` or foreign subprograms; a record is read and
   written by its fields; a VHPI handle stands for a region, a declared object or part of one, a

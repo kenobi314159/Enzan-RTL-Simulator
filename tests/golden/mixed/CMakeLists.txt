@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Self-checking designs of both languages (DESIGN_GUIDE.md sections 14.2 and 18, M7): a VHDL
-# testbench `tb`, <name>.vhd, around SystemVerilog modules, <name>.sv, that ends by reporting
-# `PASS <name>` and calling `std.env.finish`, as ../vhdl's cases do; or a SystemVerilog testbench
-# `tb`, <name>.sv, around VHDL units, <name>.vhd, that ends by displaying `PASS <name>`.
+# Self-checking designs of both languages: a VHDL testbench `tb`, <name>.vhd, around
+# SystemVerilog modules, <name>.sv, that ends by reporting `PASS <name>` and calling
+# `std.env.finish`, as ../vhdl's cases do; or a SystemVerilog testbench `tb`, <name>.sv, around
+# VHDL units, <name>.vhd, that ends by displaying `PASS <name>`.
 
 # ---------------------------------------------------------------------------
 # enzan_add_mixed_golden_test(<name>)
@@ -11,7 +11,7 @@
 #
 # Registers `golden.mixed.<name>`, which runs the design and requires the PASS line, and
 # `golden.mixed.<name>.differential`, which compares the run against GHDL's of the same design all
-# in VHDL, the modules as <name>_ref.vhd (section 14.3): no free simulator runs both languages.
+# in VHDL, the modules as <name>_ref.vhd: no free simulator runs both languages.
 function(enzan_add_mixed_golden_test name)
   set(directory "${CMAKE_CURRENT_SOURCE_DIR}")
   foreach(source "${name}.vhd" "${name}.sv" "${name}_ref.vhd")
@@ -94,7 +94,7 @@ enzan_add_mixed_sv_golden_test(shapes)
 enzan_add_mixed_sv_golden_test(nesting)
 
 # cocotb driving a design of both languages, through the toplevel's language's interface and the
-# other's (section 18, M7), once with each language's toplevel, when a Python has cocotb.
+# other's, once with each language's toplevel, when a Python has cocotb.
 if(ENZAN_HAVE_COCOTB)
   foreach(language verilog vhdl)
     add_test(NAME golden.mixed.cocotb.${language}

@@ -17,15 +17,15 @@ namespace enzan::codegen {
 
 /// Lowers EIR-B to the bytecode the virtual machine executes.
 ///
-/// The bytecode is register-based rather than stack-based, as DESIGN_GUIDE.md section
-/// 6.1 requires: it produces fewer instructions per operation and maps far more
-/// directly onto both real registers and LLVM IR.
+/// The bytecode is register-based rather than stack-based: it produces fewer
+/// instructions per operation and maps far more directly onto both real registers and
+/// LLVM IR.
 ///
 /// The lowering is deliberately simple and does no optimisation at all — no constant
 /// folding, no dead code elimination, no register coalescing. Optimisation belongs in
-/// elaboration (section 2.1) or in the JIT (section 6.3), and an optimising bytecode
-/// compiler would be a third place for a semantic bug to hide while the interpreter is
-/// still the reference the JIT will be differentially tested against.
+/// elaboration or in the JIT, and an optimising bytecode compiler would be a third
+/// place for a semantic bug to hide while the interpreter is still the reference the
+/// JIT will be differentially tested against.
 ///
 /// What it does do is resolve: virtual registers become Word offsets into a frame,
 /// blocks become instruction indices, constants are flattened into one array, and

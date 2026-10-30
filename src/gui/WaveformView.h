@@ -34,9 +34,8 @@ struct WaveCursor {
 
     /// A locked cursor stays where it is when the user clicks elsewhere.
     ///
-    /// Section 10.3 requires cursor locking, and this is what it is for: a reader pins a cursor
-    /// to the edge they are measuring from and then moves another one around without having to
-    /// be careful where they click.
+    /// This is what cursor locking is for: a reader pins a cursor to the edge they are measuring
+    /// from and then moves another one around without having to be careful where they click.
     bool locked = false;
 
     /// Where the cursor's label was last drawn, for hit testing. Filled by painting rather
@@ -72,9 +71,9 @@ public:
 
     /// The theme's colours, or the canvas's font, have changed: every trace is drawn again.
     ///
-    /// A drawn trace is kept between repaints (section 10.3), and nothing in it says which
-    /// colours it was drawn in, so without this a new theme would reach only the rows that
-    /// happened to change afterwards.
+    /// A drawn trace is kept between repaints, and nothing in it says which colours it was
+    /// drawn in, so without this a new theme would reach only the rows that happened to
+    /// change afterwards.
     void themeChanged();
 
     [[nodiscard]] TimeAxis& axis() noexcept { return timeAxis; }
@@ -144,14 +143,13 @@ public:
     /// What the mouse does in the wave window, and the keys the signal list answers to there.
     ///
     /// The shortcut sheet lists them beside the window's actions. Neither is an action it could
-    /// read them from, so they are written here, beside the handlers that do them, and follow
-    /// section 10.7.
+    /// read them from, so they are written here, beside the handlers that do them.
     [[nodiscard]] static QVector<ShortcutEntry> gestures();
 
     /// Pixels a click may miss an edge by and still snap to it.
     ///
     /// In pixels rather than time units so that the gesture behaves the same at every zoom:
-    /// close enough to click is close enough to snap (section 10.7).
+    /// close enough to click is close enough to snap.
     static constexpr double SnapPixels = 6.0;
 
     /// Pixels a right-button drag must cover before it counts as a gesture at all. Below it a
@@ -178,8 +176,8 @@ protected:
     ///
     /// The names and the traces are one window, so a key means on the traces what it means on
     /// the names: moving between rows, packing and unpacking, and finding a row by typing the
-    /// start of its name (section 10.7). The window's own keys are actions of the whole Wave
-    /// tab and never arrive here.
+    /// start of its name. The window's own keys are actions of the whole Wave tab and never
+    /// arrive here.
     void keyPressEvent(QKeyEvent* event) override;
 
     /// Consumes Tab and Shift+Tab, which Qt would otherwise spend on focus navigation.
@@ -310,7 +308,7 @@ private:
     /// A row with children is summarised by merging theirs: it changes wherever any of them
     /// does, and is constant only where all of them are. That costs what its children cost put
     /// together, which is the price of the value on its line and is why a row whose children
-    /// are simply its own bits is read from its own trace instead (section 10.7).
+    /// are simply its own bits is read from its own trace instead.
     [[nodiscard]] bool sampleInto(int rowId, int columns, std::vector<wavedb::Sample>& out) const;
 
     void syncScrollBar();

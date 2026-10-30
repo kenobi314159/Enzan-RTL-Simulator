@@ -47,7 +47,7 @@ TEST(Type, RealAndStringStorage) {
     EXPECT_EQ(Type::real().storageWords(), Type::bits(64, false, false).storageWords());
     EXPECT_EQ(Type::real().bitWidth(), 64U);
 
-    // Strings live in the constant pool in the M1 subset, not the state arena.
+    // Strings live in the constant pool, not the state arena.
     EXPECT_EQ(Type::string().storageWords(), 0U);
 }
 

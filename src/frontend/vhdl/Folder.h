@@ -23,7 +23,7 @@ namespace enzan::frontend::vhdl {
 
 /// Sets whether the IEEE packages' own warnings are reported, which `nvc.sim_pkg.ieee_no_warning`
 /// folds to the opposite of, for the translation this process runs: one design's, in a child of
-/// its own (DESIGN_GUIDE.md section 5.2).
+/// its own.
 void setIeeeWarnings(bool reported) noexcept;
 
 /// The body of the subprogram `declaration` declares: itself when it is one, and otherwise the one
@@ -175,18 +175,17 @@ public:
     [[nodiscard]] const Generics& bindings() const noexcept { return generics; }
 
     /// Runs `call`, a call of a pure function of the design whose arguments fold, as the adapter
-    /// runs a constant function (DESIGN_GUIDE.md section 5.2), and gives `use` the expression its
-    /// `return` names with the bindings to fold it in, its parameters' and variables' values: a
-    /// scalar's value or an array's elements are folded from those. The call still counts as
-    /// running while `use` folds, so a recursion through the value is bounded too. False when the
-    /// call does not fold, or `use` returns false.
+    /// runs a constant function, and gives `use` the expression its `return` names with the
+    /// bindings to fold it in, its parameters' and variables' values: a scalar's value or an
+    /// array's elements are folded from those. The call still counts as running while `use`
+    /// folds, so a recursion through the value is bounded too. False when the call does not fold,
+    /// or `use` returns false.
     bool returned(tree_t call,
                   const std::function<bool(tree_t value, const Folder& frame)>& use) const;
 
     /// The scalar result of `declaration`, a function of one array parameter, run as a constant
     /// function on `elements`, laid out as an array of `bounds` is; nothing when it does not fold.
-    /// How a resolution function is proven to return a lone driver's value (DESIGN_GUIDE.md
-    /// section 3.7).
+    /// How a resolution function is proven to return a lone driver's value.
     [[nodiscard]] std::optional<std::int64_t>
     applyToArray(tree_t declaration, const eir::BitVector& elements, const Range& bounds) const;
 
@@ -253,9 +252,9 @@ private:
 ///
 /// A generate statement's range, a generic's value and the bounds of a port are static by the
 /// language, which NVC's analysis checks, so when one does not fold here it is because a call in
-/// it ran into something the adapter does not run yet (DESIGN_GUIDE.md section 5.2). Calling such
-/// a value "not static" would send the reader looking for a mistake of their own; what they need
-/// is which call stopped, and where in it.
+/// it ran into something the adapter does not run yet. Calling such a value "not static" would
+/// send the reader looking for a mistake of their own; what they need is which call stopped, and
+/// where in it.
 struct FoldStop {
     /// What stopped the call.
     enum class Reason : std::uint8_t {

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Releases (DESIGN_GUIDE.md sections 11.6, 11.7 and 16). On a tag, `vX.Y.Z`, the source tarball and
-# every distribution's packages are made, tested and attached to a draft release, which a
-# maintainer reads over and publishes; nothing is published from here.
+# Releases. On a tag, `vX.Y.Z`, the source tarball and every distribution's packages are made,
+# tested and attached to a draft release, which a maintainer reads over and publishes; nothing is
+# published from here.
 #
 # It runs on a tag only, so the allowance branch CI spends is untouched. It can also be run by hand
 # on any branch, to try the packaging before a release: that builds and tests everything and
@@ -38,8 +38,8 @@ jobs:
           tarball=$(scripts/make-dist.sh HEAD dist)
           echo "tarball=$(basename "$tarball")" >>"$GITHUB_OUTPUT"
 
-      # A release's version has no suffix and is the tag's (section 11.6). A tag on a commit still
-      # -dev, or naming another version, is refused before anything is built.
+      # A release's version has no suffix and is the tag's. A tag on a commit still -dev, or
+      # naming another version, is refused before anything is built.
       - name: Check the tag against the version
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -73,7 +73,7 @@ jobs:
           name: dist
           path: dist
 
-      # Built with no network and tested from a fresh container (section 11.7).
+      # Built with no network and tested from a fresh container.
       - name: Build and test the packages
         run: packaging/build-package.sh ${{ matrix.target }} "dist/${{ needs.dist.outputs.tarball }}" packages
 

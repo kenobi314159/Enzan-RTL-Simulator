@@ -60,7 +60,7 @@ struct SignalInfo {
     /// A parameter's value, which is what it is at every time. Absent for a signal.
     ///
     /// A parameter has no slot, no trace and nothing to subscribe to: it is a fact about the
-    /// elaborated design rather than a piece of its state (DESIGN_GUIDE.md section 10.7).
+    /// elaborated design rather than a piece of its state.
     std::optional<eir::BitVector> constantValue;
 
     /// True for a `localparam`, which is set inside the module rather than from outside it.
@@ -80,8 +80,7 @@ struct SignalInfo {
     ipc::Recording recording = ipc::Recording::OutsideScope;
 
     /// The dimensions the signal is declared with, outermost first, dividing `width` into
-    /// equal elements, the left one highest; empty for one that is no array (DESIGN_GUIDE.md
-    /// section 10.7).
+    /// equal elements, the left one highest; empty for one that is no array.
     std::vector<eir::ArrayDimension> dimensions;
 
     /// The names this signal's type gives its values, or nothing when its type is not an
@@ -96,10 +95,10 @@ struct SignalInfo {
 
 /// The GUI's end of the connection to a kernel.
 ///
-/// Wraps `ipc::Connection` in Qt's event loop through a socket notifier, so that nothing here
-/// ever blocks the interface: the requirement in section 2.2 that a slow GUI must not stall the
-/// kernel has a mirror image, which is that a busy kernel must not freeze the GUI. Both come
-/// from the same arrangement — neither side waits for the other.
+/// Wraps `ipc::Connection` in Qt's event loop through a socket notifier, so that nothing here ever
+/// blocks the interface: the rule that a slow GUI must not stall the kernel has a mirror image,
+/// which is that a busy kernel must not freeze the GUI. Both come from the same arrangement —
+/// neither side waits for the other.
 ///
 /// The session holds its own `wavedb::WaveformDatabase`, the same class the kernel fills, fed
 /// from the protocol instead of from a state arena. That is what lets the view ask for a pixel
@@ -278,8 +277,8 @@ private:
     QVector<ipc::InstanceEntry> designInstances;
     QStringList designSources;
 
-    /// Signal metadata by kernel index. Ordered rather than hash-based, because what the GUI
-    /// lists is observable and section 3.8 makes observable ordering reproducible.
+    /// Signal metadata by kernel index. Ordered rather than hash-based, because what the GUI lists
+    /// is observable and observable ordering must be reproducible.
     std::map<std::uint32_t, SignalInfo> knownSignals;
 
     /// Whether `onWelcome` has taken the kernel's greeting since the connection was made.

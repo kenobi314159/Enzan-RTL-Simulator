@@ -1,5 +1,5 @@
 # Every sv-tests case that passes against Enzan, one per line, as a path under its tests/.
-# run-suite.sh fails when one of these stops passing (DESIGN_GUIDE.md section 14.4).
+# run-suite.sh fails when one of these stops passing.
 chapter-10/10.3.1--net-decl-assignment.sv
 chapter-10/10.3.1--one-net.sv
 chapter-10/10.3.2--cont-assignment.sv

@@ -1,8 +1,8 @@
 -- SPDX-License-Identifier: GPL-3.0-or-later
 --
 -- A resolution function an architecture declares rather than a package, which elaboration asks
--- for by its driver count as it asks for a package's (DESIGN_GUIDE.md section 3.7): the lowest
--- of three drivers' integers. Each report is what GHDL 4.1 reports.
+-- for by its driver count as it asks for a package's: the lowest of three drivers' integers.
+-- Each report is what GHDL 4.1 reports.
 
 entity tb is end entity;
 

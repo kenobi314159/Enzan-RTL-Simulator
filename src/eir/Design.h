@@ -18,21 +18,21 @@ namespace enzan::eir {
 
 /// A collection of analysed design units.
 ///
-/// This is what analysis produces and what a library directory stores (DESIGN_GUIDE.md
-/// section 4.4). It is independent of any particular top level: the same Design can be
-/// elaborated against several top modules, and elaborating one does not modify it.
+/// This is what analysis produces and what a library directory stores. It is
+/// independent of any particular top level: the same Design can be elaborated against
+/// several top modules, and elaborating one does not modify it.
 ///
 /// Lookup is by name, because an instance refers to its definition by name (see
 /// `Instance::definitionName`). The index is an ordered map so that iterating the
 /// design — to dump it, to serialise it, or to report an error about it — produces
-/// the same order on every run (section 3.8).
+/// the same order on every run.
 ///
 /// **One name may be defined by more than one library.** A design assembled from
-/// several libraries (8.2) keeps every such definition rather than letting the last
-/// one loaded win, and an unqualified lookup of a name two libraries define finds
-/// nothing and reports both. A caller that means a particular one says so by
-/// qualifying the name as `<library>.<unit>`. Copies that are the same unit are not two
-/// definitions, though (`mergeIdenticalDefinitions`).
+/// several libraries keeps every such definition rather than letting the last one
+/// loaded win, and an unqualified lookup of a name two libraries define finds nothing
+/// and reports both. A caller that means a particular one says so by qualifying the
+/// name as `<library>.<unit>`. Copies that are the same unit are not two definitions,
+/// though (`mergeIdenticalDefinitions`).
 class Design {
 public:
     /// Adds a definition and returns its index.
@@ -53,8 +53,8 @@ public:
     /// An unqualified name that more than one library defines is **not** resolved to
     /// whichever came first. This returns nullptr and, when `ambiguity` is given,
     /// fills it with the libraries that define the name, in the order they were added
-    /// — which is the order 8.2 says libraries are searched, and is what a diagnostic
-    /// lists. Silently choosing one is the failure mode section 1.2 ranks worst. Copies
+    /// — which is the order libraries are searched in, and is what a diagnostic lists.
+    /// Silently choosing one would be a wrong result with nothing to say so. Copies
     /// `mergeIdenticalDefinitions` found to be one unit are one definition, the first.
     [[nodiscard]] const ModuleDefinition*
     findModule(std::string_view name, std::vector<std::string_view>* ambiguity = nullptr) const;
@@ -89,10 +89,10 @@ public:
     ///
     /// Two libraries that each needed a parameterisation of one module both store it, because
     /// each is analysed against its inputs alone; and a session that analyses a design against
-    /// a library reproduces the units it reads from that library's sources (section 8.2). Such
-    /// copies are one unit, and refusing them as two would make libraries that share an IP
-    /// unusable together. A copy that differs in anything is a different unit, and the name
-    /// stays ambiguous.
+    /// a library reproduces the units it reads from that library's sources. Such copies are
+    /// one unit, and refusing them as two would make libraries that share an IP unusable
+    /// together. A copy that differs in anything is a different unit, and the name stays
+    /// ambiguous.
     ///
     /// The first copy added stands for the others. Each copy is kept, so a qualified name
     /// still finds its own library's. Recomputed from nothing on every call, and forgotten for

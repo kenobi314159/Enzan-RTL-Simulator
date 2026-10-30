@@ -149,7 +149,7 @@ TEST_F(WaveformModelTest, RemovingAGroupRemovesWhatIsInIt) {
 }
 
 TEST_F(WaveformModelTest, ABitRangeBecomesItsOwnRowOfTheSameSignal) {
-    // Section 10.3 requires extracting a bit range into a separately displayed signal. It is a
+    // A bit range can be extracted into a separately displayed signal. It is a
     // property of the row, so the kernel still streams the signal once.
     const SignalInfo count = infoFor(QStringLiteral("/tb"), QStringLiteral("count"));
     const int whole = model->addSignal(count);
@@ -190,7 +190,7 @@ TEST_F(WaveformModelTest, ASlicedRowShowsOnlyItsBits) {
 }
 
 TEST_F(WaveformModelTest, RadixIsPerRowAndDefaultsToHexadecimal) {
-    // Section 10.3: multi-bit values display in hexadecimal by default.
+    // Multi-bit values display in hexadecimal by default.
     const SignalInfo count = infoFor(QStringLiteral("/tb"), QStringLiteral("count"));
     const int rowId = model->addSignal(count);
 
@@ -230,10 +230,10 @@ TEST_F(WaveformModelTest, ARowWithNoDataShowsADashRatherThanAWrongValue) {
 // Enumerated signals
 // ---------------------------------------------------------------------------
 //
-// Section 10.7: a row shows the name its type gives a value, because `S_SEND` is what the
-// reader wrote and `3'h2` is what the compiler made of it. The fixture's `state` sits at
-// `S_SEND` for the whole run, so every time reads the same and the tests are about the
-// rendering rather than about when it was sampled.
+// A row shows the name its type gives a value, because `S_SEND` is what the reader wrote
+// and `3'h2` is what the compiler made of it. The fixture's `state` sits at `S_SEND` for
+// the whole run, so every time reads the same and the tests are about the rendering
+// rather than about when it was sampled.
 
 class EnumeratedRowTest : public WaveformModelTest {
 protected:
@@ -317,10 +317,9 @@ TEST_F(EnumeratedRowTest, AGroupHoldingItIsNotNamed) {
 // Parameters
 // ---------------------------------------------------------------------------
 //
-// A parameter is a constant the elaborated design settled on, not a piece of its state. It has
-// no slot, nothing to subscribe to and the same value at every time, and section 10.7 has it
-// show that value across the whole window — including the part the kernel has not reached,
-// where a trace would stop.
+// A parameter is a constant the elaborated design settled on, not a piece of its state. It has no
+// slot, nothing to subscribe to and the same value at every time, so it shows that value across
+// the whole window — including the part the kernel has not reached, where a trace would stop.
 
 class ParameterRowTest : public WaveformModelTest {
 protected:
@@ -488,8 +487,8 @@ TEST_F(WaveformViewTest, TracesArePaintedInTheThemeColour) {
 
     const std::map<QRgb, int> counts = colourHistogram(rendered);
 
-    // Section 10.5 forbids colour literals in widget code, so the colour on screen has to be
-    // the one the theme file names — which is exactly what this asserts.
+    // Widget code holds no colour literals, so the colour on screen has to be the one the
+    // theme file names — which is exactly what this asserts.
     EXPECT_GT(countOf(counts, theme.color(enzan::gui::ThemeColor::WaveTrace)), 200)
         << "the traces were not drawn in the theme's trace colour";
     EXPECT_GT(countOf(counts, theme.color(enzan::gui::ThemeColor::WaveRulerBackground)), 100)
@@ -536,8 +535,8 @@ TEST_F(WaveformViewTest, AHighlightedRowsNamesAreInTheThemesColourForThem) {
 }
 
 TEST_F(WaveformViewTest, ANewThemeReachesTracesAlreadyDrawn) {
-    // A drawn trace is kept as a picture between repaints (section 10.3), and nothing in the
-    // picture says which colours it was drawn in, so a theme changed under it has to be told.
+    // A drawn trace is kept as a picture between repaints, and nothing in the picture says
+    // which colours it was drawn in, so a theme changed under it has to be told.
     showEverythingAndRun(200);
     const QColor before = theme.color(enzan::gui::ThemeColor::WaveTrace);
     ASSERT_GT(countOf(colourHistogram(render()), before), 200);
@@ -646,7 +645,7 @@ TEST_F(WaveformViewTest, ALockedCursorDoesNotFollowAClick) {
 }
 
 TEST_F(WaveformViewTest, RenderingCostDoesNotGrowWithTheTransitionsInView) {
-    // The requirement of section 10.3. A window showing two hundred time units and a window
+    // Rendering is bounded by pixels. A window showing two hundred time units and a window
     // showing twenty thousand of the same trace differ by a hundredfold in transitions and must
     // not differ meaningfully in the work done to draw them.
     showEverythingAndRun(20'000);
@@ -860,9 +859,9 @@ TEST_F(WaveformViewTest, RemovingABitSummarisesItsBusAgain) {
 
     const std::uint64_t afterFirstPaint = view->summariesComputed();
 
-    // Section 10.7: a row with children shows what its children show. A bus whose bits are all
-    // still there is drawn from its own trace; take one away and it has to be drawn by merging
-    // the rest, which is a different summary of a different shape.
+    // A row with children shows what its children show. A bus whose bits are all still there
+    // is drawn from its own trace; take one away and it has to be drawn by merging the rest,
+    // which is a different summary of a different shape.
     const WaveRow* row = model->row(bus);
     ASSERT_NE(row, nullptr);
     ASSERT_FALSE(row->children.isEmpty());

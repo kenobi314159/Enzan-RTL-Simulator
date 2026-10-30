@@ -6,7 +6,7 @@
 #   run-cocotb-check.sh <enzan> <python-with-cocotb> <test-directory> [verilog|vhdl]
 #
 # The last is the toplevel's language, `verilog` unless given, which decides whether cocotb
-# reaches the design through VPI or VHPI (DESIGN_GUIDE.md sections 9.6 and 9.7).
+# reaches the design through VPI or VHPI.
 #
 # Prints `PASS cocotb` when every test in it passed.
 

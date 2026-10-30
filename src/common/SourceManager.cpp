@@ -21,7 +21,7 @@ namespace {
 /// The distinction matters for the diagnostic the caller emits: "no such file"
 /// and "permission denied" lead a user to different fixes, and collapsing them
 /// into "could not read" is the kind of unhelpful message this project is
-/// trying not to produce (DESIGN_GUIDE.md section 10.6).
+/// trying not to produce.
 FileReadStatus statusFor(const std::error_code& error) noexcept {
     if (error == std::errc::no_such_file_or_directory) return FileReadStatus::NotFound;
     if (error == std::errc::permission_denied) return FileReadStatus::PermissionDenied;

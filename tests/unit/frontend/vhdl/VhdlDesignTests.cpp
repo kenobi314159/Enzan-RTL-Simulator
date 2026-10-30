@@ -245,7 +245,7 @@ TEST_F(VhdlDesignTest, AnEntityAndItsArchitectureBecomeOneDefinition) {
     EXPECT_EQ(counter->ports[2].name, "count");
     EXPECT_EQ(counter->ports[2].direction, PortDirection::Output);
 
-    // A `bit` is a byte holding its position, and an `integer` 32 signed bits (section 3.6).
+    // A `bit` is a byte holding its position, and an `integer` 32 signed bits.
     const enzan::eir::Object& clock = counter->objects[counter->ports[0].objectIndex];
     EXPECT_EQ(clock.type, enzan::eir::Type::bits(8, false, false));
     ASSERT_NE(clock.enumIndex, enzan::eir::Object::NoEnum);
@@ -402,7 +402,7 @@ end architecture;
     EXPECT_EQ(deep->sourceName, "delay_line");
     const std::optional<enzan::eir::BitVector>& stages = deep->objects[1].initialValue;
     EXPECT_EQ(stages.has_value() ? stages->ref().toUInt64() : 0U, 4U);
-    // The generics, then the constant, which VHPI shows as a constant (section 9.7).
+    // The generics, then the constant, which VHPI shows as a constant.
     ASSERT_EQ(deep->parameters.size(), 3U);
     EXPECT_EQ(deep->parameters[0].name, "depth");
     EXPECT_FALSE(deep->parameters[0].isLocal);
@@ -1416,8 +1416,8 @@ end architecture;
 
 TEST_F(VhdlDesignTest, AComponentWithNoEntityIsBoundToTheModuleOfItsNameInAnyCase) {
     // The instance names a placeholder and asks for the module, its generics' values as
-    // SystemVerilog literals, the ports it connects in the order met (DESIGN_GUIDE.md section 18,
-    // M7). Two instances asking for the same are one request.
+    // SystemVerilog literals, the ports it connects in the order met. Two instances asking for
+    // the same are one request.
     modules = {"other", "ClkBuf"};
     std::unique_ptr<enzan::eir::Design> design = translate(R"(
 library ieee;

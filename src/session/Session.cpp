@@ -204,7 +204,7 @@ Session::Session(SourceManager& sourceManager, DiagnosticEngine& engine)
 Session::~Session() {
     // The application first, while the design it is told about still exists: an application
     // that writes its results when the simulation ends — cocotb does — reads the design as it
-    // does so, and a batch run that stopped at its time limit ends here (section 9.5).
+    // does so, and a batch run that stopped at its time limit ends here.
     endVpiSimulation();
     if (vpi != nullptr) vpi->detach();
 
@@ -296,7 +296,7 @@ bool Session::analyse(const AnalysisRequest& request) {
     // This session's own sources, plus the sources of the libraries it resolves against: a
     // parameterisation those libraries do not hold was created *here*, for this design, and has
     // to be stored here or nothing holds it at all. Units an input library already has are
-    // excluded below rather than duplicated (8.2).
+    // excluded below rather than duplicated.
     const std::vector<eir::LibrarySource> stored = librarySources(
         std::span(ordered).subspan(firstStored), std::span(buffers).subspan(firstStored));
 
@@ -330,9 +330,9 @@ bool Session::analyse(const AnalysisRequest& request) {
     }
 
     // A design asking for a finer precision than the unit is run in that precision, unless
-    // `--timescale` or a library fixed the unit (section 3.1). A library being written is one:
-    // what it stores counts its unit, and a later analysis into it takes that unit as the one a
-    // module with no time scale of its own is in, which has to be the one this analysis used.
+    // `--timescale` or a library fixed the unit. A library being written is one: what it stores
+    // counts its unit, and a later analysis into it takes that unit as the one a module with no
+    // time scale of its own is in, which has to be the one this analysis used.
     std::int8_t runTimeUnit = defaultScale.precisionExponent();
     frontend::sv::Options options;
     options.filesRead = &lastFilesRead;
@@ -409,9 +409,9 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     const std::string& top = options.top;
 
     // Sources the library holds analysed already, with these options, are not analysed again:
-    // the design under a named top is translated from NVC's units, parsing nothing (section
-    // 4.4). Without a top, what to translate is the entity the sources declare that none of
-    // them instantiates, which only analysing them shows.
+    // the design under a named top is translated from NVC's units, parsing nothing. Without a
+    // top, what to translate is the entity the sources declare that none of them
+    // instantiates, which only analysing them shows.
     const bool reused =
         library.isOpen() && !top.empty() && library.vhdlCurrent(read, sources, keyOptions);
     if (reused) options.units.sources.clear();
@@ -426,7 +426,7 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
 
     // NVC's units are in the library once its analysis succeeds, whatever the translation after
     // it did, so they are recorded then: units no entry records are units a run from the library
-    // is told are not there (section 4.4). A failed store is reported and otherwise ignored, as
+    // is told are not there. A failed store is reported and otherwise ignored, as
     // SystemVerilog's is.
     if (library.isOpen() && !reused && unitsAnalysed) {
         std::vector<std::vector<std::string>> declared;
@@ -457,12 +457,12 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
 bool Session::setVhdlOptions(const AnalysisRequest& request, bool sourcesGiven,
                              frontend::vhdl::DesignOptions& options, std::string& keyOptions) {
     // VHDL counts time in femtoseconds, its resolution limit, and a design is simulated in the
-    // finest unit anything in it asks for (section 3.1), unless `--timescale` said otherwise.
+    // finest unit anything in it asks for, unless `--timescale` said otherwise.
     if (!scaleChosen) scale = runtime::TimeScale(runtime::FinestTimeExponent);
 
-    // The work library is the one analysis writes into, whose name is its own (section 8.2): a
-    // `--work` naming another would analyse a design that refers to itself by a name the
-    // library does not answer to.
+    // The work library is the one analysis writes into, whose name is its own: a `--work`
+    // naming another would analyse a design that refers to itself by a name the library does
+    // not answer to.
     std::string work = request.vhdlWork;
     if (library.isOpen()) {
         if (!work.empty() && !sameName(work, library.name())) {
@@ -590,9 +590,8 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
 
     // Each frontend in turn, with every unit the other has asked for so far, until neither asks for
     // one the other has not given, and every instance of an entity was checked against ports as
-    // wide as the entity's translation for its values makes them (DESIGN_GUIDE.md section 18, M7).
-    // What the rounds before the last reported is said again by the last, so only its diagnostics
-    // are reported.
+    // wide as the entity's translation for its values makes them. What the rounds before the last
+    // reported is said again by the last, so only its diagnostics are reported.
     const auto sameRequest = [](const eir::UnitRequest& left, const eir::UnitRequest& right) {
         return left.unit == right.unit && left.parameters == right.parameters;
     };
@@ -893,7 +892,7 @@ bool Session::answerResolutions(const elab::ElaboratedDesign& tree) {
     if (!found) return false;
 
     // A package the design already has gains the functions it lacks; a specialisation is named
-    // for what it is, so one it has is the same one (section 3.7).
+    // for what it is, so one it has is the same one.
     for (eir::ModuleDefinition& definition : found->definitions) {
         const std::string qualified = definition.library.empty()
                                           ? definition.name
@@ -1008,14 +1007,14 @@ bool Session::elaborate(std::string_view topModule) {
 
     // Two libraries built on one IP each hold the parameterisations they needed, and a design
     // analysed here against a library reproduces the units it reads from that library's
-    // sources. Copies that are the same unit are one; any that differ stay ambiguous (8.2).
+    // sources. Copies that are the same unit are one; any that differ stay ambiguous.
     const auto contentOf = [this](const eir::ModuleDefinition& definition) {
         return eir::encodeContent(definition, sources);
     };
     design->mergeIdenticalDefinitions(contentOf);
 
     // A port crossing between languages is connected through conversions before anything is
-    // elaborated (section 3.5). Copies of one unit are converted alike, and so merged again.
+    // elaborated. Copies of one unit are converted alike, and so merged again.
     if (!elab::bridgeLanguages(*design, diagnostics)) return false;
     design->mergeIdenticalDefinitions(contentOf);
 
@@ -1029,7 +1028,7 @@ bool Session::elaborate(std::string_view topModule) {
     if (tree == nullptr) return false;
 
     // A resolved signal's function for a driver count no translation has given yet is asked for,
-    // and the design elaborated again with it (DESIGN_GUIDE.md section 3.7).
+    // and the design elaborated again with it.
     const bool unanswered = std::ranges::any_of(
         tree->resolutionCalls(), [](const elab::ResolutionCall& call) { return !call.answered(); });
     if (unanswered) {
@@ -1057,7 +1056,7 @@ bool Session::elaborate(std::string_view topModule) {
     kernel->initialize();
     status = runtime::RunStatus::TimeLimitReached;
 
-    // Everything an application does to the design starts here (section 9.1).
+    // Everything an application does to the design starts here.
     if (vpi != nullptr) {
         vpi->attach(*image, *kernel, &sources);
         vpi->startOfSimulation();

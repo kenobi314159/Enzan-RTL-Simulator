@@ -166,8 +166,8 @@ TEST_F(WaveformRecorderTest, StartDeclaresEverySignalAndDumpsTimeZero) {
 
     EXPECT_EQ(database.signalCount(), 3U);
 
-    // A four-state object with no initialiser starts at X (section 3.9), and the viewer must be
-    // able to show that rather than an empty trace.
+    // A four-state object with no initialiser starts at X, and the viewer must be able to show
+    // that rather than an empty trace.
     const std::uint32_t count = recordOf("/tb/count");
     ASSERT_NE(count, WaveformDatabase::NotRecorded);
     EXPECT_EQ(database.changeCount(count), 1U);
@@ -205,7 +205,7 @@ TEST_F(WaveformRecorderTest, ChangesBelongToTheSlotThatEnded) {
 
 TEST_F(WaveformRecorderTest, SeveralChangesInOneSlotCollapseToTheSettledValue) {
     // Delta-level noise must not reach the database: what a slot records is the value it
-    // settled on, which is what makes a waveform diff meaningful (section 14.3).
+    // settled on, which is what makes a waveform diff meaningful.
     build(twoScopeDesign(), "tb");
     recorder->start();
 

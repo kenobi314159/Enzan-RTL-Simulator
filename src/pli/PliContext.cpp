@@ -136,8 +136,8 @@ void fillTime(s_vpi_time& time, runtime::SimTime now) {
         time.low = static_cast<PLI_UINT32>(now);
         return;
     case vpiScaledRealTime:
-        // Enzan counts every delay in one unit (section 3.1), so a design's time unit and its
-        // precision are the same unit and scaling is the identity.
+        // Enzan counts every delay in one unit, so a design's time unit and its precision are
+        // the same unit and scaling is the identity.
         time.real = static_cast<double>(now);
         return;
     default: return;
@@ -214,9 +214,9 @@ bool PliContext::load(std::string_view specification, Interface which) {
     }
 
     // Now, so that a routine the application needs and Enzan lacks is named here rather than
-    // being found mid-run; global, so that libraries it loads in turn can resolve against it
-    // (section 9.1). The handle is never closed: an application's code stays reachable through
-    // the callbacks it registered for the whole life of the process.
+    // being found mid-run; global, so that libraries it loads in turn can resolve against it.
+    // The handle is never closed: an application's code stays reachable through the callbacks
+    // it registered for the whole life of the process.
     ::dlerror();
     void* opened = ::dlopen(library.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (opened == nullptr) {
@@ -364,8 +364,8 @@ void PliContext::buildScopes() {
                 scopes[scopeFor(scopeIndex, object.name)].vhdlObjects.push_back(objectIndex);
 
             // Only what holds a packed value has a slot, and a name with a `$` in it is one a
-            // frontend made up and kept out of the user's namespace on purpose (section 9.2). A
-            // VHDL signal of a null range holds no value VPI could give.
+            // frontend made up and kept out of the user's namespace on purpose. A VHDL signal
+            // of a null range holds no value VPI could give.
             if (!object.type.isBits() || object.holdsNothing) continue;
 
             const std::uint32_t owner = scopeFor(scopeIndex, object.name);
@@ -522,8 +522,8 @@ vpiHandle PliContext::intern(const Target& target) {
 
     case TargetKind::Element: {
         // An element of an array, reached through `depth` indices: a window of the array's
-        // storage, the left element highest (section 4.3). It is an array itself while
-        // dimensions remain below it.
+        // storage, the left element highest. It is an array itself while dimensions remain
+        // below it.
         const Object& whole = *reinterpret_cast<const Object*>(
             intern({.kind = TargetKind::Signal, .first = target.first, .second = target.second}));
         const std::uint8_t depth = target.depth;
@@ -737,8 +737,8 @@ vpiHandle PliContext::handleByIndex(vpiHandle object, PLI_INT32 index) {
                        .depth = static_cast<std::uint8_t>(found->target.depth + 1U)});
     }
 
-    // A bit of a vector. Its range is `[width-1:0]` (section 9.2), so an index is a bit
-    // position; anything else Enzan has no elements of.
+    // A bit of a vector. Its range is `[width-1:0]`, so an index is a bit position;
+    // anything else Enzan has no elements of.
     if (found->kind != Object::Kind::Signal || found->isWindow || found->width < 2) {
         fail(vpiError, std::format("vpi_handle_by_index: a {} has no elements to select",
                                    typeName(found->type)));
@@ -817,8 +817,8 @@ vpiHandle PliContext::handle(PLI_INT32 type, vpiHandle reference) {
                            .first = 0,
                            .second = type == vpiLeftRange ? object->left : object->right});
         }
-        // EIR does not keep declared bounds, so a vector is described as `[width-1:0]`
-        // (section 9.2), and a scalar has no range at all.
+        // EIR does not keep declared bounds, so a vector is described as
+        // `[width-1:0]`, and a scalar has no range at all.
         if ((object->kind != Object::Kind::Signal && object->kind != Object::Kind::Parameter)
             || object->width < 2) {
             return nullptr;
@@ -975,7 +975,7 @@ PLI_INT32 PliContext::freeObject(vpiHandle object) {
 
     // Only an iterator is owned by the application. A design handle names something that
     // exists for the whole elaboration, and freeing a callback's handle leaves the callback
-    // registered, so freeing either changes nothing (section 9.2).
+    // registered, so freeing either changes nothing.
     if (found->kind == Object::Kind::Iterator) objects.erase(object);
     return 1;
 }
@@ -1179,7 +1179,7 @@ vpiHandle PliContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
     }
 
     // A read-only phase that could be written would report values that depend on the order
-    // its callbacks ran in (section 9.4).
+    // its callbacks ran in.
     if (phase == Phase::ReadOnly) {
         fail(vpiError, "vpi_put_value: nothing may be written during cbReadOnlySynch");
         return nullptr;
@@ -1193,7 +1193,7 @@ vpiHandle PliContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
     const PLI_INT32 mode =
         flags & ~(vpiReturnEvent | vpiUserAllocFlag | vpiOneValue | vpiPropagateOff);
 
-    // A force holds a whole signal (section 10.4), so it is forced and released whole.
+    // A force holds a whole signal, so it is forced and released whole.
     if ((mode == vpiForceFlag || mode == vpiReleaseFlag) && found->isWindow) {
         fail(vpiError, "vpi_put_value: a bit or an element of a signal cannot be forced or "
                        "released on its own; force the signal");
@@ -1244,8 +1244,7 @@ vpiHandle PliContext::putValue(vpiHandle object, s_vpi_value* value, const s_vpi
             delay = *ticks;
         }
 
-        // No delay is a non-blocking assignment; a delay lands at the start of the slot it
-        // reaches (section 9.4).
+        // No delay is a non-blocking assignment; a delay lands at the start of the slot it reaches.
         if (delay == 0 && found->isWindow) {
             kernel->scheduleNonBlockingPart(found->signal, parsed->ref(), found->lowBit);
         } else if (delay == 0) {
@@ -1383,7 +1382,7 @@ vpiHandle PliContext::registerCallback(const s_cb_data* data) {
         break;
     }
 
-    // Registered during read-only, these belong to the next slot (section 9.3).
+    // Registered during read-only, these belong to the next slot.
     case cbReadWriteSynch:
         (phase == Phase::ReadOnly ? deferredReadWrite : readWrite).push_back(raw);
         break;
@@ -1483,7 +1482,7 @@ void PliContext::retire(Callback& callback) {
 void PliContext::runOnce(std::vector<Callback*>& pending,
                          [[maybe_unused]] std::vector<Callback*>* rearm) {
     // Taken as a batch, so that a callback registering another of the same reason gets the
-    // next occurrence rather than this one (section 9.3).
+    // next occurrence rather than this one.
     std::vector<Callback*> batch;
     batch.swap(pending);
 
@@ -1589,7 +1588,7 @@ void PliContext::timeAdvanced(runtime::SimTime /*time*/) {
 void PliContext::runTimedEvents(runtime::SimTime time) {
     ++dispatchDepth;
 
-    // Delayed writes first, so that a callback at the same time sees them (section 9.4).
+    // Delayed writes first, so that a callback at the same time sees them.
     while (!delayedWrites.empty() && delayedWrites.begin()->first <= time) {
         const DelayedWrite write = std::move(delayedWrites.begin()->second);
         delayedWrites.erase(delayedWrites.begin());

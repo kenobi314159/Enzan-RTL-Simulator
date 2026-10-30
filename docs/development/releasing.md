@@ -1,7 +1,6 @@
 # Making a release
 
-What a maintainer does to release Enzan. DESIGN_GUIDE.md is normative (sections 11.6, 11.7 and
-16); this is the order the steps are taken in.
+What a maintainer does to release Enzan, in the order the steps are taken.
 
 ## Before
 

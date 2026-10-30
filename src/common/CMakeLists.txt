@@ -5,10 +5,10 @@
 # nothing but `--version` reads, so the staleness is accepted and documented in
 # Version.h instead.
 #
-# A release tarball records the revision it was made from (DESIGN_GUIDE.md
-# section 11.6), and that comes first. A tarball is not a checkout, and one
-# unpacked inside a checkout, as a distribution's packaging repository unpacks
-# it, would otherwise be given that repository's revision.
+# A release tarball records the revision it was made from, and that comes
+# first. A tarball is not a checkout, and one unpacked inside a checkout, as a
+# distribution's packaging repository unpacks it, would otherwise be given
+# that repository's revision.
 set(ENZAN_SOURCE_REVISION "unknown")
 find_package(Git QUIET)
 if(EXISTS "${PROJECT_SOURCE_DIR}/.tarball-revision")

@@ -26,10 +26,10 @@ constexpr Opcode AllOpcodes[] = {
 // ---------------------------------------------------------------------------
 
 TEST(OpcodeCatalogue, EveryOpcodeRecordsAnLlvmLowering) {
-    // DESIGN_GUIDE.md section 6.1 makes this a standing invariant: the JIT backend
-    // of M8 is meant to be a mechanical translation of the interpreter, and an
-    // opcode that cannot be lowered mechanically blocks it. A requirement nothing
-    // checks is a requirement that erodes, so it is checked here.
+    // A standing invariant: the JIT backend is meant to be a mechanical translation
+    // of the interpreter, and an opcode that cannot be lowered mechanically blocks
+    // it. A requirement nothing checks is a requirement that erodes, so it is
+    // checked here.
     for (const Opcode opcode : AllOpcodes) {
         EXPECT_FALSE(enzan::eir::llvmLowering(opcode).empty())
             << "opcode '" << enzan::eir::mnemonic(opcode) << "' has no recorded LLVM lowering";
