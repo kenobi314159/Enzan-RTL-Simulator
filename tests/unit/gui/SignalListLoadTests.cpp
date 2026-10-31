@@ -100,6 +100,19 @@ protected:
 
     [[nodiscard]] const WaveRow& rowAt(int rowId) const { return *waves()->row(rowId); }
 
+    /// The wave window's list of names, which is the tree whose model is the wave model.
+    [[nodiscard]] QTreeView* waveRows() const {
+        for (QTreeView* view : window->findChildren<QTreeView*>()) {
+            if (qobject_cast<WaveformModel*>(view->model()) != nullptr) return view;
+        }
+        return nullptr;
+    }
+
+    /// True when the wave window shows `rowId`'s rows: open itself, whether or not its parent is.
+    [[nodiscard]] bool isOpen(int rowId) const {
+        return waveRows()->isExpanded(waves()->indexOfRow(rowId));
+    }
+
     [[nodiscard]] SignalInfo info(const QString& scope, const QString& name) {
         for (const SignalInfo& candidate : objectsOf(scope)) {
             if (candidate.name == name) return candidate;
@@ -184,6 +197,46 @@ TEST_F(SignalListLoadTest, ALoadedListHasTheRowsItDescribes) {
     ASSERT_EQ(q.children.size(), 4) << "one row per bit, as unpacking makes them";
     EXPECT_EQ(rowAt(q.children.front()).highBit, 3U);
     EXPECT_EQ(rowAt(q.children.front()).highlight, 2) << "each bit takes the signal's highlight";
+}
+
+TEST_F(SignalListLoadTest, WhatTheListMarksExpandArrivesOpenAndNothingElseDoes) {
+    // Unpacking in the window shows the rows it makes, so a signal the list unpacks with
+    // -expand arrives showing them, and a group it marks arrives open. The rest arrive closed,
+    // because a long list opened all at once is a wall.
+    ASSERT_NE(waveRows(), nullptr);
+    ASSERT_TRUE(load(R"(
+        group -expand Open {
+            add wave -expand /tb/u_dut/q
+            add wave -contents {
+                add wave /tb/count[3]
+            } /tb/count
+            add wave -expand -contents {
+                add wave /tb/count[1]
+            } /tb/count
+        }
+        group Closed {
+            add wave -expand /tb/u_dut/q
+        }
+    )"));
+
+    const QVector<int> rows = topRows();
+    ASSERT_EQ(rows.size(), 2);
+
+    const WaveRow& open = rowAt(rows[0]);
+    EXPECT_TRUE(isOpen(rows[0]));
+    ASSERT_EQ(open.children.size(), 3);
+    EXPECT_TRUE(isOpen(open.children[0]));
+    EXPECT_EQ(rowAt(open.children[0]).children.size(), 4);
+    EXPECT_TRUE(rowAt(open.children[1]).unpacked);
+    EXPECT_EQ(rowAt(open.children[1]).children.size(), 1);
+    EXPECT_FALSE(isOpen(open.children[1])) << "-contents alone says what is beneath, closed";
+    EXPECT_EQ(rowAt(open.children[2]).children.size(), 1);
+    EXPECT_TRUE(isOpen(open.children[2])) << "and with -expand, shown";
+
+    const WaveRow& closed = rowAt(rows[1]);
+    EXPECT_FALSE(isOpen(rows[1]));
+    ASSERT_EQ(closed.children.size(), 1);
+    EXPECT_TRUE(isOpen(closed.children[0])) << "open beneath a closed group, as the list says";
 }
 
 TEST_F(SignalListLoadTest, AScopeAddsWhatTheMenuEntryAdds) {

@@ -115,6 +115,30 @@ TEST(SignalList, ContentsIsABodyAndMayBeEmpty) {
     EXPECT_TRUE(parsed.entries[1].body.empty());
 }
 
+TEST(SignalList, ExpandOpensAGroupOrASignalAndMayAccompanyContents) {
+    // -contents says which rows are beneath a signal and -expand that they are shown, so the
+    // two say different things and are given together.
+    const ParsedSignalList parsed = parse(R"(
+        group -expand Open {
+            add wave -expand -contents {
+                add wave /tb/bus[7]
+            } /tb/bus
+            add wave -expand /tb/other
+        }
+    )");
+    ASSERT_TRUE(parsed.errors.isEmpty()) << firstError(parsed);
+    ASSERT_EQ(parsed.entries.size(), 1U);
+
+    const SignalListEntry& group = parsed.entries.front();
+    EXPECT_TRUE(group.expand);
+    ASSERT_EQ(group.body.size(), 2U);
+    EXPECT_TRUE(group.body[0].expand);
+    EXPECT_TRUE(group.body[0].contents);
+    EXPECT_EQ(group.body[0].body.size(), 1U);
+    EXPECT_TRUE(group.body[1].expand);
+    EXPECT_FALSE(group.body[1].contents);
+}
+
 // ---------------------------------------------------------------------------
 // Tcl's syntax, nothing evaluated
 // ---------------------------------------------------------------------------
@@ -205,7 +229,6 @@ TEST(SignalList, AWrongRadixIsToldEveryRadixThereIs) {
 TEST(SignalList, OptionsThatContradictTheirPathsAreRefused) {
     EXPECT_FALSE(parse("add wave -label x /tb/a /tb/b\n").errors.isEmpty());
     EXPECT_FALSE(parse("add wave -contents {} /tb/a /tb/b\n").errors.isEmpty());
-    EXPECT_FALSE(parse("add wave -expand -contents {} /tb/a\n").errors.isEmpty());
     EXPECT_FALSE(parse("add wave -r -label x /tb\n").errors.isEmpty());
 }
 

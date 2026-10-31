@@ -166,6 +166,10 @@ public:
     struct PendingRow {
         WaveRow row;
         std::vector<PendingRow> children;
+
+        /// Shown open once it is in the window, which only a signal list says: what is open is
+        /// the view's to know, and `insertSignalRows` leaves it to the view.
+        bool open = false;
     };
 
     // --- making rows ------------------------------------------------------

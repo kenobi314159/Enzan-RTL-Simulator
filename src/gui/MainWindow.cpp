@@ -122,6 +122,21 @@ void openFromItsMenu(QMenu* submenu) {
     submenu->installEventFilter(new SubmenuParenting(submenu));
 }
 
+/// Opens what a signal list marks open among the rows it made, at every depth.
+///
+/// `made` are the rows `pending` became, in the same order, as `insertSignalRows` returns them
+/// and as it puts each one's children beneath it.
+void openAsListed(QTreeView& view, const WaveformModel& model,
+                  const std::vector<WaveformModel::PendingRow>& pending, const QVector<int>& made) {
+    const std::size_t count = std::min(pending.size(), static_cast<std::size_t>(made.size()));
+    for (std::size_t position = 0; position < count; ++position) {
+        const int rowId = made[static_cast<qsizetype>(position)];
+        if (pending[position].open) view.expand(model.indexOfRow(rowId));
+        if (const WaveRow* row = model.row(rowId))
+            openAsListed(view, model, pending[position].children, row->children);
+    }
+}
+
 /// The desktop's font, as it was before any theme was applied, which every size a theme gives is
 /// worked out from.
 ///
@@ -1072,9 +1087,11 @@ void MainWindow::finishLoad(const PendingLoad& load) {
     if (load.replace) waveModel->clear();
 
     // Inserted the way a paste inserts, so nothing already in the window collapses or
-    // expands. Groups are not expanded either: a list of two hundred signals opened all at
-    // once is a wall, and the groups are there to be opened one by one.
-    static_cast<void>(waveModel->insertSignalRows(resolved.rows, -1, -1));
+    // expands. Of the rows arriving, only those the list marks `-expand` open: a list of two
+    // hundred signals opened all at once is a wall, and the groups are there to be opened one
+    // by one.
+    const QVector<int> made = waveModel->insertSignalRows(resolved.rows, -1, -1);
+    openAsListed(*waveRowsView, *waveModel, resolved.rows, made);
 
     if (!load.file.isEmpty()) {
         signalListFile = load.file;
