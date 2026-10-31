@@ -35,6 +35,7 @@
 #include <QToolBar>
 #include <QTreeView>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <algorithm>
 #include <functional>
@@ -81,6 +82,44 @@ void showKeyInToolTip(QAction* action) {
     if (action->shortcut().isEmpty()) return;
     action->setToolTip(
         QStringLiteral("%1 (%2)").arg(action->toolTip(), keyText(action->shortcut())));
+}
+
+/// Gives a submenu, as it is shown, the menu it is shown from as its native window's parent.
+class SubmenuParenting final : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        auto* submenu = qobject_cast<QMenu*>(watched);
+        if (submenu == nullptr || event->type() != QEvent::Show) return false;
+
+        QWindow* window = submenu->windowHandle();
+        if (window == nullptr) return false;
+        for (QObject* object : submenu->menuAction()->associatedObjects()) {
+            const auto* menu = qobject_cast<const QMenu*>(object);
+            if (menu != nullptr && menu->isVisible() && menu->windowHandle() != nullptr) {
+                window->setTransientParent(menu->windowHandle());
+                break;
+            }
+        }
+        return false;
+    }
+};
+
+/// Makes `submenu` open as a child of whichever of its menus it is opened from.
+///
+/// For a submenu that is an entry of more than one menu, and so is parented to neither. Qt before
+/// 6.10 makes a menu's native window the child of its parent widget's window, here the main
+/// window, and makes that window again each time the menu opens. On Wayland a menu has to be the
+/// child of the open menu it comes from: given the main window instead, Qt moves it under that
+/// menu itself, warns on the terminal, and the menu may open in the wrong place or close
+/// unexpectedly.
+///
+/// The parent is set when the submenu is shown, after its window is made and before it reaches
+/// the compositor; by then the menu it comes from is the one of its menus that is open.
+void openFromItsMenu(QMenu* submenu) {
+    submenu->installEventFilter(new SubmenuParenting(submenu));
 }
 
 /// The desktop's font, as it was before any theme was applied, which every size a theme gives is
@@ -324,6 +363,7 @@ void MainWindow::buildDocks() {
     // does nothing to a row whose type is not an enumeration, which is the honest answer: there
     // are no names to show.
     auto* radixMenu = new QMenu(tr("Radix"), waveRowsView);
+    openFromItsMenu(radixMenu);
     connect(radixMenu->addAction(tr("Symbolic")), &QAction::triggered, this, [this] {
         for (const int rowId : selectedWaveRows()) waveModel->setSymbolicRecursive(rowId, true);
         waveView->update();
@@ -338,6 +378,7 @@ void MainWindow::buildDocks() {
     // The palette is the theme's, so each entry carries its actual colour, which `applyTheme`
     // paints, and is numbered as `-highlight` numbers it in a signal list file.
     auto* highlightMenu = new QMenu(tr("Highlight"), waveRowsView);
+    openFromItsMenu(highlightMenu);
     for (int slot = 1; slot <= HighlightSlots; ++slot) {
         QAction* entry = highlightMenu->addAction(QString::number(slot));
         connect(entry, &QAction::triggered, this, [this, slot] { setSelectedHighlight(slot); });

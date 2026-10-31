@@ -42,6 +42,7 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QPlainTextEdit>
+#include <QPoint>
 #include <QPushButton>
 #include <QSize>
 #include <QString>
@@ -51,6 +52,7 @@
 #include <QTextBlock>
 #include <QTextBrowser>
 #include <QTreeView>
+#include <QWindow>
 
 #include <algorithm>
 #include <atomic>
@@ -804,6 +806,49 @@ TEST_F(MainWindowTest, TheTranscriptIsClearedByOneCommand) {
 
     transcriptView->clearAction()->trigger();
     EXPECT_TRUE(text->toPlainText().isEmpty());
+}
+
+TEST_F(MainWindowTest, ASubmenuOpensAsAChildOfTheMenuItIsOpenedFrom) {
+    // Radix and Highlight are entries of the wave list's own menu and of Edit. On Wayland a menu
+    // must be the child of the menu it opens from, and one given the main window instead is
+    // moved there by Qt with a warning on the terminal. Each is opened from both, the second
+    // time after the first has closed it, since Qt makes a menu's window again as it reopens.
+    QTreeView* rows = waveRows();
+    ASSERT_NE(rows, nullptr);
+    QMenu* edit = nullptr;
+    for (const QAction* entry : window->menuBar()->actions()) {
+        if (entry->text() == QStringLiteral("&Edit")) edit = entry->menu();
+    }
+    ASSERT_NE(edit, nullptr);
+
+    // The wave list's menu, built from its actions as Qt builds it on a right-click, and titled
+    // only to be named below.
+    QMenu context(QStringLiteral("the wave list's menu"), rows);
+    context.addActions(rows->actions());
+
+    // A main window with no native window of its own could not be anybody's parent.
+    window->show();
+
+    for (QMenu* host : {edit, &context}) {
+        for (const QString& title : {QStringLiteral("Radix"), QStringLiteral("Highlight")}) {
+            QAction* entry = nullptr;
+            for (QAction* candidate : host->actions()) {
+                if (candidate->menu() != nullptr && candidate->text() == title) entry = candidate;
+            }
+            ASSERT_NE(entry, nullptr) << title.toStdString();
+
+            host->popup(window->mapToGlobal(QPoint(20, 20)));
+            host->setActiveAction(entry);
+            QMenu* submenu = entry->menu();
+            ASSERT_TRUE(submenu->isVisible()) << title.toStdString();
+            ASSERT_NE(submenu->windowHandle(), nullptr);
+            EXPECT_EQ(submenu->windowHandle()->transientParent(), host->windowHandle())
+                << title.toStdString() << " opened from " << host->title().toStdString();
+
+            submenu->hide();
+            host->hide();
+        }
+    }
 }
 
 TEST_F(MainWindowTest, TheShortcutSheetIsReadFromTheActions) {
