@@ -1245,6 +1245,9 @@ What the wave window shows can be saved and loaded again, from the window or wit
 - **Saving writes what the window shows**, signals by path, and nothing that varies between saves,
   so an unchanged window saves the same bytes. **Loading is pasting**: the whole file is read and
   every path looked up before any row is added.
+- **Which rows are open is part of what the window shows.** A list marks every open group and
+  signal `-expand`, and loading opens those and nothing else, so a list reloads as it was saved and
+  a long one opens no more than its reader had open. ModelSim's `-expand` means the same.
 - **A mistake in the file is an error; a path the design lacks is not.** A syntax error loads
   nothing, while a path the design lacks is a warning that skips its row, since a list outlives the
   version of the design it was saved from.

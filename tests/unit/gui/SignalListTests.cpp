@@ -409,7 +409,7 @@ TEST(SignalList, TheDeepestSubtreeSavesAListThatLoadsBack) {
     const Theme theme;
     WaveformModel added(session, theme);
     static_cast<void>(added.insertSignalRows(design.resolve("add wave -r /tb\n").rows, -1, -1));
-    const QString saved = added.writeSignalList();
+    const QString saved = added.writeSignalList({});
 
     const ParsedSignalList parsed = parseSignalList(saved.toUtf8());
     ASSERT_TRUE(parsed.errors.isEmpty()) << firstError(parsed);
@@ -417,7 +417,7 @@ TEST(SignalList, TheDeepestSubtreeSavesAListThatLoadsBack) {
     WaveformModel loaded(session, theme);
     static_cast<void>(loaded.insertSignalRows(
         resolveSignalList(parsed.entries, design.instances, design.objects).rows, -1, -1));
-    EXPECT_EQ(loaded.writeSignalList(), saved);
+    EXPECT_EQ(loaded.writeSignalList({}), saved);
 }
 
 } // namespace

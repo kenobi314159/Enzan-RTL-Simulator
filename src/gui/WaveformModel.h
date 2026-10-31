@@ -9,6 +9,7 @@
 #include "runtime/Time.h"
 
 #include <QAbstractItemModel>
+#include <QSet>
 #include <QString>
 #include <QVector>
 
@@ -306,11 +307,15 @@ public:
     QVector<int> insertSignalRows(const std::vector<PendingRow>& pending, int targetGroup,
                                   int position);
 
-    /// The whole list as a signal list file, top to bottom.
+    /// The whole list as a signal list file, top to bottom, with `openRows` the rows the view
+    /// shows open.
+    ///
+    /// Which rows are open is the view's to know, so it is passed in rather than kept here
+    /// beside it, where it could come to disagree with what the window shows.
     ///
     /// Deterministic: the same rows always give the same text, so that a list kept in version
     /// control changes only when the list does.
-    [[nodiscard]] QString writeSignalList() const;
+    [[nodiscard]] QString writeSignalList(const QSet<int>& openRows) const;
 
     // --- reading -----------------------------------------------------------
 
@@ -446,11 +451,15 @@ private:
     int materialise(const PendingRow& pending, int parentRow, int position);
 
     /// Writes `rowId` and everything below it as signal list commands, indented by `depth`.
-    void writeSignalListRow(QString& text, int rowId, int depth) const;
+    void writeSignalListRow(QString& text, int rowId, int depth, const QSet<int>& openRows) const;
 
-    /// True when a row's children are what unpacking it would make now, so that `-expand`
-    /// describes them.
-    [[nodiscard]] bool childrenAreAsUnpacked(int rowId) const;
+    /// True when a row's children are what unpacking it would make now, each of them written
+    /// as a packed signal, so that no `-contents` is needed to describe them.
+    [[nodiscard]] bool childrenAreAsUnpacked(int rowId, const QSet<int>& openRows) const;
+
+    /// True when a row is written as no more than its path: packed, or closed over what
+    /// unpacking makes, which shows what a packed row shows and opens into the same rows.
+    [[nodiscard]] bool writtenAsPacked(int rowId, const QSet<int>& openRows) const;
 
     const KernelSession* kernelSession;
     const Theme* theme;

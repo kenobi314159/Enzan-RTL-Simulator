@@ -754,15 +754,21 @@ QVector<int> WaveformModel::insertSignalRows(const std::vector<PendingRow>& pend
 // Signal list files
 // ---------------------------------------------------------------------------
 
-QString WaveformModel::writeSignalList() const {
+QString WaveformModel::writeSignalList(const QSet<int>& openRows) const {
     // Nothing that varies between saves — no date, no user — so that saving an unchanged window
     // writes the same bytes.
     QString text = QStringLiteral("# Enzan signal list\n");
-    for (const int root : roots) writeSignalListRow(text, root, 0);
+    for (const int root : roots) writeSignalListRow(text, root, 0, openRows);
     return text;
 }
 
-bool WaveformModel::childrenAreAsUnpacked(int rowId) const {
+bool WaveformModel::writtenAsPacked(int rowId, const QSet<int>& openRows) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr || !waveRow->unpacked) return true;
+    return !openRows.contains(rowId) && childrenAreAsUnpacked(rowId, openRows);
+}
+
+bool WaveformModel::childrenAreAsUnpacked(int rowId, const QSet<int>& openRows) const {
     const WaveRow* waveRow = row(rowId);
     if (waveRow == nullptr || !waveRow->unpacked) return false;
 
@@ -777,23 +783,24 @@ bool WaveformModel::childrenAreAsUnpacked(int rowId) const {
             || child.label != expected.label || child.path != expected.path
             || child.radix != expected.radix || child.symbolic != expected.symbolic
             || child.highlight != expected.highlight || child.dimensions != expected.dimensions
-            || child.unpacked)
+            || !writtenAsPacked(waveRow->children[static_cast<qsizetype>(position)], openRows))
             return false;
     }
     return true;
 }
 
-void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) const {
+void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth,
+                                       const QSet<int>& openRows) const {
     const WaveRow* waveRow = row(rowId);
     if (waveRow == nullptr) return;
 
     const QString indent(static_cast<qsizetype>(depth) * 4, u' ');
 
     // A body is written in braces with its rows indented beneath, and an empty one as `{}`.
-    const auto body = [this, &indent, depth](const QVector<int>& children) {
+    const auto body = [this, &indent, depth, &openRows](const QVector<int>& children) {
         if (children.isEmpty()) return QStringLiteral("{}");
         QString inner = QStringLiteral("{\n");
-        for (const int child : children) writeSignalListRow(inner, child, depth + 1);
+        for (const int child : children) writeSignalListRow(inner, child, depth + 1, openRows);
         return inner + indent + u'}';
     };
 
@@ -810,6 +817,7 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
     if (waveRow->kind == WaveRow::Kind::Group) {
         if (waveRow->highlight != 0)
             words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
+        if (openRows.contains(rowId)) words << QStringLiteral("-expand");
         words.prepend(QStringLiteral("group"));
         words << quoteTclWord(waveRow->label) << body(waveRow->children);
         text += indent + words.join(u' ') + u'\n';
@@ -842,12 +850,12 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
     if (waveRow->highlight != 0)
         words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
 
-    if (waveRow->unpacked) {
-        if (childrenAreAsUnpacked(rowId)) {
-            words << QStringLiteral("-expand");
-        } else {
+    // Open or not, and the rows beneath only where unpacking would not make them again. A
+    // closed row over what unpacking makes is written as packed, which loads showing the same.
+    if (!writtenAsPacked(rowId, openRows)) {
+        if (openRows.contains(rowId)) words << QStringLiteral("-expand");
+        if (!childrenAreAsUnpacked(rowId, openRows))
             words << QStringLiteral("-contents") << body(waveRow->children);
-        }
     }
 
     words.prepend(QStringLiteral("add wave"));

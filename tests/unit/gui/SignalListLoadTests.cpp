@@ -22,12 +22,15 @@
 #include <QDockWidget>
 #include <QFile>
 #include <QItemSelectionModel>
+#include <QModelIndex>
 #include <QPlainTextEdit>
+#include <QSet>
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTreeView>
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 
 namespace {
@@ -111,6 +114,23 @@ protected:
     /// True when the wave window shows `rowId`'s rows: open itself, whether or not its parent is.
     [[nodiscard]] bool isOpen(int rowId) const {
         return waveRows()->isExpanded(waves()->indexOfRow(rowId));
+    }
+
+    /// Opens `rowId` in the wave window, as clicking its arrow does.
+    void open(int rowId) const { waveRows()->expand(waves()->indexOfRow(rowId)); }
+
+    /// The list as saving writes it: the rows, and which of them the window shows open.
+    [[nodiscard]] QString listed() const {
+        QSet<int> open;
+        const std::function<void(const QModelIndex&)> visit = [&](const QModelIndex& parent) {
+            for (int position = 0; position < waves()->rowCount(parent); ++position) {
+                const QModelIndex index = waves()->index(position, 0, parent);
+                if (waveRows()->isExpanded(index)) open.insert(waves()->rowIdOf(index));
+                visit(index);
+            }
+        };
+        visit(QModelIndex());
+        return waves()->writeSignalList(open);
     }
 
     [[nodiscard]] SignalInfo info(const QString& scope, const QString& name) {
@@ -244,10 +264,10 @@ TEST_F(SignalListLoadTest, AScopeAddsWhatTheMenuEntryAdds) {
     ASSERT_TRUE(pumpUntil([this] { return topRows().size() == 1; }))
         << topRows().size() << " rows; the transcript says:\n"
         << transcript().toStdString();
-    const QString byMenu = waves()->writeSignalList();
+    const QString byMenu = listed();
 
     ASSERT_TRUE(load("add wave -r /tb\n"));
-    EXPECT_EQ(waves()->writeSignalList(), byMenu);
+    EXPECT_EQ(listed(), byMenu);
 }
 
 TEST_F(SignalListLoadTest, ALabelNamesTheGroupAScopeAdds) {
@@ -325,6 +345,7 @@ TEST_F(SignalListLoadTest, ASavedListLoadsBackAsItWasAndSavesTheSameBytes) {
     model->setHighlight(clock, 1);
 
     const int group = model->addGroup(QStringLiteral("State and parameters"));
+    open(group);
     model->addSignal(info(QStringLiteral("/tb"), QStringLiteral("state")), group);
     model->addSignal(info(QStringLiteral("/tb/u_dut"), QStringLiteral("WIDTH")), group);
     model->addGroup(QStringLiteral("empty"), group);
@@ -336,9 +357,11 @@ TEST_F(SignalListLoadTest, ASavedListLoadsBackAsItWasAndSavesTheSameBytes) {
     model->removeRow(model->row(bus)->children[1]);
     model->setRadix(model->row(bus)->children[0], Radix::Binary);
     static_cast<void>(model->moveRowsTo({model->row(bus)->children[2]}, bus, 0));
+    open(bus);
 
     const int q = model->addSignal(info(QStringLiteral("/tb/u_dut"), QStringLiteral("q")));
     model->unpack(q);
+    open(q);
 
     const int slice = model->addSlice(
         model->addSignal(info(QStringLiteral("/tb"), QStringLiteral("count"))), 5, 2);
@@ -352,7 +375,7 @@ TEST_F(SignalListLoadTest, ASavedListLoadsBackAsItWasAndSavesTheSameBytes) {
     first.close();
 
     // What the window had made of it, to compare the reload against.
-    const QString before = model->writeSignalList();
+    const QString before = listed();
     EXPECT_TRUE(before.contains(QStringLiteral("-contents"))) << before.toStdString();
     EXPECT_TRUE(before.contains(QStringLiteral("-expand"))) << before.toStdString();
 
@@ -361,12 +384,61 @@ TEST_F(SignalListLoadTest, ASavedListLoadsBackAsItWasAndSavesTheSameBytes) {
         return transcript().contains(QStringLiteral("Loaded the signal list %1").arg(saved));
     }));
 
-    EXPECT_EQ(model->writeSignalList(), before);
+    EXPECT_EQ(listed(), before);
 
     ASSERT_TRUE(window->saveSignalList(saved));
     QFile second(saved);
     ASSERT_TRUE(second.open(QIODevice::ReadOnly));
     EXPECT_EQ(second.readAll(), written) << "the same window saves the same bytes";
+}
+
+TEST_F(SignalListLoadTest, SavingMarksWhatIsOpenAndWritesAClosedUnpackedSignalAsPacked) {
+    // A list records which rows its reader had open, so that it reloads looking as it was. A
+    // closed signal over the rows unpacking makes shows what a packed one shows, and opening it
+    // makes those rows again, so it is written as packed.
+    WaveformModel* model = waves();
+
+    const int shown = model->addGroup(QStringLiteral("Shown"));
+    open(shown);
+    const int opened =
+        model->addSignal(info(QStringLiteral("/tb/u_dut"), QStringLiteral("q")), shown);
+    model->unpack(opened);
+    open(opened);
+    const int closed =
+        model->addSignal(info(QStringLiteral("/tb/u_dut"), QStringLiteral("q")), shown);
+    model->unpack(closed);
+
+    model->addGroup(QStringLiteral("Hidden"));
+
+    // With a bit taken out, the rows beneath are written whether or not they are shown.
+    for (const bool shownOpen : {true, false}) {
+        const int trimmed =
+            model->addSignal(info(QStringLiteral("/tb/u_dut"), QStringLiteral("q")));
+        model->unpack(trimmed);
+        model->removeRow(model->row(trimmed)->children[0]);
+        if (shownOpen) open(trimmed);
+    }
+
+    const QString saved = listed();
+    EXPECT_EQ(saved, QStringLiteral("# Enzan signal list\n"
+                                    "group -expand Shown {\n"
+                                    "    add wave -expand /tb/u_dut/q\n"
+                                    "    add wave /tb/u_dut/q\n"
+                                    "}\n"
+                                    "group Hidden {}\n"
+                                    "add wave -expand -contents {\n"
+                                    "    add wave /tb/u_dut/q[2]\n"
+                                    "    add wave /tb/u_dut/q[1]\n"
+                                    "    add wave /tb/u_dut/q[0]\n"
+                                    "} /tb/u_dut/q\n"
+                                    "add wave -contents {\n"
+                                    "    add wave /tb/u_dut/q[2]\n"
+                                    "    add wave /tb/u_dut/q[1]\n"
+                                    "    add wave /tb/u_dut/q[0]\n"
+                                    "} /tb/u_dut/q\n"));
+
+    ASSERT_TRUE(load(saved.toUtf8()));
+    EXPECT_EQ(listed(), saved) << "loading opens what was open and nothing else";
 }
 
 TEST_F(SignalListLoadTest, SaveWritesBackToTheFileTheListCameFrom) {
@@ -378,13 +450,13 @@ TEST_F(SignalListLoadTest, SaveWritesBackToTheFileTheListCameFrom) {
 
     ASSERT_NE(saveAction(), nullptr);
     saveAction()->trigger();
-    EXPECT_EQ(contentsOf(loaded), waves()->writeSignalList().toUtf8());
+    EXPECT_EQ(contentsOf(loaded), listed().toUtf8());
 
     const QString elsewhere = files.filePath(QStringLiteral("elsewhere.tcl"));
     ASSERT_TRUE(window->saveSignalList(elsewhere));
     waves()->addSignal(info(QStringLiteral("/tb"), QStringLiteral("state")));
     saveAction()->trigger();
-    EXPECT_EQ(contentsOf(elsewhere), waves()->writeSignalList().toUtf8())
+    EXPECT_EQ(contentsOf(elsewhere), listed().toUtf8())
         << "after a save to another file, that file is the list's";
     EXPECT_NE(contentsOf(loaded), contentsOf(elsewhere));
 }
@@ -407,7 +479,7 @@ TEST_F(SignalListLoadTest, AFileThatLoadedNothingIsNotWhereSaveWrites) {
     saveAction()->trigger();
     EXPECT_EQ(contentsOf(bad), mistaken);
     EXPECT_EQ(contentsOf(scope), QByteArray("add wave -expand /tb\n"));
-    EXPECT_EQ(contentsOf(kept), waves()->writeSignalList().toUtf8());
+    EXPECT_EQ(contentsOf(kept), listed().toUtf8());
 }
 
 // ---------------------------------------------------------------------------
@@ -488,8 +560,9 @@ TEST_F(ArraySignalListTest, AnArrayTakenApartIsSavedByItsIndicesAndLoadsBackTheS
 
     const int memory = model->addSignal(info(QStringLiteral("/tb"), QStringLiteral("memory")));
     model->unpack(memory);
+    open(memory);
 
-    const QString before = model->writeSignalList();
+    const QString before = listed();
     EXPECT_TRUE(before.contains(QStringLiteral("add wave -radix bin /tb/lanes[1]")))
         << before.toStdString();
     EXPECT_TRUE(before.contains(QStringLiteral("add wave /tb/lanes[0][2]")))
@@ -498,7 +571,7 @@ TEST_F(ArraySignalListTest, AnArrayTakenApartIsSavedByItsIndicesAndLoadsBackTheS
         << before.toStdString();
 
     ASSERT_TRUE(load(before.toUtf8()));
-    EXPECT_EQ(model->writeSignalList(), before);
+    EXPECT_EQ(listed(), before);
 
     // What came back is an element again, that unpacks into its bits.
     const QVector<int> rows = topRows();

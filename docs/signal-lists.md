@@ -100,8 +100,10 @@ reordered, other rows dragged in, and each row with its own radix, label and hig
 Loading a saved file rebuilds the same list. A saved file contains:
 
 - `-label` only on rows that were renamed;
-- `-expand` on a signal left exactly as unpacking made it, and `-contents` on one that was changed
-  since;
+- `-expand` on every group and signal that is open;
+- `-contents` on an unpacked signal whose rows unpacking would not make again: changed since, or
+  with one of them open. One that is closed over the rows unpacking made is written as packed,
+  since it shows the same and opens into the same rows;
 - signals, selects and parameters by path, never a scope or `-r`, because by then the rows exist
   one by one and may have been rearranged. A range of bits that no select can name, such as part of
   one element and part of the next, is left out.
@@ -109,8 +111,7 @@ Loading a saved file rebuilds the same list. A saved file contains:
 - nothing that varies between saves, such as a date or a user name, so an unchanged window saves to
   the same bytes and a list kept in version control changes only when the list does.
 
-Cursors and zoom are not part of a signal list, and saving does not record which groups are
-open.
+Cursors and zoom are not part of a signal list.
 
 ## Loading
 

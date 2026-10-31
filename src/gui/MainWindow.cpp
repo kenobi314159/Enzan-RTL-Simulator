@@ -137,6 +137,17 @@ void openAsListed(QTreeView& view, const WaveformModel& model,
     }
 }
 
+/// Adds to `open` every row below `parent` that `view` shows open, at any depth, whether or not
+/// what holds it is: a row inside a closed group is open as soon as the group is.
+void collectOpenRows(const QTreeView& view, const WaveformModel& model, const QModelIndex& parent,
+                     QSet<int>& open) {
+    for (int position = 0; position < model.rowCount(parent); ++position) {
+        const QModelIndex index = model.index(position, 0, parent);
+        if (view.isExpanded(index)) open.insert(model.rowIdOf(index));
+        collectOpenRows(view, model, index, open);
+    }
+}
+
 /// The desktop's font, as it was before any theme was applied, which every size a theme gives is
 /// worked out from.
 ///
@@ -1021,11 +1032,15 @@ bool MainWindow::loadSignalList(const QString& path) {
 }
 
 bool MainWindow::saveSignalList(const QString& path) {
+    // Which rows are open is part of what the window shows, and the view is what knows it.
+    QSet<int> open;
+    collectOpenRows(*waveRowsView, *waveModel, QModelIndex(), open);
+
     // Written aside and moved into place, so that a save that fails half-way leaves the list
     // that was there rather than half of the new one.
     QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly) || file.write(waveModel->writeSignalList().toUtf8()) < 0
-        || !file.commit()) {
+    if (!file.open(QIODevice::WriteOnly)
+        || file.write(waveModel->writeSignalList(open).toUtf8()) < 0 || !file.commit()) {
         note(tr("The signal list could not be written to %1: %2").arg(path, file.errorString()));
         return false;
     }
