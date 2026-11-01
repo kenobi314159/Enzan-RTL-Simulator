@@ -80,8 +80,9 @@ struct ValueReading {
 /// `parts`, the first the most significant, as one value.
 [[nodiscard]] eir::BitVector joinParts(std::span<const eir::BitVector> parts);
 
-/// `parts`, each with a value and the first the most significant, as one reading: their values
-/// joined, and their partial digits moved to where their bits went.
+/// `parts`, the first the most significant, as one reading: their values joined, and their partial
+/// digits moved to where their bits went. The first of them with no value is the reading, if one
+/// has none.
 [[nodiscard]] ValueReading joinReadings(std::span<const ValueReading> parts);
 
 } // namespace enzan::gui

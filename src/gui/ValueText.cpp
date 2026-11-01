@@ -417,19 +417,23 @@ eir::BitVector joinParts(std::span<const eir::BitVector> parts) {
 ValueReading joinReadings(std::span<const ValueReading> parts) {
     std::vector<eir::BitVector> values;
     values.reserve(parts.size());
-    for (const ValueReading& part : parts) values.push_back(*part.value);
-    ValueReading joined = accepted(joinParts(values));
-
-    std::uint32_t top = joined.value->width();
     for (const ValueReading& part : parts) {
-        top -= part.value->width();
-        for (PartialDigit digit : part.partial) {
+        if (!part.value.has_value()) return part;
+        values.push_back(*part.value);
+    }
+    eir::BitVector joined = joinParts(values);
+
+    std::vector<PartialDigit> partial;
+    std::uint32_t top = joined.width();
+    for (std::size_t index = 0; index < parts.size(); ++index) {
+        top -= values[index].width();
+        for (PartialDigit digit : parts[index].partial) {
             digit.highBit += top;
             digit.lowBit += top;
-            joined.partial.push_back(digit);
+            partial.push_back(digit);
         }
     }
-    return joined;
+    return accepted(std::move(joined), std::move(partial));
 }
 
 } // namespace enzan::gui

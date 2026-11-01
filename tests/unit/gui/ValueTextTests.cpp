@@ -390,6 +390,9 @@ TEST(ValueText, WhatTheColumnWritesReadsBackAsTheSameValue) {
 /// under each partial digit some bits unknown and not all, or, none unknown, some high impedance
 /// and not all.
 bool describes(const ValueReading& reading, const BitVector& value) {
+    if (!reading.value.has_value()) return false;
+    const BitVector& read = *reading.value;
+
     std::vector<bool> partial(value.width(), false);
     for (const PartialDigit& digit : reading.partial) {
         std::uint32_t unknown = 0;
@@ -406,7 +409,7 @@ bool describes(const ValueReading& reading, const BitVector& value) {
         if (!shows) return false;
     }
     for (std::uint32_t bit = 0; bit < value.width(); ++bit) {
-        if (!partial[bit] && value.get(bit) != reading.value->get(bit)) return false;
+        if (!partial[bit] && value.get(bit) != read.get(bit)) return false;
     }
     return true;
 }

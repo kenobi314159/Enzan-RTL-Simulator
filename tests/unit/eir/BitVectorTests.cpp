@@ -272,8 +272,10 @@ TEST(BitVectorParse, ALiteralWiderThanAnyValueIsRefusedRatherThanMade) {
 
     const std::optional<BitVector> widest = BitVector::parse("16777215'h1");
     ASSERT_TRUE(widest.has_value());
+    // NOLINTBEGIN(bugprone-unchecked-optional-access)
     EXPECT_EQ(widest->width(), enzan::eir::MaxLiteralWidth);
     EXPECT_EQ(widest->get(0), Logic::One);
+    // NOLINTEND(bugprone-unchecked-optional-access)
 }
 
 TEST(BitVectorParse, UnderscoresAreSeparators) {

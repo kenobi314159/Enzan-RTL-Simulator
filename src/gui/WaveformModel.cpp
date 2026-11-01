@@ -1297,8 +1297,9 @@ WaveformModel::termsFor(int rowId, const eir::BitVector& value,
 
         // A parameter's bits are the same at every time, so they settle now what they ask.
         if (part.constant.has_value()) {
-            for (std::uint32_t offset = 0; offset < part.width(); ++offset) {
-                const eir::Logic shown = part.constant->get(offset);
+            const eir::BitVector& constant = *part.constant;
+            for (std::uint32_t offset = 0; offset < constant.width(); ++offset) {
+                const eir::Logic shown = constant.get(offset);
                 const std::size_t digit = digitOf[top + offset];
                 if (digit != NoDigit) {
                     digits[digit].coverFixed(shown);

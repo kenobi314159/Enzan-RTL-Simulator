@@ -958,6 +958,7 @@ TEST(WaveformDatabaseTests, DigitsAcrossSignalsAnswerAsTheirRenderingDoes) {
         const std::string capital = kind == Logic::Unknown ? "X" : "Z";
         for (const Logic b2 : {Logic::Zero, Logic::Unknown}) {
             std::vector<SearchTerm> terms;
+            terms.reserve(records.size());
             for (const std::uint32_t record : records)
                 terms.push_back({.recordIndex = record, .pattern = BitPattern(3)});
             ASSERT_TRUE(terms[1].pattern.require(2, 2, BitVector::filled(1, b2).ref()));
