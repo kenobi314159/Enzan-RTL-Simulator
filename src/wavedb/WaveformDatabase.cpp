@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <iterator>
+#include <queue>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,43 +23,6 @@ namespace enzan::wavedb {
 namespace {
 
 constexpr std::uint64_t BytesPerWord = sizeof(eir::Word);
-
-/// Bits of a value laid out as a stored value of the whole signal is, with the mask that picks
-/// them out: what a stored value is compared with where it lies.
-class StoredPattern {
-public:
-    StoredPattern(std::uint32_t width, std::uint32_t highBit, std::uint32_t lowBit,
-                  eir::ConstBitRef value)
-        : planeWords(eir::wordsFor(width)),
-          firstWord(lowBit / eir::BitsPerWord),
-          lastWord(highBit / eir::BitsPerWord),
-          expected(eir::storageWordsFor(width)),
-          mask(planeWords) {
-        eir::BitVector placed = eir::BitVector::filled(width, eir::Logic::Zero);
-        eir::bitops::assignPartAt(placed.mutableRef(), value, lowBit);
-        std::copy_n(placed.ref().aval(), expected.size(), expected.begin());
-
-        for (std::uint32_t bit = lowBit; bit <= highBit; ++bit)
-            mask[bit / eir::BitsPerWord] |= eir::Word{1} << (bit % eir::BitsPerWord);
-    }
-
-    /// True when the value stored at `stored`, both of its planes, holds the pattern's bits.
-    [[nodiscard]] bool matches(const eir::Word* stored) const noexcept {
-        for (std::uint32_t word = firstWord; word <= lastWord; ++word) {
-            const eir::Word differs = (stored[word] ^ expected[word])
-                                      | (stored[planeWords + word] ^ expected[planeWords + word]);
-            if ((differs & mask[word]) != 0) return false;
-        }
-        return true;
-    }
-
-private:
-    std::uint32_t planeWords;
-    std::uint32_t firstWord;
-    std::uint32_t lastWord;
-    std::vector<eir::Word> expected;
-    std::vector<eir::Word> mask;
-};
 
 /// Ceiling on the number of columns `sample` will summarise into.
 ///
@@ -235,39 +200,274 @@ std::uint64_t WaveformDatabase::nearestChange(std::uint32_t recordIndex,
     return backward <= forward ? earlier : later;
 }
 
-std::uint64_t WaveformDatabase::firstStartIn(std::uint32_t recordIndex, std::uint64_t from,
-                                             std::uint64_t to, std::uint32_t highBit,
-                                             std::uint32_t lowBit, eir::ConstBitRef value) const {
-    const SignalStore& store = storeAt(recordIndex);
-    ENZAN_ASSERT(lowBit <= highBit && highBit < store.info.width,
-                 "a bit range must lie inside the signal");
+// ---------------------------------------------------------------------------
+// Searching for a value
+// ---------------------------------------------------------------------------
+
+BitPattern::BitPattern(std::uint32_t width)
+    : bits(width),
+      planeWords(eir::wordsFor(width)),
+      expected(eir::storageWordsFor(width)),
+      mask(planeWords) {}
+
+bool BitPattern::require(std::uint32_t highBit, std::uint32_t lowBit, eir::ConstBitRef value) {
+    ENZAN_ASSERT(lowBit <= highBit && highBit < bits, "a bit range must lie inside the signal");
     ENZAN_ASSERT(value.width() == highBit - lowBit + 1, "a value must be as wide as its bits");
+
+    eir::BitVector placed = eir::BitVector::filled(bits, eir::Logic::Zero);
+    eir::bitops::assignPartAt(placed.mutableRef(), value, lowBit);
+    const eir::Word* words = placed.ref().aval();
+
+    std::vector<eir::Word> asked(planeWords);
+    for (std::uint32_t bit = lowBit; bit <= highBit; ++bit)
+        asked[bit / eir::BitsPerWord] |= eir::Word{1} << (bit % eir::BitsPerWord);
+
+    // Checked whole before anything is changed, so that a refusal leaves the pattern as it was.
+    for (std::uint32_t word = 0; word < planeWords; ++word) {
+        const eir::Word differs = (expected[word] ^ words[word])
+                                  | (expected[planeWords + word] ^ words[planeWords + word]);
+        if ((differs & mask[word] & asked[word]) != 0) return false;
+    }
+
+    for (std::uint32_t word = 0; word < planeWords; ++word) {
+        expected[word] |= words[word] & asked[word];
+        expected[planeWords + word] |= words[planeWords + word] & asked[word];
+        mask[word] |= asked[word];
+    }
+    firstWord = std::min(firstWord, lowBit / eir::BitsPerWord);
+    lastWord = std::max(lastWord, highBit / eir::BitsPerWord);
+    return true;
+}
+
+/// A search's place in one signal's changes, and whether the signal holds its term there.
+///
+/// It keeps the address of the chunk it last read rather than asking for it at every change,
+/// which is most of what reading a value costs, and asks again once the chunk changes or any
+/// chunk has been evicted since, so that it never reads values a reload has freed.
+struct WaveformDatabase::SearchCursor {
+    const SearchTerm* term = nullptr;
+    const SignalStore* store = nullptr;
+
+    /// Forwards, the first change not yet examined; backwards, one past the last.
+    std::uint64_t next = 0;
+
+    bool holds = false;
+
+    /// The changes of the chunk last read, `[chunkStart, chunkEnd)`, where its values are, and
+    /// how many chunks had been evicted when they were read.
+    std::uint64_t chunkStart = 0;
+    std::uint64_t chunkEnd = 0;
+    const eir::Word* words = nullptr;
+    std::uint64_t evictionsSeen = 0;
+};
+
+bool WaveformDatabase::holdsAt(SearchCursor& cursor, std::uint64_t change) const {
+    // Compared with the bounds of the chunk rather than divided into one, since a division costs
+    // more than the comparison the values are read for.
+    if (change < cursor.chunkStart || change >= cursor.chunkEnd
+        || cursor.evictionsSeen != evictions) {
+        const auto chunkIndex = static_cast<std::uint32_t>(change / options.chunkCapacity);
+        cursor.words = chunkWordsOf(cursor.term->recordIndex, chunkIndex).data();
+        cursor.chunkStart = std::uint64_t{chunkIndex} * options.chunkCapacity;
+        cursor.chunkEnd = cursor.chunkStart + options.chunkCapacity;
+        cursor.evictionsSeen = evictions;
+    }
+    const std::uint64_t offset = (change - cursor.chunkStart) * cursor.store->valueWords;
+    return cursor.term->pattern.matches(cursor.words + offset);
+}
+
+SearchResult WaveformDatabase::nextTimeHolding(std::span<const SearchTerm> terms,
+                                               runtime::SimTime after, runtime::SimTime limit,
+                                               std::uint64_t budget) const {
+    if (terms.empty()) return {};
+    if (terms.size() == 1) return nextTimeHoldingOne(terms.front(), after, limit, budget);
+
+    std::vector<SearchCursor> cursors(terms.size());
+    std::size_t holding = 0;
+    for (std::size_t index = 0; index < terms.size(); ++index) {
+        SearchCursor& cursor = cursors[index];
+        cursor.term = &terms[index];
+        cursor.store = &storeAt(terms[index].recordIndex);
+        cursor.next = static_cast<std::uint64_t>(
+            std::ranges::upper_bound(cursor.store->times, after) - cursor.store->times.begin());
+        cursor.holds = cursor.next > 0 && holdsAt(cursor, cursor.next - 1);
+        holding += cursor.holds ? 1 : 0;
+    }
+
+    // The cursors by the time of their next change, earliest first.
+    using Pending = std::pair<runtime::SimTime, std::size_t>;
+    std::priority_queue<Pending, std::vector<Pending>, std::greater<>> pending;
+    for (std::size_t index = 0; index < cursors.size(); ++index) {
+        const SearchCursor& cursor = cursors[index];
+        if (cursor.next < cursor.store->times.size())
+            pending.emplace(cursor.store->times[cursor.next], index);
+    }
+
+    const std::uint64_t allowed = std::max(budget, std::uint64_t{8} * terms.size());
+    std::uint64_t examined = 0;
+    while (!pending.empty()) {
+        const runtime::SimTime time = pending.top().first;
+        if (time >= limit) return {};
+        const bool held = holding == cursors.size();
+
+        // Every signal changing at this time changes before the terms are tested, since they all
+        // change at once.
+        while (!pending.empty() && pending.top().first == time) {
+            SearchCursor& cursor = cursors[pending.top().second];
+            const std::size_t index = pending.top().second;
+            pending.pop();
+
+            const std::vector<runtime::SimTime>& times = cursor.store->times;
+            while (cursor.next < times.size() && times[cursor.next] == time) {
+                ++cursor.next;
+                ++examined;
+            }
+            const bool holds = holdsAt(cursor, cursor.next - 1);
+            holding = holding - (cursor.holds ? 1 : 0) + (holds ? 1 : 0);
+            cursor.holds = holds;
+            if (cursor.next < times.size()) pending.emplace(times[cursor.next], index);
+        }
+
+        if (holding == cursors.size() && !held)
+            return {.outcome = SearchResult::Outcome::Found, .time = time};
+        if (examined >= allowed)
+            return {.outcome = SearchResult::Outcome::Unfinished, .time = time};
+    }
+    return {};
+}
+
+SearchResult WaveformDatabase::previousTimeHolding(std::span<const SearchTerm> terms,
+                                                   runtime::SimTime before, runtime::SimTime limit,
+                                                   std::uint64_t budget) const {
+    if (terms.empty()) return {};
+    if (terms.size() == 1) return previousTimeHoldingOne(terms.front(), before, limit, budget);
+
+    // Nothing at or past the limit is known yet, so the search starts below it.
+    const runtime::SimTime bound = std::min(before, limit);
+
+    std::vector<SearchCursor> cursors(terms.size());
+    std::size_t holding = 0;
+    for (std::size_t index = 0; index < terms.size(); ++index) {
+        SearchCursor& cursor = cursors[index];
+        cursor.term = &terms[index];
+        cursor.store = &storeAt(terms[index].recordIndex);
+        cursor.next = static_cast<std::uint64_t>(
+            std::ranges::lower_bound(cursor.store->times, bound) - cursor.store->times.begin());
+        cursor.holds = cursor.next > 0 && holdsAt(cursor, cursor.next - 1);
+        holding += cursor.holds ? 1 : 0;
+    }
+
+    // The cursors by the time of the change they stand on, latest first. What the signals hold
+    // from the latest of them is what they hold now; stepping each back past it gives what they
+    // held an instant before.
+    using Pending = std::pair<runtime::SimTime, std::size_t>;
+    std::priority_queue<Pending> pending;
+    for (std::size_t index = 0; index < cursors.size(); ++index) {
+        const SearchCursor& cursor = cursors[index];
+        if (cursor.next > 0) pending.emplace(cursor.store->times[cursor.next - 1], index);
+    }
+
+    const std::uint64_t allowed = std::max(budget, std::uint64_t{8} * terms.size());
+    std::uint64_t examined = 0;
+    while (!pending.empty()) {
+        const runtime::SimTime time = pending.top().first;
+        const bool holds = holding == cursors.size();
+
+        while (!pending.empty() && pending.top().first == time) {
+            SearchCursor& cursor = cursors[pending.top().second];
+            const std::size_t index = pending.top().second;
+            pending.pop();
+
+            const std::vector<runtime::SimTime>& times = cursor.store->times;
+            while (cursor.next > 0 && times[cursor.next - 1] == time) {
+                --cursor.next;
+                ++examined;
+            }
+            const bool held = cursor.next > 0 && holdsAt(cursor, cursor.next - 1);
+            holding = holding - (cursor.holds ? 1 : 0) + (held ? 1 : 0);
+            cursor.holds = held;
+            if (cursor.next > 0) pending.emplace(times[cursor.next - 1], index);
+        }
+
+        if (holds && holding != cursors.size())
+            return {.outcome = SearchResult::Outcome::Found, .time = time};
+        if (examined >= allowed)
+            return {.outcome = SearchResult::Outcome::Unfinished, .time = time};
+    }
+    return {};
+}
+
+SearchResult WaveformDatabase::nextTimeHoldingOne(const SearchTerm& term, runtime::SimTime after,
+                                                  runtime::SimTime limit,
+                                                  std::uint64_t budget) const {
+    const std::vector<runtime::SimTime>& times = storeAt(term.recordIndex).times;
+    const auto first =
+        static_cast<std::uint64_t>(std::ranges::upper_bound(times, after) - times.begin());
+    const auto stop =
+        static_cast<std::uint64_t>(std::ranges::lower_bound(times, limit) - times.begin());
+    if (first >= stop) return {};
+
+    // As many changes as the budget allows, ending with a whole time, so that a search going on
+    // from that time starts where this one stopped.
+    std::uint64_t last = std::min(stop, first + std::max(budget, std::uint64_t{1}));
+    while (last < stop && times[last] == times[last - 1]) ++last;
+
+    const std::uint64_t found = firstStartIn(term, first, last);
+    if (found != NoChange) return {.outcome = SearchResult::Outcome::Found, .time = times[found]};
+    if (last == stop) return {};
+    return {.outcome = SearchResult::Outcome::Unfinished, .time = times[last - 1]};
+}
+
+SearchResult WaveformDatabase::previousTimeHoldingOne(const SearchTerm& term,
+                                                      runtime::SimTime before,
+                                                      runtime::SimTime limit,
+                                                      std::uint64_t budget) const {
+    const std::vector<runtime::SimTime>& times = storeAt(term.recordIndex).times;
+    const auto end = static_cast<std::uint64_t>(
+        std::ranges::lower_bound(times, std::min(before, limit)) - times.begin());
+    if (end == 0) return {};
+
+    // As many changes as the budget allows, beginning with a whole time, as forwards.
+    const std::uint64_t allowed = std::max(budget, std::uint64_t{1});
+    std::uint64_t begin = end > allowed ? end - allowed : 0;
+    while (begin > 0 && times[begin] == times[begin - 1]) --begin;
+
+    const std::uint64_t found = lastStartIn(term, begin, end);
+    if (found != NoChange) return {.outcome = SearchResult::Outcome::Found, .time = times[found]};
+    if (begin == 0) return {};
+    return {.outcome = SearchResult::Outcome::Unfinished, .time = times[begin]};
+}
+
+std::uint64_t WaveformDatabase::firstStartIn(const SearchTerm& term, std::uint64_t from,
+                                             std::uint64_t to) const {
+    const SignalStore& store = storeAt(term.recordIndex);
+    ENZAN_ASSERT(term.pattern.width() == store.info.width, "a pattern must fit its signal");
     ENZAN_ASSERT(from <= to && to <= store.times.size(), "a range must lie inside the changes");
     if (from == to) return NoChange;
 
-    const StoredPattern pattern(store.info.width, highBit, lowBit, value);
     const std::vector<runtime::SimTime>& times = store.times;
     const auto lastOfItsTime = [&](std::uint64_t change) {
         return change + 1 == times.size() || times[change + 1] != times[change];
     };
 
-    // Whether the bits held the value an instant before the range: at the last change of an
+    // Whether the signal held the term an instant before the range: at the last change of an
     // earlier time, which is read before the walk, so that the walk holds one chunk at a time.
     std::uint64_t earlier = from;
     while (earlier > 0 && times[earlier - 1] == times[from]) --earlier;
+    const BitPattern& pattern = term.pattern;
     bool held =
-        earlier > 0 && pattern.matches(valueWordsOf(store, earlier - 1, recordIndex).data());
+        earlier > 0 && pattern.matches(valueWordsOf(store, earlier - 1, term.recordIndex).data());
 
+    // A chunk at a time, so that a change costs its comparison and nothing more.
     for (std::uint64_t change = from; change < to;) {
         const auto chunkIndex = static_cast<std::uint32_t>(change / options.chunkCapacity);
-        const std::span<const eir::Word> words = chunkWordsOf(recordIndex, chunkIndex);
+        const eir::Word* words = chunkWordsOf(term.recordIndex, chunkIndex).data();
         const std::uint64_t chunkStart = std::uint64_t{chunkIndex} * options.chunkCapacity;
         const std::uint64_t end = std::min(to, chunkStart + options.chunkCapacity);
 
         for (; change < end; ++change) {
             if (!lastOfItsTime(change)) continue;
-            const bool holds =
-                pattern.matches(words.data() + ((change - chunkStart) * store.valueWords));
+            const bool holds = pattern.matches(words + ((change - chunkStart) * store.valueWords));
             if (holds && !held) return change;
             held = holds;
         }
@@ -275,38 +475,33 @@ std::uint64_t WaveformDatabase::firstStartIn(std::uint32_t recordIndex, std::uin
     return NoChange;
 }
 
-std::uint64_t WaveformDatabase::lastStartIn(std::uint32_t recordIndex, std::uint64_t from,
-                                            std::uint64_t to, std::uint32_t highBit,
-                                            std::uint32_t lowBit, eir::ConstBitRef value) const {
-    const SignalStore& store = storeAt(recordIndex);
-    ENZAN_ASSERT(lowBit <= highBit && highBit < store.info.width,
-                 "a bit range must lie inside the signal");
-    ENZAN_ASSERT(value.width() == highBit - lowBit + 1, "a value must be as wide as its bits");
+std::uint64_t WaveformDatabase::lastStartIn(const SearchTerm& term, std::uint64_t from,
+                                            std::uint64_t to) const {
+    const SignalStore& store = storeAt(term.recordIndex);
+    ENZAN_ASSERT(term.pattern.width() == store.info.width, "a pattern must fit its signal");
     ENZAN_ASSERT(from <= to && to <= store.times.size(), "a range must lie inside the changes");
     if (from == to) return NoChange;
 
-    const StoredPattern pattern(store.info.width, highBit, lowBit, value);
     const std::vector<runtime::SimTime>& times = store.times;
     const auto lastOfItsTime = [&](std::uint64_t change) {
         return change + 1 == times.size() || times[change + 1] != times[change];
     };
 
-    // Walking back, a change holding the value is a start when the time before it did not hold
+    // Walking back, a change holding the term is a start when the time before it did not hold
     // it, which is the next change the walk examines. The last one it examines has the time before
-    // it outside the range, and is settled after the walk, so that the walk holds one chunk at a
-    // time.
+    // it outside the range, and is settled after the walk.
+    const BitPattern& pattern = term.pattern;
     std::uint64_t candidate = NoChange;
     for (std::uint64_t next = to; next > from;) {
         const auto chunkIndex = static_cast<std::uint32_t>((next - 1) / options.chunkCapacity);
-        const std::span<const eir::Word> words = chunkWordsOf(recordIndex, chunkIndex);
+        const eir::Word* words = chunkWordsOf(term.recordIndex, chunkIndex).data();
         const std::uint64_t chunkStart = std::uint64_t{chunkIndex} * options.chunkCapacity;
         const std::uint64_t begin = std::max(from, chunkStart);
 
         for (; next > begin; --next) {
             const std::uint64_t change = next - 1;
             if (!lastOfItsTime(change)) continue;
-            const bool holds =
-                pattern.matches(words.data() + ((change - chunkStart) * store.valueWords));
+            const bool holds = pattern.matches(words + ((change - chunkStart) * store.valueWords));
             if (candidate != NoChange && !holds) return candidate;
             candidate = holds ? change : NoChange;
         }
@@ -316,7 +511,7 @@ std::uint64_t WaveformDatabase::lastStartIn(std::uint32_t recordIndex, std::uint
     std::uint64_t first = candidate;
     while (first > 0 && times[first - 1] == times[candidate]) --first;
     const bool heldBefore =
-        first > 0 && pattern.matches(valueWordsOf(store, first - 1, recordIndex).data());
+        first > 0 && pattern.matches(valueWordsOf(store, first - 1, term.recordIndex).data());
     return heldBefore ? NoChange : candidate;
 }
 
@@ -559,6 +754,7 @@ void WaveformDatabase::spill(std::uint32_t recordIndex, std::uint32_t chunkIndex
     chunk.values.shrink_to_fit();
     chunk.resident = false;
     residentBytes -= bytes;
+    ++evictions;
 }
 
 bool WaveformDatabase::openScratchFile() const {

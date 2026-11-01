@@ -759,8 +759,12 @@ not to justify threading the kernel now.
 - **Finding a value is a scan, done where the values lie.** No index says when a signal holds a
   value, since one would cost memory for every change of every signal to answer a question asked
   now and then. So the database compares its stored values in place under a mask, a few
-  nanoseconds a change: a search of ten million changes takes tens of milliseconds, where reading
-  them out one at a time took two seconds.
+  nanoseconds a change, and steps the signals a search asks about together through their changes
+  in time order: a search of ten million changes takes tens of milliseconds, where reading them out
+  one at a time took two seconds, and many times that for a row joined from many.
+- **A search keeps nothing.** It holds a cursor a signal while it runs, and reads chunks through
+  the memory budget like any other query, so searching a group of a thousand signals stays inside
+  the budget and writes nothing to disk.
 
 ### 7.2 Structure
 
@@ -1225,9 +1229,9 @@ they are decided here.
   list of its children or of its elements — so that whatever a row shows can be typed back, and a
   literal, `8'hff` or `'x`, means what it says in any row. A value too wide for the row is refused
   rather than cut down, since a value cut down is another value. There are no wildcards.
-- **A search is a scan** (7.1): the database's of a row of one signal, and for a row joined from
-  others a walk over its edges, a hundred times slower a change. So it runs a slice at a time on
-  the event loop, never blocking the window, and moving the cursor or the selection abandons it.
+- **A search is a scan** (7.1): the row is taken apart into the bits of the signals it shows, as
+  its value joins them, and the database searches those. So it runs a slice at a time on the event
+  loop, never blocking the window, and moving the cursor or the selection abandons it.
   It finds nothing past where the traces stop, which is not known yet, and does not wrap.
 - **The keys follow the wheel**: Ctrl zooms, Shift pans, and a key without a modifier is the signal
   list's own. **Typing the start of a name finds a row**, so a command MUST NOT take a key that

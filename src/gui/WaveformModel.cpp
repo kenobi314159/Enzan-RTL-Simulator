@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <span>
 #include <utility>
 #include <vector>
@@ -1238,120 +1239,84 @@ std::optional<std::uint32_t> WaveformModel::ownRecordOf(int rowId) const {
     return record;
 }
 
-WaveformModel::Match WaveformModel::nextMatchInRecord(const WaveRow& waveRow, std::uint32_t record,
-                                                      runtime::SimTime time,
-                                                      const eir::BitVector& value,
-                                                      runtime::SimTime limit, int budget) const {
-    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
-    const auto [high, low] = bitRange(waveRow);
-    if (value.width() != high - low + 1) return {};
+bool WaveformModel::partsOf(int rowId, std::vector<ValuePart>& parts) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr) return false;
 
-    const std::uint64_t first = database.nextChangeAfter(record, time);
-    const std::uint64_t stop = limit == 0 ? 0
-                                          : std::min(database.changeCount(record),
-                                                     database.nextChangeAfter(record, limit - 1));
-    if (first == wavedb::NoChange || first >= stop) return {};
-
-    // As many changes as the budget allows, ending with a whole time, so that a search going on
-    // from that time starts where this one stopped.
-    std::uint64_t last = std::min(stop, first + static_cast<std::uint64_t>(std::max(budget, 1)));
-    while (last < stop
-           && database.timeOfChange(record, last) == database.timeOfChange(record, last - 1)) {
-        ++last;
+    if (const std::optional<std::uint32_t> record = ownRecordOf(rowId)) {
+        const auto [high, low] = bitRange(*waveRow);
+        parts.push_back(ValuePart{.record = *record, .highBit = high, .lowBit = low});
+        return true;
     }
 
-    const std::uint64_t found = database.firstStartIn(record, first, last, high, low, value.ref());
-    if (found != wavedb::NoChange)
-        return {.outcome = Match::Outcome::Found, .time = database.timeOfChange(record, found)};
-    if (last == stop) return {};
-    return {.outcome = Match::Outcome::Unfinished, .time = database.timeOfChange(record, last - 1)};
+    // As `valueAt` reads the rest: a row with children joins theirs, and has no value while one
+    // of them has none; a parameter is its value.
+    if (showsChildren(rowId) && !childrenReconstituteParent(rowId)) {
+        if (waveRow->children.isEmpty()) return false;
+        return std::ranges::all_of(waveRow->children,
+                                   [&](int child) { return partsOf(child, parts); });
+    }
+    if (waveRow->kind == WaveRow::Kind::Parameter && waveRow->constantValue.has_value()) {
+        parts.push_back(ValuePart{.constant = waveRow->constantValue});
+        return true;
+    }
+    return false;
 }
 
-WaveformModel::Match
-WaveformModel::previousMatchInRecord(const WaveRow& waveRow, std::uint32_t record,
-                                     runtime::SimTime time, const eir::BitVector& value,
-                                     runtime::SimTime limit, int budget) const {
+std::optional<std::vector<wavedb::SearchTerm>>
+WaveformModel::termsFor(int rowId, const eir::BitVector& value) const {
+    std::vector<ValuePart> parts;
+    if (!partsOf(rowId, parts)) return std::nullopt;
+
+    std::uint32_t width = 0;
+    for (const ValuePart& part : parts) width += part.width();
+    if (value.width() != width) return std::nullopt;
+
+    // One term a signal, however many of the row's pieces show bits of it: a bus with a bit taken
+    // out is the bus asked for all but that bit.
     const wavedb::WaveformDatabase& database = kernelSession->waveforms();
-    const auto [high, low] = bitRange(waveRow);
-    if (value.width() != high - low + 1) return {};
+    std::vector<wavedb::SearchTerm> terms;
+    std::map<std::uint32_t, std::size_t> termOfRecord;
 
-    // Nothing at or past the limit is known yet, so the search starts below it.
-    const std::uint64_t latest = database.previousChangeBefore(record, std::min(time, limit));
-    if (latest == wavedb::NoChange) return {};
+    std::uint32_t top = width;
+    for (const ValuePart& part : parts) {
+        top -= part.width();
+        eir::BitVector wanted = eir::BitVector::filled(part.width(), eir::Logic::Zero);
+        eir::bitops::partSelectAt(wanted.mutableRef(), value.ref(), top);
 
-    // As many changes as the budget allows, beginning with a whole time, as forwards.
-    const std::uint64_t end = latest + 1;
-    const auto allowed = static_cast<std::uint64_t>(std::max(budget, 1));
-    std::uint64_t begin = end > allowed ? end - allowed : 0;
-    while (begin > 0
-           && database.timeOfChange(record, begin) == database.timeOfChange(record, begin - 1)) {
-        --begin;
+        if (part.constant.has_value()) {
+            if (*part.constant != wanted) return std::nullopt;
+            continue;
+        }
+
+        const auto [entry, added] = termOfRecord.try_emplace(part.record, terms.size());
+        if (added) {
+            terms.push_back(wavedb::SearchTerm{
+                .recordIndex = part.record,
+                .pattern = wavedb::BitPattern(database.signal(part.record).width)});
+        }
+        if (!terms[entry->second].pattern.require(part.highBit, part.lowBit, wanted.ref()))
+            return std::nullopt;
     }
-
-    const std::uint64_t found = database.lastStartIn(record, begin, end, high, low, value.ref());
-    if (found != wavedb::NoChange)
-        return {.outcome = Match::Outcome::Found, .time = database.timeOfChange(record, found)};
-    if (begin == 0) return {};
-    return {.outcome = Match::Outcome::Unfinished, .time = database.timeOfChange(record, begin)};
+    return terms;
 }
 
 WaveformModel::Match WaveformModel::nextMatchAfter(int rowId, runtime::SimTime time,
                                                    const eir::BitVector& value,
                                                    runtime::SimTime limit, int budget) const {
-    if (row(rowId) == nullptr) return {};
-    if (const std::optional<std::uint32_t> record = ownRecordOf(rowId))
-        return nextMatchInRecord(*row(rowId), *record, time, value, limit, budget);
-
-    // A row joined from others: its edges are theirs put together, examined one at a time. It
-    // shows one value from each to the next, so what it showed an instant before an edge is
-    // what it showed at the edge before, and each edge costs one value read.
-
-    std::optional<eir::BitVector> before = valueAt(rowId, time);
-    runtime::SimTime candidate = time;
-    for (int examined = 1;; ++examined) {
-        candidate = nextRawEdgeAfter(rowId, candidate);
-        if (candidate == runtime::NoTime || candidate >= limit) return {};
-
-        std::optional<eir::BitVector> now = valueAt(rowId, candidate);
-        if (now == value && before != value)
-            return {.outcome = Match::Outcome::Found, .time = candidate};
-        if (examined >= budget) return {.outcome = Match::Outcome::Unfinished, .time = candidate};
-
-        before = std::move(now);
-    }
+    const std::optional<std::vector<wavedb::SearchTerm>> terms = termsFor(rowId, value);
+    if (!terms.has_value()) return {};
+    return kernelSession->waveforms().nextTimeHolding(
+        *terms, time, limit, static_cast<std::uint64_t>(std::max(budget, 1)));
 }
 
 WaveformModel::Match WaveformModel::previousMatchBefore(int rowId, runtime::SimTime time,
                                                         const eir::BitVector& value,
                                                         runtime::SimTime limit, int budget) const {
-    if (row(rowId) == nullptr) return {};
-    if (const std::optional<std::uint32_t> record = ownRecordOf(rowId))
-        return previousMatchInRecord(*row(rowId), *record, time, value, limit, budget);
-
-    // Nothing at or past the limit is known yet, so the search starts below it.
-    runtime::SimTime candidate = previousRawEdgeBefore(rowId, std::min(time, limit));
-    if (candidate == runtime::NoTime) return {};
-
-    std::optional<eir::BitVector> at = valueAt(rowId, candidate);
-    for (int examined = 1;; ++examined) {
-        const runtime::SimTime earlier =
-            candidate == 0 ? runtime::NoTime : previousRawEdgeBefore(rowId, candidate);
-
-        // Before its first edge a row shows nothing, unless a parameter in it shows something.
-        std::optional<eir::BitVector> before;
-        if (earlier != runtime::NoTime)
-            before = valueAt(rowId, earlier);
-        else if (candidate > 0)
-            before = valueAt(rowId, candidate - 1);
-
-        if (at == value && before != value)
-            return {.outcome = Match::Outcome::Found, .time = candidate};
-        if (earlier == runtime::NoTime) return {};
-        if (examined >= budget) return {.outcome = Match::Outcome::Unfinished, .time = candidate};
-
-        candidate = earlier;
-        at = std::move(before);
-    }
+    const std::optional<std::vector<wavedb::SearchTerm>> terms = termsFor(rowId, value);
+    if (!terms.has_value()) return {};
+    return kernelSession->waveforms().previousTimeHolding(
+        *terms, time, limit, static_cast<std::uint64_t>(std::max(budget, 1)));
 }
 
 void WaveformModel::setCursorTime(runtime::SimTime time) {

@@ -43,22 +43,22 @@
 #include <tuple>
 #include <vector>
 
-namespace enzan::gui {
+namespace enzan::wavedb {
 
 /// How gtest shows a search's outcome when a test of one fails.
 ///
 /// gtest finds it by this name, through the namespace of the type, which neither a name of this
 /// project's style nor an anonymous namespace would let it do.
 // NOLINTNEXTLINE(readability-identifier-naming,misc-use-internal-linkage)
-void PrintTo(const WaveformModel::Match& match, std::ostream* out) {
+void PrintTo(const SearchResult& match, std::ostream* out) {
     switch (match.outcome) {
-    case WaveformModel::Match::Outcome::Found: *out << "found at " << match.time; break;
-    case WaveformModel::Match::Outcome::Absent: *out << "absent"; break;
-    case WaveformModel::Match::Outcome::Unfinished: *out << "unfinished at " << match.time; break;
+    case SearchResult::Outcome::Found: *out << "found at " << match.time; break;
+    case SearchResult::Outcome::Absent: *out << "absent"; break;
+    case SearchResult::Outcome::Unfinished: *out << "unfinished at " << match.time; break;
     }
 }
 
-} // namespace enzan::gui
+} // namespace enzan::wavedb
 
 namespace {
 
@@ -562,21 +562,75 @@ TEST_F(FindValueTest, ASearchThatRunsOutSaysHowFarItGotAndGoesOnFromThere) {
     EXPECT_EQ(match, found(95));
 }
 
-TEST_F(FindValueTest, ARowOfOneSignalFindsWhatAGroupOfItFinds) {
-    // A row of one signal is searched where the database keeps its values, and a row joined from
-    // others edge by edge. A group holding nothing but the signal shows what the signal shows, so
-    // every search of the two must end in the same place, however small the steps it goes in.
-    const int count = model->addSignal(counter);
-    const int countGroup = model->addGroup(QStringLiteral("count alone"));
-    model->addSignal(counter, countGroup);
+TEST_F(FindValueTest, EveryShapeOfRowIsFoundWhereItsOwnValueStartsToBeTheOneAskedFor) {
+    // A search takes a row apart into the bits of the signals it shows and asks the database
+    // where those start to hold their parts together. What it must answer is where the row's own
+    // value starts to be the one asked for, which the row says directly: its value is `valueAt`,
+    // and a value starts only where the row has an edge. So every row is held to a walk over its
+    // edges asking `valueAt` at each, for every value it shows, from either side and in steps of
+    // any size.
+    QVector<int> shapes;
+    shapes.push_back(model->addSignal(counter));
+    shapes.push_back(model->addSignal(clock));
+    shapes.push_back(model->addSlice(model->addSignal(counter), 2, 0));
 
-    const int low = model->addSlice(count, 2, 0);
-    const int lowGroup = model->addGroup(QStringLiteral("low bits alone"));
-    ASSERT_TRUE(model->moveRowsTo({model->addSlice(count, 2, 0)}, lowGroup, 0));
+    // A bus with a bit taken out, joined from what is left of it.
+    const int narrowed = model->addSignal(counter);
+    model->unpack(narrowed);
+    model->removeRow(childOf(narrowed, 4));
+    shapes.push_back(narrowed);
 
-    // Each search taken to its end, a budget at a time, as the Find field goes on with it.
-    const auto settle = [this](int rowId, bool forward, enzan::runtime::SimTime from,
-                               const enzan::eir::BitVector& value, int budget) {
+    // Two signals that change apart as often as together.
+    const int mixed = model->addGroup(QStringLiteral("clock and count"));
+    model->addSignal(clock, mixed);
+    model->addSignal(counter, mixed);
+    shapes.push_back(mixed);
+
+    // Bits of a bus regrouped in an order of the reader's own, in groups inside a group.
+    const int source = model->addSignal(counter);
+    model->unpack(source);
+    const int outer = model->addGroup(QStringLiteral("regrouped"));
+    const int first = model->addGroup(QStringLiteral("first"), outer);
+    const int second = model->addGroup(QStringLiteral("second"), outer);
+    ASSERT_TRUE(model->moveRowsTo({childOf(source, 7)}, first, 0));  // count[0]
+    ASSERT_TRUE(model->moveRowsTo({childOf(source, 1)}, first, 1));  // count[6]
+    ASSERT_TRUE(model->moveRowsTo({childOf(source, 2)}, second, 0)); // count[4]
+    ASSERT_TRUE(model->moveRowsTo({childOf(source, 1)}, second, 1)); // count[5]
+    shapes.push_back(outer);
+
+    // One signal shown twice, and a parameter beside a signal.
+    const int twice = model->addGroup(QStringLiteral("twice"));
+    model->addSignal(counter, twice);
+    model->addSlice(model->addSignal(counter, twice), 3, 0);
+    shapes.push_back(twice);
+
+    SignalInfo width;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+        if (info.name == QStringLiteral("WIDTH")) width = info;
+    }
+    ASSERT_TRUE(width.isParameter());
+    const int constant = model->addGroup(QStringLiteral("with a parameter"));
+    model->addSignal(width, constant);
+    model->addSignal(clock, constant);
+    shapes.push_back(constant);
+
+    const auto walk = [this](int rowId, enzan::runtime::SimTime from,
+                             const enzan::eir::BitVector& value, bool forward) {
+        enzan::runtime::SimTime edge =
+            forward
+                ? model->nextEdgeAfter(rowId, from)
+                : model->previousEdgeBefore(rowId, std::min<enzan::runtime::SimTime>(from, 400));
+        // NoTime, which there is past the last edge, is no time below the limit either.
+        while (edge < 400) {
+            if (model->valueAt(rowId, edge) == value) return found(edge);
+            edge = forward ? model->nextEdgeAfter(rowId, edge)
+                           : model->previousEdgeBefore(rowId, edge);
+        }
+        return Match{};
+    };
+
+    const auto settle = [this](int rowId, enzan::runtime::SimTime from,
+                               const enzan::eir::BitVector& value, bool forward, int budget) {
         Match match;
         do {
             match = forward ? model->nextMatchAfter(rowId, from, value, 400, budget)
@@ -586,22 +640,54 @@ TEST_F(FindValueTest, ARowOfOneSignalFindsWhatAGroupOfItFinds) {
         return match;
     };
 
-    for (const auto& [single, joined, width] :
-         {std::tuple{count, countGroup, 8U}, std::tuple{low, lowGroup, 3U}}) {
-        for (std::uint64_t number = 0; number < 42; number += 3) {
-            const enzan::eir::BitVector value = enzan::eir::BitVector::fromUInt64(number, width);
+    for (const int rowId : shapes) {
+        // The values the row shows, a few of them, at its edges.
+        std::vector<enzan::eir::BitVector> values;
+        for (enzan::runtime::SimTime edge = 0; edge < 400 && values.size() < 6;
+             edge = model->nextEdgeAfter(rowId, edge)) {
+            const std::optional<enzan::eir::BitVector> value = model->valueAt(rowId, edge);
+            if (value.has_value() && std::ranges::find(values, *value) == values.end())
+                values.push_back(*value);
+            if (edge == enzan::runtime::NoTime) break;
+        }
+        ASSERT_FALSE(values.empty()) << model->row(rowId)->label.toStdString();
+
+        for (const enzan::eir::BitVector& value : values) {
             for (const enzan::runtime::SimTime from : {0U, 7U, 45U, 200U, 399U, 500U}) {
-                for (const int budget : {1, 3, Unbounded}) {
-                    for (const bool forward : {true, false}) {
-                        EXPECT_EQ(settle(single, forward, from, value, budget),
-                                  settle(joined, forward, from, value, budget))
-                            << number << (forward ? " after " : " before ") << from << ", budget "
-                            << budget;
+                for (const bool forward : {true, false}) {
+                    const Match expected = walk(rowId, from, value, forward);
+                    for (const int budget : {1, 3, Unbounded}) {
+                        EXPECT_EQ(settle(rowId, from, value, forward, budget), expected)
+                            << model->row(rowId)->label.toStdString() << " for "
+                            << enzan::eir::toString(value.ref(), Radix::Binary)
+                            << (forward ? " after " : " before ") << from << ", budget " << budget;
                     }
                 }
             }
         }
     }
+}
+
+TEST_F(FindValueTest, AValueARowCanNeverShowIsFoundNowhere) {
+    // A signal shown twice cannot show two values at once, and a parameter shows only its own.
+    const int twice = model->addGroup(QStringLiteral("twice"));
+    model->addSignal(counter, twice);
+    model->addSignal(counter, twice);
+    EXPECT_EQ(next(twice, 0, "16'h0505"), found(45));
+    EXPECT_EQ(next(twice, 0, "16'h0506"), Absent);
+
+    SignalInfo width;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+        if (info.name == QStringLiteral("WIDTH")) width = info;
+    }
+    const int constant = model->addGroup(QStringLiteral("with a parameter"));
+    model->addSignal(width, constant);
+    model->addSignal(counter, constant);
+    EXPECT_EQ(next(constant, 0, "40'h00000004_05"), found(45));
+    EXPECT_EQ(next(constant, 0, "40'h00000005_05"), Absent);
+
+    EXPECT_EQ(next(model->addGroup(QStringLiteral("empty")), 0, "1'b0"), Absent);
+    EXPECT_EQ(next(twice, 0, "8'h05"), Absent) << "a value of another width";
 }
 
 TEST_F(FindValueTest, ARemovedRowHasNothingToFind) {

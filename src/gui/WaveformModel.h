@@ -8,6 +8,7 @@
 #include "gui/Theme.h"
 #include "gui/ValueText.h"
 #include "runtime/Time.h"
+#include "wavedb/WaveformDatabase.h"
 
 #include <QAbstractItemModel>
 #include <QSet>
@@ -366,35 +367,20 @@ public:
     /// The row's edge closest to `time`, or `NoTime` when it has none.
     [[nodiscard]] runtime::SimTime nearestEdge(int rowId, runtime::SimTime time) const;
 
-    /// How far a search for a value got.
-    struct Match {
-        enum class Outcome : std::uint8_t {
-            /// `time` is where the row starts to show the value.
-            Found,
-
-            /// The row starts to show it nowhere the search could look.
-            Absent,
-
-            /// The search looked at as many edges as it was allowed to first. `time` is the last
-            /// it looked at, and a search from there goes on where this one stopped.
-            Unfinished,
-        };
-
-        Outcome outcome = Outcome::Absent;
-        runtime::SimTime time = runtime::NoTime;
-
-        friend bool operator==(const Match&, const Match&) = default;
-    };
+    /// How far a search for a value got: where the row starts to show it, that it does nowhere
+    /// the search could look, or where a search that ran out of budget stopped.
+    using Match = wavedb::SearchResult;
 
     /// The first time after `time`, and before `limit`, at which the row starts to show `value`:
     /// shows it, and an instant earlier did not. A row already showing it is found where it next
     /// comes back to it.
     ///
-    /// No index says when a row holds a value, so a search is a scan, of at most `budget` changes:
-    /// the database's, over the stored values of a row of one signal, and a walk over the edges of
-    /// a row joined from others. A search that runs out says how far it got rather than answering
-    /// with an edge it never checked, as `nextEdgeAfter` may: there a cursor on an edge is still on
-    /// an edge, and here it would be on a value that is not the one asked for.
+    /// No index says when a row holds a value, so a search is a scan of about `budget` changes,
+    /// which the database makes where the values lie: the row is taken apart into the bits of
+    /// signals it shows (`termsFor`), and those signals' changes are compared with the bits asked
+    /// of them in time order. A search that runs out says how far it got rather than answering with
+    /// an edge it never checked, as `nextEdgeAfter` may: there a cursor on an edge is still on an
+    /// edge, and here it would be on a value that is not the one asked for.
     [[nodiscard]] Match nextMatchAfter(int rowId, runtime::SimTime time,
                                        const eir::BitVector& value, runtime::SimTime limit,
                                        int budget) const;
@@ -472,14 +458,32 @@ private:
     /// joined from other rows, or has no trace.
     [[nodiscard]] std::optional<std::uint32_t> ownRecordOf(int rowId) const;
 
-    /// `nextMatchAfter` and `previousMatchBefore` for a row whose value is bits of one recorded
-    /// signal, which the database searches where the values lie rather than an edge at a time.
-    [[nodiscard]] Match nextMatchInRecord(const WaveRow& waveRow, std::uint32_t record,
-                                          runtime::SimTime time, const eir::BitVector& value,
-                                          runtime::SimTime limit, int budget) const;
-    [[nodiscard]] Match previousMatchInRecord(const WaveRow& waveRow, std::uint32_t record,
-                                              runtime::SimTime time, const eir::BitVector& value,
-                                              runtime::SimTime limit, int budget) const;
+    /// One piece of what a row shows: a range of bits of a recorded signal, or a parameter's
+    /// value.
+    struct ValuePart {
+        std::uint32_t record = 0;
+        std::uint32_t highBit = 0;
+        std::uint32_t lowBit = 0;
+
+        /// Set for a parameter, which is the same at every time.
+        std::optional<eir::BitVector> constant;
+
+        [[nodiscard]] std::uint32_t width() const {
+            return constant.has_value() ? constant->width() : highBit - lowBit + 1;
+        }
+    };
+
+    /// Appends the pieces the row's value is joined from, the most significant first, as
+    /// `valueAt` joins them. False when the row has no value at any time: an empty group, or a
+    /// signal nobody recorded, in it or below it.
+    [[nodiscard]] bool partsOf(int rowId, std::vector<ValuePart>& parts) const;
+
+    /// What the database is asked for when the row is searched for `value`: of each signal the row
+    /// shows bits of, that those bits hold their part of it. Nothing when the row can never show
+    /// the value: one of another width, or one a parameter in it contradicts, or one asking a bit
+    /// shown twice to hold two things at once.
+    [[nodiscard]] std::optional<std::vector<wavedb::SearchTerm>>
+    termsFor(int rowId, const eir::BitVector& value) const;
 
     /// The next or previous time at which *something* in the row changes, without checking
     /// whether what the row displays changed with it.
