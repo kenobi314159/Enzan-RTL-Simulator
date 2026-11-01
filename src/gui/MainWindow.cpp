@@ -6,6 +6,7 @@
 #include "common/Version.h"
 #include "eir/BitOps.h"
 #include "gui/TclSyntax.h"
+#include "gui/ValueFinder.h"
 #include "runtime/Time.h"
 
 #include <QAction>
@@ -20,6 +21,7 @@
 #include <QHeaderView>
 #include <QIcon>
 #include <QInputDialog>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -83,6 +85,36 @@ void showKeyInToolTip(QAction* action) {
     action->setToolTip(
         QStringLiteral("%1 (%2)").arg(action->toolTip(), keyText(action->shortcut())));
 }
+
+/// How long the status bar says what a search found, which is long enough to read it and short
+/// enough to give the bar back to the run's state.
+constexpr int FindReportMilliseconds = 10000;
+
+/// The toolbar's field for a value to find. Enter finds the next time the selected row takes it
+/// and Shift+Enter the previous, as F3 and Shift+F3 do from anywhere, and Escape gives up a
+/// search and goes back to the waves.
+///
+/// A field of its own rather than a QLineEdit's `returnPressed`, which Shift+Enter sends too.
+class FindValueField final : public QLineEdit {
+public:
+    using QLineEdit::QLineEdit;
+
+    std::function<void(bool forward)> find;
+    std::function<void()> giveUp;
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override {
+        if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && find) {
+            find(!event->modifiers().testFlag(Qt::ShiftModifier));
+            return;
+        }
+        if (event->key() == Qt::Key_Escape && giveUp) {
+            giveUp();
+            return;
+        }
+        QLineEdit::keyPressEvent(event);
+    }
+};
 
 /// Gives a submenu, as it is shown, the menu it is shown from as its native window's parent.
 class SubmenuParenting final : public QObject {
@@ -605,8 +637,45 @@ void MainWindow::buildToolBar() {
     followAction->setToolTip(tr("Keep the right-hand edge at the latest simulated time"));
     connect(followAction, &QAction::toggled, waveView, &WaveformView::setFollowTail);
 
-    for (QAction* action : {runAction, runAllAction, stopAction, restartAction, zoomFitAction,
-                            zoomCursorsAction, addCursorAction}) {
+    // A value is typed as the selected row shows one and found from the active cursor. Its keys
+    // act wherever the focus is, as Tab does, rather than only in the Wave tab: the field they
+    // are pressed from is here, outside it.
+    bar->addSeparator();
+    valueFinder = new ValueFinder(*session, *waveModel, *waveView, this);
+    auto* field = new FindValueField(bar);
+    field->setObjectName(QStringLiteral("findValue"));
+    field->setPlaceholderText(tr("Find value"));
+    field->setFixedWidth(140);
+    field->setToolTip(tr("A value of the selected row, written as the row shows it: ff in a "
+                         "hexadecimal row, S_IDLE in an enumeration's, {1}{ff} in a group's; or "
+                         "a literal, as 8'hff or 'x. Enter finds the next time the row takes it, "
+                         "Shift+Enter the previous"));
+    field->find = [this](bool forward) { findValue(forward); };
+    field->giveUp = [this] {
+        valueFinder->cancel();
+        waveRowsView->setFocus(Qt::OtherFocusReason);
+    };
+    findValueEdit = field;
+    bar->addWidget(findValueEdit);
+
+    findPreviousAction = bar->addAction(tr("Find Previous"), this, [this] { findValue(false); });
+    findPreviousAction->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F3));
+    findNextAction = bar->addAction(tr("Find Next"), this, [this] { findValue(true); });
+    findNextAction->setShortcut(QKeySequence(Qt::Key_F3));
+
+    // What a search found is said where the cursor's time is, rather than in the transcript: a
+    // search is a step of the cursor, as Tab is, and a transcript of every step would bury what
+    // the design said.
+    connect(valueFinder, &ValueFinder::reported, this, [this](const QString& message) {
+        statusBar()->showMessage(message, FindReportMilliseconds);
+    });
+    connect(valueFinder, &ValueFinder::searchStarted, this,
+            [this](const QString& message) { statusBar()->showMessage(message); });
+    connect(valueFinder, &ValueFinder::searchAbandoned, statusBar(), &QStatusBar::clearMessage);
+
+    for (QAction* action :
+         {runAction, runAllAction, stopAction, restartAction, zoomFitAction, zoomCursorsAction,
+          addCursorAction, findPreviousAction, findNextAction}) {
         showKeyInToolTip(action);
     }
 }
@@ -699,6 +768,8 @@ void MainWindow::buildMenus() {
         tr("Previous Edge") + u'\t'
             + QKeySequence(Qt::SHIFT | Qt::Key_Tab).toString(QKeySequence::NativeText),
         waveView, [this] { waveView->stepActiveCursorToEdge(false); });
+    cursor->addAction(findNextAction);
+    cursor->addAction(findPreviousAction);
     scopeTo(cursor->addAction(tr("Cursor to Start"), waveView,
                               [this] { waveView->placeActiveCursor(0); }),
             waveTab)
@@ -901,7 +972,9 @@ void MainWindow::onWavesChanged() {
 
 void MainWindow::onWavesCleared() {
     // The rows stay: the user asked to watch these signals, and a restart is them asking to
-    // watch the same ones again from the beginning. Only the values are gone.
+    // watch the same ones again from the beginning. Only the values are gone, and a search
+    // among them with them.
+    valueFinder->cancel();
     note(tr("The design was restarted; the recorded waveform was discarded"));
     waveModel->refreshValues();
     objectsModel->refreshValues();
@@ -925,6 +998,14 @@ void MainWindow::onCursorsChanged() {
     waveModel->setCursorTime(time);
     objectsModel->setCursorTime(time);
     statusCursor->setText(tr("Cursor: %1").arg(TimeAxis::format(time, session->timeScale())));
+}
+
+void MainWindow::findValue(bool forward) {
+    if (findValueEdit->text().isEmpty()) {
+        findValueEdit->setFocus(Qt::ShortcutFocusReason);
+        return;
+    }
+    valueFinder->find(findValueEdit->text(), forward);
 }
 
 void MainWindow::note(const QString& text) {

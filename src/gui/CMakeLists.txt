@@ -23,6 +23,7 @@ enzan_add_component(
           Theme.cpp
           TimeAxis.cpp
           TranscriptView.cpp
+          ValueFinder.cpp
           ValueText.cpp
           WaveformModel.cpp
           WaveformView.cpp
@@ -39,6 +40,7 @@ enzan_add_component(
           ThemeColors.def
           TimeAxis.h
           TranscriptView.h
+          ValueFinder.h
           ValueText.h
           WaveformModel.h
           WaveformView.h

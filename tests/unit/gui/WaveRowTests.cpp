@@ -25,9 +25,11 @@
 #include <QClipboard>
 #include <QDockWidget>
 #include <QHash>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QStatusBar>
 #include <QStringList>
 #include <QTableView>
 #include <QTest>
@@ -1306,6 +1308,114 @@ TEST_F(WaveWindowTest, TheEditMenuIsTheWaveListsMenu) {
     }
     ASSERT_NE(edit, nullptr);
     EXPECT_EQ(edit->actions(), waveRows->actions());
+}
+
+// ---------------------------------------------------------------------------
+// Finding a value from the toolbar
+// ---------------------------------------------------------------------------
+
+class FindFieldTest : public WaveWindowTest {
+protected:
+    void SetUp() override {
+        WaveWindowTest::SetUp();
+
+        // The counter in the window, with a run behind it: it takes each value v at 10v - 5.
+        addToWave(QStringLiteral("count"));
+        ASSERT_EQ(waveModel->rowCount(), 1);
+        session->run(400);
+        ASSERT_TRUE(pumpUntilCaughtUp(400));
+        waveRows->setCurrentIndex(waveModel->index(0, 0));
+
+        canvas = window->findChild<enzan::gui::WaveformView*>();
+        field = window->findChild<QLineEdit*>(QStringLiteral("findValue"));
+        ASSERT_NE(canvas, nullptr);
+        ASSERT_NE(field, nullptr);
+        canvas->setCursorTime(0, 0);
+
+        window->activateWindow();
+        ASSERT_TRUE(QTest::qWaitForWindowActive(window.get()));
+    }
+
+    /// Presses and releases `key` on `widget`, and lets go of the modifiers afterwards.
+    ///
+    /// A key with a modifier leaves the modifier held in the application's state, whether QTest
+    /// sends it or a test does, since nothing sends the modifier's own release as a keyboard
+    /// would. Every selection the process made afterwards would then extend a range rather than
+    /// select a row, so the release is sent here.
+    static void press(QWidget* widget, Qt::Key key,
+                      Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QTest::keyClick(widget, key, modifiers);
+        if (modifiers.testFlag(Qt::ShiftModifier)) QTest::keyRelease(widget, Qt::Key_Shift);
+    }
+
+    enzan::gui::WaveformView* canvas = nullptr;
+    QLineEdit* field = nullptr;
+};
+
+TEST_F(FindFieldTest, F3FindsTheTypedValueWhereverTheFocusIs) {
+    field->setText(QStringLiteral("05"));
+
+    // From the signal list, where a key without a modifier is the list's own: F3 types nothing.
+    waveRows->setFocus();
+    press(waveRows, Qt::Key_F3);
+    EXPECT_EQ(canvas->activeCursorTime(), 45U);
+    EXPECT_TRUE(window->statusBar()->currentMessage().startsWith(QStringLiteral("count shows 05")))
+        << window->statusBar()->currentMessage().toStdString();
+
+    canvas->setCursorTime(0, 100);
+    objects->setFocus();
+    press(objects, Qt::Key_F3, Qt::ShiftModifier);
+    EXPECT_EQ(canvas->activeCursorTime(), 45U);
+}
+
+TEST_F(FindFieldTest, EnterInTheFieldFindsTheNextAndShiftEnterThePrevious) {
+    field->setFocus();
+    QTest::keyClicks(field, QStringLiteral("05"));
+
+    press(field, Qt::Key_Return);
+    EXPECT_EQ(canvas->activeCursorTime(), 45U);
+    EXPECT_TRUE(field->hasFocus()) << "finding again is another Enter away";
+
+    canvas->setCursorTime(0, 100);
+    press(field, Qt::Key_Return, Qt::ShiftModifier);
+    EXPECT_EQ(canvas->activeCursorTime(), 45U);
+}
+
+TEST_F(FindFieldTest, F3WithNothingTypedGoesToTheField) {
+    waveRows->setFocus();
+    press(waveRows, Qt::Key_F3);
+
+    EXPECT_TRUE(field->hasFocus());
+    EXPECT_EQ(canvas->activeCursorTime(), 0U);
+}
+
+TEST_F(FindFieldTest, EscapeInTheFieldGoesBackToTheWaves) {
+    field->setFocus();
+    press(field, Qt::Key_Escape);
+    EXPECT_TRUE(waveRows->hasFocus());
+}
+
+TEST_F(FindFieldTest, WhatCannotBeFoundIsSaidInTheStatusBar) {
+    field->setText(QStringLiteral("1ff"));
+    waveRows->setFocus();
+    press(waveRows, Qt::Key_F3);
+
+    EXPECT_EQ(canvas->activeCursorTime(), 0U);
+    EXPECT_EQ(window->statusBar()->currentMessage(),
+              QStringLiteral("'1ff' does not fit in 8 bits"));
+}
+
+TEST_F(FindFieldTest, TheCursorMenuOffersFindingWithItsKeys) {
+    const QMenu* cursor = nullptr;
+    for (const QAction* entry : window->menuBar()->actions()) {
+        if (entry->text() == QStringLiteral("&Cursor")) cursor = entry->menu();
+    }
+    ASSERT_NE(cursor, nullptr);
+
+    QHash<QString, QKeySequence> keys;
+    for (const QAction* action : cursor->actions()) keys.insert(action->text(), action->shortcut());
+    EXPECT_EQ(keys.value(QStringLiteral("Find Next")), QKeySequence(Qt::Key_F3));
+    EXPECT_EQ(keys.value(QStringLiteral("Find Previous")), QKeySequence(Qt::SHIFT | Qt::Key_F3));
 }
 
 } // namespace

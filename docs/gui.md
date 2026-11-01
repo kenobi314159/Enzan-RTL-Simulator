@@ -25,6 +25,12 @@ it opens. Closing the window ends the simulation.
   **Tab** and **Shift+Tab** then walk the cursor from edge to edge of the selected row, whichever
   way you selected it, a group included. To measure, lock one cursor and step another, and read
   both times off their labels. Right-click a cursor's label to rename, lock or remove it.
+- **To find a value**, type it in the toolbar's *Find value* field as the selected row shows it —
+  `ff` in a hexadecimal row, `S_IDLE` in an enum's, `{1}{ff}` in a group's — or as a literal such
+  as `8'hff` or `'x`, and press **F3**, or Enter in the field. The active cursor moves to the next
+  time the row takes that value, and pressing again goes on to the one after; **Shift+F3**, or
+  Shift+Enter, goes back. A locked cursor stays put, and the status bar says what was found, or
+  why nothing was. A long search runs while you carry on: move the cursor and it stops.
 - **Rows** drag to reorder, rename in place with **F2**, and copy and paste with **Ctrl+C** and
   **Ctrl+V**. The context menu also offers a pack/unpack toggle, a radix and one of five highlight
   colours.

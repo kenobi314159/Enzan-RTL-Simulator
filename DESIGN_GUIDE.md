@@ -1209,6 +1209,21 @@ they are decided here.
   it, `,` and `.` change which one is active, Insert adds one. **Tab** and **Shift+Tab** step the
   active cursor to the next or previous transition of the selected row — a change in what the row
   *displays* — wherever the focus is.
+- **Finding a value** moves the active cursor, unless it is locked, to the next or the previous
+  time the selected row *starts* to show a value: shows it, and an instant earlier did not, so
+  that finding again goes on to the next. **F3** and **Shift+F3** find wherever the focus is, as
+  Tab steps, and so do Enter and Shift+Enter in the toolbar's field; F3 with nothing typed goes to
+  the field. F3 is find-next's key in most programs, and Ctrl+F, the other candidate, is Zoom
+  Fit's and stays so. What a search found, or why it found nothing, is said in the status bar, since it is
+  a step of the cursor and not something the design said.
+- **A value is read as the row shows one** — digits in its radix, a name of its enumeration, the
+  list of its children or of its elements — so that whatever a row shows can be typed back, and a
+  literal, `8'hff` or `'x`, means what it says in any row. A value too wide for the row is refused
+  rather than cut down, since a value cut down is another value. There are no wildcards.
+- **A search walks the row's edges**, since the index answers when a row changes and not what to
+  (7.1). So it runs a slice at a time on the event loop, never blocking the window, and moving
+  the cursor or the selection abandons it. It finds nothing past where the traces stop, which is
+  not known yet, and does not wrap.
 - **The keys follow the wheel**: Ctrl zooms, Shift pans, and a key without a modifier is the signal
   list's own. **Typing the start of a name finds a row**, so a command MUST NOT take a key that
   types a letter or a digit in the Wave tab.

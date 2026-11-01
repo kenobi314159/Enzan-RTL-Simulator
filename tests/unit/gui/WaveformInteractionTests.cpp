@@ -15,6 +15,8 @@
 #include "gui/WaveformView.h"
 
 #include "gui/Theme.h"
+#include "gui/TimeAxis.h"
+#include "gui/ValueFinder.h"
 #include "gui/WaveformModel.h"
 #include "wavedb/WaveformDatabase.h"
 
@@ -31,6 +33,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
 
 namespace {
@@ -39,6 +42,8 @@ using enzan::eir::Radix;
 using enzan::gui::HighlightSlots;
 using enzan::gui::SignalInfo;
 using enzan::gui::Theme;
+using enzan::gui::TimeAxis;
+using enzan::gui::ValueFinder;
 using enzan::gui::WaveformModel;
 using enzan::gui::WaveformView;
 using enzan::runtime::SimTime;
@@ -455,6 +460,171 @@ TEST_F(InteractionTest, AGroupCanBeSteppedAlongLikeASignal) {
 
     key(Qt::Key_Tab);
     EXPECT_EQ(view->activeCursorTime(), 105U);
+}
+
+// ---------------------------------------------------------------------------
+// Finding a value
+// ---------------------------------------------------------------------------
+//
+// The counter takes each value v at 10v - 5 and the run stops at 400.
+
+class FindValueInteractionTest : public InteractionTest {
+protected:
+    void SetUp() override {
+        InteractionTest::SetUp();
+        populate();
+
+        finder = std::make_unique<ValueFinder>(*session, *model, *view);
+        reports = std::make_unique<QSignalSpy>(finder.get(), &ValueFinder::reported);
+
+        select(QStringLiteral("count"));
+        view->setCursorTime(0, 0);
+    }
+
+    void TearDown() override {
+        reports = nullptr;
+        finder = nullptr;
+        InteractionTest::TearDown();
+    }
+
+    void select(const QString& label) {
+        treeView->setCurrentIndex(model->indexOfRow(rowOf.value(label)));
+    }
+
+    /// What the finder said last.
+    [[nodiscard]] QString lastReport() const {
+        return reports->isEmpty() ? QString() : reports->last().front().toString();
+    }
+
+    [[nodiscard]] QString at(SimTime time) const {
+        return TimeAxis::format(time, session->timeScale());
+    }
+
+    /// Lets the event loop run the slices of a search until it finishes.
+    void finishSearching() {
+        for (int turn = 0; turn < 1000 && finder->searching(); ++turn) {
+            QCoreApplication::processEvents();
+        }
+    }
+
+    std::unique_ptr<ValueFinder> finder;
+    std::unique_ptr<QSignalSpy> reports;
+};
+
+TEST_F(FindValueInteractionTest, FindingMovesTheActiveCursorToWhereTheRowStartsToShowTheValue) {
+    finder->find(QStringLiteral("05"), true);
+    EXPECT_EQ(view->activeCursorTime(), 45U);
+    EXPECT_EQ(lastReport(), QStringLiteral("count shows 05 from %1").arg(at(45)));
+
+    view->setCursorTime(0, 100);
+    finder->find(QStringLiteral("05"), false);
+    EXPECT_EQ(view->activeCursorTime(), 45U);
+}
+
+TEST_F(FindValueInteractionTest, FindingAgainGoesOnToTheNextTimeAndNotTheOneTheCursorIsAt) {
+    select(QStringLiteral("clk"));
+    view->setCursorTime(0, 0);
+
+    for (const SimTime expected : {5U, 15U, 25U}) {
+        finder->find(QStringLiteral("1"), true);
+        EXPECT_EQ(view->activeCursorTime(), expected);
+    }
+    finder->find(QStringLiteral("1"), false);
+    EXPECT_EQ(view->activeCursorTime(), 15U);
+}
+
+TEST_F(FindValueInteractionTest, NothingFoundLeavesTheCursorAndSaysHowFarTheSearchLooked) {
+    finder->find(QStringLiteral("ff"), true);
+    EXPECT_EQ(view->activeCursorTime(), 0U);
+    EXPECT_EQ(lastReport(), QStringLiteral("No later ff in count, up to %1").arg(at(400)));
+
+    view->setCursorTime(0, 40);
+    finder->find(QStringLiteral("05"), false);
+    EXPECT_EQ(view->activeCursorTime(), 40U) << "a search does not wrap round";
+    EXPECT_EQ(lastReport(), QStringLiteral("No earlier 05 in count"));
+}
+
+TEST_F(FindValueInteractionTest, ALockedCursorStaysWhereItIs) {
+    view->setCursorTime(0, 100);
+    view->setCursorLocked(0, true);
+
+    finder->find(QStringLiteral("05"), false);
+    EXPECT_EQ(view->activeCursorTime(), 100U);
+    EXPECT_EQ(lastReport(), QStringLiteral("The active cursor is locked"));
+}
+
+TEST_F(FindValueInteractionTest, WithNoRowSelectedThereIsNothingToSearch) {
+    treeView->setCurrentIndex(QModelIndex());
+    treeView->selectionModel()->clearSelection();
+
+    finder->find(QStringLiteral("05"), true);
+    EXPECT_EQ(view->activeCursorTime(), 0U);
+    EXPECT_EQ(lastReport(), QStringLiteral("Select a row to find a value in"));
+}
+
+TEST_F(FindValueInteractionTest, TextThatIsNoValueOfTheRowSaysWhyAndMovesNothing) {
+    finder->find(QStringLiteral("1ff"), true);
+    EXPECT_EQ(view->activeCursorTime(), 0U);
+    EXPECT_EQ(lastReport(), QStringLiteral("'1ff' does not fit in 8 bits"));
+    EXPECT_FALSE(finder->searching());
+}
+
+TEST_F(FindValueInteractionTest, ALongSearchGoesOnWhileTheWindowAnswersAndThenMovesTheCursor) {
+    // One edge a slice: thirty-nine slices to the counter's 39, at 385.
+    finder->setSlice(1, std::chrono::milliseconds(0));
+    const QSignalSpy started(finder.get(), &ValueFinder::searchStarted);
+
+    finder->find(QStringLiteral("27"), true);
+    EXPECT_TRUE(finder->searching()) << "find returned before the search was done";
+    EXPECT_EQ(started.count(), 1);
+    EXPECT_EQ(view->activeCursorTime(), 0U);
+
+    finishSearching();
+    EXPECT_FALSE(finder->searching());
+    EXPECT_EQ(view->activeCursorTime(), 385U);
+    EXPECT_EQ(lastReport(), QStringLiteral("count shows 27 from %1").arg(at(385)));
+}
+
+TEST_F(FindValueInteractionTest, MovingTheCursorAbandonsASearchStillRunning) {
+    finder->setSlice(1, std::chrono::milliseconds(0));
+    const QSignalSpy abandoned(finder.get(), &ValueFinder::searchAbandoned);
+
+    finder->find(QStringLiteral("27"), true);
+    ASSERT_TRUE(finder->searching());
+    view->setCursorTime(0, 200);
+
+    finishSearching();
+    EXPECT_FALSE(finder->searching());
+    EXPECT_EQ(abandoned.count(), 1);
+    EXPECT_EQ(view->activeCursorTime(), 200U) << "the reader's cursor, not the search's";
+    EXPECT_TRUE(reports->isEmpty());
+}
+
+TEST_F(FindValueInteractionTest, SelectingAnotherRowAbandonsASearchStillRunning) {
+    finder->setSlice(1, std::chrono::milliseconds(0));
+    const QSignalSpy abandoned(finder.get(), &ValueFinder::searchAbandoned);
+
+    finder->find(QStringLiteral("27"), true);
+    ASSERT_TRUE(finder->searching());
+    select(QStringLiteral("clk"));
+    const SimTime placed = view->activeCursorTime();
+
+    finishSearching();
+    EXPECT_EQ(abandoned.count(), 1);
+    EXPECT_EQ(view->activeCursorTime(), placed);
+}
+
+TEST_F(FindValueInteractionTest, ANewSearchReplacesOneStillRunning) {
+    finder->setSlice(1, std::chrono::milliseconds(0));
+    const QSignalSpy abandoned(finder.get(), &ValueFinder::searchAbandoned);
+
+    finder->find(QStringLiteral("27"), true);
+    ASSERT_TRUE(finder->searching());
+    finder->find(QStringLiteral("03"), true);
+
+    finishSearching();
+    EXPECT_EQ(abandoned.count(), 1);
+    EXPECT_EQ(view->activeCursorTime(), 25U);
 }
 
 // ---------------------------------------------------------------------------
