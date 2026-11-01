@@ -614,6 +614,40 @@ TEST_F(FindValueInteractionTest, SelectingAnotherRowAbandonsASearchStillRunning)
     EXPECT_EQ(view->activeCursorTime(), placed);
 }
 
+TEST_F(FindValueInteractionTest, AParameterHasNothingToFindAndSaysWhy) {
+    SignalInfo width;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+        if (info.name == QStringLiteral("WIDTH")) width = info;
+    }
+    ASSERT_TRUE(width.isParameter());
+    treeView->setCurrentIndex(model->indexOfRow(model->addSignal(width)));
+
+    finder->find(QStringLiteral("8"), true);
+    EXPECT_FALSE(finder->searching());
+    EXPECT_EQ(view->activeCursorTime(), 0U);
+    EXPECT_EQ(lastReport(),
+              QStringLiteral("WIDTH is a parameter, which shows one value at every time"));
+}
+
+TEST_F(FindValueInteractionTest, ChangingTheWidthOfTheRowAbandonsASearchStillRunning) {
+    // The value searched for is no longer one the row can show.
+    finder->setSlice(1, std::chrono::milliseconds(0));
+    const QSignalSpy abandoned(finder.get(), &ValueFinder::searchAbandoned);
+
+    finder->find(QStringLiteral("27"), true);
+    ASSERT_TRUE(finder->searching());
+    const int count = rowOf.value(QStringLiteral("count"));
+    model->unpack(count);
+    model->removeRow(model->row(count)->children.front());
+    ASSERT_EQ(view->selectedRow(), count);
+
+    finishSearching();
+    EXPECT_FALSE(finder->searching());
+    EXPECT_EQ(abandoned.count(), 1);
+    EXPECT_EQ(view->activeCursorTime(), 0U);
+    EXPECT_TRUE(reports->isEmpty());
+}
+
 TEST_F(FindValueInteractionTest, ANewSearchReplacesOneStillRunning) {
     finder->setSlice(1, std::chrono::milliseconds(0));
     const QSignalSpy abandoned(finder.get(), &ValueFinder::searchAbandoned);

@@ -12,6 +12,7 @@
 
 #include "gui/MainWindow.h"
 #include "gui/Theme.h"
+#include "gui/ValueFinder.h"
 #include "gui/WaveformView.h"
 
 #include "SessionFixture.h"
@@ -35,6 +36,7 @@
 #include <QTest>
 #include <QTreeView>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -1532,6 +1534,27 @@ TEST_F(FindFieldTest, WhatCannotBeFoundIsSaidInTheStatusBar) {
     EXPECT_EQ(canvas->activeCursorTime(), 0U);
     EXPECT_EQ(window->statusBar()->currentMessage(),
               QStringLiteral("'1ff' does not fit in 8 bits"));
+}
+
+TEST_F(FindFieldTest, ARestartAbandonsASearchStillRunning) {
+    // The values it was searching are gone, and going on through what replaces them would answer
+    // for a run that no longer exists.
+    auto* finder = window->findChild<enzan::gui::ValueFinder*>();
+    ASSERT_NE(finder, nullptr);
+    finder->setSlice(1, std::chrono::milliseconds(0));
+
+    field->setText(QStringLiteral("27"));
+    waveRows->setFocus();
+    press(waveRows, Qt::Key_F3);
+    ASSERT_TRUE(finder->searching());
+    EXPECT_TRUE(window->statusBar()->currentMessage().startsWith(QStringLiteral("Searching")))
+        << window->statusBar()->currentMessage().toStdString();
+
+    Q_EMIT session->wavesCleared();
+    EXPECT_FALSE(finder->searching());
+    EXPECT_TRUE(window->statusBar()->currentMessage().isEmpty())
+        << window->statusBar()->currentMessage().toStdString();
+    EXPECT_EQ(canvas->activeCursorTime(), 0U);
 }
 
 TEST_F(FindFieldTest, TheCursorMenuOffersFindingWithItsKeys) {
