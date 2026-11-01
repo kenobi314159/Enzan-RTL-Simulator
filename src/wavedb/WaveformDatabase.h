@@ -276,12 +276,6 @@ public:
                                                    runtime::SimTime before, runtime::SimTime limit,
                                                    std::uint64_t budget) const;
 
-    /// The last change in `[from, to)` at which bits `[lowBit, highBit]` of the signal start to
-    /// hold `value`, as `firstStartIn` finds the first.
-    [[nodiscard]] std::uint64_t lastStartIn(std::uint32_t recordIndex, std::uint64_t from,
-                                            std::uint64_t to, std::uint32_t highBit,
-                                            std::uint32_t lowBit, eir::ConstBitRef value) const;
-
     /// Appends every change with a time in `[from, to)` to `out`.
     ///
     /// For the zoomed-in case, where the caller wants the transitions themselves rather than a
