@@ -1228,6 +1228,60 @@ runtime::SimTime WaveformModel::nearestEdge(int rowId, runtime::SimTime time) co
     return time - earlier <= later - time ? earlier : later;
 }
 
+// The row shows one value from each of its raw edges to the next, so what it showed an instant
+// before an edge is what it showed at the edge before: each search reads one value per edge.
+
+WaveformModel::Match WaveformModel::nextMatchAfter(int rowId, runtime::SimTime time,
+                                                   const eir::BitVector& value,
+                                                   runtime::SimTime limit, int budget) const {
+    if (row(rowId) == nullptr) return {};
+
+    std::optional<eir::BitVector> before = valueAt(rowId, time);
+    runtime::SimTime candidate = time;
+    for (int examined = 1;; ++examined) {
+        candidate = nextRawEdgeAfter(rowId, candidate);
+        if (candidate == runtime::NoTime || candidate >= limit) return {};
+
+        std::optional<eir::BitVector> now = valueAt(rowId, candidate);
+        if (now == value && before != value)
+            return {.outcome = Match::Outcome::Found, .time = candidate};
+        if (examined >= budget) return {.outcome = Match::Outcome::Unfinished, .time = candidate};
+
+        before = std::move(now);
+    }
+}
+
+WaveformModel::Match WaveformModel::previousMatchBefore(int rowId, runtime::SimTime time,
+                                                        const eir::BitVector& value,
+                                                        runtime::SimTime limit, int budget) const {
+    if (row(rowId) == nullptr) return {};
+
+    // Nothing at or past the limit is known yet, so the search starts below it.
+    runtime::SimTime candidate = previousRawEdgeBefore(rowId, std::min(time, limit));
+    if (candidate == runtime::NoTime) return {};
+
+    std::optional<eir::BitVector> at = valueAt(rowId, candidate);
+    for (int examined = 1;; ++examined) {
+        const runtime::SimTime earlier =
+            candidate == 0 ? runtime::NoTime : previousRawEdgeBefore(rowId, candidate);
+
+        // Before its first edge a row shows nothing, unless a parameter in it shows something.
+        std::optional<eir::BitVector> before;
+        if (earlier != runtime::NoTime)
+            before = valueAt(rowId, earlier);
+        else if (candidate > 0)
+            before = valueAt(rowId, candidate - 1);
+
+        if (at == value && before != value)
+            return {.outcome = Match::Outcome::Found, .time = candidate};
+        if (earlier == runtime::NoTime) return {};
+        if (examined >= budget) return {.outcome = Match::Outcome::Unfinished, .time = candidate};
+
+        candidate = earlier;
+        at = std::move(before);
+    }
+}
+
 void WaveformModel::setCursorTime(runtime::SimTime time) {
     if (time == cursorTime) return;
     cursorTime = time;

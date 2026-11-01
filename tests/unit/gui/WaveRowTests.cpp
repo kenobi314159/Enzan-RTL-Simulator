@@ -16,6 +16,7 @@
 
 #include "SessionFixture.h"
 
+#include "support/Literals.h"
 #include "support/Workspace.h"
 
 #include <gtest/gtest.h>
@@ -35,7 +36,26 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <ostream>
+#include <string_view>
 #include <vector>
+
+namespace enzan::gui {
+
+/// How gtest shows a search's outcome when a test of one fails.
+///
+/// gtest finds it by this name, through the namespace of the type, which neither a name of this
+/// project's style nor an anonymous namespace would let it do.
+// NOLINTNEXTLINE(readability-identifier-naming,misc-use-internal-linkage)
+void PrintTo(const WaveformModel::Match& match, std::ostream* out) {
+    switch (match.outcome) {
+    case WaveformModel::Match::Outcome::Found: *out << "found at " << match.time; break;
+    case WaveformModel::Match::Outcome::Absent: *out << "absent"; break;
+    case WaveformModel::Match::Outcome::Unfinished: *out << "unfinished at " << match.time; break;
+    }
+}
+
+} // namespace enzan::gui
 
 namespace {
 
@@ -412,6 +432,139 @@ TEST_F(WaveRowTest, TheNearestEdgeIsFoundFromEitherSide) {
 
     EXPECT_EQ(model->nearestEdge(row, 101), 100U);
     EXPECT_EQ(model->nearestEdge(row, 104), 105U);
+}
+
+// ---------------------------------------------------------------------------
+// Finding a value
+// ---------------------------------------------------------------------------
+//
+// The counter takes each value v at 10v - 5, on the clock's rising edge, and the clock is low from
+// 0 and toggles every 5; the run stops at 400.
+
+class FindValueTest : public WaveRowTest {
+protected:
+    using Match = WaveformModel::Match;
+
+    /// Far more edges than the run has, for a search meant to finish.
+    static constexpr int Unbounded = 1 << 20;
+
+    [[nodiscard]] Match next(int rowId, enzan::runtime::SimTime from, std::string_view value,
+                             enzan::runtime::SimTime limit = 400, int budget = Unbounded) const {
+        return model->nextMatchAfter(rowId, from, enzan::test::literal(value), limit, budget);
+    }
+
+    [[nodiscard]] Match previous(int rowId, enzan::runtime::SimTime from, std::string_view value,
+                                 enzan::runtime::SimTime limit = 400,
+                                 int budget = Unbounded) const {
+        return model->previousMatchBefore(rowId, from, enzan::test::literal(value), limit, budget);
+    }
+
+    static Match found(enzan::runtime::SimTime time) {
+        return {.outcome = Match::Outcome::Found, .time = time};
+    }
+};
+
+const WaveformModel::Match Absent{};
+
+TEST_F(FindValueTest, AValueIsFoundWhereTheRowStartsToShowIt) {
+    const int count = model->addSignal(counter);
+
+    EXPECT_EQ(next(count, 0, "8'd5"), found(45));
+    EXPECT_EQ(previous(count, 400, "8'd5"), found(45));
+    EXPECT_EQ(next(count, 0, "8'd200"), Absent);
+}
+
+TEST_F(FindValueTest, FromInsideAStretchNextFindsTheNextOneAndPreviousItsStart) {
+    // The clock is high over [5, 10) and again from 15: the stretch the cursor is in is not one
+    // to find again, and its start is the one just passed.
+    const int clk = model->addSignal(clock);
+
+    EXPECT_EQ(next(clk, 7, "1'b1"), found(15));
+    EXPECT_EQ(previous(clk, 7, "1'b1"), found(5));
+
+    // From the start of a stretch, as a cursor just put there by a search is.
+    EXPECT_EQ(next(clk, 5, "1'b1"), found(15));
+    EXPECT_EQ(previous(clk, 5, "1'b1"), Absent) << "nothing before 5 starts to be high";
+    EXPECT_EQ(previous(clk, 15, "1'b1"), found(5));
+}
+
+TEST_F(FindValueTest, AValueShownFromTheStartIsFoundAtZero) {
+    const int clk = model->addSignal(clock);
+    EXPECT_EQ(previous(clk, 7, "1'b0"), found(0));
+
+    const int count = model->addSignal(counter);
+    EXPECT_EQ(previous(count, 400, "8'd0"), found(0));
+    EXPECT_EQ(next(count, 0, "8'd0"), Absent) << "a search after zero does not find zero";
+}
+
+TEST_F(FindValueTest, ASliceIsFoundWhereItsBitsChangeRatherThanWhereItsSignalDoes) {
+    // Bit 3 of the counter is set from 8 to 15, from 75, and again from 24, at 235. The counter
+    // changes eight times between, each an edge of the signal and none a start of the bit.
+    const int count = model->addSignal(counter);
+    const int bit3 = model->addSlice(count, 3, 3);
+
+    EXPECT_EQ(next(bit3, 80, "1'b1"), found(235));
+    EXPECT_EQ(previous(bit3, 230, "1'b1"), found(75));
+}
+
+TEST_F(FindValueTest, AGroupIsFoundByWhatItShows) {
+    // The clock beside the counter: high, and 40, from 395.
+    const int group = model->addGroup(QStringLiteral("mixed"));
+    model->addSignal(clock, group);
+    model->addSignal(counter, group);
+
+    EXPECT_EQ(next(group, 0, "9'h128"), found(395));
+    EXPECT_EQ(previous(group, 400, "9'h028"), Absent)
+        << "the counter is 40 only once the clock has risen";
+}
+
+TEST_F(FindValueTest, NothingAtOrPastTheLimitIsFound) {
+    const int count = model->addSignal(counter);
+
+    EXPECT_EQ(next(count, 0, "8'd40", 395), Absent);
+    EXPECT_EQ(next(count, 0, "8'd40", 396), found(395));
+
+    // A cursor past the limit searches back from it.
+    EXPECT_EQ(previous(count, 500, "8'd40", 395), Absent);
+    EXPECT_EQ(previous(count, 500, "8'd39", 395), found(385));
+}
+
+TEST_F(FindValueTest, ASearchThatRunsOutSaysHowFarItGotAndGoesOnFromThere) {
+    const int count = model->addSignal(counter);
+
+    // Four edges, 5 to 35, and none of them a 30.
+    EXPECT_EQ(next(count, 0, "8'd30", 400, 4),
+              (Match{.outcome = Match::Outcome::Unfinished, .time = 35}));
+
+    Match match = next(count, 0, "8'd30", 400, 4);
+    int searches = 1;
+    while (match.outcome == Match::Outcome::Unfinished) {
+        const enzan::runtime::SimTime from = match.time;
+        match = next(count, from, "8'd30", 400, 4);
+        ASSERT_TRUE(match.outcome != Match::Outcome::Unfinished || match.time > from);
+        ++searches;
+    }
+    EXPECT_EQ(match, found(295));
+    EXPECT_EQ(searches, 8) << "thirty edges, four at a time";
+
+    // Backwards the same: 395 down to 365, then on.
+    EXPECT_EQ(previous(count, 400, "8'd10", 400, 4),
+              (Match{.outcome = Match::Outcome::Unfinished, .time = 365}));
+    match = previous(count, 400, "8'd10", 400, 4);
+    while (match.outcome == Match::Outcome::Unfinished) {
+        const enzan::runtime::SimTime from = match.time;
+        match = previous(count, from, "8'd10", 400, 4);
+        ASSERT_TRUE(match.outcome != Match::Outcome::Unfinished || match.time < from);
+    }
+    EXPECT_EQ(match, found(95));
+}
+
+TEST_F(FindValueTest, ARemovedRowHasNothingToFind) {
+    const int count = model->addSignal(counter);
+    model->removeRow(count);
+
+    EXPECT_EQ(next(count, 0, "8'd5"), Absent);
+    EXPECT_EQ(previous(count, 400, "8'd5"), Absent);
 }
 
 // ---------------------------------------------------------------------------

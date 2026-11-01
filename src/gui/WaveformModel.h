@@ -366,6 +366,45 @@ public:
     /// The row's edge closest to `time`, or `NoTime` when it has none.
     [[nodiscard]] runtime::SimTime nearestEdge(int rowId, runtime::SimTime time) const;
 
+    /// How far a search for a value got.
+    struct Match {
+        enum class Outcome : std::uint8_t {
+            /// `time` is where the row starts to show the value.
+            Found,
+
+            /// The row starts to show it nowhere the search could look.
+            Absent,
+
+            /// The search looked at as many edges as it was allowed to first. `time` is the last
+            /// it looked at, and a search from there goes on where this one stopped.
+            Unfinished,
+        };
+
+        Outcome outcome = Outcome::Absent;
+        runtime::SimTime time = runtime::NoTime;
+
+        friend bool operator==(const Match&, const Match&) = default;
+    };
+
+    /// The first time after `time`, and before `limit`, at which the row starts to show `value`:
+    /// shows it, and an instant earlier did not. A row already showing it is found where it next
+    /// comes back to it.
+    ///
+    /// No index says when a row holds a value, so its edges are examined one by one, at most
+    /// `budget` of them. A search that runs out says how far it got rather than answering with an
+    /// edge it never checked, as `nextEdgeAfter` may: there a cursor on an edge is still on an
+    /// edge, and here it would be on a value that is not the one asked for.
+    [[nodiscard]] Match nextMatchAfter(int rowId, runtime::SimTime time,
+                                       const eir::BitVector& value, runtime::SimTime limit,
+                                       int budget) const;
+
+    /// The last time before `time`, and before `limit`, at which the row starts to show `value`,
+    /// searched for as `nextMatchAfter` searches. A row showing it at `time` is found where it
+    /// started to.
+    [[nodiscard]] Match previousMatchBefore(int rowId, runtime::SimTime time,
+                                            const eir::BitVector& value, runtime::SimTime limit,
+                                            int budget) const;
+
     /// Narrows a whole-signal value to the row's bit range. Returns it unchanged when the row
     /// shows the whole signal.
     [[nodiscard]] static eir::BitVector slice(const WaveRow& waveRow, const eir::BitVector& value);
