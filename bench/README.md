@@ -38,6 +38,25 @@ loaded machine alongside three hundred other tests is not comparable with anythi
 `results.tsv` is not committed: a number from one machine does not compare with one from
 another, and the file would be a merge conflict on every run.
 
+### Finding a value in the wave window
+
+`find-value/FindValueBench.cpp` measures what the wave window's search for a value costs per
+change of a trace, which is what a reader waits for: no index answers the search, so its cost
+grows with the trace. A kernel runs a counter for as many changes as are asked for, the window's
+session fetches them all, and the model is searched for a value the counter never takes, so that
+every change is examined, for a row of the signal, a slice of it and a group holding it, which is
+searched as every row with children is:
+
+```sh
+cmake --build --preset gcc-release --target enzan-bench-find-value
+./build/gcc-release/bin/enzan-bench-find-value 10000000
+```
+
+It is built only when asked for, and it records nothing: it is what the search's design was
+decided by, kept so that the decision can be checked again. A trace past the database's memory
+budget spills to the temporary directory on both ends of the socket, so a large one wants
+`TMPDIR` on a disk with room, and short enough for the socket's path.
+
 
 ## What goes here, and what the rules are
 
