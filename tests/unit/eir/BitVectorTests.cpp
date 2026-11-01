@@ -248,6 +248,20 @@ TEST(BitVectorParse, UnknownDigitsExpandToTheWholeDigit) {
     EXPECT_EQ(binary(literal("8'hzF").ref()), "zzzz1111");
 }
 
+TEST(BitVectorParse, ALeadingUnknownDigitPadsWithItsValue) {
+    // IEEE 1800 section 5.7.1: digits short of the width pad with zeros, unless the leftmost
+    // is an x or a z, which pads with x or z.
+    EXPECT_EQ(binary(literal("8'hx").ref()), "xxxxxxxx");
+    EXPECT_EQ(binary(literal("8'hz").ref()), "zzzzzzzz");
+    EXPECT_EQ(binary(literal("8'b?1").ref()), "zzzzzzz1");
+    EXPECT_EQ(binary(literal("10'ox5").ref()), "xxxxxxx101");
+    EXPECT_TRUE(literal("'hx").ref().isAll(Logic::Unknown)) << "unsized, 32 bits of x";
+
+    // Only the leftmost digit decides: an unknown digit further right pads with zeros.
+    EXPECT_EQ(binary(literal("8'h1x").ref()), "0001xxxx");
+    EXPECT_EQ(binary(literal("8'b1z").ref()), "0000001z");
+}
+
 TEST(BitVectorParse, UnderscoresAreSeparators) {
     EXPECT_EQ(binary(literal("8'b1010_0101").ref()), "10100101");
     EXPECT_EQ(literal("16'd1_000").ref().toUInt64(), 1000U);

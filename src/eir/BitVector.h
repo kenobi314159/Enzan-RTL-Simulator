@@ -230,6 +230,10 @@ public:
     /// than guessing: a misparsed literal is a wrong simulation result, and the
     /// caller has a source location to attach a diagnostic to.
     ///
+    /// Digits short of the width are padded on the left with zeros, or with x or
+    /// z when the leftmost digit is one, and digits beyond it are truncated, as
+    /// IEEE 1800 section 5.7.1 specifies.
+    ///
     /// A plain decimal with no size is 32 bits wide and signed, as IEEE 1800
     /// specifies for an unsized decimal literal. An unsized `'0`/`'1`/`'x`/`'z`
     /// fill literal has no width of its own, so it is returned as one bit and the
