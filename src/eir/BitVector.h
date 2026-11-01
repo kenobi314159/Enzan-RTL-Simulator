@@ -30,6 +30,11 @@ constexpr std::uint32_t storageWordsFor(std::uint32_t bitWidth) noexcept {
     return 2 * wordsFor(bitWidth);
 }
 
+/// The widest literal `BitVector::parse` reads, which is the widest value slang
+/// makes. A width past it is a typo rather than a value: made whole, it would
+/// take gigabytes, and near 2^32 it overflows the count of Words it occupies.
+constexpr std::uint32_t MaxLiteralWidth = (std::uint32_t{1} << 24) - 1;
+
 /// Returns a mask of the bits used in the last Word of a plane of `bitWidth`
 /// bits. A width that is a multiple of 64 uses the whole Word.
 constexpr Word topWordMask(std::uint32_t bitWidth) noexcept {
@@ -232,7 +237,8 @@ public:
     ///
     /// Digits short of the width are padded on the left with zeros, or with x or
     /// z when the leftmost digit is one, and digits beyond it are truncated, as
-    /// IEEE 1800 section 5.7.1 specifies.
+    /// IEEE 1800 section 5.7.1 specifies. A width past `MaxLiteralWidth` is
+    /// refused.
     ///
     /// A plain decimal with no size is 32 bits wide and signed, as IEEE 1800
     /// specifies for an unsized decimal literal. An unsized `'0`/`'1`/`'x`/`'z`

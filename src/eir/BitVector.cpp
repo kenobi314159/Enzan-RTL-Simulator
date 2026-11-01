@@ -312,7 +312,8 @@ std::optional<BitVector> BitVector::parse(std::string_view text) {
         const auto* first = sizeText.data();
         const auto* last = first + sizeText.size();
         const std::from_chars_result parsed = std::from_chars(first, last, width);
-        if (parsed.ec != std::errc() || parsed.ptr != last || width == 0) return std::nullopt;
+        if (parsed.ec != std::errc() || parsed.ptr != last || width == 0 || width > MaxLiteralWidth)
+            return std::nullopt;
         sized = true;
     }
 
