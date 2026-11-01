@@ -472,6 +472,12 @@ class FindValueInteractionTest : public InteractionTest {
 protected:
     void SetUp() override {
         InteractionTest::SetUp();
+
+        // Recorded from the start, beside the rows `populate` adds, without a row of its own.
+        for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+            if (info.name == QStringLiteral("q")) quiet = info;
+        }
+        session->subscribe({quiet.signalIndex});
         populate();
 
         finder = std::make_unique<ValueFinder>(*session, *model, *view);
@@ -509,6 +515,9 @@ protected:
 
     std::unique_ptr<ValueFinder> finder;
     std::unique_ptr<QSignalSpy> reports;
+
+    /// The child's `q`, which nothing drives: four unknown bits at every time.
+    SignalInfo quiet;
 };
 
 TEST_F(FindValueInteractionTest, FindingMovesTheActiveCursorToWhereTheRowStartsToShowTheValue) {
@@ -687,6 +696,35 @@ TEST_F(FindValueInteractionTest, RowsChangingElsewhereLeaveASearchRunning) {
     finishSearching();
     EXPECT_EQ(abandoned.count(), 0);
     EXPECT_EQ(view->activeCursorTime(), 385U);
+}
+
+TEST_F(FindValueInteractionTest, ADigitTypedInCapitalsFindsWhereTheRowShowsOne) {
+    // Two bits of the quiet `q` and the counter's lowest bit as one digit, which the column writes
+    // as `X`, partly unknown, from the start, and never as `x`, wholly unknown.
+    SignalInfo count;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+        if (info.name == QStringLiteral("count")) count = info;
+    }
+    const int group = model->addGroup(QStringLiteral("partly"));
+    const int bits = model->addSignal(quiet, group);
+    model->addSlice(bits, 0, 0);
+    model->addSlice(bits, 1, 1);
+    model->removeRow(bits);
+    const int counter = model->addSignal(count, group);
+    model->addSlice(counter, 0, 0);
+    model->removeRow(counter);
+    ASSERT_EQ(model->renderValue(group, 100), QStringLiteral("X"));
+
+    treeView->setCurrentIndex(model->indexOfRow(group));
+    view->setCursorTime(0, 100);
+    finder->find(QStringLiteral("X"), false);
+    EXPECT_EQ(view->activeCursorTime(), 0U);
+    EXPECT_EQ(lastReport(), QStringLiteral("partly shows X from %1").arg(at(0)));
+
+    view->setCursorTime(0, 100);
+    finder->find(QStringLiteral("x"), false);
+    EXPECT_EQ(view->activeCursorTime(), 100U);
+    EXPECT_EQ(lastReport(), QStringLiteral("No earlier x in partly"));
 }
 
 TEST_F(FindValueInteractionTest, ANewSearchReplacesOneStillRunning) {

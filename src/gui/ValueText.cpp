@@ -14,8 +14,8 @@ namespace enzan::gui {
 
 namespace {
 
-ValueReading accepted(eir::BitVector value) {
-    return {.value = std::move(value), .problem = {}};
+ValueReading accepted(eir::BitVector value, std::vector<PartialDigit> partial = {}) {
+    return {.value = std::move(value), .partial = std::move(partial), .problem = {}};
 }
 
 ValueReading refused(QString problem) {
@@ -107,6 +107,9 @@ bool isDigitOf(char16_t code, eir::Radix radix, bool literal) {
 /// reaches past a width its bits do not divide, as the value column writes it there, and an x or
 /// a z covers as much of it as there is; a one past the width, or any other digit beyond, is a
 /// value too wide.
+///
+/// Outside a literal, an `X` or a `Z` is a partial digit wherever it covers more than one bit, as
+/// the column writes one.
 std::optional<ValueReading> readDigits(QStringView text, std::uint32_t width, eir::Radix radix,
                                        bool literal) {
     QString digits;
@@ -116,12 +119,28 @@ std::optional<ValueReading> readDigits(QStringView text, std::uint32_t width, ei
     }
     if (digits.isEmpty()) return std::nullopt;
 
+    // The kind of partial digit `code` is over bits [high, low], if it is one.
+    const auto partialOf = [literal](char16_t code, std::uint32_t high,
+                                     std::uint32_t low) -> std::optional<PartialDigit> {
+        if (literal || high == low) return std::nullopt;
+        if (code == u'X')
+            return PartialDigit{.highBit = high, .lowBit = low, .kind = eir::Logic::Unknown};
+        if (code == u'Z')
+            return PartialDigit{.highBit = high, .lowBit = low, .kind = eir::Logic::HighZ};
+        return std::nullopt;
+    };
+
     // Decimal cannot place an unknown in a digit, so its x and z stand for the whole value, as
     // the column writes them.
     if (radix == eir::Radix::Decimal && digits.size() == 1) {
-        const char16_t code = digits.front().toLower().unicode();
-        if (code == u'x') return accepted(eir::BitVector::filled(width, eir::Logic::Unknown));
-        if (code == u'z') return accepted(eir::BitVector::filled(width, eir::Logic::HighZ));
+        const char16_t code = digits.front().unicode();
+        std::vector<PartialDigit> partial;
+        if (const std::optional<PartialDigit> digit = partialOf(code, width - 1, 0))
+            partial.push_back(*digit);
+        if (code == u'x' || code == u'X')
+            return accepted(eir::BitVector::filled(width, eir::Logic::Unknown), std::move(partial));
+        if (code == u'z' || code == u'Z')
+            return accepted(eir::BitVector::filled(width, eir::Logic::HighZ), std::move(partial));
     }
 
     if (!std::ranges::all_of(digits, [radix, literal](QChar character) {
@@ -154,15 +173,26 @@ std::optional<ValueReading> readDigits(QStringView text, std::uint32_t width, ei
     if (digits.size() - first > static_cast<qsizetype>(needed))
         return refused(tooWide(text, width));
 
+    const QString kept = digits.sliced(first);
     const std::uint32_t size = needed * perDigit;
-    const std::optional<eir::BitVector> parsed = eir::BitVector::parse(
-        std::to_string(size) + '\'' + base + digits.sliced(first).toStdString());
+    const std::optional<eir::BitVector> parsed =
+        eir::BitVector::parse(std::to_string(size) + '\'' + base + kept.toStdString());
     if (!parsed.has_value()) return std::nullopt;
 
     for (std::uint32_t bit = width; bit < size; ++bit) {
         if (parsed->get(bit) == eir::Logic::One) return refused(tooWide(text, width));
     }
-    return accepted(parsed->resized(width, false));
+
+    // The leftmost first, and none past the width, which a digit always reaches into.
+    std::vector<PartialDigit> partial;
+    for (qsizetype position = 0; position < kept.size(); ++position) {
+        const auto low = static_cast<std::uint32_t>(kept.size() - 1 - position) * perDigit;
+        const std::uint32_t high = std::min(low + perDigit - 1, width - 1);
+        if (const std::optional<PartialDigit> digit =
+                partialOf(kept[position].unicode(), high, low))
+            partial.push_back(*digit);
+    }
+    return accepted(parsed->resized(width, false), std::move(partial));
 }
 
 /// Reads a SystemVerilog literal into `width` bits, or nothing when `text` is no literal.
@@ -329,14 +359,14 @@ ValueReading readArray(QStringView text, std::uint32_t width,
                                    .arg(count));
             }
 
-            std::vector<eir::BitVector> parts;
+            std::vector<ValueReading> parts;
             parts.reserve(count);
             for (const QString& word : *words) {
                 ValueReading element = readArray(word, elementWidth, dimensions.subspan(1), radix);
                 if (!element.value.has_value()) return element;
-                parts.push_back(std::move(*element.value));
+                parts.push_back(std::move(element));
             }
-            return accepted(joinParts(parts));
+            return joinReadings(parts);
         }
     }
 
@@ -380,6 +410,24 @@ eir::BitVector joinParts(std::span<const eir::BitVector> parts) {
     for (const eir::BitVector& part : parts) {
         top -= part.width();
         eir::bitops::assignPartAt(joined.mutableRef(), part.ref(), top);
+    }
+    return joined;
+}
+
+ValueReading joinReadings(std::span<const ValueReading> parts) {
+    std::vector<eir::BitVector> values;
+    values.reserve(parts.size());
+    for (const ValueReading& part : parts) values.push_back(*part.value);
+    ValueReading joined = accepted(joinParts(values));
+
+    std::uint32_t top = joined.value->width();
+    for (const ValueReading& part : parts) {
+        top -= part.value->width();
+        for (PartialDigit digit : part.partial) {
+            digit.highBit += top;
+            digit.lowBit += top;
+            joined.partial.push_back(digit);
+        }
     }
     return joined;
 }

@@ -1228,7 +1228,10 @@ they are decided here.
 - **A value is read as the row shows one** — digits in its radix, a name of its enumeration, the
   list of its children or of its elements — so that whatever a row shows can be typed back, and a
   literal, `8'hff` or `'x`, means what it says in any row. A value too wide for the row is refused
-  rather than cut down, since a value cut down is another value. There are no wildcards.
+  rather than cut down, since a value cut down is another value. There are no wildcards, save the
+  one the row writes itself: a digit in capitals, `X` or `Z`, is partly unknown, some of its bits
+  and not all, and is read as that, since a row showing `1X` shows it for any of several values.
+  In a literal, case means nothing, as in SystemVerilog.
 - **A search is a scan** (7.1): the row is taken apart into the bits of the signals it shows, as
   its value joins them, and the database searches those. So it runs a slice at a time on the event
   loop, never blocking the window, and moving the cursor or the selection abandons it.

@@ -27,6 +27,7 @@ using enzan::eir::ArrayDimension;
 using enzan::eir::BitVector;
 using enzan::eir::Logic;
 using enzan::eir::Radix;
+using enzan::gui::PartialDigit;
 using enzan::gui::readArray;
 using enzan::gui::readNumber;
 using enzan::gui::splitList;
@@ -81,7 +82,7 @@ TEST(ValueText, SpaceAroundAndUnderscoresWithinAreIgnored) {
 TEST(ValueText, AnUnknownDigitIsUnknownInEveryBitItCovers) {
     EXPECT_EQ(read(QStringLiteral("1x"), 8, Radix::Hexadecimal), "0001xxxx");
     EXPECT_EQ(read(QStringLiteral("10z1"), 4, Radix::Binary), "10z1");
-    EXPECT_EQ(read(QStringLiteral("X5"), 8, Radix::Hexadecimal), "xxxx0101") << "in either case";
+    EXPECT_EQ(read(QStringLiteral("x5"), 8, Radix::Hexadecimal), "xxxx0101");
 
     // Read as `8'hx` is, so one x is the whole row unknown, as IEEE 1800 pads a literal.
     EXPECT_EQ(read(QStringLiteral("x"), 8, Radix::Hexadecimal), "xxxxxxxx");
@@ -89,7 +90,64 @@ TEST(ValueText, AnUnknownDigitIsUnknownInEveryBitItCovers) {
 
     // Decimal cannot place an unknown in a digit, so its x and z are the whole value.
     EXPECT_EQ(read(QStringLiteral("x"), 8, Radix::Decimal), "xxxxxxxx");
-    EXPECT_EQ(read(QStringLiteral("Z"), 4, Radix::Decimal), "zzzz");
+    EXPECT_EQ(read(QStringLiteral("z"), 4, Radix::Decimal), "zzzz");
+}
+
+/// The partial digits of `text` read in a row of `width` bits shown in `radix`.
+std::vector<PartialDigit> partialOf(const QString& text, std::uint32_t width, Radix radix) {
+    const ValueReading reading = readNumber(text, width, radix);
+    EXPECT_TRUE(reading.value.has_value()) << reading.problem.toStdString();
+    return reading.partial;
+}
+
+TEST(ValueText, ADigitInCapitalsIsOnlyPartlyUnknown) {
+    // What the column writes for a digit with some of its bits unknown and not all, or with some
+    // high impedance and none unknown: not one value but any of several, kept beside the value.
+    EXPECT_EQ(partialOf(QStringLiteral("1X"), 8, Radix::Hexadecimal),
+              std::vector({PartialDigit{.highBit = 3, .lowBit = 0, .kind = Logic::Unknown}}));
+    EXPECT_EQ(partialOf(QStringLiteral("Z0"), 8, Radix::Hexadecimal),
+              std::vector({PartialDigit{.highBit = 7, .lowBit = 4, .kind = Logic::HighZ}}));
+    EXPECT_EQ(partialOf(QStringLiteral("X7Z"), 9, Radix::Octal),
+              std::vector({PartialDigit{.highBit = 8, .lowBit = 6, .kind = Logic::Unknown},
+                           PartialDigit{.highBit = 2, .lowBit = 0, .kind = Logic::HighZ}}));
+    EXPECT_EQ(read(QStringLiteral("1X"), 8, Radix::Hexadecimal), "0001xxxx")
+        << "its bits in the value are a lowercase digit's";
+
+    // The top digit of a width its bits do not divide covers what there is of it.
+    EXPECT_EQ(partialOf(QStringLiteral("X0"), 7, Radix::Hexadecimal),
+              std::vector({PartialDigit{.highBit = 6, .lowBit = 4, .kind = Logic::Unknown}}));
+
+    // Decimal writes one for the whole value.
+    EXPECT_EQ(partialOf(QStringLiteral("X"), 8, Radix::Decimal),
+              std::vector({PartialDigit{.highBit = 7, .lowBit = 0, .kind = Logic::Unknown}}));
+    EXPECT_EQ(partialOf(QStringLiteral("Z"), 8, Radix::Decimal),
+              std::vector({PartialDigit{.highBit = 7, .lowBit = 0, .kind = Logic::HighZ}}));
+}
+
+TEST(ValueText, WhereADigitCannotBePartlyAnythingItsCapitalIsItsLowercase) {
+    // A digit of one bit, as every binary digit is, is unknown or not.
+    EXPECT_TRUE(partialOf(QStringLiteral("10X1"), 4, Radix::Binary).empty());
+    EXPECT_EQ(read(QStringLiteral("10X1"), 4, Radix::Binary), "10x1");
+    EXPECT_TRUE(partialOf(QStringLiteral("X5"), 5, Radix::Hexadecimal).empty())
+        << "the top digit of five bits covers one";
+    EXPECT_TRUE(partialOf(QStringLiteral("X"), 1, Radix::Decimal).empty());
+
+    // A literal is read as SystemVerilog reads one, where case does not matter.
+    EXPECT_TRUE(partialOf(QStringLiteral("8'hX5"), 8, Radix::Hexadecimal).empty());
+    EXPECT_EQ(read(QStringLiteral("8'hX5"), 8, Radix::Hexadecimal), "xxxx0101");
+    EXPECT_TRUE(partialOf(QStringLiteral("'hZ5"), 8, Radix::Hexadecimal).empty());
+    EXPECT_TRUE(partialOf(QStringLiteral("'dX"), 8, Radix::Hexadecimal).empty());
+}
+
+TEST(ValueText, AListMovesItsElementsPartialDigitsToWhereTheirBitsGo) {
+    // `logic [1:0][7:0]`, the right element the lowest.
+    const std::vector<ArrayDimension> bytes = {{.left = 1, .right = 0}, {.left = 7, .right = 0}};
+    const ValueReading listed =
+        readArray(QStringLiteral("{X1}{2Z}"), 16, bytes, Radix::Hexadecimal);
+    ASSERT_TRUE(listed.value.has_value()) << listed.problem.toStdString();
+    EXPECT_EQ(listed.partial,
+              std::vector({PartialDigit{.highBit = 15, .lowBit = 12, .kind = Logic::Unknown},
+                           PartialDigit{.highBit = 3, .lowBit = 0, .kind = Logic::HighZ}}));
 }
 
 TEST(ValueText, ALiteralMeansWhatItSaysInAnyRadix) {
@@ -312,6 +370,7 @@ TEST(ValueText, WhatTheColumnWritesReadsBackAsTheSameValue) {
                     << " bits: " << reading.problem.toStdString();
                 EXPECT_EQ(reading.value, std::optional(value))
                     << written.toStdString() << " at " << width;
+                EXPECT_TRUE(reading.partial.empty()) << written.toStdString() << " at " << width;
             }
         }
     }
@@ -324,6 +383,63 @@ TEST(ValueText, WhatTheColumnWritesReadsBackAsTheSameValue) {
         const ValueReading reading = readNumber(written, 64, Radix::Ascii);
         ASSERT_TRUE(reading.value.has_value()) << written.toStdString();
         EXPECT_EQ(reading.value, std::optional(value)) << written.toStdString();
+    }
+}
+
+/// True when `value` is one of the values `reading` reads: its bits where no digit is partial, and
+/// under each partial digit some bits unknown and not all, or, none unknown, some high impedance
+/// and not all.
+bool describes(const ValueReading& reading, const BitVector& value) {
+    std::vector<bool> partial(value.width(), false);
+    for (const PartialDigit& digit : reading.partial) {
+        std::uint32_t unknown = 0;
+        std::uint32_t highZ = 0;
+        for (std::uint32_t bit = digit.lowBit; bit <= digit.highBit; ++bit) {
+            partial[bit] = true;
+            unknown += value.get(bit) == Logic::Unknown ? 1U : 0U;
+            highZ += value.get(bit) == Logic::HighZ ? 1U : 0U;
+        }
+        const std::uint32_t count = digit.highBit - digit.lowBit + 1;
+        const bool shows = digit.kind == Logic::Unknown
+                               ? unknown > 0 && unknown < count
+                               : unknown == 0 && highZ > 0 && highZ < count;
+        if (!shows) return false;
+    }
+    for (std::uint32_t bit = 0; bit < value.width(); ++bit) {
+        if (!partial[bit] && value.get(bit) != reading.value->get(bit)) return false;
+    }
+    return true;
+}
+
+TEST(ValueText, WhatTheColumnWritesForAPartlyUnknownValueReadsBackAsDescribingIt) {
+    for (const std::uint32_t width : {4U, 7U, 8U, 12U, 33U, 72U}) {
+        const BitVector known = BitVector::fromUInt64(0x5a5a'1234'8001'7f3cULL, width);
+        std::vector<BitVector> values(3, known);
+        values[0].set(1, Logic::Unknown);
+        values[1].set(1, Logic::HighZ);
+        values[2].set(1, Logic::Unknown);
+        values[2].set(2, Logic::HighZ);
+        values[2].set(width - 1, Logic::HighZ);
+
+        for (const Radix radix : {Radix::Octal, Radix::Decimal, Radix::Hexadecimal}) {
+            for (const BitVector& value : values) {
+                const QString written = QString::fromStdString(toString(value.ref(), radix));
+                const ValueReading reading = readNumber(written, width, radix);
+                ASSERT_TRUE(reading.value.has_value())
+                    << written.toStdString() << ": " << reading.problem.toStdString();
+                EXPECT_FALSE(reading.partial.empty()) << written.toStdString();
+                EXPECT_TRUE(describes(reading, value)) << written.toStdString() << " at " << width;
+
+                // A digit wholly unknown is written in lowercase, and is not the one read.
+                BitVector whole = value;
+                whole.set(0, Logic::Unknown);
+                whole.set(1, Logic::Unknown);
+                whole.set(2, Logic::Unknown);
+                whole.set(3, Logic::Unknown);
+                EXPECT_FALSE(describes(reading, whole) && radix != Radix::Decimal)
+                    << written.toStdString() << " at " << width;
+            }
+        }
     }
 }
 

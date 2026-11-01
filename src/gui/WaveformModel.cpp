@@ -1071,14 +1071,14 @@ ValueReading WaveformModel::readValue(int rowId, QStringView text) const {
                                    .arg(waveRow->children.size())};
         }
 
-        std::vector<eir::BitVector> parts;
+        std::vector<ValueReading> parts;
         parts.reserve(static_cast<std::size_t>(words->size()));
         for (qsizetype position = 0; position < words->size(); ++position) {
             ValueReading part = readValue(waveRow->children[position], words->at(position));
             if (!part.value.has_value()) return part;
-            parts.push_back(std::move(*part.value));
+            parts.push_back(std::move(part));
         }
-        return {.value = joinParts(parts), .problem = {}};
+        return joinReadings(parts);
     }
 
     const std::uint32_t width = displayedWidth(rowId);
@@ -1263,8 +1263,9 @@ bool WaveformModel::partsOf(int rowId, std::vector<ValuePart>& parts) const {
     return false;
 }
 
-std::optional<std::vector<wavedb::SearchTerm>>
-WaveformModel::termsFor(int rowId, const eir::BitVector& value) const {
+std::optional<WaveformModel::SearchTerms>
+WaveformModel::termsFor(int rowId, const eir::BitVector& value,
+                        std::span<const PartialDigit> partial) const {
     std::vector<ValuePart> parts;
     if (!partsOf(rowId, parts)) return std::nullopt;
 
@@ -1272,51 +1273,98 @@ WaveformModel::termsFor(int rowId, const eir::BitVector& value) const {
     for (const ValuePart& part : parts) width += part.width();
     if (value.width() != width) return std::nullopt;
 
+    // Which digit each bit of the row's value lies under, if one does: such a bit is asked of its
+    // digit, with the others it covers, rather than to hold a value of its own.
+    constexpr std::size_t NoDigit = ~std::size_t{0};
+    std::vector<std::size_t> digitOf(width, NoDigit);
+    std::vector<wavedb::DigitTerm> digits(partial.size());
+    for (std::size_t index = 0; index < partial.size(); ++index) {
+        const PartialDigit& digit = partial[index];
+        if (digit.lowBit > digit.highBit || digit.highBit >= width) return std::nullopt;
+        for (std::uint32_t bit = digit.lowBit; bit <= digit.highBit; ++bit) digitOf[bit] = index;
+        digits[index].kind = digit.kind;
+    }
+
     // One term a signal, however many of the row's pieces show bits of it: a bus with a bit taken
     // out is the bus asked for all but that bit.
     const wavedb::WaveformDatabase& database = kernelSession->waveforms();
-    std::vector<wavedb::SearchTerm> terms;
+    SearchTerms asked;
     std::map<std::uint32_t, std::size_t> termOfRecord;
 
     std::uint32_t top = width;
     for (const ValuePart& part : parts) {
         top -= part.width();
-        eir::BitVector wanted = eir::BitVector::filled(part.width(), eir::Logic::Zero);
-        eir::bitops::partSelectAt(wanted.mutableRef(), value.ref(), top);
 
+        // A parameter's bits are the same at every time, so they settle now what they ask.
         if (part.constant.has_value()) {
-            if (*part.constant != wanted) return std::nullopt;
+            for (std::uint32_t offset = 0; offset < part.width(); ++offset) {
+                const eir::Logic shown = part.constant->get(offset);
+                const std::size_t digit = digitOf[top + offset];
+                if (digit != NoDigit) {
+                    digits[digit].coverFixed(shown);
+                } else if (shown != value.get(top + offset)) {
+                    return std::nullopt;
+                }
+            }
             continue;
         }
 
-        const auto [entry, added] = termOfRecord.try_emplace(part.record, terms.size());
+        const auto [entry, added] = termOfRecord.try_emplace(part.record, asked.terms.size());
         if (added) {
-            terms.push_back(wavedb::SearchTerm{
+            asked.terms.push_back(wavedb::SearchTerm{
                 .recordIndex = part.record,
                 .pattern = wavedb::BitPattern(database.signal(part.record).width)});
         }
-        if (!terms[entry->second].pattern.require(part.highBit, part.lowBit, wanted.ref()))
-            return std::nullopt;
+        const auto term = static_cast<std::uint32_t>(entry->second);
+        wavedb::BitPattern& pattern = asked.terms[entry->second].pattern;
+
+        // A run of bits under no digit at a time, asked of the term; a bit under one, of it.
+        for (std::uint32_t offset = 0; offset < part.width();) {
+            if (const std::size_t digit = digitOf[top + offset]; digit != NoDigit) {
+                digits[digit].cover(term, part.lowBit + offset);
+                ++offset;
+                continue;
+            }
+            std::uint32_t end = offset;
+            while (end < part.width() && digitOf[top + end] == NoDigit) ++end;
+
+            eir::BitVector wanted = eir::BitVector::filled(end - offset, eir::Logic::Zero);
+            eir::bitops::partSelectAt(wanted.mutableRef(), value.ref(), top + offset);
+            if (!pattern.require(part.lowBit + end - 1, part.lowBit + offset, wanted.ref()))
+                return std::nullopt;
+            offset = end;
+        }
     }
-    return terms;
+
+    // A digit over parameters alone shows at every time or at none.
+    for (wavedb::DigitTerm& digit : digits) {
+        if (!digit.bits.empty()) {
+            asked.digits.push_back(std::move(digit));
+        } else if (!digit.shows(0, 0)) {
+            return std::nullopt;
+        }
+    }
+    return asked;
 }
 
 WaveformModel::Match WaveformModel::nextMatchAfter(int rowId, runtime::SimTime time,
                                                    const eir::BitVector& value,
-                                                   runtime::SimTime limit, int budget) const {
-    const std::optional<std::vector<wavedb::SearchTerm>> terms = termsFor(rowId, value);
-    if (!terms.has_value()) return {};
+                                                   runtime::SimTime limit, int budget,
+                                                   std::span<const PartialDigit> partial) const {
+    const std::optional<SearchTerms> asked = termsFor(rowId, value, partial);
+    if (!asked.has_value()) return {};
     return kernelSession->waveforms().nextTimeHolding(
-        *terms, time, limit, static_cast<std::uint64_t>(std::max(budget, 1)));
+        asked->terms, time, limit, static_cast<std::uint64_t>(std::max(budget, 1)), asked->digits);
 }
 
-WaveformModel::Match WaveformModel::previousMatchBefore(int rowId, runtime::SimTime time,
-                                                        const eir::BitVector& value,
-                                                        runtime::SimTime limit, int budget) const {
-    const std::optional<std::vector<wavedb::SearchTerm>> terms = termsFor(rowId, value);
-    if (!terms.has_value()) return {};
+WaveformModel::Match
+WaveformModel::previousMatchBefore(int rowId, runtime::SimTime time, const eir::BitVector& value,
+                                   runtime::SimTime limit, int budget,
+                                   std::span<const PartialDigit> partial) const {
+    const std::optional<SearchTerms> asked = termsFor(rowId, value, partial);
+    if (!asked.has_value()) return {};
     return kernelSession->waveforms().previousTimeHolding(
-        *terms, time, limit, static_cast<std::uint64_t>(std::max(budget, 1)));
+        asked->terms, time, limit, static_cast<std::uint64_t>(std::max(budget, 1)), asked->digits);
 }
 
 void WaveformModel::setCursorTime(runtime::SimTime time) {

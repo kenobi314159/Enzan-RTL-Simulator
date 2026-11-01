@@ -69,6 +69,7 @@ void ValueFinder::find(const QString& text, bool forward) {
 
     search = Search{.rowId = rowId,
                     .value = std::move(*reading.value),
+                    .partial = std::move(reading.partial),
                     .text = text.trimmed(),
                     .forward = forward,
                     .cursor = cursor,
@@ -115,10 +116,11 @@ void ValueFinder::step() {
         // Read afresh each call: a run in progress moves it, and a search may go as far as the
         // traces have got by the time it gets there.
         const runtime::SimTime limit = session->heldTime();
-        match = current.forward ? model->nextMatchAfter(current.rowId, current.from, current.value,
-                                                        limit, edgesPerCall)
-                                : model->previousMatchBefore(current.rowId, current.from,
-                                                             current.value, limit, edgesPerCall);
+        match = current.forward
+                    ? model->nextMatchAfter(current.rowId, current.from, current.value, limit,
+                                            edgesPerCall, current.partial)
+                    : model->previousMatchBefore(current.rowId, current.from, current.value, limit,
+                                                 edgesPerCall, current.partial);
         if (match.outcome == WaveformModel::Match::Outcome::Unfinished) current.from = match.time;
     } while (match.outcome == WaveformModel::Match::Outcome::Unfinished
              && std::chrono::milliseconds(clock.elapsed()) < sliceDuration);

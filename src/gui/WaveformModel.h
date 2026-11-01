@@ -19,6 +19,7 @@ class QDataStream;
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -384,16 +385,21 @@ public:
     /// of them in time order. A search that runs out says how far it got rather than answering with
     /// an edge it never checked, as `nextEdgeAfter` may: there a cursor on an edge is still on an
     /// edge, and here it would be on a value that is not the one asked for.
+    ///
+    /// The bits of `value` under one of `partial` are asked to be as that digit says rather than
+    /// to be what `value` holds there, as `readValue` reads a digit written `X` or `Z`.
     [[nodiscard]] Match nextMatchAfter(int rowId, runtime::SimTime time,
                                        const eir::BitVector& value, runtime::SimTime limit,
-                                       int budget) const;
+                                       int budget,
+                                       std::span<const PartialDigit> partial = {}) const;
 
     /// The last time before `time`, and before `limit`, at which the row starts to show `value`,
     /// searched for as `nextMatchAfter` searches. A row showing it at `time` is found where it
     /// started to.
     [[nodiscard]] Match previousMatchBefore(int rowId, runtime::SimTime time,
                                             const eir::BitVector& value, runtime::SimTime limit,
-                                            int budget) const;
+                                            int budget,
+                                            std::span<const PartialDigit> partial = {}) const;
 
     /// Narrows a whole-signal value to the row's bit range. Returns it unchanged when the row
     /// shows the whole signal.
@@ -478,12 +484,20 @@ private:
     /// signal nobody recorded, in it or below it.
     [[nodiscard]] bool partsOf(int rowId, std::vector<ValuePart>& parts) const;
 
+    /// What a search asks of the database: of each signal, the bits it must hold, and of the
+    /// digits written `X` or `Z`, the bits they cover.
+    struct SearchTerms {
+        std::vector<wavedb::SearchTerm> terms;
+        std::vector<wavedb::DigitTerm> digits;
+    };
+
     /// What the database is asked for when the row is searched for `value`: of each signal the row
-    /// shows bits of, that those bits hold their part of it. Nothing when the row can never show
-    /// the value: one of another width, or one a parameter in it contradicts, or one asking a bit
-    /// shown twice to hold two things at once.
-    [[nodiscard]] std::optional<std::vector<wavedb::SearchTerm>>
-    termsFor(int rowId, const eir::BitVector& value) const;
+    /// shows bits of, that those bits hold their part of it, and of each of `partial`, that the
+    /// bits it covers, of signals and of parameters alike, show as it says. Nothing when the row
+    /// can never show the value: one of another width, or one a parameter in it contradicts, or
+    /// one asking a bit shown twice to hold two things at once.
+    [[nodiscard]] std::optional<SearchTerms> termsFor(int rowId, const eir::BitVector& value,
+                                                      std::span<const PartialDigit> partial) const;
 
     /// The next or previous time at which *something* in the row changes, without checking
     /// whether what the row displays changed with it.

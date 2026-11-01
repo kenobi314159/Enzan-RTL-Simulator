@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 class QTimer;
 
@@ -71,6 +72,9 @@ private:
     struct Search {
         int rowId = -1;
         eir::BitVector value = eir::BitVector::filled(1, eir::Logic::Unknown);
+
+        /// Its digits written `X` or `Z`, which ask what they say of the bits they cover.
+        std::vector<PartialDigit> partial;
 
         /// The value as the reader typed it, for saying what was looked for.
         QString text;

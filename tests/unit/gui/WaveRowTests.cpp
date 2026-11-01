@@ -83,7 +83,10 @@ protected:
         // A run behind the window, so that the rows have values to join.
         clock = infoFor(QStringLiteral("clk"));
         counter = infoFor(QStringLiteral("count"));
-        session->subscribe({clock.signalIndex, counter.signalIndex});
+        for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+            if (info.name == QStringLiteral("q")) quiet = info;
+        }
+        session->subscribe({clock.signalIndex, counter.signalIndex, quiet.signalIndex});
         session->run(400);
         pumpUntilCaughtUp(400);
     }
@@ -110,6 +113,9 @@ protected:
     std::unique_ptr<WaveformModel> model;
     SignalInfo clock;
     SignalInfo counter;
+
+    /// The child's `q`, which nothing drives: four unknown bits at every time.
+    SignalInfo quiet;
 };
 
 // ---------------------------------------------------------------------------
@@ -668,6 +674,130 @@ TEST_F(FindValueTest, EveryShapeOfRowIsFoundWhereItsOwnValueStartsToBeTheOneAske
             }
         }
     }
+}
+
+TEST_F(FindValueTest, WhatARowShowsIsFoundWhereItStartsToShowItPartlyUnknownDigitsAndAll) {
+    // Whatever a row shows can be typed back, and a search for it finds where the row starts to
+    // show it. A digit the column writes in capitals is partly unknown, which no one value of its
+    // bits is, and here such digits cover bits of several signals at once: the quiet `q`, which is
+    // unknown, beside the clock and the counter, which are not. So each row is held to a walk over
+    // every time comparing what it shows there with the text.
+    const int counted = model->addSignal(counter);
+    model->unpack(counted); // count[7] first
+    const int quieted = model->addSignal(quiet);
+    model->unpack(quieted); // q[3] first
+    ASSERT_TRUE(model->valueAt(childOf(quieted, 0), 0).has_value())
+        << "q is recorded from the start";
+
+    // The counter's high nibble as one digit, and q[3] with the clock and count[1:0] as another.
+    QVector<int> shapes;
+    const int nibbles = model->addGroup(QStringLiteral("nibbles"));
+    for (int bit = 0; bit < 4; ++bit)
+        ASSERT_TRUE(model->moveRowsTo({childOf(counted, 0)}, nibbles, bit));
+    ASSERT_TRUE(model->moveRowsTo({childOf(quieted, 0)}, nibbles, 4));
+    model->addSignal(clock, nibbles);
+    ASSERT_TRUE(model->moveRowsTo({childOf(counted, 2)}, nibbles, 6)); // count[1]
+    ASSERT_TRUE(model->moveRowsTo({childOf(counted, 2)}, nibbles, 7)); // count[0]
+    shapes.push_back(nibbles);
+
+    // In decimal, which writes one digit for the whole of a partly unknown value.
+    const int decimal = model->addGroup(QStringLiteral("decimal"));
+    ASSERT_TRUE(model->moveRowsTo({childOf(quieted, 0)}, decimal, 0)); // q[2]
+    model->addSignal(clock, decimal);
+    model->setRadix(decimal, Radix::Decimal);
+    shapes.push_back(decimal);
+
+    // A list beside it, whose digits are wholly unknown or not at all.
+    const int listed = model->addGroup(QStringLiteral("listed"));
+    model->addSignal(quiet, listed);
+    model->addSignal(counter, listed);
+    shapes.push_back(listed);
+
+    for (const int rowId : shapes) {
+        std::vector<QString> shown(400);
+        for (enzan::runtime::SimTime time = 0; time < 400; ++time) {
+            if (model->valueAt(rowId, time).has_value())
+                shown[time] = model->renderValue(rowId, time);
+        }
+
+        std::vector<QString> texts;
+        for (enzan::runtime::SimTime time = 0; time < 400 && texts.size() < 5; time += 37) {
+            if (!shown[time].isEmpty() && std::ranges::find(texts, shown[time]) == texts.end())
+                texts.push_back(shown[time]);
+        }
+        ASSERT_FALSE(texts.empty()) << model->row(rowId)->label.toStdString();
+        const std::string label = model->row(rowId)->label.toStdString();
+        if (rowId != listed) {
+            EXPECT_TRUE(
+                std::ranges::any_of(texts, [](const QString& text) { return text.contains(u'X'); }))
+                << label << " shows a partly unknown digit";
+        }
+
+        for (const QString& text : texts) {
+            const enzan::gui::ValueReading reading = model->readValue(rowId, text);
+            ASSERT_TRUE(reading.value.has_value())
+                << label << ": " << reading.problem.toStdString();
+
+            const auto walk = [&](enzan::runtime::SimTime from, bool forward) {
+                Match first;
+                for (enzan::runtime::SimTime time = 0; time < 400; ++time) {
+                    if (forward ? time <= from : time >= from) continue;
+                    if (shown[time] == text && (time == 0 || shown[time - 1] != text)) {
+                        first = found(time);
+                        if (forward) break;
+                    }
+                }
+                return first;
+            };
+
+            for (const enzan::runtime::SimTime from : {0U, 7U, 156U, 399U, 500U}) {
+                for (const bool forward : {true, false}) {
+                    const Match expected = walk(from, forward);
+                    for (const int budget : {1, 3, Unbounded}) {
+                        Match match;
+                        enzan::runtime::SimTime at = from;
+                        do {
+                            match = forward
+                                        ? model->nextMatchAfter(rowId, at, *reading.value, 400,
+                                                                budget, reading.partial)
+                                        : model->previousMatchBefore(rowId, at, *reading.value, 400,
+                                                                     budget, reading.partial);
+                            at = match.time;
+                        } while (match.outcome == Match::Outcome::Unfinished);
+                        EXPECT_EQ(match, expected)
+                            << label << " for " << text.toStdString()
+                            << (forward ? " after " : " before ") << from << ", budget " << budget;
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(FindValueTest, ADigitAcrossAParameterAndASignalCountsTheBitsOfBoth) {
+    // WIDTH, 4, beside q[1:0]: the lowest hexadecimal digit of the whole is WIDTH's two low bits,
+    // both 0, and q's two unknown ones, so it is partly unknown and never wholly.
+    SignalInfo width;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+        if (info.name == QStringLiteral("WIDTH")) width = info;
+    }
+    ASSERT_TRUE(width.isParameter());
+    const int group = model->addGroup(QStringLiteral("beside a parameter"));
+    model->addSignal(width, group);
+    const int whole = model->addSignal(quiet, group);
+    model->addSlice(whole, 1, 0);
+    model->removeRow(whole);
+    ASSERT_EQ(model->displayedWidth(group), 34U);
+
+    const auto search = [&](const QString& text) {
+        const enzan::gui::ValueReading reading = model->readValue(group, text);
+        EXPECT_TRUE(reading.value.has_value()) << reading.problem.toStdString();
+        return model->previousMatchBefore(group, 400, *reading.value, 400, Unbounded,
+                                          reading.partial);
+    };
+    EXPECT_EQ(search(QStringLiteral("00000001X")), found(0));
+    EXPECT_EQ(search(QStringLiteral("00000001x")), Absent) << "WIDTH's bits are known";
+    EXPECT_EQ(search(QStringLiteral("00000002X")), Absent) << "WIDTH is 4, not 8";
 }
 
 TEST_F(FindValueTest, AValueARowCanNeverShowIsFoundNowhere) {
