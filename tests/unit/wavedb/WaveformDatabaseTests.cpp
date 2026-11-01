@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -531,8 +532,11 @@ TEST(WaveformDatabaseTests, ChangeCountAndTimeOfChangeAgreeWithWhatWasAppended) 
 // Finding when bits start to hold a value
 // ---------------------------------------------------------------------------
 
+using enzan::eir::Logic;
+using enzan::eir::Radix;
 using enzan::runtime::SimTime;
 using enzan::wavedb::BitPattern;
+using enzan::wavedb::DigitTerm;
 using enzan::wavedb::SearchResult;
 using enzan::wavedb::SearchTerm;
 
@@ -826,6 +830,182 @@ TEST(WaveformDatabaseTests, SearchesThroughSpilledChunksAnswerAsTheDefinitionDoe
                         const std::vector<SearchTerm> alone{terms[0]};
                         EXPECT_EQ(settle(alone, from, forward, 1),
                                   walk(database, alone, {values[0]}, {0}, from, forward));
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Digits shown partly unknown
+// ---------------------------------------------------------------------------
+
+/// A digit of `kind` over the bits `[highBit, lowBit]` of the signal of term `term`.
+DigitTerm digitOver(enzan::eir::Logic kind, std::uint32_t term, std::uint32_t highBit,
+                    std::uint32_t lowBit) {
+    DigitTerm digit;
+    digit.kind = kind;
+    for (std::uint32_t bit = highBit + 1; bit-- > lowBit;) digit.cover(term, bit);
+    return digit;
+}
+
+TEST(WaveformDatabaseTests, ADigitIsFoundWhereItsBitsStartToBePartlyUnknown) {
+    // The high nibble stays 1 while the low one is known, partly unknown, wholly unknown, partly
+    // again, partly high impedance, and partly unknown among high impedance: `1X` is shown at 20,
+    // 40 and 60, which are where it starts, and `1Z` at 50.
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/nibbles", 8);
+    appendLiteral(database, signal, 10, "8'b0001_0101");
+    appendLiteral(database, signal, 20, "8'b0001_0x01");
+    appendLiteral(database, signal, 25, "8'b0001_x001"); // still partly unknown
+    appendLiteral(database, signal, 30, "8'b0001_xxxx");
+    appendLiteral(database, signal, 40, "8'b0001_x0x0");
+    appendLiteral(database, signal, 50, "8'b0001_0z01");
+    appendLiteral(database, signal, 60, "8'b0001_zz0x");
+
+    const std::vector<SearchTerm> high{termFor(database, signal, 7, 4, "4'h1")};
+    const std::vector<DigitTerm> unknown{digitOver(Logic::Unknown, 0, 3, 0)};
+    const std::vector<DigitTerm> highZ{digitOver(Logic::HighZ, 0, 3, 0)};
+
+    EXPECT_EQ(database.nextTimeHolding(high, 0, Everywhere, 100, unknown), foundAt(20));
+    EXPECT_EQ(database.nextTimeHolding(high, 20, Everywhere, 100, unknown), foundAt(40))
+        << "25 goes on showing it, and 30 shows a lowercase x";
+    EXPECT_EQ(database.nextTimeHolding(high, 40, Everywhere, 100, unknown), foundAt(60))
+        << "50 shows a Z";
+    EXPECT_EQ(database.previousTimeHolding(high, 100, Everywhere, 100, unknown), foundAt(60));
+    EXPECT_EQ(database.previousTimeHolding(high, 60, Everywhere, 100, unknown), foundAt(40));
+    EXPECT_EQ(database.previousTimeHolding(high, 40, Everywhere, 100, unknown), foundAt(20));
+    EXPECT_EQ(database.previousTimeHolding(high, 20, Everywhere, 100, unknown), Absent);
+
+    EXPECT_EQ(database.nextTimeHolding(high, 0, Everywhere, 100, highZ), foundAt(50));
+    EXPECT_EQ(database.previousTimeHolding(high, 100, Everywhere, 100, highZ), foundAt(50));
+    EXPECT_EQ(database.nextTimeHolding(high, 50, Everywhere, 100, highZ), Absent)
+        << "60 has an x among its z";
+}
+
+TEST(WaveformDatabaseTests, ADigitsFixedBitsCountWithItsSignalsBits) {
+    // Two bits of a signal and two of a parameter beside it, both unknown: the digit is partly
+    // unknown wherever the signal's bits are known, and wholly so where they are not.
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/pair", 2);
+    appendLiteral(database, signal, 10, "2'b01");
+    appendLiteral(database, signal, 20, "2'bxx");
+    appendLiteral(database, signal, 30, "2'b10");
+
+    const std::vector<SearchTerm> terms{
+        {.recordIndex = signal, .pattern = BitPattern(database.signal(signal).width)}};
+    std::vector<DigitTerm> digits{digitOver(Logic::Unknown, 0, 1, 0)};
+    digits.front().coverFixed(Logic::Unknown);
+    digits.front().coverFixed(Logic::Unknown);
+
+    EXPECT_EQ(database.nextTimeHolding(terms, 0, Everywhere, 100, digits), foundAt(10));
+    EXPECT_EQ(database.nextTimeHolding(terms, 10, Everywhere, 100, digits), foundAt(30));
+    EXPECT_EQ(database.previousTimeHolding(terms, 30, Everywhere, 100, digits), foundAt(10));
+}
+
+TEST(WaveformDatabaseTests, DigitsAcrossSignalsAnswerAsTheirRenderingDoes) {
+    // Values of every kind of bit, spilled and searched in steps of every size, with digits that
+    // cover bits of several signals and terms that ask bits of them besides. What the searches
+    // must answer is where the digits start to be written in capitals, as the value column
+    // writes them, while the terms hold.
+    DatabaseOptions options;
+    options.chunkCapacity = 4;
+    options.memoryBudgetBytes = 64;
+    WaveformDatabase database(options);
+    const std::array<std::uint32_t, 3> records{database.addSignal(0, "/tb/a", 3),
+                                               database.addSignal(1, "/tb/b", 3),
+                                               database.addSignal(2, "/tb/c", 3)};
+
+    // Each bit unknown about one change in four and high impedance about one in four.
+    std::uint64_t seed = 12345;
+    const auto next = [&seed] {
+        seed = (seed * 6364136223846793005ULL) + 1442695040888963407ULL;
+        return static_cast<std::uint32_t>(seed >> 33);
+    };
+    for (std::uint64_t step = 0; step < 150; ++step) {
+        for (std::size_t signal = 0; signal < records.size(); ++signal) {
+            if (next() % 3 == 0) continue;
+            BitVector value = BitVector::filled(3, Logic::Zero);
+            for (std::uint32_t bit = 0; bit < 3; ++bit)
+                value.set(bit, static_cast<Logic>(next() % 4));
+            database.append(records[signal], (step * 10) + (signal * 3), value);
+        }
+    }
+    ASSERT_GT(database.spilledValueBytes(), 0U);
+
+    // A hexadecimal digit over a[2:1] and b[1:0], and an octal one over c[1:0] and a fixed 0;
+    // the terms ask b[2] and c[2], so that a digit is asked only where they hold.
+    const std::vector<std::pair<std::uint32_t, std::uint32_t>> hexBits{
+        {0, 2}, {0, 1}, {1, 1}, {1, 0}};
+    const std::vector<std::pair<std::uint32_t, std::uint32_t>> octalBits{{2, 1}, {2, 0}};
+
+    const auto rendered = [&](SimTime time,
+                              const std::vector<std::pair<std::uint32_t, std::uint32_t>>& bits,
+                              bool fixedZero, Radix radix) -> std::optional<std::string> {
+        BitVector digit = BitVector::filled(
+            static_cast<std::uint32_t>(bits.size()) + (fixedZero ? 1 : 0), Logic::Zero);
+        std::uint32_t position = digit.width();
+        for (const auto& [term, bit] : bits) {
+            const std::optional<BitVector> value = database.valueAt(records[term], time);
+            if (!value.has_value()) return std::nullopt;
+            digit.set(--position, value->get(bit));
+        }
+        return enzan::eir::toString(digit.ref(), radix);
+    };
+
+    for (const Logic kind : {Logic::Unknown, Logic::HighZ}) {
+        const std::string capital = kind == Logic::Unknown ? "X" : "Z";
+        for (const Logic b2 : {Logic::Zero, Logic::Unknown}) {
+            std::vector<SearchTerm> terms;
+            for (const std::uint32_t record : records)
+                terms.push_back({.recordIndex = record, .pattern = BitPattern(3)});
+            ASSERT_TRUE(terms[1].pattern.require(2, 2, BitVector::filled(1, b2).ref()));
+            ASSERT_TRUE(terms[2].pattern.require(2, 2, BitVector::filled(1, Logic::One).ref()));
+
+            std::vector<DigitTerm> digits(2);
+            digits[0].kind = kind;
+            for (const auto& [term, bit] : hexBits) digits[0].cover(term, bit);
+            digits[1].kind = kind;
+            for (const auto& [term, bit] : octalBits) digits[1].cover(term, bit);
+            digits[1].coverFixed(Logic::Zero);
+
+            const auto shows = [&](SimTime time) {
+                for (const std::uint32_t record : records) {
+                    if (!database.valueAt(record, time).has_value()) return false;
+                }
+                return database.valueAt(records[1], time)->get(2) == b2
+                       && database.valueAt(records[2], time)->get(2) == Logic::One
+                       && rendered(time, hexBits, false, Radix::Hexadecimal) == capital
+                       && rendered(time, octalBits, true, Radix::Octal) == capital;
+            };
+            const auto walk = [&](SimTime from, bool forward) {
+                SearchResult found;
+                for (SimTime time = 0; time < 1500; ++time) {
+                    if (forward ? time <= from : time >= from) continue;
+                    if (shows(time) && (time == 0 || !shows(time - 1))) {
+                        found = foundAt(time);
+                        if (forward) break;
+                    }
+                }
+                return found;
+            };
+
+            for (const SimTime from : {SimTime{0}, SimTime{333}, SimTime{1499}}) {
+                for (const bool forward : {true, false}) {
+                    const SearchResult expected = walk(from, forward);
+                    for (const std::uint64_t budget : {1U, 100U}) {
+                        SearchResult result;
+                        SimTime at = from;
+                        do {
+                            result = forward ? database.nextTimeHolding(terms, at, Everywhere,
+                                                                        budget, digits)
+                                             : database.previousTimeHolding(terms, at, Everywhere,
+                                                                            budget, digits);
+                            at = result.time;
+                        } while (result.outcome == SearchResult::Outcome::Unfinished);
+                        EXPECT_EQ(result, expected) << capital << (forward ? " after " : " before ")
+                                                    << from << ", budget " << budget;
                     }
                 }
             }

@@ -6,6 +6,7 @@
 #include "eir/BitOps.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstring>
 #include <functional>
@@ -239,6 +240,32 @@ bool BitPattern::require(std::uint32_t highBit, std::uint32_t lowBit, eir::Const
     return true;
 }
 
+void DigitTerm::cover(std::uint32_t term, std::uint32_t bit) {
+    const std::uint32_t word = bit / eir::BitsPerWord;
+    const eir::Word mask = eir::Word{1} << (bit % eir::BitsPerWord);
+    if (!bits.empty() && bits.back().term == term && bits.back().word == word
+        && (bits.back().mask & mask) == 0) {
+        bits.back().mask |= mask;
+    } else {
+        bits.push_back(Bits{.term = term, .word = word, .mask = mask});
+    }
+    ++count;
+}
+
+void DigitTerm::coverFixed(eir::Logic value) {
+    fixedUnknown += value == eir::Logic::Unknown ? 1 : 0;
+    fixedHighZ += value == eir::Logic::HighZ ? 1 : 0;
+    ++count;
+}
+
+bool DigitTerm::shows(std::uint32_t unknown, std::uint32_t highZ) const noexcept {
+    // As the value column decides between a capital and a lowercase digit.
+    const std::uint32_t allUnknown = unknown + fixedUnknown;
+    const std::uint32_t allHighZ = highZ + fixedHighZ;
+    if (kind == eir::Logic::Unknown) return allUnknown > 0 && allUnknown < count;
+    return allUnknown == 0 && allHighZ > 0 && allHighZ < count;
+}
+
 /// A search's place in one signal's changes, and whether the signal holds its term there.
 ///
 /// It keeps the address of the chunk it last read rather than asking for it at every change,
@@ -261,7 +288,7 @@ struct WaveformDatabase::SearchCursor {
     std::uint64_t evictionsSeen = 0;
 };
 
-bool WaveformDatabase::holdsAt(SearchCursor& cursor, std::uint64_t change) const {
+const eir::Word* WaveformDatabase::wordsAt(SearchCursor& cursor, std::uint64_t change) const {
     // Compared with the bounds of the chunk rather than divided into one, since a division costs
     // more than the comparison the values are read for.
     if (change < cursor.chunkStart || change >= cursor.chunkEnd
@@ -272,15 +299,39 @@ bool WaveformDatabase::holdsAt(SearchCursor& cursor, std::uint64_t change) const
         cursor.chunkEnd = cursor.chunkStart + options.chunkCapacity;
         cursor.evictionsSeen = evictions;
     }
-    const std::uint64_t offset = (change - cursor.chunkStart) * cursor.store->valueWords;
-    return cursor.term->pattern.matches(cursor.words + offset);
+    return cursor.words + ((change - cursor.chunkStart) * cursor.store->valueWords);
+}
+
+bool WaveformDatabase::holdsAt(SearchCursor& cursor, std::uint64_t change) const {
+    return cursor.term->pattern.matches(wordsAt(cursor, change));
+}
+
+bool WaveformDatabase::digitsShow(std::vector<SearchCursor>& cursors,
+                                  std::span<const DigitTerm> digits) const {
+    for (const DigitTerm& digit : digits) {
+        std::uint32_t unknown = 0;
+        std::uint32_t highZ = 0;
+        for (const DigitTerm::Bits& bits : digit.bits) {
+            // Read and counted at once: reading the next cursor's value may free this one's.
+            SearchCursor& cursor = cursors[bits.term];
+            const eir::Word* value = wordsAt(cursor, cursor.next - 1);
+            const eir::Word aval = value[bits.word];
+            const eir::Word bval = value[(cursor.store->valueWords / 2) + bits.word];
+            unknown += static_cast<std::uint32_t>(std::popcount(aval & bval & bits.mask));
+            highZ += static_cast<std::uint32_t>(std::popcount(~aval & bval & bits.mask));
+        }
+        if (!digit.shows(unknown, highZ)) return false;
+    }
+    return true;
 }
 
 SearchResult WaveformDatabase::nextTimeHolding(std::span<const SearchTerm> terms,
                                                runtime::SimTime after, runtime::SimTime limit,
-                                               std::uint64_t budget) const {
+                                               std::uint64_t budget,
+                                               std::span<const DigitTerm> digits) const {
     if (terms.empty()) return {};
-    if (terms.size() == 1) return nextTimeHoldingOne(terms.front(), after, limit, budget);
+    if (terms.size() == 1 && digits.empty())
+        return nextTimeHoldingOne(terms.front(), after, limit, budget);
 
     std::vector<SearchCursor> cursors(terms.size());
     std::size_t holding = 0;
@@ -303,12 +354,16 @@ SearchResult WaveformDatabase::nextTimeHolding(std::span<const SearchTerm> terms
             pending.emplace(cursor.store->times[cursor.next], index);
     }
 
+    // Every term holding, and every digit showing, which the digits are asked only once the
+    // terms are.
+    const auto whole = [&] { return holding == cursors.size() && digitsShow(cursors, digits); };
+
     const std::uint64_t allowed = std::max(budget, std::uint64_t{8} * terms.size());
     std::uint64_t examined = 0;
+    bool shownBefore = whole();
     while (!pending.empty()) {
         const runtime::SimTime time = pending.top().first;
         if (time >= limit) return {};
-        const bool held = holding == cursors.size();
 
         // Every signal changing at this time changes before the terms are tested, since they all
         // change at once.
@@ -328,8 +383,9 @@ SearchResult WaveformDatabase::nextTimeHolding(std::span<const SearchTerm> terms
             if (cursor.next < times.size()) pending.emplace(times[cursor.next], index);
         }
 
-        if (holding == cursors.size() && !held)
-            return {.outcome = SearchResult::Outcome::Found, .time = time};
+        const bool shown = whole();
+        if (shown && !shownBefore) return {.outcome = SearchResult::Outcome::Found, .time = time};
+        shownBefore = shown;
         if (examined >= allowed)
             return {.outcome = SearchResult::Outcome::Unfinished, .time = time};
     }
@@ -338,9 +394,11 @@ SearchResult WaveformDatabase::nextTimeHolding(std::span<const SearchTerm> terms
 
 SearchResult WaveformDatabase::previousTimeHolding(std::span<const SearchTerm> terms,
                                                    runtime::SimTime before, runtime::SimTime limit,
-                                                   std::uint64_t budget) const {
+                                                   std::uint64_t budget,
+                                                   std::span<const DigitTerm> digits) const {
     if (terms.empty()) return {};
-    if (terms.size() == 1) return previousTimeHoldingOne(terms.front(), before, limit, budget);
+    if (terms.size() == 1 && digits.empty())
+        return previousTimeHoldingOne(terms.front(), before, limit, budget);
 
     // Nothing at or past the limit is known yet, so the search starts below it.
     const runtime::SimTime bound = std::min(before, limit);
@@ -367,11 +425,13 @@ SearchResult WaveformDatabase::previousTimeHolding(std::span<const SearchTerm> t
         if (cursor.next > 0) pending.emplace(cursor.store->times[cursor.next - 1], index);
     }
 
+    const auto whole = [&] { return holding == cursors.size() && digitsShow(cursors, digits); };
+
     const std::uint64_t allowed = std::max(budget, std::uint64_t{8} * terms.size());
     std::uint64_t examined = 0;
+    bool shown = whole();
     while (!pending.empty()) {
         const runtime::SimTime time = pending.top().first;
-        const bool holds = holding == cursors.size();
 
         while (!pending.empty() && pending.top().first == time) {
             SearchCursor& cursor = cursors[pending.top().second];
@@ -389,8 +449,9 @@ SearchResult WaveformDatabase::previousTimeHolding(std::span<const SearchTerm> t
             if (cursor.next > 0) pending.emplace(times[cursor.next - 1], index);
         }
 
-        if (holds && holding != cursors.size())
-            return {.outcome = SearchResult::Outcome::Found, .time = time};
+        const bool shownBefore = whole();
+        if (shown && !shownBefore) return {.outcome = SearchResult::Outcome::Found, .time = time};
+        shown = shownBefore;
         if (examined >= allowed)
             return {.outcome = SearchResult::Outcome::Unfinished, .time = time};
     }
