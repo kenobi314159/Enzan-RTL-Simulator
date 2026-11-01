@@ -206,8 +206,9 @@ std::optional<std::string> bitsLiteral(std::string_view text) {
     const std::size_t base = text.find("'b");
     if (base == std::string_view::npos) return std::nullopt;
     std::uint64_t count = 0;
-    const auto [end, error] = std::from_chars(text.data(), text.data() + base, count);
-    if (error != std::errc() || end != text.data() + base) return std::nullopt;
+    const std::string_view size = text.substr(0, base);
+    const auto [end, error] = std::from_chars(size.data(), size.data() + size.size(), count);
+    if (error != std::errc() || end != size.data() + size.size()) return std::nullopt;
     std::string bits(text.substr(base + 2));
     if (bits.size() != count || !std::ranges::all_of(bits, [](char bit) {
             return std::string_view("01xz").find(bit) != std::string_view::npos;
