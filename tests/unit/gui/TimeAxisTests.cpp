@@ -114,6 +114,31 @@ TEST(TimeAxisTests, PanningDoesNotWrapAtTheEndOfTime) {
     EXPECT_LE(axis.start(), NoTime - axis.span());
 }
 
+TEST(TimeAxisTests, APanMovesWholeUnitsAndSaysHowManyPixelsTheyCameTo) {
+    // A hundred pixels a unit: what is short of a unit does not move the view, and the pixels
+    // that did are returned, so that a drag can carry the rest into its next step.
+    TimeAxis axis = axisOf(800, 100, 8);
+
+    EXPECT_EQ(axis.pan(99.0), 0.0);
+    EXPECT_EQ(axis.start(), 100U);
+    EXPECT_EQ(axis.pan(250.0), 200.0);
+    EXPECT_EQ(axis.start(), 102U);
+    EXPECT_EQ(axis.pan(-250.0), -200.0);
+    EXPECT_EQ(axis.start(), 100U);
+}
+
+TEST(TimeAxisTests, APanOfMoreUnitsThanAnIntegerHoldsStillGoesTheWayItWasAsked) {
+    // At the widest zoom a pixel is many times more units than a signed integer holds in a few
+    // hundred pixels; converting that many was undefined, and came out as a pan back to zero.
+    TimeAxis axis = axisOf(800, 0, NoTime / 2);
+    axis.pan(2000.0);
+    EXPECT_GT(axis.start(), 0U);
+
+    const SimTime forward = axis.start();
+    axis.pan(-2000.0);
+    EXPECT_LT(axis.start(), forward);
+}
+
 TEST(TimeAxisTests, PanningIsReversible) {
     TimeAxis axis = axisOf(800, 10'000, 800);
 

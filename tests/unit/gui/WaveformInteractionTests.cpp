@@ -960,6 +960,22 @@ TEST_F(InteractionTest, APanStepMovesTheViewAndKeepsTheZoom) {
     EXPECT_EQ(view->axis().start(), 100U);
 }
 
+TEST_F(InteractionTest, APanStepMovesAtLeastAUnitHoweverFarTheViewIsZoomedIn) {
+    // Eight units across the canvas, so a step of pixels is less than one of them: it moves a
+    // whole unit rather than nothing, by key and by Shift+Wheel alike.
+    populate();
+    view->axis().setRange(100, 8);
+
+    view->panStep(true);
+    EXPECT_EQ(view->axis().start(), 101U);
+    view->panStep(false);
+    EXPECT_EQ(view->axis().start(), 100U);
+
+    wheel(QPoint(400, 200), -1, Qt::ShiftModifier);
+    EXPECT_EQ(view->axis().start(), 101U);
+    EXPECT_EQ(view->axis().span(), 8U);
+}
+
 TEST_F(InteractionTest, TinyUnapplicablePanStepsAccumulateToAnActualStep) {
     populate();
     view->axis().setRange(0, 8);
