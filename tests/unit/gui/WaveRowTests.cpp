@@ -40,6 +40,7 @@
 #include <optional>
 #include <ostream>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace enzan::gui {
@@ -559,6 +560,48 @@ TEST_F(FindValueTest, ASearchThatRunsOutSaysHowFarItGotAndGoesOnFromThere) {
         ASSERT_TRUE(match.outcome != Match::Outcome::Unfinished || match.time < from);
     }
     EXPECT_EQ(match, found(95));
+}
+
+TEST_F(FindValueTest, ARowOfOneSignalFindsWhatAGroupOfItFinds) {
+    // A row of one signal is searched where the database keeps its values, and a row joined from
+    // others edge by edge. A group holding nothing but the signal shows what the signal shows, so
+    // every search of the two must end in the same place, however small the steps it goes in.
+    const int count = model->addSignal(counter);
+    const int countGroup = model->addGroup(QStringLiteral("count alone"));
+    model->addSignal(counter, countGroup);
+
+    const int low = model->addSlice(count, 2, 0);
+    const int lowGroup = model->addGroup(QStringLiteral("low bits alone"));
+    ASSERT_TRUE(model->moveRowsTo({model->addSlice(count, 2, 0)}, lowGroup, 0));
+
+    // Each search taken to its end, a budget at a time, as the Find field goes on with it.
+    const auto settle = [this](int rowId, bool forward, enzan::runtime::SimTime from,
+                               const enzan::eir::BitVector& value, int budget) {
+        Match match;
+        do {
+            match = forward ? model->nextMatchAfter(rowId, from, value, 400, budget)
+                            : model->previousMatchBefore(rowId, from, value, 400, budget);
+            from = match.time;
+        } while (match.outcome == Match::Outcome::Unfinished);
+        return match;
+    };
+
+    for (const auto& [single, joined, width] :
+         {std::tuple{count, countGroup, 8U}, std::tuple{low, lowGroup, 3U}}) {
+        for (std::uint64_t number = 0; number < 42; number += 3) {
+            const enzan::eir::BitVector value = enzan::eir::BitVector::fromUInt64(number, width);
+            for (const enzan::runtime::SimTime from : {0U, 7U, 45U, 200U, 399U, 500U}) {
+                for (const int budget : {1, 3, Unbounded}) {
+                    for (const bool forward : {true, false}) {
+                        EXPECT_EQ(settle(single, forward, from, value, budget),
+                                  settle(joined, forward, from, value, budget))
+                            << number << (forward ? " after " : " before ") << from << ", budget "
+                            << budget;
+                    }
+                }
+            }
+        }
+    }
 }
 
 TEST_F(FindValueTest, ARemovedRowHasNothingToFind) {

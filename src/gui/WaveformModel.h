@@ -390,10 +390,11 @@ public:
     /// shows it, and an instant earlier did not. A row already showing it is found where it next
     /// comes back to it.
     ///
-    /// No index says when a row holds a value, so its edges are examined one by one, at most
-    /// `budget` of them. A search that runs out says how far it got rather than answering with an
-    /// edge it never checked, as `nextEdgeAfter` may: there a cursor on an edge is still on an
-    /// edge, and here it would be on a value that is not the one asked for.
+    /// No index says when a row holds a value, so a search is a scan, of at most `budget` changes:
+    /// the database's, over the stored values of a row of one signal, and a walk over the edges of
+    /// a row joined from others. A search that runs out says how far it got rather than answering
+    /// with an edge it never checked, as `nextEdgeAfter` may: there a cursor on an edge is still on
+    /// an edge, and here it would be on a value that is not the one asked for.
     [[nodiscard]] Match nextMatchAfter(int rowId, runtime::SimTime time,
                                        const eir::BitVector& value, runtime::SimTime limit,
                                        int budget) const;
@@ -466,6 +467,19 @@ private:
 
     /// True when the row's value at `time` differs from its value an instant earlier.
     [[nodiscard]] bool isEdgeAt(int rowId, runtime::SimTime time) const;
+
+    /// The record of the signal a row's value is bits of, or nothing for a row whose value is
+    /// joined from other rows, or has no trace.
+    [[nodiscard]] std::optional<std::uint32_t> ownRecordOf(int rowId) const;
+
+    /// `nextMatchAfter` and `previousMatchBefore` for a row whose value is bits of one recorded
+    /// signal, which the database searches where the values lie rather than an edge at a time.
+    [[nodiscard]] Match nextMatchInRecord(const WaveRow& waveRow, std::uint32_t record,
+                                          runtime::SimTime time, const eir::BitVector& value,
+                                          runtime::SimTime limit, int budget) const;
+    [[nodiscard]] Match previousMatchInRecord(const WaveRow& waveRow, std::uint32_t record,
+                                              runtime::SimTime time, const eir::BitVector& value,
+                                              runtime::SimTime limit, int budget) const;
 
     /// The next or previous time at which *something* in the row changes, without checking
     /// whether what the row displays changed with it.

@@ -756,6 +756,11 @@ not to justify threading the kernel now.
 - **Edge navigation.** The next and the previous transition of a signal from a time are one query
   each, not a scan: snapping a cursor and stepping it from edge to edge (10.7) are what a reader
   does most.
+- **Finding a value is a scan, done where the values lie.** No index says when a signal holds a
+  value, since one would cost memory for every change of every signal to answer a question asked
+  now and then. So the database compares its stored values in place under a mask, a few
+  nanoseconds a change: a search of ten million changes takes tens of milliseconds, where reading
+  them out one at a time took two seconds.
 
 ### 7.2 Structure
 
@@ -1220,10 +1225,10 @@ they are decided here.
   list of its children or of its elements — so that whatever a row shows can be typed back, and a
   literal, `8'hff` or `'x`, means what it says in any row. A value too wide for the row is refused
   rather than cut down, since a value cut down is another value. There are no wildcards.
-- **A search walks the row's edges**, since the index answers when a row changes and not what to
-  (7.1). So it runs a slice at a time on the event loop, never blocking the window, and moving
-  the cursor or the selection abandons it. It finds nothing past where the traces stop, which is
-  not known yet, and does not wrap.
+- **A search is a scan** (7.1): the database's of a row of one signal, and for a row joined from
+  others a walk over its edges, a hundred times slower a change. So it runs a slice at a time on
+  the event loop, never blocking the window, and moving the cursor or the selection abandons it.
+  It finds nothing past where the traces stop, which is not known yet, and does not wrap.
 - **The keys follow the wheel**: Ctrl zooms, Shift pans, and a key without a modifier is the signal
   list's own. **Typing the start of a name finds a row**, so a command MUST NOT take a key that
   types a letter or a digit in the Wave tab.

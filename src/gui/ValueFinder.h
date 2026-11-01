@@ -23,8 +23,9 @@ namespace enzan::gui {
 /// there.
 ///
 /// **A search never blocks the window.** No index says when a row holds a value, so a search
-/// examines the row's edges one by one (`WaveformModel::nextMatchAfter`), and on a trace of
-/// millions of them that takes longer than a window may stop answering for. So the first slice
+/// examines the row's changes one by one (`WaveformModel::nextMatchAfter`), and on a trace of
+/// millions of them, or a group of such traces, that can take longer than a window may stop
+/// answering for. So the first slice
 /// runs at once, which finishes most searches, and the rest run a slice at a time on the event
 /// loop, as the session reads its socket. A reader can carry on meanwhile, and moving the cursor
 /// or the selection abandons the search, since its answer would be to a question no longer asked.

@@ -3,6 +3,7 @@
 #include "wavedb/WaveformDatabase.h"
 
 #include "common/Assert.h"
+#include "eir/BitOps.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -10,6 +11,7 @@
 #include <iterator>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -19,6 +21,43 @@ namespace enzan::wavedb {
 namespace {
 
 constexpr std::uint64_t BytesPerWord = sizeof(eir::Word);
+
+/// Bits of a value laid out as a stored value of the whole signal is, with the mask that picks
+/// them out: what a stored value is compared with where it lies.
+class StoredPattern {
+public:
+    StoredPattern(std::uint32_t width, std::uint32_t highBit, std::uint32_t lowBit,
+                  eir::ConstBitRef value)
+        : planeWords(eir::wordsFor(width)),
+          firstWord(lowBit / eir::BitsPerWord),
+          lastWord(highBit / eir::BitsPerWord),
+          expected(eir::storageWordsFor(width)),
+          mask(planeWords) {
+        eir::BitVector placed = eir::BitVector::filled(width, eir::Logic::Zero);
+        eir::bitops::assignPartAt(placed.mutableRef(), value, lowBit);
+        std::copy_n(placed.ref().aval(), expected.size(), expected.begin());
+
+        for (std::uint32_t bit = lowBit; bit <= highBit; ++bit)
+            mask[bit / eir::BitsPerWord] |= eir::Word{1} << (bit % eir::BitsPerWord);
+    }
+
+    /// True when the value stored at `stored`, both of its planes, holds the pattern's bits.
+    [[nodiscard]] bool matches(const eir::Word* stored) const noexcept {
+        for (std::uint32_t word = firstWord; word <= lastWord; ++word) {
+            const eir::Word differs = (stored[word] ^ expected[word])
+                                      | (stored[planeWords + word] ^ expected[planeWords + word]);
+            if ((differs & mask[word]) != 0) return false;
+        }
+        return true;
+    }
+
+private:
+    std::uint32_t planeWords;
+    std::uint32_t firstWord;
+    std::uint32_t lastWord;
+    std::vector<eir::Word> expected;
+    std::vector<eir::Word> mask;
+};
 
 /// Ceiling on the number of columns `sample` will summarise into.
 ///
@@ -196,6 +235,91 @@ std::uint64_t WaveformDatabase::nearestChange(std::uint32_t recordIndex,
     return backward <= forward ? earlier : later;
 }
 
+std::uint64_t WaveformDatabase::firstStartIn(std::uint32_t recordIndex, std::uint64_t from,
+                                             std::uint64_t to, std::uint32_t highBit,
+                                             std::uint32_t lowBit, eir::ConstBitRef value) const {
+    const SignalStore& store = storeAt(recordIndex);
+    ENZAN_ASSERT(lowBit <= highBit && highBit < store.info.width,
+                 "a bit range must lie inside the signal");
+    ENZAN_ASSERT(value.width() == highBit - lowBit + 1, "a value must be as wide as its bits");
+    ENZAN_ASSERT(from <= to && to <= store.times.size(), "a range must lie inside the changes");
+    if (from == to) return NoChange;
+
+    const StoredPattern pattern(store.info.width, highBit, lowBit, value);
+    const std::vector<runtime::SimTime>& times = store.times;
+    const auto lastOfItsTime = [&](std::uint64_t change) {
+        return change + 1 == times.size() || times[change + 1] != times[change];
+    };
+
+    // Whether the bits held the value an instant before the range: at the last change of an
+    // earlier time, which is read before the walk, so that the walk holds one chunk at a time.
+    std::uint64_t earlier = from;
+    while (earlier > 0 && times[earlier - 1] == times[from]) --earlier;
+    bool held =
+        earlier > 0 && pattern.matches(valueWordsOf(store, earlier - 1, recordIndex).data());
+
+    for (std::uint64_t change = from; change < to;) {
+        const auto chunkIndex = static_cast<std::uint32_t>(change / options.chunkCapacity);
+        const std::span<const eir::Word> words = chunkWordsOf(recordIndex, chunkIndex);
+        const std::uint64_t chunkStart = std::uint64_t{chunkIndex} * options.chunkCapacity;
+        const std::uint64_t end = std::min(to, chunkStart + options.chunkCapacity);
+
+        for (; change < end; ++change) {
+            if (!lastOfItsTime(change)) continue;
+            const bool holds =
+                pattern.matches(words.data() + ((change - chunkStart) * store.valueWords));
+            if (holds && !held) return change;
+            held = holds;
+        }
+    }
+    return NoChange;
+}
+
+std::uint64_t WaveformDatabase::lastStartIn(std::uint32_t recordIndex, std::uint64_t from,
+                                            std::uint64_t to, std::uint32_t highBit,
+                                            std::uint32_t lowBit, eir::ConstBitRef value) const {
+    const SignalStore& store = storeAt(recordIndex);
+    ENZAN_ASSERT(lowBit <= highBit && highBit < store.info.width,
+                 "a bit range must lie inside the signal");
+    ENZAN_ASSERT(value.width() == highBit - lowBit + 1, "a value must be as wide as its bits");
+    ENZAN_ASSERT(from <= to && to <= store.times.size(), "a range must lie inside the changes");
+    if (from == to) return NoChange;
+
+    const StoredPattern pattern(store.info.width, highBit, lowBit, value);
+    const std::vector<runtime::SimTime>& times = store.times;
+    const auto lastOfItsTime = [&](std::uint64_t change) {
+        return change + 1 == times.size() || times[change + 1] != times[change];
+    };
+
+    // Walking back, a change holding the value is a start when the time before it did not hold
+    // it, which is the next change the walk examines. The last one it examines has the time before
+    // it outside the range, and is settled after the walk, so that the walk holds one chunk at a
+    // time.
+    std::uint64_t candidate = NoChange;
+    for (std::uint64_t next = to; next > from;) {
+        const auto chunkIndex = static_cast<std::uint32_t>((next - 1) / options.chunkCapacity);
+        const std::span<const eir::Word> words = chunkWordsOf(recordIndex, chunkIndex);
+        const std::uint64_t chunkStart = std::uint64_t{chunkIndex} * options.chunkCapacity;
+        const std::uint64_t begin = std::max(from, chunkStart);
+
+        for (; next > begin; --next) {
+            const std::uint64_t change = next - 1;
+            if (!lastOfItsTime(change)) continue;
+            const bool holds =
+                pattern.matches(words.data() + ((change - chunkStart) * store.valueWords));
+            if (candidate != NoChange && !holds) return candidate;
+            candidate = holds ? change : NoChange;
+        }
+    }
+    if (candidate == NoChange) return NoChange;
+
+    std::uint64_t first = candidate;
+    while (first > 0 && times[first - 1] == times[candidate]) --first;
+    const bool heldBefore =
+        first > 0 && pattern.matches(valueWordsOf(store, first - 1, recordIndex).data());
+    return heldBefore ? NoChange : candidate;
+}
+
 void WaveformDatabase::changesIn(std::uint32_t recordIndex, runtime::SimTime from,
                                  runtime::SimTime to, std::vector<Change>& out) const {
     const SignalStore& store = storeAt(recordIndex);
@@ -340,15 +464,18 @@ std::span<const eir::Word> WaveformDatabase::valueWordsOf(const SignalStore& sto
                                                           std::uint32_t signalRecordIndex) const {
     const auto chunkIndex = static_cast<std::uint32_t>(changeIndex / options.chunkCapacity);
     const std::size_t offset = (changeIndex % options.chunkCapacity) * store.valueWords;
+    return chunkWordsOf(signalRecordIndex, chunkIndex).subspan(offset, store.valueWords);
+}
 
-    const Chunk& chunk = store.chunks[chunkIndex];
+std::span<const eir::Word> WaveformDatabase::chunkWordsOf(std::uint32_t recordIndex,
+                                                          std::uint32_t chunkIndex) const {
+    const Chunk& chunk = signalList[recordIndex].chunks[chunkIndex];
     if (!chunk.resident) {
-        reload(signalRecordIndex, chunkIndex);
+        reload(recordIndex, chunkIndex);
     } else {
-        touch(signalRecordIndex, chunkIndex);
+        touch(recordIndex, chunkIndex);
     }
-
-    return std::span<const eir::Word>(chunk.values).subspan(offset, store.valueWords);
+    return chunk.values;
 }
 
 void WaveformDatabase::touch(std::uint32_t recordIndex, std::uint32_t chunkIndex) const {

@@ -526,4 +526,154 @@ TEST(WaveformDatabaseTests, ChangeCountAndTimeOfChangeAgreeWithWhatWasAppended) 
     EXPECT_EQ(database.timeOfChange(signal, 1), 11U);
 }
 
+// ---------------------------------------------------------------------------
+// Finding where bits start to hold a value
+// ---------------------------------------------------------------------------
+
+using enzan::wavedb::NoChange;
+
+TEST(WaveformDatabaseTests, AValueIsFoundWhereTheBitsStartToHoldIt) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/count", 8);
+
+    appendLiteral(database, signal, 10, "8'h01");
+    appendLiteral(database, signal, 20, "8'h05");
+    appendLiteral(database, signal, 30, "8'h05"); // written again, held all along
+    appendLiteral(database, signal, 40, "8'h07");
+    appendLiteral(database, signal, 50, "8'h05");
+
+    const BitVector five = literal("8'h05");
+    EXPECT_EQ(database.firstStartIn(signal, 0, 5, 7, 0, five), 1U);
+    EXPECT_EQ(database.firstStartIn(signal, 2, 5, 7, 0, five), 4U)
+        << "the value already held before the range is not found again inside it";
+    EXPECT_EQ(database.lastStartIn(signal, 0, 5, 7, 0, five), 4U);
+    EXPECT_EQ(database.lastStartIn(signal, 0, 4, 7, 0, five), 1U)
+        << "a change writing the value again is no start of it";
+
+    // The first change is the value appearing, so it starts whatever it holds.
+    EXPECT_EQ(database.firstStartIn(signal, 0, 5, 7, 0, literal("8'h01")), 0U);
+    EXPECT_EQ(database.lastStartIn(signal, 0, 5, 7, 0, literal("8'h01")), 0U);
+
+    EXPECT_EQ(database.firstStartIn(signal, 0, 5, 7, 0, literal("8'hff")), NoChange);
+    EXPECT_EQ(database.lastStartIn(signal, 0, 5, 7, 0, literal("8'hff")), NoChange);
+}
+
+TEST(WaveformDatabaseTests, ASearchLooksOnlyInsideItsRange) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/count", 8);
+    appendLiteral(database, signal, 10, "8'h01");
+    appendLiteral(database, signal, 20, "8'h05");
+    appendLiteral(database, signal, 30, "8'h07");
+
+    const BitVector five = literal("8'h05");
+    EXPECT_EQ(database.firstStartIn(signal, 0, 1, 7, 0, five), NoChange);
+    EXPECT_EQ(database.lastStartIn(signal, 2, 3, 7, 0, five), NoChange);
+    EXPECT_EQ(database.firstStartIn(signal, 1, 1, 7, 0, five), NoChange) << "an empty range";
+    EXPECT_EQ(database.lastStartIn(signal, 1, 2, 7, 0, five), 1U);
+}
+
+TEST(WaveformDatabaseTests, OnlyTheBitsAskedAboutAreCompared) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/count", 8);
+    appendLiteral(database, signal, 10, "8'h15");
+    appendLiteral(database, signal, 20, "8'h25"); // the low nibble stays 5
+    appendLiteral(database, signal, 30, "8'h26");
+    appendLiteral(database, signal, 40, "8'h35");
+
+    const BitVector five = literal("4'h5");
+    EXPECT_EQ(database.firstStartIn(signal, 0, 4, 3, 0, five), 0U);
+    EXPECT_EQ(database.firstStartIn(signal, 1, 4, 3, 0, five), 3U);
+    EXPECT_EQ(database.lastStartIn(signal, 0, 3, 3, 0, five), 0U);
+    EXPECT_EQ(database.firstStartIn(signal, 0, 4, 7, 4, literal("4'h3")), 3U);
+}
+
+TEST(WaveformDatabaseTests, BitsAcrossAWordBoundaryAreComparedAsOne) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/wide", 96);
+    appendLiteral(database, signal, 10, "96'h0");
+    appendLiteral(database, signal, 20, "96'h00000001_80000000_00000000"); // bits 63 and 64
+    appendLiteral(database, signal, 30, "96'h00000001_00000000_00000000");
+
+    EXPECT_EQ(database.firstStartIn(signal, 0, 3, 64, 63, literal("2'b11")), 1U);
+    EXPECT_EQ(database.firstStartIn(signal, 0, 3, 64, 63, literal("2'b10")), 2U);
+    EXPECT_EQ(database.lastStartIn(signal, 0, 3, 64, 63, literal("2'b00")), 0U);
+}
+
+TEST(WaveformDatabaseTests, AnUnknownBitMatchesOnlyTheSameUnknown) {
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/x", 4);
+    appendLiteral(database, signal, 10, "4'b10x1");
+    appendLiteral(database, signal, 20, "4'b10z1");
+    appendLiteral(database, signal, 30, "4'b10x1");
+
+    EXPECT_EQ(database.firstStartIn(signal, 1, 3, 3, 0, literal("4'b10x1")), 2U);
+    EXPECT_EQ(database.firstStartIn(signal, 0, 3, 3, 0, literal("4'b10z1")), 1U);
+    EXPECT_EQ(database.firstStartIn(signal, 0, 3, 3, 0, literal("4'b1001")), NoChange);
+    EXPECT_EQ(database.firstStartIn(signal, 0, 3, 3, 0, literal("4'b1011")), NoChange);
+}
+
+TEST(WaveformDatabaseTests, OfTwoChangesAtOneTimeTheLastIsWhatWasHeld) {
+    // A value written twice in one time step: the signal held the second at that time, as
+    // `valueAt` says, so the first was never held and starts nothing.
+    WaveformDatabase database;
+    const std::uint32_t signal = database.addSignal(0, "/tb/count", 8);
+    appendLiteral(database, signal, 10, "8'h01");
+    appendLiteral(database, signal, 20, "8'h05");
+    appendLiteral(database, signal, 20, "8'h06");
+    appendLiteral(database, signal, 30, "8'h05");
+    ASSERT_EQ(database.valueAt(signal, 20), std::optional(literal("8'h06")));
+
+    EXPECT_EQ(database.firstStartIn(signal, 0, 4, 7, 0, literal("8'h05")), 3U);
+    EXPECT_EQ(database.lastStartIn(signal, 0, 4, 7, 0, literal("8'h05")), 3U);
+    EXPECT_EQ(database.firstStartIn(signal, 0, 4, 7, 0, literal("8'h06")), 2U);
+    EXPECT_EQ(database.lastStartIn(signal, 0, 3, 7, 0, literal("8'h06")), 2U);
+
+    // From the middle of the time, what was held an instant before is still the time before.
+    EXPECT_EQ(database.firstStartIn(signal, 2, 4, 7, 0, literal("8'h06")), 2U);
+    EXPECT_EQ(database.lastStartIn(signal, 3, 4, 7, 0, literal("8'h05")), 3U);
+}
+
+TEST(WaveformDatabaseTests, SpilledValuesAreSearchedAsThoughTheyWereResident) {
+    // A small budget spills almost every chunk, so the searches read most values back from the
+    // scratch file, in both directions and across chunk boundaries, and must answer what a walk
+    // over the values one by one does.
+    DatabaseOptions options;
+    options.chunkCapacity = 4;
+    options.memoryBudgetBytes = 64;
+    WaveformDatabase database(options);
+    const std::uint32_t signal = database.addSignal(0, "/tb/count", 8);
+
+    constexpr std::uint64_t Changes = 100;
+    for (std::uint64_t index = 0; index < Changes; ++index) {
+        database.append(signal, (index + 1) * 10, BitVector::fromUInt64(index % 37, 8));
+    }
+    ASSERT_GT(database.spilledValueBytes(), 0U);
+
+    const auto walk = [&](std::uint64_t from, std::uint64_t to, const BitVector& value,
+                          bool forward) {
+        std::uint64_t found = NoChange;
+        for (std::uint64_t change = from; change < to; ++change) {
+            const bool holds = database.valueOfChange(signal, change) == value;
+            const bool held = change > 0 && database.valueOfChange(signal, change - 1) == value;
+            if (holds && !held) {
+                found = change;
+                if (forward) break;
+            }
+        }
+        return found;
+    };
+
+    for (std::uint64_t number = 0; number < 40; ++number) {
+        const BitVector value = BitVector::fromUInt64(number, 8);
+        for (const std::uint64_t from : {0U, 3U, 37U, 61U}) {
+            EXPECT_EQ(database.firstStartIn(signal, from, Changes, 7, 0, value),
+                      walk(from, Changes, value, true))
+                << number << " from " << from;
+            EXPECT_EQ(database.lastStartIn(signal, 0, Changes - from, 7, 0, value),
+                      walk(0, Changes - from, value, false))
+                << number << " up to " << Changes - from;
+        }
+    }
+}
+
 } // namespace

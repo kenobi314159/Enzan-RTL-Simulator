@@ -181,6 +181,28 @@ public:
     [[nodiscard]] std::uint64_t nearestChange(std::uint32_t recordIndex,
                                               runtime::SimTime time) const;
 
+    /// The first change in `[from, to)` at which bits `[lowBit, highBit]` of the signal start to
+    /// hold `value`: hold it, where an instant earlier they held something else or nothing had
+    /// been recorded. `NoChange` when none in the range does.
+    ///
+    /// **A value has no index**, so finding one is a walk over the changes, and this is that walk
+    /// done where the values are kept: compared in place under a mask, a chunk at a time. Copying
+    /// each value out and comparing it after a binary search for its time cost over a hundred
+    /// nanoseconds a change, two seconds a search on a trace of ten million.
+    ///
+    /// Two changes share a time only when a value was written twice in one time step. The signal
+    /// held the last of them at that time, as `valueAt` says, so only the last is examined, and an
+    /// instant before it is the time before.
+    [[nodiscard]] std::uint64_t firstStartIn(std::uint32_t recordIndex, std::uint64_t from,
+                                             std::uint64_t to, std::uint32_t highBit,
+                                             std::uint32_t lowBit, eir::ConstBitRef value) const;
+
+    /// The last change in `[from, to)` at which bits `[lowBit, highBit]` of the signal start to
+    /// hold `value`, as `firstStartIn` finds the first.
+    [[nodiscard]] std::uint64_t lastStartIn(std::uint32_t recordIndex, std::uint64_t from,
+                                            std::uint64_t to, std::uint32_t highBit,
+                                            std::uint32_t lowBit, eir::ConstBitRef value) const;
+
     /// Appends every change with a time in `[from, to)` to `out`.
     ///
     /// For the zoomed-in case, where the caller wants the transitions themselves rather than a
@@ -290,6 +312,11 @@ private:
     [[nodiscard]] std::span<const eir::Word> valueWordsOf(const SignalStore& store,
                                                           std::uint64_t changeIndex,
                                                           std::uint32_t signalRecordIndex) const;
+
+    /// Returns the values of a whole chunk, loading it if it was spilled. Valid until another
+    /// chunk is loaded.
+    [[nodiscard]] std::span<const eir::Word> chunkWordsOf(std::uint32_t recordIndex,
+                                                          std::uint32_t chunkIndex) const;
 
     /// Makes a chunk's payload resident, reading it back from the scratch file.
     void reload(std::uint32_t recordIndex, std::uint32_t chunkIndex) const;
