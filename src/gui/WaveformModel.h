@@ -329,6 +329,9 @@ public:
     /// A model index for `rowId`, or an invalid index.
     [[nodiscard]] QModelIndex indexOfRow(int rowId) const;
 
+    /// True when `candidate` is `rowId` or lies below it. False for -1, which is no row.
+    [[nodiscard]] bool isDescendantOf(int candidate, int rowId) const;
+
     /// Every signal displayed anywhere, without duplicates, in row order.
     [[nodiscard]] QVector<std::uint32_t> displayedSignals() const;
 
@@ -439,9 +442,6 @@ private:
 
     /// Marks a row and its descendants dead and takes them out of the tree.
     void killSubtree(int rowId);
-
-    /// True when `candidate` is `rowId` or lies below it.
-    [[nodiscard]] bool isDescendantOf(int candidate, int rowId) const;
 
     /// The value a row's children make between them, or nothing when they cannot make one.
     [[nodiscard]] std::optional<eir::BitVector> combinedValueAt(int rowId,

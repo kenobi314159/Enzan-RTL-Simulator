@@ -4,6 +4,7 @@
 
 #include "gui/TimeAxis.h"
 
+#include <QAbstractItemModel>
 #include <QElapsedTimer>
 #include <QTimer>
 
@@ -22,6 +23,11 @@ ValueFinder::ValueFinder(const KernelSession& kernelSession, const WaveformModel
     nextSlice->setSingleShot(true);
     nextSlice->setInterval(0);
     connect(nextSlice, &QTimer::timeout, this, &ValueFinder::step);
+
+    // A move is a removal and an insertion, and clearing the list is a reset.
+    connect(model, &QAbstractItemModel::rowsInserted, this, &ValueFinder::rowsChangedAt);
+    connect(model, &QAbstractItemModel::rowsRemoved, this, &ValueFinder::rowsChangedAt);
+    connect(model, &QAbstractItemModel::modelReset, this, &ValueFinder::cancel);
 }
 
 void ValueFinder::setSlice(int edges, std::chrono::milliseconds duration) {
@@ -79,9 +85,13 @@ void ValueFinder::cancel() {
     Q_EMIT searchAbandoned();
 }
 
+void ValueFinder::rowsChangedAt(const QModelIndex& parent) {
+    if (search.has_value() && model->isDescendantOf(model->rowIdOf(parent), search->rowId))
+        cancel();
+}
+
 bool ValueFinder::stillAsked(const Search& asked) const {
     if (model->row(asked.rowId) == nullptr || view->selectedRow() != asked.rowId) return false;
-    if (model->displayedWidth(asked.rowId) != asked.value.width()) return false;
 
     const QVector<WaveCursor>& cursors = view->cursors();
     return view->activeCursor() == asked.cursor && asked.cursor < cursors.size()

@@ -648,6 +648,47 @@ TEST_F(FindValueInteractionTest, ChangingTheWidthOfTheRowAbandonsASearchStillRun
     EXPECT_TRUE(reports->isEmpty());
 }
 
+TEST_F(FindValueInteractionTest, ReorderingTheRowsOfTheRowSearchedAbandonsASearchStillRunning) {
+    // The clock beside the counter, and then the counter beside the clock: as many bits, standing
+    // for something else, so that the rest of the search would answer another question.
+    SignalInfo clk;
+    SignalInfo count;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+        if (info.name == QStringLiteral("clk")) clk = info;
+        if (info.name == QStringLiteral("count")) count = info;
+    }
+    const int group = model->addGroup(QStringLiteral("mixed"));
+    model->addSignal(clk, group);
+    const int counter = model->addSignal(count, group);
+    treeView->setCurrentIndex(model->indexOfRow(group));
+
+    finder->setSlice(1, std::chrono::milliseconds(0));
+    const QSignalSpy abandoned(finder.get(), &ValueFinder::searchAbandoned);
+    finder->find(QStringLiteral("{1}{27}"), true);
+    ASSERT_TRUE(finder->searching());
+    ASSERT_TRUE(model->moveRowsTo({counter}, group, 0));
+    ASSERT_EQ(view->selectedRow(), group);
+
+    finishSearching();
+    EXPECT_EQ(abandoned.count(), 1);
+    EXPECT_EQ(view->activeCursorTime(), 0U);
+    EXPECT_TRUE(reports->isEmpty()) << lastReport().toStdString();
+}
+
+TEST_F(FindValueInteractionTest, RowsChangingElsewhereLeaveASearchRunning) {
+    finder->setSlice(1, std::chrono::milliseconds(0));
+    const QSignalSpy abandoned(finder.get(), &ValueFinder::searchAbandoned);
+
+    finder->find(QStringLiteral("27"), true);
+    ASSERT_TRUE(finder->searching());
+    model->addGroup(QStringLiteral("elsewhere"));
+    model->removeRow(rowOf.value(QStringLiteral("clk")));
+
+    finishSearching();
+    EXPECT_EQ(abandoned.count(), 0);
+    EXPECT_EQ(view->activeCursorTime(), 385U);
+}
+
 TEST_F(FindValueInteractionTest, ANewSearchReplacesOneStillRunning) {
     finder->setSlice(1, std::chrono::milliseconds(0));
     const QSignalSpy abandoned(finder.get(), &ValueFinder::searchAbandoned);

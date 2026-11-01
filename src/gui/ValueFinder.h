@@ -8,6 +8,7 @@
 #include "gui/WaveformView.h"
 #include "runtime/Time.h"
 
+#include <QModelIndex>
 #include <QObject>
 #include <QString>
 
@@ -25,10 +26,10 @@ namespace enzan::gui {
 /// **A search never blocks the window.** No index says when a row holds a value, so a search
 /// examines the row's changes one by one (`WaveformModel::nextMatchAfter`), and on a trace of
 /// millions of them, or a group of such traces, that can take longer than a window may stop
-/// answering for. So the first slice
-/// runs at once, which finishes most searches, and the rest run a slice at a time on the event
-/// loop, as the session reads its socket. A reader can carry on meanwhile, and moving the cursor
-/// or the selection abandons the search, since its answer would be to a question no longer asked.
+/// answering for. So the first slice runs at once, which finishes most searches, and the rest run
+/// a slice at a time on the event loop, as the session reads its socket. A reader can carry on
+/// meanwhile, and moving the cursor or the selection abandons the search, as does changing the
+/// rows the selected one is joined from, since its answer would be to a question no longer asked.
 class ValueFinder : public QObject {
     Q_OBJECT
 
@@ -88,9 +89,15 @@ private:
     /// Runs one slice of the search, and the next one on the event loop if it does not finish.
     void step();
 
-    /// True while the search is still the one the reader asked for: the same row selected, of the
-    /// same width, and the same cursor, unlocked and where it was.
+    /// True while the search is still the one the reader asked for: the same row selected, and the
+    /// same cursor, unlocked and where it was.
     [[nodiscard]] bool stillAsked(const Search& asked) const;
+
+    /// Abandons the search when rows were added or taken away at `parent`, and it is the row
+    /// searched or lies below it. The row's value is joined from the rows beneath it, so with one
+    /// taken out, or put back in another place, the bits searched for stand for something else,
+    /// though there may be as many of them.
+    void rowsChangedAt(const QModelIndex& parent);
 
     void finish(const WaveformModel::Match& match);
 
