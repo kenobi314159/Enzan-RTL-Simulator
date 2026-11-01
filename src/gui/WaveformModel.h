@@ -6,6 +6,7 @@
 #include "eir/BitVector.h"
 #include "gui/KernelSession.h"
 #include "gui/Theme.h"
+#include "gui/ValueText.h"
 #include "runtime/Time.h"
 
 #include <QAbstractItemModel>
@@ -342,6 +343,15 @@ public:
     /// boundaries filed off. An array row reads the same way whether it is unpacked or not,
     /// as the list of its elements.
     [[nodiscard]] QString renderValue(int rowId, runtime::SimTime time) const;
+
+    /// Reads `text` as a value of what the row shows, as `renderValue` writes one, so that what a
+    /// row shows can be typed back and means what it showed.
+    ///
+    /// A name of the row's enumeration is the value it names, and wins over a number spelt the
+    /// same, as the name is what the row shows. A row shown as the list of its children, or of
+    /// its elements, reads such a list, each word as that child or element reads it. Anything
+    /// else is a number in the row's radix, at the width the row shows (`readNumber`).
+    [[nodiscard]] ValueReading readValue(int rowId, QStringView text) const;
 
     /// The next time after `time` at which anything the row shows changes, or `NoTime`.
     ///

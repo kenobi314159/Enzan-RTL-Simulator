@@ -23,6 +23,7 @@ enzan_add_component(
           Theme.cpp
           TimeAxis.cpp
           TranscriptView.cpp
+          ValueText.cpp
           WaveformModel.cpp
           WaveformView.cpp
   HEADERS Configuration.h
@@ -38,6 +39,7 @@ enzan_add_component(
           ThemeColors.def
           TimeAxis.h
           TranscriptView.h
+          ValueText.h
           WaveformModel.h
           WaveformView.h
   DEPENDS enzan::common enzan::eir enzan::ipc enzan::wavedb Qt6::Widgets Qt6::Gui Qt6::Core)

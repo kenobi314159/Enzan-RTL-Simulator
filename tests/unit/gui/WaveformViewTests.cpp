@@ -313,6 +313,32 @@ TEST_F(EnumeratedRowTest, AGroupHoldingItIsNotNamed) {
     EXPECT_EQ(model->enumerationOf(group), nullptr);
 }
 
+TEST_F(EnumeratedRowTest, ANameReadsAsTheValueItNames) {
+    const int rowId = addState();
+
+    EXPECT_EQ(model->readValue(rowId, QStringLiteral("S_ARM")).value,
+              enzan::eir::BitVector::parse("3'd1"));
+    EXPECT_EQ(model->readValue(rowId, QStringLiteral(" s_arm ")).value,
+              enzan::eir::BitVector::parse("3'd1"))
+        << "a VHDL name is the same name in any case";
+
+    // A value the type does not name is shown as a number, so a number reads too.
+    EXPECT_EQ(model->readValue(rowId, QStringLiteral("2")).value,
+              enzan::eir::BitVector::parse("3'd2"));
+    EXPECT_EQ(model->readValue(rowId, QStringLiteral("S_FOO")).problem,
+              QStringLiteral("'S_FOO' names no value of state_t"));
+}
+
+TEST_F(EnumeratedRowTest, ARowShowingTheNumberReadsOnlyANumber) {
+    const int rowId = addState();
+    model->setRadixRecursive(rowId, Radix::Binary);
+
+    EXPECT_EQ(model->readValue(rowId, QStringLiteral("S_ARM")).problem,
+              QStringLiteral("'S_ARM' is not a binary number"));
+    EXPECT_EQ(model->readValue(rowId, QStringLiteral("010")).value,
+              enzan::eir::BitVector::parse("3'd2"));
+}
+
 // ---------------------------------------------------------------------------
 // Parameters
 // ---------------------------------------------------------------------------

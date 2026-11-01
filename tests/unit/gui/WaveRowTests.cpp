@@ -260,6 +260,103 @@ TEST_F(WaveRowTest, AVectorOfVectorsReadsAsNestedLists) {
 }
 
 // ---------------------------------------------------------------------------
+// Reading a value as a row shows it
+// ---------------------------------------------------------------------------
+
+TEST_F(WaveRowTest, ARowReadsAValueInTheRadixItShowsItIn) {
+    const int bus = model->addSignal(counter);
+    const std::optional<enzan::eir::BitVector> forty = enzan::eir::BitVector::parse("8'd40");
+
+    EXPECT_EQ(model->readValue(bus, QStringLiteral("28")).value, forty);
+    model->setRadix(bus, Radix::Decimal);
+    EXPECT_EQ(model->readValue(bus, QStringLiteral("40")).value, forty);
+    EXPECT_EQ(model->readValue(bus, QStringLiteral("8'h28")).value, forty) << "a literal anywhere";
+
+    // A slice reads at its own width, so a value the whole signal could hold may not fit it.
+    const int low = model->addSlice(bus, 3, 0);
+    model->setRadix(low, Radix::Hexadecimal);
+    EXPECT_EQ(model->readValue(low, QStringLiteral("f")).value,
+              enzan::eir::BitVector::parse("4'hf"));
+    EXPECT_EQ(model->readValue(low, QStringLiteral("1f")).problem,
+              QStringLiteral("'1f' does not fit in 4 bits"));
+}
+
+TEST_F(WaveRowTest, WhatEveryShapeOfRowShowsReadsBackAsWhatItHolds) {
+    // The rows `renderValue` writes differently, each typed back from what it wrote at a few
+    // times, including before the counter has moved.
+    QVector<int> shapes;
+
+    shapes.push_back(model->addSignal(counter));
+    shapes.push_back(model->addSignal(clock));
+
+    const int narrowed = model->addSignal(counter);
+    model->unpack(narrowed);
+    model->removeRow(childOf(narrowed, 4));
+    shapes.push_back(narrowed);
+
+    const int source = model->addSignal(counter);
+    model->unpack(source);
+    const int nibble = model->addGroup(QStringLiteral("nibble"));
+    for (int bit = 0; bit < 4; ++bit)
+        ASSERT_TRUE(model->moveRowsTo({childOf(source, 0)}, nibble, bit));
+    shapes.push_back(nibble);
+
+    const int mixed = model->addGroup(QStringLiteral("mixed"));
+    model->addSignal(clock, mixed);
+    model->addSignal(counter, mixed);
+    shapes.push_back(mixed);
+
+    const int outer = model->addGroup(QStringLiteral("outer"));
+    for (int half = 0; half < 2; ++half) {
+        const int inner = model->addGroup(QStringLiteral("half"), outer);
+        for (int bit = 0; bit < 2; ++bit) {
+            ASSERT_TRUE(model->moveRowsTo({childOf(source, 0)}, inner, bit));
+        }
+    }
+    shapes.push_back(outer);
+
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 3, .right = 0}};
+    shapes.push_back(model->addSignal(nibbles));
+
+    for (const int rowId : shapes) {
+        for (const std::uint64_t time : {0U, 5U, 200U, 395U}) {
+            if (!model->valueAt(rowId, time).has_value()) continue;
+
+            const QString shown = model->renderValue(rowId, time);
+            const enzan::gui::ValueReading reading = model->readValue(rowId, shown);
+            ASSERT_TRUE(reading.value.has_value())
+                << model->row(rowId)->label.toStdString() << " shows " << shown.toStdString()
+                << ": " << reading.problem.toStdString();
+            EXPECT_EQ(reading.value, model->valueAt(rowId, time))
+                << model->row(rowId)->label.toStdString() << " shows " << shown.toStdString();
+        }
+    }
+}
+
+TEST_F(WaveRowTest, AListForARowOfOtherRowsNamesHowManyItHolds) {
+    const int group = model->addGroup(QStringLiteral("odds and ends"));
+    model->addSignal(clock, group);
+    model->addSignal(counter, group);
+
+    EXPECT_EQ(model->readValue(group, QStringLiteral("{1}")).problem,
+              QStringLiteral("'{1}' lists 1, and odds and ends holds 2 rows"));
+    EXPECT_EQ(model->readValue(group, QStringLiteral("{1}{1ff}")).problem,
+              QStringLiteral("'1ff' does not fit in 8 bits"))
+        << "a word is read as its own row reads it";
+
+    // A number the width of the whole group is read too.
+    EXPECT_EQ(model->readValue(group, QStringLiteral("128")).value,
+              enzan::eir::BitVector::parse("9'h128"));
+}
+
+TEST_F(WaveRowTest, ARowWithNoBitsHasNoValueToRead) {
+    const int group = model->addGroup(QStringLiteral("empty"));
+    EXPECT_EQ(model->readValue(group, QStringLiteral("0")).problem,
+              QStringLiteral("empty shows no bits to hold a value"));
+}
+
+// ---------------------------------------------------------------------------
 // Edges
 // ---------------------------------------------------------------------------
 
@@ -612,6 +709,19 @@ TEST_F(SourceArrayTest, EachCounterReadsAsItsElementsHoweverItIsDeclared) {
     EXPECT_EQ(model->renderValue(packed, 10), QStringLiteral("{04}{ff}{02}{01}"));
     EXPECT_EQ(model->renderValue(unpacked, 10), QStringLiteral("{04}{ff}{02}{01}"));
     EXPECT_EQ(model->renderValue(bits, 10), QStringLiteral("{04}{01}{02}{01}"));
+}
+
+TEST_F(SourceArrayTest, EachCounterReadsBackTheListItShows) {
+    for (const QString& name : {QStringLiteral("count_rec"), QStringLiteral("count_rec0"),
+                                QStringLiteral("count_rec1")}) {
+        const int row = model->addSignal(signals.value(name));
+        for (const std::uint64_t time : {5U, 10U}) {
+            const enzan::gui::ValueReading reading =
+                model->readValue(row, model->renderValue(row, time));
+            ASSERT_TRUE(reading.value.has_value()) << name.toStdString();
+            EXPECT_EQ(reading.value, model->valueAt(row, time)) << name.toStdString();
+        }
+    }
 }
 
 TEST_F(SourceArrayTest, EachCounterUnpacksIntoItsElementsAndThenItsBits) {

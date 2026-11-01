@@ -960,30 +960,18 @@ std::optional<eir::BitVector> WaveformModel::combinedValueAt(int rowId,
     QVector<eir::BitVector> parts;
     parts.reserve(waveRow.children.size());
 
-    std::uint32_t total = 0;
     for (const int child : waveRow.children) {
         const std::optional<eir::BitVector> value = valueAt(child, time);
         if (!value.has_value()) return std::nullopt;
 
-        total += value.value().width();
         parts.push_back(value.value());
     }
 
     if (parts.isEmpty()) return std::nullopt;
 
     // The first child is the most significant, which is the order the list shows them in and
-    // the order unpacking creates them in. Copied a word at a time: a group made by adding a
-    // subtree joins every signal in it, for every value its trace prints, and a bit at a time
-    // that was most of what a repaint of a large design cost.
-    eir::BitVector joined = eir::BitVector::filled(total, eir::Logic::Zero);
-
-    std::uint32_t top = total;
-    for (const eir::BitVector& part : parts) {
-        top -= part.width();
-        eir::bitops::assignPartAt(joined.mutableRef(), part.ref(), top);
-    }
-
-    return joined;
+    // the order unpacking creates them in.
+    return joinParts(std::span(parts.constData(), static_cast<std::size_t>(parts.size())));
 }
 
 std::optional<eir::BitVector> WaveformModel::valueAt(int rowId, runtime::SimTime time) const {
@@ -1056,6 +1044,80 @@ QString WaveformModel::renderValue(int rowId, runtime::SimTime time) const {
     // rows read joined: one number for an array of vectors would file off exactly the
     // boundaries that are the reason it has that shape.
     return renderArray(*value, waveRow->dimensions, waveRow->radix);
+}
+
+ValueReading WaveformModel::readValue(int rowId, QStringView text) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr)
+        return {.value = std::nullopt, .problem = QStringLiteral("No such row")};
+
+    // What `renderValue` writes as the list of a row's children reads as one, each word as its
+    // child reads it.
+    if (showsChildren(rowId) && !childrenReconstituteParent(rowId) && !childrenAreBits(rowId)
+        && !waveRow->children.isEmpty() && text.trimmed().startsWith(u'{')) {
+        const std::optional<QStringList> words = splitList(text);
+        if (!words.has_value()) {
+            return {.value = std::nullopt,
+                    .problem = QStringLiteral("'%1' is not a list: its braces do not pair up")
+                                   .arg(text.trimmed())};
+        }
+        if (words->size() != waveRow->children.size()) {
+            return {.value = std::nullopt,
+                    .problem = QStringLiteral("'%1' lists %2, and %3 holds %4 rows")
+                                   .arg(text.trimmed())
+                                   .arg(words->size())
+                                   .arg(waveRow->label)
+                                   .arg(waveRow->children.size())};
+        }
+
+        std::vector<eir::BitVector> parts;
+        parts.reserve(static_cast<std::size_t>(words->size()));
+        for (qsizetype position = 0; position < words->size(); ++position) {
+            ValueReading part = readValue(waveRow->children[position], words->at(position));
+            if (!part.value.has_value()) return part;
+            parts.push_back(std::move(*part.value));
+        }
+        return {.value = joinParts(parts), .problem = {}};
+    }
+
+    const std::uint32_t width = displayedWidth(rowId);
+    if (width == 0) {
+        return {.value = std::nullopt,
+                .problem = QStringLiteral("%1 shows no bits to hold a value").arg(waveRow->label)};
+    }
+
+    const EnumInfo* enumeration = enumerationOf(rowId);
+    if (enumeration != nullptr) {
+        // As the reader wrote it first. A VHDL name is the same name in any case, so failing that
+        // a name differing only in case is taken, provided it is the only one.
+        const QStringView name = text.trimmed();
+        const EnumMemberInfo* match = nullptr;
+        int caseless = 0;
+        for (const EnumMemberInfo& member : enumeration->members) {
+            if (member.name == name) {
+                match = &member;
+                caseless = 1;
+                break;
+            }
+            if (member.name.compare(name, Qt::CaseInsensitive) == 0) {
+                if (caseless++ == 0) match = &member;
+            }
+        }
+        if (match != nullptr && caseless == 1)
+            return {.value = match->value.resized(width, false), .problem = {}};
+    }
+
+    ValueReading reading = readArray(text, width, waveRow->dimensions, waveRow->radix);
+
+    // A word is more likely a name misspelt than a number, so a row with names says which.
+    const QStringView trimmed = text.trimmed();
+    if (!reading.value.has_value() && enumeration != nullptr && !trimmed.isEmpty()
+        && (trimmed.front().isLetter() || trimmed.front() == u'_')) {
+        const QString type =
+            enumeration->name.isEmpty() ? QStringLiteral("its enumeration") : enumeration->name;
+        reading.problem = QStringLiteral("'%1' names no value of %2").arg(trimmed, type);
+    }
+    return reading;
 }
 
 const EnumInfo* WaveformModel::enumerationOf(int rowId) const {

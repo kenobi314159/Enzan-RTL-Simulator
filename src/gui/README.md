@@ -18,6 +18,8 @@ waveform view and the transcript.
   the client-side copy of the waveform it is drawing.
 - **The models** (`DesignTreeModel.h`, `ObjectsModel.h`, `WaveformModel.h`) — the hierarchy, the
   objects of a scope, and what the wave window shows.
+- **Reading a value** (`ValueText.h`) — text typed as the value column writes a value, read back
+  into the value, so that what a row shows can be typed in and means what it showed.
 - **The time axis** (`TimeAxis.h`) — the mapping between simulated time and pixels, separated out
   because it is the part of the view that can be wrong without anyone noticing by eye.
 - **The waveform canvas** (`WaveformView.h`) — the custom painting, the cursors and the zoom.
