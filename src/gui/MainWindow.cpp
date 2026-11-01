@@ -121,7 +121,8 @@ class SubmenuParenting final : public QObject {
 public:
     using QObject::QObject;
 
-protected:
+    /// Public because `QObject` declares it so, and narrowing an override's visibility is legal
+    /// and confusing.
     bool eventFilter(QObject* watched, QEvent* event) override {
         auto* submenu = qobject_cast<QMenu*>(watched);
         if (submenu == nullptr || event->type() != QEvent::Show) return false;
