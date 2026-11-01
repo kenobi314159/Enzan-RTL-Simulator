@@ -133,6 +133,21 @@ TEST(ValueText, AValueTooWideForTheRowIsRefusedRatherThanCutDown) {
               QStringLiteral("'2' does not fit in 1 bit"));
 }
 
+TEST(ValueText, ALiteralStatingAHugeWidthIsReadWithoutMakingThatManyBits) {
+    // A typo can state billions of bits, which made the field allocate a gigabyte and then walk
+    // every bit of it. Past the row and past its digits a literal is only padding, so it reads
+    // as it would at a width just past both.
+    EXPECT_EQ(read(QStringLiteral("4000000000'h0"), 8, Radix::Hexadecimal), "00000000");
+    EXPECT_EQ(read(QStringLiteral("4000000000'sh5_a"), 8, Radix::Hexadecimal), "01011010");
+    EXPECT_EQ(read(QStringLiteral("4294967295'd200"), 8, Radix::Hexadecimal), "11001000");
+    EXPECT_TRUE(refused(QStringLiteral("4000000000'h1ff"), 8, Radix::Hexadecimal));
+
+    // An x or a z on the left pads every bit it states, which is past the row.
+    EXPECT_TRUE(refused(QStringLiteral("4000000000'hx"), 8, Radix::Hexadecimal));
+    EXPECT_TRUE(refused(QStringLiteral("4000000000'bz1"), 8, Radix::Hexadecimal));
+    EXPECT_TRUE(refused(QStringLiteral("4000000000'dx"), 8, Radix::Hexadecimal));
+}
+
 TEST(ValueText, LeadingZerosAndAnUnknownTopDigitStillFit) {
     EXPECT_EQ(read(QStringLiteral("00ff"), 8, Radix::Hexadecimal), "11111111");
     EXPECT_EQ(read(QStringLiteral("000"), 1, Radix::Hexadecimal), "0");

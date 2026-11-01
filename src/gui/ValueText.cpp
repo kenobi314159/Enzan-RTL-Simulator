@@ -5,7 +5,9 @@
 #include "eir/BitOps.h"
 
 #include <algorithm>
+#include <charconv>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace enzan::gui {
@@ -194,8 +196,20 @@ std::optional<ValueReading> readLiteral(QStringView text, std::uint32_t width) {
 
     // A sized literal is the value it says at the width it says, which is refused where that is
     // wider than the row holds and extended with zeros where it is narrower.
-    const std::optional<eir::BitVector> parsed =
-        eir::BitVector::parse(text.toString().toStdString());
+    //
+    // Not at every width it can say, though: a typo can say billions of bits, which are made
+    // whole before any is compared. Past the row, and past the four bits a character its digits
+    // reach at most, a literal holds only the padding of its leftmost digit, so it is read at the
+    // first width past both, which keeps a bit of that padding above the row to refuse an x by.
+    std::string literal = text.toString().toStdString();
+    const std::size_t tick = literal.find('\'');
+    std::uint64_t stated = 0;
+    const auto [end, error] = std::from_chars(literal.data(), literal.data() + tick, stated);
+    const std::uint64_t enough = std::max<std::uint64_t>(width, 4 * literal.size()) + 1;
+    if (error == std::errc() && end == literal.data() + tick && stated > enough)
+        literal = std::to_string(enough) + literal.substr(tick);
+
+    const std::optional<eir::BitVector> parsed = eir::BitVector::parse(literal);
     if (!parsed.has_value()) return std::nullopt;
 
     std::optional<eir::BitVector> value = fitted(*parsed, width);
