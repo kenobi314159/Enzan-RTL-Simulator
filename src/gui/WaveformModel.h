@@ -224,8 +224,9 @@ public:
     /// all hand this the same kind of thing.
     int addSignal(const SignalInfo& info, int parentGroup = -1);
 
-    /// Adds an empty group. Returns its row number.
-    int addGroup(const QString& name, int parentGroup = -1);
+    /// Adds an empty group inside `parentGroup` at `position`, or at the end when `position` is
+    /// negative. Returns its row number.
+    int addGroup(const QString& name, int parentGroup = -1, int position = -1);
 
     /// Adds a row showing bits `[high:low]` of a signal already displayed by `rowId`.
     ///

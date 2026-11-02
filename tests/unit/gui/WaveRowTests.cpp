@@ -902,6 +902,27 @@ TEST_F(WaveRowTest, MovingARowDoesNotResetTheModel) {
     EXPECT_EQ(model->row(first)->parent, group);
 }
 
+TEST_F(WaveRowTest, AGroupIsAddedWhereItIsAskedFor) {
+    const int outer = model->addGroup(QStringLiteral("outer"));
+    const int first = model->addSignal(clock, outer);
+    const int second = model->addSignal(counter, outer);
+
+    // The view is told the same position the list takes, or it would draw the group beside the
+    // wrong row until something made it ask again.
+    int announced = -1;
+    QObject::connect(model.get(), &QAbstractItemModel::rowsInserted,
+                     [&announced](const QModelIndex& /*parent*/, int firstRow, int /*last*/) {
+                         announced = firstRow;
+                     });
+    const int between = model->addGroup(QStringLiteral("between"), outer, 1);
+    EXPECT_EQ(announced, 1);
+
+    const int last = model->addGroup(QStringLiteral("last"), outer);
+    const int past = model->addGroup(QStringLiteral("past the end"), outer, 99);
+
+    EXPECT_EQ(model->row(outer)->children, (QVector<int>{first, between, second, last, past}));
+}
+
 // ---------------------------------------------------------------------------
 // An array unpacks by its dimensions
 // ---------------------------------------------------------------------------

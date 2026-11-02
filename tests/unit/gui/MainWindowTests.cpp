@@ -36,6 +36,7 @@
 #include <QFontMetrics>
 #include <QImage>
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
@@ -51,6 +52,7 @@
 #include <QTest>
 #include <QTextBlock>
 #include <QTextBrowser>
+#include <QTimer>
 #include <QTreeView>
 #include <QWindow>
 
@@ -402,6 +404,106 @@ TEST_F(MainWindowTest, TheWaveFontIsTheNamesAndTheTraces) {
     ASSERT_NE(text, nullptr);
     EXPECT_EQ(text->font().pointSizeF(), 15.0);
     EXPECT_EQ(text->font().family(), QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
+}
+
+// ---------------------------------------------------------------------------
+// A new group
+// ---------------------------------------------------------------------------
+
+class NewGroupTest : public MainWindowTest {
+protected:
+    /// Fills the wave window as Add to Wave Recursive does: `/tb`'s group, holding `$top`'s with
+    /// clk, count and state, then `u_dut`'s.
+    void SetUp() override {
+        MainWindowTest::SetUp();
+        insert(topScope(), QStringLiteral("Add to Wave Recursive"));
+        ASSERT_TRUE(waitForSignals(
+            static_cast<int>(signalsOf(topScope()).size() + signalsOf(childScope()).size())));
+
+        tb = topRows().front();
+        ASSERT_EQ(waves()->row(tb)->children.size(), 2);
+        own = waves()->row(tb)->children[0];
+        dut = waves()->row(tb)->children[1];
+        ASSERT_EQ(waves()->row(own)->children.size(), 3);
+    }
+
+    /// Adds `rowId` to the wave list's selection, after whatever is selected already.
+    void addToSelection(int rowId) const {
+        waveRows()->selectionModel()->select(
+            waves()->indexOfRow(rowId), QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    }
+
+    /// Collects the selection into a new group, answering the dialog as a reader would. Returns
+    /// the group, the first row the command adds.
+    int groupSelection() {
+        QAction* action = actionCalled(QStringLiteral("New Group…"));
+        if (action == nullptr) {
+            ADD_FAILURE() << "no New Group action";
+            return -1;
+        }
+
+        // The dialog runs an event loop of its own, so it is answered from inside that loop.
+        QTimer::singleShot(0, window.get(), [this] {
+            if (auto* dialog = window->findChild<QInputDialog*>()) dialog->accept();
+        });
+
+        int made = -1;
+        const QMetaObject::Connection watch =
+            QObject::connect(waves(), &QAbstractItemModel::rowsInserted,
+                             [this, &made](const QModelIndex& parent, int first, int /*last*/) {
+                                 if (made < 0)
+                                     made = waves()->rowIdOf(waves()->index(first, 0, parent));
+                             });
+        action->trigger();
+        QObject::disconnect(watch);
+        return made;
+    }
+
+    int tb = -1;
+    int own = -1;
+    int dut = -1;
+};
+
+TEST_F(NewGroupTest, TakesThePlaceOfTheRowsItCollects) {
+    const QVector<int> signalRows = waves()->row(own)->children;
+    addToSelection(signalRows[1]);
+    addToSelection(signalRows[2]);
+
+    const int made = groupSelection();
+    ASSERT_NE(waves()->row(made), nullptr);
+    EXPECT_EQ(waves()->row(made)->kind, WaveRow::Kind::Group);
+
+    EXPECT_EQ(waves()->row(own)->children, (QVector<int>{signalRows[0], made}));
+    EXPECT_EQ(waves()->row(made)->children, (QVector<int>{signalRows[1], signalRows[2]}));
+    EXPECT_EQ(waves()->row(tb)->children, (QVector<int>{own, dut}));
+}
+
+TEST_F(NewGroupTest, RowsAtSeveralDepthsAreCollectedWhereTheTopmostWas) {
+    // The deeper row is clicked first, so a group put where the first click was would land in
+    // `u_dut`'s group rather than where `$top`'s stood.
+    const int q = waves()->row(dut)->children.front();
+    addToSelection(q);
+    addToSelection(own);
+
+    const int made = groupSelection();
+    ASSERT_NE(waves()->row(made), nullptr);
+
+    EXPECT_EQ(waves()->row(tb)->children, (QVector<int>{made, dut}));
+    EXPECT_EQ(waves()->row(made)->children, (QVector<int>{q, own}));
+}
+
+TEST_F(NewGroupTest, AGroupCollectedWithOneOfItsRowsIsCollectedWhole) {
+    // Put where `q` was, the group would be inside `u_dut`'s, which could then not be moved into
+    // it, and would be left holding the group rather than held by it.
+    const int q = waves()->row(dut)->children.front();
+    addToSelection(q);
+    addToSelection(dut);
+
+    const int made = groupSelection();
+    ASSERT_NE(waves()->row(made), nullptr);
+
+    EXPECT_EQ(waves()->row(tb)->children, (QVector<int>{own, made}));
+    EXPECT_EQ(waves()->row(made)->children, (QVector<int>{q, dut}));
 }
 
 // ---------------------------------------------------------------------------

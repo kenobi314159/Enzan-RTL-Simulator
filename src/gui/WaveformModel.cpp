@@ -312,7 +312,7 @@ int WaveformModel::addSignal(const SignalInfo& info, int parentGroup) {
     return rowId;
 }
 
-int WaveformModel::addGroup(const QString& name, int parentGroup) {
+int WaveformModel::addGroup(const QString& name, int parentGroup, int position) {
     WaveRow added;
     added.kind = WaveRow::Kind::Group;
     added.label = name;
@@ -320,12 +320,13 @@ int WaveformModel::addGroup(const QString& name, int parentGroup) {
 
     const int rowId = static_cast<int>(rows.size());
     const int parentRow = added.parent;
-    const int at = parentRow < 0 ? static_cast<int>(roots.size())
-                                 : static_cast<int>(rows[parentRow].children.size());
+    const int end = parentRow < 0 ? static_cast<int>(roots.size())
+                                  : static_cast<int>(rows[parentRow].children.size());
+    const int at = position < 0 || position > end ? end : position;
 
     beginInsertRows(parentRow < 0 ? QModelIndex() : indexOfRow(parentRow), at, at);
     rows.push_back(added);
-    (parentRow < 0 ? roots : rows[parentRow].children).push_back(rowId);
+    (parentRow < 0 ? roots : rows[parentRow].children).insert(at, rowId);
     endInsertRows();
 
     return rowId;

@@ -181,6 +181,14 @@ void collectOpenRows(const QTreeView& view, const WaveformModel& model, const QM
     }
 }
 
+/// Where `index` stands in the list read from the top: its position and its parents', outermost
+/// first, so that two of them compare as the list shows their rows, whether or not either is open.
+QVector<int> positionFromTop(QModelIndex index) {
+    QVector<int> positions;
+    for (; index.isValid(); index = index.parent()) positions.prepend(index.row());
+    return positions;
+}
+
 /// The desktop's font, as it was before any theme was applied, which every size a theme gives is
 /// worked out from.
 ///
@@ -1273,7 +1281,14 @@ void MainWindow::groupSelectedWaves() {
         if (waveRowsView->isExpanded(waveModel->indexOfRow(rowId))) wereExpanded.push_back(rowId);
     }
 
-    const int group = waveModel->addGroup(name);
+    // In the place of the topmost of the rows, inside whatever holds it, because that is where
+    // the reader was looking. The topmost rather than the first clicked, because nothing holding
+    // it is among the rows collected: a group put inside one of those could not then take it in.
+    const int topmost = *std::ranges::min_element(selected, std::less<>(), [this](int rowId) {
+        return positionFromTop(waveModel->indexOfRow(rowId));
+    });
+    const int group = waveModel->addGroup(name, waveModel->row(topmost)->parent,
+                                          waveModel->indexOfRow(topmost).row());
     for (const int rowId : selected) waveModel->moveToGroup(rowId, group);
 
     // Only the group just made, so that the rows the reader was collecting are visible where
