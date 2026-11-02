@@ -178,9 +178,10 @@ std::optional<ValueReading> readDigits(QStringView text, std::uint32_t width, ei
     const std::optional<eir::BitVector> parsed =
         eir::BitVector::parse(std::to_string(size) + '\'' + base + kept.toStdString());
     if (!parsed.has_value()) return std::nullopt;
+    const eir::BitVector& bits = *parsed;
 
     for (std::uint32_t bit = width; bit < size; ++bit) {
-        if (parsed->get(bit) == eir::Logic::One) return refused(tooWide(text, width));
+        if (bits.get(bit) == eir::Logic::One) return refused(tooWide(text, width));
     }
 
     // The leftmost first, and none past the width, which a digit always reaches into.
@@ -192,7 +193,7 @@ std::optional<ValueReading> readDigits(QStringView text, std::uint32_t width, ei
                 partialOf(kept[position].unicode(), high, low))
             partial.push_back(*digit);
     }
-    return accepted(parsed->resized(width, false), std::move(partial));
+    return accepted(bits.resized(width, false), std::move(partial));
 }
 
 /// Reads a SystemVerilog literal into `width` bits, or nothing when `text` is no literal.
