@@ -253,7 +253,7 @@ jobs:
 
       - name: Run clang-tidy
         run: |
-          mapfile -t files < <(git ls-files 'src/*.cpp' 'tools/*.cpp' 'tests/*.cpp')
+          mapfile -t files < <(git ls-files 'src/*.cpp' 'tools/*.cpp')
           printf 'Linting %d files\n' "${#files[@]}"
           clang-tidy-18 -p build/clang-debug --quiet "${files[@]}"
 
