@@ -257,7 +257,7 @@ jobs:
           printf 'Linting %d files\n' "${#files[@]}"
           status=0
           for f in "${files[@]}"; do
-            echo '> $f'
+            echo "> $f"
             clang-tidy-18 -p build/clang-debug --quiet "$f" || status=$?
           done
           exit "$status"
