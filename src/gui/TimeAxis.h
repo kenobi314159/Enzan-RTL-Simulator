@@ -64,7 +64,9 @@ public:
     void zoom(double factor, double anchorX) noexcept;
 
     /// Scrolls by a number of pixels. Positive moves the view later in time.
-    void pan(double deltaPixels) noexcept;
+    ///
+    /// Returns the number of pixels actually shifted.
+    double pan(double deltaPixels) noexcept;
 
     /// Shows everything simulated so far, with a little room past the end.
     void fit() noexcept;

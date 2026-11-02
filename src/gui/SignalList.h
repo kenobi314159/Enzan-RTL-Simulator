@@ -40,6 +40,9 @@ struct SignalListEntry {
     std::optional<QString> label;
     int highlight = 0;
     bool recursive = false;
+
+    /// `-expand`: shown open. A group's rows are shown; a signal is unpacked, into the rows
+    /// unpacking makes unless `-contents` says which, and shown with them.
     bool expand = false;
 
     /// True when `-contents` was given, so that an empty body can be told from none.

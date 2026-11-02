@@ -37,6 +37,8 @@ class QTreeView;
 
 namespace enzan::gui {
 
+class ValueFinder;
+
 /// The Enzan window.
 ///
 /// The layout follows Modelsim, which is what users of this kind of tool expect: Structure,
@@ -160,6 +162,12 @@ private:
     void pasteWaves();
     void addCursor();
     void toggleActiveCursorLock();
+
+    /// Finds the next time the selected row takes the value in the Find field, or the previous.
+    ///
+    /// With nothing typed yet, the field is where the key goes instead, so that F3 is enough to
+    /// reach it and needs no key of its own beside it.
+    void findValue(bool forward);
 
     /// Shows the Keyboard Shortcuts window, read afresh from the actions so that it lists what
     /// the window is bound to now.
@@ -305,6 +313,11 @@ private:
     ShortcutSheet* shortcutSheet = nullptr;
 
     QLineEdit* runLengthEdit = nullptr;
+
+    /// The value Find Next and Find Previous look for, as the selected row shows one.
+    QLineEdit* findValueEdit = nullptr;
+    ValueFinder* valueFinder = nullptr;
+
     QLabel* statusTime = nullptr;
     QLabel* statusState = nullptr;
     QLabel* statusCursor = nullptr;
@@ -317,6 +330,8 @@ private:
     QAction* zoomFitAction = nullptr;
     QAction* zoomCursorsAction = nullptr;
     QAction* addCursorAction = nullptr;
+    QAction* findNextAction = nullptr;
+    QAction* findPreviousAction = nullptr;
 
     /// The Highlight menu's entries, whose icons are swatches of the theme's colours.
     std::array<QAction*, HighlightSlots> highlightActions{};

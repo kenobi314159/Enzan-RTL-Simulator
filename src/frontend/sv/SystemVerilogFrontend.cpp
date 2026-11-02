@@ -2104,6 +2104,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     // instantiating it, which makes it no top level itself, as an instance from the other
     // language would.
     std::vector<std::string> requestModules;
+    requestModules.reserve(options.requests.size());
     for (std::size_t index = 0; index < options.requests.size(); ++index)
         requestModules.push_back(requestModuleName(index));
 

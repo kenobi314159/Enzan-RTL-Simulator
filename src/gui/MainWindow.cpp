@@ -6,6 +6,7 @@
 #include "common/Version.h"
 #include "eir/BitOps.h"
 #include "gui/TclSyntax.h"
+#include "gui/ValueFinder.h"
 #include "runtime/Time.h"
 
 #include <QAction>
@@ -20,6 +21,7 @@
 #include <QHeaderView>
 #include <QIcon>
 #include <QInputDialog>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -35,6 +37,7 @@
 #include <QToolBar>
 #include <QTreeView>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <algorithm>
 #include <functional>
@@ -81,6 +84,109 @@ void showKeyInToolTip(QAction* action) {
     if (action->shortcut().isEmpty()) return;
     action->setToolTip(
         QStringLiteral("%1 (%2)").arg(action->toolTip(), keyText(action->shortcut())));
+}
+
+/// How long the status bar says what a search found, which is long enough to read it and short
+/// enough to give the bar back to the run's state.
+constexpr int FindReportMilliseconds = 10000;
+
+/// The toolbar's field for a value to find. Enter finds the next time the selected row takes it
+/// and Shift+Enter the previous, as F3 and Shift+F3 do from anywhere, and Escape gives up a
+/// search and goes back to the waves.
+///
+/// A field of its own rather than a QLineEdit's `returnPressed`, which Shift+Enter sends too.
+class FindValueField final : public QLineEdit {
+public:
+    using QLineEdit::QLineEdit;
+
+    std::function<void(bool forward)> find;
+    std::function<void()> giveUp;
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override {
+        if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && find) {
+            find(!event->modifiers().testFlag(Qt::ShiftModifier));
+            return;
+        }
+        if (event->key() == Qt::Key_Escape && giveUp) {
+            giveUp();
+            return;
+        }
+        QLineEdit::keyPressEvent(event);
+    }
+};
+
+/// Gives a submenu, as it is shown, the menu it is shown from as its native window's parent.
+class SubmenuParenting final : public QObject {
+public:
+    using QObject::QObject;
+
+    /// Public because `QObject` declares it so, and narrowing an override's visibility is legal
+    /// and confusing.
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        auto* submenu = qobject_cast<QMenu*>(watched);
+        if (submenu == nullptr || event->type() != QEvent::Show) return false;
+
+        QWindow* window = submenu->windowHandle();
+        if (window == nullptr) return false;
+        for (QObject* object : submenu->menuAction()->associatedObjects()) {
+            const auto* menu = qobject_cast<const QMenu*>(object);
+            if (menu != nullptr && menu->isVisible() && menu->windowHandle() != nullptr) {
+                window->setTransientParent(menu->windowHandle());
+                break;
+            }
+        }
+        return false;
+    }
+};
+
+/// Makes `submenu` open as a child of whichever of its menus it is opened from.
+///
+/// For a submenu that is an entry of more than one menu, and so is parented to neither. Qt before
+/// 6.10 makes a menu's native window the child of its parent widget's window, here the main
+/// window, and makes that window again each time the menu opens. On Wayland a menu has to be the
+/// child of the open menu it comes from: given the main window instead, Qt moves it under that
+/// menu itself, warns on the terminal, and the menu may open in the wrong place or close
+/// unexpectedly.
+///
+/// The parent is set when the submenu is shown, after its window is made and before it reaches
+/// the compositor; by then the menu it comes from is the one of its menus that is open.
+void openFromItsMenu(QMenu* submenu) {
+    submenu->installEventFilter(new SubmenuParenting(submenu));
+}
+
+/// Opens what a signal list marks open among the rows it made, at every depth.
+///
+/// `made` are the rows `pending` became, in the same order, as `insertSignalRows` returns them
+/// and as it puts each one's children beneath it.
+void openAsListed(QTreeView& view, const WaveformModel& model,
+                  const std::vector<WaveformModel::PendingRow>& pending, const QVector<int>& made) {
+    const std::size_t count = std::min(pending.size(), static_cast<std::size_t>(made.size()));
+    for (std::size_t position = 0; position < count; ++position) {
+        const int rowId = made[static_cast<qsizetype>(position)];
+        if (pending[position].open) view.expand(model.indexOfRow(rowId));
+        if (const WaveRow* row = model.row(rowId))
+            openAsListed(view, model, pending[position].children, row->children);
+    }
+}
+
+/// Adds to `open` every row below `parent` that `view` shows open, at any depth, whether or not
+/// what holds it is: a row inside a closed group is open as soon as the group is.
+void collectOpenRows(const QTreeView& view, const WaveformModel& model, const QModelIndex& parent,
+                     QSet<int>& open) {
+    for (int position = 0; position < model.rowCount(parent); ++position) {
+        const QModelIndex index = model.index(position, 0, parent);
+        if (view.isExpanded(index)) open.insert(model.rowIdOf(index));
+        collectOpenRows(view, model, index, open);
+    }
+}
+
+/// Where `index` stands in the list read from the top: its position and its parents', outermost
+/// first, so that two of them compare as the list shows their rows, whether or not either is open.
+QVector<int> positionFromTop(QModelIndex index) {
+    QVector<int> positions;
+    for (; index.isValid(); index = index.parent()) positions.prepend(index.row());
+    return positions;
 }
 
 /// The desktop's font, as it was before any theme was applied, which every size a theme gives is
@@ -324,6 +430,7 @@ void MainWindow::buildDocks() {
     // does nothing to a row whose type is not an enumeration, which is the honest answer: there
     // are no names to show.
     auto* radixMenu = new QMenu(tr("Radix"), waveRowsView);
+    openFromItsMenu(radixMenu);
     connect(radixMenu->addAction(tr("Symbolic")), &QAction::triggered, this, [this] {
         for (const int rowId : selectedWaveRows()) waveModel->setSymbolicRecursive(rowId, true);
         waveView->update();
@@ -338,6 +445,7 @@ void MainWindow::buildDocks() {
     // The palette is the theme's, so each entry carries its actual colour, which `applyTheme`
     // paints, and is numbered as `-highlight` numbers it in a signal list file.
     auto* highlightMenu = new QMenu(tr("Highlight"), waveRowsView);
+    openFromItsMenu(highlightMenu);
     for (int slot = 1; slot <= HighlightSlots; ++slot) {
         QAction* entry = highlightMenu->addAction(QString::number(slot));
         connect(entry, &QAction::triggered, this, [this, slot] { setSelectedHighlight(slot); });
@@ -538,8 +646,45 @@ void MainWindow::buildToolBar() {
     followAction->setToolTip(tr("Keep the right-hand edge at the latest simulated time"));
     connect(followAction, &QAction::toggled, waveView, &WaveformView::setFollowTail);
 
-    for (QAction* action : {runAction, runAllAction, stopAction, restartAction, zoomFitAction,
-                            zoomCursorsAction, addCursorAction}) {
+    // A value is typed as the selected row shows one and found from the active cursor. Its keys
+    // act wherever the focus is, as Tab does, rather than only in the Wave tab: the field they
+    // are pressed from is here, outside it.
+    bar->addSeparator();
+    valueFinder = new ValueFinder(*session, *waveModel, *waveView, this);
+    auto* field = new FindValueField(bar);
+    field->setObjectName(QStringLiteral("findValue"));
+    field->setPlaceholderText(tr("Find value"));
+    field->setFixedWidth(140);
+    field->setToolTip(tr("A value of the selected row, written as the row shows it: ff in a "
+                         "hexadecimal row, S_IDLE in an enumeration's, {1}{ff} in a group's; or "
+                         "a literal, as 8'hff or 'x. Enter finds the next time the row takes it, "
+                         "Shift+Enter the previous"));
+    field->find = [this](bool forward) { findValue(forward); };
+    field->giveUp = [this] {
+        valueFinder->cancel();
+        waveRowsView->setFocus(Qt::OtherFocusReason);
+    };
+    findValueEdit = field;
+    bar->addWidget(findValueEdit);
+
+    findPreviousAction = bar->addAction(tr("Find Previous"), this, [this] { findValue(false); });
+    findPreviousAction->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F3));
+    findNextAction = bar->addAction(tr("Find Next"), this, [this] { findValue(true); });
+    findNextAction->setShortcut(QKeySequence(Qt::Key_F3));
+
+    // What a search found is said where the cursor's time is, rather than in the transcript: a
+    // search is a step of the cursor, as Tab is, and a transcript of every step would bury what
+    // the design said.
+    connect(valueFinder, &ValueFinder::reported, this, [this](const QString& message) {
+        statusBar()->showMessage(message, FindReportMilliseconds);
+    });
+    connect(valueFinder, &ValueFinder::searchStarted, this,
+            [this](const QString& message) { statusBar()->showMessage(message); });
+    connect(valueFinder, &ValueFinder::searchAbandoned, statusBar(), &QStatusBar::clearMessage);
+
+    for (QAction* action :
+         {runAction, runAllAction, stopAction, restartAction, zoomFitAction, zoomCursorsAction,
+          addCursorAction, findPreviousAction, findNextAction}) {
         showKeyInToolTip(action);
     }
 }
@@ -632,6 +777,8 @@ void MainWindow::buildMenus() {
         tr("Previous Edge") + u'\t'
             + QKeySequence(Qt::SHIFT | Qt::Key_Tab).toString(QKeySequence::NativeText),
         waveView, [this] { waveView->stepActiveCursorToEdge(false); });
+    cursor->addAction(findNextAction);
+    cursor->addAction(findPreviousAction);
     scopeTo(cursor->addAction(tr("Cursor to Start"), waveView,
                               [this] { waveView->placeActiveCursor(0); }),
             waveTab)
@@ -834,7 +981,9 @@ void MainWindow::onWavesChanged() {
 
 void MainWindow::onWavesCleared() {
     // The rows stay: the user asked to watch these signals, and a restart is them asking to
-    // watch the same ones again from the beginning. Only the values are gone.
+    // watch the same ones again from the beginning. Only the values are gone, and a search
+    // among them with them.
+    valueFinder->cancel();
     note(tr("The design was restarted; the recorded waveform was discarded"));
     waveModel->refreshValues();
     objectsModel->refreshValues();
@@ -858,6 +1007,14 @@ void MainWindow::onCursorsChanged() {
     waveModel->setCursorTime(time);
     objectsModel->setCursorTime(time);
     statusCursor->setText(tr("Cursor: %1").arg(TimeAxis::format(time, session->timeScale())));
+}
+
+void MainWindow::findValue(bool forward) {
+    if (findValueEdit->text().isEmpty()) {
+        findValueEdit->setFocus(Qt::ShortcutFocusReason);
+        return;
+    }
+    valueFinder->find(findValueEdit->text(), forward);
 }
 
 void MainWindow::note(const QString& text) {
@@ -965,11 +1122,15 @@ bool MainWindow::loadSignalList(const QString& path) {
 }
 
 bool MainWindow::saveSignalList(const QString& path) {
+    // Which rows are open is part of what the window shows, and the view is what knows it.
+    QSet<int> open;
+    collectOpenRows(*waveRowsView, *waveModel, QModelIndex(), open);
+
     // Written aside and moved into place, so that a save that fails half-way leaves the list
     // that was there rather than half of the new one.
     QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly) || file.write(waveModel->writeSignalList().toUtf8()) < 0
-        || !file.commit()) {
+    if (!file.open(QIODevice::WriteOnly)
+        || file.write(waveModel->writeSignalList(open).toUtf8()) < 0 || !file.commit()) {
         note(tr("The signal list could not be written to %1: %2").arg(path, file.errorString()));
         return false;
     }
@@ -1031,9 +1192,11 @@ void MainWindow::finishLoad(const PendingLoad& load) {
     if (load.replace) waveModel->clear();
 
     // Inserted the way a paste inserts, so nothing already in the window collapses or
-    // expands. Groups are not expanded either: a list of two hundred signals opened all at
-    // once is a wall, and the groups are there to be opened one by one.
-    static_cast<void>(waveModel->insertSignalRows(resolved.rows, -1, -1));
+    // expands. Of the rows arriving, only those the list marks `-expand` open: a list of two
+    // hundred signals opened all at once is a wall, and the groups are there to be opened one
+    // by one.
+    const QVector<int> made = waveModel->insertSignalRows(resolved.rows, -1, -1);
+    openAsListed(*waveRowsView, *waveModel, resolved.rows, made);
 
     if (!load.file.isEmpty()) {
         signalListFile = load.file;
@@ -1118,7 +1281,14 @@ void MainWindow::groupSelectedWaves() {
         if (waveRowsView->isExpanded(waveModel->indexOfRow(rowId))) wereExpanded.push_back(rowId);
     }
 
-    const int group = waveModel->addGroup(name);
+    // In the place of the topmost of the rows, inside whatever holds it, because that is where
+    // the reader was looking. The topmost rather than the first clicked, because nothing holding
+    // it is among the rows collected: a group put inside one of those could not then take it in.
+    const int topmost = *std::ranges::min_element(selected, std::less<>(), [this](int rowId) {
+        return positionFromTop(waveModel->indexOfRow(rowId));
+    });
+    const int group = waveModel->addGroup(name, waveModel->row(topmost)->parent,
+                                          waveModel->indexOfRow(topmost).row());
     for (const int rowId : selected) waveModel->moveToGroup(rowId, group);
 
     // Only the group just made, so that the rows the reader was collecting are visible where

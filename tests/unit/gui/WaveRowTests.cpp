@@ -12,10 +12,12 @@
 
 #include "gui/MainWindow.h"
 #include "gui/Theme.h"
+#include "gui/ValueFinder.h"
 #include "gui/WaveformView.h"
 
 #include "SessionFixture.h"
 
+#include "support/Literals.h"
 #include "support/Workspace.h"
 
 #include <gtest/gtest.h>
@@ -24,18 +26,41 @@
 #include <QClipboard>
 #include <QDockWidget>
 #include <QHash>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QStatusBar>
 #include <QStringList>
 #include <QTableView>
 #include <QTest>
 #include <QTreeView>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <ostream>
+#include <string_view>
+#include <tuple>
 #include <vector>
+
+namespace enzan::wavedb {
+
+/// How gtest shows a search's outcome when a test of one fails.
+///
+/// gtest finds it by this name, through the namespace of the type, which neither a name of this
+/// project's style nor an anonymous namespace would let it do.
+// NOLINTNEXTLINE(readability-identifier-naming,misc-use-internal-linkage)
+void PrintTo(const SearchResult& match, std::ostream* out) {
+    switch (match.outcome) {
+    case SearchResult::Outcome::Found: *out << "found at " << match.time; break;
+    case SearchResult::Outcome::Absent: *out << "absent"; break;
+    case SearchResult::Outcome::Unfinished: *out << "unfinished at " << match.time; break;
+    }
+}
+
+} // namespace enzan::wavedb
 
 namespace {
 
@@ -58,7 +83,10 @@ protected:
         // A run behind the window, so that the rows have values to join.
         clock = infoFor(QStringLiteral("clk"));
         counter = infoFor(QStringLiteral("count"));
-        session->subscribe({clock.signalIndex, counter.signalIndex});
+        for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+            if (info.name == QStringLiteral("q")) quiet = info;
+        }
+        session->subscribe({clock.signalIndex, counter.signalIndex, quiet.signalIndex});
         session->run(400);
         pumpUntilCaughtUp(400);
     }
@@ -85,6 +113,9 @@ protected:
     std::unique_ptr<WaveformModel> model;
     SignalInfo clock;
     SignalInfo counter;
+
+    /// The child's `q`, which nothing drives: four unknown bits at every time.
+    SignalInfo quiet;
 };
 
 // ---------------------------------------------------------------------------
@@ -260,6 +291,103 @@ TEST_F(WaveRowTest, AVectorOfVectorsReadsAsNestedLists) {
 }
 
 // ---------------------------------------------------------------------------
+// Reading a value as a row shows it
+// ---------------------------------------------------------------------------
+
+TEST_F(WaveRowTest, ARowReadsAValueInTheRadixItShowsItIn) {
+    const int bus = model->addSignal(counter);
+    const std::optional<enzan::eir::BitVector> forty = enzan::eir::BitVector::parse("8'd40");
+
+    EXPECT_EQ(model->readValue(bus, QStringLiteral("28")).value, forty);
+    model->setRadix(bus, Radix::Decimal);
+    EXPECT_EQ(model->readValue(bus, QStringLiteral("40")).value, forty);
+    EXPECT_EQ(model->readValue(bus, QStringLiteral("8'h28")).value, forty) << "a literal anywhere";
+
+    // A slice reads at its own width, so a value the whole signal could hold may not fit it.
+    const int low = model->addSlice(bus, 3, 0);
+    model->setRadix(low, Radix::Hexadecimal);
+    EXPECT_EQ(model->readValue(low, QStringLiteral("f")).value,
+              enzan::eir::BitVector::parse("4'hf"));
+    EXPECT_EQ(model->readValue(low, QStringLiteral("1f")).problem,
+              QStringLiteral("'1f' does not fit in 4 bits"));
+}
+
+TEST_F(WaveRowTest, WhatEveryShapeOfRowShowsReadsBackAsWhatItHolds) {
+    // The rows `renderValue` writes differently, each typed back from what it wrote at a few
+    // times, including before the counter has moved.
+    QVector<int> shapes;
+
+    shapes.push_back(model->addSignal(counter));
+    shapes.push_back(model->addSignal(clock));
+
+    const int narrowed = model->addSignal(counter);
+    model->unpack(narrowed);
+    model->removeRow(childOf(narrowed, 4));
+    shapes.push_back(narrowed);
+
+    const int source = model->addSignal(counter);
+    model->unpack(source);
+    const int nibble = model->addGroup(QStringLiteral("nibble"));
+    for (int bit = 0; bit < 4; ++bit)
+        ASSERT_TRUE(model->moveRowsTo({childOf(source, 0)}, nibble, bit));
+    shapes.push_back(nibble);
+
+    const int mixed = model->addGroup(QStringLiteral("mixed"));
+    model->addSignal(clock, mixed);
+    model->addSignal(counter, mixed);
+    shapes.push_back(mixed);
+
+    const int outer = model->addGroup(QStringLiteral("outer"));
+    for (int half = 0; half < 2; ++half) {
+        const int inner = model->addGroup(QStringLiteral("half"), outer);
+        for (int bit = 0; bit < 2; ++bit) {
+            ASSERT_TRUE(model->moveRowsTo({childOf(source, 0)}, inner, bit));
+        }
+    }
+    shapes.push_back(outer);
+
+    SignalInfo nibbles = counter;
+    nibbles.dimensions = {{.left = 1, .right = 0}, {.left = 3, .right = 0}};
+    shapes.push_back(model->addSignal(nibbles));
+
+    for (const int rowId : shapes) {
+        for (const std::uint64_t time : {0U, 5U, 200U, 395U}) {
+            if (!model->valueAt(rowId, time).has_value()) continue;
+
+            const QString shown = model->renderValue(rowId, time);
+            const enzan::gui::ValueReading reading = model->readValue(rowId, shown);
+            ASSERT_TRUE(reading.value.has_value())
+                << model->row(rowId)->label.toStdString() << " shows " << shown.toStdString()
+                << ": " << reading.problem.toStdString();
+            EXPECT_EQ(reading.value, model->valueAt(rowId, time))
+                << model->row(rowId)->label.toStdString() << " shows " << shown.toStdString();
+        }
+    }
+}
+
+TEST_F(WaveRowTest, AListForARowOfOtherRowsNamesHowManyItHolds) {
+    const int group = model->addGroup(QStringLiteral("odds and ends"));
+    model->addSignal(clock, group);
+    model->addSignal(counter, group);
+
+    EXPECT_EQ(model->readValue(group, QStringLiteral("{1}")).problem,
+              QStringLiteral("'{1}' lists 1, and odds and ends holds 2 rows"));
+    EXPECT_EQ(model->readValue(group, QStringLiteral("{1}{1ff}")).problem,
+              QStringLiteral("'1ff' does not fit in 8 bits"))
+        << "a word is read as its own row reads it";
+
+    // A number the width of the whole group is read too.
+    EXPECT_EQ(model->readValue(group, QStringLiteral("128")).value,
+              enzan::eir::BitVector::parse("9'h128"));
+}
+
+TEST_F(WaveRowTest, ARowWithNoBitsHasNoValueToRead) {
+    const int group = model->addGroup(QStringLiteral("empty"));
+    EXPECT_EQ(model->readValue(group, QStringLiteral("0")).problem,
+              QStringLiteral("empty shows no bits to hold a value"));
+}
+
+// ---------------------------------------------------------------------------
 // Edges
 // ---------------------------------------------------------------------------
 
@@ -315,6 +443,392 @@ TEST_F(WaveRowTest, TheNearestEdgeIsFoundFromEitherSide) {
 
     EXPECT_EQ(model->nearestEdge(row, 101), 100U);
     EXPECT_EQ(model->nearestEdge(row, 104), 105U);
+}
+
+// ---------------------------------------------------------------------------
+// Finding a value
+// ---------------------------------------------------------------------------
+//
+// The counter takes each value v at 10v - 5, on the clock's rising edge, and the clock is low from
+// 0 and toggles every 5; the run stops at 400.
+
+class FindValueTest : public WaveRowTest {
+protected:
+    using Match = WaveformModel::Match;
+
+    /// Far more edges than the run has, for a search meant to finish.
+    static constexpr int Unbounded = 1 << 20;
+
+    [[nodiscard]] Match next(int rowId, enzan::runtime::SimTime from, std::string_view value,
+                             enzan::runtime::SimTime limit = 400, int budget = Unbounded) const {
+        return model->nextMatchAfter(rowId, from, enzan::test::literal(value), limit, budget);
+    }
+
+    [[nodiscard]] Match previous(int rowId, enzan::runtime::SimTime from, std::string_view value,
+                                 enzan::runtime::SimTime limit = 400,
+                                 int budget = Unbounded) const {
+        return model->previousMatchBefore(rowId, from, enzan::test::literal(value), limit, budget);
+    }
+
+    static Match found(enzan::runtime::SimTime time) {
+        return {.outcome = Match::Outcome::Found, .time = time};
+    }
+};
+
+const WaveformModel::Match Absent{};
+
+TEST_F(FindValueTest, AValueIsFoundWhereTheRowStartsToShowIt) {
+    const int count = model->addSignal(counter);
+
+    EXPECT_EQ(next(count, 0, "8'd5"), found(45));
+    EXPECT_EQ(previous(count, 400, "8'd5"), found(45));
+    EXPECT_EQ(next(count, 0, "8'd200"), Absent);
+}
+
+TEST_F(FindValueTest, FromInsideAStretchNextFindsTheNextOneAndPreviousItsStart) {
+    // The clock is high over [5, 10) and again from 15: the stretch the cursor is in is not one
+    // to find again, and its start is the one just passed.
+    const int clk = model->addSignal(clock);
+
+    EXPECT_EQ(next(clk, 7, "1'b1"), found(15));
+    EXPECT_EQ(previous(clk, 7, "1'b1"), found(5));
+
+    // From the start of a stretch, as a cursor just put there by a search is.
+    EXPECT_EQ(next(clk, 5, "1'b1"), found(15));
+    EXPECT_EQ(previous(clk, 5, "1'b1"), Absent) << "nothing before 5 starts to be high";
+    EXPECT_EQ(previous(clk, 15, "1'b1"), found(5));
+}
+
+TEST_F(FindValueTest, AValueShownFromTheStartIsFoundAtZero) {
+    const int clk = model->addSignal(clock);
+    EXPECT_EQ(previous(clk, 7, "1'b0"), found(0));
+
+    const int count = model->addSignal(counter);
+    EXPECT_EQ(previous(count, 400, "8'd0"), found(0));
+    EXPECT_EQ(next(count, 0, "8'd0"), Absent) << "a search after zero does not find zero";
+}
+
+TEST_F(FindValueTest, ASliceIsFoundWhereItsBitsChangeRatherThanWhereItsSignalDoes) {
+    // Bit 3 of the counter is set from 8 to 15, from 75, and again from 24, at 235. The counter
+    // changes eight times between, each an edge of the signal and none a start of the bit.
+    const int count = model->addSignal(counter);
+    const int bit3 = model->addSlice(count, 3, 3);
+
+    EXPECT_EQ(next(bit3, 80, "1'b1"), found(235));
+    EXPECT_EQ(previous(bit3, 230, "1'b1"), found(75));
+}
+
+TEST_F(FindValueTest, AGroupIsFoundByWhatItShows) {
+    // The clock beside the counter: high, and 40, from 395.
+    const int group = model->addGroup(QStringLiteral("mixed"));
+    model->addSignal(clock, group);
+    model->addSignal(counter, group);
+
+    EXPECT_EQ(next(group, 0, "9'h128"), found(395));
+    EXPECT_EQ(previous(group, 400, "9'h028"), Absent)
+        << "the counter is 40 only once the clock has risen";
+}
+
+TEST_F(FindValueTest, NothingAtOrPastTheLimitIsFound) {
+    const int count = model->addSignal(counter);
+
+    EXPECT_EQ(next(count, 0, "8'd40", 395), Absent);
+    EXPECT_EQ(next(count, 0, "8'd40", 396), found(395));
+
+    // A cursor past the limit searches back from it.
+    EXPECT_EQ(previous(count, 500, "8'd40", 395), Absent);
+    EXPECT_EQ(previous(count, 500, "8'd39", 395), found(385));
+}
+
+TEST_F(FindValueTest, ASearchThatRunsOutSaysHowFarItGotAndGoesOnFromThere) {
+    const int count = model->addSignal(counter);
+
+    // Four edges, 5 to 35, and none of them a 30.
+    EXPECT_EQ(next(count, 0, "8'd30", 400, 4),
+              (Match{.outcome = Match::Outcome::Unfinished, .time = 35}));
+
+    Match match = next(count, 0, "8'd30", 400, 4);
+    int searches = 1;
+    while (match.outcome == Match::Outcome::Unfinished) {
+        const enzan::runtime::SimTime from = match.time;
+        match = next(count, from, "8'd30", 400, 4);
+        ASSERT_TRUE(match.outcome != Match::Outcome::Unfinished || match.time > from);
+        ++searches;
+    }
+    EXPECT_EQ(match, found(295));
+    EXPECT_EQ(searches, 8) << "thirty edges, four at a time";
+
+    // Backwards the same: 395 down to 365, then on.
+    EXPECT_EQ(previous(count, 400, "8'd10", 400, 4),
+              (Match{.outcome = Match::Outcome::Unfinished, .time = 365}));
+    match = previous(count, 400, "8'd10", 400, 4);
+    while (match.outcome == Match::Outcome::Unfinished) {
+        const enzan::runtime::SimTime from = match.time;
+        match = previous(count, from, "8'd10", 400, 4);
+        ASSERT_TRUE(match.outcome != Match::Outcome::Unfinished || match.time < from);
+    }
+    EXPECT_EQ(match, found(95));
+}
+
+TEST_F(FindValueTest, EveryShapeOfRowIsFoundWhereItsOwnValueStartsToBeTheOneAskedFor) {
+    // A search takes a row apart into the bits of the signals it shows and asks the database
+    // where those start to hold their parts together. What it must answer is where the row's own
+    // value starts to be the one asked for, which the row says directly: its value is `valueAt`,
+    // and a value starts only where the row has an edge. So every row is held to a walk over its
+    // edges asking `valueAt` at each, for every value it shows, from either side and in steps of
+    // any size.
+    QVector<int> shapes;
+    shapes.push_back(model->addSignal(counter));
+    shapes.push_back(model->addSignal(clock));
+    shapes.push_back(model->addSlice(model->addSignal(counter), 2, 0));
+
+    // A bus with a bit taken out, joined from what is left of it.
+    const int narrowed = model->addSignal(counter);
+    model->unpack(narrowed);
+    model->removeRow(childOf(narrowed, 4));
+    shapes.push_back(narrowed);
+
+    // Two signals that change apart as often as together.
+    const int mixed = model->addGroup(QStringLiteral("clock and count"));
+    model->addSignal(clock, mixed);
+    model->addSignal(counter, mixed);
+    shapes.push_back(mixed);
+
+    // Bits of a bus regrouped in an order of the reader's own, in groups inside a group.
+    const int source = model->addSignal(counter);
+    model->unpack(source);
+    const int outer = model->addGroup(QStringLiteral("regrouped"));
+    const int first = model->addGroup(QStringLiteral("first"), outer);
+    const int second = model->addGroup(QStringLiteral("second"), outer);
+    ASSERT_TRUE(model->moveRowsTo({childOf(source, 7)}, first, 0));  // count[0]
+    ASSERT_TRUE(model->moveRowsTo({childOf(source, 1)}, first, 1));  // count[6]
+    ASSERT_TRUE(model->moveRowsTo({childOf(source, 2)}, second, 0)); // count[4]
+    ASSERT_TRUE(model->moveRowsTo({childOf(source, 1)}, second, 1)); // count[5]
+    shapes.push_back(outer);
+
+    // One signal shown twice, and a parameter beside a signal.
+    const int twice = model->addGroup(QStringLiteral("twice"));
+    model->addSignal(counter, twice);
+    model->addSlice(model->addSignal(counter, twice), 3, 0);
+    shapes.push_back(twice);
+
+    SignalInfo width;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+        if (info.name == QStringLiteral("WIDTH")) width = info;
+    }
+    ASSERT_TRUE(width.isParameter());
+    const int constant = model->addGroup(QStringLiteral("with a parameter"));
+    model->addSignal(width, constant);
+    model->addSignal(clock, constant);
+    shapes.push_back(constant);
+
+    const auto walk = [this](int rowId, enzan::runtime::SimTime from,
+                             const enzan::eir::BitVector& value, bool forward) {
+        enzan::runtime::SimTime edge =
+            forward
+                ? model->nextEdgeAfter(rowId, from)
+                : model->previousEdgeBefore(rowId, std::min<enzan::runtime::SimTime>(from, 400));
+        // NoTime, which there is past the last edge, is no time below the limit either.
+        while (edge < 400) {
+            if (model->valueAt(rowId, edge) == value) return found(edge);
+            edge = forward ? model->nextEdgeAfter(rowId, edge)
+                           : model->previousEdgeBefore(rowId, edge);
+        }
+        return Match{};
+    };
+
+    const auto settle = [this](int rowId, enzan::runtime::SimTime from,
+                               const enzan::eir::BitVector& value, bool forward, int budget) {
+        Match match;
+        do {
+            match = forward ? model->nextMatchAfter(rowId, from, value, 400, budget)
+                            : model->previousMatchBefore(rowId, from, value, 400, budget);
+            from = match.time;
+        } while (match.outcome == Match::Outcome::Unfinished);
+        return match;
+    };
+
+    for (const int rowId : shapes) {
+        // The values the row shows, a few of them, at its edges.
+        std::vector<enzan::eir::BitVector> values;
+        for (enzan::runtime::SimTime edge = 0; edge < 400 && values.size() < 6;
+             edge = model->nextEdgeAfter(rowId, edge)) {
+            const std::optional<enzan::eir::BitVector> value = model->valueAt(rowId, edge);
+            if (value.has_value() && std::ranges::find(values, *value) == values.end())
+                values.push_back(*value);
+            if (edge == enzan::runtime::NoTime) break;
+        }
+        ASSERT_FALSE(values.empty()) << model->row(rowId)->label.toStdString();
+
+        for (const enzan::eir::BitVector& value : values) {
+            for (const enzan::runtime::SimTime from : {0U, 7U, 45U, 200U, 399U, 500U}) {
+                for (const bool forward : {true, false}) {
+                    const Match expected = walk(rowId, from, value, forward);
+                    for (const int budget : {1, 3, Unbounded}) {
+                        EXPECT_EQ(settle(rowId, from, value, forward, budget), expected)
+                            << model->row(rowId)->label.toStdString() << " for "
+                            << enzan::eir::toString(value.ref(), Radix::Binary)
+                            << (forward ? " after " : " before ") << from << ", budget " << budget;
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(FindValueTest, WhatARowShowsIsFoundWhereItStartsToShowItPartlyUnknownDigitsAndAll) {
+    // Whatever a row shows can be typed back, and a search for it finds where the row starts to
+    // show it. A digit the column writes in capitals is partly unknown, which no one value of its
+    // bits is, and here such digits cover bits of several signals at once: the quiet `q`, which is
+    // unknown, beside the clock and the counter, which are not. So each row is held to a walk over
+    // every time comparing what it shows there with the text.
+    const int counted = model->addSignal(counter);
+    model->unpack(counted); // count[7] first
+    const int quieted = model->addSignal(quiet);
+    model->unpack(quieted); // q[3] first
+    ASSERT_TRUE(model->valueAt(childOf(quieted, 0), 0).has_value())
+        << "q is recorded from the start";
+
+    // The counter's high nibble as one digit, and q[3] with the clock and count[1:0] as another.
+    QVector<int> shapes;
+    const int nibbles = model->addGroup(QStringLiteral("nibbles"));
+    for (int bit = 0; bit < 4; ++bit)
+        ASSERT_TRUE(model->moveRowsTo({childOf(counted, 0)}, nibbles, bit));
+    ASSERT_TRUE(model->moveRowsTo({childOf(quieted, 0)}, nibbles, 4));
+    model->addSignal(clock, nibbles);
+    ASSERT_TRUE(model->moveRowsTo({childOf(counted, 2)}, nibbles, 6)); // count[1]
+    ASSERT_TRUE(model->moveRowsTo({childOf(counted, 2)}, nibbles, 7)); // count[0]
+    shapes.push_back(nibbles);
+
+    // In decimal, which writes one digit for the whole of a partly unknown value.
+    const int decimal = model->addGroup(QStringLiteral("decimal"));
+    ASSERT_TRUE(model->moveRowsTo({childOf(quieted, 0)}, decimal, 0)); // q[2]
+    model->addSignal(clock, decimal);
+    model->setRadix(decimal, Radix::Decimal);
+    shapes.push_back(decimal);
+
+    // A list beside it, whose digits are wholly unknown or not at all.
+    const int listed = model->addGroup(QStringLiteral("listed"));
+    model->addSignal(quiet, listed);
+    model->addSignal(counter, listed);
+    shapes.push_back(listed);
+
+    for (const int rowId : shapes) {
+        std::vector<QString> shown(400);
+        for (enzan::runtime::SimTime time = 0; time < 400; ++time) {
+            if (model->valueAt(rowId, time).has_value())
+                shown[time] = model->renderValue(rowId, time);
+        }
+
+        std::vector<QString> texts;
+        for (enzan::runtime::SimTime time = 0; time < 400 && texts.size() < 5; time += 37) {
+            if (!shown[time].isEmpty() && std::ranges::find(texts, shown[time]) == texts.end())
+                texts.push_back(shown[time]);
+        }
+        ASSERT_FALSE(texts.empty()) << model->row(rowId)->label.toStdString();
+        const std::string label = model->row(rowId)->label.toStdString();
+        if (rowId != listed) {
+            EXPECT_TRUE(
+                std::ranges::any_of(texts, [](const QString& text) { return text.contains(u'X'); }))
+                << label << " shows a partly unknown digit";
+        }
+
+        for (const QString& text : texts) {
+            const enzan::gui::ValueReading reading = model->readValue(rowId, text);
+            ASSERT_TRUE(reading.value.has_value())
+                << label << ": " << reading.problem.toStdString();
+            // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — checked by the assertion above
+            const enzan::eir::BitVector& sought = *reading.value;
+
+            const auto walk = [&](enzan::runtime::SimTime from, bool forward) {
+                Match first;
+                for (enzan::runtime::SimTime time = 0; time < 400; ++time) {
+                    if (forward ? time <= from : time >= from) continue;
+                    if (shown[time] == text && (time == 0 || shown[time - 1] != text)) {
+                        first = found(time);
+                        if (forward) break;
+                    }
+                }
+                return first;
+            };
+
+            for (const enzan::runtime::SimTime from : {0U, 7U, 156U, 399U, 500U}) {
+                for (const bool forward : {true, false}) {
+                    const Match expected = walk(from, forward);
+                    for (const int budget : {1, 3, Unbounded}) {
+                        Match match;
+                        enzan::runtime::SimTime at = from;
+                        do {
+                            match = forward ? model->nextMatchAfter(rowId, at, sought, 400, budget,
+                                                                    reading.partial)
+                                            : model->previousMatchBefore(rowId, at, sought, 400,
+                                                                         budget, reading.partial);
+                            at = match.time;
+                        } while (match.outcome == Match::Outcome::Unfinished);
+                        EXPECT_EQ(match, expected)
+                            << label << " for " << text.toStdString()
+                            << (forward ? " after " : " before ") << from << ", budget " << budget;
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(FindValueTest, ADigitAcrossAParameterAndASignalCountsTheBitsOfBoth) {
+    // WIDTH, 4, beside q[1:0]: the lowest hexadecimal digit of the whole is WIDTH's two low bits,
+    // both 0, and q's two unknown ones, so it is partly unknown and never wholly.
+    SignalInfo width;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+        if (info.name == QStringLiteral("WIDTH")) width = info;
+    }
+    ASSERT_TRUE(width.isParameter());
+    const int group = model->addGroup(QStringLiteral("beside a parameter"));
+    model->addSignal(width, group);
+    const int whole = model->addSignal(quiet, group);
+    model->addSlice(whole, 1, 0);
+    model->removeRow(whole);
+    ASSERT_EQ(model->displayedWidth(group), 34U);
+
+    const auto search = [&](const QString& text) {
+        const enzan::gui::ValueReading reading = model->readValue(group, text);
+        EXPECT_TRUE(reading.value.has_value()) << reading.problem.toStdString();
+        return model->previousMatchBefore(group, 400, *reading.value, 400, Unbounded,
+                                          reading.partial);
+    };
+    EXPECT_EQ(search(QStringLiteral("00000001X")), found(0));
+    EXPECT_EQ(search(QStringLiteral("00000001x")), Absent) << "WIDTH's bits are known";
+    EXPECT_EQ(search(QStringLiteral("00000002X")), Absent) << "WIDTH is 4, not 8";
+}
+
+TEST_F(FindValueTest, AValueARowCanNeverShowIsFoundNowhere) {
+    // A signal shown twice cannot show two values at once, and a parameter shows only its own.
+    const int twice = model->addGroup(QStringLiteral("twice"));
+    model->addSignal(counter, twice);
+    model->addSignal(counter, twice);
+    EXPECT_EQ(next(twice, 0, "16'h0505"), found(45));
+    EXPECT_EQ(next(twice, 0, "16'h0506"), Absent);
+
+    SignalInfo width;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+        if (info.name == QStringLiteral("WIDTH")) width = info;
+    }
+    const int constant = model->addGroup(QStringLiteral("with a parameter"));
+    model->addSignal(width, constant);
+    model->addSignal(counter, constant);
+    EXPECT_EQ(next(constant, 0, "40'h00000004_05"), found(45));
+    EXPECT_EQ(next(constant, 0, "40'h00000005_05"), Absent);
+
+    EXPECT_EQ(next(model->addGroup(QStringLiteral("empty")), 0, "1'b0"), Absent);
+    EXPECT_EQ(next(twice, 0, "8'h05"), Absent) << "a value of another width";
+}
+
+TEST_F(FindValueTest, ARemovedRowHasNothingToFind) {
+    const int count = model->addSignal(counter);
+    model->removeRow(count);
+
+    EXPECT_EQ(next(count, 0, "8'd5"), Absent);
+    EXPECT_EQ(previous(count, 400, "8'd5"), Absent);
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +901,27 @@ TEST_F(WaveRowTest, MovingARowDoesNotResetTheModel) {
 
     EXPECT_EQ(resets, 0);
     EXPECT_EQ(model->row(first)->parent, group);
+}
+
+TEST_F(WaveRowTest, AGroupIsAddedWhereItIsAskedFor) {
+    const int outer = model->addGroup(QStringLiteral("outer"));
+    const int first = model->addSignal(clock, outer);
+    const int second = model->addSignal(counter, outer);
+
+    // The view is told the same position the list takes, or it would draw the group beside the
+    // wrong row until something made it ask again.
+    int announced = -1;
+    QObject::connect(model.get(), &QAbstractItemModel::rowsInserted,
+                     [&announced](const QModelIndex& /*parent*/, int firstRow, int /*last*/) {
+                         announced = firstRow;
+                     });
+    const int between = model->addGroup(QStringLiteral("between"), outer, 1);
+    EXPECT_EQ(announced, 1);
+
+    const int last = model->addGroup(QStringLiteral("last"), outer);
+    const int past = model->addGroup(QStringLiteral("past the end"), outer, 99);
+
+    EXPECT_EQ(model->row(outer)->children, (QVector<int>{first, between, second, last, past}));
 }
 
 // ---------------------------------------------------------------------------
@@ -612,6 +1147,19 @@ TEST_F(SourceArrayTest, EachCounterReadsAsItsElementsHoweverItIsDeclared) {
     EXPECT_EQ(model->renderValue(packed, 10), QStringLiteral("{04}{ff}{02}{01}"));
     EXPECT_EQ(model->renderValue(unpacked, 10), QStringLiteral("{04}{ff}{02}{01}"));
     EXPECT_EQ(model->renderValue(bits, 10), QStringLiteral("{04}{01}{02}{01}"));
+}
+
+TEST_F(SourceArrayTest, EachCounterReadsBackTheListItShows) {
+    for (const QString& name : {QStringLiteral("count_rec"), QStringLiteral("count_rec0"),
+                                QStringLiteral("count_rec1")}) {
+        const int row = model->addSignal(signals.value(name));
+        for (const std::uint64_t time : {5U, 10U}) {
+            const enzan::gui::ValueReading reading =
+                model->readValue(row, model->renderValue(row, time));
+            ASSERT_TRUE(reading.value.has_value()) << name.toStdString();
+            EXPECT_EQ(reading.value, model->valueAt(row, time)) << name.toStdString();
+        }
+    }
 }
 
 TEST_F(SourceArrayTest, EachCounterUnpacksIntoItsElementsAndThenItsBits) {
@@ -1043,6 +1591,140 @@ TEST_F(WaveWindowTest, TheEditMenuIsTheWaveListsMenu) {
     }
     ASSERT_NE(edit, nullptr);
     EXPECT_EQ(edit->actions(), waveRows->actions());
+}
+
+// ---------------------------------------------------------------------------
+// Finding a value from the toolbar
+// ---------------------------------------------------------------------------
+
+class FindFieldTest : public WaveWindowTest {
+protected:
+    void SetUp() override {
+        WaveWindowTest::SetUp();
+
+        // The counter in the window, with a run behind it: it takes each value v at 10v - 5.
+        addToWave(QStringLiteral("count"));
+        ASSERT_EQ(waveModel->rowCount(), 1);
+        session->run(400);
+        ASSERT_TRUE(pumpUntilCaughtUp(400));
+        waveRows->setCurrentIndex(waveModel->index(0, 0));
+
+        canvas = window->findChild<enzan::gui::WaveformView*>();
+        field = window->findChild<QLineEdit*>(QStringLiteral("findValue"));
+        ASSERT_NE(canvas, nullptr);
+        ASSERT_NE(field, nullptr);
+        canvas->setCursorTime(0, 0);
+
+        window->activateWindow();
+        ASSERT_TRUE(QTest::qWaitForWindowActive(window.get()));
+    }
+
+    /// Presses and releases `key` on `widget`, and lets go of the modifiers afterwards.
+    ///
+    /// A key with a modifier leaves the modifier held in the application's state, whether QTest
+    /// sends it or a test does, since nothing sends the modifier's own release as a keyboard
+    /// would. Every selection the process made afterwards would then extend a range rather than
+    /// select a row, so the release is sent here.
+    ///
+    /// A press and a release rather than `keyClick`, which is the two of them guarded by a
+    /// `QPointer` in case the press destroys the widget. Nothing here does, and clang-tidy's
+    /// analyzer reads the guard's destructor as a use of memory already freed.
+    static void press(QWidget* widget, Qt::Key key,
+                      Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QTest::keyPress(widget, key, modifiers);
+        QTest::keyRelease(widget, key, modifiers);
+        if (modifiers.testFlag(Qt::ShiftModifier)) QTest::keyRelease(widget, Qt::Key_Shift);
+    }
+
+    enzan::gui::WaveformView* canvas = nullptr;
+    QLineEdit* field = nullptr;
+};
+
+TEST_F(FindFieldTest, F3FindsTheTypedValueWhereverTheFocusIs) {
+    field->setText(QStringLiteral("05"));
+
+    // From the signal list, where a key without a modifier is the list's own: F3 types nothing.
+    waveRows->setFocus();
+    press(waveRows, Qt::Key_F3);
+    EXPECT_EQ(canvas->activeCursorTime(), 45U);
+    EXPECT_TRUE(window->statusBar()->currentMessage().startsWith(QStringLiteral("count shows 05")))
+        << window->statusBar()->currentMessage().toStdString();
+
+    canvas->setCursorTime(0, 100);
+    objects->setFocus();
+    press(objects, Qt::Key_F3, Qt::ShiftModifier);
+    EXPECT_EQ(canvas->activeCursorTime(), 45U);
+}
+
+TEST_F(FindFieldTest, EnterInTheFieldFindsTheNextAndShiftEnterThePrevious) {
+    field->setFocus();
+    QTest::keyClicks(field, QStringLiteral("05"));
+
+    press(field, Qt::Key_Return);
+    EXPECT_EQ(canvas->activeCursorTime(), 45U);
+    EXPECT_TRUE(field->hasFocus()) << "finding again is another Enter away";
+
+    canvas->setCursorTime(0, 100);
+    press(field, Qt::Key_Return, Qt::ShiftModifier);
+    EXPECT_EQ(canvas->activeCursorTime(), 45U);
+}
+
+TEST_F(FindFieldTest, F3WithNothingTypedGoesToTheField) {
+    waveRows->setFocus();
+    press(waveRows, Qt::Key_F3);
+
+    EXPECT_TRUE(field->hasFocus());
+    EXPECT_EQ(canvas->activeCursorTime(), 0U);
+}
+
+TEST_F(FindFieldTest, EscapeInTheFieldGoesBackToTheWaves) {
+    field->setFocus();
+    press(field, Qt::Key_Escape);
+    EXPECT_TRUE(waveRows->hasFocus());
+}
+
+TEST_F(FindFieldTest, WhatCannotBeFoundIsSaidInTheStatusBar) {
+    field->setText(QStringLiteral("1ff"));
+    waveRows->setFocus();
+    press(waveRows, Qt::Key_F3);
+
+    EXPECT_EQ(canvas->activeCursorTime(), 0U);
+    EXPECT_EQ(window->statusBar()->currentMessage(),
+              QStringLiteral("'1ff' does not fit in 8 bits"));
+}
+
+TEST_F(FindFieldTest, ARestartAbandonsASearchStillRunning) {
+    // The values it was searching are gone, and going on through what replaces them would answer
+    // for a run that no longer exists.
+    auto* finder = window->findChild<enzan::gui::ValueFinder*>();
+    ASSERT_NE(finder, nullptr);
+    finder->setSlice(1, std::chrono::milliseconds(0));
+
+    field->setText(QStringLiteral("27"));
+    waveRows->setFocus();
+    press(waveRows, Qt::Key_F3);
+    ASSERT_TRUE(finder->searching());
+    EXPECT_TRUE(window->statusBar()->currentMessage().startsWith(QStringLiteral("Searching")))
+        << window->statusBar()->currentMessage().toStdString();
+
+    Q_EMIT session->wavesCleared();
+    EXPECT_FALSE(finder->searching());
+    EXPECT_TRUE(window->statusBar()->currentMessage().isEmpty())
+        << window->statusBar()->currentMessage().toStdString();
+    EXPECT_EQ(canvas->activeCursorTime(), 0U);
+}
+
+TEST_F(FindFieldTest, TheCursorMenuOffersFindingWithItsKeys) {
+    const QMenu* cursor = nullptr;
+    for (const QAction* entry : window->menuBar()->actions()) {
+        if (entry->text() == QStringLiteral("&Cursor")) cursor = entry->menu();
+    }
+    ASSERT_NE(cursor, nullptr);
+
+    QHash<QString, QKeySequence> keys;
+    for (const QAction* action : cursor->actions()) keys.insert(action->text(), action->shortcut());
+    EXPECT_EQ(keys.value(QStringLiteral("Find Next")), QKeySequence(Qt::Key_F3));
+    EXPECT_EQ(keys.value(QStringLiteral("Find Previous")), QKeySequence(Qt::SHIFT | Qt::Key_F3));
 }
 
 } // namespace

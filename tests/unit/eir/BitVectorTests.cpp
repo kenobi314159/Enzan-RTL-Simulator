@@ -248,6 +248,36 @@ TEST(BitVectorParse, UnknownDigitsExpandToTheWholeDigit) {
     EXPECT_EQ(binary(literal("8'hzF").ref()), "zzzz1111");
 }
 
+TEST(BitVectorParse, ALeadingUnknownDigitPadsWithItsValue) {
+    // IEEE 1800 section 5.7.1: digits short of the width pad with zeros, unless the leftmost
+    // is an x or a z, which pads with x or z.
+    EXPECT_EQ(binary(literal("8'hx").ref()), "xxxxxxxx");
+    EXPECT_EQ(binary(literal("8'hz").ref()), "zzzzzzzz");
+    EXPECT_EQ(binary(literal("8'b?1").ref()), "zzzzzzz1");
+    EXPECT_EQ(binary(literal("10'ox5").ref()), "xxxxxxx101");
+    EXPECT_TRUE(literal("'hx").ref().isAll(Logic::Unknown)) << "unsized, 32 bits of x";
+
+    // Only the leftmost digit decides: an unknown digit further right pads with zeros.
+    EXPECT_EQ(binary(literal("8'h1x").ref()), "0001xxxx");
+    EXPECT_EQ(binary(literal("8'b1z").ref()), "0000001z");
+}
+
+TEST(BitVectorParse, ALiteralWiderThanAnyValueIsRefusedRatherThanMade) {
+    // A width is made whole before a digit is read, and a typo in a Force dialog or a `force`
+    // can state billions of bits: a gigabyte allocated, or, near 2^32, a count of words that
+    // overflows. Past the widest value SystemVerilog makes, a literal is refused.
+    EXPECT_FALSE(BitVector::parse("4294967295'd1").has_value());
+    EXPECT_FALSE(BitVector::parse("4000000000'h0").has_value());
+    EXPECT_FALSE(BitVector::parse("16777216'b1").has_value());
+
+    const std::optional<BitVector> widest = BitVector::parse("16777215'h1");
+    ASSERT_TRUE(widest.has_value());
+    // NOLINTBEGIN(bugprone-unchecked-optional-access)
+    EXPECT_EQ(widest->width(), enzan::eir::MaxLiteralWidth);
+    EXPECT_EQ(widest->get(0), Logic::One);
+    // NOLINTEND(bugprone-unchecked-optional-access)
+}
+
 TEST(BitVectorParse, UnderscoresAreSeparators) {
     EXPECT_EQ(binary(literal("8'b1010_0101").ref()), "10100101");
     EXPECT_EQ(literal("16'd1_000").ref().toUInt64(), 1000U);

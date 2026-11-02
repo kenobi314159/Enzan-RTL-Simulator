@@ -6,9 +6,12 @@
 #include "eir/BitVector.h"
 #include "gui/KernelSession.h"
 #include "gui/Theme.h"
+#include "gui/ValueText.h"
 #include "runtime/Time.h"
+#include "wavedb/WaveformDatabase.h"
 
 #include <QAbstractItemModel>
+#include <QSet>
 #include <QString>
 #include <QVector>
 
@@ -16,6 +19,7 @@ class QDataStream;
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -166,6 +170,10 @@ public:
     struct PendingRow {
         WaveRow row;
         std::vector<PendingRow> children;
+
+        /// Shown open once it is in the window, which only a signal list says: what is open is
+        /// the view's to know, and `insertSignalRows` leaves it to the view.
+        bool open = false;
     };
 
     // --- making rows ------------------------------------------------------
@@ -216,8 +224,9 @@ public:
     /// all hand this the same kind of thing.
     int addSignal(const SignalInfo& info, int parentGroup = -1);
 
-    /// Adds an empty group. Returns its row number.
-    int addGroup(const QString& name, int parentGroup = -1);
+    /// Adds an empty group inside `parentGroup` at `position`, or at the end when `position` is
+    /// negative. Returns its row number.
+    int addGroup(const QString& name, int parentGroup = -1, int position = -1);
 
     /// Adds a row showing bits `[high:low]` of a signal already displayed by `rowId`.
     ///
@@ -302,11 +311,15 @@ public:
     QVector<int> insertSignalRows(const std::vector<PendingRow>& pending, int targetGroup,
                                   int position);
 
-    /// The whole list as a signal list file, top to bottom.
+    /// The whole list as a signal list file, top to bottom, with `openRows` the rows the view
+    /// shows open.
+    ///
+    /// Which rows are open is the view's to know, so it is passed in rather than kept here
+    /// beside it, where it could come to disagree with what the window shows.
     ///
     /// Deterministic: the same rows always give the same text, so that a list kept in version
     /// control changes only when the list does.
-    [[nodiscard]] QString writeSignalList() const;
+    [[nodiscard]] QString writeSignalList(const QSet<int>& openRows) const;
 
     // --- reading -----------------------------------------------------------
 
@@ -317,6 +330,9 @@ public:
 
     /// A model index for `rowId`, or an invalid index.
     [[nodiscard]] QModelIndex indexOfRow(int rowId) const;
+
+    /// True when `candidate` is `rowId` or lies below it. False for -1, which is no row.
+    [[nodiscard]] bool isDescendantOf(int candidate, int rowId) const;
 
     /// Every signal displayed anywhere, without duplicates, in row order.
     [[nodiscard]] QVector<std::uint32_t> displayedSignals() const;
@@ -334,6 +350,15 @@ public:
     /// as the list of its elements.
     [[nodiscard]] QString renderValue(int rowId, runtime::SimTime time) const;
 
+    /// Reads `text` as a value of what the row shows, as `renderValue` writes one, so that what a
+    /// row shows can be typed back and means what it showed.
+    ///
+    /// A name of the row's enumeration is the value it names, and wins over a number spelt the
+    /// same, as the name is what the row shows. A row shown as the list of its children, or of
+    /// its elements, reads such a list, each word as that child or element reads it. Anything
+    /// else is a number in the row's radix, at the width the row shows (`readNumber`).
+    [[nodiscard]] ValueReading readValue(int rowId, QStringView text) const;
+
     /// The next time after `time` at which anything the row shows changes, or `NoTime`.
     ///
     /// Defined for every row, not only for one backed by a signal: a group shows a value on
@@ -346,6 +371,36 @@ public:
 
     /// The row's edge closest to `time`, or `NoTime` when it has none.
     [[nodiscard]] runtime::SimTime nearestEdge(int rowId, runtime::SimTime time) const;
+
+    /// How far a search for a value got: where the row starts to show it, that it does nowhere
+    /// the search could look, or where a search that ran out of budget stopped.
+    using Match = wavedb::SearchResult;
+
+    /// The first time after `time`, and before `limit`, at which the row starts to show `value`:
+    /// shows it, and an instant earlier did not. A row already showing it is found where it next
+    /// comes back to it.
+    ///
+    /// No index says when a row holds a value, so a search is a scan of about `budget` changes,
+    /// which the database makes where the values lie: the row is taken apart into the bits of
+    /// signals it shows (`termsFor`), and those signals' changes are compared with the bits asked
+    /// of them in time order. A search that runs out says how far it got rather than answering with
+    /// an edge it never checked, as `nextEdgeAfter` may: there a cursor on an edge is still on an
+    /// edge, and here it would be on a value that is not the one asked for.
+    ///
+    /// The bits of `value` under one of `partial` are asked to be as that digit says rather than
+    /// to be what `value` holds there, as `readValue` reads a digit written `X` or `Z`.
+    [[nodiscard]] Match nextMatchAfter(int rowId, runtime::SimTime time,
+                                       const eir::BitVector& value, runtime::SimTime limit,
+                                       int budget,
+                                       std::span<const PartialDigit> partial = {}) const;
+
+    /// The last time before `time`, and before `limit`, at which the row starts to show `value`,
+    /// searched for as `nextMatchAfter` searches. A row showing it at `time` is found where it
+    /// started to.
+    [[nodiscard]] Match previousMatchBefore(int rowId, runtime::SimTime time,
+                                            const eir::BitVector& value, runtime::SimTime limit,
+                                            int budget,
+                                            std::span<const PartialDigit> partial = {}) const;
 
     /// Narrows a whole-signal value to the row's bit range. Returns it unchanged when the row
     /// shows the whole signal.
@@ -395,9 +450,6 @@ private:
     /// Marks a row and its descendants dead and takes them out of the tree.
     void killSubtree(int rowId);
 
-    /// True when `candidate` is `rowId` or lies below it.
-    [[nodiscard]] bool isDescendantOf(int candidate, int rowId) const;
-
     /// The value a row's children make between them, or nothing when they cannot make one.
     [[nodiscard]] std::optional<eir::BitVector> combinedValueAt(int rowId,
                                                                 runtime::SimTime time) const;
@@ -408,6 +460,45 @@ private:
 
     /// True when the row's value at `time` differs from its value an instant earlier.
     [[nodiscard]] bool isEdgeAt(int rowId, runtime::SimTime time) const;
+
+    /// The record of the signal a row's value is bits of, or nothing for a row whose value is
+    /// joined from other rows, or has no trace.
+    [[nodiscard]] std::optional<std::uint32_t> ownRecordOf(int rowId) const;
+
+    /// One piece of what a row shows: a range of bits of a recorded signal, or a parameter's
+    /// value.
+    struct ValuePart {
+        std::uint32_t record = 0;
+        std::uint32_t highBit = 0;
+        std::uint32_t lowBit = 0;
+
+        /// Set for a parameter, which is the same at every time.
+        std::optional<eir::BitVector> constant;
+
+        [[nodiscard]] std::uint32_t width() const {
+            return constant.has_value() ? constant->width() : highBit - lowBit + 1;
+        }
+    };
+
+    /// Appends the pieces the row's value is joined from, the most significant first, as
+    /// `valueAt` joins them. False when the row has no value at any time: an empty group, or a
+    /// signal nobody recorded, in it or below it.
+    [[nodiscard]] bool partsOf(int rowId, std::vector<ValuePart>& parts) const;
+
+    /// What a search asks of the database: of each signal, the bits it must hold, and of the
+    /// digits written `X` or `Z`, the bits they cover.
+    struct SearchTerms {
+        std::vector<wavedb::SearchTerm> terms;
+        std::vector<wavedb::DigitTerm> digits;
+    };
+
+    /// What the database is asked for when the row is searched for `value`: of each signal the row
+    /// shows bits of, that those bits hold their part of it, and of each of `partial`, that the
+    /// bits it covers, of signals and of parameters alike, show as it says. Nothing when the row
+    /// can never show the value: one of another width, or one a parameter in it contradicts, or
+    /// one asking a bit shown twice to hold two things at once.
+    [[nodiscard]] std::optional<SearchTerms> termsFor(int rowId, const eir::BitVector& value,
+                                                      std::span<const PartialDigit> partial) const;
 
     /// The next or previous time at which *something* in the row changes, without checking
     /// whether what the row displays changed with it.
@@ -442,11 +533,15 @@ private:
     int materialise(const PendingRow& pending, int parentRow, int position);
 
     /// Writes `rowId` and everything below it as signal list commands, indented by `depth`.
-    void writeSignalListRow(QString& text, int rowId, int depth) const;
+    void writeSignalListRow(QString& text, int rowId, int depth, const QSet<int>& openRows) const;
 
-    /// True when a row's children are what unpacking it would make now, so that `-expand`
-    /// describes them.
-    [[nodiscard]] bool childrenAreAsUnpacked(int rowId) const;
+    /// True when a row's children are what unpacking it would make now, each of them written
+    /// as a packed signal, so that no `-contents` is needed to describe them.
+    [[nodiscard]] bool childrenAreAsUnpacked(int rowId, const QSet<int>& openRows) const;
+
+    /// True when a row is written as no more than its path: packed, or closed over what
+    /// unpacking makes, which shows what a packed row shows and opens into the same rows.
+    [[nodiscard]] bool writtenAsPacked(int rowId, const QSet<int>& openRows) const;
 
     const KernelSession* kernelSession;
     const Theme* theme;

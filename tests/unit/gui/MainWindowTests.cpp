@@ -36,12 +36,14 @@
 #include <QFontMetrics>
 #include <QImage>
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPalette>
 #include <QPlainTextEdit>
+#include <QPoint>
 #include <QPushButton>
 #include <QSize>
 #include <QString>
@@ -50,7 +52,9 @@
 #include <QTest>
 #include <QTextBlock>
 #include <QTextBrowser>
+#include <QTimer>
 #include <QTreeView>
+#include <QWindow>
 
 #include <algorithm>
 #include <atomic>
@@ -70,9 +74,15 @@ using enzan::gui::WaveformModel;
 using enzan::gui::WaveRow;
 using enzan::ipc::SimulationState;
 
-/// The two scopes `guiTestDesign` elaborates to, outermost first.
-const QString Top = QStringLiteral("/tb");
-const QString Child = QStringLiteral("/tb/u_dut");
+/// The two scopes `guiTestDesign` elaborates to, outermost first. Functions rather than constants,
+/// whose construction before `main` could throw where nothing could catch it.
+QString topScope() {
+    return QStringLiteral("/tb");
+}
+
+QString childScope() {
+    return QStringLiteral("/tb/u_dut");
+}
 
 class MainWindowTest : public enzan::test::SessionFixture {
 protected:
@@ -105,7 +115,7 @@ protected:
     /// The Structure window's tree, through the dock that names itself: the window has two tree
     /// views and only the docks are distinguishable.
     [[nodiscard]] QTreeView* structure() const {
-        for (QDockWidget* dock : window->findChildren<QDockWidget*>()) {
+        for (const QDockWidget* dock : window->findChildren<QDockWidget*>()) {
             if (dock->objectName() == QStringLiteral("structure")) {
                 return qobject_cast<QTreeView*>(dock->widget());
             }
@@ -215,10 +225,10 @@ protected:
 // ---------------------------------------------------------------------------
 
 TEST_F(MainWindowTest, AGroupedInsertNamesTheGroupAfterTheScopesPath) {
-    const QVector<std::uint32_t> expected = signalsOf(Top);
+    const QVector<std::uint32_t> expected = signalsOf(topScope());
     ASSERT_FALSE(expected.isEmpty());
 
-    insert(Top, QStringLiteral("Add to Wave"));
+    insert(topScope(), QStringLiteral("Add to Wave"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
@@ -230,15 +240,15 @@ TEST_F(MainWindowTest, AGroupedInsertNamesTheGroupAfterTheScopesPath) {
 
     // The path, not the leaf name: two instances of one module would otherwise give two groups
     // called the same thing, which is the case grouping exists to tell apart.
-    EXPECT_EQ(group->label, Top);
+    EXPECT_EQ(group->label, topScope());
     EXPECT_EQ(signalsUnder(rows.front()), expected);
 }
 
 TEST_F(MainWindowTest, AGroupedRecursiveInsertNestsTheGroupsAsTheDesignIs) {
-    QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
+    QVector<std::uint32_t> expected = signalsOf(topScope()) + signalsOf(childScope());
     std::ranges::sort(expected);
 
-    insert(Top, QStringLiteral("Add to Wave Recursive"));
+    insert(topScope(), QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     const QVector<int> rows = topRows();
@@ -247,7 +257,7 @@ TEST_F(MainWindowTest, AGroupedRecursiveInsertNestsTheGroupsAsTheDesignIs) {
     const WaveRow* top = waves()->row(rows.front());
     ASSERT_NE(top, nullptr);
     EXPECT_EQ(top->kind, WaveRow::Kind::Group);
-    EXPECT_EQ(top->label, Top);
+    EXPECT_EQ(top->label, topScope());
     ASSERT_EQ(top->children.size(), 2) << "the scope's own signals, then its instance";
 
     // In the order the Structure window shows them, which is the order the tree arrived in —
@@ -262,8 +272,8 @@ TEST_F(MainWindowTest, AGroupedRecursiveInsertNestsTheGroupsAsTheDesignIs) {
     EXPECT_EQ(child->kind, WaveRow::Kind::Group);
     EXPECT_EQ(child->label, QStringLiteral("u_dut"));
 
-    EXPECT_EQ(signalsUnder(top->children[0]), signalsOf(Top));
-    EXPECT_EQ(signalsUnder(top->children[1]), signalsOf(Child));
+    EXPECT_EQ(signalsUnder(top->children[0]), signalsOf(topScope()));
+    EXPECT_EQ(signalsUnder(top->children[1]), signalsOf(childScope()));
 }
 
 // ---------------------------------------------------------------------------
@@ -277,15 +287,15 @@ TEST_F(MainWindowTest, AnInsertLeavesTheObjectsWindowOnTheScopeTheReaderClicked)
     // looking at a module they never chose.
     QTreeView* tree = structure();
     ASSERT_NE(tree, nullptr);
-    tree->setCurrentIndex(design()->indexOfPath(Top));
-    Q_EMIT tree->clicked(design()->indexOfPath(Top));
-    ASSERT_TRUE(pumpUntil([this] { return objects()->scope() == Top; }));
+    tree->setCurrentIndex(design()->indexOfPath(topScope()));
+    Q_EMIT tree->clicked(design()->indexOfPath(topScope()));
+    ASSERT_TRUE(pumpUntil([this] { return objects()->scope() == topScope(); }));
 
-    const QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
-    insert(Top, QStringLiteral("Add to Wave Recursive"));
+    const QVector<std::uint32_t> expected = signalsOf(topScope()) + signalsOf(childScope());
+    insert(topScope(), QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
-    EXPECT_EQ(objects()->scope(), Top);
+    EXPECT_EQ(objects()->scope(), topScope());
 }
 
 TEST_F(MainWindowTest, NoGroupIsLeftEmpty) {
@@ -294,10 +304,10 @@ TEST_F(MainWindowTest, NoGroupIsLeftEmpty) {
     // Both of the fixture's scopes declare signals, so what this pins is the other half of that
     // rule: a group that *was* filled must survive. An over-eager removal — checking before the
     // reply arrived, say — would take every group with it.
-    QVector<std::uint32_t> expected = signalsOf(Top) + signalsOf(Child);
+    QVector<std::uint32_t> expected = signalsOf(topScope()) + signalsOf(childScope());
     std::ranges::sort(expected);
 
-    insert(Top, QStringLiteral("Add to Wave Recursive"));
+    insert(topScope(), QStringLiteral("Add to Wave Recursive"));
     ASSERT_TRUE(waitForSignals(static_cast<int>(expected.size())));
 
     QVector<int> rows = topRows();
@@ -333,8 +343,9 @@ TEST_F(MainWindowTest, StopEndsARunTheWindowStarted) {
     ASSERT_NE(stop, nullptr);
 
     // Streamed signals are what the window has to keep up with.
-    insert(Top, QStringLiteral("Add to Wave Recursive"));
-    ASSERT_TRUE(waitForSignals(static_cast<int>((signalsOf(Top) + signalsOf(Child)).size())));
+    insert(topScope(), QStringLiteral("Add to Wave Recursive"));
+    ASSERT_TRUE(
+        waitForSignals(static_cast<int>((signalsOf(topScope()) + signalsOf(childScope())).size())));
 
     std::atomic<bool> serving = true;
     std::thread kernel([this, &serving] {
@@ -393,6 +404,106 @@ TEST_F(MainWindowTest, TheWaveFontIsTheNamesAndTheTraces) {
     ASSERT_NE(text, nullptr);
     EXPECT_EQ(text->font().pointSizeF(), 15.0);
     EXPECT_EQ(text->font().family(), QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
+}
+
+// ---------------------------------------------------------------------------
+// A new group
+// ---------------------------------------------------------------------------
+
+class NewGroupTest : public MainWindowTest {
+protected:
+    /// Fills the wave window as Add to Wave Recursive does: `/tb`'s group, holding `$top`'s with
+    /// clk, count and state, then `u_dut`'s.
+    void SetUp() override {
+        MainWindowTest::SetUp();
+        insert(topScope(), QStringLiteral("Add to Wave Recursive"));
+        ASSERT_TRUE(waitForSignals(
+            static_cast<int>(signalsOf(topScope()).size() + signalsOf(childScope()).size())));
+
+        tb = topRows().front();
+        ASSERT_EQ(waves()->row(tb)->children.size(), 2);
+        own = waves()->row(tb)->children[0];
+        dut = waves()->row(tb)->children[1];
+        ASSERT_EQ(waves()->row(own)->children.size(), 3);
+    }
+
+    /// Adds `rowId` to the wave list's selection, after whatever is selected already.
+    void addToSelection(int rowId) const {
+        waveRows()->selectionModel()->select(
+            waves()->indexOfRow(rowId), QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    }
+
+    /// Collects the selection into a new group, answering the dialog as a reader would. Returns
+    /// the group, the first row the command adds.
+    int groupSelection() {
+        QAction* action = actionCalled(QStringLiteral("New Group…"));
+        if (action == nullptr) {
+            ADD_FAILURE() << "no New Group action";
+            return -1;
+        }
+
+        // The dialog runs an event loop of its own, so it is answered from inside that loop.
+        QTimer::singleShot(0, window.get(), [this] {
+            if (auto* dialog = window->findChild<QInputDialog*>()) dialog->accept();
+        });
+
+        int made = -1;
+        const QMetaObject::Connection watch =
+            QObject::connect(waves(), &QAbstractItemModel::rowsInserted,
+                             [this, &made](const QModelIndex& parent, int first, int /*last*/) {
+                                 if (made < 0)
+                                     made = waves()->rowIdOf(waves()->index(first, 0, parent));
+                             });
+        action->trigger();
+        QObject::disconnect(watch);
+        return made;
+    }
+
+    int tb = -1;
+    int own = -1;
+    int dut = -1;
+};
+
+TEST_F(NewGroupTest, TakesThePlaceOfTheRowsItCollects) {
+    const QVector<int> signalRows = waves()->row(own)->children;
+    addToSelection(signalRows[1]);
+    addToSelection(signalRows[2]);
+
+    const int made = groupSelection();
+    ASSERT_NE(waves()->row(made), nullptr);
+    EXPECT_EQ(waves()->row(made)->kind, WaveRow::Kind::Group);
+
+    EXPECT_EQ(waves()->row(own)->children, (QVector<int>{signalRows[0], made}));
+    EXPECT_EQ(waves()->row(made)->children, (QVector<int>{signalRows[1], signalRows[2]}));
+    EXPECT_EQ(waves()->row(tb)->children, (QVector<int>{own, dut}));
+}
+
+TEST_F(NewGroupTest, RowsAtSeveralDepthsAreCollectedWhereTheTopmostWas) {
+    // The deeper row is clicked first, so a group put where the first click was would land in
+    // `u_dut`'s group rather than where `$top`'s stood.
+    const int q = waves()->row(dut)->children.front();
+    addToSelection(q);
+    addToSelection(own);
+
+    const int made = groupSelection();
+    ASSERT_NE(waves()->row(made), nullptr);
+
+    EXPECT_EQ(waves()->row(tb)->children, (QVector<int>{made, dut}));
+    EXPECT_EQ(waves()->row(made)->children, (QVector<int>{q, own}));
+}
+
+TEST_F(NewGroupTest, AGroupCollectedWithOneOfItsRowsIsCollectedWhole) {
+    // Put where `q` was, the group would be inside `u_dut`'s, which could then not be moved into
+    // it, and would be left holding the group rather than held by it.
+    const int q = waves()->row(dut)->children.front();
+    addToSelection(q);
+    addToSelection(dut);
+
+    const int made = groupSelection();
+    ASSERT_NE(waves()->row(made), nullptr);
+
+    EXPECT_EQ(waves()->row(tb)->children, (QVector<int>{own, made}));
+    EXPECT_EQ(waves()->row(made)->children, (QVector<int>{q, dut}));
 }
 
 // ---------------------------------------------------------------------------
@@ -527,7 +638,7 @@ protected:
     }
 
     [[nodiscard]] QAction* entry(const QString& text) const {
-        QMenu* themes = menu();
+        const QMenu* themes = menu();
         if (themes == nullptr) return nullptr;
         for (QAction* candidate : themes->actions()) {
             if (candidate->text() == text) return candidate;
@@ -549,7 +660,7 @@ protected:
 
 TEST_F(ThemeMenuTest, OffersTheBuiltInThemeAndEveryFileInThemes) {
     open();
-    QMenu* themes = menu();
+    const QMenu* themes = menu();
     ASSERT_NE(themes, nullptr);
 
     QStringList texts;
@@ -804,6 +915,49 @@ TEST_F(MainWindowTest, TheTranscriptIsClearedByOneCommand) {
 
     transcriptView->clearAction()->trigger();
     EXPECT_TRUE(text->toPlainText().isEmpty());
+}
+
+TEST_F(MainWindowTest, ASubmenuOpensAsAChildOfTheMenuItIsOpenedFrom) {
+    // Radix and Highlight are entries of the wave list's own menu and of Edit. On Wayland a menu
+    // must be the child of the menu it opens from, and one given the main window instead is
+    // moved there by Qt with a warning on the terminal. Each is opened from both, the second
+    // time after the first has closed it, since Qt makes a menu's window again as it reopens.
+    QTreeView* rows = waveRows();
+    ASSERT_NE(rows, nullptr);
+    QMenu* edit = nullptr;
+    for (const QAction* entry : window->menuBar()->actions()) {
+        if (entry->text() == QStringLiteral("&Edit")) edit = entry->menu();
+    }
+    ASSERT_NE(edit, nullptr);
+
+    // The wave list's menu, built from its actions as Qt builds it on a right-click, and titled
+    // only to be named below.
+    QMenu context(QStringLiteral("the wave list's menu"), rows);
+    context.addActions(rows->actions());
+
+    // A main window with no native window of its own could not be anybody's parent.
+    window->show();
+
+    for (QMenu* host : {edit, &context}) {
+        for (const QString& title : {QStringLiteral("Radix"), QStringLiteral("Highlight")}) {
+            QAction* entry = nullptr;
+            for (QAction* candidate : host->actions()) {
+                if (candidate->menu() != nullptr && candidate->text() == title) entry = candidate;
+            }
+            ASSERT_NE(entry, nullptr) << title.toStdString();
+
+            host->popup(window->mapToGlobal(QPoint(20, 20)));
+            host->setActiveAction(entry);
+            QMenu* submenu = entry->menu();
+            ASSERT_TRUE(submenu->isVisible()) << title.toStdString();
+            ASSERT_NE(submenu->windowHandle(), nullptr);
+            EXPECT_EQ(submenu->windowHandle()->transientParent(), host->windowHandle())
+                << title.toStdString() << " opened from " << host->title().toStdString();
+
+            submenu->hide();
+            host->hide();
+        }
+    }
 }
 
 TEST_F(MainWindowTest, TheShortcutSheetIsReadFromTheActions) {

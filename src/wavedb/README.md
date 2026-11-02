@@ -16,8 +16,9 @@ Records value changes, and exports them in the formats external viewers understa
 - **FST export** (`FstWriter.h`) — compressed and seekable, and what anyone recording a real design
   will actually use. Produced by GTKWave's own library, vendored in `third_party/fst`.
 - **The live database** (`WaveformDatabase.h`) — the in-memory store the GUI draws from, with
-  random access by time, per-column summaries for the waveform view, and a memory budget that
-  spills to a scratch file rather than growing without bound.
+  random access by time, per-column summaries for the waveform view, a search for when bits of one
+  or more signals start to hold a value, and a memory budget that spills to a scratch file rather
+  than growing without bound.
 - **The recorder** (`WaveformRecorder.h`) — the listener that fills the database from a running
   kernel. It is a `WaveformWriter` whose "format" is the database, so the two exporters and the
   database share one answer to which signals are in scope and which value a time slot settled on.

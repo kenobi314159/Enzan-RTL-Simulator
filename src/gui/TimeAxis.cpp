@@ -72,18 +72,26 @@ void TimeAxis::zoom(double factor, double anchorX) noexcept {
     setRange(anchorTime > offset ? anchorTime - offset : 0, newSpan);
 }
 
-void TimeAxis::pan(double deltaPixels) noexcept {
-    const double shift = deltaPixels * unitsPerPixel();
-    if (shift >= 0.0) {
-        const auto forward = static_cast<runtime::SimTime>(shift);
+double TimeAxis::pan(double deltaPixels) noexcept {
+    // No more units than a signed integer holds with room to spare, since converting more is
+    // undefined: at the widest zoom a drag across the canvas is more than that, and it came out
+    // as a pan the other way.
+    constexpr auto Furthest = static_cast<double>(std::int64_t{1} << 62);
+    const double shift = std::clamp(deltaPixels * unitsPerPixel(), -Furthest, Furthest);
+    const auto appliedShift = static_cast<std::int64_t>(shift);
+    const auto appliedDelta = static_cast<double>(appliedShift) / unitsPerPixel();
+    if (appliedShift >= 0) {
+        const auto forward = static_cast<runtime::SimTime>(appliedShift);
         setRange(rangeStart > maximumStart(rangeSpan) - forward ? maximumStart(rangeSpan)
                                                                 : rangeStart + forward,
                  rangeSpan);
-        return;
+        return appliedDelta;
     }
 
-    const auto backward = static_cast<runtime::SimTime>(-shift);
+    const auto backward = static_cast<runtime::SimTime>(-appliedShift);
     setRange(rangeStart > backward ? rangeStart - backward : 0, rangeSpan);
+
+    return appliedDelta;
 }
 
 void TimeAxis::fit() noexcept {

@@ -1910,14 +1910,14 @@ std::optional<BodyTranslator::Value> BodyTranslator::digitString(tree_t expressi
                                  tree_type(expression));
     const eir::Type offsetType = eir::Type::bits(32, false, false);
     const eir::Type digitType = eir::Type::bits(bitsPerDigit, false, false);
-    const std::uint32_t pad = (bitsPerDigit - bits % bitsPerDigit) % bitsPerDigit;
+    const std::uint32_t pad = (bitsPerDigit - (bits % bitsPerDigit)) % bitsPerDigit;
     for (std::uint32_t position = 0; position < length; ++position) {
         // The digit's bits, the first of them highest; a bit before the vector's left end is a
         // '0' of the padding. A `bit` is its code, so an element's lowest bit is its value.
         const Value digit = constantArray(eir::BitVector::filled(bitsPerDigit, eir::Logic::Zero),
                                           Layout{.storage = digitType}, nullptr);
         for (std::uint32_t place = 0; place < bitsPerDigit; ++place) {
-            const std::uint32_t padded = position * bitsPerDigit + place;
+            const std::uint32_t padded = (position * bitsPerDigit) + place;
             if (padded < pad) continue;
             const std::uint32_t element = padded - pad;
             const std::int64_t from =
@@ -2516,7 +2516,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::delay(tree_t delay) {
             return std::nullopt;
         }
         const std::int64_t remainder = *folded % scale;
-        const std::int64_t units = *folded / scale + (remainder >= half && half > 0 ? 1 : 0);
+        const std::int64_t units = (*folded / scale) + (remainder >= half && half > 0 ? 1 : 0);
         if (remainder != 0) {
             owner.warn(delay,
                        std::format("a delay of {} fs, which the run's unit of {} fs does not "

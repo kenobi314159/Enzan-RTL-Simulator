@@ -110,7 +110,7 @@ SimTime TimeScale::ticksOf(std::uint64_t count, TimeExponent unit) const noexcep
     std::uint64_t divisor = 1;
     for (int shift = finer; shift > 0; --shift) divisor *= 10;
     const std::uint64_t remainder = ticks % divisor;
-    return ticks / divisor + (remainder >= divisor - remainder ? 1 : 0);
+    return (ticks / divisor) + (remainder >= divisor - remainder ? 1 : 0);
 }
 
 } // namespace enzan::runtime

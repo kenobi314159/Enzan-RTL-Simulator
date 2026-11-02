@@ -756,6 +756,15 @@ not to justify threading the kernel now.
 - **Edge navigation.** The next and the previous transition of a signal from a time are one query
   each, not a scan: snapping a cursor and stepping it from edge to edge (10.7) are what a reader
   does most.
+- **Finding a value is a scan, done where the values lie.** No index says when a signal holds a
+  value, since one would cost memory for every change of every signal to answer a question asked
+  now and then. So the database compares its stored values in place under a mask, a few
+  nanoseconds a change, and steps the signals a search asks about together through their changes
+  in time order: a search of ten million changes takes tens of milliseconds, where reading them out
+  one at a time took two seconds, and many times that for a row joined from many.
+- **A search keeps nothing.** It holds a cursor a signal while it runs, and reads chunks through
+  the memory budget like any other query, so searching a group of a thousand signals stays inside
+  the budget and writes nothing to disk.
 
 ### 7.2 Structure
 
@@ -1209,6 +1218,24 @@ they are decided here.
   it, `,` and `.` change which one is active, Insert adds one. **Tab** and **Shift+Tab** step the
   active cursor to the next or previous transition of the selected row — a change in what the row
   *displays* — wherever the focus is.
+- **Finding a value** moves the active cursor, unless it is locked, to the next or the previous
+  time the selected row *starts* to show a value: shows it, and an instant earlier did not, so
+  that finding again goes on to the next. **F3** and **Shift+F3** find wherever the focus is, as
+  Tab steps, and so do Enter and Shift+Enter in the toolbar's field; F3 with nothing typed goes to
+  the field. F3 is find-next's key in most programs, and Ctrl+F, the other candidate, is Zoom
+  Fit's and stays so. What a search found, or why it found nothing, is said in the status bar, since it is
+  a step of the cursor and not something the design said.
+- **A value is read as the row shows one** — digits in its radix, a name of its enumeration, the
+  list of its children or of its elements — so that whatever a row shows can be typed back, and a
+  literal, `8'hff` or `'x`, means what it says in any row. A value too wide for the row is refused
+  rather than cut down, since a value cut down is another value. There are no wildcards, save the
+  one the row writes itself: a digit in capitals, `X` or `Z`, is partly unknown, some of its bits
+  and not all, and is read as that, since a row showing `1X` shows it for any of several values.
+  In a literal, case means nothing, as in SystemVerilog.
+- **A search is a scan** (7.1): the row is taken apart into the bits of the signals it shows, as
+  its value joins them, and the database searches those. So it runs a slice at a time on the event
+  loop, never blocking the window, and moving the cursor or the selection abandons it.
+  It finds nothing past where the traces stop, which is not known yet, and does not wrap.
 - **The keys follow the wheel**: Ctrl zooms, Shift pans, and a key without a modifier is the signal
   list's own. **Typing the start of a name finds a row**, so a command MUST NOT take a key that
   types a letter or a digit in the Wave tab.
@@ -1245,6 +1272,9 @@ What the wave window shows can be saved and loaded again, from the window or wit
 - **Saving writes what the window shows**, signals by path, and nothing that varies between saves,
   so an unchanged window saves the same bytes. **Loading is pasting**: the whole file is read and
   every path looked up before any row is added.
+- **Which rows are open is part of what the window shows.** A list marks every open group and
+  signal `-expand`, and loading opens those and nothing else, so a list reloads as it was saved and
+  a long one opens no more than its reader had open. ModelSim's `-expand` means the same.
 - **A mistake in the file is an error; a path the design lacks is not.** A syntax error loads
   nothing, while a path the design lacks is a warning that skips its row, since a list outlives the
   version of the design it was saved from.

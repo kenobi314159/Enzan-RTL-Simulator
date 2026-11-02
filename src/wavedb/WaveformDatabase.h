@@ -79,6 +79,110 @@ struct Change {
     eir::BitVector value;
 };
 
+/// What a search for a value asks of one signal: that the bits it names hold the values it gives.
+///
+/// Built a range of bits at a time, as a row of the wave window shows them, so that the bits of
+/// one signal shown by several rows of a group are asked of the signal once. Laid out as a stored
+/// value of the signal is, both planes, with a mask picking out the bits asked, so that a stored
+/// value is compared with it where it lies.
+class BitPattern {
+public:
+    /// A pattern over a signal `width` bits wide, asking nothing yet.
+    explicit BitPattern(std::uint32_t width);
+
+    /// Asks that bits `[lowBit, highBit]` hold `value`, which is as wide as they are. Returns
+    /// false, having asked nothing, when one of them is asked already to hold something else: no
+    /// value of the signal meets the pattern then.
+    bool require(std::uint32_t highBit, std::uint32_t lowBit, eir::ConstBitRef value);
+
+    /// True when the value stored at `stored`, both of its planes, holds every bit asked.
+    [[nodiscard]] bool matches(const eir::Word* stored) const noexcept {
+        for (std::uint32_t word = firstWord; word <= lastWord; ++word) {
+            const eir::Word differs = (stored[word] ^ expected[word])
+                                      | (stored[planeWords + word] ^ expected[planeWords + word]);
+            if ((differs & mask[word]) != 0) return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] std::uint32_t width() const noexcept { return bits; }
+
+private:
+    std::uint32_t bits;
+    std::uint32_t planeWords;
+
+    /// The words holding a bit asked, which are all `matches` reads. Empty, first past last, while
+    /// nothing is asked.
+    std::uint32_t firstWord = ~std::uint32_t{0};
+    std::uint32_t lastWord = 0;
+
+    std::vector<eir::Word> expected;
+    std::vector<eir::Word> mask;
+};
+
+/// One signal's part in a search for a value.
+struct SearchTerm {
+    std::uint32_t recordIndex = 0;
+    BitPattern pattern;
+};
+
+/// What a digit written `X` or `Z` asks of the bits it covers: some of them unknown and not all,
+/// or, none of them unknown, some of them high impedance and not all.
+///
+/// A digit of a row joined from several signals can cover bits of more than one of them, and of
+/// a parameter beside them, so it is asked of a search as a whole rather than of one term, and
+/// names each bit by the term whose signal holds it.
+struct DigitTerm {
+    /// `Unknown` for an `X`, `HighZ` for a `Z`.
+    eir::Logic kind = eir::Logic::Unknown;
+
+    /// Bits of one word of a plane of a term's signal.
+    struct Bits {
+        std::uint32_t term = 0;
+        std::uint32_t word = 0;
+        eir::Word mask = 0;
+    };
+
+    std::vector<Bits> bits;
+
+    /// Every bit the digit covers, and of those no signal holds, which are the same at every
+    /// time, how many are unknown and how many high impedance.
+    std::uint32_t count = 0;
+    std::uint32_t fixedUnknown = 0;
+    std::uint32_t fixedHighZ = 0;
+
+    /// Covers bit `bit` of the signal of the search's term `term`. A bit covered twice, as a row
+    /// showing a signal twice covers it, counts twice.
+    void cover(std::uint32_t term, std::uint32_t bit);
+
+    /// Covers a bit no signal holds, which is `value` at every time.
+    void coverFixed(eir::Logic value);
+
+    /// True when the digit shows as it asks, with `unknown` of the bits signals hold unknown and
+    /// `highZ` of them high impedance.
+    [[nodiscard]] bool shows(std::uint32_t unknown, std::uint32_t highZ) const noexcept;
+};
+
+/// How far a search for a value got.
+struct SearchResult {
+    enum class Outcome : std::uint8_t {
+        /// `time` is where what was searched for starts to hold.
+        Found,
+
+        /// It starts to hold nowhere the search could look.
+        Absent,
+
+        /// The search examined as many changes as it was allowed to first. `time` is the last it
+        /// examined, and a search from there goes on where this one stopped.
+        Unfinished,
+    };
+
+    Outcome outcome = Outcome::Absent;
+    runtime::SimTime time = runtime::NoTime;
+
+    friend bool operator==(const SearchResult&, const SearchResult&) = default;
+};
+
 /// The in-memory waveform database.
 ///
 /// The structure is per-signal append-only chunks of value changes, plus a time index for random
@@ -180,6 +284,39 @@ public:
     /// side of an edge a click landed by a rounding.
     [[nodiscard]] std::uint64_t nearestChange(std::uint32_t recordIndex,
                                               runtime::SimTime time) const;
+
+    /// The first time after `after`, and before `limit`, at which every term starts to hold at
+    /// once: each signal holds the bits asked of it, where an instant earlier one of them did not,
+    /// or had recorded nothing. One term to a signal; with none, nothing ever starts.
+    ///
+    /// **A value has no index**, so finding one is a walk over the changes, and this is that walk
+    /// done where the values are kept: each compared in place with its term, a chunk at a time,
+    /// and the signals of several terms stepped through together, in time order, so that a time at
+    /// which some of them change is tested once all of them have. Copying each value out and
+    /// comparing it after a binary search for its time cost from a hundred nanoseconds a change to
+    /// microseconds for a row joined from many.
+    ///
+    /// At most about `budget` changes are examined, a few more for every term, since setting a term
+    /// up costs about what examining a few changes does. Two changes of one signal share a time
+    /// only when a value was written twice in one time step, and the signal held the last of them
+    /// at that time, as `valueAt` says, so only the last is examined.
+    ///
+    /// Nothing is kept: what a search holds is a cursor a term, and a chunk it reads is read
+    /// through the memory budget like any other, so a search of a thousand signals stays inside it.
+    ///
+    /// Each of `digits` must show as well, its bits named by index into `terms`. A digit is tested
+    /// only at a time every term holds, which a search of partly unknown digits is the rarer for.
+    [[nodiscard]] SearchResult nextTimeHolding(std::span<const SearchTerm> terms,
+                                               runtime::SimTime after, runtime::SimTime limit,
+                                               std::uint64_t budget,
+                                               std::span<const DigitTerm> digits = {}) const;
+
+    /// The last time before `before`, and before `limit`, at which every term starts to hold at
+    /// once, searched for as `nextTimeHolding` searches.
+    [[nodiscard]] SearchResult previousTimeHolding(std::span<const SearchTerm> terms,
+                                                   runtime::SimTime before, runtime::SimTime limit,
+                                                   std::uint64_t budget,
+                                                   std::span<const DigitTerm> digits = {}) const;
 
     /// Appends every change with a time in `[from, to)` to `out`.
     ///
@@ -291,6 +428,41 @@ private:
                                                           std::uint64_t changeIndex,
                                                           std::uint32_t signalRecordIndex) const;
 
+    /// Returns the values of a whole chunk, loading it if it was spilled. Valid until another
+    /// chunk is loaded.
+    [[nodiscard]] std::span<const eir::Word> chunkWordsOf(std::uint32_t recordIndex,
+                                                          std::uint32_t chunkIndex) const;
+
+    /// A search's place in one signal's changes. Defined with the searches that use it.
+    struct SearchCursor;
+
+    /// The value of change `change` of the cursor's signal, both planes, read through the chunk
+    /// the cursor last read where no chunk has been evicted since. Valid until another chunk is
+    /// loaded.
+    [[nodiscard]] const eir::Word* wordsAt(SearchCursor& cursor, std::uint64_t change) const;
+
+    /// True when the change `change` of the cursor's signal holds its term.
+    [[nodiscard]] bool holdsAt(SearchCursor& cursor, std::uint64_t change) const;
+
+    /// True when every one of `digits` shows, with each cursor standing on a change.
+    [[nodiscard]] bool digitsShow(std::vector<SearchCursor>& cursors,
+                                  std::span<const DigitTerm> digits) const;
+
+    /// The searches of one term, a tight walk over one signal's changes.
+    [[nodiscard]] SearchResult nextTimeHoldingOne(const SearchTerm& term, runtime::SimTime after,
+                                                  runtime::SimTime limit,
+                                                  std::uint64_t budget) const;
+    [[nodiscard]] SearchResult previousTimeHoldingOne(const SearchTerm& term,
+                                                      runtime::SimTime before,
+                                                      runtime::SimTime limit,
+                                                      std::uint64_t budget) const;
+
+    /// The first or last change in `[from, to)` at which the term's signal starts to hold it.
+    [[nodiscard]] std::uint64_t firstStartIn(const SearchTerm& term, std::uint64_t from,
+                                             std::uint64_t to) const;
+    [[nodiscard]] std::uint64_t lastStartIn(const SearchTerm& term, std::uint64_t from,
+                                            std::uint64_t to) const;
+
     /// Makes a chunk's payload resident, reading it back from the scratch file.
     void reload(std::uint32_t recordIndex, std::uint32_t chunkIndex) const;
 
@@ -328,6 +500,10 @@ private:
 
     mutable std::uint64_t residentBytes = 0;
     mutable std::uint64_t spilledBytes = 0;
+
+    /// Counts the chunks whose values have been freed, so that a search holding a chunk's words
+    /// can tell that they may have gone.
+    mutable std::uint64_t evictions = 0;
 
     /// Scratch file descriptor, or -1. The file is unlinked as soon as it is created, so it
     /// cannot outlive the process even if the process dies without unwinding.

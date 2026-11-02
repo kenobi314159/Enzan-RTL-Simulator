@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <span>
 #include <utility>
 #include <vector>
@@ -311,7 +312,7 @@ int WaveformModel::addSignal(const SignalInfo& info, int parentGroup) {
     return rowId;
 }
 
-int WaveformModel::addGroup(const QString& name, int parentGroup) {
+int WaveformModel::addGroup(const QString& name, int parentGroup, int position) {
     WaveRow added;
     added.kind = WaveRow::Kind::Group;
     added.label = name;
@@ -319,12 +320,13 @@ int WaveformModel::addGroup(const QString& name, int parentGroup) {
 
     const int rowId = static_cast<int>(rows.size());
     const int parentRow = added.parent;
-    const int at = parentRow < 0 ? static_cast<int>(roots.size())
-                                 : static_cast<int>(rows[parentRow].children.size());
+    const int end = parentRow < 0 ? static_cast<int>(roots.size())
+                                  : static_cast<int>(rows[parentRow].children.size());
+    const int at = position < 0 || position > end ? end : position;
 
     beginInsertRows(parentRow < 0 ? QModelIndex() : indexOfRow(parentRow), at, at);
     rows.push_back(added);
-    (parentRow < 0 ? roots : rows[parentRow].children).push_back(rowId);
+    (parentRow < 0 ? roots : rows[parentRow].children).insert(at, rowId);
     endInsertRows();
 
     return rowId;
@@ -754,15 +756,21 @@ QVector<int> WaveformModel::insertSignalRows(const std::vector<PendingRow>& pend
 // Signal list files
 // ---------------------------------------------------------------------------
 
-QString WaveformModel::writeSignalList() const {
+QString WaveformModel::writeSignalList(const QSet<int>& openRows) const {
     // Nothing that varies between saves — no date, no user — so that saving an unchanged window
     // writes the same bytes.
     QString text = QStringLiteral("# Enzan signal list\n");
-    for (const int root : roots) writeSignalListRow(text, root, 0);
+    for (const int root : roots) writeSignalListRow(text, root, 0, openRows);
     return text;
 }
 
-bool WaveformModel::childrenAreAsUnpacked(int rowId) const {
+bool WaveformModel::writtenAsPacked(int rowId, const QSet<int>& openRows) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr || !waveRow->unpacked) return true;
+    return !openRows.contains(rowId) && childrenAreAsUnpacked(rowId, openRows);
+}
+
+bool WaveformModel::childrenAreAsUnpacked(int rowId, const QSet<int>& openRows) const {
     const WaveRow* waveRow = row(rowId);
     if (waveRow == nullptr || !waveRow->unpacked) return false;
 
@@ -777,23 +785,24 @@ bool WaveformModel::childrenAreAsUnpacked(int rowId) const {
             || child.label != expected.label || child.path != expected.path
             || child.radix != expected.radix || child.symbolic != expected.symbolic
             || child.highlight != expected.highlight || child.dimensions != expected.dimensions
-            || child.unpacked)
+            || !writtenAsPacked(waveRow->children[static_cast<qsizetype>(position)], openRows))
             return false;
     }
     return true;
 }
 
-void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) const {
+void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth,
+                                       const QSet<int>& openRows) const {
     const WaveRow* waveRow = row(rowId);
     if (waveRow == nullptr) return;
 
     const QString indent(static_cast<qsizetype>(depth) * 4, u' ');
 
     // A body is written in braces with its rows indented beneath, and an empty one as `{}`.
-    const auto body = [this, &indent, depth](const QVector<int>& children) {
+    const auto body = [this, &indent, depth, &openRows](const QVector<int>& children) {
         if (children.isEmpty()) return QStringLiteral("{}");
         QString inner = QStringLiteral("{\n");
-        for (const int child : children) writeSignalListRow(inner, child, depth + 1);
+        for (const int child : children) writeSignalListRow(inner, child, depth + 1, openRows);
         return inner + indent + u'}';
     };
 
@@ -810,6 +819,7 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
     if (waveRow->kind == WaveRow::Kind::Group) {
         if (waveRow->highlight != 0)
             words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
+        if (openRows.contains(rowId)) words << QStringLiteral("-expand");
         words.prepend(QStringLiteral("group"));
         words << quoteTclWord(waveRow->label) << body(waveRow->children);
         text += indent + words.join(u' ') + u'\n';
@@ -842,12 +852,12 @@ void WaveformModel::writeSignalListRow(QString& text, int rowId, int depth) cons
     if (waveRow->highlight != 0)
         words << QStringLiteral("-highlight") << QString::number(waveRow->highlight);
 
-    if (waveRow->unpacked) {
-        if (childrenAreAsUnpacked(rowId)) {
-            words << QStringLiteral("-expand");
-        } else {
+    // Open or not, and the rows beneath only where unpacking would not make them again. A
+    // closed row over what unpacking makes is written as packed, which loads showing the same.
+    if (!writtenAsPacked(rowId, openRows)) {
+        if (openRows.contains(rowId)) words << QStringLiteral("-expand");
+        if (!childrenAreAsUnpacked(rowId, openRows))
             words << QStringLiteral("-contents") << body(waveRow->children);
-        }
     }
 
     words.prepend(QStringLiteral("add wave"));
@@ -952,30 +962,18 @@ std::optional<eir::BitVector> WaveformModel::combinedValueAt(int rowId,
     QVector<eir::BitVector> parts;
     parts.reserve(waveRow.children.size());
 
-    std::uint32_t total = 0;
     for (const int child : waveRow.children) {
         const std::optional<eir::BitVector> value = valueAt(child, time);
         if (!value.has_value()) return std::nullopt;
 
-        total += value.value().width();
         parts.push_back(value.value());
     }
 
     if (parts.isEmpty()) return std::nullopt;
 
     // The first child is the most significant, which is the order the list shows them in and
-    // the order unpacking creates them in. Copied a word at a time: a group made by adding a
-    // subtree joins every signal in it, for every value its trace prints, and a bit at a time
-    // that was most of what a repaint of a large design cost.
-    eir::BitVector joined = eir::BitVector::filled(total, eir::Logic::Zero);
-
-    std::uint32_t top = total;
-    for (const eir::BitVector& part : parts) {
-        top -= part.width();
-        eir::bitops::assignPartAt(joined.mutableRef(), part.ref(), top);
-    }
-
-    return joined;
+    // the order unpacking creates them in.
+    return joinParts(std::span(parts.constData(), static_cast<std::size_t>(parts.size())));
 }
 
 std::optional<eir::BitVector> WaveformModel::valueAt(int rowId, runtime::SimTime time) const {
@@ -1048,6 +1046,80 @@ QString WaveformModel::renderValue(int rowId, runtime::SimTime time) const {
     // rows read joined: one number for an array of vectors would file off exactly the
     // boundaries that are the reason it has that shape.
     return renderArray(*value, waveRow->dimensions, waveRow->radix);
+}
+
+ValueReading WaveformModel::readValue(int rowId, QStringView text) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr)
+        return {.value = std::nullopt, .problem = QStringLiteral("No such row")};
+
+    // What `renderValue` writes as the list of a row's children reads as one, each word as its
+    // child reads it.
+    if (showsChildren(rowId) && !childrenReconstituteParent(rowId) && !childrenAreBits(rowId)
+        && !waveRow->children.isEmpty() && text.trimmed().startsWith(u'{')) {
+        const std::optional<QStringList> words = splitList(text);
+        if (!words.has_value()) {
+            return {.value = std::nullopt,
+                    .problem = QStringLiteral("'%1' is not a list: its braces do not pair up")
+                                   .arg(text.trimmed())};
+        }
+        if (words->size() != waveRow->children.size()) {
+            return {.value = std::nullopt,
+                    .problem = QStringLiteral("'%1' lists %2, and %3 holds %4 rows")
+                                   .arg(text.trimmed())
+                                   .arg(words->size())
+                                   .arg(waveRow->label)
+                                   .arg(waveRow->children.size())};
+        }
+
+        std::vector<ValueReading> parts;
+        parts.reserve(static_cast<std::size_t>(words->size()));
+        for (qsizetype position = 0; position < words->size(); ++position) {
+            ValueReading part = readValue(waveRow->children[position], words->at(position));
+            if (!part.value.has_value()) return part;
+            parts.push_back(std::move(part));
+        }
+        return joinReadings(parts);
+    }
+
+    const std::uint32_t width = displayedWidth(rowId);
+    if (width == 0) {
+        return {.value = std::nullopt,
+                .problem = QStringLiteral("%1 shows no bits to hold a value").arg(waveRow->label)};
+    }
+
+    const EnumInfo* enumeration = enumerationOf(rowId);
+    if (enumeration != nullptr) {
+        // As the reader wrote it first. A VHDL name is the same name in any case, so failing that
+        // a name differing only in case is taken, provided it is the only one.
+        const QStringView name = text.trimmed();
+        const EnumMemberInfo* match = nullptr;
+        int caseless = 0;
+        for (const EnumMemberInfo& member : enumeration->members) {
+            if (member.name == name) {
+                match = &member;
+                caseless = 1;
+                break;
+            }
+            if (member.name.compare(name, Qt::CaseInsensitive) == 0) {
+                if (caseless++ == 0) match = &member;
+            }
+        }
+        if (match != nullptr && caseless == 1)
+            return {.value = match->value.resized(width, false), .problem = {}};
+    }
+
+    ValueReading reading = readArray(text, width, waveRow->dimensions, waveRow->radix);
+
+    // A word is more likely a name misspelt than a number, so a row with names says which.
+    const QStringView trimmed = text.trimmed();
+    if (!reading.value.has_value() && enumeration != nullptr && !trimmed.isEmpty()
+        && (trimmed.front().isLetter() || trimmed.front() == u'_')) {
+        const QString type =
+            enumeration->name.isEmpty() ? QStringLiteral("its enumeration") : enumeration->name;
+        reading.problem = QStringLiteral("'%1' names no value of %2").arg(trimmed, type);
+    }
+    return reading;
 }
 
 const EnumInfo* WaveformModel::enumerationOf(int rowId) const {
@@ -1156,6 +1228,145 @@ runtime::SimTime WaveformModel::nearestEdge(int rowId, runtime::SimTime time) co
     // A tie goes to the earlier one, so that which side of an edge a click rounded to does not
     // decide the answer.
     return time - earlier <= later - time ? earlier : later;
+}
+
+std::optional<std::uint32_t> WaveformModel::ownRecordOf(int rowId) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr || waveRow->kind != WaveRow::Kind::Signal) return std::nullopt;
+    if (showsChildren(rowId) && !childrenReconstituteParent(rowId)) return std::nullopt;
+
+    const std::uint32_t record = kernelSession->waveforms().recordIndexOf(waveRow->signalIndex);
+    if (record == wavedb::WaveformDatabase::NotRecorded) return std::nullopt;
+    return record;
+}
+
+bool WaveformModel::partsOf(int rowId, std::vector<ValuePart>& parts) const {
+    const WaveRow* waveRow = row(rowId);
+    if (waveRow == nullptr) return false;
+
+    if (const std::optional<std::uint32_t> record = ownRecordOf(rowId)) {
+        const auto [high, low] = bitRange(*waveRow);
+        parts.push_back(ValuePart{.record = *record, .highBit = high, .lowBit = low});
+        return true;
+    }
+
+    // As `valueAt` reads the rest: a row with children joins theirs, and has no value while one
+    // of them has none; a parameter is its value.
+    if (showsChildren(rowId) && !childrenReconstituteParent(rowId)) {
+        if (waveRow->children.isEmpty()) return false;
+        return std::ranges::all_of(waveRow->children,
+                                   [&](int child) { return partsOf(child, parts); });
+    }
+    if (waveRow->kind == WaveRow::Kind::Parameter && waveRow->constantValue.has_value()) {
+        parts.push_back(ValuePart{.constant = waveRow->constantValue});
+        return true;
+    }
+    return false;
+}
+
+std::optional<WaveformModel::SearchTerms>
+WaveformModel::termsFor(int rowId, const eir::BitVector& value,
+                        std::span<const PartialDigit> partial) const {
+    std::vector<ValuePart> parts;
+    if (!partsOf(rowId, parts)) return std::nullopt;
+
+    std::uint32_t width = 0;
+    for (const ValuePart& part : parts) width += part.width();
+    if (value.width() != width) return std::nullopt;
+
+    // Which digit each bit of the row's value lies under, if one does: such a bit is asked of its
+    // digit, with the others it covers, rather than to hold a value of its own.
+    constexpr std::size_t NoDigit = ~std::size_t{0};
+    std::vector<std::size_t> digitOf(width, NoDigit);
+    std::vector<wavedb::DigitTerm> digits(partial.size());
+    for (std::size_t index = 0; index < partial.size(); ++index) {
+        const PartialDigit& digit = partial[index];
+        if (digit.lowBit > digit.highBit || digit.highBit >= width) return std::nullopt;
+        for (std::uint32_t bit = digit.lowBit; bit <= digit.highBit; ++bit) digitOf[bit] = index;
+        digits[index].kind = digit.kind;
+    }
+
+    // One term a signal, however many of the row's pieces show bits of it: a bus with a bit taken
+    // out is the bus asked for all but that bit.
+    const wavedb::WaveformDatabase& database = kernelSession->waveforms();
+    SearchTerms asked;
+    std::map<std::uint32_t, std::size_t> termOfRecord;
+
+    std::uint32_t top = width;
+    for (const ValuePart& part : parts) {
+        top -= part.width();
+
+        // A parameter's bits are the same at every time, so they settle now what they ask.
+        if (part.constant.has_value()) {
+            const eir::BitVector& constant = *part.constant;
+            for (std::uint32_t offset = 0; offset < constant.width(); ++offset) {
+                const eir::Logic shown = constant.get(offset);
+                const std::size_t digit = digitOf[top + offset];
+                if (digit != NoDigit) {
+                    digits[digit].coverFixed(shown);
+                } else if (shown != value.get(top + offset)) {
+                    return std::nullopt;
+                }
+            }
+            continue;
+        }
+
+        const auto [entry, added] = termOfRecord.try_emplace(part.record, asked.terms.size());
+        if (added) {
+            asked.terms.push_back(wavedb::SearchTerm{
+                .recordIndex = part.record,
+                .pattern = wavedb::BitPattern(database.signal(part.record).width)});
+        }
+        const auto term = static_cast<std::uint32_t>(entry->second);
+        wavedb::BitPattern& pattern = asked.terms[entry->second].pattern;
+
+        // A run of bits under no digit at a time, asked of the term; a bit under one, of it.
+        for (std::uint32_t offset = 0; offset < part.width();) {
+            if (const std::size_t digit = digitOf[top + offset]; digit != NoDigit) {
+                digits[digit].cover(term, part.lowBit + offset);
+                ++offset;
+                continue;
+            }
+            std::uint32_t end = offset;
+            while (end < part.width() && digitOf[top + end] == NoDigit) ++end;
+
+            eir::BitVector wanted = eir::BitVector::filled(end - offset, eir::Logic::Zero);
+            eir::bitops::partSelectAt(wanted.mutableRef(), value.ref(), top + offset);
+            if (!pattern.require(part.lowBit + end - 1, part.lowBit + offset, wanted.ref()))
+                return std::nullopt;
+            offset = end;
+        }
+    }
+
+    // A digit over parameters alone shows at every time or at none.
+    for (wavedb::DigitTerm& digit : digits) {
+        if (!digit.bits.empty()) {
+            asked.digits.push_back(std::move(digit));
+        } else if (!digit.shows(0, 0)) {
+            return std::nullopt;
+        }
+    }
+    return asked;
+}
+
+WaveformModel::Match WaveformModel::nextMatchAfter(int rowId, runtime::SimTime time,
+                                                   const eir::BitVector& value,
+                                                   runtime::SimTime limit, int budget,
+                                                   std::span<const PartialDigit> partial) const {
+    const std::optional<SearchTerms> asked = termsFor(rowId, value, partial);
+    if (!asked.has_value()) return {};
+    return kernelSession->waveforms().nextTimeHolding(
+        asked->terms, time, limit, static_cast<std::uint64_t>(std::max(budget, 1)), asked->digits);
+}
+
+WaveformModel::Match
+WaveformModel::previousMatchBefore(int rowId, runtime::SimTime time, const eir::BitVector& value,
+                                   runtime::SimTime limit, int budget,
+                                   std::span<const PartialDigit> partial) const {
+    const std::optional<SearchTerms> asked = termsFor(rowId, value, partial);
+    if (!asked.has_value()) return {};
+    return kernelSession->waveforms().previousTimeHolding(
+        asked->terms, time, limit, static_cast<std::uint64_t>(std::max(budget, 1)), asked->digits);
 }
 
 void WaveformModel::setCursorTime(runtime::SimTime time) {

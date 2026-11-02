@@ -312,7 +312,8 @@ std::optional<BitVector> BitVector::parse(std::string_view text) {
         const auto* first = sizeText.data();
         const auto* last = first + sizeText.size();
         const std::from_chars_result parsed = std::from_chars(first, last, width);
-        if (parsed.ec != std::errc() || parsed.ptr != last || width == 0) return std::nullopt;
+        if (parsed.ec != std::errc() || parsed.ptr != last || width == 0 || width > MaxLiteralWidth)
+            return std::nullopt;
         sized = true;
     }
 
@@ -390,6 +391,11 @@ std::optional<BitVector> BitVector::parse(std::string_view text) {
     else if (base == 8)
         perDigit = 3;
     std::uint32_t bitIndex = 0;
+
+    // What the bits above the digits hold. IEEE 1800 section 5.7.1 pads with zeros, unless the
+    // leftmost digit is an x or a z, which pads with x or z: `8'hx` is eight unknown bits.
+    Logic leftFill = Logic::Zero;
+
     for (std::size_t position = digits.size(); position-- > 0;) {
         const char character = digits[position];
         Logic unknownFill = Logic::Zero;
@@ -402,6 +408,7 @@ std::optional<BitVector> BitVector::parse(std::string_view text) {
             unknownFill = Logic::HighZ;
             isUnknownDigit = true;
         }
+        if (position == 0) leftFill = unknownFill;
 
         std::uint8_t digit = 0;
         if (!isUnknownDigit) {
@@ -421,6 +428,10 @@ std::optional<BitVector> BitVector::parse(std::string_view text) {
             }
             ++bitIndex;
         }
+    }
+
+    if (leftFill != Logic::Zero) {
+        for (; bitIndex < width; ++bitIndex) result.set(bitIndex, leftFill);
     }
 
     return result;

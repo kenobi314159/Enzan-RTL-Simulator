@@ -18,6 +18,10 @@ waveform view and the transcript.
   the client-side copy of the waveform it is drawing.
 - **The models** (`DesignTreeModel.h`, `ObjectsModel.h`, `WaveformModel.h`) — the hierarchy, the
   objects of a scope, and what the wave window shows.
+- **Reading a value** (`ValueText.h`) — text typed as the value column writes a value, read back
+  into the value, so that what a row shows can be typed in and means what it showed.
+- **Finding a value** (`ValueFinder.h`) — moving the active cursor to where the selected row next
+  shows a value, a slice of the search at a time.
 - **The time axis** (`TimeAxis.h`) — the mapping between simulated time and pixels, separated out
   because it is the part of the view that can be wrong without anyone noticing by eye.
 - **The waveform canvas** (`WaveformView.h`) — the custom painting, the cursors and the zoom.
@@ -86,7 +90,8 @@ front end.
 
 **Nothing here blocks.** The session sits on Qt's event loop through a socket notifier: a busy
 kernel never freezes the interface, the mirror image of the rule that a slow interface never stalls
-the kernel. Both come from the same arrangement — neither side waits for the other.
+the kernel. Both come from the same arrangement — neither side waits for the other. A search for a
+value, which no index answers, goes a slice at a time on the event loop for the same reason.
 
 ## What this milestone does not include
 

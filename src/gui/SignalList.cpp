@@ -203,11 +203,6 @@ private:
                             .arg(entry.paths.size()));
             failed = true;
         }
-        if (entry.contents && entry.expand) {
-            error(line, QStringLiteral("-expand and -contents both say what is beneath a signal; "
-                                       "give one"));
-            failed = true;
-        }
         if (entry.recursive && (entry.label.has_value() || entry.expand || entry.contents)) {
             error(line, QStringLiteral("-r adds a scope's subtree, which -label, -expand and "
                                        "-contents do not apply to"));
@@ -230,9 +225,14 @@ private:
         std::size_t index = 1;
         for (; index < words.size() && words[index].text.startsWith('-'); ++index) {
             if (sharedOption(words, index, line, entry, failed)) continue;
-            error(line, QStringLiteral("'%1' is not an option of `group`")
-                            .arg(QString::fromUtf8(words[index].text)));
-            failed = true;
+
+            const QString option = QString::fromUtf8(words[index].text);
+            if (option == QStringLiteral("-expand")) {
+                entry.expand = true;
+            } else {
+                error(line, QStringLiteral("'%1' is not an option of `group`").arg(option));
+                failed = true;
+            }
         }
 
         if (words.size() - index != 2) {
@@ -351,6 +351,7 @@ public:
                 WaveformModel::PendingRow group;
                 group.row.kind = WaveRow::Kind::Group;
                 group.row.label = entry.name;
+                group.open = entry.expand;
                 apply(entry, group.row);
                 entries(entry.body, group.children);
                 out.push_back(std::move(group));
@@ -521,7 +522,9 @@ private:
             pending.row.unpacked = true;
         }
 
-        if (entry.expand) {
+        pending.open = entry.expand;
+
+        if (entry.expand && !entry.contents) {
             // What unpacking makes, made the same way: each element or bit takes the radix, the
             // highlight and the name the signal has by then.
             for (WaveRow& made : WaveformModel::unpackedRows(pending.row)) {

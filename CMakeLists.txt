@@ -149,6 +149,15 @@ if(ENZAN_ENABLE_SYSTEMVERILOG)
     USES_TERMINAL)
 endif()
 
+# What the wave window's search for a value costs per edge of a trace, which decides how that
+# search walks one. Built when asked for rather than by default, and installed nowhere.
+if(ENZAN_ENABLE_SYSTEMVERILOG AND TARGET enzan::gui)
+  add_executable(enzan-bench-find-value EXCLUDE_FROM_ALL bench/find-value/FindValueBench.cpp)
+  target_link_libraries(enzan-bench-find-value PRIVATE enzan::gui enzan::ipc_server
+                                                       enzan::session Qt6::Core)
+  target_compile_definitions(enzan-bench-find-value PRIVATE QT_NO_KEYWORDS)
+endif()
+
 # ---------------------------------------------------------------------------
 # Configuration summary
 # ---------------------------------------------------------------------------
