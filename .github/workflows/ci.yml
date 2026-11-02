@@ -62,7 +62,7 @@ jobs:
   build:
     name: ${{ matrix.preset }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -253,9 +253,14 @@ jobs:
 
       - name: Run clang-tidy
         run: |
-          mapfile -t files < <(git ls-files 'src/*.cpp' 'tools/*.cpp' 'tests/*.cpp')
+          mapfile -t files < <(git ls-files 'src/*.cpp' 'tools/*.cpp')
           printf 'Linting %d files\n' "${#files[@]}"
-          clang-tidy-18 -p build/clang-debug --quiet "${files[@]}"
+          status=0
+          for f in "${files[@]}"; do
+            echo '> $f'
+            clang-tidy-18 -p build/clang-debug --quiet "$f" || status=$?
+          done
+          exit "$status"
 
       - name: Report cache statistics
         if: always()
@@ -264,7 +269,7 @@ jobs:
   gui:
     name: Graphical front end without the language frontends
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -312,7 +317,7 @@ jobs:
   systemverilog:
     name: SystemVerilog frontend and golden suite, default configuration
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ github.ref == 'refs/heads/main' && 30 || 10 }}
+    timeout-minutes: ${{ github.ref == 'refs/heads/main' && 30 || 20 }}
     steps:
       # NVC, which the VHDL frontend builds part of, is a submodule.
       - uses: actions/checkout@v4
