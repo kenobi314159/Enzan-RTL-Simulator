@@ -37,7 +37,7 @@ jobs:
   lint:
     name: Format and license headers
     runs-on: ubuntu-24.04
-    timeout-minutes: 1
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
 
