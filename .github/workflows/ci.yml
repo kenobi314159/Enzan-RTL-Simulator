@@ -158,6 +158,7 @@ jobs:
           COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
         run: |
           status=0
+          PYTHON_VERSION=$(python3 -V | cut -d" " -f2) \
           tests/conformance/cocotb/run-suite.sh build/gcc-release/bin/enzan build/cocotb-vhdl \
             vhdl > build/cocotb-vhdl.txt 2>&1 || status=$?
           grep -v -e '^FAIL ' -e '^PASS ' build/cocotb-vhdl.txt
