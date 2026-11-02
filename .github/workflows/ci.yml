@@ -62,7 +62,7 @@ jobs:
   build:
     name: ${{ matrix.preset }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -172,7 +172,7 @@ jobs:
   sanitize:
     name: ASan + UBSan
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -311,7 +311,7 @@ jobs:
   systemverilog:
     name: SystemVerilog frontend and golden suite, default configuration
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ github.ref == 'refs/heads/main' && 30 || 20 }}
+    timeout-minutes: ${{ github.ref == 'refs/heads/main' && 30 || 10 }}
     steps:
       # NVC, which the VHDL frontend builds part of, is a submodule.
       - uses: actions/checkout@v4
