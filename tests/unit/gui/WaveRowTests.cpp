@@ -737,6 +737,8 @@ TEST_F(FindValueTest, WhatARowShowsIsFoundWhereItStartsToShowItPartlyUnknownDigi
             const enzan::gui::ValueReading reading = model->readValue(rowId, text);
             ASSERT_TRUE(reading.value.has_value())
                 << label << ": " << reading.problem.toStdString();
+            // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — checked by the assertion above
+            const enzan::eir::BitVector& sought = *reading.value;
 
             const auto walk = [&](enzan::runtime::SimTime from, bool forward) {
                 Match first;
@@ -757,11 +759,10 @@ TEST_F(FindValueTest, WhatARowShowsIsFoundWhereItStartsToShowItPartlyUnknownDigi
                         Match match;
                         enzan::runtime::SimTime at = from;
                         do {
-                            match = forward
-                                        ? model->nextMatchAfter(rowId, at, *reading.value, 400,
-                                                                budget, reading.partial)
-                                        : model->previousMatchBefore(rowId, at, *reading.value, 400,
-                                                                     budget, reading.partial);
+                            match = forward ? model->nextMatchAfter(rowId, at, sought, 400, budget,
+                                                                    reading.partial)
+                                            : model->previousMatchBefore(rowId, at, sought, 400,
+                                                                         budget, reading.partial);
                             at = match.time;
                         } while (match.outcome == Match::Outcome::Unfinished);
                         EXPECT_EQ(match, expected)
@@ -1624,9 +1625,14 @@ protected:
     /// sends it or a test does, since nothing sends the modifier's own release as a keyboard
     /// would. Every selection the process made afterwards would then extend a range rather than
     /// select a row, so the release is sent here.
+    ///
+    /// A press and a release rather than `keyClick`, which is the two of them guarded by a
+    /// `QPointer` in case the press destroys the widget. Nothing here does, and clang-tidy's
+    /// analyzer reads the guard's destructor as a use of memory already freed.
     static void press(QWidget* widget, Qt::Key key,
                       Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
-        QTest::keyClick(widget, key, modifiers);
+        QTest::keyPress(widget, key, modifiers);
+        QTest::keyRelease(widget, key, modifiers);
         if (modifiers.testFlag(Qt::ShiftModifier)) QTest::keyRelease(widget, Qt::Key_Shift);
     }
 
