@@ -11,6 +11,9 @@ Enzan simulates SystemVerilog and VHDL, each alone or both in one design, writes
 waveforms, and runs cocotb testbenches. The NEORV32 RISC-V processor runs its own VHDL testbench,
 and the same testbench rewritten in Verilog, with GHDL's results. Performance work is next.
 
+Enzan is developed largely by AI coding agents, working to a written specification of its design.
+Its results are checked against Icarus Verilog's and GHDL's as well as by its own tests.
+
 ## Installing
 
 Enzan runs on Linux. Each release has packages for Ubuntu 24.04, Debian 13, Fedora, RHEL 9 and
