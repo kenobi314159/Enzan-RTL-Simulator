@@ -17,6 +17,10 @@ license=('GPL-3.0-or-later' 'Apache-2.0' 'LGPL-3.0-or-later' 'MIT' 'ISC' 'BSD-2-
          'LicenseRef-public-domain')
 # Arch packages a mimalloc as recent as slang asks for, so slang uses it rather than none.
 makedepends=(cmake ninja flex gtest mimalloc qt6-base tcl zlib zstd)
+# The GUI's tests lay out a window, and Arch's Qt brings no font with it, as other distributions'
+# do. With none installed, Qt sizes text from a fallback that makes every toolbar button so wide
+# that the find field ends up in the toolbar's overflow menu, where it cannot take the focus.
+checkdepends=(ttf-dejavu)
 source=("$url/releases/download/v$_upstream/enzan-$_upstream.tar.xz")
 sha256sums=('@SHA256@')
 
