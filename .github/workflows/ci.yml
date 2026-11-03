@@ -2,11 +2,9 @@
 #
 # Continuous integration, run on every push and pull request.
 #
-# GitHub allows a fixed amount of CI time a month, and every push to every branch spends it,
-# so what runs on a development branch or a pull request must be fast. A job or step that takes
-# long runs on main only, with `if: github.ref == 'refs/heads/main'`: clang-tidy, and the taxi
-# design regression. Whoever merges a pull request runs those locally first, because one that
-# fails after the merge leaves main red.
+# Every job and step runs on every branch and pull request, the long ones included. The
+# repository is public, so its runners cost nothing, and a check that ran on main alone would be
+# found failing after a merge, leaving main red, rather than on the pull request before it.
 #
 # The default branch must stay green; a red default branch is fixed or reverted before other
 # work continues.
@@ -215,7 +213,6 @@ jobs:
   tidy:
     name: clang-tidy
     runs-on: ubuntu-24.04
-    if: github.ref == 'refs/heads/main'
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -317,7 +314,7 @@ jobs:
   systemverilog:
     name: SystemVerilog frontend and golden suite, default configuration
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ github.ref == 'refs/heads/main' && 30 || 20 }}
+    timeout-minutes: 30
     steps:
       # NVC, which the VHDL frontend builds part of, is a submodule.
       - uses: actions/checkout@v4
@@ -368,11 +365,11 @@ jobs:
       # This is the only job that builds slang, which is why it is also the only one that runs
       # the frontend unit tests and the golden suite. The build matrix above configures the
       # frontend off: nothing outside this job links slang, and compiling it five times per
-      # commit would spend most of the CI budget on one dependency.
+      # commit would spend most of every run on one dependency.
       #
       # Everything else is the defaults too, the VHDL frontend and the GUI with it, so that the
       # configuration a plain `cmake --preset` gives a contributor is the one built and tested
-      # on every commit, rather than only on main by clang-tidy's job.
+      # on every commit, rather than only by clang-tidy's job.
       - name: Configure and build the default configuration
         run: |
           cmake --preset gcc-release -DENZAN_WERROR=ON \
@@ -446,9 +443,8 @@ jobs:
             build/designs/common_cells || status=1
           exit "$status"
 
-      # The long running tests only execute on the main branch.
+      # taxi's cocotb testbenches, the longest of the design regression at about two minutes.
       - name: Design regression - long run
-        if: github.ref == 'refs/heads/main'
         timeout-minutes: 5
         env:
           COCOTB_PYTHON: ${{ github.workspace }}/.venv/bin/python
@@ -460,17 +456,15 @@ jobs:
 
       # NEORV32 through its own testbench's on-chip debugger sequence, and through the same
       # testbench in Verilog around its VHDL, each held to GHDL's reports of the VHDL testbench and
-      # to its CPU trace and UART logs. A few minutes, so on the main branch only, in the one build
-      # with both frontends.
+      # to its CPU trace and UART logs, in the one build with both frontends.
       - name: Design regression - NEORV32
-        if: github.ref == 'refs/heads/main'
         timeout-minutes: 5
         run: >
           tests/designs/neorv32/run.sh build/gcc-release/bin/enzan "$(command -v ghdl)" \
             build/designs/neorv32
 
       - name: Keep the NEORV32 logs
-        if: failure() && github.ref == 'refs/heads/main'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: neorv32-logs

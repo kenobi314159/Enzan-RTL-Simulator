@@ -1644,11 +1644,9 @@ a threshold is agreed, a regression beyond it should fail CI, in a nightly job i
 
 **GitHub Actions.** The workflow is the record of which job runs what; these are the rules it keeps.
 
-- **What runs on a development branch or a pull request must be fast.** Every push spends the
-  project's monthly allowance of CI time, so a job or step that takes long runs on `main` only.
-- **Everything still runs before a pull request is merged**: whoever merges runs the main-only jobs
-  locally first, with the commands the workflow uses, since a main-only check that fails after the
-  merge leaves `main` red.
+- **Every job runs on every push and pull request**, the long ones included. The repository is
+  public, so its runners cost nothing, and a check that ran on `main` alone would be found failing
+  after a merge, leaving `main` red, rather than on the pull request before it.
 - **Code compiled only with a component, or only without one, is compiled somewhere with warnings as
   errors.** One job builds every optional component, as a contributor's plain configure does, and is
   the only one to build the SystemVerilog frontend, since one is enough to prove it; another builds

@@ -4,9 +4,8 @@
 # tested and attached to a draft release, which a maintainer reads over and publishes; nothing is
 # published from here.
 #
-# It runs on a tag only, so the allowance branch CI spends is untouched. It can also be run by hand
-# on any branch, to try the packaging before a release: that builds and tests everything and
-# releases nothing.
+# It runs on a tag, and by hand on any branch to try the packaging before a release: that builds
+# and tests everything and releases nothing.
 
 name: Release
 
