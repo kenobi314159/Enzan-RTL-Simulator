@@ -1,7 +1,7 @@
 # Enzan RTL Simulator — Design and Development Guide
 
 **Status:** Living specification. Revised as the project evolves.
-**Audience:** AI coding agents and maintainers working in this repository.
+**Audience:** everyone working in this repository, people and AI coding agents alike.
 **Authority:** This document is the single normative specification for Enzan. Documentation for
 users lives separately and is derived from it, never the reverse.
 
@@ -9,8 +9,8 @@ users lives separately and is derived from it, never the reverse.
 
 ## 0. How to use this document
 
-Agents working in this repository MUST read sections 0, 12, 13 and 17 before making any change, and
-MUST read the section covering the component they are modifying.
+Anyone working in this repository, a person or an agent, MUST read sections 0, 12, 13 and 17 before
+making any change, and MUST read the section covering the component they are modifying.
 
 The keywords **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT** and **MAY** are used in their RFC
 2119 sense. A **MUST** is an invariant: code that would violate one is a conflict to raise, not to
@@ -1664,7 +1664,7 @@ branch is fixed or reverted before other work continues.
 
 ---
 
-## 17. Working agreements for agents
+## 17. Working agreements
 
 ### 17.1 Commit messages
 
