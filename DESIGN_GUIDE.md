@@ -1694,8 +1694,9 @@ test: golden: picorv32: Add differential VCD comparison
 docs: Describe the mixed-language delta mapping
 ```
 
-The subject line is imperative, capitalised, and under 72 characters. The body explains **why**, not
-what — the diff already shows what.
+The subject line is imperative, capitalised, and 72 characters at most, its prefixes included. The
+body explains **why**, not what — the diff already shows what. `scripts/check-commit-messages.sh`
+checks every commit a branch adds for a category's shape and for the length, and CI runs it.
 
 ### 17.2 Commit granularity
 

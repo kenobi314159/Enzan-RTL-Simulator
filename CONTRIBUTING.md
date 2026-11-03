@@ -89,6 +89,7 @@ The checks CI runs are all runnable locally:
 ```sh
 clang-format --dry-run --Werror $(git ls-files '*.h' '*.cpp')
 ./scripts/check-license-headers.sh
+./scripts/check-commit-messages.sh
 cmake --preset clang-debug -DENZAN_WERROR=ON
 cmake --build --preset clang-debug && ctest --preset clang-debug
 clang-tidy -p build/clang-debug --quiet $(git ls-files 'src/*.cpp' 'tools/*.cpp' 'tests/*.cpp')
@@ -106,9 +107,9 @@ suites run from their scripts under `tests/conformance/`; cocotb's, for example,
 `tests/conformance/cocotb/run-suite.sh <enzan> <work>`, with `vhdl` after it for VHDL toplevels.
 
 Every source file begins with `// SPDX-License-Identifier: GPL-3.0-or-later`. Commit messages carry
-a category prefix, followed by the path of the area when the change is confined to one:
-`runtime: scheduler: Drain the NBA region before Observed`. Section 17 of the design guide has the
-rest of the working agreements.
+a category prefix, one lowercase word, followed by the path of the area when the change is confined
+to one: `runtime: scheduler: Drain the NBA region before Observed`. A subject is 72 characters at
+most. Section 17 of the design guide has the rest of the working agreements.
 
 ## Developer documentation
 

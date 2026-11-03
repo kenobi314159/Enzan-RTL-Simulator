@@ -33,11 +33,15 @@ env:
 
 jobs:
   lint:
-    name: Format and license headers
+    name: Format, license headers and commit messages
     runs-on: ubuntu-24.04
     timeout-minutes: 4
     steps:
+      # The whole history, main included: the commit message check compares the branch with
+      # main, and a shallow clone has neither.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install tooling
         run: |
@@ -56,6 +60,10 @@ jobs:
 
       - name: Check SPDX license headers
         run: ./scripts/check-license-headers.sh
+
+      # Each commit the branch or pull request adds to main. On main itself that is none.
+      - name: Check commit messages
+        run: ./scripts/check-commit-messages.sh
 
   build:
     name: ${{ matrix.preset }}
