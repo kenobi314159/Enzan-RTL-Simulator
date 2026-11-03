@@ -95,7 +95,7 @@ jobs:
           .venv/bin/pip install --quiet -r tests/conformance/cocotb/requirements.txt
 
       - name: Restore compiler cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ matrix.preset }}-${{ github.sha }}
@@ -193,7 +193,7 @@ jobs:
             ghdl ghdl-mcode qt6-base-dev tcl-dev
 
       - name: Restore compiler cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-sanitize-${{ github.sha }}
@@ -235,7 +235,7 @@ jobs:
             qt6-base-dev tcl-dev flex libzstd-dev
 
       - name: Restore compiler cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-tidy-${{ github.sha }}
@@ -286,7 +286,7 @@ jobs:
             cmake ninja-build ccache libgtest-dev zlib1g-dev qt6-base-dev tcl-dev
 
       - name: Restore compiler cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           key: ccache-gui-${{ github.sha }}
           path: ${{ env.CCACHE_DIR }}
@@ -360,7 +360,7 @@ jobs:
             -r tests/conformance/sv-tests/requirements.txt
 
       - name: Restore compiler cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-slang-${{ github.sha }}
