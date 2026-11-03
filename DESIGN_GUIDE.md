@@ -96,7 +96,10 @@ Every source file MUST begin with an SPDX identifier, in its language's comment 
 ```
 
 Third-party code vendored into `third_party/` MUST keep its original license text and MUST be
-recorded, in the user documentation, with its license, upstream URL and pinned revision.
+recorded, in the user documentation, with its license, upstream URL and pinned revision. So MUST
+a file translated from another project's, such as a testbench rewritten in the other language: a
+translation is that project's work as well as Enzan's, so it keeps that project's notice and
+licence rather than taking Enzan's.
 
 ---
 

@@ -69,3 +69,17 @@ this list is a record of the current revisions rather than a second place they a
 | [GoogleTest](https://github.com/google/googletest) | `v1.17.0` | BSD-3-Clause | Enzan's unit tests, where no GoogleTest 1.12 or later is installed |
 
 None of them is in the repository, and each keeps its own licence text in the tarball.
+
+## Translated from other projects
+
+Two testbenches of the design regression are another project's testbench rewritten in the other
+language, so that the design can be checked with the boundary between the languages moved. A
+translation is that project's work as well as Enzan's, so each keeps the original's copyright
+notice and licence, which cover the translation too, rather than Enzan's GPLv3:
+
+| File | Translated from | License |
+|---|---|---|
+| `tests/designs/neorv32/tb/neorv32_tb.v` | [NEORV32](https://github.com/stnolting/neorv32)'s `sim/neorv32_tb.vhd` | BSD-3-Clause |
+| `tests/designs/aes/tb/tb_aes_core.vhd` | [secworks/aes](https://github.com/secworks/aes)'s `src/tb/tb_aes_core.v` | BSD-2-Clause |
+
+Each was translated from the revision its design's `revision.txt` names.
