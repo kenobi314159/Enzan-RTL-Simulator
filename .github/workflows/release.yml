@@ -26,7 +26,7 @@ jobs:
       tarball: ${{ steps.dist.outputs.tarball }}
     steps:
       # The tags, for the revision the tarball records, and NVC, which it carries.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
           fetch-depth: 0
@@ -65,7 +65,7 @@ jobs:
       matrix:
         target: [ubuntu-24.04, debian-13, fedora, el9, arch]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v4
         with:
