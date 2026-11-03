@@ -121,7 +121,8 @@ deps() {
             pacman -Syu --noconfirm --needed base-devel
             prepare "$1"
             # shellcheck source=/dev/null
-            (. "$work/PKGBUILD" && pacman -S --noconfirm --needed "${makedepends[@]}")
+            (. "$work/PKGBUILD" &&
+                pacman -S --noconfirm --needed "${makedepends[@]}" "${checkdepends[@]}")
             # makepkg will not run as root.
             useradd --create-home builder
             ;;
