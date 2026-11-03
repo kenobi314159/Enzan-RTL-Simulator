@@ -12,6 +12,17 @@ Files: *
 Copyright: 2026 the Enzan authors
 License: GPL-3+
 
+Files: tests/designs/neorv32/tb/neorv32_tb.v
+Copyright: NEORV32 contributors
+           2020-2026 Stephan Nolting
+           2026 the Enzan authors
+License: BSD-3-clause
+
+Files: tests/designs/aes/tb/tb_aes_core.vhd
+Copyright: 2014 Secworks Sweden AB
+           2026 the Enzan authors
+License: BSD-2-clause
+
 Files: third_party/nvc/*
 Copyright: 2011-2026 Nick Gasson and the NVC contributors
 License: GPL-3+

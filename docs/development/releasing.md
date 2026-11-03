@@ -4,9 +4,9 @@ What a maintainer does to release Enzan, in the order the steps are taken.
 
 ## Before
 
-`main` is green, including the jobs that run on `main` only, and the packaging builds: run the
-release workflow by hand on `main` (Actions → Release → Run workflow), which builds and tests every
-distribution's packages and releases nothing. Locally, the same for one distribution is
+`main` is green and the packaging builds: run the release workflow by hand on `main` (Actions →
+Release → Run workflow), which builds and tests every distribution's packages and releases nothing.
+Locally, the same for one distribution is
 
 ```sh
 scripts/make-dist.sh

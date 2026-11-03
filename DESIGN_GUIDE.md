@@ -1,7 +1,7 @@
 # Enzan RTL Simulator — Design and Development Guide
 
 **Status:** Living specification. Revised as the project evolves.
-**Audience:** AI coding agents and maintainers working in this repository.
+**Audience:** everyone working in this repository, people and AI coding agents alike.
 **Authority:** This document is the single normative specification for Enzan. Documentation for
 users lives separately and is derived from it, never the reverse.
 
@@ -9,8 +9,8 @@ users lives separately and is derived from it, never the reverse.
 
 ## 0. How to use this document
 
-Agents working in this repository MUST read sections 0, 12, 13 and 17 before making any change, and
-MUST read the section covering the component they are modifying.
+Anyone working in this repository, a person or an agent, MUST read sections 0, 12, 13 and 17 before
+making any change, and MUST read the section covering the component they are modifying.
 
 The keywords **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT** and **MAY** are used in their RFC
 2119 sense. A **MUST** is an invariant: code that would violate one is a conflict to raise, not to
@@ -96,7 +96,10 @@ Every source file MUST begin with an SPDX identifier, in its language's comment 
 ```
 
 Third-party code vendored into `third_party/` MUST keep its original license text and MUST be
-recorded, in the user documentation, with its license, upstream URL and pinned revision.
+recorded, in the user documentation, with its license, upstream URL and pinned revision. So MUST
+a file translated from another project's, such as a testbench rewritten in the other language: a
+translation is that project's work as well as Enzan's, so it keeps that project's notice and
+licence rather than taking Enzan's.
 
 ---
 
@@ -1421,10 +1424,12 @@ Enzan-RTL-Simulator/
 ├── LICENSE                   GPLv3
 ├── README.md                 short orientation for users
 ├── CONTRIBUTING.md           building from source and checking a change; points here
+├── SECURITY.md               how to report a vulnerability, and what is one
 ├── DESIGN_GUIDE.md           this document — the normative specification
 ├── .clang-format
 ├── .clang-tidy
 ├── .github/
+│   ├── dependabot.yml        keeps the workflows' actions current
 │   └── workflows/            GitHub Actions CI
 ├── cmake/                    find modules and helper functions
 ├── include/
@@ -1641,11 +1646,9 @@ a threshold is agreed, a regression beyond it should fail CI, in a nightly job i
 
 **GitHub Actions.** The workflow is the record of which job runs what; these are the rules it keeps.
 
-- **What runs on a development branch or a pull request must be fast.** Every push spends the
-  project's monthly allowance of CI time, so a job or step that takes long runs on `main` only.
-- **Everything still runs before a pull request is merged**: whoever merges runs the main-only jobs
-  locally first, with the commands the workflow uses, since a main-only check that fails after the
-  merge leaves `main` red.
+- **Every job runs on every push and pull request**, the long ones included. The repository is
+  public, so its runners cost nothing, and a check that ran on `main` alone would be found failing
+  after a merge, leaving `main` red, rather than on the pull request before it.
 - **Code compiled only with a component, or only without one, is compiled somewhere with warnings as
   errors.** One job builds every optional component, as a contributor's plain configure does, and is
   the only one to build the SystemVerilog frontend, since one is enough to prove it; another builds
@@ -1661,7 +1664,7 @@ branch is fixed or reverted before other work continues.
 
 ---
 
-## 17. Working agreements for agents
+## 17. Working agreements
 
 ### 17.1 Commit messages
 
@@ -1676,8 +1679,10 @@ Path segments are lowercase and mirror the source tree, even though source files
 PascalCase. The path prefix is used only when the change genuinely touches just that area; a change
 spanning several components carries the category alone.
 
-Categories: `build`, `ci`, `design`, `docs`, `eir`, `elab`, `frontend`, `gui`, `session`, `ipc`,
-`wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`, `perf`, `refactor`, `license`.
+The category is one lowercase word for the kind of change or for the component it is in. These are
+the usual ones, not a closed list: `build`, `ci`, `design`, `docs`, `eir`, `elab`, `frontend`,
+`gui`, `session`, `ipc`, `wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`, `perf`,
+`refactor`, `license`.
 
 Examples:
 
@@ -1689,8 +1694,9 @@ test: golden: picorv32: Add differential VCD comparison
 docs: Describe the mixed-language delta mapping
 ```
 
-The subject line is imperative, capitalised, and under 72 characters. The body explains **why**, not
-what — the diff already shows what.
+The subject line is imperative, capitalised, and 72 characters at most, its prefixes included. The
+body explains **why**, not what — the diff already shows what. `scripts/check-commit-messages.sh`
+checks every commit a branch adds for a category's shape and for the length, and CI runs it.
 
 ### 17.2 Commit granularity
 

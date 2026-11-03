@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Keeps the actions the workflows use current, and nothing else. cocotb's version is pinned on
+# purpose, in one file, and NVC's and slang's revisions are pinned because an upgrade is expected
+# to break the frontend adapters: each of those is moved by hand, with the suites it breaks.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci

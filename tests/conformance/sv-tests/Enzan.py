@@ -15,7 +15,7 @@ from BaseRunner import BaseRunner
 class Enzan(BaseRunner):
     def __init__(self):
         super().__init__('enzan', 'enzan', {'parsing', 'elaboration', 'simulation'})
-        self.url = 'https://github.com/kubalekj/Enzan-RTL-Simulator'
+        self.url = 'https://github.com/kenobi314159/Enzan-RTL-Simulator'
 
     def prepare_run_cb(self, tmp_dir, params):
         # The sources go in a file list because `elaborate` and `run` take their sources from
