@@ -1679,8 +1679,10 @@ Path segments are lowercase and mirror the source tree, even though source files
 PascalCase. The path prefix is used only when the change genuinely touches just that area; a change
 spanning several components carries the category alone.
 
-Categories: `build`, `ci`, `design`, `docs`, `eir`, `elab`, `frontend`, `gui`, `session`, `ipc`,
-`wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`, `perf`, `refactor`, `license`.
+The category is one lowercase word for the kind of change or for the component it is in. These are
+the usual ones, not a closed list: `build`, `ci`, `design`, `docs`, `eir`, `elab`, `frontend`,
+`gui`, `session`, `ipc`, `wavedb`, `pli`, `runtime`, `codegen`, `test`, `bench`, `fix`, `perf`,
+`refactor`, `license`.
 
 Examples:
 
