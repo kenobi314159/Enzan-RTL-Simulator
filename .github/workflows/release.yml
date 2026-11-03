@@ -50,7 +50,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -76,7 +76,7 @@ jobs:
       - name: Build and test the packages
         run: packaging/build-package.sh ${{ matrix.target }} "dist/${{ needs.dist.outputs.tarball }}" packages
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: packages-${{ matrix.target }}
           path: packages/

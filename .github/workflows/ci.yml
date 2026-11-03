@@ -403,7 +403,7 @@ jobs:
 
       - name: Keep the cocotb logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cocotb-suite-logs
           path: build/cocotb-suite/*.log
@@ -423,7 +423,7 @@ jobs:
 
       - name: Keep the sv-tests logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sv-tests-logs
           path: build/sv-tests/out/logs
@@ -473,7 +473,7 @@ jobs:
 
       - name: Keep the NEORV32 logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: neorv32-logs
           path: |
@@ -484,7 +484,7 @@ jobs:
 
       - name: Keep the design regression logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: design-regression-logs
           path: |
