@@ -1424,6 +1424,7 @@ Enzan-RTL-Simulator/
 ├── LICENSE                   GPLv3
 ├── README.md                 short orientation for users
 ├── CONTRIBUTING.md           building from source and checking a change; points here
+├── SECURITY.md               how to report a vulnerability, and what is one
 ├── DESIGN_GUIDE.md           this document — the normative specification
 ├── .clang-format
 ├── .clang-tidy
