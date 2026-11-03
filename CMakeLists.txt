@@ -21,7 +21,7 @@ project(
 
 # Appended to the version in `enzan --version`. Release builds clear it.
 set(ENZAN_VERSION_SUFFIX
-    "dev"
+    ""
     CACHE STRING "Pre-release suffix appended to the reported version")
 
 if(ENZAN_VERSION_SUFFIX)
