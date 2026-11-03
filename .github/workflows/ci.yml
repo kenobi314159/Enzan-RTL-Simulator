@@ -39,7 +39,7 @@ jobs:
     steps:
       # The whole history, main included: the commit message check compares the branch with
       # main, and a shallow clone has neither.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -75,7 +75,7 @@ jobs:
         preset: [gcc-debug, gcc-release, clang-debug, clang-release]
     steps:
       # NVC, which the VHDL frontend builds part of, is a submodule.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
 
@@ -181,7 +181,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
 
@@ -223,7 +223,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
 
@@ -276,7 +276,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Qt 6 for the windows and Tcl for the theme; nothing of NVC's or slang's.
       - name: Install dependencies
@@ -325,7 +325,7 @@ jobs:
     timeout-minutes: 30
     steps:
       # NVC, which the VHDL frontend builds part of, is a submodule.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
 
