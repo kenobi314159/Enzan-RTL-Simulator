@@ -1428,6 +1428,7 @@ Enzan-RTL-Simulator/
 ├── .clang-format
 ├── .clang-tidy
 ├── .github/
+│   ├── dependabot.yml        keeps the workflows' actions current
 │   └── workflows/            GitHub Actions CI
 ├── cmake/                    find modules and helper functions
 ├── include/
