@@ -27,6 +27,7 @@
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/PortSymbols.h"
+#include "slang/ast/symbols/SpecifySymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
@@ -370,6 +371,10 @@ public:
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
+
+    /// Reads what a functional simulation needs of a specify block: whether its module paths
+    /// change anything, and where its first timing check is.
+    void collectSpecifyBlock(const ast::SpecifyBlockSymbol& block);
 
     /// The EIR kind of a slang net kind, or nothing for one Enzan cannot resolve.
     static std::optional<eir::NetKind> convertNetKind(ast::NetType::NetKind kind);
@@ -905,6 +910,10 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             reportPrimitiveInstance(member.as<ast::PrimitiveInstanceSymbol>());
             break;
 
+        case slang::ast::SymbolKind::SpecifyBlock:
+            collectSpecifyBlock(member.as<ast::SpecifyBlockSymbol>());
+            break;
+
         case slang::ast::SymbolKind::GenerateBlock: {
             // slang has already decided which generate branch is taken; an
             // uninstantiated one is the branch that was not, and must be skipped
@@ -951,6 +960,55 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
     }
 
     return true;
+}
+
+void ModuleBuilder::collectSpecifyBlock(const ast::SpecifyBlockSymbol& block) {
+    // The terminals of a path, by name where they are plain signals, for a diagnostic.
+    const auto terminals = [](std::span<const ast::Expression* const> expressions) {
+        std::string names;
+        for (const ast::Expression* expression : expressions) {
+            if (!names.empty()) names += ", ";
+            const ast::Symbol* symbol = expression->getSymbolReference();
+            names += symbol != nullptr ? std::format("'{}'", symbol->name) : "an expression";
+        }
+        return names;
+    };
+
+    for (const ast::Symbol& member : block.members()) {
+        switch (member.kind) {
+        case slang::ast::SymbolKind::TimingPath: {
+            // A path with a delay holds its output back, which leaving it out would not, so only
+            // one whose every delay is zero, and which so changes nothing, is accepted.
+            const auto& path = member.as<ast::TimingPathSymbol>();
+            const bool zero =
+                std::ranges::all_of(path.getDelays(), [&](const ast::Expression* delay) {
+                    ast::EvalContext evalContext(path);
+                    const slang::ConstantValue value = delay->eval(evalContext);
+                    return (value.isInteger() || value.isReal() || value.isShortReal())
+                           && value.isFalse();
+                });
+            if (!zero) {
+                reportUnsupported(path.location,
+                                  std::format("the module path from {} to {}, whose delay is not "
+                                              "zero,",
+                                              terminals(path.getInputs()),
+                                              terminals(path.getOutputs())));
+            }
+            break;
+        }
+
+        case slang::ast::SymbolKind::SystemTimingCheck:
+            if (!definitionValue.firstTimingCheck.valid())
+                definitionValue.firstTimingCheck = convertLocation(member.location);
+            break;
+
+        default:
+            // Specparams, `PATHPULSE$` among them, are constants, which an expression naming one
+            // folds. A pulse style and `showcancelled` shape only the pulses a path with a delay
+            // lets through, and every path accepted above has none.
+            break;
+        }
+    }
 }
 
 bool ModuleBuilder::collectDeclarations() {

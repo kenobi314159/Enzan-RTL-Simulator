@@ -343,6 +343,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
     out.boolean(definition.isPackage);
     out.u8(static_cast<std::uint8_t>(definition.language));
     writeLocation(out, names, definition.location);
+    writeLocation(out, names, definition.firstTimingCheck);
 
     out.u32(static_cast<std::uint32_t>(definition.objects.size()));
     for (const Object& object : definition.objects) {
@@ -676,6 +677,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     definition.isPackage = in.boolean();
     definition.language = static_cast<Language>(in.u8());
     definition.location = readLocation(in, buffers);
+    definition.firstTimingCheck = readLocation(in, buffers);
 
     definition.objects.resize(in.count());
     for (Object& object : definition.objects) {

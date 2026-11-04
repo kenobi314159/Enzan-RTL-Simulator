@@ -225,6 +225,9 @@ ENZAN_DIAG(VhdlUnitUnrecorded, 6031, Error,
            "'{}' is among the VHDL NVC analysed into library '{}', but the analysis that put it "
            "there did not finish, so the library does not record it; analyse its sources into "
            "the library again")
+ENZAN_DIAG(TimingChecksNotRun, 6032, Note,
+           "timing checks are not run, so a violation of this one or of any other in the design "
+           "is never reported")
 ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
            "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
            "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "

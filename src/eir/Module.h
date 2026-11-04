@@ -481,6 +481,11 @@ struct ModuleDefinition {
     /// What this parameterisation's parameters were resolved to, in declaration order.
     std::vector<Parameter> parameters;
 
+    /// Where the first timing check of this definition's specify blocks is, or an invalid
+    /// location when it has none. A timing check is not run, and a run instantiating one says
+    /// so, so the check itself is not kept: only where to point the user.
+    SourceLocation firstTimingCheck;
+
     /// Returns the index of the object called `name`, or nothing.
     ///
     /// A linear scan: an object table is small, and a map would add a container

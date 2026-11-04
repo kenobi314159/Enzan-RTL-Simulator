@@ -162,6 +162,10 @@ enzan_add_golden_test(events)
 # Intra-assignment delays, and inertial delays on continuous assignments.
 enzan_add_golden_test(delays)
 
+# Specify blocks as cell libraries write them: specparams, module paths of no delay, and timing
+# checks, which are not run.
+enzan_add_golden_test(specify)
+
 # Delays and `$time` in each module's own time unit, rounded to its precision.
 enzan_add_golden_test(timescales OWN_TIME_SCALES)
 

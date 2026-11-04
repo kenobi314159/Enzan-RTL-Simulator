@@ -592,6 +592,11 @@ floor.
   caller and the caller's read and write sets are exactly what the call touches. A recursive call is
   refused, unless slang folds it to a constant. Calling a SystemVerilog function as an EIR
   subprogram instead would be a change to this frontend alone.
+- **A specify block is read for what a functional simulation needs of it.** A `specparam` is a
+  parameter. A module path whose delays are all zero changes nothing and is accepted; one with a
+  delay is refused, since leaving it out would move its output early. A timing check is not run
+  (1.3): its notifier never toggles, and a run instantiating one says so once, pointing at the
+  first in the hierarchy.
 
 ### 5.2 VHDL via NVC
 
@@ -1804,8 +1809,8 @@ Left out of the milestones above, and refused by name where a design uses them r
 mistranslated:
 
 - SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
-  classes, unpacked unions, strengths other than strong, and instances of built-in and
-  user-defined primitives.
+  classes, unpacked unions, strengths other than strong, instances of built-in and user-defined
+  primitives, and module paths with a delay.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
