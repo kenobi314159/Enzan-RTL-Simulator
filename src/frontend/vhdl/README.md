@@ -7,7 +7,7 @@ configured with `-DENZAN_ENABLE_VHDL=OFF`.
 
 - Drive NVC's analysis over the sources — lexing, parsing, semantic checking, simplification
   and bounds checking — into NVC's units in a library, and translate NVC's diagnostics into
-  Enzan's diagnostic engine (ENZ2001–ENZ2004).
+  Enzan's diagnostic engine (ENZ2001–ENZ2004, and ENZ2008 for a design naming VITAL).
 - Walk NVC's analysed trees and emit EIR, one unit per entity, architecture, set of generic
   values and set of bounds its unconstrained ports take, folding generics as it goes, from the top
   down the hierarchy.

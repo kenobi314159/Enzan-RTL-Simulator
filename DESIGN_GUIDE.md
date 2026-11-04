@@ -544,7 +544,9 @@ using without first having to find it.
 **VHDL's standard libraries are part of the tool, not a cache.** `std`, `ieee` and NVC's own `nvc`
 are analysed from NVC's sources when Enzan is built and found from the executable's own directory
 (11.5), without being named, since `library ieee;` has to resolve with no flag. Nothing a user does
-writes to them. A library the user names `ieee` replaces them.
+writes to them. A library the user names `ieee` replaces them. `ieee` is built without VITAL,
+gate-level timing being out of scope (1.3), and a design naming it is told so rather than that a
+unit is missing.
 
 **A library holds VHDL as NVC's analysed units, not as EIR.** A VHDL unit is analysed against the
 units analysed before it, which only NVC's units can serve, and a design is translated into EIR for

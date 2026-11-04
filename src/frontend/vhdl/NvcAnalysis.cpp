@@ -9,7 +9,10 @@
 #include "frontend/vhdl/NvcApi.h"
 #include "frontend/vhdl/Translator.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
+#include <format>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -59,6 +62,24 @@ std::string stripMarkup(std::string_view text) {
         ++at;
     }
     return plain;
+}
+
+/// The VITAL package an NVC message says `ieee` lacks, in lower case, or an empty string.
+///
+/// Enzan builds `ieee` without VITAL, gate-level timing being out of scope, so NVC reports a
+/// design using it as naming a unit that is missing, as though the installation were broken.
+/// NVC gives no more than its message to tell that case apart, so its wording is matched, and a
+/// unit test pins it.
+std::string missingVitalPackage(std::string_view message) {
+    constexpr std::string_view Prefix = "design unit ";
+    constexpr std::string_view Suffix = " not found in library IEEE";
+    if (!message.starts_with(Prefix) || !message.ends_with(Suffix)) return {};
+    std::string unit(message.substr(Prefix.size(), message.size() - Prefix.size() - Suffix.size()));
+    if (!unit.starts_with("VITAL_")) return {};
+    std::ranges::transform(unit, unit.begin(), [](char c) {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    });
+    return unit;
 }
 
 /// The buffer of the source NVC knows as `file`, or an invalid one when it is not one of the
@@ -116,6 +137,12 @@ void translate(diag_t* nvcDiagnostic, void* context) {
     diagnostic.code = code;
     diagnostic.severity = defaultSeverity(code);
     diagnostic.message = stripMarkup(diag_get_text(nvcDiagnostic));
+    if (const std::string vital = missingVitalPackage(diagnostic.message); !vital.empty()) {
+        diagnostic.code = DiagCode::VhdlVital;
+        diagnostic.severity = defaultSeverity(DiagCode::VhdlVital);
+        diagnostic.message =
+            std::vformat(formatString(DiagCode::VhdlVital), std::make_format_args(vital));
+    }
 
     const loc_t* const location = diag_get_loc(nvcDiagnostic);
     diagnostic.location = locate(translation, location);
