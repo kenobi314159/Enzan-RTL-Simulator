@@ -66,9 +66,13 @@ When two goals conflict, resolve the conflict in this order:
 The following are **out of scope** and MUST NOT be implemented without an explicit decision to
 change this list:
 
-- Gate-level simulation, SDF back-annotation and timing checks.
+- Gate-level timing simulation: SDF back-annotation, timing checks and VITAL. The Verilog that
+  vendors' cell libraries are written in is in scope, read for what a functional simulation needs
+  of it: gate and user-defined primitives, drive strengths and specify blocks, whose module paths
+  delay outputs as the standard says, since the vendors' own simulators show those delays.
 - Power-aware (UPF/CPF) and mixed-signal (Verilog-AMS, VHDL-AMS) simulation.
-- IP encryption (IEEE 1735).
+- IP encryption (IEEE 1735). Decrypting needs a vendor to wrap its keys for Enzan's, which takes
+  an agreement with each vendor, and a private key in a GPL binary is no secret.
 - Windows and macOS support. Enzan targets Linux only.
 - Synthesis, formal verification, equivalence checking.
 - UVM, constrained-random stimulus and functional coverage, until M9+ (section 18).
