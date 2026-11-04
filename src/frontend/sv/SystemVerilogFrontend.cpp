@@ -404,8 +404,23 @@ private:
             } else if (element->kind == slang::ast::SymbolKind::Instance) {
                 instances.push_back(CollectedInstance{
                     .prefix = prefix, .symbol = &element->as<ast::InstanceSymbol>()});
+            } else if (element->kind == slang::ast::SymbolKind::PrimitiveInstance) {
+                reportPrimitiveInstance(element->as<ast::PrimitiveInstanceSymbol>());
             }
         }
+    }
+
+    /// Reports an instance of a gate, a switch or a user-defined primitive by the primitive's
+    /// name. Each drives its outputs, so leaving one out would leave them undriven and the
+    /// design would simulate to the wrong answer.
+    void reportPrimitiveInstance(const ast::PrimitiveInstanceSymbol& instance) {
+        const ast::PrimitiveSymbol& primitive = instance.primitiveType;
+        reportUnsupported(instance.location,
+                          std::format("an instance of the {} '{}'",
+                                      primitive.primitiveKind == ast::PrimitiveSymbol::UserDefined
+                                          ? "user-defined primitive"
+                                          : "built-in primitive",
+                                      primitive.name));
     }
 
     /// Returns a name not already used by an object in this module.
@@ -883,6 +898,10 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
         case slang::ast::SymbolKind::InstanceArray:
             // Each element is an instance of its own, named with its index.
             collectInstanceArray(member.as<ast::InstanceArraySymbol>(), prefix);
+            break;
+
+        case slang::ast::SymbolKind::PrimitiveInstance:
+            reportPrimitiveInstance(member.as<ast::PrimitiveInstanceSymbol>());
             break;
 
         case slang::ast::SymbolKind::GenerateBlock: {
