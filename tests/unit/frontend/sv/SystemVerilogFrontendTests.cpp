@@ -1564,6 +1564,31 @@ TEST_F(FrontendTest, ReportsAnArrayOfPrimitiveInstances) {
     EXPECT_TRUE(reported("the built-in primitive 'not'"));
 }
 
+TEST_F(FrontendTest, RefusesAFileHoldingAnEncryptedEnvelopeWithOneError) {
+    // slang skips the envelope with a warning, which would leave `m` an empty module that
+    // simulates. Everything else slang says about the file follows from the missing text.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+        `pragma protect begin_protected
+        `pragma protect version = 1
+        `pragma protect encrypt_agent = "written for this test"
+        `pragma protect key_keyowner = "nobody", key_keyname = "none", key_method = "rsa"
+        `pragma protect encoding = (enctype = "base64", line_length = 64, bytes = 3)
+        `pragma protect key_block
+        AA+/
+        `pragma protect encoding = (enctype = "base64", line_length = 64, bytes = 5)
+        `pragma protect data_block
+        AAAA+/8=
+        `pragma protect end_protected
+        endmodule
+    )"),
+              nullptr);
+    ASSERT_EQ(consumer.codes.size(), 1U) << consumer.messages.front();
+    EXPECT_EQ(consumer.codes.front(), DiagCode::EncryptedSource);
+    EXPECT_TRUE(reported((directory / "design.sv").string())) << "the error names the file";
+}
+
 TEST_F(FrontendTest, EachCaseFormComparesItsItemsWithItsOwnOpcode) {
     // A wildcard compare approximated with `==` would silently take the wrong branch, so each
     // form is pinned to the comparison IEEE 1800 section 12.5 gives it.

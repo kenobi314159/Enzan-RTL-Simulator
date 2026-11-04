@@ -245,6 +245,32 @@ TEST_F(VhdlAnalysisTest, RunsNoneOfEnzansExitHandlersWhenNvcStops) {
     EXPECT_FALSE(std::filesystem::exists(workspace / "destroyed"));
 }
 
+TEST_F(VhdlAnalysisTest, RefusesAnEncryptedEnvelopeWithOneError) {
+    // NVC refuses protect tool directives (IEEE 1076-2008 section 24.1) at the first and skips to
+    // `end_protected`. Pinned so that an NVC upgrade skipping envelopes silently is noticed. The
+    // envelope is the whole file, as in Vivado's encrypted packages, and its blocks hold '+', '/'
+    // and '=', as real ones do: NVC skips by tokens, misses `end_protected` after a block with
+    // none, and misreads what follows an envelope in its file, refusing the file all the same.
+    EXPECT_FALSE(analyse("`protect begin_protected\n"
+                         "`protect version = 1\n"
+                         "`protect encrypt_agent = \"written for this test\"\n"
+                         "`protect key_keyowner = \"nobody\", key_method = \"rsa\"\n"
+                         "`protect encoding = (enctype = \"base64\", line_length = 64, bytes = 3)\n"
+                         "`protect key_block\n"
+                         "AA+/\n"
+                         "`protect encoding = (enctype = \"base64\", line_length = 64, bytes = 5)\n"
+                         "`protect data_block\n"
+                         "AAAA+/8=\n"
+                         "`protect end_protected\n"));
+
+    ASSERT_EQ(std::ranges::count(consumer.received, DiagCode::VhdlError, &Diagnostic::code), 1)
+        << transcript();
+    const Diagnostic* const error = first(DiagCode::VhdlError);
+    EXPECT_NE(error->message.find("protect"), std::string::npos) << error->message;
+    ASSERT_TRUE(error->location.valid());
+    EXPECT_EQ(sources.lineNumber(error->location), 1U);
+}
+
 TEST_F(VhdlAnalysisTest, ReportsAFatalErrorOnce) {
     EXPECT_FALSE(analyse("library nonesuch;\n"
                          "use nonesuch.things.all;\n"

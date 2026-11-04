@@ -35,6 +35,7 @@
 #include "slang/ast/types/Type.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/Diagnostics.h"
+#include "slang/diagnostics/PreprocessorDiags.h"
 #include "slang/numeric/Time.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/AllSyntax.h"
@@ -2174,6 +2175,17 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     const slang::Diagnostics& slangDiagnostics = compilation.getAllDiagnostics();
     const DeadCode deadCode(compilation.getRoot());
 
+    // slang skips an encrypted envelope with a warning and reads on, so a module whose body is
+    // encrypted would be translated without it and simulate. Such a file is refused, by one
+    // error naming it: what slang says about the rest of it follows from the missing text, such
+    // as an `ifndef left open or a header with no `endmodule`.
+    std::set<slang::BufferID> encrypted;
+    for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
+        if (diagnostic.code == slang::diag::ProtectedEnvelope && diagnostic.location)
+            encrypted.insert(diagnostic.location.buffer());
+    }
+    std::set<slang::BufferID> encryptionReported;
+
     for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
         const slang::DiagnosticSeverity severity = slang::getDefaultSeverity(diagnostic.code);
         if (severity == slang::DiagnosticSeverity::Ignored) continue;
@@ -2197,6 +2209,17 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             const std::size_t column = slangSources.getColumnNumber(diagnostic.location);
             return start.advanced(static_cast<std::uint32_t>(column > 0 ? column - 1 : 0));
         }();
+
+        if (diagnostic.location && encrypted.contains(diagnostic.location.buffer())) {
+            const slang::BufferID buffer = diagnostic.location.buffer();
+            if (diagnostic.code == slang::diag::ProtectedEnvelope
+                && encryptionReported.insert(buffer).second) {
+                diagnostics.report(DiagCode::EncryptedSource, location,
+                                   slangSources.getRawFileName(buffer));
+                hasError = true;
+            }
+            continue;
+        }
 
         // A degenerate construct a constant condition rules out is never translated, so it is
         // reported and accepted rather than refused (see DeadCode).
