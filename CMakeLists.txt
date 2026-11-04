@@ -10,7 +10,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
   Enzan
-  VERSION 0.1.0
+  VERSION 0.2.0
   DESCRIPTION "Event-driven mixed-language RTL simulator for SystemVerilog and VHDL"
   HOMEPAGE_URL "https://github.com/kenobi314159/Enzan-RTL-Simulator"
   # Enzan itself is C++ only. C is declared because mimalloc, which slang pulls
@@ -21,7 +21,7 @@ project(
 
 # Appended to the version in `enzan --version`. Release builds clear it.
 set(ENZAN_VERSION_SUFFIX
-    ""
+    "dev"
     CACHE STRING "Pre-release suffix appended to the reported version")
 
 if(ENZAN_VERSION_SUFFIX)
