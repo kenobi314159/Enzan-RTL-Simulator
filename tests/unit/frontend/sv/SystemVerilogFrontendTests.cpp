@@ -38,6 +38,7 @@ namespace {
 using enzan::DiagCode;
 using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
+using enzan::SourceLocation;
 using enzan::SourceManager;
 using enzan::eir::Design;
 using enzan::eir::Instance;
@@ -1587,6 +1588,81 @@ TEST_F(FrontendTest, RefusesAFileHoldingAnEncryptedEnvelopeWithOneError) {
     ASSERT_EQ(consumer.codes.size(), 1U) << consumer.messages.front();
     EXPECT_EQ(consumer.codes.front(), DiagCode::EncryptedSource);
     EXPECT_TRUE(reported((directory / "design.sv").string())) << "the error names the file";
+}
+
+TEST_F(FrontendTest, AcceptsASpecifyBlockWhosePathsHaveNoDelay) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (input a, input b, output y);
+            assign y = a & b;
+            specify
+                specparam PATHPULSE$ = 0;
+                specparam tpd = 0;
+                pulsestyle_ondetect y;
+                showcancelled y;
+                (a => y) = tpd;
+                (b => y) = (0:0:0, 0:0:0);
+                if (a) (b => y) = 0.0;
+                ifnone (a => y) = (0, 0, 0);
+            endspecify
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(design->findModule("m")->firstTimingCheck.valid());
+}
+
+TEST_F(FrontendTest, RefusesAModulePathWithADelayByItsTerminals) {
+    // Left out, the path would let `y` change at once, where every other simulator holds it.
+    EXPECT_EQ(analyse(R"(
+        module m (input a, input b, output y);
+            assign y = a & b;
+            specify
+                (a => y) = 0;
+                (a, b *> y) = (0:1:2);
+            endspecify
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("the module path from 'a', 'b' to 'y', whose delay is not zero,"));
+    EXPECT_EQ(std::ranges::count(consumer.codes, DiagCode::UnsupportedConstruct), 1)
+        << "the path without a delay is accepted";
+}
+
+TEST_F(FrontendTest, RecordsWhereADefinitionsFirstTimingCheckIs) {
+    // The checks are not run; the definition keeps only where the first is, for the run to point
+    // at when it says so.
+    const std::unique_ptr<Design> design = analyse("module m (input clk, input d);\n"
+                                                   "    reg notifier;\n"
+                                                   "    specify\n"
+                                                   "        $setup(d, posedge clk, 1, notifier);\n"
+                                                   "        $hold(posedge clk, d, 1, notifier);\n"
+                                                   "    endspecify\n"
+                                                   "endmodule\n");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const SourceLocation check = design->findModule("m")->firstTimingCheck;
+    ASSERT_TRUE(check.valid());
+    EXPECT_EQ(sources.lineNumber(check), 4U);
+}
+
+TEST_F(FrontendTest, ReadsASpecparamAsAParameter) {
+    // Read through a hierarchical reference, which slang does not fold, a specparam would
+    // otherwise become an object that nothing stores.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf;
+            specparam width = 3;
+        endmodule
+
+        module m;
+            logic [7:0] seen;
+            leaf u ();
+            initial seen = u.width;
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(std::ranges::none_of(
+        design->findModule("m")->objects,
+        [](const enzan::eir::Object& object) { return !object.hierarchicalPath.empty(); }))
+        << "a specparam has no storage to refer to";
 }
 
 TEST_F(FrontendTest, EachCaseFormComparesItsItemsWithItsOwnOpcode) {

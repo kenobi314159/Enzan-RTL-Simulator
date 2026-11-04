@@ -94,6 +94,7 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.sourceName = "counter";
     definition.language = Language::Vhdl;
     definition.location = SourceLocation(buffer, 3);
+    definition.firstTimingCheck = SourceLocation(buffer, 9);
 
     EnumDefinition states;
     states.name = "state_e";
@@ -270,6 +271,7 @@ TEST_F(SerializationTest, ModuleIdentityRoundTrips) {
     EXPECT_EQ(decoded.front().sourceName, "counter");
     EXPECT_EQ(decoded.front().language, Language::Vhdl);
     EXPECT_EQ(decoded.front().location, SourceLocation(buffer, 3));
+    EXPECT_EQ(decoded.front().firstTimingCheck, SourceLocation(buffer, 9));
 }
 
 TEST_F(SerializationTest, ObjectsRoundTrip) {

@@ -212,6 +212,40 @@ TEST_F(SessionTest, ElaboratingAnUnknownTopFails) {
     EXPECT_TRUE(reported(DiagCode::TopModuleNotFound));
 }
 
+TEST_F(SessionTest, ARunSaysOnceThatTimingChecksAreNotRun) {
+    // Two definitions with timing checks, one instantiated twice: one note, at the first check in
+    // the hierarchy, rather than one per definition or instance.
+    ASSERT_TRUE(analyse("checks.sv", "module setup_cell (input clk, input d);\n"
+                                     "    specify\n"
+                                     "        $setup(d, posedge clk, 1);\n"
+                                     "    endspecify\n"
+                                     "endmodule\n"
+                                     "module hold_cell (input clk, input d);\n"
+                                     "    specify\n"
+                                     "        $hold(posedge clk, d, 1);\n"
+                                     "    endspecify\n"
+                                     "endmodule\n"
+                                     "module tb;\n"
+                                     "    logic clk = 1'b0, d = 1'b0;\n"
+                                     "    hold_cell u_hold (.clk(clk), .d(d));\n"
+                                     "    setup_cell u_first (.clk(clk), .d(d));\n"
+                                     "    setup_cell u_second (.clk(clk), .d(d));\n"
+                                     "endmodule\n"))
+        << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+
+    ASSERT_EQ(
+        std::ranges::count(consumer.received, DiagCode::TimingChecksNotRun, &Diagnostic::code), 1);
+    const auto note =
+        std::ranges::find(consumer.received, DiagCode::TimingChecksNotRun, &Diagnostic::code);
+    EXPECT_EQ(sources.lineNumber(note->location), 8U) << "the hold check, instantiated first";
+}
+
+TEST_F(SessionTest, ARunWithoutTimingChecksSaysNothingOfThem) {
+    loadCounter();
+    EXPECT_FALSE(reported(DiagCode::TimingChecksNotRun));
+}
+
 TEST_F(SessionTest, RunningWithNoSimulationSaysSo) {
     EXPECT_EQ(session.run(std::nullopt), RunStatus::Error);
     EXPECT_TRUE(reported(DiagCode::NoSimulation));

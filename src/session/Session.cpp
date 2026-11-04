@@ -1037,6 +1037,17 @@ bool Session::elaborate(std::string_view topModule) {
         if (tree == nullptr) return false;
     }
 
+    // A timing check is not run, and a vendor's model that a user simulates elsewhere reports
+    // its violations, so a run says so once, at the first in the hierarchy (DESIGN_GUIDE.md
+    // section 5.1). Here rather than in the elaborator, which may elaborate twice.
+    for (const elab::Instance& instance : tree->instances()) {
+        const SourceLocation check = design->module(instance.definitionIndex).firstTimingCheck;
+        if (check.valid()) {
+            diagnostics.report(DiagCode::TimingChecksNotRun, check);
+            break;
+        }
+    }
+
     codegen::Compiler compiler(diagnostics);
     std::unique_ptr<codegen::CompiledDesign> bodies = compiler.compile(*design);
     if (bodies == nullptr) return false;

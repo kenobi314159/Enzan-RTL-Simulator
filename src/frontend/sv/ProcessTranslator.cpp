@@ -52,6 +52,18 @@ namespace ast = slang::ast;
 
 namespace {
 
+/// The value of `symbol` when it names a constant rather than state: a parameter, a specparam or
+/// an enumeration's member. A specparam (IEEE 1800 section 6.20.5) is a constant only SDF
+/// annotation could change, which Enzan does not do, so it is read as a parameter is.
+const slang::ConstantValue* constantOf(const ast::ValueSymbol& symbol) {
+    switch (symbol.kind) {
+    case slang::ast::SymbolKind::Parameter: return &symbol.as<ast::ParameterSymbol>().getValue();
+    case slang::ast::SymbolKind::Specparam: return &symbol.as<ast::SpecparamSymbol>().getValue();
+    case slang::ast::SymbolKind::EnumValue: return &symbol.as<ast::EnumValueSymbol>().getValue();
+    default: return nullptr;
+    }
+}
+
 /// Ten to the `exponent`, which no difference between two time units Enzan counts takes past 64
 /// bits.
 std::uint64_t powerOfTen(int exponent) {
@@ -1392,17 +1404,13 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         // A local of a subroutine being inlined lives in a register.
         if (const Value* local = localFor(symbol)) return copyOf(*local);
 
-        // A parameter or an enumeration's value is a constant, not state: reading it must not
-        // create an object, because an object would be a per-instance slot for a value that
-        // never changes.
-        if (symbol.kind == slang::ast::SymbolKind::Parameter
-            || symbol.kind == slang::ast::SymbolKind::EnumValue) {
-            const slang::ConstantValue& value = symbol.kind == slang::ast::SymbolKind::Parameter
-                                                    ? symbol.as<ast::ParameterSymbol>().getValue()
-                                                    : symbol.as<ast::EnumValueSymbol>().getValue();
+        // A parameter, a specparam or an enumeration's value is a constant, not state: reading
+        // it must not create an object, because an object would be a per-instance slot for a
+        // value that never changes.
+        if (const slang::ConstantValue* value = constantOf(symbol)) {
             if (!type.has_value()) break;
             const std::optional<eir::BitVector> bits =
-                module->constantBits(value, *expression.type);
+                module->constantBits(*value, *expression.type);
             if (!bits.has_value()) break;
             const std::uint32_t constant = addConstant(*bits);
             const std::uint32_t result = newRegister(*type);
@@ -2228,9 +2236,7 @@ ProcessTranslator::locate(const ast::Expression& expression) {
                             .reachWidth = local->type.bitWidth(),
                             .rootIsLocal = true};
         }
-        if (symbol.kind == slang::ast::SymbolKind::Parameter
-            || symbol.kind == slang::ast::SymbolKind::EnumValue)
-            break;
+        if (constantOf(symbol) != nullptr) break;
 
         const std::optional<std::uint32_t> objectIndex = module->objectFor(symbol);
         if (!objectIndex.has_value()) {
@@ -3261,11 +3267,9 @@ std::optional<std::int64_t> ProcessTranslator::constantValueOf(const ast::Expres
         return expression.as<ast::IntegerLiteral>().getValue().as<std::int64_t>();
 
     if (expression.kind == ast::ExpressionKind::NamedValue) {
-        const ast::ValueSymbol& symbol = expression.as<ast::ValueExpressionBase>().symbol;
-        if (symbol.kind == slang::ast::SymbolKind::Parameter) {
-            const slang::ConstantValue& value = symbol.as<ast::ParameterSymbol>().getValue();
-            if (value.isInteger()) return value.integer().as<std::int64_t>();
-        }
+        const slang::ConstantValue* value =
+            constantOf(expression.as<ast::ValueExpressionBase>().symbol);
+        if (value != nullptr && value->isInteger()) return value->integer().as<std::int64_t>();
     }
 
     if (const slang::ConstantValue* constant = expression.getConstant();
