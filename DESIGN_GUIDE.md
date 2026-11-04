@@ -1809,7 +1809,7 @@ mistranslated:
 
 - SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
   classes, unpacked unions, strengths other than strong, instances of built-in and user-defined
-  primitives, and module paths with a delay.
+  primitives, module paths with a delay, and net aliases.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from

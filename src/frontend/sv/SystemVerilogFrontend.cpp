@@ -180,6 +180,18 @@ std::string digestOf(std::string_view text) {
     return std::format("{:016x}", hash);
 }
 
+/// What `expressions` name, for a diagnostic: each signal by its name, `'a', 'b'`, and anything
+/// else as an expression.
+std::string signalNames(std::span<const ast::Expression* const> expressions) {
+    std::string names;
+    for (const ast::Expression* expression : expressions) {
+        if (!names.empty()) names += ", ";
+        const ast::Symbol* symbol = expression->getSymbolReference();
+        names += symbol != nullptr ? std::format("'{}'", symbol->name) : "an expression";
+    }
+    return names;
+}
+
 /// The name an instance has in the module holding it: its own, or its array's with its index.
 std::string instanceName(const ast::InstanceSymbol& instance) {
     if (instance.arrayPath.empty()) return std::string(instance.name);
@@ -930,6 +942,15 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             collectSpecifyBlock(member.as<ast::SpecifyBlockSymbol>());
             break;
 
+        case slang::ast::SymbolKind::NetAlias:
+            // An alias makes its nets one, so that a driver of either drives both; left out,
+            // each would see only its own drivers.
+            reportUnsupported(
+                member.location,
+                std::format("the net alias of {}",
+                            signalNames(member.as<ast::NetAliasSymbol>().getNetReferences())));
+            break;
+
         case slang::ast::SymbolKind::GenerateBlock: {
             // slang has already decided which generate branch is taken; an
             // uninstantiated one is the branch that was not, and must be skipped
@@ -979,17 +1000,6 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
 }
 
 void ModuleBuilder::collectSpecifyBlock(const ast::SpecifyBlockSymbol& block) {
-    // The terminals of a path, by name where they are plain signals, for a diagnostic.
-    const auto terminals = [](std::span<const ast::Expression* const> expressions) {
-        std::string names;
-        for (const ast::Expression* expression : expressions) {
-            if (!names.empty()) names += ", ";
-            const ast::Symbol* symbol = expression->getSymbolReference();
-            names += symbol != nullptr ? std::format("'{}'", symbol->name) : "an expression";
-        }
-        return names;
-    };
-
     for (const ast::Symbol& member : block.members()) {
         switch (member.kind) {
         case slang::ast::SymbolKind::TimingPath: {
@@ -1007,8 +1017,8 @@ void ModuleBuilder::collectSpecifyBlock(const ast::SpecifyBlockSymbol& block) {
                 reportUnsupported(path.location,
                                   std::format("the module path from {} to {}, whose delay is not "
                                               "zero,",
-                                              terminals(path.getInputs()),
-                                              terminals(path.getOutputs())));
+                                              signalNames(path.getInputs()),
+                                              signalNames(path.getOutputs())));
             }
             break;
         }
