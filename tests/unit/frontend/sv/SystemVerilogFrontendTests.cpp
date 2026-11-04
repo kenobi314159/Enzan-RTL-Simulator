@@ -1142,8 +1142,9 @@ TEST_F(FrontendTest, ACalledFunctionIsInlinedAndItsReadsAreTheCallers) {
 }
 
 TEST_F(FrontendTest, AHierarchicalReferenceIsAPathFromTheInstanceHoldingIt) {
-    // Down from the testbench, and up and across from one leaf to another. One definition
-    // serves both leaves, so the path is relative rather than from the root.
+    // Down from the testbench, and up and across from one leaf to the other. From the other leaf
+    // itself the same name is its own object, so the two leaves are two definitions: sharing the
+    // first translated would have one of them read the wrong `value`.
     const std::unique_ptr<Design> design = analyse(R"(
         module leaf;
             logic [3:0] value;
@@ -1167,12 +1168,69 @@ TEST_F(FrontendTest, AHierarchicalReferenceIsAPathFromTheInstanceHoldingIt) {
             if (!object.hierarchicalPath.empty()) paths.push_back(object.hierarchicalPath);
         return paths;
     };
+    const auto definitionOf = [&design](const ModuleDefinition& parent, std::string_view name) {
+        const auto instance = std::ranges::find(parent.instances, name, &Instance::name);
+        EXPECT_NE(instance, parent.instances.end()) << name;
+        return design->findModule(instance->definitionName);
+    };
     const ModuleDefinition* tb = design->findModule("tb");
-    const ModuleDefinition* leaf = design->findModule("leaf");
     ASSERT_NE(tb, nullptr);
-    ASSERT_NE(leaf, nullptr);
     EXPECT_EQ(referencesOf(*tb), (std::vector<std::string>{"u_one/value"}));
-    EXPECT_EQ(referencesOf(*leaf), (std::vector<std::string>{"../u_other/value"}));
+
+    const ModuleDefinition* one = definitionOf(*tb, "u_one");
+    const ModuleDefinition* other = definitionOf(*tb, "u_other");
+    ASSERT_NE(one, nullptr);
+    ASSERT_NE(other, nullptr);
+    EXPECT_NE(one, other);
+    EXPECT_EQ(referencesOf(*one), (std::vector<std::string>{"../u_other/value"}));
+    EXPECT_TRUE(referencesOf(*other).empty()) << "u_other reads its own value";
+    EXPECT_EQ(other->name, "leaf") << "names that stay inside leave the name as it was";
+}
+
+TEST_F(FrontendTest, InstancesShareADefinitionOnlyWhereTheirReferencesLeadAlike) {
+    // One parameterisation reading `tb.clk` from three instances, two of them one level down and
+    // one two levels down: the two alike share a definition, and the third has its own.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module probe;
+            logic seen;
+            assign seen = tb.clk;
+        endmodule
+
+        module shelter;
+            probe u ();
+        endmodule
+
+        module tb;
+            logic clk;
+            probe first ();
+            probe second ();
+            shelter deeper ();
+        endmodule
+    )",
+                                                   "tb");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* tb = design->findModule("tb");
+    const ModuleDefinition* shelter = design->findModule("shelter");
+    ASSERT_NE(tb, nullptr);
+    ASSERT_NE(shelter, nullptr);
+    const auto definitionName = [](const ModuleDefinition& parent, std::string_view name) {
+        const auto instance = std::ranges::find(parent.instances, name, &Instance::name);
+        return instance == parent.instances.end() ? std::string() : instance->definitionName;
+    };
+    EXPECT_EQ(definitionName(*tb, "first"), definitionName(*tb, "second"));
+    EXPECT_NE(definitionName(*tb, "first"), definitionName(*shelter, "u"));
+
+    const ModuleDefinition* shallow = design->findModule(definitionName(*tb, "first"));
+    const ModuleDefinition* deep = design->findModule(definitionName(*shelter, "u"));
+    ASSERT_NE(shallow, nullptr);
+    ASSERT_NE(deep, nullptr);
+    EXPECT_EQ(shallow->objects[require(shallow->findObject("ref$../clk"))].hierarchicalPath,
+              "../clk");
+    EXPECT_EQ(deep->objects[require(deep->findObject("ref$../../clk"))].hierarchicalPath,
+              "../../clk");
+    EXPECT_EQ(shallow->sourceName, "probe");
+    EXPECT_EQ(deep->sourceName, "probe");
 }
 
 TEST_F(FrontendTest, AModuleWithoutATimescaleBesideOneWithIsAccepted) {

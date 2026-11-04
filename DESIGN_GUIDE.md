@@ -121,10 +121,11 @@ output is independent of any particular top level, and so is reusable across run
 **A parameterised unit is analysed once per set of values the design uses.** slang is an elaborating
 frontend: it type-checks a body in the context of the values it is given, because a type can depend
 on a parameter, and offers no body generic over them. The VHDL adapter folds generics the same way
-(5.2). So a unit becomes one unit per set of values, named for them (8.2): the same values make the
-same unit wherever it is produced, but a library is re-runnable rather than reusable at values it
-has never seen. Rebuilding a generic unit out of slang's elaborations was rejected: it would be
-checked against slang only at the values slang saw, and trusted at the others.
+(5.2). So a unit becomes one unit per set of values, and per set of places its hierarchical
+references lead (5.1), named for them (8.2): the same values and places make the same unit wherever
+it is produced, but a library is re-runnable rather than reusable at values it has never seen.
+Rebuilding a generic unit out of slang's elaborations was rejected: it would be checked against
+slang only at the values slang saw, and trusted at the others.
 
 **Elaboration** takes a top level and the analysed units, binds each instance to the unit for its
 values, builds the instance tree, binds ports, computes the flat state layout and produces an
@@ -578,8 +579,11 @@ floor.
   named changes the EIR produced, so it bumps the format version (4.4).
 - **A hierarchical reference is an object with a path and no storage**, bound by elaboration to the
   object it names, so reads, writes, sensitivity and drivers all see the real signal. The path is
-  relative — `core/state`, `../u_peer/ready` — because one definition serves every instance of a
-  parameterisation.
+  relative — `core/state`, `../u_peer/ready` — so that one definition serves every instance of a
+  parameterisation whose references lead to the same places from where it is. An instance whose
+  lead elsewhere, a module reading `tb.clk` from two depths, is a definition of its own, named for
+  where they lead. Only the instances of a parameterisation whose first instance names something
+  past its own objects are walked to find out.
 - **A package's variables are a definition of their own, `<package>::`**, with one instance at the
   root, `/<package>`, created when something refers to one, and are referred to by the absolute path
   `/<package>/<variable>`. A package's constants, types and subroutines need no instance.
