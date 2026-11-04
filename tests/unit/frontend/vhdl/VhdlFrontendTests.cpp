@@ -271,6 +271,22 @@ TEST_F(VhdlAnalysisTest, RefusesAnEncryptedEnvelopeWithOneError) {
     EXPECT_EQ(sources.lineNumber(error->location), 1U);
 }
 
+TEST_F(VhdlAnalysisTest, TellsADesignNamingVitalThatItIsOutOfScope) {
+    // Enzan's `ieee` has no VITAL, and NVC says only that a unit is missing, which reads as a
+    // broken installation. This also pins the NVC wording the frontend recognises.
+    EXPECT_FALSE(analyse("library ieee;\n"
+                         "use ieee.vital_timing.all;\n"
+                         "entity cell is\n"
+                         "end entity;\n"));
+
+    const Diagnostic* const vital = first(DiagCode::VhdlVital);
+    ASSERT_NE(vital, nullptr) << transcript();
+    EXPECT_NE(vital->message.find("'ieee.vital_timing'"), std::string::npos) << vital->message;
+    ASSERT_TRUE(vital->location.valid());
+    EXPECT_EQ(sources.lineNumber(vital->location), 2U);
+    EXPECT_EQ(transcript().find("not found in library"), std::string::npos) << transcript();
+}
+
 TEST_F(VhdlAnalysisTest, ReportsAFatalErrorOnce) {
     EXPECT_FALSE(analyse("library nonesuch;\n"
                          "use nonesuch.things.all;\n"

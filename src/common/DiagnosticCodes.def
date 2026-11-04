@@ -77,6 +77,9 @@ ENZAN_DIAG(VhdlProcessNeverWaits, 2006, Error,
 ENZAN_DIAG(VhdlUnboundComponent, 2007, Warning,
            "component '{}' has no entity of its name to be bound to, so this instance is left "
            "unbound and does nothing (IEEE 1076 section 7.3.3)")
+ENZAN_DIAG(VhdlVital, 2008, Error,
+           "'ieee.{}' is part of VITAL, the library of gate-level timing models (IEEE 1076.4), "
+           "which Enzan does not simulate")
 
 // --- 3000-3999: elaboration -------------------------------------------------
 
