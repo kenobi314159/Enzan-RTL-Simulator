@@ -107,8 +107,8 @@ files NVC's tree carries beside each library's sources, which name every unit, t
 from and the units it needs first, and analyses each file with `enzan-vhdl-library`, a build-time
 tool around the frontend, into `lib/enzan/vhdl` beside `bin/`. It builds the libraries of 1993,
 which serve 2000 and 2002 as well, 2008 and 2019, with the Synopsys packages NVC puts in `ieee`
-and without VITAL, the gate-level timing library, gate-level simulation being out of scope: 129
-analyses, a few seconds of a build.
+and without VITAL, the gate-level timing library, gate-level timing simulation being out of
+scope: 129 analyses, a few seconds of a build.
 
 **Each `ieee` file is analysed by a separate run**, as NVC's own build does. Analysing several of
 them in one run reports eight errors in `numeric_std`'s body, eight `?=` and `?/=` operators on

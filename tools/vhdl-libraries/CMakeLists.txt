@@ -55,7 +55,8 @@ foreach(_standard 1993 2008 2019)
       set(_source "${CMAKE_MATCH_3}")
       string(STRIP "${CMAKE_MATCH_4}" _needs)
 
-      # VITAL is the gate-level timing library, and gate-level simulation is out of scope.
+      # VITAL is the gate-level timing library, and gate-level timing simulation is out
+      # of scope.
       if(_source MATCHES "^lib/vital/")
         continue()
       endif()
