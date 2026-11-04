@@ -74,7 +74,8 @@ change this list:
   their own simulators show; a timing check is not run.
 - Power-aware (UPF/CPF) and mixed-signal (Verilog-AMS, VHDL-AMS) simulation.
 - IP encryption (IEEE 1735). Decrypting needs a vendor to wrap its keys for Enzan's, which takes
-  an agreement with each vendor, and a private key in a GPL binary is no secret.
+  an agreement with each vendor, and a private key in a GPL binary is no secret. A source holding
+  an encrypted envelope is refused by one error saying so, never read around.
 - Windows and macOS support. Enzan targets Linux only.
 - Synthesis, formal verification, equivalence checking.
 - UVM, constrained-random stimulus and functional coverage, until M9+ (section 18).
