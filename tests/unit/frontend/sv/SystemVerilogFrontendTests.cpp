@@ -1648,6 +1648,20 @@ TEST_F(FrontendTest, RefusesAFileHoldingAnEncryptedEnvelopeWithOneError) {
     EXPECT_TRUE(reported((directory / "design.sv").string())) << "the error names the file";
 }
 
+TEST_F(FrontendTest, RefusesANetAliasByItsNets) {
+    // Dropped, the alias would leave `b` undriven, where `a`'s driver drives both.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            wire [3:0] a, b;
+            alias a = b;
+            assign a = 4'd5;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
+    EXPECT_TRUE(reported("the net alias of 'a', 'b'")) << "the diagnostic must name the nets";
+}
+
 TEST_F(FrontendTest, AcceptsASpecifyBlockWhosePathsHaveNoDelay) {
     const std::unique_ptr<Design> design = analyse(R"(
         module m (input a, input b, output y);
