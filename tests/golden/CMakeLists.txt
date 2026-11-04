@@ -143,6 +143,9 @@ enzan_add_golden_test(static_function_callers NO_DIFFERENTIAL)
 # Hierarchical references, down, up and across, from a definition two instances share.
 enzan_add_golden_test(hierarchical)
 
+# Instances of one parameterisation whose hierarchical references lead to different places.
+enzan_add_golden_test(upward_references)
+
 # Interfaces, with their own logic, modports, and an interface passed down through a module.
 # Icarus Verilog cannot parse an interface with ports or modports, so the case checks itself.
 enzan_add_golden_test(interfaces NO_DIFFERENTIAL)

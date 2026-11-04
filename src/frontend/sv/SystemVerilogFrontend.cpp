@@ -18,6 +18,7 @@
 #include "slang/ast/Statement.h"
 #include "slang/ast/Symbol.h"
 #include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/ConversionExpression.h"
 #include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/statements/MiscStatements.h"
@@ -166,6 +167,17 @@ const ast::InstanceSymbol* firstElement(const ast::InstanceArraySymbol& array) {
             return found;
     }
     return nullptr;
+}
+
+/// FNV-1a over `text`, in hexadecimal: stable across runs, builds and machines, which a std::hash
+/// is not required to be, so that a name made of it is the same wherever it is made.
+std::string digestOf(std::string_view text) {
+    std::uint64_t hash = 0xcbf2'9ce4'8422'2325ULL;
+    for (const char c : text) {
+        hash ^= static_cast<unsigned char>(c);
+        hash *= 0x0000'0100'0000'01b3ULL;
+    }
+    return std::format("{:016x}", hash);
 }
 
 /// The name an instance has in the module holding it: its own, or its array's with its index.
@@ -317,6 +329,14 @@ public:
     /// variable of, if one does.
     static const ast::PackageSymbol* packageOf(const ast::ValueSymbol& symbol);
 
+    /// The path from `from`'s instance to `name`, declared in `owner`, another instance's body.
+    /// Through one of `from`'s interface ports, `@bus/data`, when one reaches that instance;
+    /// otherwise up to the instance both share and down to the one declaring it, `core/state`
+    /// or `../u_peer/ready`. Nothing when either instance has no name a path can use.
+    static std::optional<std::string> pathTo(const ast::InstanceBodySymbol& from,
+                                             const ast::InstanceBodySymbol& owner,
+                                             const std::string& name);
+
     /// Collects declarations and ports. Instances and processes come after, because an
     /// instance's connections resolve against this module's objects.
     bool collectDeclarations();
@@ -378,12 +398,6 @@ private:
 
     /// The EIR kind of a slang net kind, or nothing for one Enzan cannot resolve.
     static std::optional<eir::NetKind> convertNetKind(ast::NetType::NetKind kind);
-
-    /// Creates the object a hierarchical reference to `symbol`, declared in `owner` as `name`,
-    /// is: one with no storage and a path from this instance to that object.
-    std::optional<std::uint32_t> referenceTo(const ast::ValueSymbol& symbol,
-                                             const ast::InstanceBodySymbol& owner,
-                                             const std::string& name, eir::Type type);
 
     /// Records what `connection`, an interface port of `instance`, is connected to here.
     bool bindInterface(const ast::InstanceSymbol& instance, const ast::PortConnection& connection,
@@ -476,16 +490,19 @@ private:
     /// The interface ports of this body, in declaration order.
     std::vector<const ast::InterfacePortSymbol*> interfacePorts;
 
-    /// How this body reaches `instance` through one of its interface ports: `@port`, or
-    /// `@port[2]` when the port is an array and the instance one of its elements. Empty when no
-    /// interface port reaches it.
-    [[nodiscard]] std::string portReaching(const ast::InstanceSymbol& instance) const {
-        for (const ast::InterfacePortSymbol* port : interfacePorts) {
-            const ast::Symbol* connected = port->getConnection().first;
-            if (connected == &instance) return std::format("@{}", port->name);
+    /// How `from` reaches `instance` through one of its interface ports: `@port`, or `@port[2]`
+    /// when the port is an array and the instance one of its elements. Empty when no interface
+    /// port reaches it.
+    [[nodiscard]] static std::string portReaching(const ast::InstanceBodySymbol& from,
+                                                  const ast::InstanceSymbol& instance) {
+        for (const ast::Symbol* portSymbol : from.getPortList()) {
+            if (portSymbol->kind != slang::ast::SymbolKind::InterfacePort) continue;
+            const auto& port = portSymbol->as<ast::InterfacePortSymbol>();
+            const ast::Symbol* connected = port.getConnection().first;
+            if (connected == &instance) return std::format("@{}", port.name);
             if (connected != nullptr && connected->kind == slang::ast::SymbolKind::InstanceArray
                 && containsElement(connected->as<ast::InstanceArraySymbol>(), instance)) {
-                return std::format("@{}{}", port->name, arraySuffixOf(instance));
+                return std::format("@{}{}", port.name, arraySuffixOf(instance));
             }
         }
         return {};
@@ -756,14 +773,13 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
         // subroutine is in as well.
         if (subroutine != nullptr) name = *nameThere;
         if (owner != body) {
-            // Reached through an interface port, the reference names the port rather than the
-            // interface it happens to be connected to here: one definition serves every
-            // instance, and each may be connected to a different one.
-            if (owner->parentInstance != nullptr) {
-                if (const std::string port = portReaching(*owner->parentInstance); !port.empty())
-                    return referenceThrough(symbol, std::format("{}/{}", port, *nameThere), *type);
+            std::optional<std::string> path = pathTo(*body, *owner, *nameThere);
+            if (!path.has_value()) {
+                reportUnsupported(symbol.location,
+                                  std::format("the hierarchical reference to '{}'", symbol.name));
+                return std::nullopt;
             }
-            return referenceTo(symbol, *owner, *nameThere, *type);
+            return referenceThrough(symbol, std::move(*path), *type);
         }
     }
 
@@ -1164,7 +1180,7 @@ bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
         const auto& interface = connected->as<ast::InstanceSymbol>();
         const ast::InstanceBodySymbol* owner = nullptr;
         const std::optional<std::string> name = nameWithinBody(interface, owner);
-        target = name.has_value() && owner == body ? *name : portReaching(interface);
+        target = name.has_value() && owner == body ? *name : portReaching(*body, interface);
     } else if (connected != nullptr && connected->kind == slang::ast::SymbolKind::InstanceArray) {
         // A whole array, to an array port: what the elements are called here, or the port of
         // this body it arrived through. slang hands the connection over as an array of its own,
@@ -1198,16 +1214,20 @@ bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
     return true;
 }
 
-std::optional<std::uint32_t> ModuleBuilder::referenceTo(const ast::ValueSymbol& symbol,
-                                                        const ast::InstanceBodySymbol& owner,
-                                                        const std::string& name, eir::Type type) {
-    const std::optional<std::vector<std::string>> here = instanceChain(*body);
-    const std::optional<std::vector<std::string>> there = instanceChain(owner);
-    if (!here.has_value() || !there.has_value()) {
-        reportUnsupported(symbol.location,
-                          std::format("the hierarchical reference to '{}'", symbol.name));
-        return std::nullopt;
+std::optional<std::string> ModuleBuilder::pathTo(const ast::InstanceBodySymbol& from,
+                                                 const ast::InstanceBodySymbol& owner,
+                                                 const std::string& name) {
+    // Reached through an interface port, the reference names the port rather than the
+    // interface it happens to be connected to here: one definition serves every instance, and
+    // each may be connected to a different one.
+    if (owner.parentInstance != nullptr) {
+        if (const std::string port = portReaching(from, *owner.parentInstance); !port.empty())
+            return std::format("{}/{}", port, name);
     }
+
+    const std::optional<std::vector<std::string>> here = instanceChain(from);
+    const std::optional<std::vector<std::string>> there = instanceChain(owner);
+    if (!here.has_value() || !there.has_value()) return std::nullopt;
 
     // Up from here to the instance both paths share, then down to the one declaring it.
     std::size_t common = 0;
@@ -1217,8 +1237,7 @@ std::optional<std::uint32_t> ModuleBuilder::referenceTo(const ast::ValueSymbol& 
     for (std::size_t level = common; level < here->size(); ++level) path += "../";
     for (std::size_t level = common; level < there->size(); ++level) path += (*there)[level] + "/";
     path += name;
-
-    return referenceThrough(symbol, std::move(path), type);
+    return path;
 }
 
 std::optional<std::uint32_t> ModuleBuilder::referenceThrough(const ast::ValueSymbol& symbol,
@@ -1442,99 +1461,21 @@ bool ModuleBuilder::addInstance(
     return true;
 }
 
-/// Walks the elaborated hierarchy, translating each distinct module body once.
-class Walker {
-public:
-    Walker(eir::Design& target, ModuleBuilder::Shared sharedState)
-        : design(&target), shared(sharedState) {
-        shared.packageVariables = &packageVariables;
-    }
-
-    /// Translates `instance`'s body if it has not been seen, and returns its EIR name.
-    std::optional<std::string> translate(const ast::InstanceSymbol& instance);
-
-    /// Makes an instance of one of `units` ask for it into `requests` rather than be translated.
-    void standIn(const std::vector<eir::UnitInterface>& units,
-                 std::vector<eir::UnitRequest>& requests) {
-        interfaces = &units;
-        asked = &requests;
-    }
-
-    /// Adds a definition for each package whose variables the translated modules refer to.
-    bool translatePackages();
-
-    [[nodiscard]] bool ok() const noexcept { return succeeded; }
-
-private:
-    struct BodyInfo {
-        std::string name;
-        std::map<std::string, std::uint32_t, std::less<>> portIndices;
-    };
-
-    /// Returns the EIR name for one parameterisation of a module.
-    ///
-    /// slang caches one body per distinct parameterisation, so a parameterised module
-    /// produces several. Each becomes its own EIR definition — which is what keeps parameters
-    /// out of EIR entirely (see eir/Module.h) — and a suffix distinguishes them.
-    ///
-    /// **The suffix is a function of the parameter values, and of the interfaces the body's
-    /// ports are connected to, not a counter.** A counter numbers the parameterisations in the
-    /// order *this* compilation happened to walk them, which makes the name meaningless outside
-    /// it: `counter$1` from one analysis and `counter$1` from another would be different
-    /// modules wearing one name, and a design assembled from two libraries would resolve an
-    /// instance to the wrong body with nothing to say so. Deriving it from the values instead
-    /// gives a specialisation the same name wherever it is produced, which is what lets a
-    /// library be instantiated with parameters chosen by whoever uses it.
-    static std::string specialisedModuleName(const ast::InstanceBodySymbol& body);
-
-    eir::Design* design;
-    ModuleBuilder::Shared shared;
-    /// Bodies already translated, by the EIR name they were given.
-    ///
-    /// Keyed by name and not by `InstanceBodySymbol*`: slang hands out a separate body symbol
-    /// per instance even when the parameterisation is identical, so a pointer never matches and
-    /// every instance of a module was translated again and then discarded by the design's
-    /// replace-by-name. The name is a function of the definition, the parameters set on it and
-    /// the interfaces it is given (`specialisedModuleName`), so two bodies sharing a name are the
-    /// same module and one translation serves every instance of it.
-    ///
-    /// This is only sound because `BodyInfo::portIndices` is keyed by port name. A map keyed on
-    /// slang's port symbols belongs to the one body it came from, and reusing it for another
-    /// binds no connections at all — quietly, with the design still elaborating and simulating
-    /// to the wrong answer.
-    std::map<std::string, BodyInfo, std::less<>> bodies;
-    std::vector<const ast::ValueSymbol*> packageVariables;
-    bool succeeded = true;
-
-    /// The request `instance` of `unit` makes, as its placeholder.
-    std::optional<std::string> askFor(const ast::InstanceSymbol& instance,
-                                      const eir::UnitInterface& unit);
-
-    const std::vector<eir::UnitInterface>* interfaces = nullptr;
-    std::vector<eir::UnitRequest>* asked = nullptr;
-};
-
-bool Walker::translatePackages() {
-    // Packages in the order a module first used one of their variables, which is the order the
-    // modules were walked in, so the definitions come out the same on every run.
-    std::vector<const ast::PackageSymbol*> packages;
-    for (const ast::ValueSymbol* variable : packageVariables) {
-        const ast::PackageSymbol* package = ModuleBuilder::packageOf(*variable);
-        if (std::ranges::find(packages, package) == packages.end()) packages.push_back(package);
-    }
-
-    for (const ast::PackageSymbol* package : packages) {
-        ModuleBuilder builder(shared, *package);
-        for (const ast::ValueSymbol* variable : packageVariables) {
-            if (ModuleBuilder::packageOf(*variable) != package) continue;
-            if (!builder.objectFor(*variable).has_value()) return false;
-        }
-        design->addModule(builder.take());
-    }
-    return true;
-}
-
-std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
+/// Returns the EIR name for one parameterisation of a module.
+///
+/// slang caches one body per distinct parameterisation, so a parameterised module
+/// produces several. Each becomes its own EIR definition — which is what keeps parameters
+/// out of EIR entirely (see eir/Module.h) — and a suffix distinguishes them.
+///
+/// **The suffix is a function of the parameter values, and of the interfaces the body's
+/// ports are connected to, not a counter.** A counter numbers the parameterisations in the
+/// order *this* compilation happened to walk them, which makes the name meaningless outside
+/// it: `counter$1` from one analysis and `counter$1` from another would be different
+/// modules wearing one name, and a design assembled from two libraries would resolve an
+/// instance to the wrong body with nothing to say so. Deriving it from the values instead
+/// gives a specialisation the same name wherever it is produced, which is what lets a
+/// library be instantiated with parameters chosen by whoever uses it.
+std::string specialisedModuleName(const ast::InstanceBodySymbol& body) {
     std::string base(body.getDefinition().name);
 
     // Only the parameters set from outside: a localparam is derived inside the module from
@@ -1609,17 +1550,175 @@ std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
             if (!keep) c = '_';
         }
     } else {
-        // FNV-1a over the rendered values. Stable across runs, builds and machines, which a
-        // std::hash is not required to be.
-        std::uint64_t hash = 0xcbf2'9ce4'8422'2325ULL;
-        for (const char c : values) {
-            hash ^= static_cast<unsigned char>(c);
-            hash *= 0x0000'0100'0000'01b3ULL;
-        }
-        suffix = std::format("{:016x}", hash);
+        suffix = digestOf(values);
     }
 
     return std::format("{}${}", base, suffix);
+}
+
+/// What the names in an instance's body that reach past its own objects lead to, from that
+/// instance: for each, in the order slang holds them, the path a reference to it takes and the
+/// kind and type of what it reaches, or the object's own name when a hierarchical name comes back
+/// to the instance itself. A subroutine called by a name found upwards is inlined, so it is named
+/// by its module's parameterisation, and what its own body names is followed from here too.
+///
+/// Instances of one parameterisation translate alike only when these agree. A reference is a
+/// path from the instance holding it, so `tb.clk` read from two depths is `../clk` from one and
+/// `../../clk` from the other; `tb.u_seen.mark` is an object of `u_seen`'s own from `u_seen` and
+/// a reference from its sibling; and `../bump` is whichever ancestor's task of that name is
+/// nearest. slang keeps the names that leave an instance, but not where anything outside it can
+/// read them, so they are found here, by a walk of the body that a translation does not make.
+class ReachedNames : public ast::ASTVisitor<ReachedNames, ast::VisitFlags::AllGood> {
+public:
+    explicit ReachedNames(const ast::InstanceBodySymbol& from) : body(&from) {}
+
+    // A child's body is its own definition's; only its connections are written here.
+    void handle(const ast::InstanceSymbol& instance) { instance.visitExprs(*this); }
+
+    // A branch a generate condition rules out is never translated.
+    void handle(const ast::GenerateBlockSymbol& block) {
+        if (!block.isUninstantiated) visitDefault(block);
+    }
+
+    void handle(const ast::HierarchicalValueExpression& expression) {
+        note(expression.symbol, true);
+    }
+
+    void handle(const ast::NamedValueExpression& expression) { note(expression.symbol, false); }
+
+    // A subroutine found by its name upwards is inlined, and reaches its own module's objects
+    // from wherever it is called.
+    void handle(const ast::CallExpression& call) {
+        if (!call.isSystemCall()) {
+            const ast::SubroutineSymbol& subroutine = *std::get<0>(call.subroutine);
+            const ast::InstanceBodySymbol* owner = nullptr;
+            const std::optional<std::string> name = nameWithinBody(subroutine, owner);
+            if (name.has_value() && owner != nullptr && owner != body) {
+                reached.push_back(
+                    std::format("{} {}", ModuleBuilder::pathTo(*body, *owner, *name).value_or("?"),
+                                specialisedModuleName(*owner)));
+                if (entered.insert(&subroutine).second) subroutine.visit(*this);
+            }
+        }
+        visitDefault(call);
+    }
+
+    std::vector<std::string> reached;
+
+private:
+    void note(const ast::ValueSymbol& symbol, bool hierarchical) {
+        const ast::ValueSymbol* target = &symbol;
+        if (target->kind == slang::ast::SymbolKind::ModportPort) {
+            const ast::Symbol* internal = target->as<ast::ModportPortSymbol>().internalSymbol;
+            if (internal == nullptr || !ast::ValueSymbol::isKind(internal->kind)) return;
+            target = &internal->as<ast::ValueSymbol>();
+        }
+        // Only what has storage becomes a reference; a package's variable is at one absolute
+        // path from everywhere.
+        if (target->kind != slang::ast::SymbolKind::Variable
+            && target->kind != slang::ast::SymbolKind::Net)
+            return;
+        if (ModuleBuilder::packageOf(*target) != nullptr) return;
+
+        const ast::InstanceBodySymbol* owner = nullptr;
+        const std::optional<std::string> name = nameWithinBody(*target, owner);
+        if (!name.has_value() || owner == nullptr) return;
+        if (owner == body) {
+            if (hierarchical) reached.push_back(*name);
+            return;
+        }
+        reached.push_back(std::format("{} {} {}",
+                                      ModuleBuilder::pathTo(*body, *owner, *name).value_or("?"),
+                                      target->kind == slang::ast::SymbolKind::Net ? "net" : "var",
+                                      target->getType().toString()));
+    }
+
+    const ast::InstanceBodySymbol* body;
+
+    /// The subroutines of other modules already followed, so that a recursive one ends.
+    std::set<const ast::SubroutineSymbol*> entered;
+};
+
+/// Walks the elaborated hierarchy, translating each distinct module body once.
+class Walker {
+public:
+    Walker(eir::Design& target, ModuleBuilder::Shared sharedState)
+        : design(&target), shared(sharedState) {
+        shared.packageVariables = &packageVariables;
+    }
+
+    /// Translates `instance`'s body if it has not been seen, and returns its EIR name.
+    std::optional<std::string> translate(const ast::InstanceSymbol& instance);
+
+    /// Makes an instance of one of `units` ask for it into `requests` rather than be translated.
+    void standIn(const std::vector<eir::UnitInterface>& units,
+                 std::vector<eir::UnitRequest>& requests) {
+        interfaces = &units;
+        asked = &requests;
+    }
+
+    /// Adds a definition for each package whose variables the translated modules refer to.
+    bool translatePackages();
+
+    [[nodiscard]] bool ok() const noexcept { return succeeded; }
+
+private:
+    struct BodyInfo {
+        std::string name;
+        std::map<std::string, std::uint32_t, std::less<>> portIndices;
+    };
+
+    eir::Design* design;
+    ModuleBuilder::Shared shared;
+    /// Bodies already translated, by the EIR name they were given.
+    ///
+    /// Keyed by name and not by `InstanceBodySymbol*`: slang hands out a separate body symbol
+    /// per instance even when the parameterisation is identical, so a pointer never matches and
+    /// every instance of a module was translated again and then discarded by the design's
+    /// replace-by-name. The name is a function of the definition, the parameters set on it and
+    /// the interfaces it is given (`specialisedModuleName`), so two bodies sharing a name are the
+    /// same module and one translation serves every instance of it.
+    ///
+    /// This is only sound because `BodyInfo::portIndices` is keyed by port name. A map keyed on
+    /// slang's port symbols belongs to the one body it came from, and reusing it for another
+    /// binds no connections at all — quietly, with the design still elaborating and simulating
+    /// to the wrong answer.
+    std::map<std::string, BodyInfo, std::less<>> bodies;
+
+    /// Whether the body of each parameterisation names anything past its own objects, by the
+    /// name `specialisedModuleName` gives it, as the first instance of it showed. Only an
+    /// instance of one that does has its names followed (`ReachedNames`), so that the others
+    /// cost nothing more than a lookup.
+    std::map<std::string, bool, std::less<>> reachesPast;
+    std::vector<const ast::ValueSymbol*> packageVariables;
+    bool succeeded = true;
+
+    /// The request `instance` of `unit` makes, as its placeholder.
+    std::optional<std::string> askFor(const ast::InstanceSymbol& instance,
+                                      const eir::UnitInterface& unit);
+
+    const std::vector<eir::UnitInterface>* interfaces = nullptr;
+    std::vector<eir::UnitRequest>* asked = nullptr;
+};
+
+bool Walker::translatePackages() {
+    // Packages in the order a module first used one of their variables, which is the order the
+    // modules were walked in, so the definitions come out the same on every run.
+    std::vector<const ast::PackageSymbol*> packages;
+    for (const ast::ValueSymbol* variable : packageVariables) {
+        const ast::PackageSymbol* package = ModuleBuilder::packageOf(*variable);
+        if (std::ranges::find(packages, package) == packages.end()) packages.push_back(package);
+    }
+
+    for (const ast::PackageSymbol* package : packages) {
+        ModuleBuilder builder(shared, *package);
+        for (const ast::ValueSymbol* variable : packageVariables) {
+            if (ModuleBuilder::packageOf(*variable) != package) continue;
+            if (!builder.objectFor(*variable).has_value()) return false;
+        }
+        design->addModule(builder.take());
+    }
+    return true;
 }
 
 std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance) {
@@ -1642,6 +1741,24 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
     }
 
     std::string name = specialisedModuleName(body);
+
+    // An instance whose names lead out of it, to objects it reaches by a path from where it is,
+    // is a definition of its own unless another instance's lead to the same places, and is named
+    // for where they lead. One whose names stay inside keeps the parameterisation's name, which
+    // every such instance can share: a name leading into the instance holding it leads there
+    // from every instance of one parameterisation.
+    const auto [past, first] = reachesPast.try_emplace(name, false);
+    if (first || past->second) {
+        ReachedNames names(body);
+        body.visit(names);
+        if (first) past->second = !names.reached.empty();
+        if (std::ranges::any_of(names.reached,
+                                [](const std::string& path) { return path.starts_with("../"); })) {
+            std::string joined;
+            for (const std::string& path : names.reached) joined += path + '\n';
+            name = std::format("{}${}", name, digestOf(joined));
+        }
+    }
 
     const auto existing = bodies.find(name);
     if (existing != bodies.end()) return existing->second.name;
