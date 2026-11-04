@@ -1803,7 +1803,8 @@ Left out of the milestones above, and refused by name where a design uses them r
 mistranslated:
 
 - SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
-  classes, unpacked unions, and strengths other than strong.
+  classes, unpacked unions, strengths other than strong, and instances of built-in and
+  user-defined primitives.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from

@@ -1515,6 +1515,55 @@ TEST_F(FrontendTest, ReportsAnUnsupportedSystemTaskByName) {
     EXPECT_TRUE(reported("$sdf_annotate")) << "the diagnostic must name the task";
 }
 
+TEST_F(FrontendTest, ReportsABuiltInPrimitiveInstanceByName) {
+    // Dropped, the instance would leave `o` undriven, and the design would simulate.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic i, t;
+            wire  o;
+            bufif0 b (o, i, t);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
+    EXPECT_TRUE(reported("the built-in primitive 'bufif0'")) << "the diagnostic must name it";
+}
+
+TEST_F(FrontendTest, ReportsAUserDefinedPrimitiveInstanceByName) {
+    EXPECT_EQ(analyse(R"(
+        primitive inverter (output o, input i);
+            table
+                0 : 1;
+                1 : 0;
+            endtable
+        endprimitive
+
+        module m;
+            logic i;
+            wire  o;
+            inverter u (o, i);
+        endmodule
+    )",
+                      "m"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
+    EXPECT_TRUE(reported("the user-defined primitive 'inverter'")) << "the diagnostic must name it";
+}
+
+TEST_F(FrontendTest, ReportsAnArrayOfPrimitiveInstances) {
+    // The elements of an array are collected one by one, so each kind of element needs its own
+    // case there as well as in the scope walk.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [3:0] i;
+            wire  [3:0] o;
+            not n[3:0] (o, i);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("the built-in primitive 'not'"));
+}
+
 TEST_F(FrontendTest, EachCaseFormComparesItsItemsWithItsOwnOpcode) {
     // A wildcard compare approximated with `==` would silently take the wrong branch, so each
     // form is pinned to the comparison IEEE 1800 section 12.5 gives it.
