@@ -116,13 +116,14 @@ expect 0 "tb.sv" "$enzan" --dry-run -t tb --top tb -G W=1 -GW=1 tb.sv
 # --- several top levels --------------------------------------------------------------------------
 
 # `--top` is repeatable, each a root and the first the design's own; the same top again is the
-# same one. With none named, two candidates are refused.
+# same one. With none named, two candidates are refused, and `glbl` among them is said to be a top
+# of its own.
 if has systemverilog; then
     printf 'module tb;\n  initial $display("PASS cli tb");\nendmodule\nmodule glbl;\nendmodule\n' \
         >tops.sv
     expect 0 "PASS cli tb" "$enzan" --top tb --top glbl --top tb tops.sv
     expect 2 "top module 'other' was not found" "$enzan" --top tb --top other tb.sv
-    expect 2 "has 2 candidates" "$enzan" tops.sv
+    expect 2 "give \`--top\` for each" "$enzan" tops.sv
 fi
 
 # --- how long a run runs --------------------------------------------------------------------------

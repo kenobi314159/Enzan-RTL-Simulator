@@ -168,8 +168,13 @@ private:
             const std::string& source = index ? design.module(*index).sourceName : candidate;
             shown.push_back(source.empty() ? candidate : source);
         }
-        diagnostics.report(DiagCode::NoTopModule, SourceLocation(), candidates.size(),
-                           joinNames(shown));
+        DiagnosticBuilder refusal = diagnostics.report(DiagCode::NoTopModule, SourceLocation(),
+                                                       candidates.size(), joinNames(shown));
+        // AMD's models reach `glbl` by name, so it is a top level beside the design's own.
+        if (candidates.size() > 1 && std::ranges::find(shown, "glbl") != shown.end())
+            refusal.note({},
+                         "a design with AMD's `glbl` has two top levels; give `--top` for each, "
+                         "as `--top <design> --top glbl`");
         return std::nullopt;
     }
 

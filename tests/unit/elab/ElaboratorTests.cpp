@@ -56,10 +56,12 @@ public:
     void consume(const Diagnostic& diagnostic) override {
         messages.push_back(diagnostic.message);
         codes.push_back(diagnostic.code);
+        for (const enzan::DiagnosticNote& note : diagnostic.notes) notes.push_back(note.message);
     }
 
     std::vector<std::string> messages;
     std::vector<enzan::DiagCode> codes;
+    std::vector<std::string> notes;
 };
 
 /// Builds a process that copies one object to another, with the declared read and
@@ -247,6 +249,22 @@ TEST_F(ElaboratorTest, ListsCandidateTopsByTheNamesTheirSourcesGive) {
 
     EXPECT_EQ(elaborate(), nullptr);
     EXPECT_TRUE(reported("'counter', 'tb'")) << "by the names the source gives them";
+}
+
+TEST_F(ElaboratorTest, SaysGlblIsATopLevelOfItsOwnWhenNoTopIsNamed) {
+    ModuleDefinition testbench;
+    testbench.name = "tb";
+    testbench.sourceName = "tb";
+    design.addModule(std::move(testbench));
+    ModuleDefinition glbl;
+    glbl.name = "glbl$values";
+    glbl.sourceName = "glbl";
+    design.addModule(std::move(glbl));
+
+    EXPECT_EQ(elaborate(), nullptr);
+    ASSERT_EQ(consumer.notes.size(), 1U);
+    EXPECT_NE(consumer.notes.front().find("--top <design> --top glbl"), std::string::npos)
+        << consumer.notes.front();
 }
 
 TEST_F(ElaboratorTest, ReportsAnUnknownTopModuleAndListsWhatExists) {
