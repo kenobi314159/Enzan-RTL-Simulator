@@ -1790,6 +1790,34 @@ exit criteria are unmet.
 | M6 | VHDL via NVC, the VHDL simulation cycle and VHPI |
 | M7 | Designs of both languages (3.5) |
 
+### M7.1 — AMD Xilinx simulation libraries
+
+Designs instantiating AMD Xilinx's simulation models, read from the user's own installation: the
+unisims, unimacro, `glbl` and XPM from SystemVerilog; the same through `unisim` and `xpm` libraries of
+components from VHDL; and 7-series functional-simulation netlists. It takes `-y`, `-v` and
+`+libext+` acted on; several top levels, `glbl` beside the design's own; drive strengths in two
+classes; gate and user-defined primitives; procedural `assign`, `deassign`, `force` and `release`;
+SystemVerilog `real`; and module path delays.
+
+**Exit:** self-checking testbenches for the primitives designs use most — flip-flops with `glbl`'s
+reset, LUTs, carry chains, shift registers, block RAM, DSP slices, clock buffers, MMCMs, DDR
+registers, I/O buffers with pulls — match Icarus Verilog, their clock-to-output delays included;
+XPM memories, FIFOs and synchronisers match Verilator; the same checks run from VHDL through the
+component libraries agree with both; and NEORV32's 7-series functional netlists, in Verilog and in
+VHDL, run its program as its RTL does.
+
+### M7.2 — Altera simulation libraries
+
+Designs instantiating Altera's models: `altera_primitives`, LPM, `altera_mf`, `sgate` and the
+Cyclone 10 LP atoms from SystemVerilog, and from VHDL through Altera's component packages or as
+VHDL libraries of their own; and Cyclone 10 LP `.vo` netlists. Beyond M7.1 it takes `$fgetc` and
+the rest of what reading a memory initialisation file needs.
+
+**Exit:** testbenches for `altsyncram` with an initialisation file and for the LPM functions match
+Icarus Verilog, and `scfifo` and `dcfifo` match Verilator; the Cyclone 10 LP atoms match Icarus
+Verilog, and `cyclone10lp_pll` Verilator; Altera's VHDL models give GHDL's results; and NEORV32's
+Cyclone 10 LP netlist runs its program as its RTL does.
+
 ### M8 — Performance
 
 LLVM JIT backend behind a flag; profiling and hot-path work; activity-based scheduling refinements;
@@ -1841,6 +1869,9 @@ mistranslated:
 | Waveform rendering does not scale when zoomed out | Medium | Pixel-bounded rendering (10.3) |
 | Scope creep into verification features | Medium | Explicit non-goals (1.3) and milestone gating |
 | Parallelism delivers less speedup than hoped | Low | Expectations calibrated in 6.4; the single-threaded kernel is the plan, not a fallback |
+| One unit per parameterisation (2.1) makes a functional netlist too many units | Medium | Measured: a 7-series NEORV32 netlist is 2,306 cell parameterisations for 41,355 instances; value-only parameters would reopen 2.1 |
+| Vendors' models change between releases, and CI cannot run them | Medium | A release pinned and recorded; golden tests of each construct in CI; the vendor harnesses run before merging |
+| Module paths behave unlike the standard where the references disagree | Medium | Icarus Verilog for paths, and self-checking cases where it ignores `PATHPULSE$` |
 
 ---
 
@@ -1856,11 +1887,26 @@ once per set of values the design uses (2.1). Cacheable and reusable.
 **Elaboration**: building the instance tree and state layout for a specific top level. Not cacheable
 across designs.
 
+**Functional-simulation netlist**: a synthesised design written as instances of a vendor's
+primitives with no timing, as Vivado's `write_verilog -mode funcsim` or a Quartus `.vo` writes it.
+
+**glbl**: the module of AMD Xilinx's global signals, its reset and its tristate among them, which the
+unisims reach by hierarchical name, simulated as a top level of its own.
+
+**Module path**: a specify block's delay from a module's input to its output (IEEE 1800 section 30).
+
 **Region**: one of the ordered phases within a SystemVerilog time slot.
 
 **State arena**: the single contiguous allocation holding all mutable simulation state.
 
 **Time precision**: the global integer unit in which simulated time is counted.
 
+**UDP**: a user-defined primitive, an element defined by a truth table (IEEE 1800 section 29).
+
+**Unisim**: one of AMD Xilinx's simulation models of its devices' primitives.
+
 **VPI / VHPI / DPI**: VPI and VHPI are the introspection and callback APIs tools such as cocotb
 drive a simulation through. DPI is the separate mechanism for calling C from SystemVerilog.
+
+**XPM**: AMD Xilinx's parameterised macros, memories, FIFOs and synchronisers written in
+SystemVerilog.
