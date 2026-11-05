@@ -27,6 +27,7 @@
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/BlockSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
@@ -549,33 +550,135 @@ void ProcessTranslator::inferSensitivityFromReads() {
     }
 }
 
+bool ProcessTranslator::setContinuousDelay(const ast::TimingControl& delay) {
+    // A single delay; a rise, fall and turn-off triple delays each transition by its own
+    // amount, which a store with one delay cannot do.
+    const ast::Expression* amount = nullptr;
+    if (delay.kind == ast::TimingControlKind::Delay) {
+        amount = &delay.as<ast::DelayControl>().expr;
+    } else if (delay.kind == ast::TimingControlKind::Delay3
+               && delay.as<ast::Delay3Control>().expr2 == nullptr) {
+        amount = &delay.as<ast::Delay3Control>().expr1;
+    }
+    if (amount == nullptr) {
+        module->reportUnsupported(delay.sourceRange.start(),
+                                  "separate rise, fall and turn-off delays");
+        return false;
+    }
+    const std::optional<Value> ticks = translateDelay(*amount);
+    if (!ticks.has_value()) return false;
+    storeDelay = ticks->reg;
+    return true;
+}
+
 bool ProcessTranslator::translateContinuousAssignment(const ast::Expression& assignment,
                                                       const ast::TimingControl* delay) {
-    if (delay != nullptr) {
-        // A single delay; a rise, fall and turn-off triple delays each transition by its own
-        // amount, which a store with one delay cannot do.
-        const ast::Expression* amount = nullptr;
-        if (delay->kind == ast::TimingControlKind::Delay) {
-            amount = &delay->as<ast::DelayControl>().expr;
-        } else if (delay->kind == ast::TimingControlKind::Delay3
-                   && delay->as<ast::Delay3Control>().expr2 == nullptr) {
-            amount = &delay->as<ast::Delay3Control>().expr1;
-        }
-        if (amount == nullptr) {
-            module->reportUnsupported(delay->sourceRange.start(),
-                                      "separate rise, fall and turn-off delays");
-            return false;
-        }
-        const std::optional<Value> ticks = translateDelay(*amount);
-        if (!ticks.has_value()) return false;
-        storeDelay = ticks->reg;
-    }
+    if (delay != nullptr && !setContinuousDelay(*delay)) return false;
 
     if (!translateExpression(assignment).has_value() && failed) return false;
 
     if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
 
     return !failed;
+}
+
+bool ProcessTranslator::translateGate(const ast::PrimitiveInstanceSymbol& gate) {
+    const ast::TimingControl* delay = gate.getDelay();
+    if (delay != nullptr && !setContinuousDelay(*delay)) return false;
+
+    // slang binds an output as the target of an assignment it builds, and an input converted to
+    // one bit of `logic`; an unconnected terminal is null.
+    std::vector<const ast::Expression*> terminals;
+    for (const ast::Expression* connection : gate.getPortConnections()) {
+        if (connection != nullptr && connection->kind == ast::ExpressionKind::Assignment)
+            connection = &connection->as<ast::AssignmentExpression>().left();
+        terminals.push_back(connection);
+    }
+    const auto input = [&](const ast::Expression* terminal) -> std::optional<Value> {
+        if (terminal == nullptr)
+            return Value{.reg = constantRegister(eir::Logic::HighZ), .type = eir::Type::logic()};
+        const std::optional<Value> value = translateExpression(*terminal);
+        if (!value.has_value()) return std::nullopt;
+        return coerce(*value, eir::Type::logic());
+    };
+    const auto apply = [&](eir::Opcode opcode, std::uint32_t left,
+                           std::optional<std::uint32_t> right) {
+        const std::uint32_t result = newRegister(eir::Type::logic());
+        if (right.has_value()) {
+            emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(left),
+                                        eir::Operand::reg(*right)));
+        } else {
+            emit(
+                eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(left)));
+        }
+        return result;
+    };
+    // What a buffer drives of its input: the input, with `z` read as `x`.
+    const auto buffered = [&](std::uint32_t value) {
+        return apply(eir::Opcode::Xor, value, constantRegister(eir::Logic::Zero));
+    };
+
+    const std::string_view name = gate.primitiveType.name;
+    std::vector<const ast::Expression*> outputs;
+    std::uint32_t driven = 0;
+    if (name == "and" || name == "or" || name == "xor" || name == "nand" || name == "nor"
+        || name == "xnor") {
+        eir::Opcode opcode = eir::Opcode::Xor;
+        if (name == "and" || name == "nand") opcode = eir::Opcode::And;
+        if (name == "or" || name == "nor") opcode = eir::Opcode::Or;
+        outputs = {terminals.front()};
+        for (std::size_t index = 1; index < terminals.size(); ++index) {
+            const std::optional<Value> value = input(terminals[index]);
+            if (!value.has_value()) return false;
+            driven = index == 1 ? buffered(value->reg) : apply(opcode, driven, value->reg);
+        }
+        if (name == "nand" || name == "nor" || name == "xnor")
+            driven = apply(eir::Opcode::Not, driven, std::nullopt);
+    } else if (name == "buf" || name == "not") {
+        outputs.assign(terminals.begin(), terminals.end() - 1);
+        const std::optional<Value> value = input(terminals.back());
+        if (!value.has_value()) return false;
+        driven = name == "buf" ? buffered(value->reg)
+                               : apply(eir::Opcode::Not, value->reg, std::nullopt);
+    } else if (name == "bufif0" || name == "bufif1" || name == "notif0" || name == "notif1") {
+        outputs = {terminals[0]};
+        const std::optional<Value> data = input(terminals[1]);
+        if (!data.has_value()) return false;
+        const std::optional<Value> control = input(terminals[2]);
+        if (!control.has_value()) return false;
+        const std::uint32_t passed = name.starts_with("buf")
+                                         ? buffered(data->reg)
+                                         : apply(eir::Opcode::Not, data->reg, std::nullopt);
+        const std::uint32_t released = constantRegister(eir::Logic::HighZ);
+        const bool onOne = name.ends_with('1');
+        driven = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(driven),
+                                    eir::Operand::reg(control->reg),
+                                    eir::Operand::reg(onOne ? passed : released),
+                                    eir::Operand::reg(onOne ? released : passed)));
+    } else if (name == "pullup" || name == "pulldown") {
+        outputs = terminals;
+        driven = constantRegister(name == "pullup" ? eir::Logic::One : eir::Logic::Zero);
+    } else {
+        module->reportUnsupported(gate.location, std::format("the switch '{}'", name));
+        return false;
+    }
+
+    for (const ast::Expression* output : outputs) {
+        if (output == nullptr) continue;
+        if (!assignTo(*output, Value{.reg = driven, .type = eir::Type::logic()}, false))
+            return false;
+    }
+    if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
+    return !failed;
+}
+
+std::uint32_t ProcessTranslator::constantRegister(eir::Logic value) {
+    const std::uint32_t result = newRegister(eir::Type::logic());
+    emit(eir::Instruction::make(
+        eir::Opcode::LoadConstant, eir::Operand::reg(result),
+        eir::Operand::constant(addConstant(eir::BitVector::filled(1, value)))));
+    return result;
 }
 
 // ---------------------------------------------------------------------------

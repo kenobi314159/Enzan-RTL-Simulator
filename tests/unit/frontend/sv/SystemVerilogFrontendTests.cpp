@@ -1626,18 +1626,39 @@ TEST_F(FrontendTest, ReportsAnUnsupportedSystemTaskByName) {
     EXPECT_TRUE(reported("$sdf_annotate")) << "the diagnostic must name the task";
 }
 
-TEST_F(FrontendTest, ReportsABuiltInPrimitiveInstanceByName) {
-    // Dropped, the instance would leave `o` undriven, and the design would simulate.
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, AGateIsAContinuousAssignmentAtItsStrength) {
+    // Driving its output, at the strength the instance declares, or pull for a pull-up.
+    const std::unique_ptr<Design> design = analyse(R"(
         module m;
             logic i, t;
-            wire  o;
-            bufif0 b (o, i, t);
+            wire o;
+            bufif0 (weak1, weak0) b (o, i, t);
+            pullup p (o);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 2U);
+    using enzan::eir::Strength;
+    for (const enzan::eir::Process& process : found->processes)
+        EXPECT_EQ(process.kind, enzan::eir::ProcessKind::ContinuousAssign);
+    EXPECT_EQ(found->processes[0].strength,
+              (enzan::eir::DriveStrength{.zero = Strength::Weak, .one = Strength::Weak}));
+    EXPECT_EQ(found->processes[1].strength,
+              (enzan::eir::DriveStrength{.zero = Strength::Pull, .one = Strength::Pull}));
+}
+
+TEST_F(FrontendTest, ReportsASwitchByName) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            wire a, b;
+            logic c;
+            tranif1 t (a, b, c);
         endmodule
     )"),
               nullptr);
-    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-    EXPECT_TRUE(reported("the built-in primitive 'bufif0'")) << "the diagnostic must name it";
+    EXPECT_TRUE(reported("the switch 'tranif1'"));
 }
 
 TEST_F(FrontendTest, ReportsAUserDefinedPrimitiveInstanceByName) {
@@ -1661,18 +1682,18 @@ TEST_F(FrontendTest, ReportsAUserDefinedPrimitiveInstanceByName) {
     EXPECT_TRUE(reported("the user-defined primitive 'inverter'")) << "the diagnostic must name it";
 }
 
-TEST_F(FrontendTest, ReportsAnArrayOfPrimitiveInstances) {
+TEST_F(FrontendTest, AnArrayOfGatesIsAGatePerElement) {
     // The elements of an array are collected one by one, so each kind of element needs its own
     // case there as well as in the scope walk.
-    EXPECT_EQ(analyse(R"(
+    const std::unique_ptr<Design> design = analyse(R"(
         module m;
             logic [3:0] i;
             wire  [3:0] o;
             not n[3:0] (o, i);
         endmodule
-    )"),
-              nullptr);
-    EXPECT_TRUE(reported("the built-in primitive 'not'"));
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_EQ(design->findModule("m")->processes.size(), 4U);
 }
 
 TEST_F(FrontendTest, RefusesAFileHoldingAnEncryptedEnvelopeWithOneError) {

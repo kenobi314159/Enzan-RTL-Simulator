@@ -436,22 +436,23 @@ private:
                 instances.push_back(CollectedInstance{
                     .prefix = prefix, .symbol = &element->as<ast::InstanceSymbol>()});
             } else if (element->kind == slang::ast::SymbolKind::PrimitiveInstance) {
-                reportPrimitiveInstance(element->as<ast::PrimitiveInstanceSymbol>());
+                collectPrimitiveInstance(element->as<ast::PrimitiveInstanceSymbol>());
             }
         }
     }
 
-    /// Reports an instance of a gate, a switch or a user-defined primitive by the primitive's
-    /// name. Each drives its outputs, so leaving one out would leave them undriven and the
-    /// design would simulate to the wrong answer.
-    void reportPrimitiveInstance(const ast::PrimitiveInstanceSymbol& instance) {
+    /// Keeps an instance of a built-in gate to translate as the continuous assignment it is, and
+    /// reports one of a user-defined primitive by its name: each drives its outputs, so leaving one
+    /// out would leave them undriven and the design would simulate to the wrong answer.
+    void collectPrimitiveInstance(const ast::PrimitiveInstanceSymbol& instance) {
         const ast::PrimitiveSymbol& primitive = instance.primitiveType;
-        reportUnsupported(instance.location,
-                          std::format("an instance of the {} '{}'",
-                                      primitive.primitiveKind == ast::PrimitiveSymbol::UserDefined
-                                          ? "user-defined primitive"
-                                          : "built-in primitive",
-                                      primitive.name));
+        if (primitive.primitiveKind != ast::PrimitiveSymbol::UserDefined) {
+            gates.push_back(&instance);
+            return;
+        }
+        reportUnsupported(
+            instance.location,
+            std::format("an instance of the user-defined primitive '{}'", primitive.name));
     }
 
     /// Returns a name not already used by an object in this module.
@@ -497,6 +498,9 @@ private:
 
     std::vector<std::pair<std::string, const ast::ProceduralBlockSymbol*>> proceduralBlocks;
     std::vector<const ast::ContinuousAssignSymbol*> continuousAssignments;
+
+    /// Instances of built-in gates, each a continuous assignment of its outputs.
+    std::vector<const ast::PrimitiveInstanceSymbol*> gates;
 
     /// The interface ports of this body, in declaration order.
     std::vector<const ast::InterfacePortSymbol*> interfacePorts;
@@ -934,7 +938,7 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             break;
 
         case slang::ast::SymbolKind::PrimitiveInstance:
-            reportPrimitiveInstance(member.as<ast::PrimitiveInstanceSymbol>());
+            collectPrimitiveInstance(member.as<ast::PrimitiveInstanceSymbol>());
             break;
 
         case slang::ast::SymbolKind::SpecifyBlock:
@@ -1157,6 +1161,31 @@ bool ModuleBuilder::translateProcesses() {
             continue;
         }
 
+        definitionValue.processes.push_back(translator.take());
+        definitionValue.processes.back().strength = *strength;
+    }
+
+    for (const ast::PrimitiveInstanceSymbol* gate : gates) {
+        // `pullup` and `pulldown` drive at pull strength unless they say otherwise.
+        const bool pull =
+            gate->primitiveType.name == "pullup" || gate->primitiveType.name == "pulldown";
+        auto declared = gate->getDriveStrength();
+        if (pull && !declared.first && !declared.second)
+            declared = {ast::DriveStrength::Pull, ast::DriveStrength::Pull};
+        const std::optional<eir::DriveStrength> strength =
+            driveStrengthOf(declared, gate->location);
+        if (!strength) continue;
+
+        ProcessTranslator translator(
+            *this, eir::ProcessKind::ContinuousAssign,
+            std::format("{}@{}:{}", gate->primitiveType.name,
+                        shared->slangSources.getFileName(gate->location),
+                        shared->slangSources.getLineNumber(gate->location)),
+            convertLocation(gate->location));
+        if (!translator.translateGate(*gate)) {
+            failed = true;
+            continue;
+        }
         definitionValue.processes.push_back(translator.take());
         definitionValue.processes.back().strength = *strength;
     }
