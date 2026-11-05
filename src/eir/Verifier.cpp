@@ -6,6 +6,7 @@
 #include "eir/Instruction.h"
 #include "eir/Module.h"
 #include "eir/Type.h"
+#include "eir/Udp.h"
 
 #include <array>
 
@@ -347,6 +348,35 @@ private:
                                    where, registerType.bitWidth(),
                                    definition.objects[objectOperand.index()].name,
                                    objectType.bitWidth()));
+        }
+    }
+
+    /// A primitive's output is one bit, its inputs as many as the table's rows have fields for,
+    /// and a sequential one's inputs as they were the same, above one bit of state.
+    void checkPrimitive(const ModuleDefinition& definition, const Body& body,
+                        const Instruction& instruction, const std::string& where) {
+        const bool sequential = instruction.opcode == Opcode::UdpSequential;
+        if (registerWidth(definition, body, instruction.dst, where) != 1)
+            reportBody(definition, body,
+                       std::format("{} has an output of more than one bit", where));
+        const std::uint32_t inputs = registerWidth(definition, body, instruction.a, where);
+        if (inputs == 0 || inputs > udp::MaxInputs) {
+            reportBody(definition, body,
+                       std::format("{} has {} inputs, where a primitive has 1 to {}", where, inputs,
+                                   udp::MaxInputs));
+            return;
+        }
+        if (sequential && registerWidth(definition, body, instruction.b, where) != inputs + 1) {
+            reportBody(definition, body,
+                       std::format("{} needs its inputs as they were and its state in {} bits",
+                                   where, inputs + 1));
+        }
+        const Operand table = sequential ? instruction.c : instruction.b;
+        if (table.kind() != Operand::Kind::Constant || table.index() >= body.constants.size()
+            || body.constants[table.index()].width() % (8 * (inputs + 2)) != 0) {
+            reportBody(
+                definition, body,
+                std::format("{} needs a table constant of rows of {} inputs", where, inputs));
         }
     }
 
@@ -783,6 +813,9 @@ private:
         case Opcode::WaitEdge:
             checkObjectAccess(definition, body, instruction.a, false, where);
             break;
+
+        case Opcode::UdpCombinational:
+        case Opcode::UdpSequential: checkPrimitive(definition, body, instruction, where); break;
 
         // An override names its object in the override set, and the value is the whole of it;
         // what starts one names the process that evaluates it again, which must be one.

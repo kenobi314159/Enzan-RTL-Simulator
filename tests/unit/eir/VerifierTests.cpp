@@ -278,6 +278,28 @@ ModuleDefinition makeModuleWithForce() {
     return definition;
 }
 
+TEST_F(VerifierTest, RejectsAPrimitiveWhoseTableIsNotOfItsInputs) {
+    // Eight bits a field, a field per input and two more a row: a table for two inputs is
+    // 32 bits a row, so one of 24 bits is a table for one input, not two.
+    ModuleDefinition definition = makeValidModule();
+    Process& process = definition.processes[0];
+    process.registerTypes = {Type::bits(2, false, true), Type::logic()};
+    process.constants = {enzan::eir::BitVector::filled(24, enzan::eir::Logic::Zero)};
+    process.writeSet.clear();
+    std::vector<Instruction>& code = process.blocks[0].instructions;
+    code = {Instruction::make(Opcode::UdpCombinational, Operand::reg(1), Operand::reg(0),
+                              Operand::constant(0)),
+            Instruction::make(Opcode::Return)};
+    process.readSet.clear();
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("rows of 2 inputs"));
+
+    process.constants = {enzan::eir::BitVector::filled(32, enzan::eir::Logic::Zero)};
+    consumer.messages.clear();
+    EXPECT_TRUE(check(definition)) << consumer.messages.front();
+}
+
 TEST_F(VerifierTest, AcceptsAForceHeldByAnOverrideProcess) {
     EXPECT_TRUE(check(makeModuleWithForce())) << consumer.messages.front();
 }

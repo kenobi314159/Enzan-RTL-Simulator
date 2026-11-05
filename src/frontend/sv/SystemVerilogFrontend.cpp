@@ -445,18 +445,13 @@ private:
         }
     }
 
-    /// Keeps an instance of a built-in gate to translate as the continuous assignment it is, and
-    /// reports one of a user-defined primitive by its name: each drives its outputs, so leaving one
-    /// out would leave them undriven and the design would simulate to the wrong answer.
+    /// Keeps an instance of a built-in gate or of a user-defined primitive to translate as the
+    /// continuous assignment it is.
     void collectPrimitiveInstance(const ast::PrimitiveInstanceSymbol& instance) {
-        const ast::PrimitiveSymbol& primitive = instance.primitiveType;
-        if (primitive.primitiveKind != ast::PrimitiveSymbol::UserDefined) {
+        if (instance.primitiveType.primitiveKind == ast::PrimitiveSymbol::UserDefined)
+            primitives.push_back(&instance);
+        else
             gates.push_back(&instance);
-            return;
-        }
-        reportUnsupported(
-            instance.location,
-            std::format("an instance of the user-defined primitive '{}'", primitive.name));
     }
 
     /// Returns a name not already used by an object in this module.
@@ -505,6 +500,9 @@ private:
 
     /// Instances of built-in gates, each a continuous assignment of its outputs.
     std::vector<const ast::PrimitiveInstanceSymbol*> gates;
+
+    /// Instances of user-defined primitives, each a continuous assignment of its output.
+    std::vector<const ast::PrimitiveInstanceSymbol*> primitives;
 
     /// The interface ports of this body, in declaration order.
     std::vector<const ast::InterfacePortSymbol*> interfacePorts;
@@ -1205,6 +1203,45 @@ bool ModuleBuilder::translateProcesses() {
                         shared->slangSources.getLineNumber(gate->location)),
             convertLocation(gate->location));
         if (!translator.translateGate(*gate)) {
+            failed = true;
+            continue;
+        }
+        definitionValue.processes.push_back(translator.take());
+        definitionValue.processes.back().strength = *strength;
+    }
+
+    for (const ast::PrimitiveInstanceSymbol* instance : primitives) {
+        const std::optional<eir::DriveStrength> strength =
+            driveStrengthOf(instance->getDriveStrength(), instance->location);
+        if (!strength) continue;
+
+        // A sequential primitive's inputs as it last took them, x until it first has, above its
+        // state, which starts at its `initial` value or at x.
+        std::optional<std::uint32_t> held;
+        const ast::PrimitiveSymbol& primitive = instance->primitiveType;
+        if (primitive.isSequential) {
+            const auto width = static_cast<std::uint32_t>(instance->getPortConnections().size());
+            eir::Object object;
+            object.name = uniqueObjectName(std::format("{}$state", instance->name));
+            object.type = eir::Type::bits(width, false, true);
+            object.location = convertLocation(instance->location);
+            eir::BitVector initial = eir::BitVector::filled(width, eir::Logic::Unknown);
+            if (primitive.initVal != nullptr && primitive.initVal->isInteger()) {
+                const slang::logic_t bit = primitive.initVal->integer()[0];
+                if (!bit.isUnknown())
+                    initial.set(0, bit.value != 0 ? eir::Logic::One : eir::Logic::Zero);
+            }
+            object.initialValue = std::move(initial);
+            held = definitionValue.addObject(std::move(object));
+        }
+
+        ProcessTranslator translator(
+            *this, eir::ProcessKind::ContinuousAssign,
+            std::format("{}@{}:{}", primitive.name,
+                        shared->slangSources.getFileName(instance->location),
+                        shared->slangSources.getLineNumber(instance->location)),
+            convertLocation(instance->location));
+        if (!translator.translatePrimitive(*instance, held)) {
             failed = true;
             continue;
         }

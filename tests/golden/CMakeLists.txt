@@ -127,6 +127,10 @@ enzan_add_golden_test(strengths)
 # Built-in gates over the four values, tristate buffers, an array, a delay and a pad with a pull-up.
 enzan_add_golden_test(gates)
 
+# User-defined primitives of each kind: combinational over every input, a level-sensitive latch
+# and an edge-sensitive flip-flop with an asynchronous clear and an initial state.
+enzan_add_golden_test(primitives)
+
 # Procedural `assign` and `force`: a flip-flop held by its reset, a force over an assign, nets
 # released back to their drivers, a variable that keeps its forced value.
 enzan_add_golden_test(overrides)
