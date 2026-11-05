@@ -1862,6 +1862,30 @@ exit criteria are unmet.
 | M6 | VHDL via NVC, the VHDL simulation cycle and VHPI |
 | M7 | Designs of both languages (3.5) |
 
+### M7.1 — AMD Xilinx simulation libraries
+
+Designs instantiating AMD Xilinx's simulation models, read from the user's own installation: the
+unisims, unimacro, `glbl` and XPM from SystemVerilog; the same through `unisim` and `xpm` libraries
+of components from VHDL; and 7-series functional-simulation netlists.
+
+**Exit:** self-checking testbenches for the primitives designs use most — flip-flops with `glbl`'s
+reset, LUTs, carry chains, shift registers, block RAM, DSP slices, clock buffers, MMCMs, DDR
+registers, I/O buffers with pulls — match Icarus Verilog, their clock-to-output delays included;
+XPM memories, FIFOs and synchronisers match Verilator; the same checks run from VHDL through the
+component libraries agree with both; and NEORV32's 7-series functional netlists, in Verilog and in
+VHDL, run its program as its RTL does.
+
+### M7.2 — Altera simulation libraries
+
+Designs instantiating Altera's models: `altera_primitives`, LPM, `altera_mf`, `sgate` and the
+Cyclone 10 LP atoms from SystemVerilog, and from VHDL through Altera's component packages or as
+VHDL libraries of their own; and Cyclone 10 LP `.vo` netlists.
+
+**Exit:** testbenches for `altsyncram` with an initialisation file and for the LPM functions match
+Icarus Verilog, and `scfifo` and `dcfifo` match Verilator; the Cyclone 10 LP atoms match Icarus
+Verilog, and `cyclone10lp_pll` Verilator; Altera's VHDL models give GHDL's results; and NEORV32's
+Cyclone 10 LP netlist runs its program as its RTL does.
+
 ### M8 — Performance
 
 LLVM JIT backend behind a flag; profiling and hot-path work; activity-based scheduling refinements;
@@ -1919,6 +1943,8 @@ mistranslated:
 | Waveform rendering does not scale when zoomed out | Medium | Pixel-bounded rendering (10.3) |
 | Scope creep into verification features | Medium | Explicit non-goals (1.3) and milestone gating |
 | Parallelism delivers less speedup than hoped | Low | Expectations calibrated in 6.4; the single-threaded kernel is the plan, not a fallback |
+| One unit per parameterisation (2.1) makes a functional netlist too many units | Medium | Measured: a 7-series NEORV32 netlist is 2,306 cell parameterisations for 41,355 instances; value-only parameters would reopen 2.1 |
+| Vendors' models change between releases, and CI cannot run them | Medium | A release pinned and recorded; golden tests of each construct, and Yosys's models of AMD's cells, in CI; the vendor harnesses run before merging |
 
 ---
 
