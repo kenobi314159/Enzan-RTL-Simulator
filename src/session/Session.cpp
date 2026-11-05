@@ -391,6 +391,12 @@ bool Session::analyse(const AnalysisRequest& request) {
 
 bool Session::analyseVhdl(const AnalysisRequest& request) {
 #ifdef ENZAN_WITH_VHDL
+    // The adapter translates the hierarchy under one top.
+    if (!request.otherTops.empty()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "a second top level of VHDL");
+        return false;
+    }
     frontend::vhdl::DesignOptions options;
     std::vector<eir::LibrarySource> read;
     std::set<std::filesystem::path> seen;
@@ -714,6 +720,18 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
             return sameName(name, request.top);
         });
 
+    // A further top level is a module, as AMD's `glbl` is: the adapter translates under one top.
+    std::vector<std::string> svTops;
+    for (const std::string& other : request.otherTops) {
+        if (std::ranges::none_of(names.declared,
+                                 [&other](const std::string& name) { return name == other; })) {
+            diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                               std::format("a second top level of VHDL, '{}',", other));
+            return false;
+        }
+        svTops.push_back(other);
+    }
+
     std::string keyOptions;
     if (!setVhdlOptions(request, true, options, keyOptions)) return false;
     options.modules = names.declared;
@@ -732,6 +750,7 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     } else {
         svOptions.onlyRequested = !request.top.empty();
     }
+    for (std::string& top : svTops) svOptions.topModules.push_back(std::move(top));
     // Without a top, an analysis that translates no VHDL still translates what SystemVerilog
     // instantiates of it, since SystemVerilog's analysis cannot check an instance without it.
     if (!request.translateVhdl) options.onlyRequested = true;
@@ -788,7 +807,8 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
         std::vector<eir::UnitRequest> asked;
         bool settled = true;
         std::string newlyAsked;
-        if (svTop || request.top.empty() || !forSystemVerilog.empty()) {
+        if (svTop || request.top.empty() || !forSystemVerilog.empty()
+            || !svOptions.topModules.empty()) {
             svOptions.requests = forSystemVerilog;
             svOptions.requestAnswers = &svAnswers;
             svOptions.interfaces = interfaces;
@@ -1150,6 +1170,13 @@ std::vector<std::string> Session::inputLibraryDefines() const {
 }
 
 bool Session::elaborate(std::string_view topModule) {
+    const std::vector<std::string> tops = topModule.empty()
+                                              ? std::vector<std::string>{}
+                                              : std::vector<std::string>{std::string(topModule)};
+    return elaborate(std::span<const std::string>(tops));
+}
+
+bool Session::elaborate(std::span<const std::string> topModules) {
     // A run may be given nothing but libraries to resolve against, so the design to elaborate
     // is whatever was analysed here plus every unit the input libraries hold. Merged in the
     // order the libraries were given, which is the order 8.2 says they are searched and the
@@ -1164,9 +1191,11 @@ bool Session::elaborate(std::string_view topModule) {
         diagnostics.report(DiagCode::NothingAnalysed, SourceLocation());
         return false;
     }
-    if (!topModule.empty() && design->findModule(topModule) == nullptr
-        && design->findSpecialisations(topModule).empty() && reportUnrecordedTop(topModule))
-        return false;
+    for (const std::string& topModule : topModules) {
+        if (design->findModule(topModule) == nullptr
+            && design->findSpecialisations(topModule).empty() && reportUnrecordedTop(topModule))
+            return false;
+    }
 
     // Two libraries built on one IP each hold the parameterisations they needed, and a design
     // analysed here against a library reproduces the units it reads from that library's
@@ -1187,7 +1216,7 @@ bool Session::elaborate(std::string_view topModule) {
 
     elab::Elaborator elaborator(*design, diagnostics);
     std::unique_ptr<elab::ElaboratedDesign> tree =
-        elaborator.elaborate(topModule, resolutionAnswers);
+        elaborator.elaborate(topModules, resolutionAnswers);
     if (tree == nullptr) return false;
 
     // A resolved signal's function for a driver count no translation has given yet is asked for,
@@ -1196,7 +1225,7 @@ bool Session::elaborate(std::string_view topModule) {
         tree->resolutionCalls(), [](const elab::ResolutionCall& call) { return !call.answered(); });
     if (unanswered) {
         if (!answerResolutions(*tree)) return false;
-        tree = elab::Elaborator(*design, diagnostics).elaborate(topModule, resolutionAnswers);
+        tree = elab::Elaborator(*design, diagnostics).elaborate(topModules, resolutionAnswers);
         if (tree == nullptr) return false;
     }
 

@@ -206,6 +206,16 @@ TEST_F(SessionTest, ElaboratingPreparesAKernelAtTimeZero) {
     EXPECT_EQ(session.time(), 0U);
 }
 
+TEST_F(SessionTest, SeveralTopLevelsAreElaboratedSideBySide) {
+    ASSERT_TRUE(analyse("tops.sv", "module design_top;\n  logic a = 1'b1;\nendmodule\n"
+                                   "module glbl;\n  logic GSR = 1'b0;\nendmodule\n"))
+        << firstMessage();
+    const std::vector<std::string> tops{"design_top", "glbl"};
+    ASSERT_TRUE(session.elaborate(std::span<const std::string>(tops))) << firstMessage();
+    EXPECT_NE(session.findSignal("/design_top/a"), Session::NoSignal);
+    EXPECT_NE(session.findSignal("/glbl/GSR"), Session::NoSignal);
+}
+
 TEST_F(SessionTest, ElaboratingAnUnknownTopFails) {
     ASSERT_TRUE(analyse("counter.sv", CounterSource)) << firstMessage();
     EXPECT_FALSE(session.elaborate("nosuchmodule"));

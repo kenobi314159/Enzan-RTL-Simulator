@@ -207,6 +207,36 @@ TEST_F(Vpi, TheTopLevelIsFoundFromTheRoot) {
     EXPECT_EQ(lastErrorLevel(), vpiError);
 }
 
+TEST(VpiTopLevels, EveryTopLevelIsFoundFromTheRoot) {
+    // A design and AMD's `glbl`, which are two top levels, as other simulators show them.
+    ModuleDefinition tb;
+    tb.name = "tb";
+    tb.sourceName = "tb";
+    ModuleDefinition glbl;
+    glbl.name = "glbl";
+    glbl.sourceName = "glbl";
+    Design design;
+    design.addModule(std::move(tb));
+    design.addModule(std::move(glbl));
+
+    Simulation simulation(std::move(design), std::vector<std::string>{"tb", "glbl"});
+    ASSERT_TRUE(simulation.ready());
+    enzan::SourceManager sources;
+    enzan::DiagnosticEngine engine(sources);
+    PliContext context(engine, {"enzan"});
+    context.attach(simulation.designImage(), simulation.simulationKernel());
+
+    vpiHandle iterator = vpi_iterate(vpiModule, nullptr);
+    ASSERT_NE(iterator, nullptr);
+    std::vector<std::string> names;
+    while (vpiHandle top = vpi_scan(iterator)) {
+        names.push_back(vpi_get_str(vpiName, top));
+        EXPECT_EQ(vpi_get(vpiTopModule, top), 1);
+    }
+    EXPECT_EQ(names, (std::vector<std::string>{"tb", "glbl"}));
+    context.detach();
+}
+
 TEST_F(Vpi, NamesAreDottedFromTheTop) {
     vpiHandle data = byName("tb.data");
     ASSERT_NE(data, nullptr);

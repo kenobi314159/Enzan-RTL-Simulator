@@ -55,10 +55,12 @@ public:
     void consume(const Diagnostic& diagnostic) override {
         messages.push_back(diagnostic.message);
         codes.push_back(diagnostic.code);
+        for (const enzan::DiagnosticNote& note : diagnostic.notes) notes.push_back(note.message);
     }
 
     std::vector<std::string> messages;
     std::vector<enzan::DiagCode> codes;
+    std::vector<std::string> notes;
 };
 
 /// Builds a process that copies one object to another, with the declared read and
@@ -203,6 +205,51 @@ TEST_F(ElaboratorTest, RefusesToGuessBetweenSeveralCandidateTops) {
     EXPECT_TRUE(reportedCode(enzan::DiagCode::NoTopModule));
     EXPECT_TRUE(reported("'one'")) << "the candidates must be listed";
     EXPECT_TRUE(reported("'two'"));
+}
+
+TEST_F(ElaboratorTest, SeveralTopLevelsAreSeveralRoots) {
+    // As a design and AMD's `glbl` are, in the order given and each once.
+    ModuleDefinition design_top;
+    design_top.name = "tb";
+    design_top.sourceName = "tb";
+    design_top.addObject(Object{.name = "clk", .type = Type::bits(1, false, true)});
+    design.addModule(std::move(design_top));
+    ModuleDefinition glbl;
+    glbl.name = "glbl$values";
+    glbl.sourceName = "glbl";
+    glbl.addObject(Object{.name = "GSR", .type = Type::bits(1, false, true)});
+    design.addModule(std::move(glbl));
+
+    const std::vector<std::string> tops{"tb", "glbl", "tb"};
+    Elaborator elaborator(design, engine);
+    const std::unique_ptr<ElaboratedDesign> elaborated =
+        elaborator.elaborate(std::span<const std::string>(tops));
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_EQ(elaborated->topModuleName(), "tb") << "the first, the design's own";
+    EXPECT_EQ(std::vector<std::string>(elaborated->topModuleNames().begin(),
+                                       elaborated->topModuleNames().end()),
+              (std::vector<std::string>{"tb", "glbl"}));
+    ASSERT_EQ(elaborated->instances().size(), 2U);
+    EXPECT_EQ(elaborated->instances()[1].path, "/glbl");
+    EXPECT_EQ(elaborated->instances()[1].parent, Instance::NoParent);
+    EXPECT_TRUE(elaborated->findSlot("/glbl/GSR").has_value());
+}
+
+TEST_F(ElaboratorTest, SaysGlblIsATopLevelOfItsOwnWhenNoTopIsNamed) {
+    ModuleDefinition design_top;
+    design_top.name = "tb";
+    design_top.sourceName = "tb";
+    design.addModule(std::move(design_top));
+    ModuleDefinition glbl;
+    glbl.name = "glbl$values";
+    glbl.sourceName = "glbl";
+    design.addModule(std::move(glbl));
+
+    EXPECT_EQ(elaborate(), nullptr);
+    EXPECT_TRUE(reported("'glbl', 'tb'")) << "by the names the source gives them";
+    ASSERT_EQ(consumer.notes.size(), 1U);
+    EXPECT_NE(consumer.notes.front().find("--top <design> --top glbl"), std::string::npos)
+        << consumer.notes.front();
 }
 
 TEST_F(ElaboratorTest, ReportsAnUnknownTopModuleAndListsWhatExists) {
