@@ -1095,6 +1095,33 @@ void pullHighImpedance(BitRef value, Logic pull) {
     value.canonicalize();
 }
 
+void keepClass(BitRef dst, ConstBitRef value, bool zeros, bool ones) {
+    ENZAN_ASSERT(dst.width() == value.width(), "a class is of the driver's width");
+    const Word keepZeros = zeros ? ~Word{0} : Word{0};
+    const Word keepOnes = ones ? ~Word{0} : Word{0};
+    const Word keepUnknowns = keepZeros | keepOnes;
+    const std::uint32_t count = value.words();
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const Word a = value.aval()[index];
+        const Word b = value.bval()[index];
+        const Word keep = (~a & ~b & keepZeros) | (a & ~b & keepOnes) | (a & b & keepUnknowns);
+        dst.aval()[index] = a & keep;
+        dst.bval()[index] = (b & keep) | ~keep;
+    }
+    dst.canonicalize();
+}
+
+void fillHighImpedance(BitRef acc, ConstBitRef below) {
+    ENZAN_ASSERT(acc.width() == below.width(), "the classes are of one width");
+    const std::uint32_t count = acc.words();
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const Word isHighZ = ~acc.aval()[index] & acc.bval()[index];
+        acc.aval()[index] = (acc.aval()[index] & ~isHighZ) | (below.aval()[index] & isHighZ);
+        acc.bval()[index] = (acc.bval()[index] & ~isHighZ) | (below.bval()[index] & isHighZ);
+    }
+    acc.canonicalize();
+}
+
 double realOf(ConstBitRef value) noexcept {
     return std::bit_cast<double>(value.toUInt64());
 }

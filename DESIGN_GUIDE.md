@@ -377,6 +377,26 @@ whose ranges are disjoint are not in conflict and MUST NOT be treated as though 
 - A driver's range is fixed at elaboration. A part-select at a position that is not constant writes
   through the driver of every bit it could reach.
 
+**Strength is two classes, not the standard's eight.** A driver's strength for each value is
+*strong* (`supply`, `strong`) or *weak* (`pull`, `weak`, and a `tri0` or `tri1` net's own pull).
+Strength is declared, so it is fixed at elaboration and held by the driver in the image, not by its
+value in the arena: what changes during a run is a driver's value, never its strength. A bit
+resolves among the drivers of the strongest class that contributes to it, by its net kind's table,
+and is `z` when none does; a driver whose 0 and 1 are of different classes contributes its `x` to
+both. A lone driver still bypasses resolution where its net kind allows, since strength decides
+only between drivers.
+
+**What the classes cannot tell apart is refused, not guessed.** Two drivers of one segment, or a
+driver and its net's own pull, whose strengths the standard orders and one class holds — pull
+against weak, supply against strong on a net of no supply kind — are an elaboration error naming
+both: resolved as equals they would give `x` where the standard has a winner. So is a driver of a
+supply net at supply strength. A result the standard gives as a partial value, `L` or `H`, is `x`,
+which four-state values cannot avoid. A `highz` strength, switches (`nmos`, `tran` and the rest)
+and `trireg` are refused; `%v` prints as written and `vpiStrengthVal` is refused, rather than
+reporting a strength Enzan does not hold. The eight-level model was rejected because nothing in
+the vendors' libraries Enzan reads needs it, and these refusals keep the shortcut honest where it
+would differ.
+
 **VHDL resolution functions are user code**, compiled to EIR like any subprogram, and the runtime
 MUST NOT assume resolution is a table. A function's parameter is an array as long as the bit has
 drivers, which only elaboration knows, so elaboration counts the drivers and the frontend then
@@ -1863,8 +1883,8 @@ Left out of the milestones above, and refused by name where a design uses them r
 mistranslated:
 
 - SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
-  classes, unpacked unions, strengths other than strong, instances of built-in and user-defined
-  primitives, module paths with a delay, and net aliases.
+  classes, unpacked unions, `highz` strengths, instances of built-in and user-defined primitives,
+  module paths with a delay, and net aliases.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from

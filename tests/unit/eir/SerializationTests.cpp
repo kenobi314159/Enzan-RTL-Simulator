@@ -164,6 +164,7 @@ ModuleDefinition richModule(BufferId buffer) {
     Process process;
     process.kind = ProcessKind::AlwaysFf;
     process.drivesSignals = true;
+    process.strength = {.zero = enzan::eir::Strength::Strong, .one = enzan::eir::Strength::Weak};
     process.postponed = true;
     process.connectsPort = true;
     process.name = "always_ff@counter.sv:14";
@@ -339,6 +340,8 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
 
     EXPECT_EQ(process.kind, ProcessKind::AlwaysFf);
     EXPECT_TRUE(process.drivesSignals);
+    EXPECT_EQ(process.strength, (enzan::eir::DriveStrength{.zero = enzan::eir::Strength::Strong,
+                                                           .one = enzan::eir::Strength::Weak}));
     EXPECT_TRUE(process.postponed);
     EXPECT_TRUE(process.connectsPort);
     EXPECT_EQ(process.name, "always_ff@counter.sv:14");

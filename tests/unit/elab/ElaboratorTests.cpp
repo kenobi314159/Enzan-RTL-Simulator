@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <format>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -683,6 +684,64 @@ TEST_F(ElaboratorTest, RejectsTwoContinuousAssignmentsDrivingOneObject) {
     EXPECT_EQ(elaborate("tb"), nullptr);
     EXPECT_TRUE(reportedCode(enzan::DiagCode::MultipleContinuousDrivers));
     EXPECT_TRUE(reported("/tb/net")) << "the report must name the object";
+}
+
+/// A net `net` of `kind` driven by one continuous assignment of each of `strengths`.
+void addNetDrivers(Design& design, enzan::eir::NetKind kind,
+                   std::initializer_list<enzan::eir::DriveStrength> strengths) {
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::logic()});
+    top.addObject(Object{.name = "net",
+                         .type = Type::logic(),
+                         .kind = enzan::eir::ObjectKind::Net,
+                         .netKind = kind});
+    for (const enzan::eir::DriveStrength strength : strengths) {
+        Process process = makeCopyProcess(ProcessKind::ContinuousAssign, 0, 1, Type::logic());
+        process.strength = strength;
+        top.processes.push_back(std::move(process));
+    }
+    design.addModule(std::move(top));
+}
+
+TEST_F(ElaboratorTest, ADriversStrengthIsHeldByTheDriverAndItsSegment) {
+    using enzan::eir::Strength;
+    addNetDrivers(design, enzan::eir::NetKind::Wire,
+                  {{.zero = Strength::Strong, .one = Strength::Weak}, {}});
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->drivers().size(), 2U);
+    EXPECT_EQ(elaborated->drivers()[0].strength.one, Strength::Weak);
+    ASSERT_EQ(elaborated->segments().size(), 1U);
+    EXPECT_TRUE(elaborated->segments()[0].weak);
+}
+
+TEST_F(ElaboratorTest, RefusesStrengthsTheTwoClassesWouldResolveAsEquals) {
+    // The standard has pull beat weak; two classes would resolve them to X.
+    using enzan::eir::Strength;
+    addNetDrivers(design, enzan::eir::NetKind::Wire,
+                  {{.zero = Strength::Pull, .one = Strength::Pull},
+                   {.zero = Strength::Weak, .one = Strength::Weak}});
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::StrengthsIndistinguishable));
+    EXPECT_TRUE(reported("/tb/net"));
+}
+
+TEST_F(ElaboratorTest, RefusesAWeakDriverOfANetThatPulls) {
+    // A `tri1`'s own pull beats a weak 0.
+    using enzan::eir::Strength;
+    addNetDrivers(design, enzan::eir::NetKind::Tri1,
+                  {{.zero = Strength::Weak, .one = Strength::Weak}});
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reported("the tri1's own pull"));
+}
+
+TEST_F(ElaboratorTest, RefusesADriverOfASupplyNetAtSupplyStrength) {
+    using enzan::eir::Strength;
+    addNetDrivers(design, enzan::eir::NetKind::Supply0,
+                  {{.zero = Strength::Supply, .one = Strength::Supply}});
+    EXPECT_EQ(elaborate("tb"), nullptr);
+    EXPECT_TRUE(reportedCode(enzan::DiagCode::NotYetImplemented));
 }
 
 TEST_F(ElaboratorTest, AProcessThatDrivesItsSignalsIsADriverOfThem) {

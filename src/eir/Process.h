@@ -368,6 +368,28 @@ struct Body {
     std::vector<WriteExtent> writeSet;
 };
 
+/// A strength a driver drives a value with (IEEE 1800 section 28.11), of the four levels a
+/// value can be driven at. Resolution tells only two classes apart, `Supply` and `Strong` the
+/// strong, `Pull` and `Weak` the weak, and elaboration refuses drivers whose levels the standard
+/// orders and a class does not (DESIGN_GUIDE.md section 3.7).
+enum class Strength : std::uint8_t { Supply, Strong, Pull, Weak };
+
+/// True for `Pull` and `Weak`, which yield to any driver of the strong class.
+[[nodiscard]] constexpr bool isWeak(Strength strength) noexcept {
+    return strength == Strength::Pull || strength == Strength::Weak;
+}
+
+/// The strengths a driver drives 0 and 1 with; strong for both unless declared otherwise.
+struct DriveStrength {
+    Strength zero = Strength::Strong;
+    Strength one = Strength::Strong;
+
+    /// True when either value is driven in the weak class.
+    [[nodiscard]] constexpr bool anyWeak() const noexcept { return isWeak(zero) || isWeak(one); }
+
+    friend bool operator==(const DriveStrength&, const DriveStrength&) = default;
+};
+
 /// An EIR-B process: the body of one procedural block, scheduled by the kernel.
 struct Process : Body {
     ProcessKind kind = ProcessKind::Always;
@@ -380,6 +402,10 @@ struct Process : Body {
     /// not a race the last write wins. Elaboration treats its writes as it treats a continuous
     /// assignment's.
     bool drivesSignals = false;
+
+    /// What a continuous assignment drives with, as `assign (strong1, weak0)` declares it. Every
+    /// other process drives strong.
+    DriveStrength strength;
 
     /// True for a VHDL postponed process (IEEE 1076 section 11.3): past initialization, it
     /// resumes only in the last delta cycle of a time step, once nothing else is due then, and so

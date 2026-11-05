@@ -90,8 +90,8 @@ enum class NetKind : std::uint8_t {
     Tri0,
     /// Pulled to 1 likewise.
     Tri1,
-    /// Always 0. Its supply strength beats every driver Enzan can model, all of which are
-    /// strong.
+    /// Always 0. Its supply strength beats every driver but one of supply strength, which
+    /// elaboration refuses, since the two would contend as equals.
     Supply0,
     /// Always 1.
     Supply1,

@@ -120,6 +120,10 @@ enzan_add_golden_test(nets)
 # Nets with several drivers, resolved per bit: tristate buses, wired logic, pulls and supplies.
 enzan_add_golden_test(resolution)
 
+# Drive strengths as two classes: weak drivers yielding to strong ones, as AMD's `glbl` drives its
+# reset and its PLLs' lock.
+enzan_add_golden_test(strengths)
+
 # The comparisons with don't-care bits: ==?, casez and casex.
 enzan_add_golden_test(wildcards)
 

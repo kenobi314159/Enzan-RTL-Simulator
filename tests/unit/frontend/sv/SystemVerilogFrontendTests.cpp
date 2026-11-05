@@ -1090,18 +1090,39 @@ TEST_F(FrontendTest, ReportsAnInoutConnectedToASignalOfAnotherWidth) {
                          "a signal of another width"));
 }
 
-TEST_F(FrontendTest, ReportsADriveStrengthOtherThanStrong) {
-    // Resolution has no strength model, so a weak driver would lose to nothing and tie with a
-    // strong one.
+TEST_F(FrontendTest, AContinuousAssignmentKeepsTheStrengthsItDeclares) {
+    // As AMD's `glbl` declares its reset and its PLLs' lock: strong one way, weak the other.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic a, b;
+            wire gsr;
+            assign (strong1, weak0) gsr = a;
+            tri (weak1, strong0) lock = b;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    std::vector<enzan::eir::DriveStrength> strengths;
+    for (const enzan::eir::Process& process : found->processes)
+        strengths.push_back(process.strength);
+    using enzan::eir::Strength;
+    EXPECT_EQ(strengths, (std::vector<enzan::eir::DriveStrength>{
+                             {.zero = Strength::Weak, .one = Strength::Strong},
+                             {.zero = Strength::Strong, .one = Strength::Weak}}));
+}
+
+TEST_F(FrontendTest, ReportsAHighImpedanceDriveStrength) {
+    // It drives `z` where a strength would, which no model Enzan reads asks for.
     EXPECT_EQ(analyse(R"(
         module m;
             logic a;
             wire w;
-            assign (weak0, weak1) w = a;
+            assign (strong1, highz0) w = a;
         endmodule
     )"),
               nullptr);
-    EXPECT_TRUE(reported("a drive strength other than strong"));
+    EXPECT_TRUE(reported("a drive strength of highz"));
 }
 
 TEST_F(FrontendTest, AnExplicitStrongDriveIsTheDefaultAndAccepted) {

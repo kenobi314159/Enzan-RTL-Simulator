@@ -420,12 +420,10 @@ private:
     std::optional<std::uint32_t> referenceThrough(const ast::ValueSymbol& symbol, std::string path,
                                                   eir::Type type);
 
-    /// Reports a drive strength other than the default and returns false.
-    ///
-    /// Enzan resolves drivers without a strength model, which gives the right answer only when
-    /// every driver is strong: a `weak` driver contending with a strong one would resolve to X
-    /// where the strong one should win.
-    bool checkDriveStrength(
+    /// The strengths `strength` declares for 0 and for 1, strong where it declares none; nothing,
+    /// having reported, for `highz`, which drives `z` where a strength would and no model Enzan
+    /// reads uses.
+    std::optional<eir::DriveStrength> driveStrengthOf(
         std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
         slang::SourceLocation location);
 
@@ -845,7 +843,7 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
             reportUnsupported(symbol.location, "a delay on a net");
             return std::nullopt;
         }
-        if (!checkDriveStrength(net.getDriveStrength(), symbol.location)) return std::nullopt;
+        if (!driveStrengthOf(net.getDriveStrength(), symbol.location)) return std::nullopt;
     }
 
     // A net's initialiser is a continuous assignment, `wire w = a & b;`, translated with the
@@ -1142,7 +1140,9 @@ bool ModuleBuilder::translateProcesses() {
     }
 
     for (const ast::ContinuousAssignSymbol* assignment : continuousAssignments) {
-        if (!checkDriveStrength(assignment->getDriveStrength(), assignment->location)) continue;
+        const std::optional<eir::DriveStrength> strength =
+            driveStrengthOf(assignment->getDriveStrength(), assignment->location);
+        if (!strength) continue;
 
         const SourceLocation location = convertLocation(assignment->location);
         ProcessTranslator translator(
@@ -1158,6 +1158,7 @@ bool ModuleBuilder::translateProcesses() {
         }
 
         definitionValue.processes.push_back(translator.take());
+        definitionValue.processes.back().strength = *strength;
     }
 
     // By index, because translating one initialiser may meet a net not yet seen and add it,
@@ -1177,7 +1178,11 @@ bool ModuleBuilder::translateProcesses() {
             continue;
         }
 
+        // `tri (weak1, strong0) n = v` drives `n` with what the declaration says.
         definitionValue.processes.push_back(translator.take());
+        if (const std::optional<eir::DriveStrength> strength =
+                driveStrengthOf(net.getDriveStrength(), net.location))
+            definitionValue.processes.back().strength = *strength;
     }
 
     return !failed;
@@ -1301,16 +1306,27 @@ std::optional<eir::NetKind> ModuleBuilder::convertNetKind(ast::NetType::NetKind 
     return std::nullopt;
 }
 
-bool ModuleBuilder::checkDriveStrength(
+std::optional<eir::DriveStrength> ModuleBuilder::driveStrengthOf(
     std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
     slang::SourceLocation location) {
-    const auto isDefault = [](std::optional<ast::DriveStrength> value) {
-        return !value.has_value() || *value == ast::DriveStrength::Strong;
+    bool highImpedance = false;
+    const auto levelOf = [&highImpedance](std::optional<ast::DriveStrength> value) {
+        switch (value.value_or(ast::DriveStrength::Strong)) {
+        case ast::DriveStrength::Supply: return eir::Strength::Supply;
+        case ast::DriveStrength::Strong: return eir::Strength::Strong;
+        case ast::DriveStrength::Pull: return eir::Strength::Pull;
+        case ast::DriveStrength::Weak: return eir::Strength::Weak;
+        case ast::DriveStrength::HighZ: highImpedance = true; return eir::Strength::Strong;
+        }
+        return eir::Strength::Strong;
     };
-    if (isDefault(strength.first) && isDefault(strength.second)) return true;
-
-    reportUnsupported(location, "a drive strength other than strong");
-    return false;
+    const eir::DriveStrength result{.zero = levelOf(strength.first),
+                                    .one = levelOf(strength.second)};
+    if (highImpedance) {
+        reportUnsupported(location, "a drive strength of highz");
+        return std::nullopt;
+    }
+    return result;
 }
 
 ModuleBuilder::SensitivityForm

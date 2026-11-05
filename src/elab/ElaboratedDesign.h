@@ -216,6 +216,10 @@ struct Driver {
     std::uint32_t firstSegment = 0;
     std::uint32_t segmentCount = 0;
 
+    /// What it drives 0 and 1 with, fixed by its declaration: the driver's value changes during a
+    /// run, its strength never does (DESIGN_GUIDE.md section 3.7).
+    eir::DriveStrength strength;
+
     [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + width; }
 };
 
@@ -234,6 +238,11 @@ struct Segment {
     /// its resolution call in the elaborated design's list.
     eir::NetKind netKind = eir::NetKind::Wire;
     std::uint32_t resolution = NoResolution;
+
+    /// Whether a driver drives a value in the weak class, so that the strong ones are resolved
+    /// first and the weak only where they leave a bit `z`. A segment of strong drivers alone takes
+    /// the plain fold.
+    bool weak = false;
 
     static constexpr std::uint32_t NoResolution = 0xFFFF'FFFFU;
 };

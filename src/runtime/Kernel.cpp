@@ -156,6 +156,8 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
       resolvedScratch(eir::storageWordsFor(designImageToRun.elaboratedDesign().widestDriver()), 0),
       segmentScratch(resolvedScratch.size(), 0),
       driverScratch(resolvedScratch.size(), 0),
+      weakScratch(resolvedScratch.size(), 0),
+      classScratch(resolvedScratch.size(), 0),
       windowScratch(windowScratchWords(designImageToRun), 0),
       edgeWaiters(designImageToRun.signals().size()) {
     callsInProgress.reserve(callDepthCapacity);
@@ -745,23 +747,50 @@ void Kernel::resolveDriver(std::uint32_t driverIndex) {
             continue;
         }
 
-        sliceOf(segment.firstDriver, acc);
-        for (std::uint32_t other = segment.firstDriver + 1;
-             other < segment.firstDriver + segment.driverCount; ++other) {
-            sliceOf(other, next);
+        // Each driver folded in by the net's table.
+        const auto fold = [&segment](eir::BitRef into, eir::ConstBitRef driver) {
             switch (segment.netKind) {
             case eir::NetKind::WiredAnd:
-            case eir::NetKind::TriAnd: bitops::resolveWiredAnd(acc, next); break;
+            case eir::NetKind::TriAnd: bitops::resolveWiredAnd(into, driver); break;
             case eir::NetKind::WiredOr:
-            case eir::NetKind::TriOr: bitops::resolveWiredOr(acc, next); break;
+            case eir::NetKind::TriOr: bitops::resolveWiredOr(into, driver); break;
             case eir::NetKind::Wire:
             case eir::NetKind::Tri:
             case eir::NetKind::Tri0:
             case eir::NetKind::Tri1:
             case eir::NetKind::Supply0:
             case eir::NetKind::Supply1:
-            case eir::NetKind::UWire: bitops::resolveWire(acc, next); break;
+            case eir::NetKind::UWire: bitops::resolveWire(into, driver); break;
             }
+        };
+
+        if (!segment.weak) {
+            sliceOf(segment.firstDriver, acc);
+            for (std::uint32_t other = segment.firstDriver + 1;
+                 other < segment.firstDriver + segment.driverCount; ++other) {
+                sliceOf(other, next);
+                fold(acc, next);
+            }
+        } else {
+            // The strong class decides each bit, and the weak only where the strong leave it
+            // `z` (DESIGN_GUIDE.md section 3.7).
+            const eir::BitRef weak(weakScratch.data(), segment.width);
+            const eir::BitRef part(classScratch.data(), segment.width);
+            acc.fill(eir::Logic::HighZ);
+            weak.fill(eir::Logic::HighZ);
+            for (std::uint32_t index = segment.firstDriver;
+                 index < segment.firstDriver + segment.driverCount; ++index) {
+                const eir::DriveStrength strength =
+                    elaborated.drivers()[elaborated.segmentDrivers()[index]].strength;
+                sliceOf(index, next);
+                bitops::keepClass(part, next, !eir::isWeak(strength.zero),
+                                  !eir::isWeak(strength.one));
+                fold(acc, part);
+                bitops::keepClass(part, next, eir::isWeak(strength.zero),
+                                  eir::isWeak(strength.one));
+                fold(weak, part);
+            }
+            bitops::fillHighImpedance(acc, weak);
         }
 
         // What the net itself contributes: a pull where every driver is `z`, or a supply that
