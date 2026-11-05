@@ -101,6 +101,10 @@ ENZAN_OPCODE(StoreDelayed, "dstore", false, 3,
              "a call to the runtime helper that schedules the write of a continuous "
              "assignment with a delay, the third operand, replacing the one it scheduled "
              "before if that has not happened yet; when it happens it is a Store")
+ENZAN_OPCODE(StoreTransport, "tstore", false, 3,
+             "as StoreDelayed through the same helper, replacing nothing it scheduled before: "
+             "the transport delay of a module path whose pulse limits are zero, which lets every "
+             "pulse through")
 ENZAN_OPCODE(StoreNonBlockingDelayed, "nbdstore", false, 3,
              "a call to the runtime helper that schedules a non-blocking update the "
              "third operand later, where it joins that time step's NBA region")

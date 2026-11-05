@@ -656,10 +656,23 @@ floor.
   it rounds to; a real with no format is shown as Icarus Verilog shows one, `%g` with its trailing
   zeros. A real port, an array or struct of reals and a real exponent are refused.
 - **A specify block is read for what a functional simulation needs of it.** A `specparam` is a
-  parameter. A module path whose delays are all zero changes nothing and is accepted; one with a
-  delay is refused, since leaving it out would move its output early. A timing check is not run
-  (1.3): its notifier never toggles, and a run instantiating one says so once, pointing at the
-  first in the hierarchy.
+  parameter. A timing check is not run (1.3): its notifier never toggles, and a run instantiating
+  one says so once, pointing at the first in the hierarchy.
+- **A module path delays its output as Icarus Verilog's `-gspecify` does**, by the standard's rule
+  (IEEE 1800 sections 30.4 to 30.7). When what the body gives an output changes, the output takes
+  it after the shortest delay among the paths whose input changed most recently, of those whose
+  condition holds, and no earlier than now: a change that comes after its path's delay has run out
+  is at once, the larger of the path's delay and the logic's (section 30.6). An edge-sensitive path counts only its
+  edge; an unknown condition holds no path, as Icarus has it. The delay is the transition's, the
+  six section 30.5 names and those to and from `x` it derives from them. A pulse shorter than the
+  delay is rejected, as the default limits have it, and `PATHPULSE$ = 0`, which AMD's models set,
+  lets every pulse through. The frontend gives such an output a process of its own, which keeps each
+  input's last change in objects beside it, and sends the body's writes of the output to a copy
+  the process reads; the port is the process's alone, and what everything reads, the body
+  included. One process delays the whole output, so paths that differ between its bits, and
+  delays that differ by transition on a vector, are refused, as are `ifnone` with a delay, pulse
+  limits other than zero, pulse styles and `showcancelled`. A path without a delay still takes part
+  in choosing, and a body whose every path has none pays nothing.
 
 ### 5.2 VHDL via NVC
 
@@ -1919,8 +1932,8 @@ mistranslated:
 
 - SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
   exponent, named events, dynamic and associative arrays, queues, classes, unpacked unions,
-  `highz` strengths, switches, module paths with a delay, net aliases, and a procedural `assign`
-  or `force` of part of an object.
+  `highz` strengths, switches, the module paths of 5.1 that one process per output cannot follow,
+  net aliases, and a procedural `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from

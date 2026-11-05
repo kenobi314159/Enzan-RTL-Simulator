@@ -410,9 +410,23 @@ private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
 
-    /// Reads what a functional simulation needs of a specify block: whether its module paths
-    /// change anything, and where its first timing check is.
+    /// Reads what a functional simulation needs of a specify block: its module paths, its pulse
+    /// limits, and where its first timing check is.
     void collectSpecifyBlock(const ast::SpecifyBlockSymbol& block);
+
+    /// Adds, for each output a module path with a delay reaches, the process that delays it, and
+    /// the objects it and the body's own writes of the output use. False, having reported, for a
+    /// path whose delay Enzan does not model.
+    bool translateModulePaths();
+
+    /// Sends the body's own writes of each output `translateModulePaths` delays to the object it
+    /// gave the output's process to read, every process's but the first `pathProcesses` from
+    /// `firstPathProcess`, which are the outputs' own.
+    void redirectDelayedOutputs(std::size_t firstPathProcess, std::size_t pathProcesses);
+
+    /// The object, bits and width a module path's terminal names: a port, or a constant select of
+    /// one. Nothing, having reported, for any other.
+    std::optional<OutputPaths::Source> pathTerminal(const ast::Expression& terminal);
 
     /// The EIR kind of a slang net kind, or nothing for one Enzan cannot resolve.
     static std::optional<eir::NetKind> convertNetKind(ast::NetType::NetKind kind);
@@ -504,6 +518,19 @@ private:
 
     /// Instances of user-defined primitives, each a continuous assignment of its output.
     std::vector<const ast::PrimitiveInstanceSymbol*> primitives;
+
+    /// The module paths of this body's specify blocks, and whether their pulse limits are zero,
+    /// which lets every pulse through (`PATHPULSE$ = 0`).
+    std::vector<const ast::TimingPathSymbol*> modulePaths;
+    bool transportPaths = false;
+
+    /// What else a specify block says of pulses, a limit of one path or other than zero, a
+    /// pulse style or `showcancelled`: where it is and what, refused where a path has a delay.
+    std::vector<std::pair<slang::SourceLocation, std::string>> pulseShapers;
+
+    /// Each output a module path with a delay reaches, by its port's object, and the object the
+    /// body's own writes of it write instead.
+    std::map<std::uint32_t, std::uint32_t> delayedOutputs;
 
     /// The interface ports of this body, in declaration order.
     std::vector<const ast::InterfacePortSymbol*> interfacePorts;
@@ -1044,37 +1071,309 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
 void ModuleBuilder::collectSpecifyBlock(const ast::SpecifyBlockSymbol& block) {
     for (const ast::Symbol& member : block.members()) {
         switch (member.kind) {
-        case slang::ast::SymbolKind::TimingPath: {
-            // A path with a delay holds its output back, which leaving it out would not, so only
-            // one whose every delay is zero, and which so changes nothing, is accepted.
-            const auto& path = member.as<ast::TimingPathSymbol>();
-            const bool zero =
-                std::ranges::all_of(path.getDelays(), [&](const ast::Expression* delay) {
-                    ast::EvalContext evalContext(path);
-                    const slang::ConstantValue value = delay->eval(evalContext);
-                    return (value.isInteger() || value.isReal() || value.isShortReal())
-                           && value.isFalse();
-                });
-            if (!zero) {
-                reportUnsupported(path.location,
-                                  std::format("the module path from {} to {}, whose delay is not "
-                                              "zero,",
-                                              signalNames(path.getInputs()),
-                                              signalNames(path.getOutputs())));
-            }
+        case slang::ast::SymbolKind::TimingPath:
+            modulePaths.push_back(&member.as<ast::TimingPathSymbol>());
             break;
-        }
 
         case slang::ast::SymbolKind::SystemTimingCheck:
             if (!definitionValue.firstTimingCheck.valid())
                 definitionValue.firstTimingCheck = convertLocation(member.location);
             break;
 
-        default:
-            // Specparams, `PATHPULSE$` among them, are constants, which an expression naming one
-            // folds. A pulse style and `showcancelled` shape only the pulses a path with a delay
-            // lets through, and every path accepted above has none.
+        case slang::ast::SymbolKind::Specparam: {
+            // Every other specparam is a constant, which an expression naming one folds. slang
+            // marks only the form of two limits a pulse limit; one limit is both.
+            const auto& specparam = member.as<ast::SpecparamSymbol>();
+            if (!specparam.name.starts_with("PATHPULSE$")) break;
+            const bool zero = specparam.isPathPulse
+                                  ? specparam.getPulseRejectLimit().isFalse()
+                                        && specparam.getPulseErrorLimit().isFalse()
+                                  : specparam.getValue().isFalse();
+            if (zero && specparam.name == "PATHPULSE$") {
+                transportPaths = true;
+            } else {
+                pulseShapers.emplace_back(member.location,
+                                          std::format("the pulse limit '{}'", specparam.name));
+            }
             break;
+        }
+
+        case slang::ast::SymbolKind::PulseStyle:
+            pulseShapers.emplace_back(member.location, "a pulse style or `showcancelled`");
+            break;
+
+        default: break;
+        }
+    }
+}
+
+std::optional<OutputPaths::Source> ModuleBuilder::pathTerminal(const ast::Expression& terminal) {
+    const ast::Expression* base = &terminal;
+    std::optional<std::int64_t> low;
+    if (terminal.kind == ast::ExpressionKind::ElementSelect) {
+        const auto& select = terminal.as<ast::ElementSelectExpression>();
+        base = &select.value();
+        ast::EvalContext context(*body);
+        const slang::ConstantValue index = select.selector().eval(context);
+        if (index.isInteger() && !index.integer().hasUnknown()) {
+            const auto position = index.integer().as<std::int32_t>();
+            if (position.has_value())
+                low = std::int64_t{base->type->getFixedRange().translateIndex(*position)}
+                      * terminal.type->getBitWidth();
+        }
+    } else if (terminal.kind == ast::ExpressionKind::RangeSelect) {
+        const auto& select = terminal.as<ast::RangeSelectExpression>();
+        base = &select.value();
+        if (select.getSelectionKind() == ast::RangeSelectionKind::Simple) {
+            ast::EvalContext context(*body);
+            const slang::ConstantValue left = select.left().eval(context);
+            const slang::ConstantValue right = select.right().eval(context);
+            const slang::ConstantRange range = base->type->getFixedRange();
+            if (left.isInteger() && right.isInteger()) {
+                const auto first = left.integer().as<std::int32_t>();
+                const auto second = right.integer().as<std::int32_t>();
+                if (first.has_value() && second.has_value())
+                    low = std::min(range.translateIndex(*first), range.translateIndex(*second));
+            }
+        }
+    } else {
+        low = 0;
+    }
+    if (base->kind != ast::ExpressionKind::NamedValue || !low.has_value()) {
+        reportUnsupported(terminal.sourceRange.start(),
+                          "a module path terminal other than a port or a constant select of one");
+        return std::nullopt;
+    }
+    const std::optional<std::uint32_t> objectIndex =
+        objectFor(base->as<ast::NamedValueExpression>().symbol);
+    if (!objectIndex.has_value()) return std::nullopt;
+    return OutputPaths::Source{.objectIndex = *objectIndex,
+                               .lowBit = static_cast<std::uint32_t>(*low),
+                               .width = terminal.type->getBitWidth()};
+}
+
+bool ModuleBuilder::translateModulePaths() {
+    // The delays of a path, as constants: a path with every one zero changes nothing, though it
+    // still takes part in choosing which path's delay applies.
+    const auto valuesOf = [this](const ast::TimingPathSymbol& path) {
+        std::vector<double> values;
+        for (const ast::Expression* delay : path.getDelays()) {
+            ast::EvalContext context(*body);
+            const slang::ConstantValue value = delay->eval(context);
+            double number = std::numeric_limits<double>::quiet_NaN();
+            if (value.isReal()) number = static_cast<double>(value.real());
+            if (value.isInteger()) number = value.integer().toDouble();
+            values.push_back(number);
+        }
+        return values;
+    };
+    const auto zero = [](const std::vector<double>& values) {
+        return std::ranges::all_of(values, [](double value) { return value == 0.0; });
+    };
+    if (std::ranges::all_of(
+            modulePaths, [&](const ast::TimingPathSymbol* path) { return zero(valuesOf(*path)); }))
+        return true;
+    for (const auto& [location, what] : pulseShapers) reportUnsupported(location, what);
+    if (!pulseShapers.empty()) return false;
+
+    // One path of one input window to one bit of an output, as the bit's paths are compared.
+    struct Arc {
+        OutputPaths::Source source;
+        const ast::TimingPathSymbol* path = nullptr;
+        std::vector<double> delays;
+    };
+
+    std::map<std::uint32_t, std::map<std::uint32_t, std::vector<Arc>>> arcsByOutput;
+    bool ok = true;
+    for (const ast::TimingPathSymbol* path : modulePaths) {
+        const std::vector<double> delays = valuesOf(*path);
+        const std::size_t count = delays.size();
+        // Twelve, which give the transitions to and from x their own, only when all one delay.
+        const bool oneDelay =
+            std::ranges::all_of(delays, [&](double value) { return value == delays.front(); });
+        const bool modelled =
+            count == 1 || count == 2 || count == 3 || count == 6 || (count == 12 && oneDelay);
+        if (!modelled) {
+            reportUnsupported(path->location, "a module path of twelve different delays");
+            ok = false;
+            continue;
+        }
+        if (path->getSyntax() != nullptr
+            && path->getSyntax()->kind == slang::syntax::SyntaxKind::IfNonePathDeclaration
+            && !zero(delays)) {
+            reportUnsupported(path->location, "an `ifnone` module path with a delay");
+            ok = false;
+            continue;
+        }
+        for (const ast::Expression* output : path->getOutputs()) {
+            const std::optional<OutputPaths::Source> to = pathTerminal(*output);
+            if (!to.has_value()) {
+                ok = false;
+                continue;
+            }
+            for (const ast::Expression* input : path->getInputs()) {
+                const std::optional<OutputPaths::Source> from = pathTerminal(*input);
+                if (!from.has_value()) {
+                    ok = false;
+                    continue;
+                }
+                // A parallel path pairs the bits of its terminals; a full one joins each input
+                // bit to every output bit, so a change of any is a change of the input.
+                const bool parallel =
+                    path->connectionKind == ast::TimingPathSymbol::ConnectionKind::Parallel;
+                for (std::uint32_t bit = 0; bit < to->width; ++bit) {
+                    OutputPaths::Source source = *from;
+                    source.edge = path->edgeIdentifier;
+                    if (parallel && from->width > 1) {
+                        source.lowBit = from->lowBit + bit;
+                        source.width = 1;
+                    }
+                    arcsByOutput[to->objectIndex][to->lowBit + bit].push_back(
+                        Arc{.source = source, .path = path, .delays = delays});
+                }
+            }
+        }
+    }
+    if (!ok) return false;
+
+    for (const auto& [output, arcsByBit] : arcsByOutput) {
+        // A copy, since the objects added below may move the table.
+        const eir::Object port = definitionValue.objects[output];
+        const bool hasDelay = std::ranges::any_of(arcsByBit, [&](const auto& entry) {
+            return std::ranges::any_of(entry.second,
+                                       [&](const Arc& arc) { return !zero(arc.delays); });
+        });
+        if (!hasDelay) continue;
+
+        // One process delays the whole output, so every bit must have the same paths.
+        const auto sameArcs = [](const std::vector<Arc>& a, const std::vector<Arc>& b) {
+            return std::ranges::equal(a, b, [](const Arc& x, const Arc& y) {
+                return x.source.objectIndex == y.source.objectIndex
+                       && x.source.lowBit == y.source.lowBit && x.source.width == y.source.width
+                       && x.source.edge == y.source.edge && x.delays == y.delays
+                       && (x.path->getConditionExpr() == nullptr)
+                              == (y.path->getConditionExpr() == nullptr)
+                       && (x.path->getConditionExpr() == nullptr
+                           || x.path->getConditionExpr()->syntax->toString()
+                                  == y.path->getConditionExpr()->syntax->toString());
+            });
+        };
+        const auto& [firstBit, firstArcs] = *arcsByBit.begin();
+        if (arcsByBit.size() != port.type.bitWidth()
+            || !std::ranges::all_of(
+                arcsByBit, [&](const auto& entry) { return sameArcs(entry.second, firstArcs); })) {
+            reportUnsupported(firstArcs.front().path->location,
+                              std::format("module paths with a delay that differ between the "
+                                          "bits of '{}'",
+                                          port.name));
+            return false;
+        }
+        const auto portIt =
+            std::ranges::find(definitionValue.ports, output, &eir::Port::objectIndex);
+        if (portIt == definitionValue.ports.end()
+            || portIt->direction != eir::PortDirection::Output) {
+            reportUnsupported(firstArcs.front().path->location,
+                              std::format("a module path with a delay to '{}', which is not an "
+                                          "output",
+                                          port.name));
+            return false;
+        }
+
+        OutputPaths paths;
+        paths.output = output;
+        paths.transport = transportPaths;
+        for (const Arc& arc : firstArcs) {
+            const auto found =
+                std::ranges::find_if(paths.sources, [&](const OutputPaths::Source& known) {
+                    return known.objectIndex == arc.source.objectIndex
+                           && known.lowBit == arc.source.lowBit && known.width == arc.source.width
+                           && known.edge == arc.source.edge;
+                });
+            const auto sourceIndex = static_cast<std::uint32_t>(found - paths.sources.begin());
+            if (found == paths.sources.end()) paths.sources.push_back(arc.source);
+
+            // The six transitions' delays from the one, two or three a path gives, as section
+            // 30.5.1 extends them.
+            const std::span<const ast::Expression* const> given = arc.path->getDelays();
+            std::array<const ast::Expression*, 6> six{};
+            switch (given.size()) {
+            case 2: six = {given[0], given[1], given[0], given[0], given[1], given[1]}; break;
+            case 3: six = {given[0], given[1], given[2], given[0], given[2], given[1]}; break;
+            case 6: std::ranges::copy(given, six.begin()); break;
+            default: six.fill(given[0]); break;
+            }
+            paths.paths.push_back(OutputPaths::Path{
+                .source = sourceIndex, .condition = arc.path->getConditionExpr(), .delays = six});
+        }
+
+        // The objects the process and the body's own writes use, beside the port. The body's
+        // writes of the output, its initial value among them, go to the copy; the port is the
+        // process's alone, and what everything else reads, inside the body as well.
+        eir::Object internal = port;
+        internal.name = uniqueObjectName(std::format("{}$path", port.name));
+        definitionValue.objects[output].initialValue.reset();
+        paths.internal = definitionValue.addObject(std::move(internal));
+        std::uint32_t seenWidth = 0;
+        for (const OutputPaths::Source& source : paths.sources) seenWidth += source.width;
+        const auto addState = [&](std::string_view suffix, eir::Type type) {
+            eir::Object state;
+            state.name = uniqueObjectName(std::format("{}${}", port.name, suffix));
+            state.type = type;
+            state.location = port.location;
+            return definitionValue.addObject(std::move(state));
+        };
+        paths.sourcesSeen = addState("seen", eir::Type::bits(seenWidth, false, true));
+        paths.changedAt = addState(
+            "changed",
+            eir::Type::bits(static_cast<std::uint32_t>(64 * paths.sources.size()), false, false));
+        paths.scheduled = addState("scheduled", port.type);
+        delayedOutputs.emplace(output, paths.internal);
+
+        ProcessTranslator translator(
+            *this, eir::ProcessKind::ContinuousAssign,
+            std::format("specify@{}:{}",
+                        shared->slangSources.getFileName(firstArcs.front().path->location),
+                        shared->slangSources.getLineNumber(firstArcs.front().path->location)),
+            convertLocation(firstArcs.front().path->location));
+        if (!translator.translateModulePaths(paths)) return false;
+        definitionValue.processes.push_back(translator.take());
+    }
+    return true;
+}
+
+void ModuleBuilder::redirectDelayedOutputs(std::size_t firstPathProcess,
+                                           std::size_t pathProcesses) {
+    if (delayedOutputs.empty()) return;
+    const auto redirected = [this](std::uint32_t objectIndex) {
+        const auto found = delayedOutputs.find(objectIndex);
+        return found == delayedOutputs.end() ? objectIndex : found->second;
+    };
+    for (std::size_t index = 0; index < definitionValue.processes.size(); ++index) {
+        if (index >= firstPathProcess && index < firstPathProcess + pathProcesses) continue;
+        eir::Process& process = definitionValue.processes[index];
+        for (eir::WriteExtent& extent : process.writeSet)
+            extent.objectIndex = redirected(extent.objectIndex);
+        eir::normaliseWriteSet(process.writeSet);
+        for (eir::BasicBlock& block : process.blocks) {
+            for (eir::Instruction& instruction : block.instructions) {
+                if (eir::isStore(instruction.opcode))
+                    instruction.a = eir::Operand::object(redirected(instruction.a.index()));
+            }
+        }
+        for (eir::SysTaskCall& call : process.sysCalls) {
+            if (call.objectIndex != eir::SysTaskCall::NoObject)
+                call.objectIndex = redirected(call.objectIndex);
+        }
+    }
+
+    // What an instance drives of a port connected to the output is the body's too; what it
+    // reads stays the port.
+    for (eir::Instance& instance : definitionValue.instances) {
+        for (eir::PortConnection& connection : instance.connections) {
+            if (connection.connected()
+                && connection.driveObjectIndex == eir::PortConnection::Unconnected
+                && delayedOutputs.contains(connection.objectIndex))
+                connection.driveObjectIndex = delayedOutputs.at(connection.objectIndex);
         }
     }
 }
@@ -1128,6 +1427,12 @@ bool ModuleBuilder::collectDeclarations() {
 }
 
 bool ModuleBuilder::translateProcesses() {
+    // First, so that the body's own writes of an output translated after them can be sent where
+    // the outputs' processes read them.
+    const std::size_t firstPathProcess = definitionValue.processes.size();
+    if (!translateModulePaths()) failed = true;
+    const std::size_t pathProcesses = definitionValue.processes.size() - firstPathProcess;
+
     for (const auto& [prefix, block] : proceduralBlocks) {
         eir::ProcessKind kind = eir::ProcessKind::Always;
         switch (block->procedureKind) {
@@ -1296,6 +1601,7 @@ bool ModuleBuilder::translateProcesses() {
             definitionValue.processes.back().strength = *strength;
     }
 
+    redirectDelayedOutputs(firstPathProcess, pathProcesses);
     return !failed;
 }
 

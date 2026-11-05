@@ -375,8 +375,8 @@ ProcessTranslator::foldThroughReals(const ast::Expression& expression, const eir
     return Value{.reg = result, .type = type};
 }
 
-std::optional<ProcessTranslator::Value>
-ProcessTranslator::translateDelay(const ast::Expression& amount) {
+std::optional<std::uint64_t> ProcessTranslator::constantDelay(const ast::Expression& amount,
+                                                              bool& constant) {
     const slang::TimeScale scale = timeScaleHere();
     const std::int8_t unit = timeExponentOf(scale.base);
     const std::int8_t precision = timeExponentOf(scale.precision);
@@ -384,64 +384,78 @@ ProcessTranslator::translateDelay(const ast::Expression& amount) {
 
     ast::EvalContext context(module->evaluationScope());
     const slang::ConstantValue value = amount.eval(context);
-    if (value.isInteger() || value.isReal()) {
-        // The delay as a count of the scope's precision, which the language rounds it to.
-        std::optional<std::uint64_t> counts;
-        bool negative = false;
-        if (value.isInteger()) {
-            const slang::SVInt& integer = value.integer();
-            if (integer.hasUnknown()) {
-                counts = 0;
-            } else if (integer.isSigned() && integer.isNegative()) {
-                negative = true;
-            } else if (const std::optional<std::uint64_t> whole = integer.as<std::uint64_t>()) {
-                counts = scaledUp(*whole, unit - precision);
-            }
-        } else {
-            const double real = value.real();
-            negative = real < 0;
-            const long double inPrecision =
-                std::round(static_cast<long double>(real)
-                           * static_cast<long double>(powerOfTen(unit - precision)));
-            if (!negative && inPrecision < 0x1p64L)
-                counts = static_cast<std::uint64_t>(inPrecision);
-        }
-        if (negative) {
-            module->reportUnsupported(amount.sourceRange.start(), "a negative delay");
-            failed = true;
-            return std::nullopt;
-        }
+    constant = value.isInteger() || value.isReal();
+    if (!constant) return std::nullopt;
 
-        // Then as a count of the run's unit, which a coarser one rounds to the nearest, a half
-        // up, as a simulator run at a coarser precision rounds.
-        std::optional<std::uint64_t> ticks;
-        if (counts.has_value() && precision >= run) {
-            ticks = scaledUp(*counts, precision - run);
-        } else if (counts.has_value()) {
-            const std::uint64_t divisor = powerOfTen(run - precision);
-            const std::uint64_t remainder = *counts % divisor;
-            const std::uint64_t rounded =
-                (*counts / divisor) + (remainder >= divisor - remainder ? 1 : 0);
-            if (remainder != 0) {
-                module->reportRoundedDelay(amount.sourceRange.start(), timeText(*counts, precision),
-                                           timeText(rounded, run));
-            }
-            ticks = rounded;
+    // The delay as a count of the scope's precision, which the language rounds it to.
+    std::optional<std::uint64_t> counts;
+    bool negative = false;
+    if (value.isInteger()) {
+        const slang::SVInt& integer = value.integer();
+        if (integer.hasUnknown()) {
+            counts = 0;
+        } else if (integer.isSigned() && integer.isNegative()) {
+            negative = true;
+        } else if (const std::optional<std::uint64_t> whole = integer.as<std::uint64_t>()) {
+            counts = scaledUp(*whole, unit - precision);
         }
-        if (!ticks.has_value()) {
-            module->reportUnsupported(amount.sourceRange.start(),
-                                      "a delay longer than 64 bits of the run's time unit count");
-            failed = true;
-            return std::nullopt;
-        }
+    } else {
+        const double real = value.real();
+        negative = real < 0;
+        const long double inPrecision =
+            std::round(static_cast<long double>(real)
+                       * static_cast<long double>(powerOfTen(unit - precision)));
+        if (!negative && inPrecision < 0x1p64L) counts = static_cast<std::uint64_t>(inPrecision);
+    }
+    if (negative) {
+        module->reportUnsupported(amount.sourceRange.start(), "a negative delay");
+        failed = true;
+        return std::nullopt;
+    }
 
+    // Then as a count of the run's unit, which a coarser one rounds to the nearest, a half
+    // up, as a simulator run at a coarser precision rounds.
+    std::optional<std::uint64_t> ticks;
+    if (counts.has_value() && precision >= run) {
+        ticks = scaledUp(*counts, precision - run);
+    } else if (counts.has_value()) {
+        const std::uint64_t divisor = powerOfTen(run - precision);
+        const std::uint64_t remainder = *counts % divisor;
+        const std::uint64_t rounded =
+            (*counts / divisor) + (remainder >= divisor - remainder ? 1 : 0);
+        if (remainder != 0) {
+            module->reportRoundedDelay(amount.sourceRange.start(), timeText(*counts, precision),
+                                       timeText(rounded, run));
+        }
+        ticks = rounded;
+    }
+    if (!ticks.has_value()) {
+        module->reportUnsupported(amount.sourceRange.start(),
+                                  "a delay longer than 64 bits of the run's time unit count");
+        failed = true;
+        return std::nullopt;
+    }
+    return ticks;
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateDelay(const ast::Expression& amount) {
+    bool constant = false;
+    const std::optional<std::uint64_t> ticks = constantDelay(amount, constant);
+    if (constant) {
+        if (!ticks.has_value()) return std::nullopt;
         const eir::Type type = eir::Type::bits(64, false, false);
-        const std::uint32_t constant = addConstant(eir::BitVector::fromUInt64(*ticks, 64));
+        const std::uint32_t index = addConstant(eir::BitVector::fromUInt64(*ticks, 64));
         const std::uint32_t result = newRegister(type);
         emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
-                                    eir::Operand::constant(constant)));
+                                    eir::Operand::constant(index)));
         return Value{.reg = result, .type = type};
     }
+
+    const slang::TimeScale scale = timeScaleHere();
+    const std::int8_t unit = timeExponentOf(scale.base);
+    const std::int8_t precision = timeExponentOf(scale.precision);
+    const std::int8_t run = module->runTimeUnit();
 
     // Known only as the process runs: a count of the scope's unit, so a whole number of its
     // precision, scaled to the run's.
@@ -869,6 +883,248 @@ bool ProcessTranslator::translatePrimitive(const ast::PrimitiveInstanceSymbol& i
         && !assignTo(*terminals.front(), Value{.reg = output, .type = eir::Type::logic()}, false))
         return false;
     if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
+    return !failed;
+}
+
+bool ProcessTranslator::translateModulePaths(const OutputPaths& paths) {
+    const eir::Type time = eir::Type::bits(64, false, false);
+    const eir::Type bit = eir::Type::logic();
+    const eir::Type outputType = module->definition().objects[paths.output].type;
+
+    const auto constant = [&](const eir::BitVector& value, eir::Type type) {
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                    eir::Operand::constant(addConstant(value))));
+        return result;
+    };
+    const auto timeConstant = [&](std::uint64_t value) {
+        return constant(eir::BitVector::fromUInt64(value, 64), time);
+    };
+    const auto apply = [&](eir::Opcode opcode, eir::Type type, std::uint32_t a, std::uint32_t b) {
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(a),
+                                    eir::Operand::reg(b)));
+        return result;
+    };
+    const auto select = [&](std::uint32_t condition, std::uint32_t whenTrue,
+                            std::uint32_t whenFalse, eir::Type type) {
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(result),
+                                    eir::Operand::reg(condition), eir::Operand::reg(whenTrue),
+                                    eir::Operand::reg(whenFalse)));
+        return result;
+    };
+    // A window of an object, at a bit offset known now.
+    const auto window = [&](std::uint32_t objectIndex, std::uint32_t lowBit, std::uint32_t width) {
+        noteRead(objectIndex);
+        const eir::Type type = eir::Type::bits(width, false, true);
+        const std::uint32_t result = newRegister(type);
+        if (lowBit == 0 && width == module->definition().objects[objectIndex].type.bitWidth()) {
+            emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(result),
+                                        eir::Operand::object(objectIndex)));
+            return result;
+        }
+        const std::uint32_t at =
+            constant(eir::BitVector::fromUInt64(lowBit, 32), eir::Type::bits(32, false, false));
+        emit(eir::Instruction::make(eir::Opcode::ReadObjectPart, eir::Operand::reg(result),
+                                    eir::Operand::object(objectIndex), eir::Operand::reg(at)));
+        return result;
+    };
+    const auto splice = [&](std::uint32_t into, std::uint32_t value, std::uint32_t offset) {
+        const std::uint32_t at =
+            constant(eir::BitVector::fromUInt64(offset, 32), eir::Type::bits(32, false, false));
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(into),
+                                    eir::Operand::reg(value), eir::Operand::reg(at)));
+    };
+    const auto is = [&](std::uint32_t value, eir::Logic level) {
+        eir::BitVector expected(1);
+        expected.mutableRef().set(0, level);
+        return apply(eir::Opcode::CaseEqual, bit, value, constant(expected, bit));
+    };
+    const auto minimum = [&](std::uint32_t a, std::uint32_t b) {
+        return select(apply(eir::Opcode::LessThan, bit, a, b), a, b, time);
+    };
+
+    // Each source's change, now, against its value as last taken: the time it last changed is
+    // now when it changed as its edge asks, and is kept otherwise.
+    const std::uint32_t now = newRegister(time);
+    emit(eir::Instruction::make(eir::Opcode::ReadTime, eir::Operand::reg(now)));
+    std::uint32_t seenWidth = 0;
+    for (const OutputPaths::Source& source : paths.sources) seenWidth += source.width;
+    const std::uint32_t seen = constant(eir::BitVector::filled(seenWidth, eir::Logic::Zero),
+                                        eir::Type::bits(seenWidth, false, true));
+    const auto timesWidth = static_cast<std::uint32_t>(64 * paths.sources.size());
+    const std::uint32_t times = constant(eir::BitVector::filled(timesWidth, eir::Logic::Zero),
+                                         eir::Type::bits(timesWidth, false, false));
+    std::vector<std::uint32_t> changedAt;
+    std::uint32_t offset = 0;
+    for (std::size_t index = 0; index < paths.sources.size(); ++index) {
+        const OutputPaths::Source& source = paths.sources[index];
+        const std::uint32_t current = window(source.objectIndex, source.lowBit, source.width);
+        const std::uint32_t before = window(paths.sourcesSeen, offset, source.width);
+        std::uint32_t counted = apply(eir::Opcode::CaseNotEqual, bit, current, before);
+        if (source.edge != ast::EdgeKind::None) {
+            // An edge of a vector is one of its least significant bit (section 9.4.2).
+            const auto lowest = [&](std::uint32_t value) {
+                if (source.width == 1) return value;
+                const std::uint32_t result = newRegister(bit);
+                emit(eir::Instruction::make(eir::Opcode::Truncate, eir::Operand::reg(result),
+                                            eir::Operand::reg(value)));
+                return result;
+            };
+            const std::uint32_t was = lowest(before);
+            const std::uint32_t becomes = lowest(current);
+            const std::uint32_t moved = apply(eir::Opcode::CaseNotEqual, bit, becomes, was);
+            const auto edgeTo = [&](eir::Logic from, eir::Logic to) {
+                // From `from` to anything else, or from anything else to `to`.
+                const std::uint32_t leaves =
+                    apply(eir::Opcode::LogicalAnd, bit, is(was, from), moved);
+                const std::uint32_t arrives =
+                    apply(eir::Opcode::LogicalAnd, bit, is(becomes, to), moved);
+                return apply(eir::Opcode::LogicalOr, bit, leaves, arrives);
+            };
+            const std::uint32_t rises = edgeTo(eir::Logic::Zero, eir::Logic::One);
+            const std::uint32_t falls = edgeTo(eir::Logic::One, eir::Logic::Zero);
+            switch (source.edge) {
+            case ast::EdgeKind::PosEdge: counted = rises; break;
+            case ast::EdgeKind::NegEdge: counted = falls; break;
+            case ast::EdgeKind::BothEdges:
+            case ast::EdgeKind::None:
+                counted = apply(eir::Opcode::LogicalOr, bit, rises, falls);
+                break;
+            }
+        }
+        const std::uint32_t previous =
+            window(paths.changedAt, static_cast<std::uint32_t>(64 * index), 64);
+        const std::uint32_t last = select(counted, now, previous, time);
+        splice(seen, current, offset);
+        splice(times, last, static_cast<std::uint32_t>(64 * index));
+        changedAt.push_back(last);
+        offset += source.width;
+    }
+    noteWholeWrite(paths.sourcesSeen);
+    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(paths.sourcesSeen),
+                                eir::Operand::reg(seen)));
+    noteWholeWrite(paths.changedAt);
+    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(paths.changedAt),
+                                eir::Operand::reg(times)));
+
+    // Only a change of what the body gives the output is scheduled: an input changing alone
+    // must not put back a change still on its way.
+    const std::uint32_t value = window(paths.internal, 0, outputType.bitWidth());
+    const std::uint32_t old = window(paths.scheduled, 0, outputType.bitWidth());
+    const std::uint32_t schedule = newBlock("path-schedule");
+    const std::uint32_t done = newBlock("path-done");
+    emit(
+        eir::Instruction::make(eir::Opcode::BranchIf, {},
+                               eir::Operand::reg(apply(eir::Opcode::CaseNotEqual, bit, value, old)),
+                               eir::Operand::block(schedule), eir::Operand::block(done)));
+    selectBlock(schedule);
+    noteWholeWrite(paths.scheduled);
+    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(paths.scheduled),
+                                eir::Operand::reg(value)));
+
+    // Each path's delay for the transition the output makes (section 30.5.2): the six the
+    // standard names, and the six to and from x that it derives from them.
+    std::uint32_t best = timeConstant(0);
+    std::uint32_t delay = timeConstant(0);
+    std::uint32_t found = constantRegister(eir::Logic::Zero);
+    for (const OutputPaths::Path& path : paths.paths) {
+        std::array<std::uint64_t, 6> six{};
+        for (std::size_t index = 0; index < six.size(); ++index) {
+            bool isConstant = false;
+            const std::optional<std::uint64_t> ticks =
+                constantDelay(*path.delays[index], isConstant);
+            if (!isConstant || !ticks.has_value()) {
+                if (!failed) {
+                    module->reportUnsupported(path.delays[index]->sourceRange.start(),
+                                              "a module path delay that is not a constant");
+                    failed = true;
+                }
+                return false;
+            }
+            six[index] = *ticks;
+        }
+        const auto [d01, d10, d0z, dz1, d1z, dz0] = six;
+        // From, to, delay: 0, 1, z and x as they are written.
+        const std::array<std::tuple<eir::Logic, eir::Logic, std::uint64_t>, 12> transitions{{
+            {eir::Logic::Zero, eir::Logic::One, d01},
+            {eir::Logic::One, eir::Logic::Zero, d10},
+            {eir::Logic::Zero, eir::Logic::HighZ, d0z},
+            {eir::Logic::HighZ, eir::Logic::One, dz1},
+            {eir::Logic::One, eir::Logic::HighZ, d1z},
+            {eir::Logic::HighZ, eir::Logic::Zero, dz0},
+            {eir::Logic::Zero, eir::Logic::Unknown, std::min(d01, d0z)},
+            {eir::Logic::One, eir::Logic::Unknown, std::min(d10, d1z)},
+            {eir::Logic::HighZ, eir::Logic::Unknown, std::min(dz1, dz0)},
+            {eir::Logic::Unknown, eir::Logic::Zero, std::max(d10, dz0)},
+            {eir::Logic::Unknown, eir::Logic::One, std::max(d01, dz1)},
+            {eir::Logic::Unknown, eir::Logic::HighZ, std::max(d1z, d0z)},
+        }};
+        const bool uniform = std::ranges::all_of(
+            transitions, [&](const auto& transition) { return std::get<2>(transition) == d01; });
+        std::uint32_t pathDelay = timeConstant(d01);
+        if (!uniform) {
+            // A vector's bits may make different transitions at once, which one delay of the
+            // output cannot follow.
+            if (outputType.bitWidth() != 1) {
+                module->reportUnsupported(
+                    path.delays[0]->sourceRange.start(),
+                    std::format("delays that differ by transition on a module path to the vector "
+                                "'{}'",
+                                module->definition().objects[paths.output].name));
+                failed = true;
+                return false;
+            }
+            for (const auto& [from, to, ticks] : transitions) {
+                const std::uint32_t taken =
+                    apply(eir::Opcode::LogicalAnd, bit, is(old, from), is(value, to));
+                pathDelay = select(taken, timeConstant(ticks), pathDelay, time);
+            }
+        }
+
+        std::uint32_t enabled = constantRegister(eir::Logic::One);
+        if (path.condition != nullptr) {
+            const std::optional<Value> condition = translateCondition(*path.condition);
+            if (!condition.has_value()) return false;
+            std::uint32_t truth = condition->reg;
+            if (condition->type.bitWidth() != 1) {
+                truth = newRegister(bit);
+                emit(eir::Instruction::make(eir::Opcode::ReduceOr, eir::Operand::reg(truth),
+                                            eir::Operand::reg(condition->reg)));
+            }
+            enabled = is(truth, eir::Logic::One);
+        }
+
+        // The most recent change decides, and of changes at one time, the shortest delay.
+        const std::uint32_t when = changedAt[path.source];
+        const std::uint32_t newer =
+            apply(eir::Opcode::LogicalAnd, bit, enabled,
+                  apply(eir::Opcode::LogicalOr, bit, is(found, eir::Logic::Zero),
+                        apply(eir::Opcode::LessThan, bit, best, when)));
+        const std::uint32_t same =
+            apply(eir::Opcode::LogicalAnd, bit, apply(eir::Opcode::LogicalAnd, bit, enabled, found),
+                  apply(eir::Opcode::Equal, bit, when, best));
+        delay =
+            select(newer, pathDelay, select(same, minimum(pathDelay, delay), delay, time), time);
+        best = select(newer, when, best, time);
+        found = apply(eir::Opcode::LogicalOr, bit, found, enabled);
+    }
+
+    // No earlier than now: a change that comes after its path's delay has run out is the
+    // larger of the two delays, as the standard has it of a path and the logic behind it.
+    const std::uint32_t until = apply(eir::Opcode::Add, time, best, delay);
+    const std::uint32_t later =
+        apply(eir::Opcode::LogicalAnd, bit, found, apply(eir::Opcode::LessThan, bit, now, until));
+    const std::uint32_t wait =
+        select(later, apply(eir::Opcode::Subtract, time, until, now), timeConstant(0), time);
+    noteWholeWrite(paths.output);
+    emit(eir::Instruction::make(
+        paths.transport ? eir::Opcode::StoreTransport : eir::Opcode::StoreDelayed, {},
+        eir::Operand::object(paths.output), eir::Operand::reg(value), eir::Operand::reg(wait)));
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(done)));
+    selectBlock(done);
+    emit(eir::Instruction::make(eir::Opcode::Return));
     return !failed;
 }
 

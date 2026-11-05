@@ -47,7 +47,8 @@ trap 'rm -rf "$workdir"' EXIT
     exit 1
 }
 
-"$reference" -g2012 -o "$workdir/reference.vvp" "$source_file" >"$workdir/compile.txt" 2>&1 || {
+# With `-gspecify`, since Enzan delays an output by its module paths as Icarus Verilog then does.
+"$reference" -g2012 -gspecify -o "$workdir/reference.vvp" "$source_file" >"$workdir/compile.txt" 2>&1 || {
     printf 'the reference simulator failed to compile the design:\n' >&2
     cat "$workdir/compile.txt" >&2
     exit 1

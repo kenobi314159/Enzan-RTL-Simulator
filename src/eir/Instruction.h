@@ -46,6 +46,10 @@ bool suspends(Opcode opcode) noexcept;
 /// instruction of its basic block.
 bool isTerminator(Opcode opcode) noexcept;
 
+/// True for the opcodes that write the object their first source names, which are the ones the
+/// runtime routes to a signal or to the process's drivers of it.
+bool isStore(Opcode opcode) noexcept;
+
 /// True when the opcode's destination register may also be one of its sources.
 ///
 /// Most operations forbid it: the four-state implementations in BitOps write the
