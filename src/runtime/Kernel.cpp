@@ -1478,7 +1478,8 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
             argument.isConstant
                 ? body.constant(argument.location)
                 : frameAt(activation.frameOffset + argument.location, argument.bitWidth);
-        arguments.push_back(FormatArgument{.value = value, .isSigned = argument.isSigned});
+        arguments.push_back(FormatArgument{
+            .value = value, .isSigned = argument.isSigned, .isReal = argument.isReal});
     }
 
     // The file tasks take a descriptor first, which is not part of what they print. An
@@ -1695,7 +1696,8 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
                 .value = compiled.isConstant ? body.constant(compiled.location)
                                              : frameAt(activation.frameOffset + compiled.location,
                                                        compiled.bitWidth),
-                .isSigned = compiled.isSigned});
+                .isSigned = compiled.isSigned,
+                .isReal = compiled.isReal});
         }
         const elab::Instance& instance =
             designImage->elaboratedDesign().instances()[state.instanceIndex];

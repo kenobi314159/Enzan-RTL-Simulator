@@ -39,6 +39,7 @@
 #include "slang/numeric/Time.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -148,7 +149,9 @@ bool hasSideEffects(const ast::Expression& expression) {
                                  std::string_view("$countones"), std::string_view("$onehot"),
                                  std::string_view("$onehot0"),   std::string_view("$isunknown"),
                                  std::string_view("$time"),      std::string_view("$stime"),
-                                 std::string_view("$realtime")};
+                                 std::string_view("$realtime"),  std::string_view("$rtoi"),
+                                 std::string_view("$itor"),      std::string_view("$realtobits"),
+                                 std::string_view("$bitstoreal")};
                              if (!call.isSystemCall()
                                  || std::ranges::find(PureFunctions, call.getSubroutineName())
                                         == PureFunctions.end()) {
@@ -293,7 +296,18 @@ ProcessTranslator::reachOfSelect(const ast::Expression& index, std::int32_t rang
 }
 
 ProcessTranslator::Value ProcessTranslator::coerce(const Value& value, eir::Type type) {
-    if (value.type.bitWidth() == type.bitWidth()) return {.reg = value.reg, .type = type};
+    // Between a real and an integer, a conversion, which rounds a real halfway away from zero
+    // (IEEE 1800 section 6.12.2).
+    if (value.type.isReal() != type.isReal()) {
+        const std::uint32_t result = newRegister(type);
+        eir::Instruction instruction = eir::Instruction::make(
+            eir::Opcode::Convert, eir::Operand::reg(result), eir::Operand::reg(value.reg));
+        instruction.isSigned = value.type.isSigned();
+        emit(instruction);
+        return {.reg = result, .type = type};
+    }
+    if (value.type.isReal() || value.type.bitWidth() == type.bitWidth())
+        return {.reg = value.reg, .type = type};
 
     const std::uint32_t result = newRegister(type);
     eir::Instruction instruction = eir::Instruction::make(
@@ -305,7 +319,7 @@ ProcessTranslator::Value ProcessTranslator::coerce(const Value& value, eir::Type
 }
 
 ProcessTranslator::Value ProcessTranslator::coerceState(const Value& value, eir::Type type) {
-    if (type.isFourState()) return value;
+    if (type.isFourState() || type.isReal()) return value;
 
     // Assigning an unknown value into a two-state object turns X and Z into zero, which
     // IEEE 1800 requires. Emitted unconditionally for a two-state target rather than only
@@ -315,6 +329,30 @@ ProcessTranslator::Value ProcessTranslator::coerceState(const Value& value, eir:
     emit(eir::Instruction::make(eir::Opcode::CoerceTwoState, eir::Operand::reg(result),
                                 eir::Operand::reg(value.reg)));
     return {.reg = result, .type = type};
+}
+
+ProcessTranslator::Value ProcessTranslator::realConstant(double value) {
+    const std::uint32_t result = newRegister(eir::Type::real());
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(
+                                    std::bit_cast<std::uint64_t>(value), 64)))));
+    return {.reg = result, .type = eir::Type::real()};
+}
+
+ProcessTranslator::Value ProcessTranslator::truthOf(const Value& value) {
+    if (!value.type.isReal()) return value;
+    const Value zero = realConstant(0.0);
+    const std::uint32_t result = newRegister(eir::Type::logic());
+    emit(eir::Instruction::make(eir::Opcode::NotEqual, eir::Operand::reg(result),
+                                eir::Operand::reg(value.reg), eir::Operand::reg(zero.reg)));
+    return {.reg = result, .type = eir::Type::logic()};
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateCondition(const ast::Expression& condition) {
+    const std::optional<Value> value = translateExpression(condition);
+    if (!value.has_value()) return std::nullopt;
+    return truthOf(*value);
 }
 
 void ProcessTranslator::setSensitivity(std::vector<eir::SensitivityEntry> sensitivity) {
@@ -408,7 +446,33 @@ ProcessTranslator::translateDelay(const ast::Expression& amount) {
     // Known only as the process runs: a count of the scope's unit, so a whole number of its
     // precision, scaled to the run's.
     std::optional<Value> counted = translateExpression(amount);
-    if (!counted.has_value() || unit == run) return counted;
+    if (!counted.has_value()) return counted;
+
+    // A real counts the scope's unit too, but in fractions of it: rounded to a whole number of
+    // the scope's precision, which is then the count to scale.
+    if (counted->type.isReal()) {
+        const Value factor = realConstant(static_cast<double>(powerOfTen(unit - precision)));
+        const std::uint32_t scaled = newRegister(eir::Type::real());
+        emit(eir::Instruction::make(eir::Opcode::Multiply, eir::Operand::reg(scaled),
+                                    eir::Operand::reg(counted->reg),
+                                    eir::Operand::reg(factor.reg)));
+        counted = coerce(Value{.reg = scaled, .type = eir::Type::real()},
+                         eir::Type::bits(64, false, false));
+        if (precision > run) {
+            return offsetArithmetic(
+                eir::Opcode::Multiply, *counted,
+                offsetConstant(static_cast<std::int64_t>(powerOfTen(precision - run))));
+        }
+        if (precision < run) {
+            const std::uint64_t divisor = powerOfTen(run - precision);
+            const Value rounded = offsetArithmetic(
+                eir::Opcode::Add, *counted, offsetConstant(static_cast<std::int64_t>(divisor / 2)));
+            return offsetArithmetic(eir::Opcode::Divide, rounded,
+                                    offsetConstant(static_cast<std::int64_t>(divisor)));
+        }
+        return counted;
+    }
+    if (unit == run) return counted;
     const Value wide = coerce(*counted, eir::Type::bits(64, false, counted->type.isFourState()));
     if (unit > run) {
         return offsetArithmetic(eir::Opcode::Multiply, wide,
@@ -932,7 +996,7 @@ bool ProcessTranslator::translateWait(const ast::Statement& statement) {
     // What the condition reads is what can make it true, so those are what it waits on.
     selectBlock(test);
     const std::size_t readsBefore = reads.size();
-    const std::optional<Value> condition = translateExpression(wait.cond);
+    const std::optional<Value> condition = translateCondition(wait.cond);
     if (!condition.has_value()) return false;
     std::vector<std::uint32_t> watched(reads.begin() + static_cast<std::ptrdiff_t>(readsBefore),
                                        reads.end());
@@ -1027,7 +1091,7 @@ bool ProcessTranslator::translateConditional(const ast::Statement& statement) {
         return live == nullptr || translateStatement(*live);
     }
 
-    const std::optional<Value> condition = translateExpression(*conditional.conditions[0].expr);
+    const std::optional<Value> condition = translateCondition(*conditional.conditions[0].expr);
     if (!condition.has_value()) return false;
 
     const std::uint32_t thenBlock = newBlock("if-then");
@@ -1127,7 +1191,7 @@ bool ProcessTranslator::translateImmediateAssertion(const ast::Statement& statem
         return false;
     }
 
-    const std::optional<Value> condition = translateExpression(assertion.cond);
+    const std::optional<Value> condition = translateCondition(assertion.cond);
     if (!condition.has_value()) return false;
 
     // An assertion holds when its expression is true; 0, X and Z all fail it (IEEE 1800
@@ -1288,7 +1352,7 @@ bool ProcessTranslator::translateForLoop(const ast::Statement& statement) {
 
     selectBlock(testBlock);
     if (loop.stopExpr != nullptr) {
-        const std::optional<Value> condition = translateExpression(*loop.stopExpr);
+        const std::optional<Value> condition = translateCondition(*loop.stopExpr);
         if (!condition.has_value()) return false;
         emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(condition->reg),
                                     eir::Operand::block(bodyBlock),
@@ -1339,7 +1403,7 @@ bool ProcessTranslator::translateWhileLoop(const ast::Statement& statement, bool
                                 eir::Operand::block(testFirst ? testBlock : bodyBlock)));
 
     selectBlock(testBlock);
-    const std::optional<Value> test = translateExpression(*condition);
+    const std::optional<Value> test = translateCondition(*condition);
     if (!test.has_value()) return false;
     emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(test->reg),
                                 eir::Operand::block(bodyBlock), eir::Operand::block(exitBlock)));
@@ -1643,8 +1707,8 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
 
     const std::optional<eir::Type> type = module->convertType(*expression.type);
 
-    // Where an integral value comes out of a real computation, either the whole computation is
-    // a constant or it cannot be translated; folding it is the one way it can work.
+    // Where an integral value comes out of a real computation of constants, it is folded, which
+    // gives what slang's own evaluation of it gives.
     const auto realOperand = [](const ast::Expression& operand) {
         return operand.type->isFloating();
     };
@@ -1675,6 +1739,9 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         emit(instruction);
         return Value{.reg = result, .type = *type};
     }
+
+    case ast::ExpressionKind::RealLiteral:
+        return realConstant(expression.as<ast::RealLiteral>().getValue());
 
     case ast::ExpressionKind::UnbasedUnsizedIntegerLiteral: {
         if (!type.has_value()) break;
@@ -1793,6 +1860,15 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
 
 ProcessTranslator::Value ProcessTranslator::compare(eir::Opcode opcode, const Value& left,
                                                     const Value& right) {
+    // A real against anything compares as reals.
+    if (left.type.isReal() || right.type.isReal()) {
+        const Value a = coerce(left, eir::Type::real());
+        const Value b = coerce(right, eir::Type::real());
+        const std::uint32_t result = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(a.reg),
+                                    eir::Operand::reg(b.reg)));
+        return Value{.reg = result, .type = eir::Type::logic()};
+    }
     // Comparison operands keep their own width, extended to whichever is wider, because the
     // result is one bit and the comparison itself decides the signedness.
     const bool isSigned = left.type.isSigned() && right.type.isSigned();
@@ -1911,9 +1987,11 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
     };
 
     const auto logical = [&](eir::Opcode opcode) -> std::optional<Value> {
+        const Value a = truthOf(*left);
+        const Value b = truthOf(*right);
         const std::uint32_t result = newRegister(eir::Type::logic());
-        emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(left->reg),
-                                    eir::Operand::reg(right->reg)));
+        emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(a.reg),
+                                    eir::Operand::reg(b.reg)));
         return Value{.reg = result, .type = eir::Type::logic()};
     };
 
@@ -1956,7 +2034,13 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
 
     case ast::BinaryOperator::Power: {
         // The exponent is self-determined, as a shift amount is, and its signedness decides
-        // what a negative one means, so it travels as an immediate.
+        // what a negative one means, so it travels as an immediate. A real raises to a whole
+        // power only.
+        if (right->type.isReal()) {
+            module->reportUnsupported(expression.sourceRange.start(), "a real exponent");
+            failed = true;
+            return std::nullopt;
+        }
         const Value base = coerce(*left, *resultType);
         const std::uint32_t result = newRegister(*resultType);
         eir::Instruction instruction =
@@ -2062,9 +2146,10 @@ ProcessTranslator::translateUnary(const ast::Expression& expression) {
     case ast::UnaryOperator::BitwiseXnor: return reduction(eir::Opcode::ReduceXor, true);
 
     case ast::UnaryOperator::LogicalNot: {
+        const Value truth = truthOf(*operand);
         const std::uint32_t result = newRegister(eir::Type::logic());
         emit(eir::Instruction::make(eir::Opcode::LogicalNot, eir::Operand::reg(result),
-                                    eir::Operand::reg(operand->reg)));
+                                    eir::Operand::reg(truth.reg)));
         return Value{.reg = result, .type = eir::Type::logic()};
     }
 
@@ -2101,7 +2186,7 @@ ProcessTranslator::translateConditionalExpression(const ast::Expression& express
         return coerce(*selected, knownType.value_or(selected->type));
     }
 
-    const std::optional<Value> condition = translateExpression(*conditional.conditions[0].expr);
+    const std::optional<Value> condition = translateCondition(*conditional.conditions[0].expr);
     if (!condition.has_value()) return std::nullopt;
 
     const std::optional<eir::Type> resultType = knownType;
@@ -2971,7 +3056,48 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
 
     if (call.isSystemCall()) {
         const std::string_view name = call.getSubroutineName();
-        if (name == "$time" || name == "$stime" || name == "$realtime") {
+        if (name == "$realtime") {
+            // The run's ticks counted in the calling scope's unit, a fraction of it included.
+            const eir::Type ticksType = eir::Type::bits(64, false, false);
+            const std::uint32_t ticks = newRegister(ticksType);
+            emit(eir::Instruction::make(eir::Opcode::ReadTime, eir::Operand::reg(ticks)));
+            const Value time = coerce(Value{.reg = ticks, .type = ticksType}, eir::Type::real());
+            const int coarser = timeExponentOf(timeScaleHere().base) - module->runTimeUnit();
+            if (coarser == 0) return time;
+            const Value factor =
+                realConstant(static_cast<double>(powerOfTen(coarser > 0 ? coarser : -coarser)));
+            const std::uint32_t result = newRegister(eir::Type::real());
+            emit(eir::Instruction::make(coarser > 0 ? eir::Opcode::Divide : eir::Opcode::Multiply,
+                                        eir::Operand::reg(result), eir::Operand::reg(time.reg),
+                                        eir::Operand::reg(factor.reg)));
+            return Value{.reg = result, .type = eir::Type::real()};
+        }
+
+        // The conversions IEEE 1800 section 20.5 names: `$rtoi` drops the fraction where an
+        // assignment would round it, `$itor` is the assignment's, and the other two move the
+        // bits of the double unchanged.
+        if ((name == "$rtoi" || name == "$itor" || name == "$realtobits" || name == "$bitstoreal")
+            && call.arguments().size() == 1) {
+            const std::optional<eir::Type> type = module->convertType(*expression.type);
+            const std::optional<Value> argument = translateExpression(*call.arguments()[0]);
+            if (!type.has_value() || !argument.has_value()) return std::nullopt;
+            if (name == "$itor") return coerce(*argument, *type);
+            const std::uint32_t result = newRegister(*type);
+            if (name == "$rtoi") {
+                const Value real = coerce(*argument, eir::Type::real());
+                emit(eir::Instruction::make(eir::Opcode::Truncate, eir::Operand::reg(result),
+                                            eir::Operand::reg(real.reg)));
+                return Value{.reg = result, .type = *type};
+            }
+            const Value bits =
+                coerce(*argument, name == "$realtobits" ? eir::Type::real()
+                                                        : eir::Type::bits(64, false, false));
+            emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(result),
+                                        eir::Operand::reg(bits.reg)));
+            return Value{.reg = result, .type = *type};
+        }
+
+        if (name == "$time" || name == "$stime") {
             // The run's ticks, counted in the calling scope's unit and rounded to a whole one
             // (IEEE 1800 section 20.3.1).
             const std::optional<eir::Type> type = module->convertType(*expression.type);

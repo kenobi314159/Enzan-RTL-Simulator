@@ -47,6 +47,7 @@
 #include "slang/util/Bag.h"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <format>
 #include <limits>
@@ -617,6 +618,9 @@ std::uint32_t ModuleBuilder::enumFor(const ast::Type& type) {
 }
 
 std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
+    // `real`, `realtime` and `shortreal` are all a double, as Type::real says.
+    if (type.isFloating()) return eir::Type::real();
+
     // Packed types — vectors, packed structs, packed arrays, enums — are all integral to
     // slang and all behave as bit vectors, so they convert for free.
     if (type.isIntegral()) {
@@ -627,9 +631,9 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
 
     // A fixed-size unpacked array and an unpacked struct are stored flat, as the vector of all
     // their bits: every operation the language allows on one as a whole — assignment,
-    // equality, a port connection — is then the same operation on bits. Reals, strings,
-    // unions, dynamic arrays and classes are none of these, and are reported where they are
-    // used, so that the diagnostic points at the user's line.
+    // equality, a port connection — is then the same operation on bits. Reals among them,
+    // strings, unions, dynamic arrays and classes are none of these, and are reported where they
+    // are used, so that the diagnostic points at the user's line.
     const ast::Type& canonical = type.getCanonicalType();
     std::uint64_t width = 0;
     bool fourState = false;
@@ -637,13 +641,13 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
     if (canonical.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
         const auto& array = canonical.as<ast::FixedSizeUnpackedArrayType>();
         const std::optional<eir::Type> element = convertType(array.elementType);
-        if (!element.has_value()) return std::nullopt;
+        if (!element.has_value() || element->isReal()) return std::nullopt;
         width = std::uint64_t{element->bitWidth()} * array.range.width();
         fourState = element->isFourState();
     } else if (canonical.kind == slang::ast::SymbolKind::UnpackedStructType) {
         for (const ast::FieldSymbol* field : canonical.as<ast::UnpackedStructType>().fields) {
             const std::optional<eir::Type> member = convertType(field->getType());
-            if (!member.has_value()) return std::nullopt;
+            if (!member.has_value() || member->isReal()) return std::nullopt;
             width += member->bitWidth();
             fourState = fourState || member->isFourState();
         }
@@ -659,6 +663,21 @@ std::optional<eir::BitVector> ModuleBuilder::constantBits(const slang::ConstantV
                                                           const ast::Type& type) {
     const std::optional<eir::Type> converted = convertType(type);
     if (!converted.has_value()) return std::nullopt;
+
+    // A real's bits are its double's, whatever kind of number the constant is.
+    if (converted->isReal()) {
+        double real = 0.0;
+        if (value.isReal()) {
+            real = value.real();
+        } else if (value.isShortReal()) {
+            real = static_cast<double>(value.shortReal());
+        } else if (value.isInteger() && !value.integer().hasUnknown()) {
+            real = value.integer().toDouble();
+        } else {
+            return std::nullopt;
+        }
+        return eir::BitVector::fromUInt64(std::bit_cast<std::uint64_t>(real), 64);
+    }
 
     if (value.isInteger()) {
         // One shared conversion, because the X/Z encodings of slang and Enzan differ and two
@@ -1082,6 +1101,10 @@ bool ModuleBuilder::collectDeclarations() {
         const std::optional<std::uint32_t> objectIndex =
             objectFor(port.internalSymbol->as<ast::ValueSymbol>());
         if (!objectIndex.has_value()) continue;
+        if (definitionValue.objects[*objectIndex].type.isReal()) {
+            reportUnsupported(port.location, std::format("the real port '{}'", port.name));
+            continue;
+        }
 
         eir::PortDirection direction = eir::PortDirection::Input;
         switch (port.direction) {

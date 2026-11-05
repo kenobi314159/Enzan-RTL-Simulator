@@ -50,9 +50,9 @@ void assignReal(BitRef dst, double value) noexcept;
 
 /// Convert's two directions: `source`, an integer of either signedness, into the real `dst`; and
 /// the real `source` into the integer `dst`, rounded halfway away from zero and wrapped to its
-/// width.
+/// width, or, for a Truncate of a real, toward zero.
 void integerToReal(BitRef dst, ConstBitRef source, bool isSigned);
-void realToInteger(BitRef dst, ConstBitRef source);
+void realToInteger(BitRef dst, ConstBitRef source, bool towardZero = false);
 
 /// Copies `source` into `dst` at any width, zero-extending, sign-extending or
 /// truncating as required. `dst` may alias `source` only when the widths are

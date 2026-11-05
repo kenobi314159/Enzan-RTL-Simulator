@@ -142,6 +142,9 @@ chapter-20/20.2--stop.sv
 chapter-20/20.3--realtime.sv
 chapter-20/20.3--stime.sv
 chapter-20/20.3--time.sv
+chapter-20/20.5--itor.sv
+chapter-20/20.5--real-bits-conv.sv
+chapter-20/20.5--rtoi.sv
 chapter-20/20.6--bits.sv
 chapter-20/20.6--bits_type.sv
 chapter-20/20.8--clog2.sv
@@ -214,6 +217,7 @@ chapter-5/5.7.1--integers-unsized-illegal.sv
 chapter-5/5.7.1--integers-unsized.sv
 chapter-5/5.7.2-real-constants-illegal.sv
 chapter-5/5.7.2-real-constants.sv
+chapter-5/5.7.2-real-token.sv
 chapter-5/5.8-time-literals.sv
 chapter-5/5.9.1-string-special-chars.sv
 chapter-5/5.9-string-assignment.sv
@@ -226,6 +230,9 @@ chapter-6/6.10--implicit_port.sv
 chapter-6/6.12--real_bit_select_idx.sv
 chapter-6/6.12--real_bit_select.sv
 chapter-6/6.12--real_edge.sv
+chapter-6/6.12--real.sv
+chapter-6/6.12--realtime.sv
+chapter-6/6.12--shortreal.sv
 chapter-6/6.13--void.sv
 chapter-6/6.18--typedef.sv
 chapter-6/6.19.1--enum_typedef.sv
@@ -257,6 +264,7 @@ chapter-6/6.20.4--localparam_unsigned_int.sv
 chapter-6/6.20.5--specparam_inv.sv
 chapter-6/6.20.5--specparam.sv
 chapter-6/6.23--localparam_type_decl.sv
+chapter-6/6.23--type_op.sv
 chapter-6/6.24.1--cast_op.sv
 chapter-6/6.5--variable_assignment.sv
 chapter-6/6.5--variable_mixed_assignments.sv
