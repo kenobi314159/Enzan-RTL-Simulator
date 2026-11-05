@@ -923,6 +923,14 @@ and `$VAR` and `${VAR}` from the environment.
   different design. `-sv` is accepted and dropped.
 - **An unset variable is an error**, not an empty expansion that turns `$RTL_ROOT/cpu.sv` into
   `/cpu.sv`.
+- **`-v` and `-y` supply what nothing else defines.** A module the sources instantiate that no
+  source, context file or library resolved against defines is looked for in the `-v` files, then
+  as `<name><extension>` in the `-y` directories, each in the order given and the `+libext+`
+  extensions in theirs, `.v` when none is given. What is found is analysed as a source is, stored
+  in `--out-lib` and named in `--depfile`, and the modules it instantiates are looked for in turn.
+  A VHDL component no entity binds to binds to a module found so. A file is read only when it
+  holds a module wanted, so a directory of a vendor's five hundred models costs the three a design
+  uses.
 - **`--dry-run`** prints the expanded list, in order, and exits.
 - **`--depfile <file>` writes a `make` dependency file naming every file the analysis read** — the
   sources a list expanded to, the headers they included, and the context files — so that a Makefile

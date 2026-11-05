@@ -196,10 +196,6 @@ ENZAN_DIAG(LibraryEntryUnreadable, 6025, Error,
 ENZAN_DIAG(LibraryWriteFailed, 6020, Warning,
            "the analysis library entry '{}' could not be written; this run is unaffected and "
            "the next one will analyse from source again")
-ENZAN_DIAG(FileListLibrarySearchIgnored, 6021, Warning,
-           "'{}' is understood but not acted on yet: Enzan analyses every file it is given and "
-           "does not go looking for a module nothing defines, so a module reachable only this "
-           "way will be reported as undefined. Naming the file in the list analyses it")
 ENZAN_DIAG(RestartWithVpiApplication, 6026, Error,
            "a design cannot be restarted while a VPI application is loaded: the application "
            "would still hold the state of the simulation being discarded, and nothing in the "
