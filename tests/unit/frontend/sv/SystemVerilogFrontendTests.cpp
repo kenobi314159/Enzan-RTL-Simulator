@@ -1104,6 +1104,7 @@ TEST_F(FrontendTest, AContinuousAssignmentKeepsTheStrengthsItDeclares) {
     const ModuleDefinition* found = design->findModule("m");
     ASSERT_NE(found, nullptr);
     std::vector<enzan::eir::DriveStrength> strengths;
+    strengths.reserve(found->processes.size());
     for (const enzan::eir::Process& process : found->processes)
         strengths.push_back(process.strength);
     using enzan::eir::Strength;

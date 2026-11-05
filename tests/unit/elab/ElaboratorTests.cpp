@@ -210,11 +210,11 @@ TEST_F(ElaboratorTest, RefusesToGuessBetweenSeveralCandidateTops) {
 
 TEST_F(ElaboratorTest, SeveralTopLevelsAreSeveralRoots) {
     // As a design and AMD's `glbl` are, in the order given and each once.
-    ModuleDefinition design_top;
-    design_top.name = "tb";
-    design_top.sourceName = "tb";
-    design_top.addObject(Object{.name = "clk", .type = Type::bits(1, false, true)});
-    design.addModule(std::move(design_top));
+    ModuleDefinition testbench;
+    testbench.name = "tb";
+    testbench.sourceName = "tb";
+    testbench.addObject(Object{.name = "clk", .type = Type::bits(1, false, true)});
+    design.addModule(std::move(testbench));
     ModuleDefinition glbl;
     glbl.name = "glbl$values";
     glbl.sourceName = "glbl";
@@ -237,10 +237,10 @@ TEST_F(ElaboratorTest, SeveralTopLevelsAreSeveralRoots) {
 }
 
 TEST_F(ElaboratorTest, SaysGlblIsATopLevelOfItsOwnWhenNoTopIsNamed) {
-    ModuleDefinition design_top;
-    design_top.name = "tb";
-    design_top.sourceName = "tb";
-    design.addModule(std::move(design_top));
+    ModuleDefinition testbench;
+    testbench.name = "tb";
+    testbench.sourceName = "tb";
+    design.addModule(std::move(testbench));
     ModuleDefinition glbl;
     glbl.name = "glbl$values";
     glbl.sourceName = "glbl";

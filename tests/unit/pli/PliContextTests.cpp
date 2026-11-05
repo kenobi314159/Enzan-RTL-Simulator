@@ -221,7 +221,7 @@ TEST(VpiTopLevels, EveryTopLevelIsFoundFromTheRoot) {
 
     Simulation simulation(std::move(design), std::vector<std::string>{"tb", "glbl"});
     ASSERT_TRUE(simulation.ready());
-    enzan::SourceManager sources;
+    const enzan::SourceManager sources;
     enzan::DiagnosticEngine engine(sources);
     PliContext context(engine, {"enzan"});
     context.attach(simulation.designImage(), simulation.simulationKernel());
@@ -230,7 +230,7 @@ TEST(VpiTopLevels, EveryTopLevelIsFoundFromTheRoot) {
     ASSERT_NE(iterator, nullptr);
     std::vector<std::string> names;
     while (vpiHandle top = vpi_scan(iterator)) {
-        names.push_back(vpi_get_str(vpiName, top));
+        names.emplace_back(vpi_get_str(vpiName, top));
         EXPECT_EQ(vpi_get(vpiTopModule, top), 1);
     }
     EXPECT_EQ(names, (std::vector<std::string>{"tb", "glbl"}));
