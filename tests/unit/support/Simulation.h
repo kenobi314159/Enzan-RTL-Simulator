@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -78,6 +79,10 @@ public:
     }
 
     Simulation(eir::Design design, std::string_view topName)
+        : Simulation(std::move(design), std::vector<std::string>{std::string(topName)}) {}
+
+    /// The same with several top levels, each a root.
+    Simulation(eir::Design design, std::vector<std::string> topNames)
         : engine(sources), analysed(std::move(design)) {
         // Added first, so that `SourceBuffer` names it. Every simulation gets one even when
         // the test does not care, because a fixture whose buffer numbering depends on what
@@ -92,7 +97,7 @@ public:
         valid = eir::verify(analysed, engine);
 
         elab::Elaborator elaborator(analysed, engine);
-        elaborated = elaborator.elaborate(topName);
+        elaborated = elaborator.elaborate(std::span<const std::string>(topNames));
         if (elaborated == nullptr) return;
 
         codegen::Compiler compiler(engine);

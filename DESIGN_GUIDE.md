@@ -827,6 +827,10 @@ when it is one of the names above, so a source file called `run.sv` is still a s
   `elaborate`, `--wave-list` without `--gui`, and a command line that gives nothing to work on are
   usage errors, each with a message saying which, rather than taken and dropped: a waveform asked
   for and never written looks exactly like one written somewhere else.
+- **`--top` is repeatable, and several top levels are several roots**, side by side as a
+  package's instance sits beside the top (5.1), the first the design's own. With none named,
+  several candidates are refused rather than all taken, since a module nothing instantiates is as
+  often one left over as one meant.
 - **A top level's parameters are set with `-G NAME=VALUE`**, or `-GNAME=VALUE`. slang applies an
   override while analysing, so it is in a library entry's key. One that names no parameter is
   reported, since a misspelt override is otherwise invisible.
@@ -1819,7 +1823,8 @@ mistranslated:
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
-  SystemVerilog; storing a design of both languages in a library, and `-G` for one.
+  SystemVerilog; storing a design of both languages in a library, and `-G` for one; a second top
+  level of VHDL.
 - In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, part-select handles,
   struct members, user system tasks, and the difference between the delay modes (9.4).
 - The Processes and Source windows (10.2), and a per-bit change index (10.3).

@@ -183,6 +183,9 @@ public:
         /// refuses several. SystemVerilog's analysis does not use it.
         std::string top;
 
+        /// The design's other top levels, beside `top`.
+        std::vector<std::string> otherTops;
+
         /// Whether VHDL is translated as well as analysed. A library holds VHDL as NVC's
         /// analysed units rather than as EIR, so an analysis that runs nothing and names no top,
         /// `enzan analyse` without `--top`, has nothing to translate: which entity is the top is
@@ -378,6 +381,10 @@ public:
     /// exactly one candidate. Calling this again replaces the whole simulation, which is what
     /// re-elaborating a running design means everywhere else.
     bool elaborate(std::string_view topModule);
+
+    /// Elaborates several top levels as `elaborate` does one, each a root of the design, the first
+    /// the design's own; none lets elaboration choose.
+    bool elaborate(std::span<const std::string> topModules);
 
     [[nodiscard]] bool isElaborated() const noexcept { return kernel != nullptr; }
 

@@ -71,24 +71,39 @@ public:
             const ResolutionAnswers& resolutions)
         : design(analysedDesign), diagnostics(engine), knownResolutions(resolutions) {}
 
-    std::unique_ptr<ElaboratedDesign> run(std::string_view topModuleName) {
-        const std::optional<std::uint32_t> topIndex = resolveTop(topModuleName);
-        if (!topIndex.has_value()) return nullptr;
+    std::unique_ptr<ElaboratedDesign> run(std::span<const std::string> topModuleNames) {
+        // Several top levels are several roots, each an instance as the one top is; the first is
+        // the design's own, the name a front end shows.
+        std::vector<std::uint32_t> topIndices;
+        if (topModuleNames.empty()) {
+            const std::optional<std::uint32_t> topIndex = resolveTop("");
+            if (!topIndex.has_value()) return nullptr;
+            topIndices.push_back(*topIndex);
+        }
+        for (const std::string& name : topModuleNames) {
+            const std::optional<std::uint32_t> topIndex = resolveTop(name);
+            if (!topIndex.has_value()) return nullptr;
+            if (std::ranges::find(topIndices, *topIndex) == topIndices.end())
+                topIndices.push_back(*topIndex);
+        }
 
-        // The top instance is named for the module as the source names it, so that a design
+        // A top instance is named for the module as the source names it, so that a design
         // elaborated with `tb` as its top has `/tb/...` paths — which is what a user typing a
         // hierarchical path like /tb/u_dut/count names. The source's name rather than the
         // definition's, because a parameterised top's definition is named for its values, and
-        // `/counter$WIDTH_8/count` is a path nobody would write. The design reports its top by
-        // the same name, since that is the name a front end shows.
-        const eir::ModuleDefinition& top = design.module(*topIndex);
-        const std::string& topName = top.sourceName.empty() ? top.name : top.sourceName;
-
+        // `/counter$WIDTH_8/count` is a path nobody would write. The design reports its tops by
+        // the same names, since those are the names a front end shows.
         result = std::make_unique<ElaboratedDesign>();
-        result->topName = topName;
-        const std::uint32_t topInstance =
-            createInstance("/" + topName, topName, *topIndex, Instance::NoParent);
-        if (!expand(topInstance)) return nullptr;
+        for (const std::uint32_t topIndex : topIndices) {
+            const eir::ModuleDefinition& top = design.module(topIndex);
+            result->topNames.push_back(top.sourceName.empty() ? top.name : top.sourceName);
+        }
+        for (std::size_t index = 0; index < topIndices.size(); ++index) {
+            const std::string& topName = result->topNames[index];
+            const std::uint32_t topInstance =
+                createInstance("/" + topName, topName, topIndices[index], Instance::NoParent);
+            if (!expand(topInstance)) return nullptr;
+        }
         if (!instantiatePackages()) return nullptr;
         if (!instantiateCalledDefinitions()) return nullptr;
         if (!bindHierarchicalReferences()) return nullptr;
@@ -144,8 +159,17 @@ private:
         const std::vector<std::string> candidates = design.candidateTopModules();
         if (candidates.size() == 1) return design.findModuleIndex(candidates.front());
 
+        // By the names the source gives them, which is what `--top` takes; a parameterised one's
+        // definition is named for its values.
+        std::vector<std::string> shown;
+        shown.reserve(candidates.size());
+        for (const std::string& candidate : candidates) {
+            const std::optional<std::uint32_t> index = design.findModuleIndex(candidate);
+            const std::string& source = index ? design.module(*index).sourceName : candidate;
+            shown.push_back(source.empty() ? candidate : source);
+        }
         diagnostics.report(DiagCode::NoTopModule, SourceLocation(), candidates.size(),
-                           joinNames(candidates));
+                           joinNames(shown));
         return std::nullopt;
     }
 
@@ -411,7 +435,7 @@ private:
             // A package that is missing leaves its references unresolved, which says so.
             const std::optional<std::uint32_t> definition = design.findModuleIndex(name + "::");
             if (!definition.has_value()) return true;
-            if (name == result->topName) {
+            if (std::ranges::find(result->topNames, name) != result->topNames.end()) {
                 diagnostics.report(DiagCode::PackageNamedAsTop, design.module(*definition).location,
                                    name, name);
                 return false;
@@ -473,7 +497,7 @@ private:
         const eir::ModuleDefinition& definition = design.module(definitionIndex);
         const std::string name =
             definition.sourceName.empty() ? definition.name : definition.sourceName;
-        if (name == result->topName) {
+        if (std::ranges::find(result->topNames, name) != result->topNames.end()) {
             diagnostics.report(DiagCode::PackageNamedAsTop, definition.location, name, name);
             return false;
         }
@@ -1092,8 +1116,16 @@ Elaborator::Elaborator(const eir::Design& analysedDesign, DiagnosticEngine& engi
 
 std::unique_ptr<ElaboratedDesign> Elaborator::elaborate(std::string_view topModuleName,
                                                         const ResolutionAnswers& resolutions) {
+    const std::vector<std::string> tops =
+        topModuleName.empty() ? std::vector<std::string>{}
+                              : std::vector<std::string>{std::string(topModuleName)};
+    return elaborate(std::span<const std::string>(tops), resolutions);
+}
+
+std::unique_ptr<ElaboratedDesign> Elaborator::elaborate(std::span<const std::string> topModuleNames,
+                                                        const ResolutionAnswers& resolutions) {
     Builder builder(design, diagnostics, resolutions);
-    return builder.run(topModuleName);
+    return builder.run(topModuleNames);
 }
 
 } // namespace enzan::elab

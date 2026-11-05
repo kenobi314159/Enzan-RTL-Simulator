@@ -205,6 +205,49 @@ TEST_F(ElaboratorTest, RefusesToGuessBetweenSeveralCandidateTops) {
     EXPECT_TRUE(reported("'two'"));
 }
 
+TEST_F(ElaboratorTest, SeveralTopLevelsAreSeveralRoots) {
+    // As a design and AMD's `glbl` are, in the order given and each once.
+    ModuleDefinition testbench;
+    testbench.name = "tb";
+    testbench.sourceName = "tb";
+    testbench.addObject(Object{.name = "clk", .type = Type::bits(1, false, true)});
+    design.addModule(std::move(testbench));
+    ModuleDefinition glbl;
+    glbl.name = "glbl$values";
+    glbl.sourceName = "glbl";
+    glbl.addObject(Object{.name = "GSR", .type = Type::bits(1, false, true)});
+    design.addModule(std::move(glbl));
+
+    const std::vector<std::string> tops{"tb", "glbl", "tb"};
+    Elaborator elaborator(design, engine);
+    const std::unique_ptr<ElaboratedDesign> elaborated =
+        elaborator.elaborate(std::span<const std::string>(tops));
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    EXPECT_EQ(elaborated->topModuleName(), "tb") << "the first, the design's own";
+    EXPECT_EQ(std::vector<std::string>(elaborated->topModuleNames().begin(),
+                                       elaborated->topModuleNames().end()),
+              (std::vector<std::string>{"tb", "glbl"}));
+    ASSERT_EQ(elaborated->instances().size(), 2U);
+    EXPECT_EQ(elaborated->instances()[1].path, "/glbl");
+    EXPECT_EQ(elaborated->instances()[1].parent, Instance::NoParent);
+    EXPECT_TRUE(elaborated->findSlot("/glbl/GSR").has_value());
+}
+
+TEST_F(ElaboratorTest, ListsCandidateTopsByTheNamesTheirSourcesGive) {
+    // As `--top` takes them: a parameterised one's definition is named for its values.
+    ModuleDefinition testbench;
+    testbench.name = "tb";
+    testbench.sourceName = "tb";
+    design.addModule(std::move(testbench));
+    ModuleDefinition counter;
+    counter.name = "counter$WIDTH_8";
+    counter.sourceName = "counter";
+    design.addModule(std::move(counter));
+
+    EXPECT_EQ(elaborate(), nullptr);
+    EXPECT_TRUE(reported("'counter', 'tb'")) << "by the names the source gives them";
+}
+
 TEST_F(ElaboratorTest, ReportsAnUnknownTopModuleAndListsWhatExists) {
     ModuleDefinition top;
     top.name = "counter";

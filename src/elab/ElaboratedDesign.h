@@ -286,8 +286,12 @@ public:
     /// Total size of the state arena, in Words.
     [[nodiscard]] std::uint32_t arenaWords() const noexcept { return arenaSize; }
 
-    /// The name of the top-level module that was elaborated.
-    [[nodiscard]] const std::string& topModuleName() const noexcept { return topName; }
+    /// The name of the first top-level module elaborated, the design's own, which a window title
+    /// shows.
+    [[nodiscard]] const std::string& topModuleName() const noexcept { return topNames.front(); }
+
+    /// The names of every top level elaborated, in the order given.
+    [[nodiscard]] std::span<const std::string> topModuleNames() const noexcept { return topNames; }
 
     /// Returns the slot a hierarchical path names, or nothing.
     ///
@@ -330,7 +334,7 @@ private:
     std::vector<ResolutionCall> resolutionList;
     std::uint32_t widestDriverBits = 0;
     std::uint32_t arenaSize = 0;
-    std::string topName;
+    std::vector<std::string> topNames;
 
     /// Hierarchical path to slot, and to instance. Ordered containers: the GUI's
     /// hierarchy tree, `find` and any diagnostic that lists names must produce the
