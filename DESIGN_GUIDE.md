@@ -674,7 +674,9 @@ the session links the two by port name.
   entity's default one, since choosing another takes a `config`, which Enzan does not read.
 - VHDL instantiates a SystemVerilog module through a component of the module's name, bound to the
   module when no entity of that name exists — the default binding of IEEE 1076 extended to the other
-  language, as commercial tools extend it. The component's generics are the module's parameters.
+  language, as commercial tools extend it. The component's generics are the module's parameters,
+  and a boolean meeting a parameter that takes a string is `"TRUE"` or `"FALSE"`, which is how
+  vendors' models write a boolean.
 - Each side specialises for the values the other gives, so the session alternates between the
   frontends until neither asks for a unit the other has not given, with a bound on the rounds so
   that a hierarchy recursing through both languages is reported rather than followed for ever. A

@@ -33,8 +33,9 @@ the analysis a second round; a hierarchy that keeps asking for new specialisatio
 languages is stopped after eight rounds (ENZ6030).
 
 A parameter or a generic crosses when it is an integer, a `bit`, `boolean` or `std_ulogic`, a
-vector of these, a string, or a real. Any other kind of generic set from SystemVerilog is refused
-(ENZ2005).
+vector of these, a string, or a real; a `boolean` meeting a parameter that takes a string crosses
+as `"TRUE"` or `"FALSE"`, which is how vendors' models write one. Any other kind of generic set
+from SystemVerilog is refused (ENZ2005).
 
 ## Ports across the boundary
 

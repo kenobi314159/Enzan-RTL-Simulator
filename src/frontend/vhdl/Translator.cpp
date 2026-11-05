@@ -2399,8 +2399,12 @@ void ArchitectureTranslator::moduleInstance(tree_t statement, tree_t component,
                                     type_pp(tree_type(generic))));
             return;
         }
+        type_t type = type_base_recur(tree_type(generic));
+        const bool boolean = type_has_ident(type)
+                             && std::string_view(istr(type_ident(type))) == "STD.STANDARD.BOOLEAN";
         parameters.push_back({.name = systemVerilogName(simpleName(tree_ident(generic))),
-                              .value = std::move(*value)});
+                              .value = std::move(*value),
+                              .boolean = boolean});
     }
     Folder formals = *local;
 
