@@ -16,6 +16,7 @@
 #include "eir/Process.h"
 #include "eir/Verifier.h"
 
+#include "support/Literals.h"
 #include "support/Optionals.h"
 
 #include <gtest/gtest.h>
@@ -1718,8 +1719,10 @@ TEST_F(FrontendTest, ReportsAForceOfPartOfAnObject) {
     EXPECT_TRUE(reported("`force` of anything but a whole variable or net"));
 }
 
-TEST_F(FrontendTest, ReportsAUserDefinedPrimitiveInstanceByName) {
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, AUserDefinedPrimitiveIsAContinuousAssignmentByItsTable) {
+    // A combinational one needs nothing kept; a sequential one keeps its inputs as it last took
+    // them above its state, which starts at its initial value.
+    const std::unique_ptr<Design> design = analyse(R"(
         primitive inverter (output o, input i);
             table
                 0 : 1;
@@ -1727,16 +1730,61 @@ TEST_F(FrontendTest, ReportsAUserDefinedPrimitiveInstanceByName) {
             endtable
         endprimitive
 
+        primitive toggle (q, t);
+            output q;
+            reg q;
+            input t;
+            initial q = 1'b1;
+            table
+                r : 0 : 1;
+                r : 1 : 0;
+                f : ? : -;
+            endtable
+        endprimitive
+
         module m;
             logic i;
-            wire  o;
-            inverter u (o, i);
+            wire  o, q;
+            inverter u_inverter (o, i);
+            toggle u_toggle (q, i);
         endmodule
     )",
-                      "m"),
-              nullptr);
-    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
-    EXPECT_TRUE(reported("the user-defined primitive 'inverter'")) << "the diagnostic must name it";
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 2U);
+    for (const enzan::eir::Process& process : found->processes)
+        EXPECT_EQ(process.kind, enzan::eir::ProcessKind::ContinuousAssign);
+
+    EXPECT_FALSE(found->findObject("u_inverter$state").has_value());
+    const std::uint32_t held = require(found->findObject("u_toggle$state"), "the toggle's state");
+    EXPECT_EQ(found->objects[held].type.bitWidth(), 2U);
+    EXPECT_EQ(found->objects[held].initialValue, std::optional(enzan::test::literal("2'bx1")));
+}
+
+TEST_F(FrontendTest, AUserDefinedPrimitivePassesTheVerifier) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        primitive latch (q, g, d);
+            output q;
+            reg q;
+            input g, d;
+            table
+                1 0 : ? : 0;
+                1 1 : ? : 1;
+                0 ? : ? : -;
+            endtable
+        endprimitive
+
+        module m;
+            logic g, d;
+            wire  q;
+            latch #1 u (q, g, d);
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
 }
 
 TEST_F(FrontendTest, AnArrayOfGatesIsAGatePerElement) {

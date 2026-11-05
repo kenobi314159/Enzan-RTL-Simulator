@@ -270,6 +270,16 @@ ENZAN_OPCODE(Conditional, "sel", true, 3,
              "merge path for the unknown case that keeps the bits where the arms "
              "agree")
 
+// A user-defined primitive's table (IEEE 1800 section 29), a constant laid out as eir/Udp.h
+// describes, matched against its inputs, the first the most significant bit of the first operand.
+ENZAN_OPCODE(UdpCombinational, "udp", true, 2,
+             "a call to the runtime helper that matches the inputs against the table, a private "
+             "constant global, and returns the one-bit output")
+ENZAN_OPCODE(UdpSequential, "sudp", true, 3,
+             "as UdpCombinational, through the sequential helper, with the inputs as they were "
+             "above the current state as its second operand and the table as its third; the "
+             "helper returns the next state")
+
 // --- Time and system tasks -------------------------------------------------
 
 ENZAN_OPCODE(ReadEvent, "event", true, 1,

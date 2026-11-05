@@ -150,6 +150,14 @@ public:
     /// no value four states hold. Returns false having reported why.
     bool translateGate(const slang::ast::PrimitiveInstanceSymbol& gate);
 
+    /// Translates an instance of a user-defined primitive as the continuous assignment of its
+    /// output its table is (IEEE 1800 section 29), matched by the runtime against the table
+    /// constant eir/Udp.h lays out. A sequential primitive, and only one, is given `held`, which
+    /// the module adds for it to keep its inputs as it last took them above its state. Returns
+    /// false having reported why.
+    bool translatePrimitive(const slang::ast::PrimitiveInstanceSymbol& instance,
+                            std::optional<std::uint32_t> held);
+
     /// Translates `expression` and stores its value into `objectIndex`.
     ///
     /// Used for the implicit continuous assignment a port connection needs when it is an

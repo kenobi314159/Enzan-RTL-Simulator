@@ -4,6 +4,7 @@
 
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
+#include "eir/Udp.h"
 #include "frontend/sv/DeadCode.h"
 #include "frontend/sv/SvIntConversion.h"
 
@@ -686,6 +687,123 @@ bool ProcessTranslator::translateGate(const ast::PrimitiveInstanceSymbol& gate) 
         if (!assignTo(*output, Value{.reg = driven, .type = eir::Type::logic()}, false))
             return false;
     }
+    if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
+    return !failed;
+}
+
+bool ProcessTranslator::translatePrimitive(const ast::PrimitiveInstanceSymbol& instance,
+                                           std::optional<std::uint32_t> held) {
+    const ast::PrimitiveSymbol& primitive = instance.primitiveType;
+    const ast::TimingControl* delay = instance.getDelay();
+    if (delay != nullptr && !setContinuousDelay(*delay)) return false;
+
+    std::vector<const ast::Expression*> terminals;
+    for (const ast::Expression* connection : instance.getPortConnections()) {
+        if (connection != nullptr && connection->kind == ast::ExpressionKind::Assignment)
+            connection = &connection->as<ast::AssignmentExpression>().left();
+        terminals.push_back(connection);
+    }
+    const auto inputs = static_cast<std::uint32_t>(terminals.size() - 1);
+    if (terminals.size() < 2 || inputs > eir::udp::MaxInputs) {
+        module->reportUnsupported(
+            instance.location,
+            std::format("the user-defined primitive '{}', of {} inputs, more than {}",
+                        primitive.name, inputs, eir::udp::MaxInputs));
+        failed = true;
+        return false;
+    }
+
+    // slang gives each row's input fields as one string, an edge in parentheses taking four
+    // characters and every other symbol one.
+    std::vector<eir::udp::Row> rows;
+    rows.reserve(primitive.table.size());
+    for (const ast::PrimitiveSymbol::TableEntry& entry : primitive.table) {
+        eir::udp::Row row;
+        for (std::size_t at = 0; at < entry.inputs.size();) {
+            const std::size_t length = entry.inputs[at] == '(' ? 4 : 1;
+            const std::optional<eir::udp::Field> field =
+                eir::udp::fieldOf(entry.inputs.substr(at, length));
+            if (!field.has_value()) {
+                module->reportUnsupported(instance.location,
+                                          std::format("the table symbol '{}' of '{}'",
+                                                      entry.inputs.substr(at, length),
+                                                      primitive.name));
+                failed = true;
+                return false;
+            }
+            row.inputs.push_back(*field);
+            at += length;
+        }
+        const std::optional<eir::udp::Field> state =
+            held.has_value() ? eir::udp::fieldOf(std::string_view(&entry.state, 1))
+                             : eir::udp::anyState();
+        const std::optional<eir::udp::Output> output = eir::udp::outputOf(entry.output);
+        if (!state.has_value() || !output.has_value() || row.inputs.size() != inputs) {
+            module->reportUnsupported(instance.location,
+                                      std::format("a row of the table of '{}'", primitive.name));
+            failed = true;
+            return false;
+        }
+        row.state = *state;
+        row.output = *output;
+        rows.push_back(std::move(row));
+    }
+    const std::uint32_t table = addConstant(eir::udp::encode(rows, inputs));
+
+    // The inputs, the first the most significant bit, as a concatenation of them would be.
+    const eir::Type inputsType = eir::Type::bits(inputs, false, true);
+    const auto splice = [&](std::uint32_t into, std::uint32_t value, std::uint32_t offset) {
+        const std::uint32_t at = newRegister(eir::Type::bits(32, false, false));
+        emit(eir::Instruction::make(
+            eir::Opcode::LoadConstant, eir::Operand::reg(at),
+            eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(offset, 32)))));
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(into),
+                                    eir::Operand::reg(value), eir::Operand::reg(at)));
+    };
+    const auto zeroOf = [&](eir::Type type) {
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                    eir::Operand::constant(addConstant(eir::BitVector::filled(
+                                        type.bitWidth(), eir::Logic::Zero)))));
+        return result;
+    };
+    const std::uint32_t packed = zeroOf(inputsType);
+    for (std::uint32_t input = 0; input < inputs; ++input) {
+        std::uint32_t value = constantRegister(eir::Logic::HighZ);
+        if (const ast::Expression* terminal = terminals[input + 1]) {
+            const std::optional<Value> translated = translateExpression(*terminal);
+            if (!translated.has_value()) return false;
+            value = coerce(*translated, eir::Type::logic()).reg;
+        }
+        splice(packed, value, inputs - 1 - input);
+    }
+
+    const std::uint32_t output = newRegister(eir::Type::logic());
+    if (!held.has_value()) {
+        emit(eir::Instruction::make(eir::Opcode::UdpCombinational, eir::Operand::reg(output),
+                                    eir::Operand::reg(packed), eir::Operand::constant(table)));
+    } else {
+        const eir::Type heldType = eir::Type::bits(inputs + 1, false, true);
+        const std::uint32_t before = newRegister(heldType);
+        noteRead(*held);
+        emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(before),
+                                    eir::Operand::object(*held)));
+        emit(eir::Instruction::make(eir::Opcode::UdpSequential, eir::Operand::reg(output),
+                                    eir::Operand::reg(packed), eir::Operand::reg(before),
+                                    eir::Operand::constant(table)));
+
+        // What it has now taken, at once, whatever delay its output has.
+        const std::uint32_t after = zeroOf(heldType);
+        splice(after, packed, 1);
+        splice(after, output, 0);
+        noteWholeWrite(*held);
+        emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(*held),
+                                    eir::Operand::reg(after)));
+    }
+
+    if (terminals.front() != nullptr
+        && !assignTo(*terminals.front(), Value{.reg = output, .type = eir::Type::logic()}, false))
+        return false;
     if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
     return !failed;
 }

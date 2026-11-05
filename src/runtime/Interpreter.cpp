@@ -6,6 +6,7 @@
 #include "common/Assert.h"
 #include "eir/BitOps.h"
 #include "eir/Module.h"
+#include "eir/Udp.h"
 #include "runtime/Kernel.h"
 
 #include <cmath>
@@ -706,6 +707,19 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             bitops::assignPart(reg(instruction.dst, instruction.dstWidth),
                                reg(instruction.a, instruction.aWidth),
                                reg(instruction.b, instruction.bWidth));
+            break;
+
+        case eir::Opcode::UdpCombinational:
+            reg(instruction.dst, instruction.dstWidth)
+                .set(0, eir::udp::evaluateCombinational(reg(instruction.a, instruction.aWidth),
+                                                        current.body->constant(instruction.b)));
+            break;
+
+        case eir::Opcode::UdpSequential:
+            reg(instruction.dst, instruction.dstWidth)
+                .set(0, eir::udp::evaluateSequential(reg(instruction.a, instruction.aWidth),
+                                                     reg(instruction.b, instruction.bWidth),
+                                                     current.body->constant(instruction.c)));
             break;
 
         case eir::Opcode::Conditional:
