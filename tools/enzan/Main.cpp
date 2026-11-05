@@ -955,6 +955,12 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
         if (!readFileList(list.path, sources, diagnostics, expanded, list.anchor)) return false;
 
         for (const std::filesystem::path& file : expanded.files) request.files.push_back(file);
+        for (const std::filesystem::path& file : expanded.libraryFiles)
+            request.searchFiles.push_back(file);
+        for (const std::filesystem::path& directory : expanded.libraryDirectories)
+            request.searchDirectories.push_back(directory);
+        for (const std::string& extension : expanded.libraryExtensions)
+            request.searchExtensions.push_back(extension);
         for (const std::string& define : expanded.defines) request.defines.push_back(define);
         for (const std::filesystem::path& directory : expanded.includeDirectories)
             request.includeDirectories.push_back(directory);

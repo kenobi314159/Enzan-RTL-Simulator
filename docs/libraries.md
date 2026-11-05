@@ -92,11 +92,20 @@ and `$VAR` and `${VAR}` from the environment.
   simulate a different design. `-sv` is the only switch accepted and ignored.
 - **An unset variable is an error**, rather than an empty string that turns `$RTL_ROOT/cpu.sv` into
   `/cpu.sv`.
+- **`-v <file>` and `-y <directory>` supply modules nothing else defines.** When the sources
+  instantiate a module that no source and no library you resolve against defines, Enzan looks for
+  it in the `-v` files and then as `<module>.v` in the `-y` directories, in the order the lists give
+  them; `+libext+.v+.sv` sets the extensions tried, in order. A file found is analysed like a
+  source, every module in it whether the design uses it or not, stored in `--out-lib` and named in
+  the dependency file, and what it instantiates is looked for in turn. Only files holding a module
+  the design needs are read. A VHDL component with no entity of its name binds to a module found
+  this way.
 
 `--dry-run` prints the list as expanded, in order, and exits.
 
 `--depfile <file>` writes a make-style dependency file naming every file the analysis read: the
-sources the lists expanded to, the headers they included and the context files. A Makefile can
+sources the lists expanded to, the files `-v` and `-y` supplied, the headers they included and the
+context files. A Makefile can
 then name the `.f` file as its only hand-written prerequisite and learn the rest after the first
 build, as a C build learns its headers from `-MMD`. `--depfile-target <name>` names the target
 those prerequisites belong to. Without it the `--out-lib` directory is used; give it when the

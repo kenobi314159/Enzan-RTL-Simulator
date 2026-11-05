@@ -142,27 +142,13 @@ TEST_F(FileListTest, CollectsLibraryFilesAndDirectories) {
     EXPECT_TRUE(list.files.empty());
 }
 
-TEST_F(FileListTest, SaysSoWhenALibrarySearchIsAskedForAndNotPerformed) {
-    // Nothing searches for an undefined module yet. An option this reader understands and then
-    // drops is the same failure as one it does not understand — what is analysed stops matching
-    // what was asked for — so it is reported, at the position that asked for it.
+TEST_F(FileListTest, ReadsALibrarySearchWithoutComment) {
+    // What `-y` and `-v` name is searched by the analysis, so reading them is not worth a word.
     workspace.write("design.f", "-y vendor/lib\n-v vendor/cells.v\na.sv\n");
 
-    // A warning, not a refusal: the list is still read, because most lists carrying a `-v` carry
-    // it for a cell the design never instantiates.
     ASSERT_TRUE(read("design.f"));
     EXPECT_EQ(fileNames(), (std::vector<std::string>{"a.sv"}));
-
-    ASSERT_EQ(consumer.received.size(), 2U);
-    EXPECT_EQ(consumer.received[0].code, DiagCode::FileListLibrarySearchIgnored);
-    EXPECT_NE(consumer.received[0].message.find("-y"), std::string::npos)
-        << consumer.received[0].message;
-    EXPECT_EQ(consumer.received[1].code, DiagCode::FileListLibrarySearchIgnored);
-    EXPECT_NE(consumer.received[1].message.find("-v"), std::string::npos)
-        << consumer.received[1].message;
-
-    // The position, so the fix is a visible edit rather than a hunt.
-    EXPECT_TRUE(consumer.received[0].location.valid());
+    EXPECT_TRUE(consumer.received.empty());
 }
 
 TEST_F(FileListTest, AListWithNoLibrarySearchReportsNothing) {
