@@ -82,6 +82,10 @@ enzan_add_mixed_golden_test(ports)
 # A module holding two others, connected through slices each way, a constant and an open output.
 enzan_add_mixed_golden_test(pipeline)
 
+# Parameters declared as vendors' models declare them, set from generics: a boolean meeting a
+# string and a bit, a string and an integer.
+enzan_add_mixed_golden_test(parameters)
+
 # A VHDL counter three times, with its generics' defaults, with a width and a step set, and with a
 # boolean cleared; its ports a vector, an integer and a boolean.
 enzan_add_mixed_sv_golden_test(generics)

@@ -1856,6 +1856,10 @@ slang::parsing::PreprocessorOptions preprocessorOptionsOf(const Options& options
 struct DeclaredModule {
     std::string_view name;
     std::vector<std::string_view> parameters;
+
+    /// The parameters, of `parameters`, that take a string: declared `string`, or with no type and
+    /// a string as their default.
+    std::vector<std::string_view> strings;
 };
 
 /// The modules `tree` declares outside any other, in order.
@@ -1865,31 +1869,40 @@ void collectModules(const slang::syntax::SyntaxTree& tree, std::vector<DeclaredM
 
     // The value parameters a declaration declares, unless they are local.
     const auto values = [](const syntax::ParameterDeclarationBaseSyntax& declaration,
-                           std::vector<std::string_view>& names) {
+                           DeclaredModule& module) {
         if (declaration.kind != syntax::SyntaxKind::ParameterDeclaration
             || declaration.keyword.kind == slang::parsing::TokenKind::LocalParamKeyword)
             return;
-        for (const syntax::DeclaratorSyntax* declarator :
-             declaration.as<syntax::ParameterDeclarationSyntax>().declarators)
-            names.push_back(declarator->name.valueText());
+        const auto& parameter = declaration.as<syntax::ParameterDeclarationSyntax>();
+        const syntax::SyntaxKind type = parameter.type->kind;
+        for (const syntax::DeclaratorSyntax* declarator : parameter.declarators) {
+            module.parameters.push_back(declarator->name.valueText());
+            const bool stringDefault = type == syntax::SyntaxKind::ImplicitType
+                                       && declarator->initializer != nullptr
+                                       && declarator->initializer->expr->kind
+                                              == syntax::SyntaxKind::StringLiteralExpression;
+            if (type == syntax::SyntaxKind::StringType || stringDefault)
+                module.strings.push_back(declarator->name.valueText());
+        }
     };
 
     for (const syntax::MemberSyntax* member :
          tree.root().as<syntax::CompilationUnitSyntax>().members) {
         if (member->kind != syntax::SyntaxKind::ModuleDeclaration) continue;
         const auto& module = member->as<syntax::ModuleDeclarationSyntax>();
-        DeclaredModule declared{.name = module.header->name.valueText(), .parameters = {}};
+        DeclaredModule declared{
+            .name = module.header->name.valueText(), .parameters = {}, .strings = {}};
 
         // With a parameter port list, a parameter of the body is local (IEEE 1800 section 6.20.1).
         if (module.header->parameters != nullptr) {
             for (const syntax::ParameterDeclarationBaseSyntax* declaration :
                  module.header->parameters->declarations)
-                values(*declaration, declared.parameters);
+                values(*declaration, declared);
         } else {
             for (const syntax::MemberSyntax* item : module.members) {
                 if (item->kind == syntax::SyntaxKind::ParameterDeclarationStatement)
                     values(*item->as<syntax::ParameterDeclarationStatementSyntax>().parameter,
-                           declared.parameters);
+                           declared);
             }
         }
         if (!declared.name.empty()) found.push_back(std::move(declared));
@@ -2223,8 +2236,14 @@ std::optional<std::string> requestText(const std::vector<eir::UnitRequest>& requ
                                    parameter.name);
                 return std::nullopt;
             }
+            // A boolean a parameter takes as a string is that string, as a model written in
+            // SystemVerilog spells one.
+            std::string value = parameter.value;
+            if (parameter.boolean
+                && std::ranges::find(module.strings, *parameterName) != module.strings.end())
+                value = parameter.value == "1'b1" ? "\"TRUE\"" : "\"FALSE\"";
             if (!values.empty()) values += ", ";
-            values += std::format(".{}({})", escapedName(*parameterName), parameter.value);
+            values += std::format(".{}({})", escapedName(*parameterName), value);
         }
         text +=
             std::format("module {};\n  {}{} u ();\nendmodule\n", requestModuleName(index),

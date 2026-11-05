@@ -37,9 +37,15 @@ struct UnitRequest {
 
     /// A value the instances set: a parameter's name, in any case, and its value as a literal (see
     /// above).
+    ///
+    /// A VHDL boolean is the bit `1'b0` or `1'b1`, marked as a boolean: a parameter taking a
+    /// string, `parameter CLKCM_CFG = "TRUE"`, is how a SystemVerilog model writes a boolean, and
+    /// takes
+    /// `"FALSE"` or `"TRUE"` instead.
     struct Parameter {
         std::string name;
         std::string value;
+        bool boolean = false;
 
         friend bool operator==(const Parameter&, const Parameter&) = default;
     };
