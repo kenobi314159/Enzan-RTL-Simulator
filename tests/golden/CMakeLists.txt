@@ -127,6 +127,14 @@ enzan_add_golden_test(strengths)
 # Built-in gates over the four values, tristate buffers, an array, a delay and a pad with a pull-up.
 enzan_add_golden_test(gates)
 
+# Procedural `assign` and `force`: a flip-flop held by its reset, a force over an assign, nets
+# released back to their drivers, a variable that keeps its forced value.
+enzan_add_golden_test(overrides)
+
+# The same, evaluating their expressions again as what they read changes, which Icarus Verilog
+# does only once, so the case checks itself against IEEE 1800 section 10.6.
+enzan_add_golden_test(overrides_expressions NO_DIFFERENTIAL)
+
 # The comparisons with don't-care bits: ==?, casez and casex.
 enzan_add_golden_test(wildcards)
 

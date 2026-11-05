@@ -397,6 +397,19 @@ reporting a strength Enzan does not hold. The eight-level model was rejected bec
 the vendors' libraries Enzan reads needs it, and these refusals keep the shortcut honest where it
 would differ.
 
+**An override outranks what drives a signal, and is not a driver of it.** A procedural `assign`
+holds a variable, and a `force` a variable or a net, until `deassign` or `release` (IEEE 1800
+section 10.6): every other write of it is discarded meanwhile, a deposit's included, and a force
+stands over an assign. The statement writes the value, and a process of its own, which the
+frontend adds beside the statement's, writes it again whenever what it reads changes, while the
+override still holds. A release hands an assign it stood over the signal back, evaluated again;
+otherwise it resolves the signal's drivers at once, and a net's undriven bits go back to their
+kind's value. The drivers keep their values for that only where a `force` in the design names the
+signal, so after a force from outside, a lone driver takes its net back when it next writes. The
+objects a process overrides are declared beside its write set rather than in it, since a forced
+net's drivers are still its drivers. A part of an object and a concatenation are refused as
+targets.
+
 **VHDL resolution functions are user code**, compiled to EIR like any subprogram, and the runtime
 MUST NOT assume resolution is a table. A function's parameter is an array as long as the bit has
 drivers, which only elaboration knows, so elaboration counts the drivers and the frontend then
@@ -1218,8 +1231,9 @@ Run controls, and `examine`, `force` and `deposit` on signals, are required alon
 implementation of writing a signal from outside would be a second set of semantics.
 
 **A force outranks the design; a deposit does not.** Every write to a forced signal is discarded
-until it is released, while a deposit is overwritten by whatever drives the signal next. Forcing
-costs an ordinary run nothing: the table of forced signals is allocated by the first force (13.4).
+until it is released, while a deposit is overwritten by whatever drives the signal next. A force
+from outside is the design's own `force` of a constant, and its release the same release (3.7).
+Forcing costs an ordinary run nothing: the table of overrides is allocated by the first one (13.4).
 
 ### 10.5 Theme
 
@@ -1888,7 +1902,8 @@ mistranslated:
 
 - SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
   classes, unpacked unions, `highz` strengths, switches, instances of user-defined primitives,
-  module paths with a delay, and net aliases.
+  module paths with a delay, net aliases, and a procedural `assign` or `force` of part of an
+  object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
@@ -1937,6 +1952,9 @@ primitives with no timing, as Vivado's `write_verilog -mode funcsim` or a Quartu
 unisims reach by hierarchical name, simulated as a top level of its own.
 
 **Module path**: a specify block's delay from a module's input to its output (IEEE 1800 section 30).
+
+**Override**: a procedural `assign` or a `force`, which holds a signal against what drives it until
+`deassign` or `release` (3.7); not a parameter's value given with `-G`, which overrides its default.
 
 **Region**: one of the ordered phases within a SystemVerilog time slot.
 

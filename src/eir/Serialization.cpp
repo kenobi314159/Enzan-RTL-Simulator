@@ -324,6 +324,8 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
         out.u32(static_cast<std::uint32_t>(list.size()));
         for (const SensitivityEntry& entry : list) writeEntry(entry);
     }
+    out.u32(static_cast<std::uint32_t>(process.overrideSet.size()));
+    for (const std::uint32_t index : process.overrideSet) out.u32(index);
 }
 
 void writeSubprogram(Writer& out, NameTable& names, const Subprogram& subprogram) {
@@ -655,6 +657,8 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
         list.resize(in.count());
         for (SensitivityEntry& entry : list) readEntry(entry);
     }
+    process.overrideSet.resize(in.count());
+    for (std::uint32_t& index : process.overrideSet) index = in.u32();
 
     return process;
 }

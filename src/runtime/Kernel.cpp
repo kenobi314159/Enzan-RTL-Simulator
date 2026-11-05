@@ -243,9 +243,9 @@ void Kernel::initialize() {
         startFrame(state.frameOffset, designImage->compiledDesign().body(state.bodyIndex));
     unwindCalls();
 
-    // A force does not survive a restart either: a signal still pinned from the last run would
-    // be state the user did not ask to keep.
-    forcedSignals.clear();
+    // An override does not survive a restart either: a signal still pinned from the last run
+    // would be state the user did not ask to keep.
+    overrides.clear();
 
     finishRequested = false;
     errorRequested = false;
@@ -634,8 +634,11 @@ Region Kernel::resumeRegion(std::uint32_t processIndex) const {
 }
 
 void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
-    if (isForced(signalIndex)) return;
+    if (isOverridden(signalIndex)) return;
+    changeSignal(signalIndex, value);
+}
 
+void Kernel::changeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
@@ -678,7 +681,7 @@ eir::ConstBitRef Kernel::lastValue(std::uint32_t signalIndex) const {
 
 void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
                              std::uint64_t lowBit) {
-    if (isForced(signalIndex)) return;
+    if (isOverridden(signalIndex)) return;
 
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
@@ -731,88 +734,89 @@ void Kernel::resolveDriver(std::uint32_t driverIndex) {
          segmentIndex < written.firstSegment + written.segmentCount; ++segmentIndex) {
         const elab::Segment& segment = elaborated.segments()[segmentIndex];
         const eir::BitRef acc(segmentScratch.data(), segment.width);
-        const eir::BitRef next(driverScratch.data(), segment.width);
-
-        const auto sliceOf = [&](std::uint32_t segmentDriver, eir::BitRef into) {
-            const elab::Driver& driver =
-                elaborated.drivers()[elaborated.segmentDrivers()[segmentDriver]];
-            bitops::partSelectAt(into, stateArena.at(driver.wordOffset, driver.width),
-                                 segment.lowBit - driver.lowBit);
-        };
-
-        // A VHDL resolved signal's function, called for each subelement; a net's table.
-        if (segment.resolution != elab::Segment::NoResolution) {
-            if (!resolveByFunction(written.process, segment, acc)) return;
-            bitops::assignPartAt(resolved, acc, segment.lowBit - written.lowBit);
-            continue;
-        }
-
-        // Each driver folded in by the net's table.
-        const auto fold = [&segment](eir::BitRef into, eir::ConstBitRef driver) {
-            switch (segment.netKind) {
-            case eir::NetKind::WiredAnd:
-            case eir::NetKind::TriAnd: bitops::resolveWiredAnd(into, driver); break;
-            case eir::NetKind::WiredOr:
-            case eir::NetKind::TriOr: bitops::resolveWiredOr(into, driver); break;
-            case eir::NetKind::Wire:
-            case eir::NetKind::Tri:
-            case eir::NetKind::Tri0:
-            case eir::NetKind::Tri1:
-            case eir::NetKind::Supply0:
-            case eir::NetKind::Supply1:
-            case eir::NetKind::UWire: bitops::resolveWire(into, driver); break;
-            }
-        };
-
-        if (!segment.weak) {
-            sliceOf(segment.firstDriver, acc);
-            for (std::uint32_t other = segment.firstDriver + 1;
-                 other < segment.firstDriver + segment.driverCount; ++other) {
-                sliceOf(other, next);
-                fold(acc, next);
-            }
-        } else {
-            // The strong class decides each bit, and the weak only where the strong leave it
-            // `z` (DESIGN_GUIDE.md section 3.7).
-            const eir::BitRef weak(weakScratch.data(), segment.width);
-            const eir::BitRef part(classScratch.data(), segment.width);
-            acc.fill(eir::Logic::HighZ);
-            weak.fill(eir::Logic::HighZ);
-            for (std::uint32_t index = segment.firstDriver;
-                 index < segment.firstDriver + segment.driverCount; ++index) {
-                const eir::DriveStrength strength =
-                    elaborated.drivers()[elaborated.segmentDrivers()[index]].strength;
-                sliceOf(index, next);
-                bitops::keepClass(part, next, !eir::isWeak(strength.zero),
-                                  !eir::isWeak(strength.one));
-                fold(acc, part);
-                bitops::keepClass(part, next, eir::isWeak(strength.zero),
-                                  eir::isWeak(strength.one));
-                fold(weak, part);
-            }
-            bitops::fillHighImpedance(acc, weak);
-        }
-
-        // What the net itself contributes: a pull where every driver is `z`, or a supply that
-        // no strong driver can move.
-        switch (segment.netKind) {
-        case eir::NetKind::Tri0: bitops::pullHighImpedance(acc, eir::Logic::Zero); break;
-        case eir::NetKind::Tri1: bitops::pullHighImpedance(acc, eir::Logic::One); break;
-        case eir::NetKind::Supply0: acc.fill(eir::Logic::Zero); break;
-        case eir::NetKind::Supply1: acc.fill(eir::Logic::One); break;
-        case eir::NetKind::Wire:
-        case eir::NetKind::Tri:
-        case eir::NetKind::WiredAnd:
-        case eir::NetKind::WiredOr:
-        case eir::NetKind::TriAnd:
-        case eir::NetKind::TriOr:
-        case eir::NetKind::UWire: break;
-        }
-
+        if (!resolveSegment(written.process, segment, acc)) return;
         bitops::assignPartAt(resolved, acc, segment.lowBit - written.lowBit);
     }
 
     writeSignalPart(written.slot, resolved, written.lowBit);
+}
+
+bool Kernel::resolveSegment(std::uint32_t processIndex, const elab::Segment& segment,
+                            eir::BitRef acc) {
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    const eir::BitRef next(driverScratch.data(), segment.width);
+
+    const auto sliceOf = [&](std::uint32_t segmentDriver, eir::BitRef into) {
+        const elab::Driver& driver =
+            elaborated.drivers()[elaborated.segmentDrivers()[segmentDriver]];
+        bitops::partSelectAt(into, stateArena.at(driver.wordOffset, driver.width),
+                             segment.lowBit - driver.lowBit);
+    };
+
+    // A VHDL resolved signal's function, called for each subelement; a net's table.
+    if (segment.resolution != elab::Segment::NoResolution)
+        return resolveByFunction(processIndex, segment, acc);
+
+    // Each driver folded in by the net's table.
+    const auto fold = [&segment](eir::BitRef into, eir::ConstBitRef driver) {
+        switch (segment.netKind) {
+        case eir::NetKind::WiredAnd:
+        case eir::NetKind::TriAnd: bitops::resolveWiredAnd(into, driver); break;
+        case eir::NetKind::WiredOr:
+        case eir::NetKind::TriOr: bitops::resolveWiredOr(into, driver); break;
+        case eir::NetKind::Wire:
+        case eir::NetKind::Tri:
+        case eir::NetKind::Tri0:
+        case eir::NetKind::Tri1:
+        case eir::NetKind::Supply0:
+        case eir::NetKind::Supply1:
+        case eir::NetKind::UWire: bitops::resolveWire(into, driver); break;
+        }
+    };
+
+    if (!segment.weak) {
+        sliceOf(segment.firstDriver, acc);
+        for (std::uint32_t other = segment.firstDriver + 1;
+             other < segment.firstDriver + segment.driverCount; ++other) {
+            sliceOf(other, next);
+            fold(acc, next);
+        }
+    } else {
+        // The strong class decides each bit, and the weak only where the strong leave it
+        // `z` (DESIGN_GUIDE.md section 3.7).
+        const eir::BitRef weak(weakScratch.data(), segment.width);
+        const eir::BitRef part(classScratch.data(), segment.width);
+        acc.fill(eir::Logic::HighZ);
+        weak.fill(eir::Logic::HighZ);
+        for (std::uint32_t index = segment.firstDriver;
+             index < segment.firstDriver + segment.driverCount; ++index) {
+            const eir::DriveStrength strength =
+                elaborated.drivers()[elaborated.segmentDrivers()[index]].strength;
+            sliceOf(index, next);
+            bitops::keepClass(part, next, !eir::isWeak(strength.zero), !eir::isWeak(strength.one));
+            fold(acc, part);
+            bitops::keepClass(part, next, eir::isWeak(strength.zero), eir::isWeak(strength.one));
+            fold(weak, part);
+        }
+        bitops::fillHighImpedance(acc, weak);
+    }
+
+    // What the net itself contributes: a pull where every driver is `z`, or a supply that
+    // no strong driver can move.
+    switch (segment.netKind) {
+    case eir::NetKind::Tri0: bitops::pullHighImpedance(acc, eir::Logic::Zero); break;
+    case eir::NetKind::Tri1: bitops::pullHighImpedance(acc, eir::Logic::One); break;
+    case eir::NetKind::Supply0: acc.fill(eir::Logic::Zero); break;
+    case eir::NetKind::Supply1: acc.fill(eir::Logic::One); break;
+    case eir::NetKind::Wire:
+    case eir::NetKind::Tri:
+    case eir::NetKind::WiredAnd:
+    case eir::NetKind::WiredOr:
+    case eir::NetKind::TriAnd:
+    case eir::NetKind::TriOr:
+    case eir::NetKind::UWire: break;
+    }
+    return true;
 }
 
 void Kernel::resolveInitialValues() {
@@ -899,7 +903,11 @@ void Kernel::scheduleNonBlockingPart(std::uint32_t signalIndex, eir::ConstBitRef
 }
 
 bool Kernel::isForced(std::uint32_t signalIndex) const noexcept {
-    return !forcedSignals.empty() && forcedSignals[signalIndex];
+    return !overrides.empty() && overrides[signalIndex].force != NoHolder;
+}
+
+bool Kernel::isOverridden(std::uint32_t signalIndex) const noexcept {
+    return !overrides.empty() && overrides[signalIndex].held();
 }
 
 void Kernel::deposit(std::uint32_t signalIndex, eir::ConstBitRef value) {
@@ -907,20 +915,89 @@ void Kernel::deposit(std::uint32_t signalIndex, eir::ConstBitRef value) {
 }
 
 void Kernel::force(std::uint32_t signalIndex, eir::ConstBitRef value) {
-    // Cleared first so that re-forcing an already-forced signal to a different value writes
-    // rather than being discarded by the force it is replacing.
-    if (!forcedSignals.empty()) forcedSignals[signalIndex] = false;
-
-    writeSignal(signalIndex, value);
-
-    if (forcedSignals.empty()) forcedSignals.assign(designImage->signals().size(), false);
-    forcedSignals[signalIndex] = true;
+    if (overrides.empty()) overrides.resize(designImage->signals().size());
+    overrides[signalIndex].force = FromOutside;
+    changeSignal(signalIndex, value);
 }
 
 bool Kernel::release(std::uint32_t signalIndex) {
     if (!isForced(signalIndex)) return false;
-    forcedSignals[signalIndex] = false;
+    Overrides& held = overrides[signalIndex];
+    held.force = NoHolder;
+
+    // An assign the force stood over is re-established and evaluated again; anything else
+    // goes back to what drives it (IEEE 1800 section 10.6.2).
+    if (held.assign != NoHolder) {
+        wake(held.assign);
+        return true;
+    }
+    restoreDriven(signalIndex);
     return true;
+}
+
+void Kernel::startOverride(std::uint32_t processIndex, std::uint32_t holder,
+                           std::uint32_t signalIndex, eir::ConstBitRef value, bool force) {
+    // The holder is a process of the same instance, which numbers its processes from the
+    // definition's first.
+    const std::uint32_t first =
+        processIndex - designImage->elaboratedDesign().processes()[processIndex].processIndex;
+    if (overrides.empty()) overrides.resize(designImage->signals().size());
+    Overrides& held = overrides[signalIndex];
+    if (force) {
+        held.force = first + holder;
+    } else {
+        held.assign = first + holder;
+        if (held.force != NoHolder) return;
+    }
+    changeSignal(signalIndex, value);
+}
+
+void Kernel::deassign(std::uint32_t signalIndex) {
+    if (!overrides.empty()) overrides[signalIndex].assign = NoHolder;
+}
+
+void Kernel::reassert(std::uint32_t processIndex, std::uint32_t signalIndex,
+                      eir::ConstBitRef value) {
+    if (overrides.empty()) return;
+    const Overrides& held = overrides[signalIndex];
+    if (held.force == processIndex || (held.force == NoHolder && held.assign == processIndex))
+        changeSignal(signalIndex, value);
+}
+
+void Kernel::restoreDriven(std::uint32_t signalIndex) {
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    const elab::Slot& slot = elaborated.slots()[signalIndex];
+    const Signal& signal = designImage->signals()[signalIndex];
+
+    // Segments are made slot by slot, so a slot's are one run of them.
+    const auto segments =
+        std::ranges::equal_range(elaborated.segments(), signalIndex, {}, &elab::Segment::slot);
+    if (slot.kind != eir::ObjectKind::Net && segments.empty()) return;
+
+    eir::BitVector value = eir::BitVector::from(stateArena.at(signal.wordOffset, signal.bitWidth));
+    if (slot.kind == eir::ObjectKind::Net) {
+        const eir::Logic undriven = eir::undrivenValue(slot.netKind);
+        std::uint32_t bit = 0;
+        const auto fillTo = [&](std::uint32_t end) {
+            if (end > bit)
+                bitops::assignPartAt(value.mutableRef(),
+                                     eir::BitVector::filled(end - bit, undriven).ref(), bit);
+        };
+        for (const eir::WriteExtent& driven : slot.drivenBits) {
+            fillTo(driven.lowBit);
+            bit = std::max(bit, driven.endBit());
+        }
+        fillTo(signal.bitWidth);
+    }
+
+    for (const elab::Segment& segment : segments) {
+        const elab::Driver& first =
+            elaborated.drivers()[elaborated.segmentDrivers()[segment.firstDriver]];
+        const eir::BitRef acc(segmentScratch.data(), segment.width);
+        if (!resolveSegment(first.process, segment, acc)) return;
+        bitops::assignPartAt(value.mutableRef(), acc, segment.lowBit);
+    }
+    writeSignal(signalIndex, value.ref());
 }
 
 void Kernel::addListener(ValueChangeListener& newListener) {

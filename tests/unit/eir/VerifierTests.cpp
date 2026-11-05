@@ -238,6 +238,86 @@ TEST_F(VerifierTest, RejectsADuplicateInADeclaredSet) {
     EXPECT_TRUE(reported("duplicate"));
 }
 
+/// The valid module, with an `initial` forcing `sink` to `source`, held by an override process
+/// that writes it again: the processes are the copier, the holder and the statement.
+ModuleDefinition makeModuleWithForce() {
+    ModuleDefinition definition = VerifierTest::validModule();
+
+    Process holder;
+    holder.kind = ProcessKind::Override;
+    holder.name = "force@copier";
+    holder.registerTypes.push_back(Type::bits(8, false, true));
+    holder.readSet = {0};
+    holder.overrideSet = {1};
+    BasicBlock again;
+    again.label = "entry";
+    again.instructions.push_back(
+        Instruction::make(Opcode::ReadObject, Operand::reg(0), Operand::object(0)));
+    again.instructions.push_back(
+        Instruction::make(Opcode::Override, {}, Operand::object(1), Operand::reg(0)));
+    again.instructions.push_back(Instruction::make(Opcode::Return));
+    holder.blocks.push_back(std::move(again));
+    definition.processes.push_back(std::move(holder));
+
+    Process statement;
+    statement.kind = ProcessKind::Initial;
+    statement.name = "initial@copier";
+    statement.registerTypes.push_back(Type::bits(8, false, true));
+    statement.readSet = {0};
+    statement.overrideSet = {1};
+    BasicBlock entry;
+    entry.label = "entry";
+    entry.instructions.push_back(
+        Instruction::make(Opcode::ReadObject, Operand::reg(0), Operand::object(0)));
+    entry.instructions.push_back(Instruction::make(Opcode::Force, {}, Operand::object(1),
+                                                   Operand::reg(0), Operand::immediate(1)));
+    entry.instructions.push_back(Instruction::make(Opcode::Release, {}, Operand::object(1)));
+    entry.instructions.push_back(Instruction::make(Opcode::Return));
+    statement.blocks.push_back(std::move(entry));
+    definition.processes.push_back(std::move(statement));
+    return definition;
+}
+
+TEST_F(VerifierTest, AcceptsAForceHeldByAnOverrideProcess) {
+    EXPECT_TRUE(check(makeModuleWithForce())) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, RejectsAnOverrideOfAnObjectNotInTheOverrideSet) {
+    // Not in the write set either, which an override does not go through: what it names is
+    // declared beside it.
+    ModuleDefinition definition = makeModuleWithForce();
+    definition.processes[2].overrideSet.clear();
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("not in the declared override set"));
+}
+
+TEST_F(VerifierTest, RejectsAForceWhoseHolderIsNotAnOverrideProcess) {
+    // The kernel wakes the holder when a release re-establishes an assign, so it must be the
+    // process that evaluates the value again, not whatever the index happens to reach.
+    ModuleDefinition definition = makeModuleWithForce();
+    definition.processes[2].blocks[0].instructions[1].c = Operand::immediate(0);
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("not an override process"));
+}
+
+TEST_F(VerifierTest, RejectsAnOverrideInASubprogram) {
+    // A subprogram has no process of its own to hold an override.
+    ModuleDefinition definition = makeValidModule();
+    Subprogram releaser;
+    releaser.name = "let_go";
+    BasicBlock entry;
+    entry.label = "entry";
+    entry.instructions.push_back(Instruction::make(Opcode::Release, {}, Operand::object(1)));
+    entry.instructions.push_back(Instruction::make(Opcode::Return));
+    releaser.blocks.push_back(std::move(entry));
+    definition.subprograms.push_back(std::move(releaser));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("only a process may"));
+}
+
 TEST_F(VerifierTest, AcceptsAWriteSetOfSeveralDisjointExtentsOfOneObject) {
     ModuleDefinition definition = makeValidModule();
     definition.processes[0].writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},

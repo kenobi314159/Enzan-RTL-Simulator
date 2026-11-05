@@ -716,6 +716,29 @@ TEST_F(ElaboratorTest, ADriversStrengthIsHeldByTheDriverAndItsSegment) {
     EXPECT_TRUE(elaborated->segments()[0].weak);
 }
 
+TEST_F(ElaboratorTest, ANetAForceNamesKeepsItsLoneDriversValue) {
+    // A lone driver of a wire writes straight into it, but one a force names is released back
+    // to what its driver drives, so the driver keeps its value.
+    ModuleDefinition top;
+    top.name = "tb";
+    top.addObject(Object{.name = "src", .type = Type::logic()});
+    top.addObject(Object{.name = "net", .type = Type::logic(), .kind = ObjectKind::Net});
+    top.processes.push_back(makeCopyProcess(ProcessKind::ContinuousAssign, 0, 1, Type::logic()));
+    Process statement;
+    statement.kind = ProcessKind::Initial;
+    statement.overrideSet = {1};
+    statement.blocks.push_back(
+        BasicBlock{.label = "entry", .instructions = {Instruction::make(Opcode::Return)}});
+    top.processes.push_back(std::move(statement));
+    design.addModule(std::move(top));
+
+    const std::unique_ptr<ElaboratedDesign> elaborated = elaborate("tb");
+    ASSERT_NE(elaborated, nullptr) << consumer.messages.front();
+    ASSERT_EQ(elaborated->segments().size(), 1U);
+    EXPECT_EQ(elaborated->segments()[0].driverCount, 1U);
+    EXPECT_EQ(elaborated->drivers().size(), 1U);
+}
+
 TEST_F(ElaboratorTest, RefusesStrengthsTheTwoClassesWouldResolveAsEquals) {
     // The standard has pull beat weak; two classes would resolve them to X.
     using enzan::eir::Strength;

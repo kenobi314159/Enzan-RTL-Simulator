@@ -452,6 +452,23 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             break;
         }
 
+        // An override is of the signal the object reads, which is what the language forces.
+        case eir::Opcode::Assign:
+        case eir::Opcode::Force:
+            kernel.startOverride(processIndex, instruction.c, current.objectSignals[instruction.a],
+                                 reg(instruction.b, instruction.bWidth),
+                                 instruction.opcode == eir::Opcode::Force);
+            break;
+
+        case eir::Opcode::Deassign: kernel.deassign(current.objectSignals[instruction.a]); break;
+
+        case eir::Opcode::Release: kernel.release(current.objectSignals[instruction.a]); break;
+
+        case eir::Opcode::Override:
+            kernel.reassert(processIndex, current.objectSignals[instruction.a],
+                            reg(instruction.b, instruction.bWidth));
+            break;
+
         case eir::Opcode::StoreNonBlocking:
             kernel.scheduleNonBlocking(current.writeSignals[instruction.a],
                                        reg(instruction.b, instruction.bWidth));

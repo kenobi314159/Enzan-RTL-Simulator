@@ -215,6 +215,7 @@ ModuleDefinition richModule(BufferId buffer) {
     // wrong order or an extent dropped shows up.
     process.writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
                         WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}};
+    process.overrideSet = {0};
     process.calls.push_back(CallSite{.definition = "arith::",
                                      .subprogram = "accumulate$8",
                                      .arguments = {Operand::reg(1), Operand::constant(0)},
@@ -381,6 +382,7 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     EXPECT_EQ(process.writeSet,
               (std::vector<WriteExtent>{WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
                                         WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}}));
+    EXPECT_EQ(process.overrideSet, (std::vector<std::uint32_t>{0}));
 }
 
 TEST_F(SerializationTest, SubprogramsAndCallsRoundTrip) {

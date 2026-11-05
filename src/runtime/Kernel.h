@@ -264,17 +264,21 @@ public:
     ///
     /// Every subsequent write to the signal — procedural, non-blocking or another deposit —
     /// is discarded while the force stands, which is what distinguishes a force from a
-    /// deposit and what makes it useful for pinning a reset or a mode bit.
+    /// deposit and what makes it useful for pinning a reset or a mode bit. It is the design's
+    /// own `force` held from outside, so it replaces one the design is holding.
     ///
-    /// Forcing costs one branch on the signal write path and nothing at all until the first force
-    /// in a run: the table is allocated when it is first needed, so nothing allocates on the hot
-    /// path.
+    /// Forcing costs one branch on the signal write path and nothing at all until the first
+    /// override in a run: the table is allocated when it is first needed, so nothing allocates on
+    /// the hot path.
     void force(std::uint32_t signalIndex, eir::ConstBitRef value);
 
     /// Releases a forced signal, returning false if it was not forced.
     ///
-    /// The value stays where the force left it until something drives the signal again, rather than
-    /// being recomputed from what the drivers now say.
+    /// A procedural `assign` the force stood over takes the signal back, by its value evaluated
+    /// again. Otherwise the bits whose drivers keep their values, those of a signal a `force` in
+    /// the design names, are resolved again now, and a net's undriven bits go back to their
+    /// kind's undriven value (IEEE 1800 section 10.6.2). Any other bit stays where the force left
+    /// it until something writes it again.
     bool release(std::uint32_t signalIndex);
 
     [[nodiscard]] bool isForced(std::uint32_t signalIndex) const noexcept;
@@ -355,8 +359,32 @@ public:
         return {frameStorage.data() + wordOffset, bitWidth};
     }
 
-    /// Writes a whole signal, detecting change and waking its subscribers.
+    /// Writes a whole signal, detecting change and waking its subscribers, unless an override
+    /// holds it.
     void writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value);
+
+    /// As `writeSignal`, past any override: the write an override itself makes.
+    void changeSignal(std::uint32_t signalIndex, eir::ConstBitRef value);
+
+    /// True when a procedural `assign` or a `force` holds the signal, whose other writes are
+    /// then discarded.
+    [[nodiscard]] bool isOverridden(std::uint32_t signalIndex) const noexcept;
+
+    /// Starts the procedural `assign`, or the `force`, of `signalIndex` that process
+    /// `processIndex` runs, held by the override process its definition numbers `holder`, and
+    /// writes `value` unless a force stands over the assign (IEEE 1800 section 10.6).
+    void startOverride(std::uint32_t processIndex, std::uint32_t holder, std::uint32_t signalIndex,
+                       eir::ConstBitRef value, bool force);
+
+    /// Ends the procedural `assign` of `signalIndex`, which keeps its value.
+    void deassign(std::uint32_t signalIndex);
+
+    /// Writes an override's value evaluated again, if `processIndex` still holds what it was
+    /// started as: the force, or the assign that no force stands over.
+    void reassert(std::uint32_t processIndex, std::uint32_t signalIndex, eir::ConstBitRef value);
+
+    /// Writes what a released signal's drivers say, as `release` describes.
+    void restoreDriven(std::uint32_t signalIndex);
 
     /// Writes `value` through the driver of `route` whose range holds bit `lowBit` of the
     /// signal, and resolves what that changes (DESIGN_GUIDE.md section 3.7).
@@ -552,6 +580,10 @@ private:
     /// Resolves every segment `driverIndex` covers and writes the result into its signal.
     void resolveDriver(std::uint32_t driverIndex);
 
+    /// Resolves `segment`'s drivers into `acc`, on behalf of process `processIndex`. False when a
+    /// resolution function's call stopped the run.
+    bool resolveSegment(std::uint32_t processIndex, const elab::Segment& segment, eir::BitRef acc);
+
     /// Gives each VHDL resolved signal the value its drivers' initial values resolve to, before
     /// the run begins.
     void resolveInitialValues();
@@ -606,11 +638,23 @@ private:
     /// `queued` change as the simulation runs and the image is shared and const.
     std::vector<ProcessState> processes;
 
-    /// True for each signal a `force` is holding, or empty when nothing is forced.
+    /// What holds each signal's overrides (DESIGN_GUIDE.md section 3.7): the override process of
+    /// the procedural `assign` holding it and of the `force`, by process index, `FromOutside` for
+    /// a force from the GUI or an application, or `NoHolder`. Empty while nothing has been
+    /// overridden.
     ///
     /// Empty rather than sized at construction so that the check on the signal write path is
     /// a test of one size against zero for the whole of an ordinary run.
-    std::vector<bool> forcedSignals;
+    struct Overrides {
+        std::uint32_t assign = NoHolder;
+        std::uint32_t force = NoHolder;
+
+        [[nodiscard]] bool held() const noexcept { return assign != NoHolder || force != NoHolder; }
+    };
+
+    std::vector<Overrides> overrides;
+    static constexpr std::uint32_t NoHolder = 0xFFFF'FFFFU;
+    static constexpr std::uint32_t FromOutside = 0xFFFF'FFFEU;
 
     /// The process the interpreter is running, which its own writes do not wake, or
     /// `NoProcess` between processes.

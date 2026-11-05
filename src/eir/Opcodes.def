@@ -127,6 +127,29 @@ ENZAN_OPCODE(DriveTransportPart, "pdrivet", false, 3,
              "as DrivePartAfter with transport delay, rejecting nothing before the new "
              "transaction")
 
+// SystemVerilog's procedural `assign` and `force` of the first operand to the second, which
+// outrank the design's own writes of it until `deassign` or `release` ends them (IEEE 1800
+// section 10.6). The third operand is the definition's process that evaluates the value again
+// whenever what it reads changes; an override names that process as its holder.
+ENZAN_OPCODE(Assign, "passign", false, 3,
+             "a call to the runtime override helper with the arena base, the object's signal, "
+             "the value and the holder's process index, the instance's first process plus the "
+             "immediate; the helper records the holder and writes the value as Store does, "
+             "unless a force holds the signal")
+ENZAN_OPCODE(Force, "force", false, 3,
+             "as Assign, through the same helper, as the holder of the signal's force, so the "
+             "value is written whatever holds it")
+ENZAN_OPCODE(Deassign, "deassign", false, 1,
+             "a call to the runtime helper that clears the signal's assign; nothing is written")
+ENZAN_OPCODE(Release, "release", false, 1,
+             "a call to the runtime helper that clears the signal's force and, where an assign "
+             "holds it, wakes the assign's holder, or else writes what its drivers resolve to")
+ENZAN_OPCODE(Override, "override", false, 2,
+             "a call to the runtime helper that writes the value as Store does when the running "
+             "process holds the signal's force, or holds its assign and nothing its force; the "
+             "holder check is two loads and compares against the process's own index, a "
+             "constant once a JIT specialises the body per instance")
+
 // --- Bitwise, element by element -------------------------------------------
 
 ENZAN_OPCODE(And, "and", true, 2,

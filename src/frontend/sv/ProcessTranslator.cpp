@@ -486,8 +486,12 @@ eir::Process ProcessTranslator::take() {
     reads.erase(std::ranges::unique(reads).begin(), reads.end());
     eir::normaliseWriteSet(writes);
 
+    std::ranges::sort(overrides);
+    overrides.erase(std::ranges::unique(overrides).begin(), overrides.end());
+
     process.readSet = reads;
     process.writeSet = writes;
+    process.overrideSet = overrides;
     return std::move(process);
 }
 
@@ -534,6 +538,19 @@ bool ProcessTranslator::translateObjectInto(const ast::Expression& target,
 
     if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
 
+    return !failed;
+}
+
+bool ProcessTranslator::translateOverride(std::uint32_t objectIndex, const ast::Expression& value) {
+    const std::optional<Value> translated = translateExpression(value);
+    if (!translated.has_value()) return false;
+
+    const eir::Type objectType = module->definition().objects[objectIndex].type;
+    const Value stored = coerceState(coerce(*translated, objectType), objectType);
+    overrides.push_back(objectIndex);
+    emit(eir::Instruction::make(eir::Opcode::Override, {}, eir::Operand::object(objectIndex),
+                                eir::Operand::reg(stored.reg)));
+    emit(eir::Instruction::make(eir::Opcode::Return));
     return !failed;
 }
 
@@ -739,6 +756,10 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
 
     case ast::StatementKind::ImmediateAssertion: return translateImmediateAssertion(statement);
 
+    case ast::StatementKind::ProceduralAssign: return translateProceduralAssign(statement);
+
+    case ast::StatementKind::ProceduralDeassign: return translateProceduralDeassign(statement);
+
     case ast::StatementKind::List:
     case ast::StatementKind::Block: return translateBlock(statement);
 
@@ -910,6 +931,63 @@ bool ProcessTranslator::translateConditional(const ast::Statement& statement) {
 
     selectBlock(joinBlock);
     return true;
+}
+
+bool ProcessTranslator::translateProceduralAssign(const ast::Statement& statement) {
+    const auto& procedural = statement.as<ast::ProceduralAssignStatement>();
+    const auto& assignment = procedural.assignment.as<ast::AssignmentExpression>();
+    const std::optional<std::uint32_t> target =
+        overrideTarget(assignment.left(), procedural.isForce ? "force" : "assign");
+    if (!target.has_value()) return false;
+
+    // Its value is written now, by the statement, so that what follows it sees the target
+    // assigned; the override's process writes it again whenever it changes.
+    const std::optional<Value> value = translateExpression(assignment.right());
+    if (!value.has_value()) return false;
+    const eir::Type objectType = module->definition().objects[*target].type;
+    const Value stored = coerceState(coerce(*value, objectType), objectType);
+
+    const std::optional<std::uint32_t> holder = module->addOverrideProcess(
+        *target, assignment.right(), procedural.isForce, statement.sourceRange.start());
+    if (!holder.has_value()) {
+        failed = true;
+        return false;
+    }
+    emit(eir::Instruction::make(procedural.isForce ? eir::Opcode::Force : eir::Opcode::Assign, {},
+                                eir::Operand::object(*target), eir::Operand::reg(stored.reg),
+                                eir::Operand::immediate(*holder)));
+    return true;
+}
+
+bool ProcessTranslator::translateProceduralDeassign(const ast::Statement& statement) {
+    const auto& procedural = statement.as<ast::ProceduralDeassignStatement>();
+    const std::optional<std::uint32_t> target =
+        overrideTarget(procedural.lvalue, procedural.isRelease ? "release" : "deassign");
+    if (!target.has_value()) return false;
+    emit(eir::Instruction::make(procedural.isRelease ? eir::Opcode::Release : eir::Opcode::Deassign,
+                                {}, eir::Operand::object(*target)));
+    return true;
+}
+
+std::optional<std::uint32_t> ProcessTranslator::overrideTarget(const ast::Expression& target,
+                                                               std::string_view statement) {
+    const bool named = target.kind == ast::ExpressionKind::NamedValue
+                       || target.kind == ast::ExpressionKind::HierarchicalValue;
+    if (!named || localFor(target.as<ast::ValueExpressionBase>().symbol) != nullptr) {
+        module->reportUnsupported(
+            target.sourceRange.start(),
+            std::format("`{}` of anything but a whole variable or net", statement));
+        failed = true;
+        return std::nullopt;
+    }
+    const std::optional<std::uint32_t> objectIndex =
+        module->objectFor(target.as<ast::ValueExpressionBase>().symbol);
+    if (!objectIndex.has_value()) {
+        failed = true;
+        return std::nullopt;
+    }
+    overrides.push_back(*objectIndex);
+    return objectIndex;
 }
 
 bool ProcessTranslator::translateImmediateAssertion(const ast::Statement& statement) {

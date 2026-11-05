@@ -20,8 +20,8 @@ PLI all consume it.
 - **Bodies** (`Process.h`): a process, which the kernel schedules, and a subprogram, which is
   called. Both are a `Body`, so everything that checks, encodes or compiles one handles the other
   the same way, and a call names its callee by definition and name.
-- **The verifier** (`Verifier.h`), which holds every body to its declared read and write sets
-  and every call to its callee's parameters.
+- **The verifier** (`Verifier.h`), which holds every body to its declared read and write sets,
+  and a process's overrides to its override set, and every call to its callee's parameters.
 
 ## Allowed dependencies
 

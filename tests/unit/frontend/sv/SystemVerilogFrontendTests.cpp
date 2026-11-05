@@ -1660,6 +1660,63 @@ TEST_F(FrontendTest, ReportsASwitchByName) {
     EXPECT_TRUE(reported("the switch 'tranif1'"));
 }
 
+TEST_F(FrontendTest, AForceIsHeldByAProcessThatEvaluatesItAgain) {
+    // The statement writes the value and names the process holding the override, which writes
+    // it again as what it reads changes, and both declare the object in their override sets.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic a, b;
+            wire n;
+            initial begin
+                force n = a & b;
+                release n;
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 2U);
+
+    // The instruction of `process` with `opcode`, or nothing.
+    const auto find = [](const enzan::eir::Process& process,
+                         enzan::eir::Opcode opcode) -> const enzan::eir::Instruction* {
+        for (const enzan::eir::BasicBlock& block : process.blocks) {
+            const auto at =
+                std::ranges::find(block.instructions, opcode, &enzan::eir::Instruction::opcode);
+            if (at != block.instructions.end()) return &*at;
+        }
+        return nullptr;
+    };
+    const enzan::eir::Process& holder = found->processes[0];
+    const enzan::eir::Process& statement = found->processes[1];
+    EXPECT_EQ(holder.kind, enzan::eir::ProcessKind::Override);
+    EXPECT_EQ(statement.kind, enzan::eir::ProcessKind::Initial);
+    EXPECT_NE(find(holder, enzan::eir::Opcode::Override), nullptr);
+    EXPECT_TRUE(holder.writeSet.empty()) << "an override drives nothing";
+    EXPECT_EQ(holder.readSet.size(), 2U);
+
+    const std::uint32_t net = require(found->findObject("n"), "object n");
+    EXPECT_EQ(holder.overrideSet, std::vector<std::uint32_t>{net});
+    EXPECT_EQ(statement.overrideSet, std::vector<std::uint32_t>{net});
+    const enzan::eir::Instruction* force = find(statement, enzan::eir::Opcode::Force);
+    ASSERT_NE(force, nullptr);
+    EXPECT_EQ(force->c, enzan::eir::Operand::immediate(0)) << "held by the first process";
+    EXPECT_NE(find(statement, enzan::eir::Opcode::Release), nullptr);
+}
+
+TEST_F(FrontendTest, ReportsAForceOfPartOfAnObject) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            wire [3:0] n;
+            initial force n[1] = 1'b1;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
+    EXPECT_TRUE(reported("`force` of anything but a whole variable or net"));
+}
+
 TEST_F(FrontendTest, ReportsAUserDefinedPrimitiveInstanceByName) {
     EXPECT_EQ(analyse(R"(
         primitive inverter (output o, input i);

@@ -350,6 +350,41 @@ private:
         }
     }
 
+    void checkOverride(const ModuleDefinition& definition, const Body& body,
+                       const Instruction& instruction, const std::string& where) {
+        // A subprogram is bound to an instance with no process of its own to hold an override.
+        if (currentProcess == nullptr) {
+            reportBody(definition, body,
+                       std::format("{} overrides an object, which only a process may", where));
+            return;
+        }
+        if (instruction.a.kind() != Operand::Kind::Object) {
+            reportBody(definition, body, std::format("{} expects an object operand", where));
+            return;
+        }
+        if (!std::ranges::binary_search(currentProcess->overrideSet, instruction.a.index())) {
+            reportBody(definition, body,
+                       std::format("{} overrides object {}, which is not in the declared "
+                                   "override set",
+                                   where, instruction.a.index()));
+            return;
+        }
+        if (instruction.opcode == Opcode::Deassign || instruction.opcode == Opcode::Release) return;
+
+        checkObjectWidth(definition, body, instruction.a, instruction.b, where);
+        if (instruction.opcode == Opcode::Override) return;
+
+        const Operand holder = instruction.c;
+        if (holder.kind() != Operand::Kind::Immediate
+            || holder.index() >= definition.processes.size()
+            || definition.processes[holder.index()].kind != ProcessKind::Override) {
+            reportBody(definition, body,
+                       std::format("{} names as its holder something that is not an override "
+                                   "process of the module",
+                                   where));
+        }
+    }
+
     void checkProcess(const ModuleDefinition& definition, const Process& process) {
         bodyNoun = "process";
         currentProcess = &process;
@@ -361,6 +396,7 @@ private:
                 checkSensitivityEntry(definition, process, entry);
         }
 
+        checkDeclaredSet(definition, process, process.overrideSet, "override set");
         checkBody(definition, process);
         currentProcess = nullptr;
     }
@@ -747,6 +783,14 @@ private:
         case Opcode::WaitEdge:
             checkObjectAccess(definition, body, instruction.a, false, where);
             break;
+
+        // An override names its object in the override set, and the value is the whole of it;
+        // what starts one names the process that evaluates it again, which must be one.
+        case Opcode::Assign:
+        case Opcode::Force:
+        case Opcode::Override:
+        case Opcode::Deassign:
+        case Opcode::Release: checkOverride(definition, body, instruction, where); break;
 
         case Opcode::Call:
             if (instruction.a.kind() != Operand::Kind::Call
