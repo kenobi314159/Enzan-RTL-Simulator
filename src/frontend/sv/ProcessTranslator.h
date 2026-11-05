@@ -109,6 +109,14 @@ public:
     /// to it.
     virtual void reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
                                     std::string_view rounded) = 0;
+
+    /// Adds the process that evaluates `value` again for the procedural `assign` or `force` of
+    /// `objectIndex` at `location`, and returns its index among the module's processes; nothing,
+    /// having reported why, when `value` cannot be translated.
+    virtual std::optional<std::uint32_t> addOverrideProcess(std::uint32_t objectIndex,
+                                                            const slang::ast::Expression& value,
+                                                            bool force,
+                                                            slang::SourceLocation location) = 0;
 };
 
 /// Translates one procedural block or continuous assignment into an EIR process.
@@ -160,6 +168,10 @@ public:
     /// object, so anything more complicated becomes a real assignment rather than something
     /// the elaborator has to understand.
     bool translateObjectInto(const slang::ast::Expression& target, std::uint32_t objectIndex);
+
+    /// Translates the body of an override process: `value`, written by `Override` into
+    /// `objectIndex`, which the statement that started the override names.
+    bool translateOverride(std::uint32_t objectIndex, const slang::ast::Expression& value);
 
     /// Fills the sensitivity list from everything the process read, once it has been
     /// translated.
@@ -274,6 +286,17 @@ private:
     bool translateTimed(const slang::ast::Statement& statement);
     bool translateReturn(const slang::ast::Statement& statement);
     bool translateImmediateAssertion(const slang::ast::Statement& statement);
+
+    /// Procedural `assign` and `force`, `deassign` and `release` (IEEE 1800 section 10.6), of a
+    /// whole object: what a part of one or a concatenation would need is refused.
+    bool translateProceduralAssign(const slang::ast::Statement& statement);
+    bool translateProceduralDeassign(const slang::ast::Statement& statement);
+
+    /// The object a procedural `assign`, `force`, `deassign` or `release` names as its target,
+    /// recorded in the override set; nothing, having reported why, for anything but the whole
+    /// of one.
+    std::optional<std::uint32_t> overrideTarget(const slang::ast::Expression& target,
+                                                std::string_view statement);
 
     /// `wait (condition) statement`: tests the condition and, while it is not true, waits for
     /// a change to anything it reads and tests it again (IEEE 1800 section 9.4.3).
@@ -530,6 +553,7 @@ private:
 
     std::vector<std::uint32_t> reads;
     std::vector<eir::WriteExtent> writes;
+    std::vector<std::uint32_t> overrides;
 
     bool failed = false;
 };

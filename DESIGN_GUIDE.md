@@ -386,6 +386,15 @@ A `highz` strength, switches and `trireg` are refused, and so is `vpiStrengthVal
 reporting a strength Enzan does not hold. The eight-level model was rejected because nothing in the
 vendors' libraries Enzan reads needs it.
 
+**An override outranks what drives a signal, and is not a driver of it.** A procedural `assign`
+or a `force` holds its target until `deassign` or `release`, every other write of it discarded
+meanwhile, a deposit's included, and a force stands over an assign (IEEE 1800 section 10.6). A
+process the frontend adds beside the statement writes the value again whenever what it reads
+changes. The objects a process overrides are declared beside its write set rather than in it, since
+a forced net's drivers are still its drivers. They keep values of their own only where a `force` in
+the design names the signal, so after a force from outside a lone driver takes its net back when it
+next writes.
+
 **VHDL resolution functions are user code**, compiled to EIR like any subprogram, and the runtime
 MUST NOT assume resolution is a table. A function's parameter is an array as long as the bit has
 drivers, which only elaboration knows, so elaboration counts the drivers and the frontend then
@@ -1191,8 +1200,9 @@ Run controls, and `examine`, `force` and `deposit` on signals, are required alon
 implementation of writing a signal from outside would be a second set of semantics.
 
 **A force outranks the design; a deposit does not.** Every write to a forced signal is discarded
-until it is released, while a deposit is overwritten by whatever drives the signal next. Forcing
-costs an ordinary run nothing: the table of forced signals is allocated by the first force (13.4).
+until it is released, while a deposit is overwritten by whatever drives the signal next. A force
+from outside is the design's own `force` of a constant, and its release the same release (3.7).
+Forcing costs an ordinary run nothing: the table of overrides is allocated by the first one (13.4).
 
 ### 10.5 Theme
 
@@ -1835,7 +1845,8 @@ mistranslated:
 
 - SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
   classes, unpacked unions, `highz` strengths, switches, instances of user-defined primitives,
-  module paths with a delay, and net aliases.
+  module paths with a delay, net aliases, and a procedural `assign` or `force` of part of an
+  object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from

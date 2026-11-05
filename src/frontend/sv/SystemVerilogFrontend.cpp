@@ -401,6 +401,10 @@ public:
     void reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
                             std::string_view rounded) override;
 
+    std::optional<std::uint32_t> addOverrideProcess(std::uint32_t objectIndex,
+                                                    const ast::Expression& value, bool force,
+                                                    slang::SourceLocation location) override;
+
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
@@ -716,6 +720,24 @@ void ModuleBuilder::reportUnsupported(slang::SourceLocation location, std::strin
 void ModuleBuilder::reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
                                        std::string_view rounded) {
     shared->diagnostics.report(DiagCode::DelayRounded, convertLocation(location), delay, rounded);
+}
+
+std::optional<std::uint32_t> ModuleBuilder::addOverrideProcess(std::uint32_t objectIndex,
+                                                               const ast::Expression& value,
+                                                               bool force,
+                                                               slang::SourceLocation location) {
+    ProcessTranslator translator(*this, eir::ProcessKind::Override,
+                                 std::format("{}@{}:{}", force ? "force" : "assign",
+                                             shared->slangSources.getFileName(location),
+                                             shared->slangSources.getLineNumber(location)),
+                                 convertLocation(location));
+    if (!translator.translateOverride(objectIndex, value)) return std::nullopt;
+
+    // Appended while the statement's own process is still being translated, so its index is
+    // fixed now and the statement can name it; processes are only ever appended.
+    const auto index = static_cast<std::uint32_t>(definitionValue.processes.size());
+    definitionValue.processes.push_back(translator.take());
+    return index;
 }
 
 const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {

@@ -112,6 +112,7 @@ std::string_view toString(ProcessKind kind) noexcept {
     case ProcessKind::AlwaysLatch: return "always_latch";
     case ProcessKind::AlwaysFf: return "always_ff";
     case ProcessKind::ContinuousAssign: return "assign";
+    case ProcessKind::Override: return "override";
     }
     return "always";
 }
@@ -133,7 +134,8 @@ bool startsAtTimeZero(const Process& process) noexcept {
         return process.sensitivity.empty();
 
     case ProcessKind::AlwaysFf:
-    case ProcessKind::Final: return false;
+    case ProcessKind::Final:
+    case ProcessKind::Override: return false;
     }
     return false;
 }

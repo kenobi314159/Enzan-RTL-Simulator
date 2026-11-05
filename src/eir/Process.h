@@ -197,6 +197,11 @@ enum class ProcessKind : std::uint8_t {
     /// A continuous assignment (`assign`), modelled as a process sensitive to
     /// everything on its right-hand side.
     ContinuousAssign,
+    /// What a procedural `assign` or `force` assigns once it has started: the value evaluated
+    /// again whenever anything it reads changes, and written while the statement's override
+    /// holds its target (IEEE 1800 section 10.6). The statement itself starts the override and
+    /// writes its first value, so this never runs at time zero.
+    Override,
 };
 
 std::string_view toString(ProcessKind kind) noexcept;
@@ -429,6 +434,12 @@ struct Process : Body {
     /// An empty list waits for nothing, so the process never resumes: VHDL's `wait;`, which is
     /// how a testbench process ends.
     std::vector<std::vector<SensitivityEntry>> eventLists;
+
+    /// The objects the process's `assign`, `force`, `deassign` and `release` name, sorted and
+    /// each once. Declared beside the write set rather than in it, because an override writes an
+    /// object without driving it: a forced net keeps its drivers, which take it back on release
+    /// (DESIGN_GUIDE.md section 3.7).
+    std::vector<std::uint32_t> overrideSet;
 };
 
 /// A body that is called rather than scheduled: a VHDL function or procedure, and in time a

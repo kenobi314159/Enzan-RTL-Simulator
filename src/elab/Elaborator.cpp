@@ -807,6 +807,7 @@ private:
     /// the signal and both drivers, and a list of every pair on a wide bus would bury it.
     bool checkDrivers() {
         std::vector<std::vector<DriverRange>> rangesBySlot(result->slotList.size());
+        std::vector<bool> overridden(result->slotList.size(), false);
 
         for (std::uint32_t processIndex = 0; processIndex < result->processList.size();
              ++processIndex) {
@@ -817,6 +818,9 @@ private:
                 design.module(instance.definitionIndex).objects;
             const bool continuous =
                 process.kind == eir::ProcessKind::ContinuousAssign || process.drivesSignals;
+
+            for (const std::uint32_t objectIndex : process.overrideSet)
+                overridden[instance.objectSlots[objectIndex]] = true;
 
             // A subroutine's static variable is written by every call of it, and a call inlined
             // into a continuous assignment no more drives it than one in an `always` does.
@@ -841,7 +845,10 @@ private:
                 ok = false;
                 continue;
             }
-            resolved[slotIndex] = resolves(slotIndex, ranges);
+            // What an override releases goes back to what its drivers drive, so they keep it.
+            resolved[slotIndex] =
+                resolves(slotIndex, ranges)
+                || (overridden[slotIndex] && std::ranges::any_of(ranges, &DriverRange::continuous));
             recordDrivenBits(slotIndex, ranges);
         }
         if (!ok || !checkCalleeWrites(rangesBySlot, resolved)) return false;
