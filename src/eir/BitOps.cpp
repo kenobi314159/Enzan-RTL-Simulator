@@ -1141,10 +1141,10 @@ void integerToReal(BitRef dst, ConstBitRef source, bool isSigned) {
     assignReal(dst, value);
 }
 
-void realToInteger(BitRef dst, ConstBitRef source) {
+void realToInteger(BitRef dst, ConstBitRef source, bool towardZero) {
     // std::round rounds halfway away from zero, as both languages do. A value past what 64 bits
     // hold, or not a number, has no integer to be; it saturates rather than being undefined.
-    const double rounded = std::round(realOf(source));
+    const double rounded = towardZero ? std::trunc(realOf(source)) : std::round(realOf(source));
     std::int64_t value = 0;
     if (std::isnan(rounded)) {
         value = 0;

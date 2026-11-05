@@ -56,6 +56,10 @@ bool runReal(const codegen::Instruction& instruction, const Registers& reg) {
         bitops::realToInteger(reg(instruction.dst, instruction.dstWidth),
                               reg(instruction.a, instruction.aWidth));
         return true;
+    case eir::Opcode::Truncate:
+        bitops::realToInteger(reg(instruction.dst, instruction.dstWidth),
+                              reg(instruction.a, instruction.aWidth), true);
+        return true;
     default: return false;
     }
 }

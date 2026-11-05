@@ -53,7 +53,8 @@ enzan run --gui --top tb design.sv testbench.sv
 | Packed and unpacked arrays, structs, enums, four-state values with X and Z | yes |
 | Nets with several drivers, resolved by their type | yes |
 | `` `timescale `` and `timeunit` | yes, each module's delays and `$time` in its own unit |
-| `real` and `string` variables and ports | not yet, reported by name |
+| `real` variables | yes; a `real` port not yet, reported by name |
+| `string` variables and ports | not yet, reported by name |
 | VHDL entities, architectures, processes, generics, generate, records, arrays | yes |
 | `std_logic_1164`, `numeric_std`, `math_real`, `std.textio` and files | yes |
 | VHDL access types beyond `line`, protected types, configurations | not yet, reported by name |

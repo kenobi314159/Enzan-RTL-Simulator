@@ -42,7 +42,9 @@ ENZAN_OPCODE(Move, "mov", true, 1,
 ENZAN_OPCODE(Extend, "ext", true, 1,
              "zext or sext of the aval plane and the same of bval, so that an "
              "unknown sign bit replicates; a runtime helper call when wide")
-ENZAN_OPCODE(Truncate, "trunc", true, 1, "trunc of both planes")
+ENZAN_OPCODE(Truncate, "trunc", true, 1,
+             "trunc of both planes; from a real, fptosi, which drops the fraction toward zero, as "
+             "SystemVerilog's $rtoi does where Convert rounds")
 ENZAN_OPCODE(CoerceTwoState, "twostate", true, 1,
              "aval := aval & ~bval, bval := 0, which is the X-to-zero conversion an "
              "assignment into a two-state object performs")

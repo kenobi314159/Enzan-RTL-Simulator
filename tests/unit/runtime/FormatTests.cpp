@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <bit>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -237,6 +238,51 @@ TEST(Format, LeftJustifyingWithoutAFieldWidthUsesTheValuesOwn) {
     EXPECT_EQ(render("[%-d]", {{.value = ten.ref(), .isSigned = false}}), "[10        ]");
     EXPECT_EQ(render("[%-d]", {{.value = minusThree.ref(), .isSigned = true}}), "[-3  ]");
     EXPECT_EQ(render("[%-h]", {{.value = ten.ref(), .isSigned = false}}), "[0000000a]");
+}
+
+/// A real argument holding `value`, as a real's register holds it: its double's bits.
+BitVector realBits(double value) {
+    return BitVector::fromUInt64(std::bit_cast<std::uint64_t>(value), 64);
+}
+
+TEST(Format, RealConversionsAreCs) {
+    // Checked against Icarus Verilog, which renders them as C does.
+    const BitVector product = realBits(-3.375);
+    const std::vector<FormatArgument> arguments{{.value = product.ref(), .isReal = true}};
+    EXPECT_EQ(render("%f", arguments), "-3.375000");
+    EXPECT_EQ(render("%e", arguments), "-3.375000e+00");
+    EXPECT_EQ(render("%g", arguments), "-3.375");
+    EXPECT_EQ(render("%0f", arguments), "-3.375000") << "a width of 0 is no width";
+    EXPECT_EQ(render("[%8.2f]", arguments), "[   -3.38]");
+    EXPECT_EQ(render("[%-8.1e]", arguments), "[-3.4e+00]");
+}
+
+TEST(Format, AnIntegerByARealConversionIsItsValue) {
+    const BitVector seven = BitVector::fromInt64(-7, 8);
+    EXPECT_EQ(render("%.1f", {{.value = seven.ref(), .isSigned = true}}), "-7.0");
+}
+
+TEST(Format, ARealByAnIntegerConversionRoundsHalfwayAwayFromZero) {
+    // As short as it is, as Icarus Verilog shows it, rather than padded to 64 bits.
+    const BitVector half = realBits(2.5);
+    const BitVector negative = realBits(-2.25);
+    EXPECT_EQ(render("%d", {{.value = half.ref(), .isReal = true}}), "3");
+    EXPECT_EQ(render("%d", {{.value = negative.ref(), .isReal = true}}), "-2");
+}
+
+TEST(Format, ARealWithNoFormatKeepsItsTrailingZeros) {
+    const BitVector half = realBits(1.5);
+    const std::vector<FormatArgument> arguments{{.value = half.ref(), .isReal = true}};
+    EXPECT_EQ(enzan::runtime::formatDefault(arguments), "1.50000");
+}
+
+TEST(Format, ARealTimeCountsItsUnitInFractions) {
+    // 1.5 of a nanosecond, in a run counting picoseconds.
+    const BitVector time = realBits(1.5);
+    const std::vector<FormatArgument> arguments{{.value = time.ref(), .isReal = true}};
+    const FormatContext context{
+        .time = 0, .timeScale = TimeScale(-12), .argumentUnit = -9, .scopeName = "/tb"};
+    EXPECT_EQ(enzan::runtime::formatSystemTask("%t", arguments, context), "1500ps");
 }
 
 } // namespace

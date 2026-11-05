@@ -266,6 +266,16 @@ private:
     /// Returns `value` with unknown bits forced to zero when `type` is two-state.
     Value coerceState(const Value& value, eir::Type type);
 
+    /// A register holding the real `value`.
+    Value realConstant(double value);
+
+    /// `value` as the truth a condition tests: a real is true where it is not 0.0, which its bits
+    /// alone do not say of -0.0; any other value is its own truth.
+    Value truthOf(const Value& value);
+
+    /// The value of an expression whose truth decides a branch, as `truthOf` makes it.
+    std::optional<Value> translateCondition(const slang::ast::Expression& condition);
+
     // --- statements --------------------------------------------------------
 
     bool translateStatement(const slang::ast::Statement& statement);
@@ -369,9 +379,10 @@ private:
     /// when an assignment delay is in effect; returns false otherwise.
     bool refuseDelayedWrite(const slang::ast::Expression& target);
 
-    /// The value of an integral `expression` that computes with reals, which have no runtime
-    /// representation yet, when every operand is a constant: `ClkPeriod >= 2ps` with
-    /// `ClkPeriod` a parameter. Nothing when some operand is not a constant.
+    /// The value of an integral `expression` that computes with reals when every operand is a
+    /// constant, folded as slang folds it: `ClkPeriod >= 2ps` with `ClkPeriod` a parameter.
+    /// Nothing when some operand is not a constant, and the reals are then computed as the design
+    /// runs.
     std::optional<Value> foldThroughReals(const slang::ast::Expression& expression,
                                           const eir::Type& type);
     std::optional<Value> translateInside(const slang::ast::Expression& expression);

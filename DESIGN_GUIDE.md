@@ -619,6 +619,7 @@ floor.
   which four states cannot avoid. **A user-defined primitive is one too**, by its table, which the
   frontend encodes as a constant and the runtime matches by the layout `eir/Udp.h` gives both.
   Inputs changing together are a race the standard leaves open, and Enzan takes them in port order.
+- **A real is a double**, `shortreal` without its reduced precision.
 - **A specify block is read for what a functional simulation needs of it.** A timing check is not
   run (1.3), and a run instantiating one says so once.
 
@@ -1845,9 +1846,10 @@ regression each run with a recorded pass rate.
 Left out of the milestones above, and refused by name where a design uses them rather than
 mistranslated:
 
-- SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
-  classes, unpacked unions, `highz` strengths, switches, module paths with a delay, net aliases,
-  and a procedural `assign` or `force` of part of an object.
+- SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
+  exponent, named events, dynamic and associative arrays, queues, classes, unpacked unions,
+  `highz` strengths, switches, module paths with a delay, net aliases, and a procedural `assign`
+  or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from

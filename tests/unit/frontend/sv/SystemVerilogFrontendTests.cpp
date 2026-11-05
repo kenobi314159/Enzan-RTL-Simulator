@@ -1054,8 +1054,8 @@ TEST_F(FrontendTest, ReportsAnUnsupportedConstructRatherThanMistranslatingIt) {
     // answer, which is the worst possible outcome.
     EXPECT_EQ(analyse(R"(
         module m;
-            real x;
-            initial x = 1.5;
+            string x;
+            initial x = "text";
         endmodule
     )"),
               nullptr);
@@ -1438,15 +1438,23 @@ TEST_F(FrontendTest, FoldsAComparisonOfConstantTimes) {
     ASSERT_NE(design, nullptr) << consumer.messages.front();
 }
 
-TEST_F(FrontendTest, ReportsARealComputationOnAVariable) {
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, ARealComputationOnAVariableIsComputedAsTheDesignRuns) {
+    // Not foldable, since `x` is known only as the design runs: a conversion into a real and a
+    // comparison of reals.
+    const std::unique_ptr<Design> design = analyse(R"(
         module m;
             logic [7:0] x;
             logic ok;
             initial ok = x * 1.5 > 2;
         endmodule
-    )"),
-              nullptr);
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 1U);
+    const std::vector<enzan::eir::Type>& registers = found->processes[0].registerTypes;
+    EXPECT_TRUE(std::ranges::any_of(registers, &enzan::eir::Type::isReal));
 }
 
 TEST_F(FrontendTest, ReportsADelayedWriteToPartOfASignal) {
@@ -1717,6 +1725,37 @@ TEST_F(FrontendTest, ReportsAForceOfPartOfAnObject) {
               nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
     EXPECT_TRUE(reported("`force` of anything but a whole variable or net"));
+}
+
+TEST_F(FrontendTest, ARealIsADouble) {
+    // `real`, `realtime` and `shortreal` alike, the last without its reduced precision.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            real r = 1.5;
+            realtime t;
+            shortreal s;
+            initial t = $realtime + r;
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    for (const std::string_view name : {"r", "t", "s"}) {
+        const std::uint32_t object = require(found->findObject(name), name);
+        EXPECT_TRUE(found->objects[object].type.isReal()) << name;
+    }
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, ReportsARealPortByName) {
+    EXPECT_EQ(analyse(R"(
+        module m (input real level);
+        endmodule
+    )",
+                      "m"),
+              nullptr);
+    EXPECT_TRUE(reported("the real port 'level'"));
 }
 
 TEST_F(FrontendTest, AUserDefinedPrimitiveIsAContinuousAssignmentByItsTable) {

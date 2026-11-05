@@ -131,6 +131,10 @@ enzan_add_golden_test(gates)
 # and an edge-sensitive flip-flop with an asynchronous clear and an initial state.
 enzan_add_golden_test(primitives)
 
+# Reals as AMD's clock managers compute with them: arithmetic, conversions, the bits of a double,
+# the time in fractions of a unit, a clock whose half period is a real variable's, and formatting.
+enzan_add_golden_test(reals OWN_TIME_SCALES)
+
 # Procedural `assign` and `force`: a flip-flop held by its reset, a force over an assign, nets
 # released back to their drivers, a variable that keeps its forced value.
 enzan_add_golden_test(overrides)

@@ -95,6 +95,9 @@ struct SysTaskDescriptor {
 
         /// Signedness for a `%d` conversion, which the format string does not carry.
         bool isSigned = false;
+
+        /// Whether the value is a real, which the formatter renders as one.
+        bool isReal = false;
     };
 
     std::vector<Argument> arguments;

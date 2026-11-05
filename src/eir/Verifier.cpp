@@ -890,6 +890,14 @@ private:
             checkReals(definition, body, {instruction.dst, instruction.a}, {instruction.b}, where);
             break;
 
+        // Narrower bits, or a real's whole part as bits.
+        case Opcode::Truncate:
+            if (isRealRegister(body, instruction.dst)) {
+                reportBody(definition, body,
+                           std::format("{} truncates into a real; it truncates into bits", where));
+            }
+            break;
+
         // Between a real and an integer, so exactly one side is a real.
         case Opcode::Convert:
             static_cast<void>(registerWidth(definition, body, instruction.dst, where));
