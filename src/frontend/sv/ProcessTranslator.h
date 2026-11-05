@@ -56,6 +56,48 @@ staticSubroutineOf(const slang::ast::ValueSymbol& symbol);
 /// A slang time unit or precision as a power of ten of a second: `10ns` is -8.
 [[nodiscard]] std::int8_t timeExponentOf(const slang::TimeScaleValue& value) noexcept;
 
+/// The module paths into one output (IEEE 1800 section 30), as the module gathers them for the
+/// process that delays the output's changes by them.
+struct OutputPaths {
+    /// An input window a path starts at, with the edge it counts, `None` counting every change.
+    struct Source {
+        std::uint32_t objectIndex = 0;
+        std::uint32_t lowBit = 0;
+        std::uint32_t width = 0;
+        slang::ast::EdgeKind edge{};
+    };
+
+    struct Path {
+        /// Index into `sources`.
+        std::uint32_t source = 0;
+
+        /// The path's condition, null for one that always holds.
+        const slang::ast::Expression* condition = nullptr;
+
+        /// The delays of the six transitions the standard names, 0 to 1, 1 to 0, 0 to z, z to 1,
+        /// 1 to z and z to 0, each a constant expression.
+        std::array<const slang::ast::Expression*, 6> delays{};
+    };
+
+    /// The output port's object, which the process writes, and the one the body's own writes of
+    /// it write instead.
+    std::uint32_t output = 0;
+    std::uint32_t internal = 0;
+
+    /// The process's own state: the sources' values as it last took them, the time each last
+    /// changed, 64 bits apiece, and the value it last scheduled for the output.
+    std::uint32_t sourcesSeen = 0;
+    std::uint32_t changedAt = 0;
+    std::uint32_t scheduled = 0;
+
+    std::vector<Source> sources;
+    std::vector<Path> paths;
+
+    /// True when the pulse limits are zero, so that every change reaches the output; otherwise a
+    /// change replaces one still on its way, as the default limits have it.
+    bool transport = false;
+};
+
 /// What a process translator needs from the module it belongs to.
 ///
 /// An interface rather than a direct dependency so that statement and expression
@@ -149,6 +191,14 @@ public:
     /// tristate buffer whose control is unknown drives `x`, the `L` or `H` of the standard being
     /// no value four states hold. Returns false having reported why.
     bool translateGate(const slang::ast::PrimitiveInstanceSymbol& gate);
+
+    /// Translates the process that delays an output by its module paths: when the value the body
+    /// gives the output changes, it is written to the output after the shortest delay of the
+    /// paths whose input changed most recently, of those whose condition holds, and no earlier
+    /// than now (IEEE 1800 sections 30.4 and 30.6). An edge-sensitive path counts only its edge; an
+    /// unknown condition holds no path, as Icarus Verilog has it. Returns false having reported
+    /// why.
+    bool translateModulePaths(const OutputPaths& paths);
 
     /// Translates an instance of a user-defined primitive as the continuous assignment of its
     /// output its table is (IEEE 1800 section 29), matched by the runtime against the table
@@ -328,6 +378,11 @@ private:
     /// run's unit, which is reported where the design states the delay. A delay that is unknown
     /// is none (section 9.4.1).
     std::optional<Value> translateDelay(const slang::ast::Expression& amount);
+
+    /// A delay that is a constant, as `translateDelay` counts it: `constant` says whether it is
+    /// one, and nothing comes back for one that cannot be counted, having reported why.
+    std::optional<std::uint64_t> constantDelay(const slang::ast::Expression& amount,
+                                               bool& constant);
 
     /// The time scale of the scope being translated: the subroutine being inlined, whose own
     /// module, package or compilation unit gives its delays their unit, or else the body.

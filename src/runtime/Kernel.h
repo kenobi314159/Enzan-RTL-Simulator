@@ -411,17 +411,25 @@ public:
     /// (DESIGN_GUIDE.md section 3.3).
     void suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint32_t resumePc);
 
-    /// Schedules a write of `value` to `signalIndex` `delay` time units from now: the write
-    /// of a continuous assignment with a delay, or a nonblocking `a <= #d b`.
-    ///
-    /// The first is inertial (IEEE 1800 section 10.3.3): it replaces the write the same store
-    /// of the same process scheduled before, if that has not happened yet, so a pulse
-    /// shorter than the delay never reaches the target. When it happens it is a write through
-    /// the process's route at `position`, as a Store. The second is transport: each update
-    /// happens, joining the NBA region of its time step.
+    /// How a delayed write treats the ones before it.
+    enum class DelayKind : std::uint8_t {
+        /// A continuous assignment's delay, and a module path's by default (IEEE 1800 section
+        /// 10.3.3): it replaces the write the same store of the same process scheduled before,
+        /// if that has not happened yet, so a pulse shorter than the delay never reaches the
+        /// target. When it happens it is a write through the process's route, as a Store.
+        Inertial,
+        /// A module path's whose pulse limits are zero: as Inertial, replacing nothing.
+        Transport,
+        /// A nonblocking `a <= #d b`: each update happens, joining the NBA region of its time
+        /// step.
+        NonBlocking,
+    };
+
+    /// Schedules a write of `value` to `signalIndex` `delay` time units from now, through the
+    /// route at `position` of process `processIndex`.
     void scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
                               std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
-                              bool nonBlocking);
+                              DelayKind kind);
 
     /// True when `signalIndex` changed in the update the current simulation cycle began with:
     /// VHDL's 'event.

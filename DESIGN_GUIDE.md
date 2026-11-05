@@ -622,6 +622,12 @@ floor.
 - **A real is a double**, `shortreal` without its reduced precision.
 - **A specify block is read for what a functional simulation needs of it.** A timing check is not
   run (1.3), and a run instantiating one says so once.
+- **A module path delays its output as Icarus Verilog's `-gspecify` does**, by the standard's rule
+  (IEEE 1800 sections 30.4 to 30.7), an unknown condition holding no path. The frontend gives a
+  delayed output a process of its own, which writes the port from a copy the body writes, so a body
+  whose paths have no delay pays nothing. One process delays the whole output, so paths that differ
+  between its bits are refused, as are delays by transition on a vector, `ifnone` with a delay,
+  pulse limits other than zero and pulse styles.
 
 ### 5.2 VHDL via NVC
 
@@ -1848,8 +1854,8 @@ mistranslated:
 
 - SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
   exponent, named events, dynamic and associative arrays, queues, classes, unpacked unions,
-  `highz` strengths, switches, module paths with a delay, net aliases, and a procedural `assign`
-  or `force` of part of an object.
+  `highz` strengths, switches, the module paths of 5.1 that one process per output cannot follow,
+  net aliases, and a procedural `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from

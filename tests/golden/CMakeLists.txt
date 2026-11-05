@@ -131,6 +131,15 @@ enzan_add_golden_test(gates)
 # and an edge-sensitive flip-flop with an asynchronous clear and an initial state.
 enzan_add_golden_test(primitives)
 
+# Module path delays as Icarus Verilog runs them with `-gspecify`: the most recent input's path,
+# the shortest of simultaneous ones, rise and fall delays and those to and from x and z,
+# conditions, an edge-sensitive path, a vector and an output an instance inside drives.
+enzan_add_golden_test(module_paths)
+
+# `PATHPULSE$ = 0` letting a pulse shorter than its path's delay through, which Icarus Verilog
+# ignores, so the case checks itself against IEEE 1800 section 30.7.
+enzan_add_golden_test(path_pulses NO_DIFFERENTIAL)
+
 # Reals as AMD's clock managers compute with them: arithmetic, conversions, the bits of a double,
 # the time in fractions of a unit, a clock whose half period is a real variable's, and formatting.
 enzan_add_golden_test(reals OWN_TIME_SCALES)

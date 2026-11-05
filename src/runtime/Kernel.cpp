@@ -1085,7 +1085,8 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
 
 void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
                                   std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
-                                  bool nonBlocking) {
+                                  DelayKind kind) {
+    const bool nonBlocking = kind == DelayKind::NonBlocking;
     if (delay > NoTime - currentTime) {
         diagnostics.report(DiagCode::TimeOverflow, SourceLocation(), currentTime,
                            options.timeScale.unitName());
@@ -1105,7 +1106,11 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
                        .serial = ++nextWriteSerial,
                        .value = eir::BitVector::from(value)};
 
-    if (!nonBlocking) {
+    if (kind == DelayKind::Transport && delay == 0) {
+        writeRouted(processIndex, position, signalIndex, value);
+        return;
+    }
+    if (kind == DelayKind::Inertial) {
         // The write this one replaces is taken out rather than skipped when it comes due, so
         // that it leaves no time step behind in which nothing happens.
         const auto key = std::pair{processIndex, position};

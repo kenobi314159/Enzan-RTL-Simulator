@@ -1899,9 +1899,10 @@ TEST_F(FrontendTest, AcceptsASpecifyBlockWhosePathsHaveNoDelay) {
     EXPECT_FALSE(design->findModule("m")->firstTimingCheck.valid());
 }
 
-TEST_F(FrontendTest, RefusesAModulePathWithADelayByItsTerminals) {
-    // Left out, the path would let `y` change at once, where every other simulator holds it.
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, AModulePathWithADelayIsAProcessThatDelaysItsOutput) {
+    // The body's own write of `y` goes to a copy, which the path's process reads and delays into
+    // the port; the path without a delay takes part as well.
+    const std::unique_ptr<Design> design = analyse(R"(
         module m (input a, input b, output y);
             assign y = a & b;
             specify
@@ -1909,11 +1910,67 @@ TEST_F(FrontendTest, RefusesAModulePathWithADelayByItsTerminals) {
                 (a, b *> y) = (0:1:2);
             endspecify
         endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    const std::uint32_t port = require(found->findObject("y"), "the port");
+    const std::uint32_t internal = require(found->findObject("y$path"), "the body's copy");
+
+    const auto writes = [](const enzan::eir::Process& process, std::uint32_t object) {
+        return enzan::eir::writesObject(process.writeSet, object);
+    };
+    ASSERT_EQ(found->processes.size(), 2U);
+    const enzan::eir::Process& delaying = found->processes[0];
+    const enzan::eir::Process& assignment = found->processes[1];
+    EXPECT_TRUE(delaying.name.starts_with("specify@"));
+    EXPECT_TRUE(writes(delaying, port));
+    EXPECT_TRUE(std::ranges::binary_search(delaying.readSet, internal));
+    EXPECT_TRUE(writes(assignment, internal));
+    EXPECT_FALSE(writes(assignment, port));
+}
+
+TEST_F(FrontendTest, RefusesModulePathsThatDifferBetweenTheBitsOfAnOutput) {
+    // One process delays the whole output, by one choice of path.
+    EXPECT_EQ(analyse(R"(
+        module m (input clk, input [1:0] d, output [1:0] q);
+            assign q = d;
+            specify
+                (clk => q[0]) = 5;
+                (d[1] => q[1]) = 0;
+            endspecify
+        endmodule
     )"),
               nullptr);
-    EXPECT_TRUE(reported("the module path from 'a', 'b' to 'y', whose delay is not zero,"));
-    EXPECT_EQ(std::ranges::count(consumer.codes, DiagCode::UnsupportedConstruct), 1)
-        << "the path without a delay is accepted";
+    EXPECT_TRUE(reported("module paths with a delay that differ between the bits of 'q'"));
+}
+
+TEST_F(FrontendTest, RefusesDelaysThatDifferByTransitionOnAVector) {
+    EXPECT_EQ(analyse(R"(
+        module m (input [1:0] d, output [1:0] q);
+            assign q = d;
+            specify
+                (d *> q) = (3, 7);
+            endspecify
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("delays that differ by transition on a module path to the vector 'q'"));
+}
+
+TEST_F(FrontendTest, RefusesAPulseLimitOtherThanZeroBesideAPathWithADelay) {
+    EXPECT_EQ(analyse(R"(
+        module m (input a, output y);
+            assign y = a;
+            specify
+                (a => y) = 5;
+                specparam PATHPULSE$ = 2;
+            endspecify
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("the pulse limit 'PATHPULSE$'"));
 }
 
 TEST_F(FrontendTest, RecordsWhereADefinitionsFirstTimingCheckIs) {

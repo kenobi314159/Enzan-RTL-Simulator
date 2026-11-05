@@ -724,6 +724,7 @@ private:
             case Opcode::StoreNonBlocking:
             case Opcode::StorePartNonBlocking:
             case Opcode::StoreDelayed:
+            case Opcode::StoreTransport:
             case Opcode::StoreNonBlockingDelayed:
             case Opcode::Drive:
             case Opcode::DriveTransport:
@@ -768,6 +769,7 @@ private:
             break;
 
         case Opcode::StoreDelayed:
+        case Opcode::StoreTransport:
         case Opcode::StoreNonBlockingDelayed:
         case Opcode::Drive:
         case Opcode::DriveTransport:
