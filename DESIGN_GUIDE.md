@@ -585,7 +585,10 @@ floor.
   parameterisation whose references lead to the same places from where it is. An instance whose
   lead elsewhere, a module reading `tb.clk` from two depths, is a definition of its own, named for
   where they lead. Only the instances of a parameterisation whose first instance names something
-  past its own objects are walked to find out.
+  past its own objects are walked to find out. **A reference into another top level is
+  absolute**, `/glbl/GSR`, as a package variable's is: no path climbs out of one top into another,
+  and one from the root is the same from every instance, so AMD's cells reading `glbl` share a
+  definition at any depth.
 - **A package's variables are a definition of their own, `<package>::`**, with one instance at the
   root, `/<package>`, created when something refers to one, and are referred to by the absolute path
   `/<package>/<variable>`. A package's constants, types and subroutines need no instance.

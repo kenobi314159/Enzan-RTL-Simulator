@@ -523,7 +523,8 @@ private:
                 std::string base = instance.path;
                 std::string_view rest = reference;
                 if (rest.starts_with('/')) {
-                    // An absolute path, to a package's variable: from the root.
+                    // An absolute path, to a package's variable or into another top level: from
+                    // the root.
                     const std::size_t slash = rest.find('/', 1);
                     base = std::string(rest.substr(0, slash));
                     rest = slash == std::string_view::npos ? std::string_view()
