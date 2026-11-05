@@ -907,14 +907,14 @@ private:
         return true;
     }
 
-    /// Records which bits of a net its continuous drivers cover.
+    /// Records which bits of a net some process writes: a continuous assignment, or a procedural
+    /// block through an output port's variable, which the port makes one slot with the net.
     void recordDrivenBits(std::uint32_t slotIndex, const std::vector<DriverRange>& ranges) {
         Slot& slot = result->slotList[slotIndex];
         if (slot.kind != eir::ObjectKind::Net) return;
         for (const DriverRange& range : ranges) {
-            if (range.continuous)
-                slot.drivenBits.push_back(eir::WriteExtent{
-                    .objectIndex = 0, .lowBit = range.lowBit, .width = range.width});
+            slot.drivenBits.push_back(
+                eir::WriteExtent{.objectIndex = 0, .lowBit = range.lowBit, .width = range.width});
         }
         eir::normaliseWriteSet(slot.drivenBits);
     }

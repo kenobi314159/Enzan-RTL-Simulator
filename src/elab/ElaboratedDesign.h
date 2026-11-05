@@ -42,9 +42,10 @@ struct Slot {
     /// The kind of net, when `kind` is `Net`.
     eir::NetKind netKind = eir::NetKind::Wire;
 
-    /// For a net, the bits some continuous assignment drives, as merged extents of this slot.
-    /// They start at X, as a variable does, until their driver first runs; the bits outside
-    /// them hold the net's undriven value for good.
+    /// For a net, the bits some process writes, as merged extents of this slot: those a continuous
+    /// assignment drives, and those an output port's variable that is one slot with the net holds.
+    /// They start at X, as a variable does, until they are first written; the bits outside them
+    /// hold the net's undriven value for good.
     std::vector<eir::WriteExtent> drivenBits;
 
     /// The unpacked dimensions and element width of the object that declared this slot, when
