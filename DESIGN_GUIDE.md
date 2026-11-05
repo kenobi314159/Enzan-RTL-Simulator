@@ -375,6 +375,17 @@ whose ranges are disjoint are not in conflict and MUST NOT be treated as though 
 - A driver's range is fixed at elaboration. A part-select at a position that is not constant writes
   through the driver of every bit it could reach.
 
+**Strength is two classes, not the standard's eight.** A driver's strength for each value is
+*strong* (`supply`, `strong`) or *weak* (`pull`, `weak`, and a `tri0` or `tri1` net's own pull).
+Strength is declared, so it is fixed at elaboration and held by the driver in the image, never by
+its value in the arena. A bit resolves among the drivers of the strongest class that contributes to
+it, by its net kind's table. **What the classes cannot tell apart is refused, not guessed**:
+drivers whose strengths the standard orders and one class holds, pull against weak or supply
+against strong, would resolve to `x` where the standard has a winner, and are an elaboration error.
+A `highz` strength, switches and `trireg` are refused, and so is `vpiStrengthVal`, rather than
+reporting a strength Enzan does not hold. The eight-level model was rejected because nothing in the
+vendors' libraries Enzan reads needs it.
+
 **VHDL resolution functions are user code**, compiled to EIR like any subprogram, and the runtime
 MUST NOT assume resolution is a table. A function's parameter is an array as long as the bit has
 drivers, which only elaboration knows, so elaboration counts the drivers and the frontend then
@@ -1819,8 +1830,8 @@ Left out of the milestones above, and refused by name where a design uses them r
 mistranslated:
 
 - SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
-  classes, unpacked unions, strengths other than strong, instances of built-in and user-defined
-  primitives, module paths with a delay, and net aliases.
+  classes, unpacked unions, `highz` strengths, instances of built-in and user-defined primitives,
+  module paths with a delay, and net aliases.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from

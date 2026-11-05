@@ -625,6 +625,10 @@ private:
     std::vector<eir::Word> segmentScratch;
     std::vector<eir::Word> driverScratch;
 
+    /// The weak class's resolution of a segment, and one driver's part of a class.
+    std::vector<eir::Word> weakScratch;
+    std::vector<eir::Word> classScratch;
+
     /// A windowed signal's old value, kept across its write for the comparison, sized once
     /// for the widest windowed signal.
     std::vector<eir::Word> windowScratch;

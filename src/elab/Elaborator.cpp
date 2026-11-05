@@ -846,8 +846,7 @@ private:
         }
         if (!ok || !checkCalleeWrites(rangesBySlot, resolved)) return false;
 
-        buildDrivers(resolved);
-        return true;
+        return buildDrivers(resolved);
     }
 
     /// Reports the first conflicting overlap among `ranges`, which are ordered by low bit,
@@ -950,7 +949,8 @@ private:
     ///
     /// Drivers are made in process order, and within a process in write-set order, so that a
     /// process's drivers through one object are contiguous: that run is what a store is routed to.
-    void buildDrivers(const std::vector<bool>& resolved) {
+    /// False, having reported, when drivers of one segment have strengths the classes merge.
+    bool buildDrivers(const std::vector<bool>& resolved) {
         std::vector<std::vector<std::uint32_t>> driversBySlot(result->slotList.size());
 
         for (std::uint32_t processIndex = 0; processIndex < result->processList.size();
@@ -972,16 +972,98 @@ private:
                                                     .width = extent.width,
                                                     .process = processIndex,
                                                     .objectIndex = extent.objectIndex,
-                                                    .wordOffset = result->arenaSize});
+                                                    .wordOffset = result->arenaSize,
+                                                    .strength = process.strength});
                 result->arenaSize += eir::storageWordsFor(extent.width);
                 result->widestDriverBits = std::max(result->widestDriverBits, extent.width);
             }
         }
 
+        bool ok = true;
         for (std::uint32_t slotIndex = 0; slotIndex < driversBySlot.size(); ++slotIndex) {
             if (!driversBySlot[slotIndex].empty())
-                buildSegments(slotIndex, driversBySlot[slotIndex]);
+                ok = buildSegments(slotIndex, driversBySlot[slotIndex]) && ok;
         }
+        return ok;
+    }
+
+    /// Reports two of `covering`, the drivers of one segment, or one and the net's own pull, whose
+    /// strengths the standard orders and one class holds: pull and weak, or supply and strong on a
+    /// net of no supply kind. Resolved as equals they would give X where the standard has a winner.
+    bool checkStrengths(const Segment& segment, const std::vector<std::uint32_t>& covering) {
+        const Slot& slot = result->slotList[segment.slot];
+        const auto levelName = [](eir::Strength strength) {
+            switch (strength) {
+            case eir::Strength::Supply: return "supply";
+            case eir::Strength::Strong: return "strong";
+            case eir::Strength::Pull: return "pull";
+            case eir::Strength::Weak: return "weak";
+            }
+            return "strong";
+        };
+
+        // Each source of the segment's value and the levels it drives at; the net's own pull is
+        // one, as a `tri0` or `tri1` drives its bits at pull where nothing else does.
+        struct Source {
+            std::string name;
+            eir::Strength zero;
+            eir::Strength one;
+            SourceLocation location;
+        };
+
+        std::vector<Source> sources;
+        if (segment.netKind == eir::NetKind::Tri0 || segment.netKind == eir::NetKind::Tri1)
+            sources.push_back({std::format("the {}'s own pull",
+                                           segment.netKind == eir::NetKind::Tri0 ? "tri0" : "tri1"),
+                               eir::Strength::Pull, eir::Strength::Pull, SourceLocation()});
+        for (const std::uint32_t driverIndex : covering) {
+            const Driver& driver = result->driverList[driverIndex];
+            sources.push_back({describeProcess(driver.process), driver.strength.zero,
+                               driver.strength.one,
+                               processOf(result->processList[driver.process]).location});
+        }
+        const bool supplyNet =
+            segment.netKind == eir::NetKind::Supply0 || segment.netKind == eir::NetKind::Supply1;
+        // A supply net holds its value against everything weaker, and a supply driver would
+        // contend with it as an equal, which the net's constant value does not.
+        if (supplyNet) {
+            for (const std::uint32_t driverIndex : covering) {
+                const Driver& driver = result->driverList[driverIndex];
+                if (driver.strength.zero != eir::Strength::Supply
+                    && driver.strength.one != eir::Strength::Supply)
+                    continue;
+                diagnostics.report(
+                    DiagCode::NotYetImplemented,
+                    processOf(result->processList[driver.process]).location,
+                    std::format("driving the supply net '{}' at supply strength, by {},", slot.path,
+                                describeProcess(driver.process)));
+                return false;
+            }
+        }
+        const auto clash = [supplyNet](eir::Strength left, eir::Strength right) {
+            const auto pair = [&](eir::Strength a, eir::Strength b) {
+                return (left == a && right == b) || (left == b && right == a);
+            };
+            return pair(eir::Strength::Pull, eir::Strength::Weak)
+                   || (!supplyNet && pair(eir::Strength::Supply, eir::Strength::Strong));
+        };
+        for (std::size_t later = 1; later < sources.size(); ++later) {
+            for (std::size_t earlier = 0; earlier < later; ++earlier) {
+                for (const eir::Strength left : {sources[earlier].zero, sources[earlier].one}) {
+                    for (const eir::Strength right : {sources[later].zero, sources[later].one}) {
+                        if (!clash(left, right)) continue;
+                        diagnostics.report(
+                            DiagCode::StrengthsIndistinguishable, sources[later].location,
+                            describeBits(segment.lowBit, segment.lowBit + segment.width,
+                                         slot.type.bitWidth()),
+                            slot.path, sources[earlier].name, levelName(left), sources[later].name,
+                            levelName(right));
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     /// The index of the resolution call for `resolution`'s function with `drivers` drivers, made
@@ -1012,8 +1094,8 @@ private:
     /// driver which of them it covers.
     ///
     /// A bit no driver covers belongs to no segment: nothing ever writes it, so it keeps the
-    /// undriven value it started with.
-    void buildSegments(std::uint32_t slotIndex, const std::vector<std::uint32_t>& drivers) {
+    /// undriven value it started with. False, having reported, when `checkStrengths` refuses one.
+    bool buildSegments(std::uint32_t slotIndex, const std::vector<std::uint32_t>& drivers) {
         std::vector<std::uint32_t> boundaries;
         for (const std::uint32_t driverIndex : drivers) {
             boundaries.push_back(result->driverList[driverIndex].lowBit);
@@ -1051,7 +1133,11 @@ private:
                         .driverCount = static_cast<std::uint32_t>(covering.size()),
                         .netKind = result->slotList[slotIndex].netKind,
                         .resolution = resolutionFor(result->slotList[slotIndex].resolution,
-                                                    static_cast<std::uint32_t>(covering.size()))});
+                                                    static_cast<std::uint32_t>(covering.size())),
+                        .weak = std::ranges::any_of(covering, [this](std::uint32_t driverIndex) {
+                            return result->driverList[driverIndex].strength.anyWeak();
+                        })});
+            if (!checkStrengths(result->segmentList.back(), covering)) return false;
             result->segmentDriverList.insert(result->segmentDriverList.end(), covering.begin(),
                                              covering.end());
             previousSet = std::move(covering);
@@ -1067,6 +1153,7 @@ private:
                 ++driver.segmentCount;
             }
         }
+        return true;
     }
 
     [[nodiscard]] const eir::Process& processOf(const ProcessInstance& processInstance) const {

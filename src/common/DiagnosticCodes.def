@@ -135,6 +135,10 @@ ENZAN_DIAG(UnconnectedPort, 3008, Warning,
 ENZAN_DIAG(UnconnectedVhdlPort, 3019, Warning,
            "port '{}' of instance '{}' is not connected and keeps its default value, as a VHDL "
            "port left open does")
+ENZAN_DIAG(StrengthsIndistinguishable, 3020, Error,
+           "{} of '{}' is driven by {} at {} strength and by {} at {}; the standard orders the "
+           "two, and Enzan, which tells strong from weak and no finer, would resolve them as "
+           "equals, to X where the standard has a winner")
 
 // --- 5000-5999: runtime and scheduler ---------------------------------------
 

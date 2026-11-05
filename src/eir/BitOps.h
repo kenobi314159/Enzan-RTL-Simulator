@@ -290,8 +290,8 @@ void conditional(BitRef dst, ConstBitRef condition, ConstBitRef whenTrue, ConstB
 // How a bit of a net with several drivers takes its value. Each function folds one more driver
 // into an accumulator that holds what the drivers so far resolved to, so a bit with `n`
 // drivers costs `n - 1` calls. `acc` and `driver` must have the same width and must not
-// overlap. Strength is not modelled: every driver is strong, which the frontend guarantees by
-// refusing any other.
+// overlap. Strength is two classes, strong and weak (DESIGN_GUIDE.md section 3.7): each class
+// is folded by these, and `fillHighImpedance` lets the weak decide where the strong leave `z`.
 //
 // `z` is the identity of all three, so an accumulator starts as the first driver's value.
 
@@ -309,5 +309,15 @@ void resolveWiredOr(BitRef acc, ConstBitRef driver);
 /// Replaces each `z` bit of `value` with `pull`, which must be 0 or 1: what a `tri0` or `tri1`
 /// does to a bit every driver leaves undriven.
 void pullHighImpedance(BitRef value, Logic pull);
+
+/// `dst` is what `value`, a driver's, contributes to one class of strength: each 0 when `zeros`
+/// and each 1 when `ones` are driven in it, each X when either is, and `z` for the rest. A driver
+/// whose 0 and 1 are of different classes contributes an X to both, which is as much as two
+/// classes can say of it. `dst` and `value` must have the same width.
+void keepClass(BitRef dst, ConstBitRef value, bool zeros, bool ones);
+
+/// Each `z` bit of `acc` takes `below`'s bit: what the weak class decides where the strong leaves
+/// a bit undriven. `acc` and `below` must have the same width and must not overlap.
+void fillHighImpedance(BitRef acc, ConstBitRef below);
 
 } // namespace enzan::eir::bitops
