@@ -579,7 +579,8 @@ floor.
   object it names, so reads, writes, sensitivity and drivers all see the real signal. The path is
   relative — `core/state`, `../u_peer/ready` — so that one definition serves every instance of a
   parameterisation whose references lead to the same places; one whose references lead elsewhere
-  is a definition of its own (2.1).
+  is a definition of its own (2.1). **A reference into another top level is absolute**, as a
+  package variable's is, so that it is the same from every instance.
 - **A package's variables are a definition of their own, `<package>::`**, with one instance at the
   root, `/<package>`, created when something refers to one, and are referred to by the absolute path
   `/<package>/<variable>`. A package's constants, types and subroutines need no instance.

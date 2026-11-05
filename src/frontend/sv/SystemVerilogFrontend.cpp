@@ -342,9 +342,10 @@ public:
     static const ast::PackageSymbol* packageOf(const ast::ValueSymbol& symbol);
 
     /// The path from `from`'s instance to `name`, declared in `owner`, another instance's body.
-    /// Through one of `from`'s interface ports, `@bus/data`, when one reaches that instance;
-    /// otherwise up to the instance both share and down to the one declaring it, `core/state`
-    /// or `../u_peer/ready`. Nothing when either instance has no name a path can use.
+    /// Through one of `from`'s interface ports, `@bus/data`, when one reaches that instance; from
+    /// the root, `/other/reset`, when the two are under different top levels; otherwise up to the
+    /// instance both share and down to the one declaring it, `core/state` or `../u_peer/ready`.
+    /// Nothing when either instance has no name a path can use.
     static std::optional<std::string> pathTo(const ast::InstanceBodySymbol& from,
                                              const ast::InstanceBodySymbol& owner,
                                              const std::string& name);
@@ -1243,6 +1244,15 @@ std::optional<std::string> ModuleBuilder::pathTo(const ast::InstanceBodySymbol& 
     std::size_t common = 0;
     while (common < here->size() && common < there->size() && (*here)[common] == (*there)[common])
         ++common;
+
+    // Into another top level, sharing none, from the root: no path climbs out of one top into
+    // another, and one from the root is the same from every instance, at whatever depth it is.
+    if (common == 0 && !there->empty()) {
+        std::string path;
+        for (const std::string& level : *there) path += "/" + level;
+        return path + "/" + name;
+    }
+
     std::string path;
     for (std::size_t level = common; level < here->size(); ++level) path += "../";
     for (std::size_t level = common; level < there->size(); ++level) path += (*there)[level] + "/";

@@ -1187,6 +1187,36 @@ TEST_F(FrontendTest, AHierarchicalReferenceIsAPathFromTheInstanceHoldingIt) {
     EXPECT_EQ(other->name, "leaf") << "names that stay inside leave the name as it was";
 }
 
+TEST_F(FrontendTest, AReferenceIntoAnotherTopLevelIsFromTheRoot) {
+    // As AMD's cells read `glbl.GSR`: the same path from every depth, so one definition serves.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module glbl;
+            logic GSR;
+        endmodule
+
+        module leaf;
+            logic gsr;
+            assign gsr = glbl.GSR;
+        endmodule
+
+        module shelter;
+            leaf u ();
+        endmodule
+
+        module tb;
+            leaf shallow ();
+            shelter deeper ();
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* leaf = design->findModule("leaf");
+    ASSERT_NE(leaf, nullptr) << "a reference from the root leaves the name as it was";
+    EXPECT_EQ(leaf->objects[require(leaf->findObject("ref$/glbl/GSR"))].hierarchicalPath,
+              "/glbl/GSR");
+    EXPECT_EQ(design->findSpecialisations("leaf").size(), 1U);
+}
+
 TEST_F(FrontendTest, InstancesShareADefinitionOnlyWhereTheirReferencesLeadAlike) {
     // One parameterisation reading `tb.clk` from three instances, two of them one level down and
     // one two levels down: the two alike share a definition, and the third has its own.
