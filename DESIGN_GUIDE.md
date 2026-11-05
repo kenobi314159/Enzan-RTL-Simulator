@@ -621,6 +621,10 @@ floor.
   caller and the caller's read and write sets are exactly what the call touches. A recursive call is
   refused, unless slang folds it to a constant. Calling a SystemVerilog function as an EIR
   subprogram instead would be a change to this frontend alone.
+- **A gate is a continuous assignment of its outputs**, at the strength its instance declares
+  (3.7), pull for `pullup` and `pulldown`, with its delay as a continuous assignment's. An input of
+  `z` reads as `x`, as the gate tables have it, and a tristate buffer whose control is unknown
+  drives `x`: the standard's `L` and `H` are no values four states hold. Switches are refused.
 - **A specify block is read for what a functional simulation needs of it.** A `specparam` is a
   parameter. A module path whose delays are all zero changes nothing and is accepted; one with a
   delay is refused, since leaving it out would move its output early. A timing check is not run
@@ -1883,7 +1887,7 @@ Left out of the milestones above, and refused by name where a design uses them r
 mistranslated:
 
 - SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
-  classes, unpacked unions, `highz` strengths, instances of built-in and user-defined primitives,
+  classes, unpacked unions, `highz` strengths, switches, instances of user-defined primitives,
   module paths with a delay, and net aliases.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type

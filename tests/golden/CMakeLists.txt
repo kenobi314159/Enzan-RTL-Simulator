@@ -124,6 +124,9 @@ enzan_add_golden_test(resolution)
 # reset and its PLLs' lock.
 enzan_add_golden_test(strengths)
 
+# Built-in gates over the four values, tristate buffers, an array, a delay and a pad with a pull-up.
+enzan_add_golden_test(gates)
+
 # The comparisons with don't-care bits: ==?, casez and casex.
 enzan_add_golden_test(wildcards)
 

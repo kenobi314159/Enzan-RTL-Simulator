@@ -34,6 +34,7 @@ class VariableSymbol;
 class ElementSelectExpression;
 class Expression;
 class MemberAccessExpression;
+class PrimitiveInstanceSymbol;
 class RangeSelectExpression;
 class Statement;
 class TimingControl;
@@ -134,6 +135,13 @@ public:
     bool translateContinuousAssignment(const slang::ast::Expression& assignment,
                                        const slang::ast::TimingControl* delay = nullptr);
 
+    /// Translates an instance of a built-in gate, `and` to `xnor`, `buf`, `not`, the four
+    /// tristate buffers, `pullup` or `pulldown`, as the continuous assignment of its outputs it
+    /// is (IEEE 1800 section 28): an input of `z` reads as `x`, as the gate tables have it, and a
+    /// tristate buffer whose control is unknown drives `x`, the `L` or `H` of the standard being
+    /// no value four states hold. Returns false having reported why.
+    bool translateGate(const slang::ast::PrimitiveInstanceSymbol& gate);
+
     /// Translates `expression` and stores its value into `objectIndex`.
     ///
     /// Used for the implicit continuous assignment a port connection needs when it is an
@@ -193,6 +201,9 @@ private:
     /// The statement being translated, stamped onto everything `emit` produces.
     SourceLocation currentStatement;
     std::uint32_t addConstant(const eir::BitVector& value);
+
+    /// A register holding one bit of `value`.
+    std::uint32_t constantRegister(eir::Logic value);
     std::uint32_t addString(std::string text);
 
     /// Switches emission to `block`.
@@ -502,6 +513,10 @@ private:
     /// nonblocking `a <= #d b`, or a continuous `assign #d a = b`. Its stores are the delayed
     /// forms, and a store the delayed forms cannot express is refused rather than undelayed.
     std::optional<std::uint32_t> storeDelay;
+
+    /// Sets `storeDelay` from a continuous assignment's or a gate's `delay`: one amount, as a
+    /// triple of rise, fall and turn-off delays cannot be. False having reported.
+    bool setContinuousDelay(const slang::ast::TimingControl& delay);
 
     /// Where `continue` and `break` go in each enclosing loop, innermost last.
     struct LoopTargets {
