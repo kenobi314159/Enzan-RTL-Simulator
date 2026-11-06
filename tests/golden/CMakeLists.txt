@@ -131,6 +131,9 @@ enzan_add_golden_test(gates)
 # and an edge-sensitive flip-flop with an asynchronous clear and an initial state.
 enzan_add_golden_test(primitives)
 
+# Separate rise, fall and turn-off delays of a continuous assignment and of a gate.
+enzan_add_golden_test(rise_fall)
+
 # Delayed writes to part of a signal: a memory word at an index known as the design runs, a bit of
 # a vector, and a continuous assignment of one bit that rejects a pulse shorter than its delay.
 enzan_add_golden_test(delayed_parts)

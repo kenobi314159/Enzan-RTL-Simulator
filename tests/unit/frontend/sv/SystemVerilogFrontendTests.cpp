@@ -1477,16 +1477,26 @@ TEST_F(FrontendTest, ADelayedWriteToPartOfASignalWritesOnlyThatPart) {
     }));
 }
 
-TEST_F(FrontendTest, ReportsSeparateRiseAndFallDelays) {
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, ReportsSeparateRiseAndFallDelaysOnAVector) {
+    // One bit's are chosen by the value it takes; a vector's bits may each call for another.
+    EXPECT_NE(analyse(R"(
         module m;
             logic a;
             wire  y;
             assign #(1, 2) y = a;
         endmodule
     )"),
+              nullptr)
+        << consumer.messages.front();
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [1:0] a;
+            wire  [1:0] y;
+            assign #(1, 2) y = a;
+        endmodule
+    )"),
               nullptr);
-    EXPECT_TRUE(reported("separate rise, fall and turn-off delays"));
+    EXPECT_TRUE(reported("separate rise, fall and turn-off delays on a vector"));
 }
 
 TEST_F(FrontendTest, ReportsReadingAMemoryOfTwoDimensions) {
