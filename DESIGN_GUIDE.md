@@ -620,6 +620,7 @@ floor.
   frontend encodes as a constant and the runtime matches by the layout `eir/Udp.h` gives both.
   Inputs changing together are a race the standard leaves open, and Enzan takes them in port order.
 - **A real is a double**, `shortreal` without its reduced precision.
+- **A named event is a bit its trigger toggles**, so that what waits on it sees it change.
 - **A specify block is read for what a functional simulation needs of it.** A timing check is not
   run (1.3), and a run instantiating one says so once.
 - **A module path delays its output as Icarus Verilog's `-gspecify` does**, by the standard's rule
@@ -1853,7 +1854,7 @@ Left out of the milestones above, and refused by name where a design uses them r
 mistranslated:
 
 - SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
-  exponent, named events, dynamic and associative arrays, queues, classes, unpacked unions,
+  exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
   `highz` strengths, switches, the module paths of 5.1 that one process per output cannot follow,
   net aliases, and a procedural `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.

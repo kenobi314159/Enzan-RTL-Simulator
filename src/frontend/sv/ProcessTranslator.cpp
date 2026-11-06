@@ -1264,6 +1264,8 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
 
     case ast::StatementKind::ProceduralDeassign: return translateProceduralDeassign(statement);
 
+    case ast::StatementKind::EventTrigger: return translateEventTrigger(statement);
+
     case ast::StatementKind::List:
     case ast::StatementKind::Block: return translateBlock(statement);
 
@@ -1460,6 +1462,39 @@ bool ProcessTranslator::translateProceduralAssign(const ast::Statement& statemen
     emit(eir::Instruction::make(procedural.isForce ? eir::Opcode::Force : eir::Opcode::Assign, {},
                                 eir::Operand::object(*target), eir::Operand::reg(stored.reg),
                                 eir::Operand::immediate(*holder)));
+    return true;
+}
+
+bool ProcessTranslator::translateEventTrigger(const ast::Statement& statement) {
+    const auto& trigger = statement.as<ast::EventTriggerStatement>();
+    const ast::Expression& target = trigger.target;
+    const bool named = target.kind == ast::ExpressionKind::NamedValue
+                       || target.kind == ast::ExpressionKind::HierarchicalValue;
+    if (trigger.timing != nullptr || !named) {
+        module->reportUnsupported(statement.sourceRange.start(),
+                                  trigger.timing != nullptr ? "a delayed event trigger"
+                                                            : "triggering this kind of event");
+        failed = true;
+        return false;
+    }
+    const std::optional<std::uint32_t> event =
+        module->objectFor(target.as<ast::ValueExpressionBase>().symbol);
+    if (!event.has_value()) {
+        failed = true;
+        return false;
+    }
+    const eir::Type bit = eir::Type::bits(1, false, false);
+    const std::uint32_t before = newRegister(bit);
+    noteRead(*event);
+    emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(before),
+                                eir::Operand::object(*event)));
+    const std::uint32_t after = newRegister(bit);
+    emit(eir::Instruction::make(eir::Opcode::Not, eir::Operand::reg(after),
+                                eir::Operand::reg(before)));
+    noteWholeWrite(*event);
+    emit(eir::Instruction::make(trigger.isNonBlocking ? eir::Opcode::StoreNonBlocking
+                                                      : eir::Opcode::Store,
+                                {}, eir::Operand::object(*event), eir::Operand::reg(after)));
     return true;
 }
 
@@ -2026,6 +2061,18 @@ bool ProcessTranslator::translateExpressionStatement(const ast::Expression& expr
 std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateExpression(const ast::Expression& expression) {
     if (failed) return std::nullopt;
+
+    // An event's bit is how its triggers reach what waits on it, not a value it has: what an
+    // expression of one would read, `.triggered` among them, is something else. An assignment of
+    // one, whose type is the event's, makes two events one (IEEE 1800 section 15.5.5).
+    if (expression.type->isEvent()) {
+        module->reportUnsupported(expression.sourceRange.start(),
+                                  expression.kind == ast::ExpressionKind::Assignment
+                                      ? "an assignment to an event"
+                                      : "an event used as a value");
+        failed = true;
+        return std::nullopt;
+    }
 
     const std::optional<eir::Type> type = module->convertType(*expression.type);
 
@@ -3787,6 +3834,12 @@ ProcessTranslator::translateAssignment(const ast::Expression& expression) {
 
 bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& value,
                                  bool nonBlocking) {
+    // Assigning one event to another makes them one event (IEEE 1800 section 15.5.5).
+    if (target.type->isEvent()) {
+        module->reportUnsupported(target.sourceRange.start(), "an assignment to an event");
+        failed = true;
+        return false;
+    }
     switch (target.kind) {
     case ast::ExpressionKind::NamedValue:
     case ast::ExpressionKind::HierarchicalValue: {

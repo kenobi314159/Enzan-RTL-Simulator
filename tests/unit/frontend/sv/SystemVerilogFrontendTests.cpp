@@ -1744,6 +1744,37 @@ TEST_F(FrontendTest, ReportsAForceOfPartOfAnObject) {
     EXPECT_TRUE(reported("`force` of anything but a whole variable or net"));
 }
 
+TEST_F(FrontendTest, ANamedEventIsABitItsTriggerToggles) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            event e;
+            initial -> e;
+            always @e;
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    const std::uint32_t event = require(found->findObject("e"), "the event");
+    EXPECT_EQ(found->objects[event].type, enzan::eir::Type::bits(1, false, false));
+    EXPECT_TRUE(enzan::eir::writesObject(found->processes[0].writeSet, event));
+}
+
+TEST_F(FrontendTest, ReportsAnAssignmentOfOneEventToAnother) {
+    // Which makes them one event, not one a copy of the other's bit.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            event a, b;
+            initial a = b;
+        endmodule
+    )",
+                      "m"),
+              nullptr);
+    EXPECT_TRUE(reported("an assignment to an event"));
+}
+
 TEST_F(FrontendTest, ARealIsADouble) {
     // `real`, `realtime` and `shortreal` alike, the last without its reduced precision.
     const std::unique_ptr<Design> design = analyse(R"(

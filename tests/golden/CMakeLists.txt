@@ -131,6 +131,12 @@ enzan_add_golden_test(gates)
 # and an edge-sensitive flip-flop with an asynchronous clear and an initial state.
 enzan_add_golden_test(primitives)
 
+# Named events, triggered and waited on again.
+enzan_add_golden_test(named_events)
+
+# A nonblocking event trigger, which Icarus Verilog does not support, so the case checks itself.
+enzan_add_golden_test(nonblocking_events NO_DIFFERENTIAL)
+
 # Separate rise, fall and turn-off delays of a continuous assignment and of a gate.
 enzan_add_golden_test(rise_fall)
 
