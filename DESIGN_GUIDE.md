@@ -245,6 +245,8 @@ A delayed write is scheduled for its time, not for a process. `a <= #d b` joins 
 the time step `d` later, and a continuous assignment with a delay writes at the start of that step's
 Active region. That delay is inertial: a newer write from the same assignment replaces one still
 pending, so a pulse shorter than the delay leaves no time step behind (IEEE 1800 section 10.3.3).
+A delayed write to part of a signal, `mem[addr] <= #d b`, writes that part alone when it comes, at
+the offset the statement computed, and a newer write replaces only one at the same offset.
 
 ### 3.4 VHDL simulation cycle
 

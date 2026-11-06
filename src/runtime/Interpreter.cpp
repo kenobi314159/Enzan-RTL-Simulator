@@ -448,6 +448,23 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             break;
         }
 
+        case eir::Opcode::StorePartDelayed:
+        case eir::Opcode::StorePartNonBlockingDelayed: {
+            // The offset in the low 64 bits, the delay in the 64 above, as DrivePartAfter's.
+            const eir::ConstBitRef both = reg(instruction.c, instruction.cWidth);
+            if (both.hasUnknown()) break;
+            const std::span<const eir::Word> words = both.avalWords();
+            kernel.scheduleDelayedWrite(processIndex, instruction.dst,
+                                        current.writeSignals[instruction.a],
+                                        reg(instruction.b, instruction.bWidth), words[1],
+                                        instruction.opcode == eir::Opcode::StorePartDelayed
+                                            ? Kernel::DelayKind::Inertial
+                                            : Kernel::DelayKind::NonBlocking,
+                                        static_cast<std::uint32_t>(words[0]));
+            if (kernel.errorRequested) return ExecutionResult::Stopped;
+            break;
+        }
+
         case eir::Opcode::DrivePartAfter:
         case eir::Opcode::DriveTransportPart: {
             // The offset in the low 64 bits, the delay in the 64 above; either unknown assigns

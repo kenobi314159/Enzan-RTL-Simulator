@@ -3173,8 +3173,6 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
         return true;
     }
 
-    if (refuseDelayedWrite(target)) return false;
-
     // The bits written, for the driver this process is: exactly the window when it is
     // constant, and everything it could reach when it moves.
     const bool written =
@@ -3184,6 +3182,29 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
     if (!written) return true;
 
     const Value low = lowOf(location);
+    if (storeDelay.has_value()) {
+        // The offset and the delay in one operand, the offset in the low 64 bits.
+        const eir::Type both = eir::Type::bits(128, false, true);
+        const std::uint32_t packed = newRegister(both);
+        emit(eir::Instruction::make(
+            eir::Opcode::LoadConstant, eir::Operand::reg(packed),
+            eir::Operand::constant(addConstant(eir::BitVector::filled(128, eir::Logic::Zero)))));
+        const auto splice = [&](std::uint32_t value, std::uint64_t at) {
+            const std::uint32_t offset = newRegister(eir::Type::bits(32, false, false));
+            emit(eir::Instruction::make(
+                eir::Opcode::LoadConstant, eir::Operand::reg(offset),
+                eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(at, 32)))));
+            emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(packed),
+                                        eir::Operand::reg(value), eir::Operand::reg(offset)));
+        };
+        splice(coerce(low, eir::Type::bits(64, false, low.type.isFourState())).reg, 0);
+        splice(*storeDelay, 64);
+        emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlockingDelayed
+                                                : eir::Opcode::StorePartDelayed,
+                                    {}, eir::Operand::object(location.objectIndex),
+                                    eir::Operand::reg(stored.reg), eir::Operand::reg(packed)));
+        return true;
+    }
     emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlocking
                                             : eir::Opcode::StorePart,
                                 {}, eir::Operand::object(location.objectIndex),
@@ -3206,8 +3227,7 @@ void ProcessTranslator::emitWholeStore(std::uint32_t objectIndex, std::uint32_t 
 
 bool ProcessTranslator::refuseDelayedWrite(const ast::Expression& target) {
     if (!storeDelay.has_value()) return false;
-    module->reportUnsupported(target.sourceRange.start(),
-                              "a delayed write to part of a signal, or to a local variable");
+    module->reportUnsupported(target.sourceRange.start(), "a delayed write to a local variable");
     failed = true;
     return true;
 }

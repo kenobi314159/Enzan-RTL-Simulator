@@ -108,6 +108,15 @@ ENZAN_OPCODE(StoreTransport, "tstore", false, 3,
 ENZAN_OPCODE(StoreNonBlockingDelayed, "nbdstore", false, 3,
              "a call to the runtime helper that schedules a non-blocking update the "
              "third operand later, where it joins that time step's NBA region")
+ENZAN_OPCODE(StorePartDelayed, "dstorepart", false, 3,
+             "as StoreDelayed, of the bits from an offset up as wide as the value: the third "
+             "operand holds the offset in its low 64 bits and the delay in the 64 above, as "
+             "DrivePartAfter's does; an extract of each half, then the call StoreDelayed makes, "
+             "which replaces only what the store scheduled at the same offset. An unknown bit in "
+             "either half writes nothing, as an unknown offset does")
+ENZAN_OPCODE(StorePartNonBlockingDelayed, "nbdstorepart", false, 3,
+             "as StorePartDelayed through the helper StoreNonBlockingDelayed calls, the update "
+             "joining the NBA region of its time step as StorePartNonBlocking's does")
 
 // A VHDL signal assignment: a transaction of the process's driver of the object, the third
 // operand later, and in the next delta cycle when that is zero (IEEE 1076 section 10.5.2.2). It

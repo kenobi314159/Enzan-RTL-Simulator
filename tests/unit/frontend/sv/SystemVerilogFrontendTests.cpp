@@ -1457,17 +1457,24 @@ TEST_F(FrontendTest, ARealComputationOnAVariableIsComputedAsTheDesignRuns) {
     EXPECT_TRUE(std::ranges::any_of(registers, &enzan::eir::Type::isReal));
 }
 
-TEST_F(FrontendTest, ReportsADelayedWriteToPartOfASignal) {
-    // A delayed store writes a whole object; splitting the update would let the rest of the
-    // signal be overwritten with the value it had when the statement ran.
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, ADelayedWriteToPartOfASignalWritesOnlyThatPart) {
+    // A store of the part, so that the rest of the signal is not written back with the value it
+    // had when the statement ran.
+    const std::unique_ptr<Design> design = analyse(R"(
         module m;
             logic [7:0] x;
             initial x[3:0] <= #2 4'd5;
         endmodule
-    )"),
-              nullptr);
-    EXPECT_TRUE(reported("a delayed write to part of a signal"));
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const enzan::eir::Process& process = design->findModule("m")->processes.front();
+    EXPECT_TRUE(std::ranges::any_of(process.blocks, [](const enzan::eir::BasicBlock& block) {
+        return std::ranges::any_of(
+            block.instructions, [](const enzan::eir::Instruction& instruction) {
+                return instruction.opcode == enzan::eir::Opcode::StorePartNonBlockingDelayed;
+            });
+    }));
 }
 
 TEST_F(FrontendTest, ReportsSeparateRiseAndFallDelays) {
