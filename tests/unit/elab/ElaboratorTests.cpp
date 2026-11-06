@@ -598,6 +598,32 @@ TEST_F(ElaboratorTest, WarnsAboutAnUnconnectedPortButContinues) {
     EXPECT_TRUE(elaborated->findSlot("/parent/u_child/in").has_value());
 }
 
+TEST_F(ElaboratorTest, AnOutputLeftOpenIsNotReported) {
+    // Its module drives it, and nothing outside reads it, in either language.
+    ModuleDefinition parent;
+    parent.name = "parent";
+    for (const enzan::eir::Language language :
+         {enzan::eir::Language::SystemVerilog, enzan::eir::Language::Vhdl}) {
+        ModuleDefinition child;
+        child.name = language == enzan::eir::Language::Vhdl ? "vhdl_child" : "sv_child";
+        child.language = language;
+        child.addObject(Object{.name = "out", .type = Type::logic()});
+        child.ports.push_back(
+            Port{.name = "out", .direction = PortDirection::Output, .objectIndex = 0});
+        enzan::eir::Instance instance;
+        instance.name = "u_" + child.name;
+        instance.definitionName = child.name;
+        instance.connections.push_back(PortConnection{.portIndex = 0});
+        parent.instances.push_back(std::move(instance));
+        design.addModule(std::move(child));
+    }
+    design.addModule(std::move(parent));
+
+    ASSERT_NE(elaborate("parent"), nullptr);
+    EXPECT_FALSE(reportedCode(enzan::DiagCode::UnconnectedPort));
+    EXPECT_FALSE(reportedCode(enzan::DiagCode::UnconnectedVhdlPort));
+}
+
 TEST_F(ElaboratorTest, AnUnconnectedVhdlPortKeepsItsDefault) {
     // Which its object starts with, rather than X: a VHDL port left open from SystemVerilog.
     ModuleDefinition child;

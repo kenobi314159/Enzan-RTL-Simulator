@@ -341,6 +341,10 @@ private:
             const eir::Port& port = childDefinition.ports[connection.portIndex];
 
             if (!connection.connected()) {
+                // An output left open is what its module drives it to, and nothing outside
+                // reads it, so there is nothing to say of it.
+                if (port.direction == eir::PortDirection::Output) return true;
+
                 // Left to read as X rather than tied off. A silently tied-off input is
                 // how a missing connection turns into a design that appears to work. A VHDL
                 // port has a default, which its object starts with, and keeps it.
