@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <string>
@@ -198,6 +199,11 @@ public:
         thread_init();
         set_default_options();
         intern_strings();
+
+        // A unit's objects live in one arena, 16 MB by NVC's default, which a package of 1,364
+        // component declarations overflows. The arena is reserved rather than touched, so a larger
+        // one costs no memory a unit does not use.
+        opt_set_size(OPT_ARENA_SIZE, std::size_t{64} << 20U);
 
         set_standard(nvcStandard(options.standard));
         if (options.bootstrap) opt_set_int(OPT_BOOTSTRAP, 1);

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -141,6 +142,24 @@ TEST_F(VhdlAnalysisTest, AnalysesAgainstVhdl2019sLibraries) {
                         "end architecture;\n",
                         "work", Standard::Vhdl2019))
         << transcript();
+}
+
+TEST_F(VhdlAnalysisTest, AnalysesAPackageAsLargeAsAVendorsComponentLibrary) {
+    // AMD's unisim package declares 1,364 components with their generics and ports, more than
+    // NVC's default arena of 16 MB holds of one unit; this one is of the same order.
+    std::string text = "library ieee;\nuse ieee.std_logic_1164.all;\npackage vcomponents is\n";
+    for (int component = 0; component < 1500; ++component) {
+        text += std::format("  component cell_{}\n    generic (\n", component);
+        for (int generic = 0; generic < 12; ++generic)
+            text += std::format(
+                "      INIT_{} : std_logic_vector(63 downto 0) := (others => '0');\n", generic);
+        text += "      MODE : string := \"NONE\"\n    );\n    port (\n";
+        for (int port = 0; port < 40; ++port)
+            text += std::format("      P{} : in std_logic_vector(31 downto 0);\n", port);
+        text += "      O : out std_logic\n    );\n  end component;\n";
+    }
+    text += "end package;\n";
+    EXPECT_TRUE(analyse(text, "unisim")) << transcript();
 }
 
 TEST_F(VhdlAnalysisTest, WritesEachUnitIntoTheLibrary) {
