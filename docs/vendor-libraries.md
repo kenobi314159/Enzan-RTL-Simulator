@@ -47,8 +47,8 @@ The `secureip` models, which are encrypted, and SDF back-annotation.
 ### What is tested
 
 `tests/designs/vendor-xilinx/run.sh` holds Enzan's testbenches of the commonest primitives to Icarus
-Verilog when `XILINX_VIVADO` is set. `release.txt` beside it names the Vivado release it last passed
-with.
+Verilog, and XPM's to Verilator, when `XILINX_VIVADO` is set. `release.txt` beside it names the
+Vivado release it last passed with.
 
 ```
 XILINX_VIVADO=/opt/Xilinx/Vivado/2026.1 tests/designs/vendor-xilinx/run.sh enzan iverilog work/
