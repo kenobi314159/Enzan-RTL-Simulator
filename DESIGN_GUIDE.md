@@ -640,6 +640,10 @@ floor.
   (3.7), pull for `pullup` and `pulldown`, with its delay as a continuous assignment's. An input of
   `z` reads as `x`, as the gate tables have it, and a tristate buffer whose control is unknown
   drives `x`: the standard's `L` and `H` are no values four states hold. Switches are refused.
+- **Separate rise, fall and turn-off delays are chosen by the value stored** (IEEE 1800 section
+  28.16): 1 takes the rise, 0 the fall, `z` the turn-off, the shorter of the other two when only
+  two are given, and `x` the shortest. A vector's bits may each call for another, so a vector with
+  separate delays is refused.
 - **A user-defined primitive is a continuous assignment of its output by its table**, at its
   instance's strength and with its delay, as a gate is. The frontend encodes the table as a
   constant, which the runtime matches the inputs against by the layout `eir/Udp.h` gives both. A

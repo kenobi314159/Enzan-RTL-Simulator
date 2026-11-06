@@ -647,24 +647,90 @@ void ProcessTranslator::inferSensitivityFromReads() {
 }
 
 bool ProcessTranslator::setContinuousDelay(const ast::TimingControl& delay) {
-    // A single delay; a rise, fall and turn-off triple delays each transition by its own
-    // amount, which a store with one delay cannot do.
-    const ast::Expression* amount = nullptr;
+    // One delay, or a rise, fall and turn-off triple, which delays each value by its own.
+    std::array<const ast::Expression*, 3> amounts{};
     if (delay.kind == ast::TimingControlKind::Delay) {
-        amount = &delay.as<ast::DelayControl>().expr;
-    } else if (delay.kind == ast::TimingControlKind::Delay3
-               && delay.as<ast::Delay3Control>().expr2 == nullptr) {
-        amount = &delay.as<ast::Delay3Control>().expr1;
+        amounts[0] = &delay.as<ast::DelayControl>().expr;
+    } else if (delay.kind == ast::TimingControlKind::Delay3) {
+        const auto& triple = delay.as<ast::Delay3Control>();
+        amounts = {&triple.expr1, triple.expr2, triple.expr3};
     }
-    if (amount == nullptr) {
-        module->reportUnsupported(delay.sourceRange.start(),
-                                  "separate rise, fall and turn-off delays");
+    if (amounts[0] == nullptr) {
+        module->reportUnsupported(delay.sourceRange.start(), "this kind of delay");
         return false;
     }
-    const std::optional<Value> ticks = translateDelay(*amount);
-    if (!ticks.has_value()) return false;
-    storeDelay = ticks->reg;
+    if (amounts[1] == nullptr) {
+        const std::optional<Value> ticks = translateDelay(*amounts[0]);
+        if (!ticks.has_value()) return false;
+        storeDelay = ticks->reg;
+        return true;
+    }
+
+    std::array<std::uint64_t, 3> ticks{};
+    for (std::size_t index = 0; index < 3; ++index) {
+        if (amounts[index] == nullptr) continue;
+        bool constant = false;
+        const std::optional<std::uint64_t> counted = constantDelay(*amounts[index], constant);
+        if (!constant) {
+            module->reportUnsupported(amounts[index]->sourceRange.start(),
+                                      "separate rise, fall and turn-off delays known only as the "
+                                      "design runs");
+            failed = true;
+        }
+        if (!counted.has_value()) return false;
+        ticks[index] = *counted;
+    }
+    // Two give the turn-off delay as the shorter of them.
+    if (amounts[2] == nullptr) ticks[2] = std::min(ticks[0], ticks[1]);
+
+    const std::uint32_t rise = newRegister(eir::Type::bits(64, false, false));
+    emit(eir::Instruction::make(
+        eir::Opcode::LoadConstant, eir::Operand::reg(rise),
+        eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(ticks[0], 64)))));
+    storeDelay = rise;
+    if (ticks[1] != ticks[0] || ticks[2] != ticks[0]) transitionDelays = ticks;
     return true;
+}
+
+std::optional<std::uint32_t> ProcessTranslator::storeDelayFor(std::uint32_t stored,
+                                                              std::uint32_t width,
+                                                              const ast::Expression* target) {
+    if (!transitionDelays.has_value()) return storeDelay;
+    if (width != 1) {
+        module->reportUnsupported(target != nullptr ? target->sourceRange.start()
+                                                    : slang::SourceLocation(),
+                                  "separate rise, fall and turn-off delays on a vector");
+        failed = true;
+        return std::nullopt;
+    }
+    const eir::Type time = eir::Type::bits(64, false, false);
+    const auto ticks = [&](std::uint64_t value) {
+        const std::uint32_t result = newRegister(time);
+        emit(eir::Instruction::make(
+            eir::Opcode::LoadConstant, eir::Operand::reg(result),
+            eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(value, 64)))));
+        return result;
+    };
+    const auto is = [&](eir::Logic level) {
+        const std::uint32_t result = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::CaseEqual, eir::Operand::reg(result),
+                                    eir::Operand::reg(stored),
+                                    eir::Operand::reg(constantRegister(level))));
+        return result;
+    };
+    const auto select = [&](std::uint32_t condition, std::uint32_t whenTrue,
+                            std::uint32_t whenFalse) {
+        const std::uint32_t result = newRegister(time);
+        emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(result),
+                                    eir::Operand::reg(condition), eir::Operand::reg(whenTrue),
+                                    eir::Operand::reg(whenFalse)));
+        return result;
+    };
+    const auto [rise, fall, turnOff] = *transitionDelays;
+    const std::uint32_t toUnknown = ticks(std::min({rise, fall, turnOff}));
+    return select(is(eir::Logic::One), ticks(rise),
+                  select(is(eir::Logic::Zero), ticks(fall),
+                         select(is(eir::Logic::HighZ), ticks(turnOff), toUnknown)));
 }
 
 bool ProcessTranslator::translateContinuousAssignment(const ast::Expression& assignment,
@@ -3169,8 +3235,7 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
 
     if (location.whole) {
         noteWholeWrite(location.objectIndex);
-        emitWholeStore(location.objectIndex, stored.reg, nonBlocking);
-        return true;
+        return emitWholeStore(location.objectIndex, stored.reg, nonBlocking);
     }
 
     // The bits written, for the driver this process is: exactly the window when it is
@@ -3197,8 +3262,11 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
             emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(packed),
                                         eir::Operand::reg(value), eir::Operand::reg(offset)));
         };
+        const std::optional<std::uint32_t> delay =
+            storeDelayFor(stored.reg, stored.type.bitWidth(), &target);
+        if (!delay.has_value()) return false;
         splice(coerce(low, eir::Type::bits(64, false, low.type.isFourState())).reg, 0);
-        splice(*storeDelay, 64);
+        splice(*delay, 64);
         emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlockingDelayed
                                                 : eir::Opcode::StorePartDelayed,
                                     {}, eir::Operand::object(location.objectIndex),
@@ -3212,17 +3280,20 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
     return true;
 }
 
-void ProcessTranslator::emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg,
+bool ProcessTranslator::emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg,
                                        bool nonBlocking) {
     if (storeDelay.has_value()) {
-        emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StoreNonBlockingDelayed
-                                                : eir::Opcode::StoreDelayed,
-                                    {}, eir::Operand::object(objectIndex), eir::Operand::reg(reg),
-                                    eir::Operand::reg(*storeDelay)));
-        return;
+        const std::optional<std::uint32_t> delay =
+            storeDelayFor(reg, module->definition().objects[objectIndex].type.bitWidth(), nullptr);
+        if (!delay.has_value()) return false;
+        emit(eir::Instruction::make(
+            nonBlocking ? eir::Opcode::StoreNonBlockingDelayed : eir::Opcode::StoreDelayed, {},
+            eir::Operand::object(objectIndex), eir::Operand::reg(reg), eir::Operand::reg(*delay)));
+        return true;
     }
     emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StoreNonBlocking : eir::Opcode::Store,
                                 {}, eir::Operand::object(objectIndex), eir::Operand::reg(reg)));
+    return true;
 }
 
 bool ProcessTranslator::refuseDelayedWrite(const ast::Expression& target) {
@@ -3739,8 +3810,7 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
         const Value stored = coerceState(widened, objectType);
 
         noteWholeWrite(*objectIndex);
-        emitWholeStore(*objectIndex, stored.reg, nonBlocking);
-        return true;
+        return emitWholeStore(*objectIndex, stored.reg, nonBlocking);
     }
 
     case ast::ExpressionKind::ElementSelect:

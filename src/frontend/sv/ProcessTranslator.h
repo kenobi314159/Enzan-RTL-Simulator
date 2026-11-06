@@ -427,8 +427,8 @@ private:
     std::array<std::uint32_t, 4> branchOnTruth(const Value& condition);
 
     /// Emits a store of `reg` to the whole of `objectIndex`, in the form `nonBlocking` and
-    /// `storeDelay` call for.
-    void emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg, bool nonBlocking);
+    /// `storeDelay` call for. False, having reported, when `storeDelayFor` refuses the delay.
+    bool emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg, bool nonBlocking);
 
     /// Reports a delayed write to something a delayed store cannot address, and returns true,
     /// when an assignment delay is in effect; returns false otherwise.
@@ -611,9 +611,21 @@ private:
     /// forms, and a store the delayed forms cannot express is refused rather than undelayed.
     std::optional<std::uint32_t> storeDelay;
 
-    /// Sets `storeDelay` from a continuous assignment's or a gate's `delay`: one amount, as a
-    /// triple of rise, fall and turn-off delays cannot be. False having reported.
+    /// A continuous assignment's or a gate's rise, fall and turn-off delays, as counts of the
+    /// run's unit, when they are not all one: each store then takes the one the value it stores
+    /// calls for, and `storeDelay` only says that there is a delay.
+    std::optional<std::array<std::uint64_t, 3>> transitionDelays;
+
+    /// Sets `storeDelay`, and `transitionDelays` where they differ, from a continuous
+    /// assignment's or a gate's `delay`. False having reported.
     bool setContinuousDelay(const slang::ast::TimingControl& delay);
+
+    /// The register holding the delay of a store of `stored`, a value of `width` bits: the one
+    /// delay, or of separate ones what the value calls for (IEEE 1800 section 28.16), the rise to
+    /// 1, the fall to 0, the turn-off to z and the smallest to x. Nothing, having reported, for
+    /// separate delays of a vector, whose bits may each call for another.
+    std::optional<std::uint32_t> storeDelayFor(std::uint32_t stored, std::uint32_t width,
+                                               const slang::ast::Expression* target);
 
     /// Where `continue` and `break` go in each enclosing loop, innermost last.
     struct LoopTargets {
