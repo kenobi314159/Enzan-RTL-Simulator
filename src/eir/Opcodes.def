@@ -117,6 +117,9 @@ ENZAN_OPCODE(StorePartDelayed, "dstorepart", false, 3,
 ENZAN_OPCODE(StorePartNonBlockingDelayed, "nbdstorepart", false, 3,
              "as StorePartDelayed through the helper StoreNonBlockingDelayed calls, the update "
              "joining the NBA region of its time step as StorePartNonBlocking's does")
+ENZAN_OPCODE(StorePartTransport, "tstorepart", false, 3,
+             "as StorePartDelayed through the helper StoreTransport calls, replacing nothing it "
+             "scheduled before: the transport delay of a module path to some bits of an output")
 
 // A VHDL signal assignment: a transaction of the process's driver of the object, the third
 // operand later, and in the next delta cycle when that is zero (IEEE 1076 section 10.5.2.2). It

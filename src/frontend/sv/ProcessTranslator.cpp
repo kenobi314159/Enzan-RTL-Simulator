@@ -955,7 +955,7 @@ bool ProcessTranslator::translatePrimitive(const ast::PrimitiveInstanceSymbol& i
 bool ProcessTranslator::translateModulePaths(const OutputPaths& paths) {
     const eir::Type time = eir::Type::bits(64, false, false);
     const eir::Type bit = eir::Type::logic();
-    const eir::Type outputType = module->definition().objects[paths.output].type;
+    const std::uint32_t outputWidth = module->definition().objects[paths.output].type.bitWidth();
 
     const auto constant = [&](const eir::BitVector& value, eir::Type type) {
         const std::uint32_t result = newRegister(type);
@@ -1010,6 +1010,25 @@ bool ProcessTranslator::translateModulePaths(const OutputPaths& paths) {
     const auto minimum = [&](std::uint32_t a, std::uint32_t b) {
         return select(apply(eir::Opcode::LessThan, bit, a, b), a, b, time);
     };
+
+    // Bits no path reaches, beside bits that paths do, take what the body gives them at once.
+    if (paths.sources.empty()) {
+        const std::uint32_t value = window(paths.internal, paths.lowBit, paths.width);
+        if (paths.lowBit == 0 && paths.width == outputWidth) {
+            noteWholeWrite(paths.output);
+            emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(paths.output),
+                                        eir::Operand::reg(value)));
+        } else {
+            noteWrite(paths.output, paths.lowBit, paths.width);
+            const std::uint32_t at = constant(eir::BitVector::fromUInt64(paths.lowBit, 32),
+                                              eir::Type::bits(32, false, false));
+            emit(eir::Instruction::make(eir::Opcode::StorePart, {},
+                                        eir::Operand::object(paths.output),
+                                        eir::Operand::reg(value), eir::Operand::reg(at)));
+        }
+        emit(eir::Instruction::make(eir::Opcode::Return));
+        return true;
+    }
 
     // Each source's change, now, against its value as last taken: the time it last changed is
     // now when it changed as its edge asks, and is kept otherwise.
@@ -1077,8 +1096,8 @@ bool ProcessTranslator::translateModulePaths(const OutputPaths& paths) {
 
     // Only a change of what the body gives the output is scheduled: an input changing alone
     // must not put back a change still on its way.
-    const std::uint32_t value = window(paths.internal, 0, outputType.bitWidth());
-    const std::uint32_t old = window(paths.scheduled, 0, outputType.bitWidth());
+    const std::uint32_t value = window(paths.internal, paths.lowBit, paths.width);
+    const std::uint32_t old = window(paths.scheduled, 0, paths.width);
     const std::uint32_t schedule = newBlock("path-schedule");
     const std::uint32_t done = newBlock("path-done");
     emit(
@@ -1132,8 +1151,8 @@ bool ProcessTranslator::translateModulePaths(const OutputPaths& paths) {
         std::uint32_t pathDelay = timeConstant(d01);
         if (!uniform) {
             // A vector's bits may make different transitions at once, which one delay of the
-            // output cannot follow.
-            if (outputType.bitWidth() != 1) {
+            // bits cannot follow.
+            if (paths.width != 1) {
                 module->reportUnsupported(
                     path.delays[0]->sourceRange.start(),
                     std::format("delays that differ by transition on a module path to the vector "
@@ -1184,10 +1203,22 @@ bool ProcessTranslator::translateModulePaths(const OutputPaths& paths) {
         apply(eir::Opcode::LogicalAnd, bit, found, apply(eir::Opcode::LessThan, bit, now, until));
     const std::uint32_t wait =
         select(later, apply(eir::Opcode::Subtract, time, until, now), timeConstant(0), time);
-    noteWholeWrite(paths.output);
-    emit(eir::Instruction::make(
-        paths.transport ? eir::Opcode::StoreTransport : eir::Opcode::StoreDelayed, {},
-        eir::Operand::object(paths.output), eir::Operand::reg(value), eir::Operand::reg(wait)));
+    if (paths.lowBit == 0 && paths.width == outputWidth) {
+        noteWholeWrite(paths.output);
+        emit(eir::Instruction::make(
+            paths.transport ? eir::Opcode::StoreTransport : eir::Opcode::StoreDelayed, {},
+            eir::Operand::object(paths.output), eir::Operand::reg(value), eir::Operand::reg(wait)));
+    } else {
+        // The offset in the low 64 bits, the delay in the 64 above.
+        noteWrite(paths.output, paths.lowBit, paths.width);
+        const std::uint32_t both = constant(eir::BitVector::filled(128, eir::Logic::Zero),
+                                            eir::Type::bits(128, false, false));
+        splice(both, timeConstant(paths.lowBit), 0);
+        splice(both, wait, 64);
+        emit(eir::Instruction::make(
+            paths.transport ? eir::Opcode::StorePartTransport : eir::Opcode::StorePartDelayed, {},
+            eir::Operand::object(paths.output), eir::Operand::reg(value), eir::Operand::reg(both)));
+    }
     emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(done)));
     selectBlock(done);
     emit(eir::Instruction::make(eir::Opcode::Return));

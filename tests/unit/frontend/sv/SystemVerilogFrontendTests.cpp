@@ -1979,19 +1979,66 @@ TEST_F(FrontendTest, AModulePathWithADelayIsAProcessThatDelaysItsOutput) {
     EXPECT_FALSE(writes(assignment, port));
 }
 
-TEST_F(FrontendTest, RefusesModulePathsThatDifferBetweenTheBitsOfAnOutput) {
-    // One process delays the whole output, by one choice of path.
-    EXPECT_EQ(analyse(R"(
-        module m (input clk, input [1:0] d, output [1:0] q);
-            assign q = d;
+TEST_F(FrontendTest, EachRunOfBitsWithTheSameModulePathsHasAProcessOfItsOwn) {
+    // A carry chain's bits each have paths of their own: each bit here has its own process, which
+    // delays its bit of the port into it, and the bit no path reaches is written at once.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (input a, input b, input [2:0] d, output [2:0] q);
+            assign q = d ^ {3{a}};
             specify
-                (clk => q[0]) = 5;
-                (d[1] => q[1]) = 0;
+                (a => q[0]) = 5;
+                (b => q[1]) = 3;
             endspecify
         endmodule
-    )"),
-              nullptr);
-    EXPECT_TRUE(reported("module paths with a delay that differ between the bits of 'q'"));
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(extentsOf(*found, "q"),
+              (std::vector<std::vector<WriteExtent>>{{extent(*found, "q", 0, 1)},
+                                                     {extent(*found, "q", 1, 1)},
+                                                     {extent(*found, "q", 2, 1)}}));
+
+    const auto uses = [](const enzan::eir::Process& process, enzan::eir::Opcode opcode) {
+        return std::ranges::any_of(process.blocks, [opcode](const enzan::eir::BasicBlock& block) {
+            return std::ranges::any_of(block.instructions,
+                                       [opcode](const enzan::eir::Instruction& instruction) {
+                                           return instruction.opcode == opcode;
+                                       });
+        });
+    };
+    ASSERT_GE(found->processes.size(), 3U);
+    EXPECT_TRUE(uses(found->processes[0], enzan::eir::Opcode::StorePartDelayed));
+    EXPECT_TRUE(uses(found->processes[1], enzan::eir::Opcode::StorePartDelayed));
+    EXPECT_TRUE(uses(found->processes[2], enzan::eir::Opcode::StorePart));
+    EXPECT_FALSE(uses(found->processes[2], enzan::eir::Opcode::StorePartDelayed));
+}
+
+TEST_F(FrontendTest, ABitsPathWithZeroPulseLimitsIsATransportWriteOfThoseBits) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (input a, input b, output [1:0] y);
+            assign y = {b, a};
+            specify
+                specparam PATHPULSE$ = 0;
+                (a => y[0]) = 5;
+                (b => y[1]) = 3;
+            endspecify
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_GE(found->processes.size(), 2U);
+    for (std::size_t index = 0; index < 2; ++index) {
+        const enzan::eir::Process& process = found->processes[index];
+        EXPECT_TRUE(std::ranges::any_of(process.blocks, [](const enzan::eir::BasicBlock& block) {
+            return std::ranges::any_of(block.instructions, [](const auto& instruction) {
+                return instruction.opcode == enzan::eir::Opcode::StorePartTransport;
+            });
+        })) << process.name;
+    }
 }
 
 TEST_F(FrontendTest, AcceptsAParameterInAModulePathConditionAsAWarning) {

@@ -159,6 +159,12 @@ enzan_add_golden_test(path_pulses NO_DIFFERENTIAL)
 enzan_add_golden_test(parameter_path_conditions)
 enzan_add_golden_test(one_bit_parallel_path NO_DIFFERENTIAL)
 
+# Module paths that differ between the bits of an output, as a carry chain's do: each bit by its
+# own paths, at once without one, a parallel path between vectors, and a bit's pulse rejected or
+# let through. Icarus Verilog applies a path to a bit to the whole vector, so the case checks
+# itself.
+enzan_add_golden_test(module_path_bits NO_DIFFERENTIAL OWN_TIME_SCALES)
+
 # Reals as AMD's clock managers compute with them: arithmetic, conversions, the bits of a double,
 # the time in fractions of a unit, a clock whose half period is a real variable's, and formatting.
 enzan_add_golden_test(reals OWN_TIME_SCALES)

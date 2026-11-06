@@ -1240,53 +1240,19 @@ bool ModuleBuilder::translateModulePaths() {
     }
     if (!ok) return false;
 
-    for (const auto& [output, arcsByBit] : arcsByOutput) {
-        // A copy, since the objects added below may move the table.
-        const eir::Object port = definitionValue.objects[output];
-        const bool hasDelay = std::ranges::any_of(arcsByBit, [&](const auto& entry) {
-            return std::ranges::any_of(entry.second,
-                                       [&](const Arc& arc) { return !zero(arc.delays); });
-        });
-        if (!hasDelay) continue;
-
-        // One process delays the whole output, so every bit must have the same paths.
-        const auto sameArcs = [](const std::vector<Arc>& a, const std::vector<Arc>& b) {
-            return std::ranges::equal(a, b, [](const Arc& x, const Arc& y) {
-                return x.source.objectIndex == y.source.objectIndex
-                       && x.source.lowBit == y.source.lowBit && x.source.width == y.source.width
-                       && x.source.edge == y.source.edge && x.delays == y.delays
-                       && (x.path->getConditionExpr() == nullptr)
-                              == (y.path->getConditionExpr() == nullptr)
-                       && (x.path->getConditionExpr() == nullptr
-                           || x.path->getConditionExpr()->syntax->toString()
-                                  == y.path->getConditionExpr()->syntax->toString());
-            });
-        };
-        const auto& [firstBit, firstArcs] = *arcsByBit.begin();
-        if (arcsByBit.size() != port.type.bitWidth()
-            || !std::ranges::all_of(
-                arcsByBit, [&](const auto& entry) { return sameArcs(entry.second, firstArcs); })) {
-            reportUnsupported(firstArcs.front().path->location,
-                              std::format("module paths with a delay that differ between the "
-                                          "bits of '{}'",
-                                          port.name));
-            return false;
-        }
-        const auto portIt =
-            std::ranges::find(definitionValue.ports, output, &eir::Port::objectIndex);
-        if (portIt == definitionValue.ports.end()
-            || portIt->direction != eir::PortDirection::Output) {
-            reportUnsupported(firstArcs.front().path->location,
-                              std::format("a module path with a delay to '{}', which is not an "
-                                          "output",
-                                          port.name));
-            return false;
-        }
-
+    // A process delaying `width` bits of the output from `lowBit` by `arcs`, the paths each of
+    // them has, into the port from the body's copy of it; with no path, it copies them at once.
+    const auto addPathProcess = [&](const eir::Object& port, std::uint32_t output,
+                                    std::uint32_t internal, std::uint32_t lowBit,
+                                    std::uint32_t width, const std::vector<Arc>& arcs,
+                                    const ast::TimingPathSymbol& firstPath) {
         OutputPaths paths;
         paths.output = output;
+        paths.internal = internal;
+        paths.lowBit = lowBit;
+        paths.width = width;
         paths.transport = transportPaths;
-        for (const Arc& arc : firstArcs) {
+        for (const Arc& arc : arcs) {
             const auto found =
                 std::ranges::find_if(paths.sources, [&](const OutputPaths::Source& known) {
                     return known.objectIndex == arc.source.objectIndex
@@ -1310,37 +1276,101 @@ bool ModuleBuilder::translateModulePaths() {
                 .source = sourceIndex, .condition = arc.path->getConditionExpr(), .delays = six});
         }
 
-        // The objects the process and the body's own writes use, beside the port. The body's
-        // writes of the output, its initial value among them, go to the copy; the port is the
-        // process's alone, and what everything else reads, inside the body as well.
+        const bool whole = lowBit == 0 && width == port.type.bitWidth();
+        const std::string stem =
+            whole ? port.name : std::format("{}[{}:{}]", port.name, lowBit + width - 1, lowBit);
+        if (!arcs.empty()) {
+            std::uint32_t seenWidth = 0;
+            for (const OutputPaths::Source& source : paths.sources) seenWidth += source.width;
+            const auto addState = [&](std::string_view suffix, eir::Type type) {
+                eir::Object state;
+                state.name = uniqueObjectName(std::format("{}${}", stem, suffix));
+                state.type = type;
+                state.location = port.location;
+                return definitionValue.addObject(std::move(state));
+            };
+            paths.sourcesSeen = addState("seen", eir::Type::bits(seenWidth, false, true));
+            paths.changedAt = addState(
+                "changed", eir::Type::bits(static_cast<std::uint32_t>(64 * paths.sources.size()),
+                                           false, false));
+            paths.scheduled = addState(
+                "scheduled",
+                whole ? port.type : eir::Type::bits(width, false, port.type.isFourState()));
+        }
+
+        const ast::TimingPathSymbol& named = arcs.empty() ? firstPath : *arcs.front().path;
+        ProcessTranslator translator(
+            *this, eir::ProcessKind::ContinuousAssign,
+            std::format("specify@{}:{}", shared->slangSources.getFileName(named.location),
+                        shared->slangSources.getLineNumber(named.location)),
+            convertLocation(named.location));
+        if (!translator.translateModulePaths(paths)) return false;
+        definitionValue.processes.push_back(translator.take());
+        return true;
+    };
+
+    for (const auto& entry : arcsByOutput) {
+        // Named rather than bound, since the lambdas below capture them.
+        const std::uint32_t output = entry.first;
+        const std::map<std::uint32_t, std::vector<Arc>>& arcsByBit = entry.second;
+
+        // A copy, since the objects added below may move the table.
+        const eir::Object port = definitionValue.objects[output];
+        const bool hasDelay = std::ranges::any_of(arcsByBit, [&](const auto& entry) {
+            return std::ranges::any_of(entry.second,
+                                       [&](const Arc& arc) { return !zero(arc.delays); });
+        });
+        if (!hasDelay) continue;
+
+        // Bits with the same paths share a process; a carry chain's bits each have their own,
+        // and a parallel path between vectors gives each bit its own source.
+        const auto sameArcs = [](const std::vector<Arc>& a, const std::vector<Arc>& b) {
+            return std::ranges::equal(a, b, [](const Arc& x, const Arc& y) {
+                return x.source.objectIndex == y.source.objectIndex
+                       && x.source.lowBit == y.source.lowBit && x.source.width == y.source.width
+                       && x.source.edge == y.source.edge && x.delays == y.delays
+                       && (x.path->getConditionExpr() == nullptr)
+                              == (y.path->getConditionExpr() == nullptr)
+                       && (x.path->getConditionExpr() == nullptr
+                           || x.path->getConditionExpr()->syntax->toString()
+                                  == y.path->getConditionExpr()->syntax->toString());
+            });
+        };
+        const ast::TimingPathSymbol& firstPath = *arcsByBit.begin()->second.front().path;
+        const auto portIt =
+            std::ranges::find(definitionValue.ports, output, &eir::Port::objectIndex);
+        if (portIt == definitionValue.ports.end()
+            || portIt->direction != eir::PortDirection::Output) {
+            reportUnsupported(firstPath.location,
+                              std::format("a module path with a delay to '{}', which is not an "
+                                          "output",
+                                          port.name));
+            return false;
+        }
+
+        // The body's own writes of the output, its initial value among them, go to a copy
+        // beside the port; the port is the processes' alone, and what everything else reads,
+        // inside the body as well.
         eir::Object internal = port;
         internal.name = uniqueObjectName(std::format("{}$path", port.name));
         definitionValue.objects[output].initialValue.reset();
-        paths.internal = definitionValue.addObject(std::move(internal));
-        std::uint32_t seenWidth = 0;
-        for (const OutputPaths::Source& source : paths.sources) seenWidth += source.width;
-        const auto addState = [&](std::string_view suffix, eir::Type type) {
-            eir::Object state;
-            state.name = uniqueObjectName(std::format("{}${}", port.name, suffix));
-            state.type = type;
-            state.location = port.location;
-            return definitionValue.addObject(std::move(state));
-        };
-        paths.sourcesSeen = addState("seen", eir::Type::bits(seenWidth, false, true));
-        paths.changedAt = addState(
-            "changed",
-            eir::Type::bits(static_cast<std::uint32_t>(64 * paths.sources.size()), false, false));
-        paths.scheduled = addState("scheduled", port.type);
-        delayedOutputs.emplace(output, paths.internal);
+        const std::uint32_t internalIndex = definitionValue.addObject(std::move(internal));
+        delayedOutputs.emplace(output, internalIndex);
 
-        ProcessTranslator translator(
-            *this, eir::ProcessKind::ContinuousAssign,
-            std::format("specify@{}:{}",
-                        shared->slangSources.getFileName(firstArcs.front().path->location),
-                        shared->slangSources.getLineNumber(firstArcs.front().path->location)),
-            convertLocation(firstArcs.front().path->location));
-        if (!translator.translateModulePaths(paths)) return false;
-        definitionValue.processes.push_back(translator.take());
+        const std::vector<Arc> none;
+        const auto arcsOf = [&](std::uint32_t bit) -> const std::vector<Arc>& {
+            const auto found = arcsByBit.find(bit);
+            return found == arcsByBit.end() ? none : found->second;
+        };
+        const std::uint32_t width = port.type.bitWidth();
+        for (std::uint32_t low = 0; low < width;) {
+            std::uint32_t end = low + 1;
+            while (end < width && sameArcs(arcsOf(end), arcsOf(low))) ++end;
+            if (!addPathProcess(port, output, internalIndex, low, end - low, arcsOf(low),
+                                firstPath))
+                return false;
+            low = end;
+        }
     }
     return true;
 }

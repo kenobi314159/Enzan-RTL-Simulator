@@ -84,8 +84,13 @@ struct OutputPaths {
     std::uint32_t output = 0;
     std::uint32_t internal = 0;
 
+    /// The bits of the output the process delays: a run of them whose paths are the same, the
+    /// whole output when every bit's are.
+    std::uint32_t lowBit = 0;
+    std::uint32_t width = 0;
+
     /// The process's own state: the sources' values as it last took them, the time each last
-    /// changed, 64 bits apiece, and the value it last scheduled for the output.
+    /// changed, 64 bits apiece, and the value it last scheduled for its bits of the output.
     std::uint32_t sourcesSeen = 0;
     std::uint32_t changedAt = 0;
     std::uint32_t scheduled = 0;

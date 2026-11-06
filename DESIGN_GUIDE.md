@@ -624,11 +624,12 @@ floor.
 - **A specify block is read for what a functional simulation needs of it.** A timing check is not
   run (1.3), and a run instantiating one says so once.
 - **A module path delays its output as Icarus Verilog's `-gspecify` does**, by the standard's rule
-  (IEEE 1800 sections 30.4 to 30.7), an unknown condition holding no path. The frontend gives a
-  delayed output a process of its own, which writes the port from a copy the body writes, so a body
-  whose paths have no delay pays nothing. One process delays the whole output, so paths that differ
-  between its bits are refused, as are delays by transition on a vector, `ifnone` with a delay,
-  pulse limits other than zero and pulse styles.
+  (IEEE 1800 sections 30.4 to 30.7), an unknown condition holding no path, but a path to some bits
+  of an output is theirs alone, where Icarus applies it to the whole output. The frontend gives each
+  run of an output's bits with the same paths a process of its own, which writes the port from a
+  copy the body writes, so a body whose paths have no delay pays nothing. Delays by transition on a
+  run of more than one bit are refused, since its bits may make different transitions at once, as
+  are `ifnone` with a delay, pulse limits other than zero and pulse styles.
 - **Two module paths the standard refuses are warnings**, since models written for other
   simulators rely on them and what they mean is plain: a parameter in a path's condition (IEEE
   1800 section 30.4.4), as Icarus Verilog takes it, and a parallel path from one bit to a vector
@@ -1859,8 +1860,8 @@ mistranslated:
 
 - SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
   exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
-  `highz` strengths, switches, the module paths of 5.1 that one process per output cannot follow,
-  net aliases, and a procedural `assign` or `force` of part of an object.
+  `highz` strengths, switches, the module paths 5.1 refuses, net aliases, and a procedural
+  `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
