@@ -729,7 +729,9 @@ child that is a diagnostic, and every analysis starts from NVC's initial state. 
 translates as well**, and sends the parent EIR in its serialised form (4.4), so NVC's trees never
 reach the process that simulates. It translates the hierarchy under the top, so a unit nothing
 instantiates cannot stop a design; with no top named it is the one entity nothing instantiates, and
-with several it names them and translates nothing.
+with several it names them and translates nothing. A unit's objects may take 64 MB of NVC's arena,
+four times NVC's default and what AMD's package of 1,364 unisim components needs; the arena is
+reserved rather than touched, so a smaller unit pays nothing for it.
 
 **Sources are analysed in dependency order**: each after the sources declaring the primary units it
 names, in the order given otherwise, so a file list need not put a package before its users.
