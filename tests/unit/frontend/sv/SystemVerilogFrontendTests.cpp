@@ -2129,6 +2129,51 @@ TEST_F(FrontendTest, DiagnosticsCarryASourceLocationInEnzansOwnBuffers) {
               (directory / "design.sv").string());
 }
 
+TEST_F(FrontendTest, ADiagnosticInAnIncludedFileCarriesItsLocation) {
+    // slang reads an included file itself, into a buffer of its own; a diagnostic there has to
+    // point into it as one in a source given does, with its line and its snippet.
+    const std::filesystem::path header = directory / "leaves.vh";
+    std::ofstream(header) << "module leaf;\n"
+                             "  logic q;\n"
+                             "  initial q = missing;\n"
+                             "endmodule\n";
+    const std::filesystem::path source = directory / "design.sv";
+    std::ofstream(source) << "`include \"leaves.vh\"\n"
+                             "module top; leaf u(); endmodule\n";
+
+    enzan::frontend::sv::Options options;
+    options.files.push_back(source);
+    options.includeDirectories.emplace_back(directory);
+    options.topModules.emplace_back("top");
+    EXPECT_EQ(enzan::frontend::sv::analyse(options, sources, engine), nullptr);
+
+    ASSERT_TRUE(reportedCode(DiagCode::SystemVerilogError));
+    const Diagnostic& error = consumer.received.front();
+    ASSERT_TRUE(error.location.valid()) << error.message;
+    EXPECT_EQ(sources.lineNumber(error.location), 3U);
+    EXPECT_EQ(sources.bufferName(error.location.buffer()), header.string());
+}
+
+TEST_F(FrontendTest, AModuleDefinitionInAnIncludedFileCarriesThatFile) {
+    // What the translation locates, a definition among it, is in the included file too.
+    const std::filesystem::path header = directory / "leaves.vh";
+    std::ofstream(header) << "module leaf;\nendmodule\n";
+    const std::filesystem::path source = directory / "design.sv";
+    std::ofstream(source) << "`include \"leaves.vh\"\n"
+                             "module top; leaf u(); endmodule\n";
+
+    enzan::frontend::sv::Options options;
+    options.files.push_back(source);
+    options.includeDirectories.emplace_back(directory);
+    options.topModules.emplace_back("top");
+    const std::unique_ptr<Design> design = enzan::frontend::sv::analyse(options, sources, engine);
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const auto leaf = std::ranges::find(design->modules(), "leaf", &ModuleDefinition::name);
+    ASSERT_NE(leaf, design->modules().end());
+    ASSERT_TRUE(leaf->location.valid());
+    EXPECT_EQ(sources.bufferName(leaf->location.buffer()), header.string());
+}
+
 TEST_F(FrontendTest, AModuleDefinitionCarriesTheFileItWasWrittenIn) {
     // The library attributes units to source files by their definition's location, so a
     // definition with no location is a unit that can never be cached.

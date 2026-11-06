@@ -2291,6 +2291,22 @@ bool slangBuffersOf(const Options& options, SourceManager& sources, DiagnosticEn
     return true;
 }
 
+/// Maps each file slang opened for an `include to a buffer of Enzan's holding the same text, so
+/// that a diagnostic or a location in one points into it as one in a source given does. The text
+/// is slang's, not read again, so that the two cannot disagree.
+void mapIncludedBuffers(const slang::SourceManager& slangSources, SourceManager& sources,
+                        std::map<slang::BufferID, BufferId>& buffers) {
+    for (const slang::BufferID buffer : slangSources.getAllBuffers()) {
+        if (buffers.contains(buffer) || !slangSources.getIncludedFrom(buffer).valid()) continue;
+
+        // slang ends a buffer's text with a null, which the file does not hold.
+        std::string_view text = slangSources.getSourceText(buffer);
+        if (!text.empty() && text.back() == '\0') text.remove_suffix(1);
+        buffers.emplace(buffer, sources.addBuffer(slangSources.getFullPath(buffer).string(),
+                                                  std::string(text)));
+    }
+}
+
 slang::parsing::PreprocessorOptions preprocessorOptionsOf(const Options& options) {
     slang::parsing::PreprocessorOptions preprocessorOptions;
     preprocessorOptions.predefines = options.defines;
@@ -2795,6 +2811,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     trees.reserve(slangBuffers.size() + 1);
     for (const slang::SourceBuffer& buffer : slangBuffers)
         trees.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+    mapIncludedBuffers(slangSources, sources, buffers);
 
     slang::BufferID requestBuffer;
     if (!options.requests.empty() || !options.interfaces.empty()) {
