@@ -1416,8 +1416,8 @@ end architecture;
 
 TEST_F(VhdlDesignTest, AComponentWithNoEntityIsBoundToTheModuleOfItsNameInAnyCase) {
     // The instance names a placeholder and asks for the module, its generics' values as
-    // SystemVerilog literals, the ports it connects in the order met. Two instances asking for
-    // the same are one request.
+    // SystemVerilog literals, a boolean's marked as one, the ports it connects in the order met.
+    // Two instances asking for the same are one request.
     modules = {"other", "ClkBuf"};
     std::unique_ptr<enzan::eir::Design> design = translate(R"(
 library ieee;
@@ -1458,7 +1458,7 @@ end architecture;
     using Parameter = enzan::eir::UnitRequest::Parameter;
     EXPECT_EQ(request.parameters,
               (std::vector<Parameter>{{.name = "w", .value = "6"},
-                                      {.name = "flag", .value = "1'b1"},
+                                      {.name = "flag", .value = "1'b1", .boolean = true},
                                       {.name = "name", .value = "\"a\\\"b\\\\c\""},
                                       {.name = "init", .value = "4'b01zx"},
                                       {.name = "neg", .value = "-3"},

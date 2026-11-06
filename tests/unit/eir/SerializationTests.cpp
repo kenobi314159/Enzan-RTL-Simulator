@@ -94,6 +94,7 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.sourceName = "counter";
     definition.language = Language::Vhdl;
     definition.location = SourceLocation(buffer, 3);
+    definition.firstTimingCheck = SourceLocation(buffer, 9);
 
     EnumDefinition states;
     states.name = "state_e";
@@ -163,6 +164,7 @@ ModuleDefinition richModule(BufferId buffer) {
     Process process;
     process.kind = ProcessKind::AlwaysFf;
     process.drivesSignals = true;
+    process.strength = {.zero = enzan::eir::Strength::Strong, .one = enzan::eir::Strength::Weak};
     process.postponed = true;
     process.connectsPort = true;
     process.name = "always_ff@counter.sv:14";
@@ -213,6 +215,7 @@ ModuleDefinition richModule(BufferId buffer) {
     // wrong order or an extent dropped shows up.
     process.writeSet = {WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
                         WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}};
+    process.overrideSet = {0};
     process.calls.push_back(CallSite{.definition = "arith::",
                                      .subprogram = "accumulate$8",
                                      .arguments = {Operand::reg(1), Operand::constant(0)},
@@ -270,6 +273,7 @@ TEST_F(SerializationTest, ModuleIdentityRoundTrips) {
     EXPECT_EQ(decoded.front().sourceName, "counter");
     EXPECT_EQ(decoded.front().language, Language::Vhdl);
     EXPECT_EQ(decoded.front().location, SourceLocation(buffer, 3));
+    EXPECT_EQ(decoded.front().firstTimingCheck, SourceLocation(buffer, 9));
 }
 
 TEST_F(SerializationTest, ObjectsRoundTrip) {
@@ -337,6 +341,8 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
 
     EXPECT_EQ(process.kind, ProcessKind::AlwaysFf);
     EXPECT_TRUE(process.drivesSignals);
+    EXPECT_EQ(process.strength, (enzan::eir::DriveStrength{.zero = enzan::eir::Strength::Strong,
+                                                           .one = enzan::eir::Strength::Weak}));
     EXPECT_TRUE(process.postponed);
     EXPECT_TRUE(process.connectsPort);
     EXPECT_EQ(process.name, "always_ff@counter.sv:14");
@@ -376,6 +382,7 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     EXPECT_EQ(process.writeSet,
               (std::vector<WriteExtent>{WriteExtent{.objectIndex = 1, .lowBit = 0, .width = 2},
                                         WriteExtent{.objectIndex = 1, .lowBit = 4, .width = 3}}));
+    EXPECT_EQ(process.overrideSet, (std::vector<std::uint32_t>{0}));
 }
 
 TEST_F(SerializationTest, SubprogramsAndCallsRoundTrip) {

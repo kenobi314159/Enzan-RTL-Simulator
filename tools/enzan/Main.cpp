@@ -159,8 +159,9 @@ Libraries:
                           default.
 
 Simulation:
-  -t, --top <module>      Module to elaborate as the top level. `elaborate` and
-                          `run` take it as their one positional word instead.
+  -t, --top <module>      Module to elaborate as a top level; repeatable, the
+                          first the design's own. `elaborate` and `run` take
+                          it as their positional word too.
   -r, --run <time>        Stop after this long: a count of the run's time unit,
                           100, or a time with its unit, 10ns or 1.5us. `all` runs
                           until the design finishes, as no --run does. With
@@ -254,7 +255,8 @@ struct Invocation {
     /// The severity, as a position of `severity_level`, at which a VHDL report ends the run; 4
     /// never does.
     std::uint8_t stopSeverity = 3;
-    std::string topModule;
+    /// The top levels, the design's own first: `glbl` beside it for AMD's models.
+    std::vector<std::string> topModules;
     std::optional<RunOption> runUntil;
     std::filesystem::path vcdPath;
     std::filesystem::path fstPath;
@@ -405,8 +407,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "-t" || argument == "--top") {
             const char* value = requireValue(index, argument);
             if (value == nullptr) return ParseOutcome::BadUsage;
-            if (!once("--top", value)) return ParseOutcome::BadUsage;
-            invocation.topModule = value;
+            if (std::ranges::find(invocation.topModules, value) == invocation.topModules.end())
+                invocation.topModules.emplace_back(value);
             continue;
         }
 
@@ -956,6 +958,12 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
         if (!readFileList(list.path, sources, diagnostics, expanded, list.anchor)) return false;
 
         for (const std::filesystem::path& file : expanded.files) request.files.push_back(file);
+        for (const std::filesystem::path& file : expanded.libraryFiles)
+            request.searchFiles.push_back(file);
+        for (const std::filesystem::path& directory : expanded.libraryDirectories)
+            request.searchDirectories.push_back(directory);
+        for (const std::string& extension : expanded.libraryExtensions)
+            request.searchExtensions.push_back(extension);
         for (const std::string& define : expanded.defines) request.defines.push_back(define);
         for (const std::filesystem::path& directory : expanded.includeDirectories)
             request.includeDirectories.push_back(directory);
@@ -969,8 +977,12 @@ bool collectSources(const Invocation& invocation, enzan::SourceManager& sources,
         request.parameters.push_back(parameter);
 
     request.contextFiles = invocation.contextFiles;
-    request.top = invocation.topModule;
-    request.translateVhdl = invocation.command != Command::Analyse || !invocation.topModule.empty();
+    if (!invocation.topModules.empty()) {
+        request.top = invocation.topModules.front();
+        request.otherTops.assign(invocation.topModules.begin() + 1, invocation.topModules.end());
+    }
+    request.translateVhdl =
+        invocation.command != Command::Analyse || !invocation.topModules.empty();
     request.vhdlWork = invocation.workLibrary;
     request.ieeeWarnings = invocation.ieeeWarnings;
     request.vhdlStandard = invocation.vhdlStandard;
@@ -1101,7 +1113,7 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
     if (invocation.waveformWidthLimit.has_value())
         session.setWaveformWidthLimit(*invocation.waveformWidthLimit);
 
-    return session.elaborate(invocation.topModule);
+    return session.elaborate(std::span<const std::string>(invocation.topModules));
 }
 
 /// Serves an elaborated session to a graphical front end instead of running it here.
@@ -1387,12 +1399,11 @@ int main(int argc, char** argv) {
                           << word.string() << "`, or analyse them into a library first\n";
                 return static_cast<int>(ExitStatus::Usage);
             }
-            if (!invocation.topModule.empty() && invocation.topModule != word.string()) {
-                std::cerr << "enzan: the top level was given twice, as '" << invocation.topModule
-                          << "' with '--top' and as '" << word.string() << "'; it takes one\n";
-                return static_cast<int>(ExitStatus::Usage);
-            }
-            invocation.topModule = word.string();
+            // The word is the design's own top level, so first, and any `--top` joins it.
+            std::vector<std::string>& tops = invocation.topModules;
+            if (const auto given = std::ranges::find(tops, word.string()); given != tops.end())
+                tops.erase(given);
+            tops.insert(tops.begin(), word.string());
             invocation.files.clear();
         }
     }

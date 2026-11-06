@@ -59,7 +59,7 @@ ENZAN_IN_LIBS := $(foreach LIB,$(VHDL_LIB_ORDER),--in-lib $(ENZAN_LIBRARIES)/$(L
 TOPLEVELS := $(call deprecate,TOPLEVEL,COCOTB_TOPLEVEL)
 ifneq ($(words $(TOPLEVELS)),0)
 ifneq ($(words $(TOPLEVELS)),1)
-    $(error Enzan elaborates one top level, and COCOTB_TOPLEVEL names $(words $(TOPLEVELS)): $(TOPLEVELS))
+    $(error cocotb's toplevel is one, and COCOTB_TOPLEVEL names $(words $(TOPLEVELS)): $(TOPLEVELS); give another top level beside it with EXTRA_ARGS += --top <name>)
 endif
     TOPMODULE_ARG := --top $(TOPLEVELS)
 endif

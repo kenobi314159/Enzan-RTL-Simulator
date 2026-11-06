@@ -287,19 +287,10 @@ private:
                 continue;
             }
 
-            // `-v` and `-y` are read, and nothing searches a library for an undefined module
-            // yet. Saying so is the point: this reader refuses an option it does not recognise
-            // precisely so that what is analysed matches what was asked for, and an option it
-            // recognises and then quietly drops is the same problem wearing a disguise.
-            //
-            // A warning rather than an error, unlike an unrecognised option. What follows from
-            // dropping these is a module reported as undefined — loud, and now traceable to the
-            // line that asked for it — whereas an error would turn away every file list that
-            // carries a `-v` for a cell the design never instantiates, which is most of them.
+            // `-v` and `-y` name where the analysis looks for a module nothing else defines.
             if (text == "-v") {
                 const Token* file = value(tokens, index);
                 if (file == nullptr) return false;
-                diagnostics.report(DiagCode::FileListLibrarySearchIgnored, token.location, text);
                 result.libraryFiles.push_back(resolve(file->text, anchor, directory));
                 continue;
             }
@@ -307,7 +298,6 @@ private:
             if (text == "-y") {
                 const Token* dir = value(tokens, index);
                 if (dir == nullptr) return false;
-                diagnostics.report(DiagCode::FileListLibrarySearchIgnored, token.location, text);
                 result.libraryDirectories.push_back(resolve(dir->text, anchor, directory));
                 continue;
             }

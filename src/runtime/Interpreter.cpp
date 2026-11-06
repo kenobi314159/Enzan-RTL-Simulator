@@ -6,6 +6,7 @@
 #include "common/Assert.h"
 #include "eir/BitOps.h"
 #include "eir/Module.h"
+#include "eir/Udp.h"
 #include "runtime/Kernel.h"
 
 #include <cmath>
@@ -54,6 +55,10 @@ bool runReal(const codegen::Instruction& instruction, const Registers& reg) {
     case eir::Opcode::Convert:
         bitops::realToInteger(reg(instruction.dst, instruction.dstWidth),
                               reg(instruction.a, instruction.aWidth));
+        return true;
+    case eir::Opcode::Truncate:
+        bitops::realToInteger(reg(instruction.dst, instruction.dstWidth),
+                              reg(instruction.a, instruction.aWidth), true);
         return true;
     default: return false;
     }
@@ -404,13 +409,19 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
         }
 
         case eir::Opcode::StoreDelayed:
+        case eir::Opcode::StoreTransport:
         case eir::Opcode::StoreNonBlockingDelayed: {
             // An unknown delay is zero, as for `#` (see WaitTime).
             const eir::ConstBitRef delay = reg(instruction.c, instruction.cWidth);
-            kernel.scheduleDelayedWrite(
-                processIndex, instruction.dst, current.writeSignals[instruction.a],
-                reg(instruction.b, instruction.bWidth), delay.hasUnknown() ? 0 : delay.toUInt64(),
-                instruction.opcode == eir::Opcode::StoreNonBlockingDelayed);
+            Kernel::DelayKind kind = Kernel::DelayKind::Inertial;
+            if (instruction.opcode == eir::Opcode::StoreTransport)
+                kind = Kernel::DelayKind::Transport;
+            if (instruction.opcode == eir::Opcode::StoreNonBlockingDelayed)
+                kind = Kernel::DelayKind::NonBlocking;
+            kernel.scheduleDelayedWrite(processIndex, instruction.dst,
+                                        current.writeSignals[instruction.a],
+                                        reg(instruction.b, instruction.bWidth),
+                                        delay.hasUnknown() ? 0 : delay.toUInt64(), kind);
             if (kernel.errorRequested) return ExecutionResult::Stopped;
             break;
         }
@@ -437,6 +448,23 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             break;
         }
 
+        case eir::Opcode::StorePartDelayed:
+        case eir::Opcode::StorePartNonBlockingDelayed: {
+            // The offset in the low 64 bits, the delay in the 64 above, as DrivePartAfter's.
+            const eir::ConstBitRef both = reg(instruction.c, instruction.cWidth);
+            if (both.hasUnknown()) break;
+            const std::span<const eir::Word> words = both.avalWords();
+            kernel.scheduleDelayedWrite(processIndex, instruction.dst,
+                                        current.writeSignals[instruction.a],
+                                        reg(instruction.b, instruction.bWidth), words[1],
+                                        instruction.opcode == eir::Opcode::StorePartDelayed
+                                            ? Kernel::DelayKind::Inertial
+                                            : Kernel::DelayKind::NonBlocking,
+                                        static_cast<std::uint32_t>(words[0]));
+            if (kernel.errorRequested) return ExecutionResult::Stopped;
+            break;
+        }
+
         case eir::Opcode::DrivePartAfter:
         case eir::Opcode::DriveTransportPart: {
             // The offset in the low 64 bits, the delay in the 64 above; either unknown assigns
@@ -451,6 +479,23 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             if (kernel.errorRequested) return ExecutionResult::Stopped;
             break;
         }
+
+        // An override is of the signal the object reads, which is what the language forces.
+        case eir::Opcode::Assign:
+        case eir::Opcode::Force:
+            kernel.startOverride(processIndex, instruction.c, current.objectSignals[instruction.a],
+                                 reg(instruction.b, instruction.bWidth),
+                                 instruction.opcode == eir::Opcode::Force);
+            break;
+
+        case eir::Opcode::Deassign: kernel.deassign(current.objectSignals[instruction.a]); break;
+
+        case eir::Opcode::Release: kernel.release(current.objectSignals[instruction.a]); break;
+
+        case eir::Opcode::Override:
+            kernel.reassert(processIndex, current.objectSignals[instruction.a],
+                            reg(instruction.b, instruction.bWidth));
+            break;
 
         case eir::Opcode::StoreNonBlocking:
             kernel.scheduleNonBlocking(current.writeSignals[instruction.a],
@@ -689,6 +734,19 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             bitops::assignPart(reg(instruction.dst, instruction.dstWidth),
                                reg(instruction.a, instruction.aWidth),
                                reg(instruction.b, instruction.bWidth));
+            break;
+
+        case eir::Opcode::UdpCombinational:
+            reg(instruction.dst, instruction.dstWidth)
+                .set(0, eir::udp::evaluateCombinational(reg(instruction.a, instruction.aWidth),
+                                                        current.body->constant(instruction.b)));
+            break;
+
+        case eir::Opcode::UdpSequential:
+            reg(instruction.dst, instruction.dstWidth)
+                .set(0, eir::udp::evaluateSequential(reg(instruction.a, instruction.aWidth),
+                                                     reg(instruction.b, instruction.bWidth),
+                                                     current.body->constant(instruction.c)));
             break;
 
         case eir::Opcode::Conditional:

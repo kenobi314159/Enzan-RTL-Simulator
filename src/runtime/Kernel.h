@@ -19,6 +19,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -264,17 +265,21 @@ public:
     ///
     /// Every subsequent write to the signal — procedural, non-blocking or another deposit —
     /// is discarded while the force stands, which is what distinguishes a force from a
-    /// deposit and what makes it useful for pinning a reset or a mode bit.
+    /// deposit and what makes it useful for pinning a reset or a mode bit. It is the design's
+    /// own `force` held from outside, so it replaces one the design is holding.
     ///
-    /// Forcing costs one branch on the signal write path and nothing at all until the first force
-    /// in a run: the table is allocated when it is first needed, so nothing allocates on the hot
-    /// path.
+    /// Forcing costs one branch on the signal write path and nothing at all until the first
+    /// override in a run: the table is allocated when it is first needed, so nothing allocates on
+    /// the hot path.
     void force(std::uint32_t signalIndex, eir::ConstBitRef value);
 
     /// Releases a forced signal, returning false if it was not forced.
     ///
-    /// The value stays where the force left it until something drives the signal again, rather than
-    /// being recomputed from what the drivers now say.
+    /// A procedural `assign` the force stood over takes the signal back, by its value evaluated
+    /// again. Otherwise the bits whose drivers keep their values, those of a signal a `force` in
+    /// the design names, are resolved again now, and a net's undriven bits go back to their
+    /// kind's undriven value (IEEE 1800 section 10.6.2). Any other bit stays where the force left
+    /// it until something writes it again.
     bool release(std::uint32_t signalIndex);
 
     [[nodiscard]] bool isForced(std::uint32_t signalIndex) const noexcept;
@@ -355,8 +360,32 @@ public:
         return {frameStorage.data() + wordOffset, bitWidth};
     }
 
-    /// Writes a whole signal, detecting change and waking its subscribers.
+    /// Writes a whole signal, detecting change and waking its subscribers, unless an override
+    /// holds it.
     void writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value);
+
+    /// As `writeSignal`, past any override: the write an override itself makes.
+    void changeSignal(std::uint32_t signalIndex, eir::ConstBitRef value);
+
+    /// True when a procedural `assign` or a `force` holds the signal, whose other writes are
+    /// then discarded.
+    [[nodiscard]] bool isOverridden(std::uint32_t signalIndex) const noexcept;
+
+    /// Starts the procedural `assign`, or the `force`, of `signalIndex` that process
+    /// `processIndex` runs, held by the override process its definition numbers `holder`, and
+    /// writes `value` unless a force stands over the assign (IEEE 1800 section 10.6).
+    void startOverride(std::uint32_t processIndex, std::uint32_t holder, std::uint32_t signalIndex,
+                       eir::ConstBitRef value, bool force);
+
+    /// Ends the procedural `assign` of `signalIndex`, which keeps its value.
+    void deassign(std::uint32_t signalIndex);
+
+    /// Writes an override's value evaluated again, if `processIndex` still holds what it was
+    /// started as: the force, or the assign that no force stands over.
+    void reassert(std::uint32_t processIndex, std::uint32_t signalIndex, eir::ConstBitRef value);
+
+    /// Writes what a released signal's drivers say, as `release` describes.
+    void restoreDriven(std::uint32_t signalIndex);
 
     /// Writes `value` through the driver of `route` whose range holds bit `lowBit` of the
     /// signal, and resolves what that changes (DESIGN_GUIDE.md section 3.7).
@@ -383,17 +412,27 @@ public:
     /// (DESIGN_GUIDE.md section 3.3).
     void suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint32_t resumePc);
 
-    /// Schedules a write of `value` to `signalIndex` `delay` time units from now: the write
-    /// of a continuous assignment with a delay, or a nonblocking `a <= #d b`.
-    ///
-    /// The first is inertial (IEEE 1800 section 10.3.3): it replaces the write the same store
-    /// of the same process scheduled before, if that has not happened yet, so a pulse
-    /// shorter than the delay never reaches the target. When it happens it is a write through
-    /// the process's route at `position`, as a Store. The second is transport: each update
-    /// happens, joining the NBA region of its time step.
+    /// How a delayed write treats the ones before it.
+    enum class DelayKind : std::uint8_t {
+        /// A continuous assignment's delay, and a module path's by default (IEEE 1800 section
+        /// 10.3.3): it replaces the write the same store of the same process scheduled before,
+        /// if that has not happened yet, so a pulse shorter than the delay never reaches the
+        /// target. When it happens it is a write through the process's route, as a Store.
+        Inertial,
+        /// A module path's whose pulse limits are zero: as Inertial, replacing nothing.
+        Transport,
+        /// A nonblocking `a <= #d b`: each update happens, joining the NBA region of its time
+        /// step.
+        NonBlocking,
+    };
+
+    /// Schedules a write of `value` to `signalIndex` `delay` time units from now, through the
+    /// route at `position` of process `processIndex`: of the whole signal, or of the bits from
+    /// `lowBit` up as wide as the value. An inertial write replaces only the one its store made
+    /// at the same bit.
     void scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
                               std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
-                              bool nonBlocking);
+                              DelayKind kind, std::optional<std::uint32_t> lowBit = std::nullopt);
 
     /// True when `signalIndex` changed in the update the current simulation cycle began with:
     /// VHDL's 'event.
@@ -552,6 +591,10 @@ private:
     /// Resolves every segment `driverIndex` covers and writes the result into its signal.
     void resolveDriver(std::uint32_t driverIndex);
 
+    /// Resolves `segment`'s drivers into `acc`, on behalf of process `processIndex`. False when a
+    /// resolution function's call stopped the run.
+    bool resolveSegment(std::uint32_t processIndex, const elab::Segment& segment, eir::BitRef acc);
+
     /// Gives each VHDL resolved signal the value its drivers' initial values resolve to, before
     /// the run begins.
     void resolveInitialValues();
@@ -606,11 +649,23 @@ private:
     /// `queued` change as the simulation runs and the image is shared and const.
     std::vector<ProcessState> processes;
 
-    /// True for each signal a `force` is holding, or empty when nothing is forced.
+    /// What holds each signal's overrides (DESIGN_GUIDE.md section 3.7): the override process of
+    /// the procedural `assign` holding it and of the `force`, by process index, `FromOutside` for
+    /// a force from the GUI or an application, or `NoHolder`. Empty while nothing has been
+    /// overridden.
     ///
     /// Empty rather than sized at construction so that the check on the signal write path is
     /// a test of one size against zero for the whole of an ordinary run.
-    std::vector<bool> forcedSignals;
+    struct Overrides {
+        std::uint32_t assign = NoHolder;
+        std::uint32_t force = NoHolder;
+
+        [[nodiscard]] bool held() const noexcept { return assign != NoHolder || force != NoHolder; }
+    };
+
+    std::vector<Overrides> overrides;
+    static constexpr std::uint32_t NoHolder = 0xFFFF'FFFFU;
+    static constexpr std::uint32_t FromOutside = 0xFFFF'FFFEU;
 
     /// The process the interpreter is running, which its own writes do not wake, or
     /// `NoProcess` between processes.
@@ -624,6 +679,10 @@ private:
 
     std::vector<eir::Word> segmentScratch;
     std::vector<eir::Word> driverScratch;
+
+    /// The weak class's resolution of a segment, and one driver's part of a class.
+    std::vector<eir::Word> weakScratch;
+    std::vector<eir::Word> classScratch;
 
     /// A windowed signal's old value, kept across its write for the comparison, sized once
     /// for the widest windowed signal.
@@ -696,19 +755,25 @@ private:
         bool transaction = false;
         std::uint64_t serial = 0;
         eir::BitVector value;
+
+        /// The bit a write of part of the signal starts at, or nothing for the whole of it.
+        std::optional<std::uint32_t> lowBit;
     };
 
     /// Pending delayed writes by time, in the order they were scheduled within one.
     std::map<SimTime, std::vector<DelayedWrite>> delayedWrites;
 
-    /// The pending inertial write of each (process, write position), by serial and time, so
-    /// that the next one can take it out of `delayedWrites`.
+    /// The pending inertial write of each (process, write position, low bit), by serial and
+    /// time, so that the next one can take it out of `delayedWrites`. The low bit of a whole
+    /// signal's write is `WholeSignal`.
     struct PendingInertial {
         std::uint64_t serial = 0;
         SimTime time = 0;
     };
 
-    std::map<std::pair<std::uint32_t, std::uint32_t>, PendingInertial> pendingInertial;
+    std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>, PendingInertial>
+        pendingInertial;
+    static constexpr std::uint32_t WholeSignal = 0xFFFF'FFFFU;
     std::uint64_t nextWriteSerial = 0;
 
     /// Performs every delayed write due at the current time.
@@ -801,9 +866,10 @@ private:
     /// Applies the transactions due in this delta cycle, from the `first` made on.
     void applyDeltaTransactions(std::size_t first = 0);
 
-    /// A write as a Store makes it: through the process's drivers when its route has any.
+    /// A write as a Store makes it, or of the bits from `lowBit` up as a StorePart does: through
+    /// the process's drivers when its route has any.
     void writeRouted(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,
-                     eir::ConstBitRef value);
+                     eir::ConstBitRef value, std::optional<std::uint32_t> lowBit = std::nullopt);
 
     /// Dynamic edge subscriptions created by `WaitEdge`, indexed by signal.
     ///

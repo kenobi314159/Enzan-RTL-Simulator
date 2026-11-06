@@ -978,6 +978,27 @@ TEST(BitOpsResolution, PullReplacesOnlyHighImpedance) {
     EXPECT_EQ(binary(value.ref()), "101x");
 }
 
+TEST(BitOpsResolution, AClassKeepsTheValuesDrivenInIt) {
+    // A driver of `(strong1, weak0)`: its 1s are strong, its 0s weak, and an X, which could be
+    // either, is in both.
+    const BitVector value = literal("4'b01xz");
+    BitVector part(4);
+    bitops::keepClass(part.mutableRef(), value.ref(), false, true);
+    EXPECT_EQ(binary(part.ref()), "z1xz") << "the strong class";
+    bitops::keepClass(part.mutableRef(), value.ref(), true, false);
+    EXPECT_EQ(binary(part.ref()), "0zxz") << "the weak class";
+    bitops::keepClass(part.mutableRef(), value.ref(), true, true);
+    EXPECT_EQ(binary(part.ref()), "01xz") << "a driver of one class keeps everything";
+    bitops::keepClass(part.mutableRef(), value.ref(), false, false);
+    EXPECT_EQ(binary(part.ref()), "zzzz");
+}
+
+TEST(BitOpsResolution, TheWeakDecideOnlyWhereTheStrongLeaveZ) {
+    BitVector strong = literal("4'bz0zx");
+    bitops::fillHighImpedance(strong.mutableRef(), literal("4'b1111").ref());
+    EXPECT_EQ(binary(strong.ref()), "101x");
+}
+
 TEST(BitOpsResolution, WideVectorsResolveBitByBitAcrossLimbs) {
     // Every pairing of the four values at every position, over three limbs, compared with the
     // single-bit result of the same table.

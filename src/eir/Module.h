@@ -90,8 +90,8 @@ enum class NetKind : std::uint8_t {
     Tri0,
     /// Pulled to 1 likewise.
     Tri1,
-    /// Always 0. Its supply strength beats every driver Enzan can model, all of which are
-    /// strong.
+    /// Always 0. Its supply strength beats every driver but one of supply strength, which
+    /// elaboration refuses, since the two would contend as equals.
     Supply0,
     /// Always 1.
     Supply1,
@@ -480,6 +480,11 @@ struct ModuleDefinition {
 
     /// What this parameterisation's parameters were resolved to, in declaration order.
     std::vector<Parameter> parameters;
+
+    /// Where the first timing check of this definition's specify blocks is, or an invalid
+    /// location when it has none. A timing check is not run, and a run instantiating one says
+    /// so, so the check itself is not kept: only where to point the user.
+    SourceLocation firstTimingCheck;
 
     /// Returns the index of the object called `name`, or nothing.
     ///

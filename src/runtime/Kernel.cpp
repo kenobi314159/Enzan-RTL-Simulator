@@ -156,6 +156,8 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
       resolvedScratch(eir::storageWordsFor(designImageToRun.elaboratedDesign().widestDriver()), 0),
       segmentScratch(resolvedScratch.size(), 0),
       driverScratch(resolvedScratch.size(), 0),
+      weakScratch(resolvedScratch.size(), 0),
+      classScratch(resolvedScratch.size(), 0),
       windowScratch(windowScratchWords(designImageToRun), 0),
       edgeWaiters(designImageToRun.signals().size()) {
     callsInProgress.reserve(callDepthCapacity);
@@ -241,9 +243,9 @@ void Kernel::initialize() {
         startFrame(state.frameOffset, designImage->compiledDesign().body(state.bodyIndex));
     unwindCalls();
 
-    // A force does not survive a restart either: a signal still pinned from the last run would
-    // be state the user did not ask to keep.
-    forcedSignals.clear();
+    // An override does not survive a restart either: a signal still pinned from the last run
+    // would be state the user did not ask to keep.
+    overrides.clear();
 
     finishRequested = false;
     errorRequested = false;
@@ -632,8 +634,11 @@ Region Kernel::resumeRegion(std::uint32_t processIndex) const {
 }
 
 void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
-    if (isForced(signalIndex)) return;
+    if (isOverridden(signalIndex)) return;
+    changeSignal(signalIndex, value);
+}
 
+void Kernel::changeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
@@ -676,7 +681,7 @@ eir::ConstBitRef Kernel::lastValue(std::uint32_t signalIndex) const {
 
 void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
                              std::uint64_t lowBit) {
-    if (isForced(signalIndex)) return;
+    if (isOverridden(signalIndex)) return;
 
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
@@ -729,61 +734,89 @@ void Kernel::resolveDriver(std::uint32_t driverIndex) {
          segmentIndex < written.firstSegment + written.segmentCount; ++segmentIndex) {
         const elab::Segment& segment = elaborated.segments()[segmentIndex];
         const eir::BitRef acc(segmentScratch.data(), segment.width);
-        const eir::BitRef next(driverScratch.data(), segment.width);
-
-        const auto sliceOf = [&](std::uint32_t segmentDriver, eir::BitRef into) {
-            const elab::Driver& driver =
-                elaborated.drivers()[elaborated.segmentDrivers()[segmentDriver]];
-            bitops::partSelectAt(into, stateArena.at(driver.wordOffset, driver.width),
-                                 segment.lowBit - driver.lowBit);
-        };
-
-        // A VHDL resolved signal's function, called for each subelement; a net's table.
-        if (segment.resolution != elab::Segment::NoResolution) {
-            if (!resolveByFunction(written.process, segment, acc)) return;
-            bitops::assignPartAt(resolved, acc, segment.lowBit - written.lowBit);
-            continue;
-        }
-
-        sliceOf(segment.firstDriver, acc);
-        for (std::uint32_t other = segment.firstDriver + 1;
-             other < segment.firstDriver + segment.driverCount; ++other) {
-            sliceOf(other, next);
-            switch (segment.netKind) {
-            case eir::NetKind::WiredAnd:
-            case eir::NetKind::TriAnd: bitops::resolveWiredAnd(acc, next); break;
-            case eir::NetKind::WiredOr:
-            case eir::NetKind::TriOr: bitops::resolveWiredOr(acc, next); break;
-            case eir::NetKind::Wire:
-            case eir::NetKind::Tri:
-            case eir::NetKind::Tri0:
-            case eir::NetKind::Tri1:
-            case eir::NetKind::Supply0:
-            case eir::NetKind::Supply1:
-            case eir::NetKind::UWire: bitops::resolveWire(acc, next); break;
-            }
-        }
-
-        // What the net itself contributes: a pull where every driver is `z`, or a supply that
-        // no strong driver can move.
-        switch (segment.netKind) {
-        case eir::NetKind::Tri0: bitops::pullHighImpedance(acc, eir::Logic::Zero); break;
-        case eir::NetKind::Tri1: bitops::pullHighImpedance(acc, eir::Logic::One); break;
-        case eir::NetKind::Supply0: acc.fill(eir::Logic::Zero); break;
-        case eir::NetKind::Supply1: acc.fill(eir::Logic::One); break;
-        case eir::NetKind::Wire:
-        case eir::NetKind::Tri:
-        case eir::NetKind::WiredAnd:
-        case eir::NetKind::WiredOr:
-        case eir::NetKind::TriAnd:
-        case eir::NetKind::TriOr:
-        case eir::NetKind::UWire: break;
-        }
-
+        if (!resolveSegment(written.process, segment, acc)) return;
         bitops::assignPartAt(resolved, acc, segment.lowBit - written.lowBit);
     }
 
     writeSignalPart(written.slot, resolved, written.lowBit);
+}
+
+bool Kernel::resolveSegment(std::uint32_t processIndex, const elab::Segment& segment,
+                            eir::BitRef acc) {
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    const eir::BitRef next(driverScratch.data(), segment.width);
+
+    const auto sliceOf = [&](std::uint32_t segmentDriver, eir::BitRef into) {
+        const elab::Driver& driver =
+            elaborated.drivers()[elaborated.segmentDrivers()[segmentDriver]];
+        bitops::partSelectAt(into, stateArena.at(driver.wordOffset, driver.width),
+                             segment.lowBit - driver.lowBit);
+    };
+
+    // A VHDL resolved signal's function, called for each subelement; a net's table.
+    if (segment.resolution != elab::Segment::NoResolution)
+        return resolveByFunction(processIndex, segment, acc);
+
+    // Each driver folded in by the net's table.
+    const auto fold = [&segment](eir::BitRef into, eir::ConstBitRef driver) {
+        switch (segment.netKind) {
+        case eir::NetKind::WiredAnd:
+        case eir::NetKind::TriAnd: bitops::resolveWiredAnd(into, driver); break;
+        case eir::NetKind::WiredOr:
+        case eir::NetKind::TriOr: bitops::resolveWiredOr(into, driver); break;
+        case eir::NetKind::Wire:
+        case eir::NetKind::Tri:
+        case eir::NetKind::Tri0:
+        case eir::NetKind::Tri1:
+        case eir::NetKind::Supply0:
+        case eir::NetKind::Supply1:
+        case eir::NetKind::UWire: bitops::resolveWire(into, driver); break;
+        }
+    };
+
+    if (!segment.weak) {
+        sliceOf(segment.firstDriver, acc);
+        for (std::uint32_t other = segment.firstDriver + 1;
+             other < segment.firstDriver + segment.driverCount; ++other) {
+            sliceOf(other, next);
+            fold(acc, next);
+        }
+    } else {
+        // The strong class decides each bit, and the weak only where the strong leave it
+        // `z` (DESIGN_GUIDE.md section 3.7).
+        const eir::BitRef weak(weakScratch.data(), segment.width);
+        const eir::BitRef part(classScratch.data(), segment.width);
+        acc.fill(eir::Logic::HighZ);
+        weak.fill(eir::Logic::HighZ);
+        for (std::uint32_t index = segment.firstDriver;
+             index < segment.firstDriver + segment.driverCount; ++index) {
+            const eir::DriveStrength strength =
+                elaborated.drivers()[elaborated.segmentDrivers()[index]].strength;
+            sliceOf(index, next);
+            bitops::keepClass(part, next, !eir::isWeak(strength.zero), !eir::isWeak(strength.one));
+            fold(acc, part);
+            bitops::keepClass(part, next, eir::isWeak(strength.zero), eir::isWeak(strength.one));
+            fold(weak, part);
+        }
+        bitops::fillHighImpedance(acc, weak);
+    }
+
+    // What the net itself contributes: a pull where every driver is `z`, or a supply that
+    // no strong driver can move.
+    switch (segment.netKind) {
+    case eir::NetKind::Tri0: bitops::pullHighImpedance(acc, eir::Logic::Zero); break;
+    case eir::NetKind::Tri1: bitops::pullHighImpedance(acc, eir::Logic::One); break;
+    case eir::NetKind::Supply0: acc.fill(eir::Logic::Zero); break;
+    case eir::NetKind::Supply1: acc.fill(eir::Logic::One); break;
+    case eir::NetKind::Wire:
+    case eir::NetKind::Tri:
+    case eir::NetKind::WiredAnd:
+    case eir::NetKind::WiredOr:
+    case eir::NetKind::TriAnd:
+    case eir::NetKind::TriOr:
+    case eir::NetKind::UWire: break;
+    }
+    return true;
 }
 
 void Kernel::resolveInitialValues() {
@@ -870,7 +903,11 @@ void Kernel::scheduleNonBlockingPart(std::uint32_t signalIndex, eir::ConstBitRef
 }
 
 bool Kernel::isForced(std::uint32_t signalIndex) const noexcept {
-    return !forcedSignals.empty() && forcedSignals[signalIndex];
+    return !overrides.empty() && overrides[signalIndex].force != NoHolder;
+}
+
+bool Kernel::isOverridden(std::uint32_t signalIndex) const noexcept {
+    return !overrides.empty() && overrides[signalIndex].held();
 }
 
 void Kernel::deposit(std::uint32_t signalIndex, eir::ConstBitRef value) {
@@ -878,20 +915,89 @@ void Kernel::deposit(std::uint32_t signalIndex, eir::ConstBitRef value) {
 }
 
 void Kernel::force(std::uint32_t signalIndex, eir::ConstBitRef value) {
-    // Cleared first so that re-forcing an already-forced signal to a different value writes
-    // rather than being discarded by the force it is replacing.
-    if (!forcedSignals.empty()) forcedSignals[signalIndex] = false;
-
-    writeSignal(signalIndex, value);
-
-    if (forcedSignals.empty()) forcedSignals.assign(designImage->signals().size(), false);
-    forcedSignals[signalIndex] = true;
+    if (overrides.empty()) overrides.resize(designImage->signals().size());
+    overrides[signalIndex].force = FromOutside;
+    changeSignal(signalIndex, value);
 }
 
 bool Kernel::release(std::uint32_t signalIndex) {
     if (!isForced(signalIndex)) return false;
-    forcedSignals[signalIndex] = false;
+    Overrides& held = overrides[signalIndex];
+    held.force = NoHolder;
+
+    // An assign the force stood over is re-established and evaluated again; anything else
+    // goes back to what drives it (IEEE 1800 section 10.6.2).
+    if (held.assign != NoHolder) {
+        wake(held.assign);
+        return true;
+    }
+    restoreDriven(signalIndex);
     return true;
+}
+
+void Kernel::startOverride(std::uint32_t processIndex, std::uint32_t holder,
+                           std::uint32_t signalIndex, eir::ConstBitRef value, bool force) {
+    // The holder is a process of the same instance, which numbers its processes from the
+    // definition's first.
+    const std::uint32_t first =
+        processIndex - designImage->elaboratedDesign().processes()[processIndex].processIndex;
+    if (overrides.empty()) overrides.resize(designImage->signals().size());
+    Overrides& held = overrides[signalIndex];
+    if (force) {
+        held.force = first + holder;
+    } else {
+        held.assign = first + holder;
+        if (held.force != NoHolder) return;
+    }
+    changeSignal(signalIndex, value);
+}
+
+void Kernel::deassign(std::uint32_t signalIndex) {
+    if (!overrides.empty()) overrides[signalIndex].assign = NoHolder;
+}
+
+void Kernel::reassert(std::uint32_t processIndex, std::uint32_t signalIndex,
+                      eir::ConstBitRef value) {
+    if (overrides.empty()) return;
+    const Overrides& held = overrides[signalIndex];
+    if (held.force == processIndex || (held.force == NoHolder && held.assign == processIndex))
+        changeSignal(signalIndex, value);
+}
+
+void Kernel::restoreDriven(std::uint32_t signalIndex) {
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    const elab::Slot& slot = elaborated.slots()[signalIndex];
+    const Signal& signal = designImage->signals()[signalIndex];
+
+    // Segments are made slot by slot, so a slot's are one run of them.
+    const auto segments =
+        std::ranges::equal_range(elaborated.segments(), signalIndex, {}, &elab::Segment::slot);
+    if (slot.kind != eir::ObjectKind::Net && segments.empty()) return;
+
+    eir::BitVector value = eir::BitVector::from(stateArena.at(signal.wordOffset, signal.bitWidth));
+    if (slot.kind == eir::ObjectKind::Net) {
+        const eir::Logic undriven = eir::undrivenValue(slot.netKind);
+        std::uint32_t bit = 0;
+        const auto fillTo = [&](std::uint32_t end) {
+            if (end > bit)
+                bitops::assignPartAt(value.mutableRef(),
+                                     eir::BitVector::filled(end - bit, undriven).ref(), bit);
+        };
+        for (const eir::WriteExtent& driven : slot.drivenBits) {
+            fillTo(driven.lowBit);
+            bit = std::max(bit, driven.endBit());
+        }
+        fillTo(signal.bitWidth);
+    }
+
+    for (const elab::Segment& segment : segments) {
+        const elab::Driver& first =
+            elaborated.drivers()[elaborated.segmentDrivers()[segment.firstDriver]];
+        const eir::BitRef acc(segmentScratch.data(), segment.width);
+        if (!resolveSegment(first.process, segment, acc)) return;
+        bitops::assignPartAt(value.mutableRef(), acc, segment.lowBit);
+    }
+    writeSignal(signalIndex, value.ref());
 }
 
 void Kernel::addListener(ValueChangeListener& newListener) {
@@ -979,7 +1085,8 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
 
 void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
                                   std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
-                                  bool nonBlocking) {
+                                  DelayKind kind, std::optional<std::uint32_t> lowBit) {
+    const bool nonBlocking = kind == DelayKind::NonBlocking;
     if (delay > NoTime - currentTime) {
         diagnostics.report(DiagCode::TimeOverflow, SourceLocation(), currentTime,
                            options.timeScale.unitName());
@@ -988,7 +1095,7 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
     }
 
     if (nonBlocking && delay == 0) {
-        scheduler.appendNonBlocking(signalIndex, value, 0, false);
+        scheduler.appendNonBlocking(signalIndex, value, lowBit.value_or(0), lowBit.has_value());
         return;
     }
 
@@ -997,12 +1104,17 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
                        .signalIndex = signalIndex,
                        .nonBlocking = nonBlocking,
                        .serial = ++nextWriteSerial,
-                       .value = eir::BitVector::from(value)};
+                       .value = eir::BitVector::from(value),
+                       .lowBit = lowBit};
 
-    if (!nonBlocking) {
+    if (kind == DelayKind::Transport && delay == 0) {
+        writeRouted(processIndex, position, signalIndex, value, lowBit);
+        return;
+    }
+    if (kind == DelayKind::Inertial) {
         // The write this one replaces is taken out rather than skipped when it comes due, so
         // that it leaves no time step behind in which nothing happens.
-        const auto key = std::pair{processIndex, position};
+        const auto key = std::tuple{processIndex, position, lowBit.value_or(WholeSignal)};
         if (const auto pending = pendingInertial.find(key); pending != pendingInertial.end()) {
             const auto slot = delayedWrites.find(pending->second.time);
             std::erase_if(slot->second, [&pending](const DelayedWrite& queued) {
@@ -1012,7 +1124,7 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
             pendingInertial.erase(pending);
         }
         if (delay == 0) {
-            writeRouted(processIndex, position, signalIndex, value);
+            writeRouted(processIndex, position, signalIndex, value, lowBit);
             return;
         }
         pendingInertial.emplace(
@@ -1037,11 +1149,14 @@ void Kernel::applyDelayedWrites() {
             continue;
         }
         if (write.nonBlocking) {
-            scheduler.appendNonBlocking(write.signalIndex, write.value.ref(), 0, false);
+            scheduler.appendNonBlocking(write.signalIndex, write.value.ref(),
+                                        write.lowBit.value_or(0), write.lowBit.has_value());
             continue;
         }
-        pendingInertial.erase(std::pair{write.processIndex, write.position});
-        writeRouted(write.processIndex, write.position, write.signalIndex, write.value.ref());
+        pendingInertial.erase(
+            std::tuple{write.processIndex, write.position, write.lowBit.value_or(WholeSignal)});
+        writeRouted(write.processIndex, write.position, write.signalIndex, write.value.ref(),
+                    write.lowBit);
     }
 }
 
@@ -1201,12 +1316,15 @@ void Kernel::applyDeltaTransactions(std::size_t first) {
 }
 
 void Kernel::writeRouted(std::uint32_t processIndex, std::uint32_t position,
-                         std::uint32_t signalIndex, eir::ConstBitRef value) {
+                         std::uint32_t signalIndex, eir::ConstBitRef value,
+                         std::optional<std::uint32_t> lowBit) {
     const WriteRoute& route = processes[processIndex].writeRoutes[position];
-    if (route.direct()) {
-        writeSignal(signalIndex, value);
+    if (!route.direct()) {
+        writeThroughDrivers(route, value, lowBit.value_or(0));
+    } else if (lowBit.has_value()) {
+        writeSignalPart(signalIndex, value, *lowBit);
     } else {
-        writeThroughDrivers(route, value, 0);
+        writeSignal(signalIndex, value);
     }
 }
 
@@ -1372,7 +1490,8 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
             argument.isConstant
                 ? body.constant(argument.location)
                 : frameAt(activation.frameOffset + argument.location, argument.bitWidth);
-        arguments.push_back(FormatArgument{.value = value, .isSigned = argument.isSigned});
+        arguments.push_back(FormatArgument{
+            .value = value, .isSigned = argument.isSigned, .isReal = argument.isReal});
     }
 
     // The file tasks take a descriptor first, which is not part of what they print. An
@@ -1589,7 +1708,8 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
                 .value = compiled.isConstant ? body.constant(compiled.location)
                                              : frameAt(activation.frameOffset + compiled.location,
                                                        compiled.bitWidth),
-                .isSigned = compiled.isSigned});
+                .isSigned = compiled.isSigned,
+                .isReal = compiled.isReal});
         }
         const elab::Instance& instance =
             designImage->elaboratedDesign().instances()[state.instanceIndex];

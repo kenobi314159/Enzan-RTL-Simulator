@@ -9,7 +9,7 @@
 # than passing quietly.
 
 # ---------------------------------------------------------------------------
-# enzan_add_golden_test(<name> [NO_DIFFERENTIAL] [OWN_TIME_SCALES])
+# enzan_add_golden_test(<name> [NO_DIFFERENTIAL] [OWN_TIME_SCALES] [EXTRA_TOPS <module>...])
 # ---------------------------------------------------------------------------
 #
 # Registers `golden.<name>`, which runs sv/<name>.sv and requires the PASS line, and
@@ -21,6 +21,8 @@
 #
 # A case runs in nanoseconds, `--timescale ns`, unless OWN_TIME_SCALES says that every module
 # states its own time scale, when it runs in the unit the design asks for.
+#
+# EXTRA_TOPS names top levels beside `tb`, which Icarus Verilog finds for itself.
 
 # A failure line, anchored to the start of one.
 #
@@ -32,7 +34,8 @@
 set(ENZAN_GOLDEN_FAILURE_PATTERN "\nFAIL")
 
 function(enzan_add_golden_test name)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL;OWN_TIME_SCALES;DIR_WITH_MAKE" "" "")
+  cmake_parse_arguments(PARSE_ARGV 1 arg "NO_DIFFERENTIAL;OWN_TIME_SCALES;DIR_WITH_MAKE" ""
+                        "EXTRA_TOPS")
 
   if(arg_DIR_WITH_MAKE)
     set(source "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}")
@@ -48,6 +51,9 @@ function(enzan_add_golden_test name)
   if(arg_OWN_TIME_SCALES)
     set(unit)
   endif()
+  foreach(top IN LISTS arg_EXTRA_TOPS)
+    list(APPEND unit --top ${top})
+  endforeach()
   string(JOIN " " unit_string ${unit})
 
   if(arg_DIR_WITH_MAKE)
@@ -114,6 +120,51 @@ enzan_add_golden_test(nets)
 # Nets with several drivers, resolved per bit: tristate buses, wired logic, pulls and supplies.
 enzan_add_golden_test(resolution)
 
+# Drive strengths as two classes: weak drivers yielding to strong ones, as AMD's `glbl` drives its
+# reset and its PLLs' lock.
+enzan_add_golden_test(strengths)
+
+# Built-in gates over the four values, tristate buffers, an array, a delay and a pad with a pull-up.
+enzan_add_golden_test(gates)
+
+# User-defined primitives of each kind: combinational over every input, a level-sensitive latch
+# and an edge-sensitive flip-flop with an asynchronous clear and an initial state.
+enzan_add_golden_test(primitives)
+
+# Named events, triggered and waited on again.
+enzan_add_golden_test(named_events)
+
+# A nonblocking event trigger, which Icarus Verilog does not support, so the case checks itself.
+enzan_add_golden_test(nonblocking_events NO_DIFFERENTIAL)
+
+# Separate rise, fall and turn-off delays of a continuous assignment and of a gate.
+enzan_add_golden_test(rise_fall)
+
+# Delayed writes to part of a signal: a memory word at an index known as the design runs, a bit of
+# a vector, and a continuous assignment of one bit that rejects a pulse shorter than its delay.
+enzan_add_golden_test(delayed_parts)
+
+# Module path delays as Icarus Verilog runs them with `-gspecify`: the most recent input's path,
+# the shortest of simultaneous ones, rise and fall delays and those to and from x and z,
+# conditions, an edge-sensitive path, a vector and an output an instance inside drives.
+enzan_add_golden_test(module_paths)
+
+# `PATHPULSE$ = 0` letting a pulse shorter than its path's delay through, which Icarus Verilog
+# ignores, so the case checks itself against IEEE 1800 section 30.7.
+enzan_add_golden_test(path_pulses NO_DIFFERENTIAL)
+
+# Reals as AMD's clock managers compute with them: arithmetic, conversions, the bits of a double,
+# the time in fractions of a unit, a clock whose half period is a real variable's, and formatting.
+enzan_add_golden_test(reals OWN_TIME_SCALES)
+
+# Procedural `assign` and `force`: a flip-flop held by its reset, a force over an assign, nets
+# released back to their drivers, a variable that keeps its forced value.
+enzan_add_golden_test(overrides)
+
+# The same, evaluating their expressions again as what they read changes, which Icarus Verilog
+# does only once, so the case checks itself against IEEE 1800 section 10.6.
+enzan_add_golden_test(overrides_expressions NO_DIFFERENTIAL)
+
 # The comparisons with don't-care bits: ==?, casez and casex.
 enzan_add_golden_test(wildcards)
 
@@ -143,6 +194,12 @@ enzan_add_golden_test(static_function_callers NO_DIFFERENTIAL)
 # Hierarchical references, down, up and across, from a definition two instances share.
 enzan_add_golden_test(hierarchical)
 
+# Instances of one parameterisation whose hierarchical references lead to different places.
+enzan_add_golden_test(upward_references)
+
+# A second top level that cells reach by name and drive, as AMD's models do `glbl`.
+enzan_add_golden_test(glbl EXTRA_TOPS glbl)
+
 # Interfaces, with their own logic, modports, and an interface passed down through a module.
 # Icarus Verilog cannot parse an interface with ports or modports, so the case checks itself.
 enzan_add_golden_test(interfaces NO_DIFFERENTIAL)
@@ -161,6 +218,10 @@ enzan_add_golden_test(events)
 
 # Intra-assignment delays, and inertial delays on continuous assignments.
 enzan_add_golden_test(delays)
+
+# Specify blocks as cell libraries write them: specparams, module paths of no delay, and timing
+# checks, which are not run.
+enzan_add_golden_test(specify)
 
 # Delays and `$time` in each module's own time unit, rounded to its precision.
 enzan_add_golden_test(timescales OWN_TIME_SCALES)

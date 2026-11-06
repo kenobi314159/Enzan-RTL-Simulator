@@ -305,6 +305,8 @@ void writeBody(Writer& out, NameTable& names, const Body& body) {
 void writeProcess(Writer& out, NameTable& names, const Process& process) {
     out.u8(static_cast<std::uint8_t>(process.kind));
     out.boolean(process.drivesSignals);
+    out.u8(static_cast<std::uint8_t>(process.strength.zero));
+    out.u8(static_cast<std::uint8_t>(process.strength.one));
     out.boolean(process.postponed);
     out.boolean(process.connectsPort);
     writeBody(out, names, process);
@@ -322,6 +324,8 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
         out.u32(static_cast<std::uint32_t>(list.size()));
         for (const SensitivityEntry& entry : list) writeEntry(entry);
     }
+    out.u32(static_cast<std::uint32_t>(process.overrideSet.size()));
+    for (const std::uint32_t index : process.overrideSet) out.u32(index);
 }
 
 void writeSubprogram(Writer& out, NameTable& names, const Subprogram& subprogram) {
@@ -343,6 +347,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
     out.boolean(definition.isPackage);
     out.u8(static_cast<std::uint8_t>(definition.language));
     writeLocation(out, names, definition.location);
+    writeLocation(out, names, definition.firstTimingCheck);
 
     out.u32(static_cast<std::uint32_t>(definition.objects.size()));
     for (const Object& object : definition.objects) {
@@ -633,6 +638,8 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     Process process;
     process.kind = static_cast<ProcessKind>(in.u8());
     process.drivesSignals = in.boolean();
+    process.strength.zero = static_cast<Strength>(in.u8());
+    process.strength.one = static_cast<Strength>(in.u8());
     process.postponed = in.boolean();
     process.connectsPort = in.boolean();
     readBody(in, buffers, process);
@@ -650,6 +657,8 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
         list.resize(in.count());
         for (SensitivityEntry& entry : list) readEntry(entry);
     }
+    process.overrideSet.resize(in.count());
+    for (std::uint32_t& index : process.overrideSet) index = in.u32();
 
     return process;
 }
@@ -676,6 +685,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     definition.isPackage = in.boolean();
     definition.language = static_cast<Language>(in.u8());
     definition.location = readLocation(in, buffers);
+    definition.firstTimingCheck = readLocation(in, buffers);
 
     definition.objects.resize(in.count());
     for (Object& object : definition.objects) {

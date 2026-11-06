@@ -71,24 +71,39 @@ public:
             const ResolutionAnswers& resolutions)
         : design(analysedDesign), diagnostics(engine), knownResolutions(resolutions) {}
 
-    std::unique_ptr<ElaboratedDesign> run(std::string_view topModuleName) {
-        const std::optional<std::uint32_t> topIndex = resolveTop(topModuleName);
-        if (!topIndex.has_value()) return nullptr;
+    std::unique_ptr<ElaboratedDesign> run(std::span<const std::string> topModuleNames) {
+        // Several top levels are several roots, a design's own beside AMD's `glbl`, each an
+        // instance as the one top is; the first is the design's, the name a front end shows.
+        std::vector<std::uint32_t> topIndices;
+        if (topModuleNames.empty()) {
+            const std::optional<std::uint32_t> topIndex = resolveTop("");
+            if (!topIndex.has_value()) return nullptr;
+            topIndices.push_back(*topIndex);
+        }
+        for (const std::string& name : topModuleNames) {
+            const std::optional<std::uint32_t> topIndex = resolveTop(name);
+            if (!topIndex.has_value()) return nullptr;
+            if (std::ranges::find(topIndices, *topIndex) == topIndices.end())
+                topIndices.push_back(*topIndex);
+        }
 
-        // The top instance is named for the module as the source names it, so that a design
+        // A top instance is named for the module as the source names it, so that a design
         // elaborated with `tb` as its top has `/tb/...` paths — which is what a user typing a
         // hierarchical path like /tb/u_dut/count names. The source's name rather than the
         // definition's, because a parameterised top's definition is named for its values, and
-        // `/counter$WIDTH_8/count` is a path nobody would write. The design reports its top by
-        // the same name, since that is the name a front end shows.
-        const eir::ModuleDefinition& top = design.module(*topIndex);
-        const std::string& topName = top.sourceName.empty() ? top.name : top.sourceName;
-
+        // `/counter$WIDTH_8/count` is a path nobody would write. The design reports its tops by
+        // the same names, since those are the names a front end shows.
         result = std::make_unique<ElaboratedDesign>();
-        result->topName = topName;
-        const std::uint32_t topInstance =
-            createInstance("/" + topName, topName, *topIndex, Instance::NoParent);
-        if (!expand(topInstance)) return nullptr;
+        for (const std::uint32_t topIndex : topIndices) {
+            const eir::ModuleDefinition& top = design.module(topIndex);
+            result->topNames.push_back(top.sourceName.empty() ? top.name : top.sourceName);
+        }
+        for (std::size_t index = 0; index < topIndices.size(); ++index) {
+            const std::string& topName = result->topNames[index];
+            const std::uint32_t topInstance =
+                createInstance("/" + topName, topName, topIndices[index], Instance::NoParent);
+            if (!expand(topInstance)) return nullptr;
+        }
         if (!instantiatePackages()) return nullptr;
         if (!instantiateCalledDefinitions()) return nullptr;
         if (!bindHierarchicalReferences()) return nullptr;
@@ -144,8 +159,22 @@ private:
         const std::vector<std::string> candidates = design.candidateTopModules();
         if (candidates.size() == 1) return design.findModuleIndex(candidates.front());
 
-        diagnostics.report(DiagCode::NoTopModule, SourceLocation(), candidates.size(),
-                           joinNames(candidates));
+        // By the names the source gives them, which is what `--top` takes; a parameterised one's
+        // definition is named for its values.
+        std::vector<std::string> shown;
+        shown.reserve(candidates.size());
+        for (const std::string& candidate : candidates) {
+            const std::optional<std::uint32_t> index = design.findModuleIndex(candidate);
+            const std::string& source = index ? design.module(*index).sourceName : candidate;
+            shown.push_back(source.empty() ? candidate : source);
+        }
+        DiagnosticBuilder refusal = diagnostics.report(DiagCode::NoTopModule, SourceLocation(),
+                                                       candidates.size(), joinNames(shown));
+        // AMD's models reach `glbl` by name, so it is a top level beside the design's own.
+        if (candidates.size() > 1 && std::ranges::find(shown, "glbl") != shown.end())
+            refusal.note({},
+                         "a design with AMD's `glbl` has two top levels; give `--top` for each, "
+                         "as `--top <design> --top glbl`");
         return std::nullopt;
     }
 
@@ -411,7 +440,7 @@ private:
             // A package that is missing leaves its references unresolved, which says so.
             const std::optional<std::uint32_t> definition = design.findModuleIndex(name + "::");
             if (!definition.has_value()) return true;
-            if (name == result->topName) {
+            if (std::ranges::find(result->topNames, name) != result->topNames.end()) {
                 diagnostics.report(DiagCode::PackageNamedAsTop, design.module(*definition).location,
                                    name, name);
                 return false;
@@ -473,7 +502,7 @@ private:
         const eir::ModuleDefinition& definition = design.module(definitionIndex);
         const std::string name =
             definition.sourceName.empty() ? definition.name : definition.sourceName;
-        if (name == result->topName) {
+        if (std::ranges::find(result->topNames, name) != result->topNames.end()) {
             diagnostics.report(DiagCode::PackageNamedAsTop, definition.location, name, name);
             return false;
         }
@@ -494,7 +523,8 @@ private:
                 std::string base = instance.path;
                 std::string_view rest = reference;
                 if (rest.starts_with('/')) {
-                    // An absolute path, to a package's variable: from the root.
+                    // An absolute path, to a package's variable or into another top level: from
+                    // the root.
                     const std::size_t slash = rest.find('/', 1);
                     base = std::string(rest.substr(0, slash));
                     rest = slash == std::string_view::npos ? std::string_view()
@@ -782,6 +812,7 @@ private:
     /// the signal and both drivers, and a list of every pair on a wide bus would bury it.
     bool checkDrivers() {
         std::vector<std::vector<DriverRange>> rangesBySlot(result->slotList.size());
+        std::vector<bool> overridden(result->slotList.size(), false);
 
         for (std::uint32_t processIndex = 0; processIndex < result->processList.size();
              ++processIndex) {
@@ -792,6 +823,9 @@ private:
                 design.module(instance.definitionIndex).objects;
             const bool continuous =
                 process.kind == eir::ProcessKind::ContinuousAssign || process.drivesSignals;
+
+            for (const std::uint32_t objectIndex : process.overrideSet)
+                overridden[instance.objectSlots[objectIndex]] = true;
 
             // A subroutine's static variable is written by every call of it, and a call inlined
             // into a continuous assignment no more drives it than one in an `always` does.
@@ -816,13 +850,15 @@ private:
                 ok = false;
                 continue;
             }
-            resolved[slotIndex] = resolves(slotIndex, ranges);
+            // What an override releases goes back to what its drivers drive, so they keep it.
+            resolved[slotIndex] =
+                resolves(slotIndex, ranges)
+                || (overridden[slotIndex] && std::ranges::any_of(ranges, &DriverRange::continuous));
             recordDrivenBits(slotIndex, ranges);
         }
         if (!ok || !checkCalleeWrites(rangesBySlot, resolved)) return false;
 
-        buildDrivers(resolved);
-        return true;
+        return buildDrivers(resolved);
     }
 
     /// Reports the first conflicting overlap among `ranges`, which are ordered by low bit,
@@ -883,14 +919,14 @@ private:
         return true;
     }
 
-    /// Records which bits of a net its continuous drivers cover.
+    /// Records which bits of a net some process writes: a continuous assignment, or a procedural
+    /// block through an output port's variable, which the port makes one slot with the net.
     void recordDrivenBits(std::uint32_t slotIndex, const std::vector<DriverRange>& ranges) {
         Slot& slot = result->slotList[slotIndex];
         if (slot.kind != eir::ObjectKind::Net) return;
         for (const DriverRange& range : ranges) {
-            if (range.continuous)
-                slot.drivenBits.push_back(eir::WriteExtent{
-                    .objectIndex = 0, .lowBit = range.lowBit, .width = range.width});
+            slot.drivenBits.push_back(
+                eir::WriteExtent{.objectIndex = 0, .lowBit = range.lowBit, .width = range.width});
         }
         eir::normaliseWriteSet(slot.drivenBits);
     }
@@ -925,7 +961,8 @@ private:
     ///
     /// Drivers are made in process order, and within a process in write-set order, so that a
     /// process's drivers through one object are contiguous: that run is what a store is routed to.
-    void buildDrivers(const std::vector<bool>& resolved) {
+    /// False, having reported, when drivers of one segment have strengths the classes merge.
+    bool buildDrivers(const std::vector<bool>& resolved) {
         std::vector<std::vector<std::uint32_t>> driversBySlot(result->slotList.size());
 
         for (std::uint32_t processIndex = 0; processIndex < result->processList.size();
@@ -947,16 +984,98 @@ private:
                                                     .width = extent.width,
                                                     .process = processIndex,
                                                     .objectIndex = extent.objectIndex,
-                                                    .wordOffset = result->arenaSize});
+                                                    .wordOffset = result->arenaSize,
+                                                    .strength = process.strength});
                 result->arenaSize += eir::storageWordsFor(extent.width);
                 result->widestDriverBits = std::max(result->widestDriverBits, extent.width);
             }
         }
 
+        bool ok = true;
         for (std::uint32_t slotIndex = 0; slotIndex < driversBySlot.size(); ++slotIndex) {
             if (!driversBySlot[slotIndex].empty())
-                buildSegments(slotIndex, driversBySlot[slotIndex]);
+                ok = buildSegments(slotIndex, driversBySlot[slotIndex]) && ok;
         }
+        return ok;
+    }
+
+    /// Reports two of `covering`, the drivers of one segment, or one and the net's own pull, whose
+    /// strengths the standard orders and one class holds: pull and weak, or supply and strong on a
+    /// net of no supply kind. Resolved as equals they would give X where the standard has a winner.
+    bool checkStrengths(const Segment& segment, const std::vector<std::uint32_t>& covering) {
+        const Slot& slot = result->slotList[segment.slot];
+        const auto levelName = [](eir::Strength strength) {
+            switch (strength) {
+            case eir::Strength::Supply: return "supply";
+            case eir::Strength::Strong: return "strong";
+            case eir::Strength::Pull: return "pull";
+            case eir::Strength::Weak: return "weak";
+            }
+            return "strong";
+        };
+
+        // Each source of the segment's value and the levels it drives at; the net's own pull is
+        // one, as a `tri0` or `tri1` drives its bits at pull where nothing else does.
+        struct Source {
+            std::string name;
+            eir::Strength zero;
+            eir::Strength one;
+            SourceLocation location;
+        };
+
+        std::vector<Source> sources;
+        if (segment.netKind == eir::NetKind::Tri0 || segment.netKind == eir::NetKind::Tri1)
+            sources.push_back({std::format("the {}'s own pull",
+                                           segment.netKind == eir::NetKind::Tri0 ? "tri0" : "tri1"),
+                               eir::Strength::Pull, eir::Strength::Pull, SourceLocation()});
+        for (const std::uint32_t driverIndex : covering) {
+            const Driver& driver = result->driverList[driverIndex];
+            sources.push_back({describeProcess(driver.process), driver.strength.zero,
+                               driver.strength.one,
+                               processOf(result->processList[driver.process]).location});
+        }
+        const bool supplyNet =
+            segment.netKind == eir::NetKind::Supply0 || segment.netKind == eir::NetKind::Supply1;
+        // A supply net holds its value against everything weaker, and a supply driver would
+        // contend with it as an equal, which the net's constant value does not.
+        if (supplyNet) {
+            for (const std::uint32_t driverIndex : covering) {
+                const Driver& driver = result->driverList[driverIndex];
+                if (driver.strength.zero != eir::Strength::Supply
+                    && driver.strength.one != eir::Strength::Supply)
+                    continue;
+                diagnostics.report(
+                    DiagCode::NotYetImplemented,
+                    processOf(result->processList[driver.process]).location,
+                    std::format("driving the supply net '{}' at supply strength, by {},", slot.path,
+                                describeProcess(driver.process)));
+                return false;
+            }
+        }
+        const auto clash = [supplyNet](eir::Strength left, eir::Strength right) {
+            const auto pair = [&](eir::Strength a, eir::Strength b) {
+                return (left == a && right == b) || (left == b && right == a);
+            };
+            return pair(eir::Strength::Pull, eir::Strength::Weak)
+                   || (!supplyNet && pair(eir::Strength::Supply, eir::Strength::Strong));
+        };
+        for (std::size_t later = 1; later < sources.size(); ++later) {
+            for (std::size_t earlier = 0; earlier < later; ++earlier) {
+                for (const eir::Strength left : {sources[earlier].zero, sources[earlier].one}) {
+                    for (const eir::Strength right : {sources[later].zero, sources[later].one}) {
+                        if (!clash(left, right)) continue;
+                        diagnostics.report(
+                            DiagCode::StrengthsIndistinguishable, sources[later].location,
+                            describeBits(segment.lowBit, segment.lowBit + segment.width,
+                                         slot.type.bitWidth()),
+                            slot.path, sources[earlier].name, levelName(left), sources[later].name,
+                            levelName(right));
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     /// The index of the resolution call for `resolution`'s function with `drivers` drivers, made
@@ -987,8 +1106,8 @@ private:
     /// driver which of them it covers.
     ///
     /// A bit no driver covers belongs to no segment: nothing ever writes it, so it keeps the
-    /// undriven value it started with.
-    void buildSegments(std::uint32_t slotIndex, const std::vector<std::uint32_t>& drivers) {
+    /// undriven value it started with. False, having reported, when `checkStrengths` refuses one.
+    bool buildSegments(std::uint32_t slotIndex, const std::vector<std::uint32_t>& drivers) {
         std::vector<std::uint32_t> boundaries;
         for (const std::uint32_t driverIndex : drivers) {
             boundaries.push_back(result->driverList[driverIndex].lowBit);
@@ -1026,7 +1145,11 @@ private:
                         .driverCount = static_cast<std::uint32_t>(covering.size()),
                         .netKind = result->slotList[slotIndex].netKind,
                         .resolution = resolutionFor(result->slotList[slotIndex].resolution,
-                                                    static_cast<std::uint32_t>(covering.size()))});
+                                                    static_cast<std::uint32_t>(covering.size())),
+                        .weak = std::ranges::any_of(covering, [this](std::uint32_t driverIndex) {
+                            return result->driverList[driverIndex].strength.anyWeak();
+                        })});
+            if (!checkStrengths(result->segmentList.back(), covering)) return false;
             result->segmentDriverList.insert(result->segmentDriverList.end(), covering.begin(),
                                              covering.end());
             previousSet = std::move(covering);
@@ -1042,6 +1165,7 @@ private:
                 ++driver.segmentCount;
             }
         }
+        return true;
     }
 
     [[nodiscard]] const eir::Process& processOf(const ProcessInstance& processInstance) const {
@@ -1092,8 +1216,16 @@ Elaborator::Elaborator(const eir::Design& analysedDesign, DiagnosticEngine& engi
 
 std::unique_ptr<ElaboratedDesign> Elaborator::elaborate(std::string_view topModuleName,
                                                         const ResolutionAnswers& resolutions) {
+    const std::vector<std::string> tops =
+        topModuleName.empty() ? std::vector<std::string>{}
+                              : std::vector<std::string>{std::string(topModuleName)};
+    return elaborate(std::span<const std::string>(tops), resolutions);
+}
+
+std::unique_ptr<ElaboratedDesign> Elaborator::elaborate(std::span<const std::string> topModuleNames,
+                                                        const ResolutionAnswers& resolutions) {
     Builder builder(design, diagnostics, resolutions);
-    return builder.run(topModuleName);
+    return builder.run(topModuleNames);
 }
 
 } // namespace enzan::elab

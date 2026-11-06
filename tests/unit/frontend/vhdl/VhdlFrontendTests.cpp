@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -143,6 +144,24 @@ TEST_F(VhdlAnalysisTest, AnalysesAgainstVhdl2019sLibraries) {
         << transcript();
 }
 
+TEST_F(VhdlAnalysisTest, AnalysesAPackageAsLargeAsAVendorsComponentLibrary) {
+    // AMD's unisim package declares 1,364 components with their generics and ports, more than
+    // NVC's default arena of 16 MB holds of one unit; this one is of the same order.
+    std::string text = "library ieee;\nuse ieee.std_logic_1164.all;\npackage vcomponents is\n";
+    for (int component = 0; component < 1500; ++component) {
+        text += std::format("  component cell_{}\n    generic (\n", component);
+        for (int generic = 0; generic < 12; ++generic)
+            text += std::format(
+                "      INIT_{} : std_logic_vector(63 downto 0) := (others => '0');\n", generic);
+        text += "      MODE : string := \"NONE\"\n    );\n    port (\n";
+        for (int port = 0; port < 40; ++port)
+            text += std::format("      P{} : in std_logic_vector(31 downto 0);\n", port);
+        text += "      O : out std_logic\n    );\n  end component;\n";
+    }
+    text += "end package;\n";
+    EXPECT_TRUE(analyse(text, "unisim")) << transcript();
+}
+
 TEST_F(VhdlAnalysisTest, WritesEachUnitIntoTheLibrary) {
     ASSERT_TRUE(analyse("entity counter is\n"
                         "  port (clk : in bit; count : out natural);\n"
@@ -243,6 +262,48 @@ TEST_F(VhdlAnalysisTest, RunsNoneOfEnzansExitHandlersWhenNvcStops) {
                          "end entity;\n"));
 
     EXPECT_FALSE(std::filesystem::exists(workspace / "destroyed"));
+}
+
+TEST_F(VhdlAnalysisTest, RefusesAnEncryptedEnvelopeWithOneError) {
+    // NVC refuses protect tool directives (IEEE 1076-2008 section 24.1) at the first and skips to
+    // `end_protected`. Pinned so that an NVC upgrade skipping envelopes silently is noticed. The
+    // envelope is the whole file, as in Vivado's encrypted packages, and its blocks hold '+', '/'
+    // and '=', as real ones do: NVC skips by tokens, misses `end_protected` after a block with
+    // none, and misreads what follows an envelope in its file, refusing the file all the same.
+    EXPECT_FALSE(analyse("`protect begin_protected\n"
+                         "`protect version = 1\n"
+                         "`protect encrypt_agent = \"written for this test\"\n"
+                         "`protect key_keyowner = \"nobody\", key_method = \"rsa\"\n"
+                         "`protect encoding = (enctype = \"base64\", line_length = 64, bytes = 3)\n"
+                         "`protect key_block\n"
+                         "AA+/\n"
+                         "`protect encoding = (enctype = \"base64\", line_length = 64, bytes = 5)\n"
+                         "`protect data_block\n"
+                         "AAAA+/8=\n"
+                         "`protect end_protected\n"));
+
+    ASSERT_EQ(std::ranges::count(consumer.received, DiagCode::VhdlError, &Diagnostic::code), 1)
+        << transcript();
+    const Diagnostic* const error = first(DiagCode::VhdlError);
+    EXPECT_NE(error->message.find("protect"), std::string::npos) << error->message;
+    ASSERT_TRUE(error->location.valid());
+    EXPECT_EQ(sources.lineNumber(error->location), 1U);
+}
+
+TEST_F(VhdlAnalysisTest, TellsADesignNamingVitalThatItIsOutOfScope) {
+    // Enzan's `ieee` has no VITAL, and NVC says only that a unit is missing, which reads as a
+    // broken installation. This also pins the NVC wording the frontend recognises.
+    EXPECT_FALSE(analyse("library ieee;\n"
+                         "use ieee.vital_timing.all;\n"
+                         "entity cell is\n"
+                         "end entity;\n"));
+
+    const Diagnostic* const vital = first(DiagCode::VhdlVital);
+    ASSERT_NE(vital, nullptr) << transcript();
+    EXPECT_NE(vital->message.find("'ieee.vital_timing'"), std::string::npos) << vital->message;
+    ASSERT_TRUE(vital->location.valid());
+    EXPECT_EQ(sources.lineNumber(vital->location), 2U);
+    EXPECT_EQ(transcript().find("not found in library"), std::string::npos) << transcript();
 }
 
 TEST_F(VhdlAnalysisTest, ReportsAFatalErrorOnce) {

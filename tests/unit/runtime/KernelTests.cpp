@@ -2276,6 +2276,40 @@ TEST(Kernel, ADepositOnAResolvedNetHoldsOnlyUntilADriverChanges) {
     EXPECT_EQ(simulation.value("/tb/n"), "1");
 }
 
+TEST(Kernel, AReleaseResolvesAgainWhatTheDriversOfAForcedNetDrive) {
+    // The drivers keep their values while the force stands, so a release from outside resolves
+    // them at once, and the net does not wait for one of them to change.
+    Simulation simulation = twoDrivers("1'b1", "1'bz");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+
+    Kernel& kernel = simulation.simulationKernel();
+    const std::uint32_t net = simulation.signal("/tb/n");
+    kernel.force(net, literal("1'b0"));
+    kernel.deposit(simulation.signal("/tb/a"), literal("1'bz"));
+    kernel.deposit(simulation.signal("/tb/b"), literal("1'b1"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "0");
+
+    EXPECT_TRUE(kernel.release(net));
+    EXPECT_EQ(simulation.value("/tb/n"), "1");
+}
+
+TEST(Kernel, AReleasedUndrivenNetGoesBackToItsKindsValue) {
+    ModuleDefinition definition = makeTop({}, {Object{.name = "n",
+                                                      .type = Type::bits(2, false, true),
+                                                      .kind = enzan::eir::ObjectKind::Net,
+                                                      .netKind = enzan::eir::NetKind::Tri1}});
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t net = simulation.signal("/tb/n");
+    simulation.simulationKernel().force(net, literal("2'b00"));
+    EXPECT_EQ(simulation.value("/tb/n"), "00");
+    EXPECT_TRUE(simulation.simulationKernel().release(net));
+    EXPECT_EQ(simulation.value("/tb/n"), "11");
+}
+
 // ---------------------------------------------------------------------------
 // Calls of subprograms
 // ---------------------------------------------------------------------------

@@ -197,6 +197,11 @@ enum class ProcessKind : std::uint8_t {
     /// A continuous assignment (`assign`), modelled as a process sensitive to
     /// everything on its right-hand side.
     ContinuousAssign,
+    /// What a procedural `assign` or `force` assigns once it has started: the value evaluated
+    /// again whenever anything it reads changes, and written while the statement's override
+    /// holds its target (IEEE 1800 section 10.6). The statement itself starts the override and
+    /// writes its first value, so this never runs at time zero.
+    Override,
 };
 
 std::string_view toString(ProcessKind kind) noexcept;
@@ -368,6 +373,28 @@ struct Body {
     std::vector<WriteExtent> writeSet;
 };
 
+/// A strength a driver drives a value with (IEEE 1800 section 28.11), of the four levels a
+/// value can be driven at. Resolution tells only two classes apart, `Supply` and `Strong` the
+/// strong, `Pull` and `Weak` the weak, and elaboration refuses drivers whose levels the standard
+/// orders and a class does not (DESIGN_GUIDE.md section 3.7).
+enum class Strength : std::uint8_t { Supply, Strong, Pull, Weak };
+
+/// True for `Pull` and `Weak`, which yield to any driver of the strong class.
+[[nodiscard]] constexpr bool isWeak(Strength strength) noexcept {
+    return strength == Strength::Pull || strength == Strength::Weak;
+}
+
+/// The strengths a driver drives 0 and 1 with; strong for both unless declared otherwise.
+struct DriveStrength {
+    Strength zero = Strength::Strong;
+    Strength one = Strength::Strong;
+
+    /// True when either value is driven in the weak class.
+    [[nodiscard]] constexpr bool anyWeak() const noexcept { return isWeak(zero) || isWeak(one); }
+
+    friend bool operator==(const DriveStrength&, const DriveStrength&) = default;
+};
+
 /// An EIR-B process: the body of one procedural block, scheduled by the kernel.
 struct Process : Body {
     ProcessKind kind = ProcessKind::Always;
@@ -380,6 +407,10 @@ struct Process : Body {
     /// not a race the last write wins. Elaboration treats its writes as it treats a continuous
     /// assignment's.
     bool drivesSignals = false;
+
+    /// What a continuous assignment drives with, as `assign (strong1, weak0)` declares it. Every
+    /// other process drives strong.
+    DriveStrength strength;
 
     /// True for a VHDL postponed process (IEEE 1076 section 11.3): past initialization, it
     /// resumes only in the last delta cycle of a time step, once nothing else is due then, and so
@@ -403,6 +434,12 @@ struct Process : Body {
     /// An empty list waits for nothing, so the process never resumes: VHDL's `wait;`, which is
     /// how a testbench process ends.
     std::vector<std::vector<SensitivityEntry>> eventLists;
+
+    /// The objects the process's `assign`, `force`, `deassign` and `release` name, sorted and
+    /// each once. Declared beside the write set rather than in it, because an override writes an
+    /// object without driving it: a forced net keeps its drivers, which take it back on release
+    /// (DESIGN_GUIDE.md section 3.7).
+    std::vector<std::uint32_t> overrideSet;
 };
 
 /// A body that is called rather than scheduled: a VHDL function or procedure, and in time a

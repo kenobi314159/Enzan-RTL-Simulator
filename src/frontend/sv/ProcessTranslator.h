@@ -34,6 +34,7 @@ class VariableSymbol;
 class ElementSelectExpression;
 class Expression;
 class MemberAccessExpression;
+class PrimitiveInstanceSymbol;
 class RangeSelectExpression;
 class Statement;
 class TimingControl;
@@ -54,6 +55,48 @@ staticSubroutineOf(const slang::ast::ValueSymbol& symbol);
 
 /// A slang time unit or precision as a power of ten of a second: `10ns` is -8.
 [[nodiscard]] std::int8_t timeExponentOf(const slang::TimeScaleValue& value) noexcept;
+
+/// The module paths into one output (IEEE 1800 section 30), as the module gathers them for the
+/// process that delays the output's changes by them.
+struct OutputPaths {
+    /// An input window a path starts at, with the edge it counts, `None` counting every change.
+    struct Source {
+        std::uint32_t objectIndex = 0;
+        std::uint32_t lowBit = 0;
+        std::uint32_t width = 0;
+        slang::ast::EdgeKind edge{};
+    };
+
+    struct Path {
+        /// Index into `sources`.
+        std::uint32_t source = 0;
+
+        /// The path's condition, null for one that always holds.
+        const slang::ast::Expression* condition = nullptr;
+
+        /// The delays of the six transitions the standard names, 0 to 1, 1 to 0, 0 to z, z to 1,
+        /// 1 to z and z to 0, each a constant expression.
+        std::array<const slang::ast::Expression*, 6> delays{};
+    };
+
+    /// The output port's object, which the process writes, and the one the body's own writes of
+    /// it write instead.
+    std::uint32_t output = 0;
+    std::uint32_t internal = 0;
+
+    /// The process's own state: the sources' values as it last took them, the time each last
+    /// changed, 64 bits apiece, and the value it last scheduled for the output.
+    std::uint32_t sourcesSeen = 0;
+    std::uint32_t changedAt = 0;
+    std::uint32_t scheduled = 0;
+
+    std::vector<Source> sources;
+    std::vector<Path> paths;
+
+    /// True when the pulse limits are zero, so that every change reaches the output; otherwise a
+    /// change replaces one still on its way, as the default limits have it.
+    bool transport = false;
+};
 
 /// What a process translator needs from the module it belongs to.
 ///
@@ -108,6 +151,14 @@ public:
     /// to it.
     virtual void reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
                                     std::string_view rounded) = 0;
+
+    /// Adds the process that evaluates `value` again for the procedural `assign` or `force` of
+    /// `objectIndex` at `location`, and returns its index among the module's processes; nothing,
+    /// having reported why, when `value` cannot be translated.
+    virtual std::optional<std::uint32_t> addOverrideProcess(std::uint32_t objectIndex,
+                                                            const slang::ast::Expression& value,
+                                                            bool force,
+                                                            slang::SourceLocation location) = 0;
 };
 
 /// Translates one procedural block or continuous assignment into an EIR process.
@@ -134,6 +185,29 @@ public:
     bool translateContinuousAssignment(const slang::ast::Expression& assignment,
                                        const slang::ast::TimingControl* delay = nullptr);
 
+    /// Translates an instance of a built-in gate, `and` to `xnor`, `buf`, `not`, the four
+    /// tristate buffers, `pullup` or `pulldown`, as the continuous assignment of its outputs it
+    /// is (IEEE 1800 section 28): an input of `z` reads as `x`, as the gate tables have it, and a
+    /// tristate buffer whose control is unknown drives `x`, the `L` or `H` of the standard being
+    /// no value four states hold. Returns false having reported why.
+    bool translateGate(const slang::ast::PrimitiveInstanceSymbol& gate);
+
+    /// Translates the process that delays an output by its module paths: when the value the body
+    /// gives the output changes, it is written to the output after the shortest delay of the
+    /// paths whose input changed most recently, of those whose condition holds, and no earlier
+    /// than now (IEEE 1800 sections 30.4 and 30.6). An edge-sensitive path counts only its edge; an
+    /// unknown condition holds no path, as Icarus Verilog has it. Returns false having reported
+    /// why.
+    bool translateModulePaths(const OutputPaths& paths);
+
+    /// Translates an instance of a user-defined primitive as the continuous assignment of its
+    /// output its table is (IEEE 1800 section 29), matched by the runtime against the table
+    /// constant eir/Udp.h lays out. A sequential primitive, and only one, is given `held`, which
+    /// the module adds for it to keep its inputs as it last took them above its state. Returns
+    /// false having reported why.
+    bool translatePrimitive(const slang::ast::PrimitiveInstanceSymbol& instance,
+                            std::optional<std::uint32_t> held);
+
     /// Translates `expression` and stores its value into `objectIndex`.
     ///
     /// Used for the implicit continuous assignment a port connection needs when it is an
@@ -152,6 +226,10 @@ public:
     /// object, so anything more complicated becomes a real assignment rather than something
     /// the elaborator has to understand.
     bool translateObjectInto(const slang::ast::Expression& target, std::uint32_t objectIndex);
+
+    /// Translates the body of an override process: `value`, written by `Override` into
+    /// `objectIndex`, which the statement that started the override names.
+    bool translateOverride(std::uint32_t objectIndex, const slang::ast::Expression& value);
 
     /// Fills the sensitivity list from everything the process read, once it has been
     /// translated.
@@ -193,6 +271,9 @@ private:
     /// The statement being translated, stamped onto everything `emit` produces.
     SourceLocation currentStatement;
     std::uint32_t addConstant(const eir::BitVector& value);
+
+    /// A register holding one bit of `value`.
+    std::uint32_t constantRegister(eir::Logic value);
     std::uint32_t addString(std::string text);
 
     /// Switches emission to `block`.
@@ -235,6 +316,16 @@ private:
     /// Returns `value` with unknown bits forced to zero when `type` is two-state.
     Value coerceState(const Value& value, eir::Type type);
 
+    /// A register holding the real `value`.
+    Value realConstant(double value);
+
+    /// `value` as the truth a condition tests: a real is true where it is not 0.0, which its bits
+    /// alone do not say of -0.0; any other value is its own truth.
+    Value truthOf(const Value& value);
+
+    /// The value of an expression whose truth decides a branch, as `truthOf` makes it.
+    std::optional<Value> translateCondition(const slang::ast::Expression& condition);
+
     // --- statements --------------------------------------------------------
 
     bool translateStatement(const slang::ast::Statement& statement);
@@ -264,6 +355,21 @@ private:
     bool translateReturn(const slang::ast::Statement& statement);
     bool translateImmediateAssertion(const slang::ast::Statement& statement);
 
+    /// Procedural `assign` and `force`, `deassign` and `release` (IEEE 1800 section 10.6), of a
+    /// whole object: what a part of one or a concatenation would need is refused.
+    bool translateProceduralAssign(const slang::ast::Statement& statement);
+    bool translateProceduralDeassign(const slang::ast::Statement& statement);
+
+    /// `-> e` and `->> e` (IEEE 1800 section 15.5.1): the event's bit inverted, now or in the NBA
+    /// region, which wakes what waits on it. One with a delay is refused.
+    bool translateEventTrigger(const slang::ast::Statement& statement);
+
+    /// The object a procedural `assign`, `force`, `deassign` or `release` names as its target,
+    /// recorded in the override set; nothing, having reported why, for anything but the whole
+    /// of one.
+    std::optional<std::uint32_t> overrideTarget(const slang::ast::Expression& target,
+                                                std::string_view statement);
+
     /// `wait (condition) statement`: tests the condition and, while it is not true, waits for
     /// a change to anything it reads and tests it again (IEEE 1800 section 9.4.3).
     bool translateWait(const slang::ast::Statement& statement);
@@ -276,6 +382,11 @@ private:
     /// run's unit, which is reported where the design states the delay. A delay that is unknown
     /// is none (section 9.4.1).
     std::optional<Value> translateDelay(const slang::ast::Expression& amount);
+
+    /// A delay that is a constant, as `translateDelay` counts it: `constant` says whether it is
+    /// one, and nothing comes back for one that cannot be counted, having reported why.
+    std::optional<std::uint64_t> constantDelay(const slang::ast::Expression& amount,
+                                               bool& constant);
 
     /// The time scale of the scope being translated: the subroutine being inlined, whose own
     /// module, package or compilation unit gives its delays their unit, or else the body.
@@ -320,16 +431,17 @@ private:
     std::array<std::uint32_t, 4> branchOnTruth(const Value& condition);
 
     /// Emits a store of `reg` to the whole of `objectIndex`, in the form `nonBlocking` and
-    /// `storeDelay` call for.
-    void emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg, bool nonBlocking);
+    /// `storeDelay` call for. False, having reported, when `storeDelayFor` refuses the delay.
+    bool emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg, bool nonBlocking);
 
     /// Reports a delayed write to something a delayed store cannot address, and returns true,
     /// when an assignment delay is in effect; returns false otherwise.
     bool refuseDelayedWrite(const slang::ast::Expression& target);
 
-    /// The value of an integral `expression` that computes with reals, which have no runtime
-    /// representation yet, when every operand is a constant: `ClkPeriod >= 2ps` with
-    /// `ClkPeriod` a parameter. Nothing when some operand is not a constant.
+    /// The value of an integral `expression` that computes with reals when every operand is a
+    /// constant, folded as slang folds it: `ClkPeriod >= 2ps` with `ClkPeriod` a parameter.
+    /// Nothing when some operand is not a constant, and the reals are then computed as the design
+    /// runs.
     std::optional<Value> foldThroughReals(const slang::ast::Expression& expression,
                                           const eir::Type& type);
     std::optional<Value> translateInside(const slang::ast::Expression& expression);
@@ -503,6 +615,22 @@ private:
     /// forms, and a store the delayed forms cannot express is refused rather than undelayed.
     std::optional<std::uint32_t> storeDelay;
 
+    /// A continuous assignment's or a gate's rise, fall and turn-off delays, as counts of the
+    /// run's unit, when they are not all one: each store then takes the one the value it stores
+    /// calls for, and `storeDelay` only says that there is a delay.
+    std::optional<std::array<std::uint64_t, 3>> transitionDelays;
+
+    /// Sets `storeDelay`, and `transitionDelays` where they differ, from a continuous
+    /// assignment's or a gate's `delay`. False having reported.
+    bool setContinuousDelay(const slang::ast::TimingControl& delay);
+
+    /// The register holding the delay of a store of `stored`, a value of `width` bits: the one
+    /// delay, or of separate ones what the value calls for (IEEE 1800 section 28.16), the rise to
+    /// 1, the fall to 0, the turn-off to z and the smallest to x. Nothing, having reported, for
+    /// separate delays of a vector, whose bits may each call for another.
+    std::optional<std::uint32_t> storeDelayFor(std::uint32_t stored, std::uint32_t width,
+                                               const slang::ast::Expression* target);
+
     /// Where `continue` and `break` go in each enclosing loop, innermost last.
     struct LoopTargets {
         std::uint32_t continueBlock = 0;
@@ -515,6 +643,7 @@ private:
 
     std::vector<std::uint32_t> reads;
     std::vector<eir::WriteExtent> writes;
+    std::vector<std::uint32_t> overrides;
 
     bool failed = false;
 };

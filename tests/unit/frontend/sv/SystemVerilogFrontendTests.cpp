@@ -16,6 +16,7 @@
 #include "eir/Process.h"
 #include "eir/Verifier.h"
 
+#include "support/Literals.h"
 #include "support/Optionals.h"
 
 #include <gtest/gtest.h>
@@ -38,6 +39,7 @@ namespace {
 using enzan::DiagCode;
 using enzan::Diagnostic;
 using enzan::DiagnosticEngine;
+using enzan::SourceLocation;
 using enzan::SourceManager;
 using enzan::eir::Design;
 using enzan::eir::Instance;
@@ -1052,8 +1054,8 @@ TEST_F(FrontendTest, ReportsAnUnsupportedConstructRatherThanMistranslatingIt) {
     // answer, which is the worst possible outcome.
     EXPECT_EQ(analyse(R"(
         module m;
-            real x;
-            initial x = 1.5;
+            string x;
+            initial x = "text";
         endmodule
     )"),
               nullptr);
@@ -1089,18 +1091,40 @@ TEST_F(FrontendTest, ReportsAnInoutConnectedToASignalOfAnotherWidth) {
                          "a signal of another width"));
 }
 
-TEST_F(FrontendTest, ReportsADriveStrengthOtherThanStrong) {
-    // Resolution has no strength model, so a weak driver would lose to nothing and tie with a
-    // strong one.
+TEST_F(FrontendTest, AContinuousAssignmentKeepsTheStrengthsItDeclares) {
+    // As AMD's `glbl` declares its reset and its PLLs' lock: strong one way, weak the other.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic a, b;
+            wire gsr;
+            assign (strong1, weak0) gsr = a;
+            tri (weak1, strong0) lock = b;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    std::vector<enzan::eir::DriveStrength> strengths;
+    strengths.reserve(found->processes.size());
+    for (const enzan::eir::Process& process : found->processes)
+        strengths.push_back(process.strength);
+    using enzan::eir::Strength;
+    EXPECT_EQ(strengths, (std::vector<enzan::eir::DriveStrength>{
+                             {.zero = Strength::Weak, .one = Strength::Strong},
+                             {.zero = Strength::Strong, .one = Strength::Weak}}));
+}
+
+TEST_F(FrontendTest, ReportsAHighImpedanceDriveStrength) {
+    // It drives `z` where a strength would, which no model Enzan reads asks for.
     EXPECT_EQ(analyse(R"(
         module m;
             logic a;
             wire w;
-            assign (weak0, weak1) w = a;
+            assign (strong1, highz0) w = a;
         endmodule
     )"),
               nullptr);
-    EXPECT_TRUE(reported("a drive strength other than strong"));
+    EXPECT_TRUE(reported("a drive strength of highz"));
 }
 
 TEST_F(FrontendTest, AnExplicitStrongDriveIsTheDefaultAndAccepted) {
@@ -1141,8 +1165,9 @@ TEST_F(FrontendTest, ACalledFunctionIsInlinedAndItsReadsAreTheCallers) {
 }
 
 TEST_F(FrontendTest, AHierarchicalReferenceIsAPathFromTheInstanceHoldingIt) {
-    // Down from the testbench, and up and across from one leaf to another. One definition
-    // serves both leaves, so the path is relative rather than from the root.
+    // Down from the testbench, and up and across from one leaf to the other. From the other leaf
+    // itself the same name is its own object, so the two leaves are two definitions: sharing the
+    // first translated would have one of them read the wrong `value`.
     const std::unique_ptr<Design> design = analyse(R"(
         module leaf;
             logic [3:0] value;
@@ -1166,12 +1191,99 @@ TEST_F(FrontendTest, AHierarchicalReferenceIsAPathFromTheInstanceHoldingIt) {
             if (!object.hierarchicalPath.empty()) paths.push_back(object.hierarchicalPath);
         return paths;
     };
+    const auto definitionOf = [&design](const ModuleDefinition& parent, std::string_view name) {
+        const auto instance = std::ranges::find(parent.instances, name, &Instance::name);
+        EXPECT_NE(instance, parent.instances.end()) << name;
+        return design->findModule(instance->definitionName);
+    };
     const ModuleDefinition* tb = design->findModule("tb");
-    const ModuleDefinition* leaf = design->findModule("leaf");
     ASSERT_NE(tb, nullptr);
-    ASSERT_NE(leaf, nullptr);
     EXPECT_EQ(referencesOf(*tb), (std::vector<std::string>{"u_one/value"}));
-    EXPECT_EQ(referencesOf(*leaf), (std::vector<std::string>{"../u_other/value"}));
+
+    const ModuleDefinition* one = definitionOf(*tb, "u_one");
+    const ModuleDefinition* other = definitionOf(*tb, "u_other");
+    ASSERT_NE(one, nullptr);
+    ASSERT_NE(other, nullptr);
+    EXPECT_NE(one, other);
+    EXPECT_EQ(referencesOf(*one), (std::vector<std::string>{"../u_other/value"}));
+    EXPECT_TRUE(referencesOf(*other).empty()) << "u_other reads its own value";
+    EXPECT_EQ(other->name, "leaf") << "names that stay inside leave the name as it was";
+}
+
+TEST_F(FrontendTest, AReferenceIntoAnotherTopLevelIsFromTheRoot) {
+    // As AMD's cells read `glbl.GSR`: the same path from every depth, so one definition serves.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module glbl;
+            logic GSR;
+        endmodule
+
+        module leaf;
+            logic gsr;
+            assign gsr = glbl.GSR;
+        endmodule
+
+        module shelter;
+            leaf u ();
+        endmodule
+
+        module tb;
+            leaf shallow ();
+            shelter deeper ();
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* leaf = design->findModule("leaf");
+    ASSERT_NE(leaf, nullptr) << "a reference from the root leaves the name as it was";
+    EXPECT_EQ(leaf->objects[require(leaf->findObject("ref$/glbl/GSR"))].hierarchicalPath,
+              "/glbl/GSR");
+    EXPECT_EQ(design->findSpecialisations("leaf").size(), 1U);
+}
+
+TEST_F(FrontendTest, InstancesShareADefinitionOnlyWhereTheirReferencesLeadAlike) {
+    // One parameterisation reading `tb.clk` from three instances, two of them one level down and
+    // one two levels down: the two alike share a definition, and the third has its own.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module probe;
+            logic seen;
+            assign seen = tb.clk;
+        endmodule
+
+        module shelter;
+            probe u ();
+        endmodule
+
+        module tb;
+            logic clk;
+            probe first ();
+            probe second ();
+            shelter deeper ();
+        endmodule
+    )",
+                                                   "tb");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+
+    const ModuleDefinition* tb = design->findModule("tb");
+    const ModuleDefinition* shelter = design->findModule("shelter");
+    ASSERT_NE(tb, nullptr);
+    ASSERT_NE(shelter, nullptr);
+    const auto definitionName = [](const ModuleDefinition& parent, std::string_view name) {
+        const auto instance = std::ranges::find(parent.instances, name, &Instance::name);
+        return instance == parent.instances.end() ? std::string() : instance->definitionName;
+    };
+    EXPECT_EQ(definitionName(*tb, "first"), definitionName(*tb, "second"));
+    EXPECT_NE(definitionName(*tb, "first"), definitionName(*shelter, "u"));
+
+    const ModuleDefinition* shallow = design->findModule(definitionName(*tb, "first"));
+    const ModuleDefinition* deep = design->findModule(definitionName(*shelter, "u"));
+    ASSERT_NE(shallow, nullptr);
+    ASSERT_NE(deep, nullptr);
+    EXPECT_EQ(shallow->objects[require(shallow->findObject("ref$../clk"))].hierarchicalPath,
+              "../clk");
+    EXPECT_EQ(deep->objects[require(deep->findObject("ref$../../clk"))].hierarchicalPath,
+              "../../clk");
+    EXPECT_EQ(shallow->sourceName, "probe");
+    EXPECT_EQ(deep->sourceName, "probe");
 }
 
 TEST_F(FrontendTest, AModuleWithoutATimescaleBesideOneWithIsAccepted) {
@@ -1326,40 +1438,65 @@ TEST_F(FrontendTest, FoldsAComparisonOfConstantTimes) {
     ASSERT_NE(design, nullptr) << consumer.messages.front();
 }
 
-TEST_F(FrontendTest, ReportsARealComputationOnAVariable) {
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, ARealComputationOnAVariableIsComputedAsTheDesignRuns) {
+    // Not foldable, since `x` is known only as the design runs: a conversion into a real and a
+    // comparison of reals.
+    const std::unique_ptr<Design> design = analyse(R"(
         module m;
             logic [7:0] x;
             logic ok;
             initial ok = x * 1.5 > 2;
         endmodule
-    )"),
-              nullptr);
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 1U);
+    const std::vector<enzan::eir::Type>& registers = found->processes[0].registerTypes;
+    EXPECT_TRUE(std::ranges::any_of(registers, &enzan::eir::Type::isReal));
 }
 
-TEST_F(FrontendTest, ReportsADelayedWriteToPartOfASignal) {
-    // A delayed store writes a whole object; splitting the update would let the rest of the
-    // signal be overwritten with the value it had when the statement ran.
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, ADelayedWriteToPartOfASignalWritesOnlyThatPart) {
+    // A store of the part, so that the rest of the signal is not written back with the value it
+    // had when the statement ran.
+    const std::unique_ptr<Design> design = analyse(R"(
         module m;
             logic [7:0] x;
             initial x[3:0] <= #2 4'd5;
         endmodule
-    )"),
-              nullptr);
-    EXPECT_TRUE(reported("a delayed write to part of a signal"));
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const enzan::eir::Process& process = design->findModule("m")->processes.front();
+    EXPECT_TRUE(std::ranges::any_of(process.blocks, [](const enzan::eir::BasicBlock& block) {
+        return std::ranges::any_of(
+            block.instructions, [](const enzan::eir::Instruction& instruction) {
+                return instruction.opcode == enzan::eir::Opcode::StorePartNonBlockingDelayed;
+            });
+    }));
 }
 
-TEST_F(FrontendTest, ReportsSeparateRiseAndFallDelays) {
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, ReportsSeparateRiseAndFallDelaysOnAVector) {
+    // One bit's are chosen by the value it takes; a vector's bits may each call for another.
+    EXPECT_NE(analyse(R"(
         module m;
             logic a;
             wire  y;
             assign #(1, 2) y = a;
         endmodule
     )"),
+              nullptr)
+        << consumer.messages.front();
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [1:0] a;
+            wire  [1:0] y;
+            assign #(1, 2) y = a;
+        endmodule
+    )"),
               nullptr);
-    EXPECT_TRUE(reported("separate rise, fall and turn-off delays"));
+    EXPECT_TRUE(reported("separate rise, fall and turn-off delays on a vector"));
 }
 
 TEST_F(FrontendTest, ReportsReadingAMemoryOfTwoDimensions) {
@@ -1513,6 +1650,413 @@ TEST_F(FrontendTest, ReportsAnUnsupportedSystemTaskByName) {
               nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
     EXPECT_TRUE(reported("$sdf_annotate")) << "the diagnostic must name the task";
+}
+
+TEST_F(FrontendTest, AGateIsAContinuousAssignmentAtItsStrength) {
+    // Driving its output, at the strength the instance declares, or pull for a pull-up.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic i, t;
+            wire o;
+            bufif0 (weak1, weak0) b (o, i, t);
+            pullup p (o);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 2U);
+    using enzan::eir::Strength;
+    for (const enzan::eir::Process& process : found->processes)
+        EXPECT_EQ(process.kind, enzan::eir::ProcessKind::ContinuousAssign);
+    EXPECT_EQ(found->processes[0].strength,
+              (enzan::eir::DriveStrength{.zero = Strength::Weak, .one = Strength::Weak}));
+    EXPECT_EQ(found->processes[1].strength,
+              (enzan::eir::DriveStrength{.zero = Strength::Pull, .one = Strength::Pull}));
+}
+
+TEST_F(FrontendTest, ReportsASwitchByName) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            wire a, b;
+            logic c;
+            tranif1 t (a, b, c);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("the switch 'tranif1'"));
+}
+
+TEST_F(FrontendTest, AForceIsHeldByAProcessThatEvaluatesItAgain) {
+    // The statement writes the value and names the process holding the override, which writes
+    // it again as what it reads changes, and both declare the object in their override sets.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic a, b;
+            wire n;
+            initial begin
+                force n = a & b;
+                release n;
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 2U);
+
+    // The instruction of `process` with `opcode`, or nothing.
+    const auto find = [](const enzan::eir::Process& process,
+                         enzan::eir::Opcode opcode) -> const enzan::eir::Instruction* {
+        for (const enzan::eir::BasicBlock& block : process.blocks) {
+            const auto at =
+                std::ranges::find(block.instructions, opcode, &enzan::eir::Instruction::opcode);
+            if (at != block.instructions.end()) return &*at;
+        }
+        return nullptr;
+    };
+    const enzan::eir::Process& holder = found->processes[0];
+    const enzan::eir::Process& statement = found->processes[1];
+    EXPECT_EQ(holder.kind, enzan::eir::ProcessKind::Override);
+    EXPECT_EQ(statement.kind, enzan::eir::ProcessKind::Initial);
+    EXPECT_NE(find(holder, enzan::eir::Opcode::Override), nullptr);
+    EXPECT_TRUE(holder.writeSet.empty()) << "an override drives nothing";
+    EXPECT_EQ(holder.readSet.size(), 2U);
+
+    const std::uint32_t net = require(found->findObject("n"), "object n");
+    EXPECT_EQ(holder.overrideSet, std::vector<std::uint32_t>{net});
+    EXPECT_EQ(statement.overrideSet, std::vector<std::uint32_t>{net});
+    const enzan::eir::Instruction* force = find(statement, enzan::eir::Opcode::Force);
+    ASSERT_NE(force, nullptr);
+    EXPECT_EQ(force->c, enzan::eir::Operand::immediate(0)) << "held by the first process";
+    EXPECT_NE(find(statement, enzan::eir::Opcode::Release), nullptr);
+}
+
+TEST_F(FrontendTest, ReportsAForceOfPartOfAnObject) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            wire [3:0] n;
+            initial force n[1] = 1'b1;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
+    EXPECT_TRUE(reported("`force` of anything but a whole variable or net"));
+}
+
+TEST_F(FrontendTest, ANamedEventIsABitItsTriggerToggles) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            event e;
+            initial -> e;
+            always @e;
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    const std::uint32_t event = require(found->findObject("e"), "the event");
+    EXPECT_EQ(found->objects[event].type, enzan::eir::Type::bits(1, false, false));
+    EXPECT_TRUE(enzan::eir::writesObject(found->processes[0].writeSet, event));
+}
+
+TEST_F(FrontendTest, ReportsAnAssignmentOfOneEventToAnother) {
+    // Which makes them one event, not one a copy of the other's bit.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            event a, b;
+            initial a = b;
+        endmodule
+    )",
+                      "m"),
+              nullptr);
+    EXPECT_TRUE(reported("an assignment to an event"));
+}
+
+TEST_F(FrontendTest, ARealIsADouble) {
+    // `real`, `realtime` and `shortreal` alike, the last without its reduced precision.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            real r = 1.5;
+            realtime t;
+            shortreal s;
+            initial t = $realtime + r;
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    for (const std::string_view name : {"r", "t", "s"}) {
+        const std::uint32_t object = require(found->findObject(name), name);
+        EXPECT_TRUE(found->objects[object].type.isReal()) << name;
+    }
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, ReportsARealPortByName) {
+    EXPECT_EQ(analyse(R"(
+        module m (input real level);
+        endmodule
+    )",
+                      "m"),
+              nullptr);
+    EXPECT_TRUE(reported("the real port 'level'"));
+}
+
+TEST_F(FrontendTest, AUserDefinedPrimitiveIsAContinuousAssignmentByItsTable) {
+    // A combinational one needs nothing kept; a sequential one keeps its inputs as it last took
+    // them above its state, which starts at its initial value.
+    const std::unique_ptr<Design> design = analyse(R"(
+        primitive inverter (output o, input i);
+            table
+                0 : 1;
+                1 : 0;
+            endtable
+        endprimitive
+
+        primitive toggle (q, t);
+            output q;
+            reg q;
+            input t;
+            initial q = 1'b1;
+            table
+                r : 0 : 1;
+                r : 1 : 0;
+                f : ? : -;
+            endtable
+        endprimitive
+
+        module m;
+            logic i;
+            wire  o, q;
+            inverter u_inverter (o, i);
+            toggle u_toggle (q, i);
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->processes.size(), 2U);
+    for (const enzan::eir::Process& process : found->processes)
+        EXPECT_EQ(process.kind, enzan::eir::ProcessKind::ContinuousAssign);
+
+    EXPECT_FALSE(found->findObject("u_inverter$state").has_value());
+    const std::uint32_t held = require(found->findObject("u_toggle$state"), "the toggle's state");
+    EXPECT_EQ(found->objects[held].type.bitWidth(), 2U);
+    EXPECT_EQ(found->objects[held].initialValue, std::optional(enzan::test::literal("2'bx1")));
+}
+
+TEST_F(FrontendTest, AUserDefinedPrimitivePassesTheVerifier) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        primitive latch (q, g, d);
+            output q;
+            reg q;
+            input g, d;
+            table
+                1 0 : ? : 0;
+                1 1 : ? : 1;
+                0 ? : ? : -;
+            endtable
+        endprimitive
+
+        module m;
+            logic g, d;
+            wire  q;
+            latch #1 u (q, g, d);
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, AnArrayOfGatesIsAGatePerElement) {
+    // The elements of an array are collected one by one, so each kind of element needs its own
+    // case there as well as in the scope walk.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic [3:0] i;
+            wire  [3:0] o;
+            not n[3:0] (o, i);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_EQ(design->findModule("m")->processes.size(), 4U);
+}
+
+TEST_F(FrontendTest, RefusesAFileHoldingAnEncryptedEnvelopeWithOneError) {
+    // slang skips the envelope with a warning, which would leave `m` an empty module that
+    // simulates. Everything else slang says about the file follows from the missing text.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+        `pragma protect begin_protected
+        `pragma protect version = 1
+        `pragma protect encrypt_agent = "written for this test"
+        `pragma protect key_keyowner = "nobody", key_keyname = "none", key_method = "rsa"
+        `pragma protect encoding = (enctype = "base64", line_length = 64, bytes = 3)
+        `pragma protect key_block
+        AA+/
+        `pragma protect encoding = (enctype = "base64", line_length = 64, bytes = 5)
+        `pragma protect data_block
+        AAAA+/8=
+        `pragma protect end_protected
+        endmodule
+    )"),
+              nullptr);
+    ASSERT_EQ(consumer.codes.size(), 1U) << consumer.messages.front();
+    EXPECT_EQ(consumer.codes.front(), DiagCode::EncryptedSource);
+    EXPECT_TRUE(reported((directory / "design.sv").string())) << "the error names the file";
+}
+
+TEST_F(FrontendTest, RefusesANetAliasByItsNets) {
+    // Dropped, the alias would leave `b` undriven, where `a`'s driver drives both.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            wire [3:0] a, b;
+            alias a = b;
+            assign a = 4'd5;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
+    EXPECT_TRUE(reported("the net alias of 'a', 'b'")) << "the diagnostic must name the nets";
+}
+
+TEST_F(FrontendTest, AcceptsASpecifyBlockWhosePathsHaveNoDelay) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (input a, input b, output y);
+            assign y = a & b;
+            specify
+                specparam PATHPULSE$ = 0;
+                specparam tpd = 0;
+                pulsestyle_ondetect y;
+                showcancelled y;
+                (a => y) = tpd;
+                (b => y) = (0:0:0, 0:0:0);
+                if (a) (b => y) = 0.0;
+                ifnone (a => y) = (0, 0, 0);
+            endspecify
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(design->findModule("m")->firstTimingCheck.valid());
+}
+
+TEST_F(FrontendTest, AModulePathWithADelayIsAProcessThatDelaysItsOutput) {
+    // The body's own write of `y` goes to a copy, which the path's process reads and delays into
+    // the port; the path without a delay takes part as well.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (input a, input b, output y);
+            assign y = a & b;
+            specify
+                (a => y) = 0;
+                (a, b *> y) = (0:1:2);
+            endspecify
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    const std::uint32_t port = require(found->findObject("y"), "the port");
+    const std::uint32_t internal = require(found->findObject("y$path"), "the body's copy");
+
+    const auto writes = [](const enzan::eir::Process& process, std::uint32_t object) {
+        return enzan::eir::writesObject(process.writeSet, object);
+    };
+    ASSERT_EQ(found->processes.size(), 2U);
+    const enzan::eir::Process& delaying = found->processes[0];
+    const enzan::eir::Process& assignment = found->processes[1];
+    EXPECT_TRUE(delaying.name.starts_with("specify@"));
+    EXPECT_TRUE(writes(delaying, port));
+    EXPECT_TRUE(std::ranges::binary_search(delaying.readSet, internal));
+    EXPECT_TRUE(writes(assignment, internal));
+    EXPECT_FALSE(writes(assignment, port));
+}
+
+TEST_F(FrontendTest, RefusesModulePathsThatDifferBetweenTheBitsOfAnOutput) {
+    // One process delays the whole output, by one choice of path.
+    EXPECT_EQ(analyse(R"(
+        module m (input clk, input [1:0] d, output [1:0] q);
+            assign q = d;
+            specify
+                (clk => q[0]) = 5;
+                (d[1] => q[1]) = 0;
+            endspecify
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("module paths with a delay that differ between the bits of 'q'"));
+}
+
+TEST_F(FrontendTest, RefusesDelaysThatDifferByTransitionOnAVector) {
+    EXPECT_EQ(analyse(R"(
+        module m (input [1:0] d, output [1:0] q);
+            assign q = d;
+            specify
+                (d *> q) = (3, 7);
+            endspecify
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("delays that differ by transition on a module path to the vector 'q'"));
+}
+
+TEST_F(FrontendTest, RefusesAPulseLimitOtherThanZeroBesideAPathWithADelay) {
+    EXPECT_EQ(analyse(R"(
+        module m (input a, output y);
+            assign y = a;
+            specify
+                (a => y) = 5;
+                specparam PATHPULSE$ = 2;
+            endspecify
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("the pulse limit 'PATHPULSE$'"));
+}
+
+TEST_F(FrontendTest, RecordsWhereADefinitionsFirstTimingCheckIs) {
+    // The checks are not run; the definition keeps only where the first is, for the run to point
+    // at when it says so.
+    const std::unique_ptr<Design> design = analyse("module m (input clk, input d);\n"
+                                                   "    reg notifier;\n"
+                                                   "    specify\n"
+                                                   "        $setup(d, posedge clk, 1, notifier);\n"
+                                                   "        $hold(posedge clk, d, 1, notifier);\n"
+                                                   "    endspecify\n"
+                                                   "endmodule\n");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const SourceLocation check = design->findModule("m")->firstTimingCheck;
+    ASSERT_TRUE(check.valid());
+    EXPECT_EQ(sources.lineNumber(check), 4U);
+}
+
+TEST_F(FrontendTest, ReadsASpecparamAsAParameter) {
+    // Read through a hierarchical reference, which slang does not fold, a specparam would
+    // otherwise become an object that nothing stores.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf;
+            specparam width = 3;
+        endmodule
+
+        module m;
+            logic [7:0] seen;
+            leaf u ();
+            initial seen = u.width;
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(std::ranges::none_of(
+        design->findModule("m")->objects,
+        [](const enzan::eir::Object& object) { return !object.hierarchicalPath.empty(); }))
+        << "a specparam has no storage to refer to";
 }
 
 TEST_F(FrontendTest, EachCaseFormComparesItsItemsWithItsOwnOpcode) {

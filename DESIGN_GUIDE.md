@@ -66,9 +66,16 @@ When two goals conflict, resolve the conflict in this order:
 The following are **out of scope** and MUST NOT be implemented without an explicit decision to
 change this list:
 
-- Gate-level simulation, SDF back-annotation and timing checks.
+- Gate-level timing simulation: SDF back-annotation, timing checks and VITAL. The Verilog that
+  vendor cell libraries are written in is part of the language and in scope: gate primitives,
+  user-defined primitives, drive strengths as two classes rather than the standard's eight
+  levels, and specify blocks, read for what a functional simulation needs of them. A module path
+  delays its output as the standard says, since vendor models give clock-to-output delays that
+  their own simulators show; a timing check is not run.
 - Power-aware (UPF/CPF) and mixed-signal (Verilog-AMS, VHDL-AMS) simulation.
-- IP encryption (IEEE 1735).
+- IP encryption (IEEE 1735). Decrypting needs a vendor to wrap its keys for Enzan's, which takes
+  an agreement with each vendor, and a private key in a GPL binary is no secret. A source holding
+  an encrypted envelope is refused by one error saying so, never read around.
 - Windows and macOS support. Enzan targets Linux only.
 - Synthesis, formal verification, equivalence checking.
 - UVM, constrained-random stimulus and functional coverage, until M9+ (section 18).
@@ -114,10 +121,11 @@ output is independent of any particular top level, and so is reusable across run
 **A parameterised unit is analysed once per set of values the design uses.** slang is an elaborating
 frontend: it type-checks a body in the context of the values it is given, because a type can depend
 on a parameter, and offers no body generic over them. The VHDL adapter folds generics the same way
-(5.2). So a unit becomes one unit per set of values, named for them (8.2): the same values make the
-same unit wherever it is produced, but a library is re-runnable rather than reusable at values it
-has never seen. Rebuilding a generic unit out of slang's elaborations was rejected: it would be
-checked against slang only at the values slang saw, and trusted at the others.
+(5.2). So a unit becomes one unit per set of values, and per set of places its hierarchical
+references lead (5.1), named for them (8.2): the same values and places make the same unit wherever
+it is produced, but a library is re-runnable rather than reusable at values it has never seen.
+Rebuilding a generic unit out of slang's elaborations was rejected: it would be checked against
+slang only at the values slang saw, and trusted at the others.
 
 **Elaboration** takes a top level and the analysed units, binds each instance to the unit for its
 values, builds the instance tree, binds ports, computes the flat state layout and produces an
@@ -237,6 +245,8 @@ A delayed write is scheduled for its time, not for a process. `a <= #d b` joins 
 the time step `d` later, and a continuous assignment with a delay writes at the start of that step's
 Active region. That delay is inertial: a newer write from the same assignment replaces one still
 pending, so a pulse shorter than the delay leaves no time step behind (IEEE 1800 section 10.3.3).
+A delayed write to part of a signal, `mem[addr] <= #d b`, writes that part alone when it comes, at
+the offset the statement computed, and a newer write replaces only one at the same offset.
 
 ### 3.4 VHDL simulation cycle
 
@@ -368,6 +378,39 @@ whose ranges are disjoint are not in conflict and MUST NOT be treated as though 
   its driver first runs.
 - A driver's range is fixed at elaboration. A part-select at a position that is not constant writes
   through the driver of every bit it could reach.
+
+**Strength is two classes, not the standard's eight.** A driver's strength for each value is
+*strong* (`supply`, `strong`) or *weak* (`pull`, `weak`, and a `tri0` or `tri1` net's own pull).
+Strength is declared, so it is fixed at elaboration and held by the driver in the image, not by its
+value in the arena: what changes during a run is a driver's value, never its strength. A bit
+resolves among the drivers of the strongest class that contributes to it, by its net kind's table,
+and is `z` when none does; a driver whose 0 and 1 are of different classes contributes its `x` to
+both. A lone driver still bypasses resolution where its net kind allows, since strength decides
+only between drivers.
+
+**What the classes cannot tell apart is refused, not guessed.** Two drivers of one segment, or a
+driver and its net's own pull, whose strengths the standard orders and one class holds — pull
+against weak, supply against strong on a net of no supply kind — are an elaboration error naming
+both: resolved as equals they would give `x` where the standard has a winner. So is a driver of a
+supply net at supply strength. A result the standard gives as a partial value, `L` or `H`, is `x`,
+which four-state values cannot avoid. A `highz` strength, switches (`nmos`, `tran` and the rest)
+and `trireg` are refused; `%v` prints as written and `vpiStrengthVal` is refused, rather than
+reporting a strength Enzan does not hold. The eight-level model was rejected because nothing in
+the vendors' libraries Enzan reads needs it, and these refusals keep the shortcut honest where it
+would differ.
+
+**An override outranks what drives a signal, and is not a driver of it.** A procedural `assign`
+holds a variable, and a `force` a variable or a net, until `deassign` or `release` (IEEE 1800
+section 10.6): every other write of it is discarded meanwhile, a deposit's included, and a force
+stands over an assign. The statement writes the value, and a process of its own, which the
+frontend adds beside the statement's, writes it again whenever what it reads changes, while the
+override still holds. A release hands an assign it stood over the signal back, evaluated again;
+otherwise it resolves the signal's drivers at once, and a net's undriven bits go back to their
+kind's value. The drivers keep their values for that only where a `force` in the design names the
+signal, so after a force from outside, a lone driver takes its net back when it next writes. The
+objects a process overrides are declared beside its write set rather than in it, since a forced
+net's drivers are still its drivers. A part of an object and a concatenation are refused as
+targets.
 
 **VHDL resolution functions are user code**, compiled to EIR like any subprogram, and the runtime
 MUST NOT assume resolution is a table. A function's parameter is an array as long as the bit has
@@ -536,7 +579,9 @@ using without first having to find it.
 **VHDL's standard libraries are part of the tool, not a cache.** `std`, `ieee` and NVC's own `nvc`
 are analysed from NVC's sources when Enzan is built and found from the executable's own directory
 (11.5), without being named, since `library ieee;` has to resolve with no flag. Nothing a user does
-writes to them. A library the user names `ieee` replaces them.
+writes to them. A library the user names `ieee` replaces them. `ieee` is built without VITAL,
+gate-level timing being out of scope (1.3), and a design naming it is told so rather than that a
+unit is missing.
 
 **A library holds VHDL as NVC's analysed units, not as EIR.** A VHDL unit is analysed against the
 units analysed before it, which only NVC's units can serve, and a design is translated into EIR for
@@ -571,8 +616,14 @@ floor.
   named changes the EIR produced, so it bumps the format version (4.4).
 - **A hierarchical reference is an object with a path and no storage**, bound by elaboration to the
   object it names, so reads, writes, sensitivity and drivers all see the real signal. The path is
-  relative — `core/state`, `../u_peer/ready` — because one definition serves every instance of a
-  parameterisation.
+  relative — `core/state`, `../u_peer/ready` — so that one definition serves every instance of a
+  parameterisation whose references lead to the same places from where it is. An instance whose
+  lead elsewhere, a module reading `tb.clk` from two depths, is a definition of its own, named for
+  where they lead. Only the instances of a parameterisation whose first instance names something
+  past its own objects are walked to find out. **A reference into another top level is
+  absolute**, `/glbl/GSR`, as a package variable's is: no path climbs out of one top into another,
+  and one from the root is the same from every instance, so AMD's cells reading `glbl` share a
+  definition at any depth.
 - **A package's variables are a definition of their own, `<package>::`**, with one instance at the
   root, `/<package>`, created when something refers to one, and are referred to by the absolute path
   `/<package>/<variable>`. A package's constants, types and subroutines need no instance.
@@ -585,6 +636,53 @@ floor.
   caller and the caller's read and write sets are exactly what the call touches. A recursive call is
   refused, unless slang folds it to a constant. Calling a SystemVerilog function as an EIR
   subprogram instead would be a change to this frontend alone.
+- **A gate is a continuous assignment of its outputs**, at the strength its instance declares
+  (3.7), pull for `pullup` and `pulldown`, with its delay as a continuous assignment's. An input of
+  `z` reads as `x`, as the gate tables have it, and a tristate buffer whose control is unknown
+  drives `x`: the standard's `L` and `H` are no values four states hold. Switches are refused.
+- **Separate rise, fall and turn-off delays are chosen by the value stored** (IEEE 1800 section
+  28.16): 1 takes the rise, 0 the fall, `z` the turn-off, the shorter of the other two when only
+  two are given, and `x` the shortest. A vector's bits may each call for another, so a vector with
+  separate delays is refused.
+- **A user-defined primitive is a continuous assignment of its output by its table**, at its
+  instance's strength and with its delay, as a gate is. The frontend encodes the table as a
+  constant, which the runtime matches the inputs against by the layout `eir/Udp.h` gives both. A
+  `z` input reads as `x`, and inputs no row has drive `x`. A sequential primitive keeps, in an
+  object of its own, its inputs as it last took them above its state, which starts at its
+  `initial` value. Each input that changed is taken in turn, first to last, as a change of its
+  own: a level row that admits the inputs decides it, outranking an edge row as the standard has
+  it, and a change no row admits makes the state `x`. Inputs changing together are a race the
+  standard leaves open, and port order is how Enzan settles it.
+- **A real is a double**, `shortreal` without its reduced precision. A conversion into an integer
+  rounds halfway away from zero, `$rtoi` truncates, and `$realtobits` and `$bitstoreal` move the
+  bits unchanged; a real's truth is whether it is 0.0, which its bits alone do not say of -0.0. A
+  real delay known only as the process runs is rounded to the scope's precision when it is taken,
+  and `$realtime` keeps the fraction of the scope's unit that `$time` rounds away. `%f`, `%e` and
+  `%g` are C's, of an integer argument too, and an integer conversion of a real shows the integer
+  it rounds to; a real with no format is shown as Icarus Verilog shows one, `%g` with its trailing
+  zeros. A real port, an array or struct of reals and a real exponent are refused.
+- **A named event is a bit its trigger toggles**, so that what waits on it sees it change: `->`
+  at once, `->>` in the NBA region. A delayed trigger, an event used as a value, `.triggered`
+  among them, and assigning one event to another, which makes them one (IEEE 1800 section
+  15.5.5), are refused.
+- **A specify block is read for what a functional simulation needs of it.** A `specparam` is a
+  parameter. A timing check is not run (1.3): its notifier never toggles, and a run instantiating
+  one says so once, pointing at the first in the hierarchy.
+- **A module path delays its output as Icarus Verilog's `-gspecify` does**, by the standard's rule
+  (IEEE 1800 sections 30.4 to 30.7). When what the body gives an output changes, the output takes
+  it after the shortest delay among the paths whose input changed most recently, of those whose
+  condition holds, and no earlier than now: a change that comes after its path's delay has run out
+  is at once, the larger of the path's delay and the logic's (section 30.6). An edge-sensitive path counts only its
+  edge; an unknown condition holds no path, as Icarus has it. The delay is the transition's, the
+  six section 30.5 names and those to and from `x` it derives from them. A pulse shorter than the
+  delay is rejected, as the default limits have it, and `PATHPULSE$ = 0`, which AMD's models set,
+  lets every pulse through. The frontend gives such an output a process of its own, which keeps each
+  input's last change in objects beside it, and sends the body's writes of the output to a copy
+  the process reads; the port is the process's alone, and what everything reads, the body
+  included. One process delays the whole output, so paths that differ between its bits, and
+  delays that differ by transition on a vector, are refused, as are `ifnone` with a delay, pulse
+  limits other than zero, pulse styles and `showcancelled`. A path without a delay still takes part
+  in choosing, and a body whose every path has none pays nothing.
 
 ### 5.2 VHDL via NVC
 
@@ -631,7 +729,9 @@ child that is a diagnostic, and every analysis starts from NVC's initial state. 
 translates as well**, and sends the parent EIR in its serialised form (4.4), so NVC's trees never
 reach the process that simulates. It translates the hierarchy under the top, so a unit nothing
 instantiates cannot stop a design; with no top named it is the one entity nothing instantiates, and
-with several it names them and translates nothing.
+with several it names them and translates nothing. A unit's objects may take 64 MB of NVC's arena,
+four times NVC's default and what AMD's package of 1,364 unisim components needs; the arena is
+reserved rather than touched, so a smaller unit pays nothing for it.
 
 **Sources are analysed in dependency order**: each after the sources declaring the primary units it
 names, in the order given otherwise, so a file list need not put a package before its users.
@@ -665,7 +765,9 @@ the session links the two by port name.
   entity's default one, since choosing another takes a `config`, which Enzan does not read.
 - VHDL instantiates a SystemVerilog module through a component of the module's name, bound to the
   module when no entity of that name exists — the default binding of IEEE 1076 extended to the other
-  language, as commercial tools extend it. The component's generics are the module's parameters.
+  language, as commercial tools extend it. The component's generics are the module's parameters,
+  and a boolean meeting a parameter that takes a string is `"TRUE"` or `"FALSE"`, which is how
+  vendors' models write a boolean.
 - Each side specialises for the values the other gives, so the session alternates between the
   frontends until neither asks for a unit the other has not given, with a bound on the rounds so
   that a hierarchy recursing through both languages is reported rather than followed for ever. A
@@ -816,6 +918,13 @@ when it is one of the names above, so a source file called `run.sv` is still a s
   `elaborate`, `--wave-list` without `--gui`, and a command line that gives nothing to work on are
   usage errors, each with a message saying which, rather than taken and dropped: a waveform asked
   for and never written looks exactly like one written somewhere else.
+- **`--top` is repeatable, and several top levels are several roots**, side by side as a
+  package's instance sits beside the top (5.1). The first is the design's own, which a window
+  title shows; a top given as `elaborate`'s or `run`'s word is first, and any `--top` joins it.
+  A design using AMD's models has `glbl` beside its own, and VPI iterates both as top modules.
+  With none named, one candidate is taken and several are refused rather than all taken, since a
+  module nothing instantiates is as often one left over as one meant; `glbl` among them is said
+  to be a top of its own.
 - **A top level's parameters are set with `-G NAME=VALUE`**, or `-GNAME=VALUE`. slang applies an
   override while analysing, so it is in a library entry's key. One that names no parameter is
   reported, since a misspelt override is otherwise invisible.
@@ -903,6 +1012,14 @@ and `$VAR` and `${VAR}` from the environment.
   different design. `-sv` is accepted and dropped.
 - **An unset variable is an error**, not an empty expansion that turns `$RTL_ROOT/cpu.sv` into
   `/cpu.sv`.
+- **`-v` and `-y` supply what nothing else defines.** A module the sources instantiate that no
+  source, context file or library resolved against defines is looked for in the `-v` files, then
+  as `<name><extension>` in the `-y` directories, each in the order given and the `+libext+`
+  extensions in theirs, `.v` when none is given. What is found is analysed as a source is, stored
+  in `--out-lib` and named in `--depfile`, and the modules it instantiates are looked for in turn.
+  A VHDL component no entity binds to binds to a module found so. A file is read only when it
+  holds a module wanted, so a directory of a vendor's five hundred models costs the three a design
+  uses.
 - **`--dry-run`** prints the expanded list, in order, and exits.
 - **`--depfile <file>` writes a `make` dependency file naming every file the analysis read** — the
   sources a list expanded to, the headers they included, and the context files — so that a Makefile
@@ -1156,8 +1273,9 @@ Run controls, and `examine`, `force` and `deposit` on signals, are required alon
 implementation of writing a signal from outside would be a second set of semantics.
 
 **A force outranks the design; a deposit does not.** Every write to a forced signal is discarded
-until it is released, while a deposit is overwritten by whatever drives the signal next. Forcing
-costs an ordinary run nothing: the table of forced signals is allocated by the first force (13.4).
+until it is released, while a deposit is overwritten by whatever drives the signal next. A force
+from outside is the design's own `force` of a constant, and its release the same release (3.7).
+Forcing costs an ordinary run nothing: the table of overrides is allocated by the first one (13.4).
 
 ### 10.5 Theme
 
@@ -1598,6 +1716,13 @@ Verilog, for both languages; and later the processors picorv32, VexRiscv, Ibex a
   testbench writes.
 - A testbench that cannot pass for a reason outside Enzan is named, with the reason, beside the
   design; any other failure fails the run.
+- **AMD's own simulation models are read from a local installation**, never committed, by
+  `tests/designs/vendor-xilinx`: testbenches of the commonest primitives, held to Icarus Verilog
+  with `-gspecify`, and of XPM's memories, FIFOs and synchronisers, held to Verilator, since Icarus
+  reads none of XPM. Without `XILINX_VIVADO`, or Verilator for XPM's, the harness says what it did
+  not run and exits 77, since a missing installation or reference is not a pass, and it names the
+  release it last passed with. CI has no vendor installation, so whoever merges a change touching
+  this runs it.
 - **A testbench written here can be wrong as easily as the simulator.** Before it is committed it is
   run under a second simulator, and it must pass there too.
 
@@ -1770,6 +1895,34 @@ exit criteria are unmet.
 | M6 | VHDL via NVC, the VHDL simulation cycle and VHPI |
 | M7 | Designs of both languages (3.5) |
 
+### M7.1 — AMD Xilinx simulation libraries
+
+Designs instantiating AMD Xilinx's simulation models, read from the user's own installation: the
+unisims, unimacro, `glbl` and XPM from SystemVerilog; the same through `unisim` and `xpm` libraries of
+components from VHDL; and 7-series functional-simulation netlists. It takes `-y`, `-v` and
+`+libext+` acted on; several top levels, `glbl` beside the design's own; drive strengths in two
+classes; gate and user-defined primitives; procedural `assign`, `deassign`, `force` and `release`;
+SystemVerilog `real`; and module path delays.
+
+**Exit:** self-checking testbenches for the primitives designs use most — flip-flops with `glbl`'s
+reset, LUTs, carry chains, shift registers, block RAM, DSP slices, clock buffers, MMCMs, DDR
+registers, I/O buffers with pulls — match Icarus Verilog, their clock-to-output delays included;
+XPM memories, FIFOs and synchronisers match Verilator; the same checks run from VHDL through the
+component libraries agree with both; and NEORV32's 7-series functional netlists, in Verilog and in
+VHDL, run its program as its RTL does.
+
+### M7.2 — Altera simulation libraries
+
+Designs instantiating Altera's models: `altera_primitives`, LPM, `altera_mf`, `sgate` and the
+Cyclone 10 LP atoms from SystemVerilog, and from VHDL through Altera's component packages or as
+VHDL libraries of their own; and Cyclone 10 LP `.vo` netlists. Beyond M7.1 it takes `$fgetc` and
+the rest of what reading a memory initialisation file needs.
+
+**Exit:** testbenches for `altsyncram` with an initialisation file and for the LPM functions match
+Icarus Verilog, and `scfifo` and `dcfifo` match Verilator; the Cyclone 10 LP atoms match Icarus
+Verilog, and `cyclone10lp_pll` Verilator; Altera's VHDL models give GHDL's results; and NEORV32's
+Cyclone 10 LP netlist runs its program as its RTL does.
+
 ### M8 — Performance
 
 LLVM JIT backend behind a flag; profiling and hot-path work; activity-based scheduling refinements;
@@ -1796,12 +1949,15 @@ regression each run with a recorded pass rate.
 Left out of the milestones above, and refused by name where a design uses them rather than
 mistranslated:
 
-- SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
-  classes, unpacked unions, and strengths other than strong.
+- SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
+  exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
+  `highz` strengths, switches, the module paths of 5.1 that one process per output cannot follow,
+  net aliases, and a procedural `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
-  SystemVerilog; storing a design of both languages in a library, and `-G` for one.
+  SystemVerilog; storing a design of both languages in a library, and `-G` for one; a second top
+  level of VHDL.
 - In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, part-select handles,
   struct members, user system tasks, and the difference between the delay modes (9.4).
 - The Processes and Source windows (10.2), and a per-bit change index (10.3).
@@ -1820,6 +1976,9 @@ mistranslated:
 | Waveform rendering does not scale when zoomed out | Medium | Pixel-bounded rendering (10.3) |
 | Scope creep into verification features | Medium | Explicit non-goals (1.3) and milestone gating |
 | Parallelism delivers less speedup than hoped | Low | Expectations calibrated in 6.4; the single-threaded kernel is the plan, not a fallback |
+| One unit per parameterisation (2.1) makes a functional netlist too many units | Medium | Measured: a 7-series NEORV32 netlist is 2,306 cell parameterisations for 41,355 instances; value-only parameters would reopen 2.1 |
+| Vendors' models change between releases, and CI cannot run them | Medium | A release pinned and recorded; golden tests of each construct in CI; the vendor harnesses run before merging |
+| Module paths behave unlike the standard where the references disagree | Medium | Icarus Verilog for paths, and self-checking cases where it ignores `PATHPULSE$` |
 
 ---
 
@@ -1835,11 +1994,29 @@ once per set of values the design uses (2.1). Cacheable and reusable.
 **Elaboration**: building the instance tree and state layout for a specific top level. Not cacheable
 across designs.
 
+**Functional-simulation netlist**: a synthesised design written as instances of a vendor's
+primitives with no timing, as Vivado's `write_verilog -mode funcsim` or a Quartus `.vo` writes it.
+
+**glbl**: the module of AMD Xilinx's global signals, its reset and its tristate among them, which the
+unisims reach by hierarchical name, simulated as a top level of its own.
+
+**Module path**: a specify block's delay from a module's input to its output (IEEE 1800 section 30).
+
+**Override**: a procedural `assign` or a `force`, which holds a signal against what drives it until
+`deassign` or `release` (3.7); not a parameter's value given with `-G`, which overrides its default.
+
 **Region**: one of the ordered phases within a SystemVerilog time slot.
 
 **State arena**: the single contiguous allocation holding all mutable simulation state.
 
 **Time precision**: the global integer unit in which simulated time is counted.
 
+**UDP**: a user-defined primitive, an element defined by a truth table (IEEE 1800 section 29).
+
+**Unisim**: one of AMD Xilinx's simulation models of its devices' primitives.
+
 **VPI / VHPI / DPI**: VPI and VHPI are the introspection and callback APIs tools such as cocotb
 drive a simulation through. DPI is the separate mechanism for calling C from SystemVerilog.
+
+**XPM**: AMD Xilinx's parameterised macros, memories, FIFOs and synchronisers written in
+SystemVerilog.

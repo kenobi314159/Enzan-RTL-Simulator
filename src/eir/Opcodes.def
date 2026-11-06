@@ -42,7 +42,9 @@ ENZAN_OPCODE(Move, "mov", true, 1,
 ENZAN_OPCODE(Extend, "ext", true, 1,
              "zext or sext of the aval plane and the same of bval, so that an "
              "unknown sign bit replicates; a runtime helper call when wide")
-ENZAN_OPCODE(Truncate, "trunc", true, 1, "trunc of both planes")
+ENZAN_OPCODE(Truncate, "trunc", true, 1,
+             "trunc of both planes; from a real, fptosi, which drops the fraction toward zero, as "
+             "SystemVerilog's $rtoi does where Convert rounds")
 ENZAN_OPCODE(CoerceTwoState, "twostate", true, 1,
              "aval := aval & ~bval, bval := 0, which is the X-to-zero conversion an "
              "assignment into a two-state object performs")
@@ -99,9 +101,22 @@ ENZAN_OPCODE(StoreDelayed, "dstore", false, 3,
              "a call to the runtime helper that schedules the write of a continuous "
              "assignment with a delay, the third operand, replacing the one it scheduled "
              "before if that has not happened yet; when it happens it is a Store")
+ENZAN_OPCODE(StoreTransport, "tstore", false, 3,
+             "as StoreDelayed through the same helper, replacing nothing it scheduled before: "
+             "the transport delay of a module path whose pulse limits are zero, which lets every "
+             "pulse through")
 ENZAN_OPCODE(StoreNonBlockingDelayed, "nbdstore", false, 3,
              "a call to the runtime helper that schedules a non-blocking update the "
              "third operand later, where it joins that time step's NBA region")
+ENZAN_OPCODE(StorePartDelayed, "dstorepart", false, 3,
+             "as StoreDelayed, of the bits from an offset up as wide as the value: the third "
+             "operand holds the offset in its low 64 bits and the delay in the 64 above, as "
+             "DrivePartAfter's does; an extract of each half, then the call StoreDelayed makes, "
+             "which replaces only what the store scheduled at the same offset. An unknown bit in "
+             "either half writes nothing, as an unknown offset does")
+ENZAN_OPCODE(StorePartNonBlockingDelayed, "nbdstorepart", false, 3,
+             "as StorePartDelayed through the helper StoreNonBlockingDelayed calls, the update "
+             "joining the NBA region of its time step as StorePartNonBlocking's does")
 
 // A VHDL signal assignment: a transaction of the process's driver of the object, the third
 // operand later, and in the next delta cycle when that is zero (IEEE 1076 section 10.5.2.2). It
@@ -126,6 +141,29 @@ ENZAN_OPCODE(DrivePartAfter, "pdrivea", false, 3,
 ENZAN_OPCODE(DriveTransportPart, "pdrivet", false, 3,
              "as DrivePartAfter with transport delay, rejecting nothing before the new "
              "transaction")
+
+// SystemVerilog's procedural `assign` and `force` of the first operand to the second, which
+// outrank the design's own writes of it until `deassign` or `release` ends them (IEEE 1800
+// section 10.6). The third operand is the definition's process that evaluates the value again
+// whenever what it reads changes; an override names that process as its holder.
+ENZAN_OPCODE(Assign, "passign", false, 3,
+             "a call to the runtime override helper with the arena base, the object's signal, "
+             "the value and the holder's process index, the instance's first process plus the "
+             "immediate; the helper records the holder and writes the value as Store does, "
+             "unless a force holds the signal")
+ENZAN_OPCODE(Force, "force", false, 3,
+             "as Assign, through the same helper, as the holder of the signal's force, so the "
+             "value is written whatever holds it")
+ENZAN_OPCODE(Deassign, "deassign", false, 1,
+             "a call to the runtime helper that clears the signal's assign; nothing is written")
+ENZAN_OPCODE(Release, "release", false, 1,
+             "a call to the runtime helper that clears the signal's force and, where an assign "
+             "holds it, wakes the assign's holder, or else writes what its drivers resolve to")
+ENZAN_OPCODE(Override, "override", false, 2,
+             "a call to the runtime helper that writes the value as Store does when the running "
+             "process holds the signal's force, or holds its assign and nothing its force; the "
+             "holder check is two loads and compares against the process's own index, a "
+             "constant once a JIT specialises the body per instance")
 
 // --- Bitwise, element by element -------------------------------------------
 
@@ -246,6 +284,16 @@ ENZAN_OPCODE(Conditional, "sel", true, 3,
              "a branch on the condition's truth value to a plain select, plus a "
              "merge path for the unknown case that keeps the bits where the arms "
              "agree")
+
+// A user-defined primitive's table (IEEE 1800 section 29), a constant laid out as eir/Udp.h
+// describes, matched against its inputs, the first the most significant bit of the first operand.
+ENZAN_OPCODE(UdpCombinational, "udp", true, 2,
+             "a call to the runtime helper that matches the inputs against the table, a private "
+             "constant global, and returns the one-bit output")
+ENZAN_OPCODE(UdpSequential, "sudp", true, 3,
+             "as UdpCombinational, through the sequential helper, with the inputs as they were "
+             "above the current state as its second operand and the table as its third; the "
+             "helper returns the next state")
 
 // --- Time and system tasks -------------------------------------------------
 
