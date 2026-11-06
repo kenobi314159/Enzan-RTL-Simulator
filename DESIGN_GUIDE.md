@@ -1690,6 +1690,11 @@ VexRiscv, Ibex and CVA6, SLAC `surf`, and the VUnit and OSVVM suites, which need
   testbench writes.
 - A testbench that cannot pass for a reason outside Enzan is named, with the reason, beside the
   design; any other failure fails the run.
+- **AMD's own simulation models are read from a local installation, never committed**, by
+  `tests/designs/vendor-xilinx`, which holds testbenches of the commonest primitives to Icarus
+  Verilog with `-gspecify`. A missing installation or reference is not a pass, so the harness says
+  what it did not run and exits 77. CI has no installation, so whoever merges a change touching the
+  models runs it; Yosys's models of AMD's cells stand in for them in CI.
 - **A testbench written here can be wrong as easily as the simulator.** Before it is committed it is
   run under a second simulator, and it must pass there too.
 
