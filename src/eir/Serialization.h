@@ -28,7 +28,7 @@ namespace enzan::eir {
 ///
 /// A mismatch makes the reader refuse the bytes, which makes the library re-analyse
 /// (DESIGN_GUIDE.md section 4.4). It never crashes and never half-decodes.
-constexpr std::uint32_t SerializationFormatVersion = 75;
+constexpr std::uint32_t SerializationFormatVersion = 76;
 
 /// Encodes design units into a self-describing byte string.
 ///

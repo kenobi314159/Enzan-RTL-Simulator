@@ -661,6 +661,10 @@ floor.
   `%g` are C's, of an integer argument too, and an integer conversion of a real shows the integer
   it rounds to; a real with no format is shown as Icarus Verilog shows one, `%g` with its trailing
   zeros. A real port, an array or struct of reals and a real exponent are refused.
+- **A named event is a bit its trigger toggles**, so that what waits on it sees it change: `->`
+  at once, `->>` in the NBA region. A delayed trigger, an event used as a value, `.triggered`
+  among them, and assigning one event to another, which makes them one (IEEE 1800 section
+  15.5.5), are refused.
 - **A specify block is read for what a functional simulation needs of it.** A `specparam` is a
   parameter. A timing check is not run (1.3): its notifier never toggles, and a run instantiating
   one says so once, pointing at the first in the hierarchy.
@@ -1937,7 +1941,7 @@ Left out of the milestones above, and refused by name where a design uses them r
 mistranslated:
 
 - SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
-  exponent, named events, dynamic and associative arrays, queues, classes, unpacked unions,
+  exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
   `highz` strengths, switches, the module paths of 5.1 that one process per output cannot follow,
   net aliases, and a procedural `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.

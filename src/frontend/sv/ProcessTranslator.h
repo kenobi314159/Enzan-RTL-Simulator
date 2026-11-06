@@ -360,6 +360,10 @@ private:
     bool translateProceduralAssign(const slang::ast::Statement& statement);
     bool translateProceduralDeassign(const slang::ast::Statement& statement);
 
+    /// `-> e` and `->> e` (IEEE 1800 section 15.5.1): the event's bit inverted, now or in the NBA
+    /// region, which wakes what waits on it. One with a delay is refused.
+    bool translateEventTrigger(const slang::ast::Statement& statement);
+
     /// The object a procedural `assign`, `force`, `deassign` or `release` names as its target,
     /// recorded in the override set; nothing, having reported why, for anything but the whole
     /// of one.

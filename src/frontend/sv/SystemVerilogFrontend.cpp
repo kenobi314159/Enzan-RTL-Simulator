@@ -648,6 +648,9 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
     // `real`, `realtime` and `shortreal` are all a double, as Type::real says.
     if (type.isFloating()) return eir::Type::real();
 
+    // A named event is a bit its trigger toggles, so that what waits on it sees it change.
+    if (type.isEvent()) return eir::Type::bits(1, false, false);
+
     // Packed types — vectors, packed structs, packed arrays, enums — are all integral to
     // slang and all behave as bit vectors, so they convert for free.
     if (type.isIntegral()) {
