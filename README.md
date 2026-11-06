@@ -76,6 +76,8 @@ Using Enzan:
 - [Signal lists](docs/signal-lists.md): the file the wave window's rows are saved to.
 - [Libraries, file lists and make](docs/libraries.md): analysis libraries, `.f` files, and
   building a design with `make`.
+- [Vendors' simulation libraries](docs/vendor-libraries.md): AMD Xilinx's unisims, `glbl` and XPM,
+  read from your own installation.
 - [Mixed-language designs](docs/mixed-language.md): what crosses between SystemVerilog and VHDL,
   and at what cost.
 - [cocotb](docs/cocotb.md): running cocotb testbenches.

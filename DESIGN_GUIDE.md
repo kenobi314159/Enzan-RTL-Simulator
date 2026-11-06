@@ -1714,6 +1714,11 @@ Verilog, for both languages; and later the processors picorv32, VexRiscv, Ibex a
   testbench writes.
 - A testbench that cannot pass for a reason outside Enzan is named, with the reason, beside the
   design; any other failure fails the run.
+- **AMD's own simulation models are read from a local installation**, never committed, by
+  `tests/designs/vendor-xilinx`: testbenches of the commonest primitives, held to Icarus Verilog
+  with `-gspecify`. Without `XILINX_VIVADO` the harness says it did not run and exits 77, since a
+  missing installation is not a pass, and it names the release it last passed with. CI has no
+  vendor installation, so whoever merges a change touching this runs it.
 - **A testbench written here can be wrong as easily as the simulator.** Before it is committed it is
   run under a second simulator, and it must pass there too.
 
