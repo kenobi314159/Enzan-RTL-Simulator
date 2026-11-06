@@ -1,0 +1,3 @@
+# The Yosys revision whose models of AMD's cells the harness runs, its release 0.70. The one place
+# it is named.
+28ba3cb926fe376fa05ebfc1b921747d011d4557

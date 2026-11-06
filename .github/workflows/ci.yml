@@ -441,7 +441,8 @@ jobs:
           exit "$status"
 
       # The design regression: each design's own testbenches, held to their own verdicts and,
-      # where Icarus Verilog can run them, to its transcript. Under a second here.
+      # where Icarus Verilog can run them, to its transcript, and testbenches of Yosys's models of
+      # AMD's cells. Under a second here.
       - name: Design regression
         run: |
           status=0
@@ -449,6 +450,8 @@ jobs:
             build/designs/aes || status=1
           tests/designs/common_cells/run.sh build/gcc-release/bin/enzan \
             build/designs/common_cells || status=1
+          tests/designs/yosys-xilinx/run.sh build/gcc-release/bin/enzan "$(command -v iverilog)" \
+            build/designs/yosys-xilinx || status=1
           exit "$status"
 
       # taxi's cocotb testbenches, the longest of the design regression at about two minutes.

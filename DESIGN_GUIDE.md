@@ -1649,10 +1649,10 @@ the reason given in 14.3; NVC's tests of VHDL with Verilog; and cocotb's suite (
 
 ### 14.5 Design regression
 
-Real designs, fetched at pinned revisions and never committed: secworks `aes`, fpganinja `taxi` and
-PULP `common_cells` for SystemVerilog; NEORV32 for VHDL and, through its testbench rewritten in
-Verilog, for both languages; and later the processors picorv32, VexRiscv, Ibex and CVA6, SLAC
-`surf`, and the VUnit and OSVVM suites, which need M9+.
+Real designs, fetched at pinned revisions and never committed: secworks `aes`, fpganinja `taxi`,
+PULP `common_cells` and Yosys's models of AMD's cells for SystemVerilog; NEORV32 for VHDL and,
+through its testbench rewritten in Verilog, for both languages; and later the processors picorv32,
+VexRiscv, Ibex and CVA6, SLAC `surf`, and the VUnit and OSVVM suites, which need M9+.
 
 - A testbench passes when it reports success and, where the reference simulator can run it, when its
   transcript is the reference's line for line: a design checking its own answers and two simulators
