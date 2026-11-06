@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Runs testbenches of AMD's own simulation models under Enzan and under Icarus Verilog, and
-# compares what the two print.
+# Runs testbenches of AMD's own simulation models under Enzan and under a reference, and compares
+# what the two print.
 #
 #   run.sh <enzan> <iverilog> <work-directory> [<testbench>...]
 #
 # The models are read from the installation XILINX_VIVADO names, which nothing here copies, so
 # without one the harness says it did not run and exits 77, as a skipped test does: a missing
-# installation is not a pass. A testbench passes when Enzan runs it to completion, it reports
-# success, and Enzan's transcript is Icarus Verilog's line for line, Icarus running the module paths
-# with -gspecify. A testbench whose models Icarus cannot read so says it in a line of its own,
-# `// Icarus: without -gspecify, since <the reason>`, and checks only values settled by then. The
-# testbenches are tb/*.sv, all of them unless some are named.
+# installation is not a pass, and neither is a missing reference. A testbench passes when Enzan runs
+# it to completion, it reports success, and Enzan's transcript is the reference's line for line.
+#
+# tb/*.sv are the unisims' testbenches, whose reference is Icarus Verilog running the module paths
+# with -gspecify. One whose models Icarus cannot read so says it in a line of its own,
+# `// Icarus: without -gspecify, since <the reason>`, and checks only values settled by then.
+#
+# xpm/*.sv are XPM's, whose reference is Verilator, VERILATOR or the one on the path, since Icarus
+# reads none of XPM; they check nothing a two-state simulator cannot show. Verilator is given
+# ONESPIN, which leaves out what xpm_cdc forces while glbl's reset is high, since Verilator cannot
+# force a whole unpacked array; every testbench starts after that reset, and resets what it uses.
+# Verilator takes one top level, so it is given one holding the testbench and glbl.
+#
+# All the testbenches run unless some are named.
 
 set -uo pipefail
 
@@ -39,6 +48,10 @@ if [[ ! -d "$models/unisims" ]]; then
     exit 77
 fi
 
+readonly xpm="$XILINX_VIVADO/data/ip/xpm"
+readonly interfaces="$XILINX_VIVADO/../data/rsb/busdef/vivado_interfaces.svh"
+readonly verilator="${VERILATOR:-$(command -v verilator)}"
+
 readonly tested="$(grep -v '^#' "$here/release.txt" | head -1)"
 if [[ "$XILINX_VIVADO" != *"$tested"* ]]; then
     printf 'WARNING: the harness last passed with Vivado %s, and XILINX_VIVADO is %s\n' "$tested" \
@@ -53,15 +66,72 @@ transcript() {
 
 testbenches=("$@")
 if [[ ${#testbenches[@]} -eq 0 ]]; then
-    for file in "$here"/tb/*.sv; do testbenches+=("$(basename "$file" .sv)"); done
+    for file in "$here"/tb/*.sv "$here"/xpm/*.sv; do testbenches+=("$(basename "$file" .sv)"); done
 fi
 
 # What a testbench's models read, an INIT_FILE among them, is beside it, and they name it as a file
 # in the directory the simulators run in.
 cp "$here"/tb/*.mem "$work"/ 2>/dev/null
 
+# Judges one testbench by the two transcripts and their simulators' exit statuses.
+judge() {
+    local testbench="$1" reference="$2" enzan_status="$3" reference_status="$4" log="$5"
+    if [[ $enzan_status -ne 0 ]]; then
+        printf 'FAIL %s: Enzan exited with %d (%s)\n' "$testbench" "$enzan_status" \
+            "$work/$testbench.enzan.log"
+        status=1
+    elif [[ $reference_status -ne 0 ]]; then
+        printf 'FAIL %s: %s did not run it (%s)\n' "$testbench" "$reference" "$log"
+        status=1
+    elif ! grep -q "^PASS $testbench\$" "$work/$testbench.reference.txt"; then
+        printf 'FAIL %s: the testbench does not pass under %s (%s)\n' "$testbench" "$reference" \
+            "$work/$testbench.reference.txt"
+        status=1
+    elif ! grep -q "^PASS $testbench\$" "$work/$testbench.enzan.txt"; then
+        printf 'FAIL %s: the testbench did not report success (%s)\n' "$testbench" \
+            "$work/$testbench.enzan.txt"
+        status=1
+    elif ! diff <(transcript "$work/$testbench.reference.txt") \
+        <(transcript "$work/$testbench.enzan.txt") >"$work/$testbench.diff"; then
+        printf 'FAIL %s: Enzan and %s disagree (%s)\n' "$testbench" "$reference" \
+            "$work/$testbench.diff"
+        status=1
+    else
+        printf 'PASS %s\n' "$testbench"
+    fi
+}
+
 status=0
+skipped=0
 for testbench in "${testbenches[@]}"; do
+    if [[ -f "$here/xpm/$testbench.sv" ]]; then
+        source="$here/xpm/$testbench.sv"
+        if [[ -z "$verilator" ]]; then
+            printf 'NOT RUN %s: no Verilator, the reference for XPM\n' "$testbench"
+            skipped=1
+            continue
+        fi
+        sources=("$interfaces" "$models/glbl.v" "$xpm/xpm_cdc/hdl/xpm_cdc.sv"
+                 "$xpm/xpm_memory/hdl/xpm_memory.sv" "$xpm/xpm_fifo/hdl/xpm_fifo.sv" "$source")
+        (cd "$work" && "$enzan" --top "$testbench" --top glbl "${sources[@]}") \
+            >"$work/$testbench.enzan.txt" 2>"$work/$testbench.enzan.log"
+        enzan_status=$?
+
+        mkdir -p "$work/$testbench.verilator"
+        printf 'module verilator_top;\n    %s tb ();\n    glbl glbl ();\nendmodule\n' "$testbench" \
+            >"$work/$testbench.verilator/top.sv"
+        "$verilator" --binary --timing -Wno-fatal -Wno-lint -Wno-style -Wno-MULTIDRIVEN \
+            -Wno-SYMRSVDWORD +define+ONESPIN --top-module verilator_top \
+            -Mdir "$work/$testbench.verilator" "${sources[@]}" "$work/$testbench.verilator/top.sv" \
+            >"$work/$testbench.verilator.log" 2>&1 \
+            && (cd "$work" && "$work/$testbench.verilator/Vverilator_top") 2>&1 \
+            | grep -v -E '^- |^\[[0-9]+\] -(Info|Warning)|^ *$' >"$work/$testbench.reference.txt"
+        reference_status=${PIPESTATUS[0]}
+        judge "$testbench" Verilator "$enzan_status" "$reference_status" \
+            "$work/$testbench.verilator.log"
+        continue
+    fi
+
     source="$here/tb/$testbench.sv"
     printf '%s\n' "-y $models/unisims" "+libext+.v" "$models/glbl.v" "$source" \
         >"$work/$testbench.f"
@@ -77,32 +147,10 @@ for testbench in "${testbenches[@]}"; do
     fi
     "$iverilog" -g2012 $specify -y "$models/unisims" -s "$testbench" -s glbl \
         -o "$work/$testbench.vvp" "$models/glbl.v" "$source" >"$work/$testbench.iverilog.log" 2>&1 \
-        && (cd "$work" && "$vvp" -n "$work/$testbench.vvp") >"$work/$testbench.iverilog.txt" 2>&1
+        && (cd "$work" && "$vvp" -n "$work/$testbench.vvp") >"$work/$testbench.reference.txt" 2>&1
     reference_status=$?
-
-    if [[ $enzan_status -ne 0 ]]; then
-        printf 'FAIL %s: Enzan exited with %d (%s)\n' "$testbench" "$enzan_status" \
-            "$work/$testbench.enzan.log"
-        status=1
-    elif [[ $reference_status -ne 0 ]]; then
-        printf 'FAIL %s: Icarus Verilog did not run it (%s)\n' "$testbench" \
-            "$work/$testbench.iverilog.log"
-        status=1
-    elif ! grep -q "^PASS $testbench\$" "$work/$testbench.iverilog.txt"; then
-        printf 'FAIL %s: the testbench does not pass under Icarus Verilog (%s)\n' "$testbench" \
-            "$work/$testbench.iverilog.txt"
-        status=1
-    elif ! grep -q "^PASS $testbench\$" "$work/$testbench.enzan.txt"; then
-        printf 'FAIL %s: the testbench did not report success (%s)\n' "$testbench" \
-            "$work/$testbench.enzan.txt"
-        status=1
-    elif ! diff <(transcript "$work/$testbench.iverilog.txt") \
-        <(transcript "$work/$testbench.enzan.txt") >"$work/$testbench.diff"; then
-        printf 'FAIL %s: Enzan and Icarus Verilog disagree (%s)\n' "$testbench" \
-            "$work/$testbench.diff"
-        status=1
-    else
-        printf 'PASS %s\n' "$testbench"
-    fi
+    judge "$testbench" "Icarus Verilog" "$enzan_status" "$reference_status" \
+        "$work/$testbench.iverilog.log"
 done
+if [[ $status -eq 0 && $skipped -ne 0 ]]; then exit 77; fi
 exit "$status"

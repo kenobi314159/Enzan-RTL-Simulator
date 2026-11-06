@@ -41,8 +41,8 @@ enzan --top tb --top glbl -f xilinx.f tb.sv design.sv
   from the design.
 
 The release tested is the one `tests/designs/vendor-xilinx/release.txt` names. That harness runs
-Enzan's testbenches of the commonest primitives, against Icarus Verilog, when `XILINX_VIVADO` is
-set:
+Enzan's testbenches of the commonest primitives against Icarus Verilog, and of XPM's memories,
+FIFOs and synchronisers against Verilator, when `XILINX_VIVADO` is set:
 
 ```
 XILINX_VIVADO=/opt/Xilinx/Vivado/2026.1 tests/designs/vendor-xilinx/run.sh enzan iverilog work/
