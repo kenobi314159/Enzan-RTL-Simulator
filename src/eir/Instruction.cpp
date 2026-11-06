@@ -66,6 +66,8 @@ bool isStore(Opcode opcode) noexcept {
     case Opcode::StoreDelayed:
     case Opcode::StoreTransport:
     case Opcode::StoreNonBlockingDelayed:
+    case Opcode::StorePartDelayed:
+    case Opcode::StorePartNonBlockingDelayed:
     case Opcode::Drive:
     case Opcode::DriveTransport:
     case Opcode::DrivePart:

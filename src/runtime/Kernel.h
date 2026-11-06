@@ -19,6 +19,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -426,10 +427,12 @@ public:
     };
 
     /// Schedules a write of `value` to `signalIndex` `delay` time units from now, through the
-    /// route at `position` of process `processIndex`.
+    /// route at `position` of process `processIndex`: of the whole signal, or of the bits from
+    /// `lowBit` up as wide as the value. An inertial write replaces only the one its store made
+    /// at the same bit.
     void scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
                               std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
-                              DelayKind kind);
+                              DelayKind kind, std::optional<std::uint32_t> lowBit = std::nullopt);
 
     /// True when `signalIndex` changed in the update the current simulation cycle began with:
     /// VHDL's 'event.
@@ -752,19 +755,25 @@ private:
         bool transaction = false;
         std::uint64_t serial = 0;
         eir::BitVector value;
+
+        /// The bit a write of part of the signal starts at, or nothing for the whole of it.
+        std::optional<std::uint32_t> lowBit;
     };
 
     /// Pending delayed writes by time, in the order they were scheduled within one.
     std::map<SimTime, std::vector<DelayedWrite>> delayedWrites;
 
-    /// The pending inertial write of each (process, write position), by serial and time, so
-    /// that the next one can take it out of `delayedWrites`.
+    /// The pending inertial write of each (process, write position, low bit), by serial and
+    /// time, so that the next one can take it out of `delayedWrites`. The low bit of a whole
+    /// signal's write is `WholeSignal`.
     struct PendingInertial {
         std::uint64_t serial = 0;
         SimTime time = 0;
     };
 
-    std::map<std::pair<std::uint32_t, std::uint32_t>, PendingInertial> pendingInertial;
+    std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>, PendingInertial>
+        pendingInertial;
+    static constexpr std::uint32_t WholeSignal = 0xFFFF'FFFFU;
     std::uint64_t nextWriteSerial = 0;
 
     /// Performs every delayed write due at the current time.
@@ -857,9 +866,10 @@ private:
     /// Applies the transactions due in this delta cycle, from the `first` made on.
     void applyDeltaTransactions(std::size_t first = 0);
 
-    /// A write as a Store makes it: through the process's drivers when its route has any.
+    /// A write as a Store makes it, or of the bits from `lowBit` up as a StorePart does: through
+    /// the process's drivers when its route has any.
     void writeRouted(std::uint32_t processIndex, std::uint32_t position, std::uint32_t signalIndex,
-                     eir::ConstBitRef value);
+                     eir::ConstBitRef value, std::optional<std::uint32_t> lowBit = std::nullopt);
 
     /// Dynamic edge subscriptions created by `WaitEdge`, indexed by signal.
     ///

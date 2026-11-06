@@ -131,6 +131,10 @@ enzan_add_golden_test(gates)
 # and an edge-sensitive flip-flop with an asynchronous clear and an initial state.
 enzan_add_golden_test(primitives)
 
+# Delayed writes to part of a signal: a memory word at an index known as the design runs, a bit of
+# a vector, and a continuous assignment of one bit that rejects a pulse shorter than its delay.
+enzan_add_golden_test(delayed_parts)
+
 # Module path delays as Icarus Verilog runs them with `-gspecify`: the most recent input's path,
 # the shortest of simultaneous ones, rise and fall delays and those to and from x and z,
 # conditions, an edge-sensitive path, a vector and an output an instance inside drives.

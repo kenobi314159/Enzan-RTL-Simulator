@@ -1085,7 +1085,7 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
 
 void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
                                   std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
-                                  DelayKind kind) {
+                                  DelayKind kind, std::optional<std::uint32_t> lowBit) {
     const bool nonBlocking = kind == DelayKind::NonBlocking;
     if (delay > NoTime - currentTime) {
         diagnostics.report(DiagCode::TimeOverflow, SourceLocation(), currentTime,
@@ -1095,7 +1095,7 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
     }
 
     if (nonBlocking && delay == 0) {
-        scheduler.appendNonBlocking(signalIndex, value, 0, false);
+        scheduler.appendNonBlocking(signalIndex, value, lowBit.value_or(0), lowBit.has_value());
         return;
     }
 
@@ -1104,16 +1104,17 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
                        .signalIndex = signalIndex,
                        .nonBlocking = nonBlocking,
                        .serial = ++nextWriteSerial,
-                       .value = eir::BitVector::from(value)};
+                       .value = eir::BitVector::from(value),
+                       .lowBit = lowBit};
 
     if (kind == DelayKind::Transport && delay == 0) {
-        writeRouted(processIndex, position, signalIndex, value);
+        writeRouted(processIndex, position, signalIndex, value, lowBit);
         return;
     }
     if (kind == DelayKind::Inertial) {
         // The write this one replaces is taken out rather than skipped when it comes due, so
         // that it leaves no time step behind in which nothing happens.
-        const auto key = std::pair{processIndex, position};
+        const auto key = std::tuple{processIndex, position, lowBit.value_or(WholeSignal)};
         if (const auto pending = pendingInertial.find(key); pending != pendingInertial.end()) {
             const auto slot = delayedWrites.find(pending->second.time);
             std::erase_if(slot->second, [&pending](const DelayedWrite& queued) {
@@ -1123,7 +1124,7 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
             pendingInertial.erase(pending);
         }
         if (delay == 0) {
-            writeRouted(processIndex, position, signalIndex, value);
+            writeRouted(processIndex, position, signalIndex, value, lowBit);
             return;
         }
         pendingInertial.emplace(
@@ -1148,11 +1149,14 @@ void Kernel::applyDelayedWrites() {
             continue;
         }
         if (write.nonBlocking) {
-            scheduler.appendNonBlocking(write.signalIndex, write.value.ref(), 0, false);
+            scheduler.appendNonBlocking(write.signalIndex, write.value.ref(),
+                                        write.lowBit.value_or(0), write.lowBit.has_value());
             continue;
         }
-        pendingInertial.erase(std::pair{write.processIndex, write.position});
-        writeRouted(write.processIndex, write.position, write.signalIndex, write.value.ref());
+        pendingInertial.erase(
+            std::tuple{write.processIndex, write.position, write.lowBit.value_or(WholeSignal)});
+        writeRouted(write.processIndex, write.position, write.signalIndex, write.value.ref(),
+                    write.lowBit);
     }
 }
 
@@ -1312,12 +1316,15 @@ void Kernel::applyDeltaTransactions(std::size_t first) {
 }
 
 void Kernel::writeRouted(std::uint32_t processIndex, std::uint32_t position,
-                         std::uint32_t signalIndex, eir::ConstBitRef value) {
+                         std::uint32_t signalIndex, eir::ConstBitRef value,
+                         std::optional<std::uint32_t> lowBit) {
     const WriteRoute& route = processes[processIndex].writeRoutes[position];
-    if (route.direct()) {
-        writeSignal(signalIndex, value);
+    if (!route.direct()) {
+        writeThroughDrivers(route, value, lowBit.value_or(0));
+    } else if (lowBit.has_value()) {
+        writeSignalPart(signalIndex, value, *lowBit);
     } else {
-        writeThroughDrivers(route, value, 0);
+        writeSignal(signalIndex, value);
     }
 }
 

@@ -726,6 +726,8 @@ private:
             case Opcode::StoreDelayed:
             case Opcode::StoreTransport:
             case Opcode::StoreNonBlockingDelayed:
+            case Opcode::StorePartDelayed:
+            case Opcode::StorePartNonBlockingDelayed:
             case Opcode::Drive:
             case Opcode::DriveTransport:
             case Opcode::DrivePart:
@@ -787,6 +789,8 @@ private:
             break;
 
         // The offset and the delay together, in one register of 128 bits.
+        case Opcode::StorePartDelayed:
+        case Opcode::StorePartNonBlockingDelayed:
         case Opcode::DrivePartAfter:
         case Opcode::DriveTransportPart:
             checkObjectAccess(definition, body, instruction.a, true, where);
