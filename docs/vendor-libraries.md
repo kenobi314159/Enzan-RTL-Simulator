@@ -35,10 +35,16 @@ enzan --top tb --top glbl -f xilinx.f tb.sv design.sv
   not see a value a testbench gave a variable where it declared it, and shows `x` until an input
   first changes, as IEEE 1800 says. Assign the inputs in an `initial` block instead.
 
+### Functional-simulation netlists
+
+Vivado's netlists in Verilog, `write_verilog -mode funcsim`, run as any other design over the
+models, with `glbl` as a second top. Expect a netlist to be slow: NEORV32's, 41,000 cells, runs
+about 60 of its clock cycles a second, in 3.5 GB. Where the RTL holds a value unknown, a register no
+instruction has written yet, the netlist holds what AMD's RAM primitives start with, 0.
+
 ### Not yet
 
-- The models from VHDL, through AMD's component packages.
-- Functional-simulation netlists written by Vivado.
+- The models from VHDL, through AMD's component packages, and Vivado's netlists in VHDL.
 
 ### Not supported
 
@@ -47,8 +53,9 @@ The `secureip` models, which are encrypted, and SDF back-annotation.
 ### What is tested
 
 `tests/designs/vendor-xilinx/run.sh` holds Enzan's testbenches of the commonest primitives to Icarus
-Verilog, and XPM's to Verilator, when `XILINX_VIVADO` is set. `release.txt` beside it names the
-Vivado release it last passed with.
+Verilog and XPM's to Verilator when `XILINX_VIVADO` is set, and NEORV32's netlist, which
+`netlist/make.sh` makes with Vivado, to Icarus Verilog and to its RTL when `XILINX_NETLISTS` names
+where it is. `release.txt` beside it names the Vivado release it last passed with.
 
 ```
 XILINX_VIVADO=/opt/Xilinx/Vivado/2026.1 tests/designs/vendor-xilinx/run.sh enzan iverilog work/
