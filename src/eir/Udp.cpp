@@ -46,7 +46,7 @@ std::uint8_t byteAt(ConstBitRef table, std::uint32_t offset) noexcept {
 
 std::uint8_t byteOf(const Field& field) noexcept {
     return static_cast<std::uint8_t>(field.now | (field.before << 3U)
-                                     | (field.edge ? EdgeBit : 0U));
+                                     | (field.edge ? EdgeBit : std::uint8_t(0)));
 }
 
 /// The output of the first row that admits `values` in `state` and is an edge row or not as
