@@ -8,6 +8,7 @@
 #include "eir/Module.h"
 #include "eir/Verifier.h"
 #include "frontend/sv/DeadCode.h"
+#include "frontend/sv/NonStandardPaths.h"
 #include "frontend/sv/ProcessTranslator.h"
 #include "frontend/sv/SvIntConversion.h"
 
@@ -2841,6 +2842,8 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     // Elaborated before anything is asked of the design, so that the dead code is known.
     const slang::Diagnostics& slangDiagnostics = compilation.getAllDiagnostics();
     const DeadCode deadCode(compilation.getRoot());
+    const NonStandardPaths nonStandardPaths(
+        trees, std::span(slangDiagnostics.data(), slangDiagnostics.size()));
 
     // slang skips an encrypted envelope with a warning and reads on, so a module whose body is
     // encrypted would be translated without it and simulate. Such a file is refused, by one
@@ -2893,6 +2896,17 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         if (severity == slang::DiagnosticSeverity::Error && deadCode.excuses(diagnostic)) {
             diagnostics.report(DiagCode::ErrorInDeadCode, location, message);
             continue;
+        }
+
+        // Two module paths the standard refuses and other simulators accept (see
+        // NonStandardPaths); slang's warning of a parameter in a specify block says again what
+        // the excused error says.
+        if (nonStandardPaths.repeats(diagnostic)) continue;
+        if (severity == slang::DiagnosticSeverity::Error) {
+            if (const std::optional<DiagCode> code = nonStandardPaths.excuses(diagnostic)) {
+                diagnostics.report(*code, location, message);
+                continue;
+            }
         }
 
         switch (severity) {

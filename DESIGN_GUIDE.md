@@ -629,6 +629,10 @@ floor.
   whose paths have no delay pays nothing. One process delays the whole output, so paths that differ
   between its bits are refused, as are delays by transition on a vector, `ifnone` with a delay,
   pulse limits other than zero and pulse styles.
+- **Two module paths the standard refuses are warnings**, since models written for other
+  simulators rely on them and what they mean is plain: a parameter in a path's condition (IEEE
+  1800 section 30.4.4), as Icarus Verilog takes it, and a parallel path from one bit to a vector
+  (section 30.4.5), which can only join the bit to every bit of the output.
 
 ### 5.2 VHDL via NVC
 

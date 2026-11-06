@@ -63,6 +63,11 @@ ENZAN_DIAG(RequestedParameterMissing, 1011, Error,
            "generic sets the module's parameter of its name")
 ENZAN_DIAG(EncryptedSource, 1012, Error,
            "'{}' holds encrypted code (IEEE 1735), which Enzan cannot decrypt")
+ENZAN_DIAG(ParameterInPathCondition, 1013, Warning,
+           "{}; a parameter is a constant there, as a specparam is, so the path is accepted")
+ENZAN_DIAG(ParallelPathFromOneBit, 1014, Warning,
+           "{}; a path from one bit joins it to every bit of the output, so it is accepted as a "
+           "full path")
 
 // --- 2000-2999: VHDL frontend -----------------------------------------------
 

@@ -1994,6 +1994,51 @@ TEST_F(FrontendTest, RefusesModulePathsThatDifferBetweenTheBitsOfAnOutput) {
     EXPECT_TRUE(reported("module paths with a delay that differ between the bits of 'q'"));
 }
 
+TEST_F(FrontendTest, AcceptsAParameterInAModulePathConditionAsAWarning) {
+    // IEEE 1800 allows only specparams among a condition's constants; a parameter is as
+    // constant. slang's own warning of a parameter in a specify block says no more than this one.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (input a, output y);
+            parameter P = 1'b0;
+            assign y = a;
+            specify
+                if (!P) (a => y) = 5;
+            endspecify
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(reportedCode(DiagCode::ParameterInPathCondition));
+    EXPECT_FALSE(reported("parameters cannot be used in specify blocks"));
+}
+
+TEST_F(FrontendTest, AcceptsAParallelModulePathFromOneBitToAVectorAsAWarning) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (input clk, input [3:0] d, output reg [3:0] q);
+            always @(posedge clk) q <= d;
+            specify
+                (posedge clk => (q : d)) = 3;
+            endspecify
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(reportedCode(DiagCode::ParallelPathFromOneBit));
+}
+
+TEST_F(FrontendTest, RefusesAParallelModulePathBetweenVectorsOfDifferentWidths) {
+    // Which bits such a path pairs is not plain, so it stays slang's error.
+    EXPECT_EQ(analyse(R"(
+        module m (input [1:0] d, output [3:0] q);
+            assign q = {2{d}};
+            specify
+                (d => q) = 3;
+            endspecify
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::SystemVerilogError));
+    EXPECT_FALSE(reportedCode(DiagCode::ParallelPathFromOneBit));
+}
+
 TEST_F(FrontendTest, RefusesDelaysThatDifferByTransitionOnAVector) {
     EXPECT_EQ(analyse(R"(
         module m (input [1:0] d, output [1:0] q);

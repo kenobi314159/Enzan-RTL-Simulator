@@ -153,6 +153,12 @@ enzan_add_golden_test(module_paths)
 # ignores, so the case checks itself against IEEE 1800 section 30.7.
 enzan_add_golden_test(path_pulses NO_DIFFERENTIAL)
 
+# Two module paths IEEE 1800 refuses that other simulators' models rely on, accepted as warnings:
+# a parameter in a path's condition, as Icarus Verilog takes it, and a parallel path from one bit
+# to a vector, which Icarus refuses, so that case checks itself.
+enzan_add_golden_test(parameter_path_conditions)
+enzan_add_golden_test(one_bit_parallel_path NO_DIFFERENTIAL)
+
 # Reals as AMD's clock managers compute with them: arithmetic, conversions, the bits of a double,
 # the time in fractions of a unit, a clock whose half period is a real variable's, and formatting.
 enzan_add_golden_test(reals OWN_TIME_SCALES)
