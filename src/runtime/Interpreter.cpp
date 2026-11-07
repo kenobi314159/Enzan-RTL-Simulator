@@ -337,7 +337,8 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
         case eir::Opcode::Encode:
             eir::encode(static_cast<eir::Encoding>(instruction.b),
                         reg(instruction.a, instruction.aWidth),
-                        reg(instruction.dst, instruction.dstWidth));
+                        reg(instruction.dst, instruction.dstWidth),
+                        static_cast<std::uint8_t>(instruction.c));
             break;
 
         case eir::Opcode::Extend:

@@ -73,11 +73,13 @@ come back a delay.
 | an array of these | an unpacked array |
 | a record of these | a packed struct, field by field |
 
-**Strength does not cross.** A weak VHDL value reaches SystemVerilog as a strong one, `'H'` as
-`1`, and a SystemVerilog net's strength, a pull-up's included, reaches VHDL as `'0'` or `'1'`. A
-VHDL `'H'` meeting a SystemVerilog driver of `0` on one net is therefore a conflict there, `x`,
-where it would have resolved to `0` in VHDL. Model pulls on the side that resolves them: a
-`tri1` or `tri0` net in SystemVerilog, an `'H'` or `'L'` driver in VHDL.
+**Strength crosses into VHDL, not out of it.** A value SystemVerilog drives weakly, a pull-up's,
+reaches VHDL as `'L'`, `'H'` or `'W'` when every driver of the port in its module drives it weakly;
+one an instance inside drives, or a process writes, crosses as strong. A weak VHDL value reaches
+SystemVerilog as a strong one, `'H'` as `1`, so a VHDL `'H'` meeting a SystemVerilog driver of `0`
+on one net is a conflict there, `x`, where it would have resolved to `0` in VHDL. Model pulls on
+the side that resolves them: a `tri1` or `tri0` net or a `pullup` in SystemVerilog, an `'H'` or
+`'L'` driver in VHDL.
 
 An `inout` port converts both ways. The inner side's own drivers, resolved, are one driver of the
 outer signal, which resolves them with its other drivers by its own language's rule; the outer

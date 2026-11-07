@@ -59,10 +59,16 @@ void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept;
 /// unknown or high-impedance `bit` or `boolean`.
 [[nodiscard]] bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
 
+/// Which of a value's 0s and 1s are driven weakly, as Encode's third operand gives it: a set of
+/// these bits.
+inline constexpr std::uint8_t WeakZero = 1U << 0;
+inline constexpr std::uint8_t WeakOne = 1U << 1;
+
 /// As `storeShown`, for a value that has to arrive whatever it holds, as one crossing from
 /// SystemVerilog into VHDL does: an unknown or high-impedance bit becomes a `bit`'s or a
-/// `boolean`'s 0, as assigning one to a two-state variable makes it.
-void encode(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
+/// `boolean`'s 0, as assigning one to a two-state variable makes it. A 0 that `weak` says is
+/// driven weakly is a `std_ulogic`'s L, a weak 1 its H, and an unknown of two weak values its W.
+void encode(Encoding encoding, ConstBitRef shown, BitRef stored, std::uint8_t weak = 0) noexcept;
 
 /// What an object stored as `encoding` holds, for a diagnostic: `std_ulogic codes`.
 [[nodiscard]] std::string_view toString(Encoding encoding) noexcept;

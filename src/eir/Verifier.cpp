@@ -933,6 +933,15 @@ private:
                 break;
             }
             const bool present = instruction.opcode == Opcode::Present;
+            if (!present
+                && (instruction.c.kind() != Operand::Kind::Immediate
+                    || instruction.c.index() > (WeakZero | WeakOne)
+                    || (instruction.c.index() != 0 && encoding != Encoding::VhdlLogic))) {
+                reportBody(definition, body,
+                           std::format("{} names no strengths by its third operand, or names "
+                                       "weak values that only std_ulogic has",
+                                       where));
+            }
             const std::uint32_t codes = present ? aWidth : dstWidth;
             const std::uint32_t bits = present ? dstWidth : aWidth;
             if (codes != bits * 8) {

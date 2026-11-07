@@ -2528,7 +2528,8 @@ TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
 
 TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {
     // What crosses a language boundary: std_ulogic's '1', '0', 'H' and 'Z' as the bits 1 0 1 z,
-    // and the bits 1 0 x z as std_ulogic's '1', '0', 'X' and 'Z' and as bits' 1, 0, 0 and 0.
+    // and the bits 1 0 x z as std_ulogic's '1', '0', 'X' and 'Z' and as bits' 1, 0, 0 and 0; and
+    // driven weakly, as 'H', 'L', 'W' and 'Z', or with only the 1 weak, as 'H', '0', 'X' and 'Z'.
     ProcessBuilder builder(ProcessKind::Initial, "boundary");
     const Type codes = Type::bits(32, false, false);
     const Type bits = Type::bits(4, false, true);
@@ -2537,6 +2538,8 @@ TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {
     const std::uint32_t shown = builder.reg(bits);
     const std::uint32_t asLogic = builder.reg(codes);
     const std::uint32_t asBit = builder.reg(codes);
+    const std::uint32_t asWeak = builder.reg(codes);
+    const std::uint32_t asWeakOne = builder.reg(codes);
     const auto encoding = [](enzan::eir::Encoding which) {
         return Operand::immediate(static_cast<std::uint32_t>(which));
     };
@@ -2550,23 +2553,35 @@ TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {
     builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(shown),
                                    Operand::constant(builder.constant("4'b10xz"))));
     builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asLogic), Operand::reg(shown),
-                                   encoding(enzan::eir::Encoding::VhdlLogic)));
+                                   encoding(enzan::eir::Encoding::VhdlLogic),
+                                   Operand::immediate(0)));
     builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asBit), Operand::reg(shown),
-                                   encoding(enzan::eir::Encoding::VhdlBit)));
+                                   encoding(enzan::eir::Encoding::VhdlBit), Operand::immediate(0)));
+    builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asWeak), Operand::reg(shown),
+                                   encoding(enzan::eir::Encoding::VhdlLogic),
+                                   Operand::immediate(enzan::eir::WeakZero | enzan::eir::WeakOne)));
+    builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asWeakOne), Operand::reg(shown),
+                                   encoding(enzan::eir::Encoding::VhdlLogic),
+                                   Operand::immediate(enzan::eir::WeakOne)));
     builder.store(0, presented);
     builder.store(1, asLogic);
     builder.store(2, asBit);
+    builder.store(3, asWeak);
+    builder.store(4, asWeakOne);
     builder.emit(Instruction::make(Opcode::Return));
 
-    ModuleDefinition definition = makeTop({builder.finish()}, {Object{.name = "a", .type = bits},
-                                                               Object{.name = "b", .type = codes},
-                                                               Object{.name = "c", .type = codes}});
+    ModuleDefinition definition = makeTop(
+        {builder.finish()}, {Object{.name = "a", .type = bits}, Object{.name = "b", .type = codes},
+                             Object{.name = "c", .type = codes}, Object{.name = "d", .type = codes},
+                             Object{.name = "e", .type = codes}});
     Simulation simulation(designOf(std::move(definition)), "tb");
     ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
     EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
     EXPECT_EQ(simulation.value("/tb/a", Radix::Binary), "101z");
     EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "03020104");
     EXPECT_EQ(simulation.value("/tb/c", Radix::Hexadecimal), "01000000");
+    EXPECT_EQ(simulation.value("/tb/d", Radix::Hexadecimal), "07060504");
+    EXPECT_EQ(simulation.value("/tb/e", Radix::Hexadecimal), "07020104");
 }
 
 TEST(Kernel, OneWordOperationsMatchTheGeneralRoutines) {

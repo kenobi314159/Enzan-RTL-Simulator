@@ -300,6 +300,10 @@ disagree with commercial tools on real designs, this section is what gets update
   two-state bits, vectors of these left element to most significant bit, integers to `int` or
   `longint` by their range, arrays to unpacked arrays and records to packed structs field by field
   where the shapes agree. A port no rule covers is refused by name.
+- **A value SystemVerilog drives weakly drives a VHDL signal weakly**, a 0 as `L` and a 1 as `H`,
+  so that a pull-up yields to a pad's other drivers as it does on a net. A value is weak when every
+  driver of the port in its module drives it weakly; one an instance inside drives, or a procedural
+  write, crosses as strong.
 - **An `inout` port across the boundary is two conversions**, split as 3.7 splits a port's driving
   value from its effective value: the inner port's driving value goes out as one driver of the outer
   signal, which resolves it by its own language's rule, and the outer signal comes back as the inner

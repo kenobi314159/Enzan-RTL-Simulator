@@ -560,8 +560,10 @@ TEST_F(VerifierTest, RejectsAConversionWithARealOnNeitherSide) {
 }
 
 /// The valid module with a register of 64 bits of codes and one of their 8 bits, and `opcode`
-/// converting between them with `encoding` as its second operand.
-ModuleDefinition withConversion(Opcode opcode, Operand encoding, std::uint32_t bits) {
+/// converting between them with `encoding` as its second operand, and an Encode's strengths,
+/// `weak`, as its third.
+ModuleDefinition withConversion(Opcode opcode, Operand encoding, std::uint32_t bits,
+                                std::uint32_t weak = 0) {
     ModuleDefinition definition = VerifierTest::validModule();
     Process& process = definition.processes[0];
     process.registerTypes.push_back(Type::bits(64, false, false));
@@ -569,8 +571,10 @@ ModuleDefinition withConversion(Opcode opcode, Operand encoding, std::uint32_t b
     const bool present = opcode == Opcode::Present;
     auto& instructions = process.blocks[0].instructions;
     instructions.insert(instructions.begin() + 1,
-                        Instruction::make(opcode, Operand::reg(present ? 2 : 1),
-                                          Operand::reg(present ? 1 : 2), encoding));
+                        present
+                            ? Instruction::make(opcode, Operand::reg(2), Operand::reg(1), encoding)
+                            : Instruction::make(opcode, Operand::reg(1), Operand::reg(2), encoding,
+                                                Operand::immediate(weak)));
     return definition;
 }
 
@@ -579,6 +583,19 @@ TEST_F(VerifierTest, AcceptsCodesPresentedAsBitsAndBitsEncodedAsCodes) {
         Operand::immediate(static_cast<std::uint32_t>(enzan::eir::Encoding::VhdlLogic));
     EXPECT_TRUE(check(withConversion(Opcode::Present, logic, 8))) << consumer.messages.front();
     EXPECT_TRUE(check(withConversion(Opcode::Encode, logic, 8))) << consumer.messages.front();
+}
+
+TEST_F(VerifierTest, AcceptsWeakValuesEncodedOnlyAsStdUlogic) {
+    // A bit's and a boolean's values are as strong as any, so only std_ulogic takes them.
+    const Operand logic =
+        Operand::immediate(static_cast<std::uint32_t>(enzan::eir::Encoding::VhdlLogic));
+    const Operand bit =
+        Operand::immediate(static_cast<std::uint32_t>(enzan::eir::Encoding::VhdlBit));
+    const std::uint32_t both = enzan::eir::WeakZero | enzan::eir::WeakOne;
+    EXPECT_TRUE(check(withConversion(Opcode::Encode, logic, 8, both))) << consumer.messages.front();
+    EXPECT_FALSE(check(withConversion(Opcode::Encode, bit, 8, enzan::eir::WeakOne)));
+    EXPECT_TRUE(reported("weak values that only std_ulogic has"));
+    EXPECT_FALSE(check(withConversion(Opcode::Encode, logic, 8, 4)));
 }
 
 TEST_F(VerifierTest, RejectsCodesThatAreNotAByteForEachBit) {

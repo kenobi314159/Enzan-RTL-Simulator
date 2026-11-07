@@ -58,11 +58,13 @@ ENZAN_OPCODE(Present, "present", true, 2,
              "the four-state bits they stand for, one each: a "
              "load from a 256-entry table of aval and bval pairs per byte, a shufflevector to "
              "gather each byte's pair, then a pack of the bits; a runtime helper call when wide")
-ENZAN_OPCODE(Encode, "encode", true, 2,
+ENZAN_OPCODE(Encode, "encode", true, 3,
              "the inverse of Present, four-state bits to the codes standing for them, an "
-             "unknown or high-impedance bit becoming a bit's or a boolean's 0: a select per "
-             "bit over aval and bval of the four codes, a broadcast of each into its byte; a "
-             "runtime helper call when wide")
+             "unknown or high-impedance bit becoming a bit's or a boolean's 0, and the "
+             "immediate third operand the strengths they are driven with, as eir::WeakZero and "
+             "eir::WeakOne name them, a weak 0 a std_ulogic's L and a weak 1 its H: a select per bit over "
+             "aval and bval of the four codes, a broadcast of each into its byte; a runtime "
+             "helper call when wide")
 
 // --- State access ----------------------------------------------------------
 //
