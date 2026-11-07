@@ -359,7 +359,10 @@ QPalette Theme::palette() const {
     result.setColor(QPalette::Shadow, color(ThemeColor::PanelBorder));
     result.setColor(QPalette::Light, color(ThemeColor::PanelBorder));
 
-    // A disabled control reads as the header foreground, which is the theme's quiet text.
+    // A disabled control, and the hint an empty field shows, read as the header foreground, which
+    // is the theme's quiet text. Left to the style, the hint is a grey meant for a light window,
+    // which the Find value field showed all but invisible on a dark theme's.
+    result.setColor(QPalette::PlaceholderText, color(ThemeColor::HeaderForeground));
     result.setColor(QPalette::Disabled, QPalette::Text, color(ThemeColor::HeaderForeground));
     result.setColor(QPalette::Disabled, QPalette::WindowText, color(ThemeColor::HeaderForeground));
     result.setColor(QPalette::Disabled, QPalette::ButtonText, color(ThemeColor::HeaderForeground));

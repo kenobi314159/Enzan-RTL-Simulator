@@ -111,6 +111,10 @@ TEST(ThemeTests, EveryShippedThemeIsReadable) {
         {.foreground = ThemeColor::HeaderForeground,
          .background = ThemeColor::HeaderBackground,
          .least = Text},
+        // The hint an empty field shows, on the field.
+        {.foreground = ThemeColor::HeaderForeground,
+         .background = ThemeColor::PanelBackground,
+         .least = Text},
         {.foreground = ThemeColor::SelectionForeground,
          .background = ThemeColor::SelectionBackground,
          .least = Text},
@@ -439,6 +443,24 @@ TEST(ThemeTests, ThePaletteCarriesTheLoadedColours) {
     EXPECT_EQ(palette.color(QPalette::Highlight), QColor(QStringLiteral("#0d0e0f")));
     EXPECT_EQ(palette.color(QPalette::Base), QColor(QStringLiteral("#101112")))
         << "an item view's background is the palette's Base, which is what lets it scroll";
+}
+
+TEST(ThemeTests, AnEmptyFieldsHintIsTheThemesQuietText) {
+    // Left to the style, the hint was a grey meant for a light window, which the Find value
+    // field showed all but invisible on a dark theme's.
+    Theme theme;
+    theme.loadBuiltIn();
+
+    QString error;
+    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme header.foreground #a1a2a3"), error));
+
+    const QPalette palette = theme.palette();
+    for (const QPalette::ColorGroup group :
+         {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+        EXPECT_EQ(palette.color(group, QPalette::PlaceholderText),
+                  QColor(QStringLiteral("#a1a2a3")))
+            << "colour group " << static_cast<int>(group);
+    }
 }
 
 TEST(ThemeTests, TheStyleSheetCarriesTheColoursAPaletteCannot) {
