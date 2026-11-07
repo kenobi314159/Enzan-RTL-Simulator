@@ -393,6 +393,10 @@ void MainWindow::buildDocks() {
     waveRowsView->setIndentation(12);
     waveRowsView->setColumnWidth(WaveformModel::NameColumn, 220);
 
+    // Set custom item delegate to increase vertical padding of text for individual lines.
+    auto* delegate = new WaveBusRowItemDelegate(waveRowsView);
+    waveRowsView->setItemDelegate(delegate);
+
     // Rows are reordered by dragging them, including into and out of groups. The order is the
     // reader's and nothing re-sorts it behind them.
     waveRowsView->setDragEnabled(true);
