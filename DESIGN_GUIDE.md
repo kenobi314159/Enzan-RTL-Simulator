@@ -1294,11 +1294,13 @@ is unset, and `enzan --help` says where.
   command line and its files (3.8), and a setting in a home directory that changed a result would be
   a cache found only after it had been trusted (4.4). The kernel reads nothing from it; only the
   front end, on the machine its window is on, reads or writes it.
-- **The window makes it the first time it opens**, with `config` naming the theme and the default
-  theme written out under `themes/`, and never replaces a file that exists. When it cannot be made,
-  the window opens with the default theme and says why.
+- **The window makes it the first time it opens**, with a `config` that names no theme, which is
+  the default, and never replaces a file that exists. No theme is written out under `themes/`: a
+  copy of the built-in theme would be a second one in the menu, keeping the colours of the release
+  that wrote it, and *New Theme* writes one when it is asked for. When the directory cannot be
+  made, the window opens with the default theme and says why.
 - **`config` has Tcl's syntax and is not Tcl.** Its one command names the theme,
-  `theme themes/dark.tcl` or `theme -builtin light`. A command this build does not know is a warning
+  `theme themes/mine.tcl` or `theme -builtin light`. A command this build does not know is a warning
   and the rest applies, so that a directory shared with a newer Enzan keeps working in an older one.
   The window rewrites the `theme` command in place and keeps every other byte of the file.
 - The dock layout is kept beside it, in Qt's own `layout.ini`.

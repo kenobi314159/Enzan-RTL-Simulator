@@ -28,6 +28,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDockWidget>
 #include <QElapsedTimer>
 #include <QFile>
@@ -714,6 +715,7 @@ protected:
     }
 
     void writeTheme(const QString& name, const QByteArray& script) const {
+        QDir().mkpath(QFileInfo(directory.resolve(name)).path());
         QFile file(directory.resolve(name));
         ASSERT_TRUE(file.open(QIODevice::WriteOnly)) << name.toStdString();
         file.write(script);
@@ -766,11 +768,11 @@ TEST_F(ThemeMenuTest, OffersTheBuiltInThemeAndEveryFileInThemes) {
     }
     EXPECT_EQ(texts,
               (QStringList{QStringLiteral("Dark (built-in)"), QStringLiteral("Light (built-in)"),
-                           QStringLiteral("dark"), QStringLiteral("pale"), QStringLiteral("-"),
+                           QStringLiteral("pale"), QStringLiteral("-"),
                            QStringLiteral("Reload Theme"), QStringLiteral("New Theme…")}));
 
-    ASSERT_NE(entry(QStringLiteral("dark")), nullptr);
-    EXPECT_TRUE(entry(QStringLiteral("dark"))->isChecked()) << "config names dark.tcl";
+    EXPECT_TRUE(entry(QStringLiteral("Dark (built-in)"))->isChecked())
+        << "config names no theme, which is the built-in dark one";
 }
 
 TEST_F(ThemeMenuTest, AThemeDroppedInIsOfferedWhenTheMenuOpens) {
@@ -824,8 +826,8 @@ TEST_F(ThemeMenuTest, AThemeThatDoesNotLoadChangesNothing) {
     entry(QStringLiteral("broken"))->trigger();
 
     EXPECT_EQ(QApplication::palette().color(QPalette::Window), before);
-    EXPECT_EQ(configured().file, QStringLiteral("themes/dark.tcl"));
-    EXPECT_TRUE(entry(QStringLiteral("dark"))->isChecked());
+    EXPECT_TRUE(configured().isDefault());
+    EXPECT_TRUE(entry(QStringLiteral("Dark (built-in)"))->isChecked());
     EXPECT_TRUE(transcript().contains(QStringLiteral("broken.tcl:1: ")))
         << transcript().toStdString();
 }
