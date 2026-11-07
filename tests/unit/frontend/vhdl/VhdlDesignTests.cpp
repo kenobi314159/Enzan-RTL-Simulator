@@ -1079,6 +1079,63 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 14U);
 }
 
+TEST_F(VhdlDesignTest, AFunctionsUnusedLineDoesNotStopItsValue) {
+    // AMD's unimacro computes its block RAMs' widths by functions that each declare a line for a
+    // message they never write.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  function width(n : integer) return integer is
+    variable message : line;
+  begin
+    if n > 18 then
+      return 36;
+    end if;
+    return 18;
+  end function;
+begin
+  g : for i in 1 to width(20) generate
+  end generate;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_NE(design, nullptr) << transcript();
+}
+
+TEST_F(VhdlDesignTest, AFunctionThatWritesALineStopsWhereItWrites) {
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  function width(n : integer) return integer is
+    variable message : line;
+  begin
+    write(message, string'("width"));
+    return n;
+  end function;
+begin
+  g : for i in 1 to width(2) generate
+  end generate;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    ASSERT_EQ(refused->notes.size(), 1U);
+    EXPECT_NE(refused->notes[0].message.find("'width' stopped at this procedure call"),
+              std::string::npos)
+        << refused->notes[0].message;
+    EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 11U);
+}
+
 TEST_F(VhdlDesignTest, AGenericsDefaultThatCannotBeComputedSaysWhereItsCallStopped) {
     // As OFM's splitter wrapper initialises its address bases: a default computed by a function
     // that calls a procedure for random numbers.

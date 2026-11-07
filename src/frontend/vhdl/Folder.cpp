@@ -708,6 +708,11 @@ public:
                     break;
                 }
                 if (!type_is_scalar(type)) {
+                    // A variable of an access type with no initial value, a line most often,
+                    // holds nothing a value could need; a statement that uses it stops the run,
+                    // as one the run cannot do, and one that never does is AMD's unimacro, whose
+                    // functions declare a line for a message they never write.
+                    if (type_is_access(type) && !tree_has_value(declaration)) break;
                     return stopsAt(declaration, FoldStop::Reason::VariableType);
                 }
                 const std::optional<std::int64_t> initial =
