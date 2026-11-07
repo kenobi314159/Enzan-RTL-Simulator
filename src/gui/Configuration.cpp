@@ -2,7 +2,6 @@
 
 #include "gui/Configuration.h"
 
-#include "common/Assert.h"
 #include "gui/TclSyntax.h"
 
 #include <QDir>
@@ -19,10 +18,10 @@ namespace enzan::gui {
 
 namespace {
 
-/// What `config` starts as, before the theme command is added to it.
+/// What `config` starts as: no theme command, which is the built-in dark theme.
 ///
 /// For the reader who opens the file rather than the window: it says what the file is, what its
-/// syntax is, and what leaving the theme out does.
+/// syntax is, what leaving the theme out does, and where a theme of their own comes from.
 constexpr std::string_view DefaultConfiguration =
     R"(# Enzan's settings for its window, read each time a window opens. The window made this file
 # the first time it opened.
@@ -33,7 +32,7 @@ constexpr std::string_view DefaultConfiguration =
 # The theme is a Tcl script, relative to this directory or as a full path, or one of the themes
 # built into Enzan, as in `theme -builtin light`. Without a `theme` line the window uses the
 # built-in dark theme. The window's View > Theme menu changes it here, keeping the rest of this
-# file as it is.
+# file as it is, and its New Theme writes a copy of the theme in use into themes/ to edit.
 )";
 
 /// Where the themes the window lists and writes are, relative to the directory.
@@ -233,23 +232,18 @@ bool ConfigurationDirectory::createDefaults(QString& error) const {
     }
     if (QFileInfo::exists(configFile())) return true;
 
-    const QString theme = resolve(QString::fromLatin1(DefaultTheme));
-    if (!QDir().mkpath(QFileInfo(theme).path())) {
-        error = QStringLiteral("could not make '%1'").arg(QFileInfo(theme).path());
+    if (!QDir().mkpath(root)) {
+        error = QStringLiteral("could not make '%1'").arg(root);
         return false;
     }
-    if (!QFileInfo::exists(theme) && !writeWhole(theme, Theme::builtInScript().toUtf8(), error))
-        return false;
 
-    const QByteArray header(DefaultConfiguration.data(),
-                            static_cast<qsizetype>(DefaultConfiguration.size()));
-    const std::optional<QByteArray> contents =
-        configurationWithTheme(header, ThemeName::ofFile(QString::fromLatin1(DefaultTheme)));
-
-    // The text is this file's own, so a header that did not read back is a broken build rather
-    // than a misconfigured one.
-    ENZAN_ASSERT(contents.has_value(), "the default configuration does not read back");
-    return writeWhole(configFile(), contents.value_or(QByteArray()), error);
+    // No theme is written out beside it. The built-in one is in use, and a copy of it would be a
+    // second dark theme in the menu, keeping the colours of the release that wrote it; New Theme
+    // writes one when the reader asks for a theme to edit.
+    return writeWhole(configFile(),
+                      QByteArray(DefaultConfiguration.data(),
+                                 static_cast<qsizetype>(DefaultConfiguration.size())),
+                      error);
 }
 
 ParsedConfiguration ConfigurationDirectory::read() const {

@@ -82,11 +82,11 @@ The window keeps its settings in `~/.config/enzan/`, or `$XDG_CONFIG_HOME/enzan/
 the first time it opens; `enzan --help` says where it is. Nothing there changes what a simulation
 computes or records.
 
-- `config` names the theme: `theme themes/dark.tcl` for a file, or `theme -builtin light` for the
-  built-in light theme. Without it the window uses the built-in dark theme.
-- `themes/dark.tcl` is the dark theme written out as a starting point. A theme file is a Tcl
-  script loaded over the dark theme, so a file that sets three colours changes three colours.
-  `font wave 11` sets a font size.
+- `config` names the theme: `theme themes/mine.tcl` for a file, or `theme -builtin light` for the
+  built-in light theme. Without it, as the window first writes the file, the window uses the
+  built-in dark theme.
+- `themes/` holds your own themes. A theme file is a Tcl script loaded over the dark theme, so a
+  file that sets three colours changes three colours. `font wave 11` sets a font size.
 - *View → Theme* chooses between the built-in themes and the files in `themes/`, *New Theme…*
   writes a copy of the theme in use, and *Reload Theme* reads it again after you edit it.
 - `layout.ini` is where the docks were when the window last closed. Delete it to start over.

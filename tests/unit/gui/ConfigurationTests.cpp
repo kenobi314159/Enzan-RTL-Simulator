@@ -78,18 +78,22 @@ TEST_F(ConfigurationTest, TheStandardPlaceIsEnzanInTheConfigurationHome) {
 // The first start
 // ---------------------------------------------------------------------------
 
-TEST_F(ConfigurationTest, TheFirstStartWritesTheShippedThemeAndNamesIt) {
+TEST_F(ConfigurationTest, TheFirstStartWritesConfigAndNoTheme) {
+    // The built-in theme is the one in use, so `config` names none and no copy of it is written:
+    // a copy would be a second dark theme in the menu, keeping the colours of the release that
+    // wrote it.
     const ConfigurationDirectory directory(fresh());
     QString error;
     ASSERT_TRUE(directory.createDefaults(error)) << error.toStdString();
 
-    EXPECT_EQ(contentsOf(directory.resolve(QStringLiteral("themes/dark.tcl"))),
-              Theme::builtInScript().toUtf8());
+    EXPECT_TRUE(QFileInfo::exists(directory.configFile()));
+    EXPECT_FALSE(QFileInfo::exists(directory.resolve(QStringLiteral("themes"))));
+    EXPECT_TRUE(directory.themes().isEmpty());
 
     const ParsedConfiguration parsed = directory.read();
     EXPECT_TRUE(parsed.errors.isEmpty()) << firstError(parsed);
     EXPECT_TRUE(parsed.warnings.isEmpty());
-    EXPECT_EQ(parsed.theme.file, QStringLiteral("themes/dark.tcl"));
+    EXPECT_TRUE(parsed.theme.isDefault());
 
     const ConfiguredTheme configured = directory.loadTheme();
     EXPECT_TRUE(configured.problems.isEmpty());
@@ -108,7 +112,7 @@ TEST_F(ConfigurationTest, NothingThatExistsIsReplaced) {
     QString error;
     ASSERT_TRUE(directory.createDefaults(error)) << error.toStdString();
     EXPECT_EQ(contentsOf(theme), QByteArray("theme wave.trace #010203\n"));
-    EXPECT_EQ(directory.read().theme.file, QStringLiteral("themes/dark.tcl"));
+    EXPECT_EQ(directory.themes(), QStringList{QStringLiteral("themes/dark.tcl")});
 
     write(directory.configFile(), "# mine\n");
     ASSERT_TRUE(directory.createDefaults(error)) << error.toStdString();
