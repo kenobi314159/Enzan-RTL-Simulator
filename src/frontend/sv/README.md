@@ -114,6 +114,10 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   with `Period` a parameter, is folded to its integral result;
 - a recursive call, which slang does not fold to a constant, and a `ref` argument;
 - `fork`, whichever way it joins, since its statements run at once as processes of their own;
+- a `disable` of anything but a named block the statement is in, within the same process or
+  subroutine body: another process's block, the block a subroutine is called from, a task.
+  A `disable` of a block it is in goes on after the block, with the next iteration when the
+  block is a loop's body;
 - `foreach` over a dimension of no fixed size, which needs the dynamic arrays and queues that
   are not here; over fixed dimensions it works, and `break` leaves the whole statement;
 - deferred assertions (`assert #0`, `assert final`) and concurrent ones (`assert property`),

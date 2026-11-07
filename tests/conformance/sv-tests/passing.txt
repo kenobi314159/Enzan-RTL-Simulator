@@ -91,6 +91,7 @@ chapter-12/12.5--case.sv
 chapter-12/12.7.1--for.sv
 chapter-12/12.7.2--repeat.sv
 chapter-12/12.7.3--foreach-synth.sv
+chapter-12/12.7.6--forever.sv
 chapter-12/12.8--break.sv
 chapter-12/12.8--continue.sv
 chapter-12/12.8--return.sv
@@ -352,6 +353,7 @@ chapter-9/9.4.3--event_sequence_controls.sv
 chapter-9/9.4.5--event_blocking_assignment_delay.sv
 chapter-9/9.4.5--event_nonblocking_assignment_delay.sv
 chapter-9/9.4.5--event_nonblocking_assignment_event.sv
+chapter-9/9.6.2--disable.sv
 generic/class/class_test_0.sv
 generic/class/class_test_11.sv
 generic/class/class_test_12.sv

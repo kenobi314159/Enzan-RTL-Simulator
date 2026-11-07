@@ -1079,6 +1079,38 @@ TEST_F(FrontendTest, ReportsAForkRatherThanRunningItsStatementsInTurn) {
     EXPECT_TRUE(reported("a `fork` block"));
 }
 
+TEST_F(FrontendTest, ReportsADisableOfABlockAnotherProcessRuns) {
+    // Ending it would stop the other process wherever it is, which no translation of this one
+    // can do.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            initial begin : waiting
+                #10 $display("late");
+            end
+            initial #5 disable waiting;
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a `disable` of 'waiting'"));
+}
+
+TEST_F(FrontendTest, ReportsADisableOfTheBlockAFunctionIsCalledFrom) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            int x;
+            function automatic int f();
+                disable outer;
+                return 1;
+            endfunction
+            initial begin : outer
+                x = f();
+            end
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a `disable` of 'outer'"));
+}
+
 TEST_F(FrontendTest, ReportsADelayOnANet) {
     EXPECT_EQ(analyse(R"(
         module m;

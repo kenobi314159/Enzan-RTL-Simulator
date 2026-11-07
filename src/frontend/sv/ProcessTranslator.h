@@ -10,6 +10,7 @@
 #include "slang/numeric/ConstantValue.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -37,6 +38,7 @@ class MemberAccessExpression;
 class PrimitiveInstanceSymbol;
 class RangeSelectExpression;
 class Statement;
+class StatementBlockSymbol;
 class TimingControl;
 class Type;
 class ValueSymbol;
@@ -356,6 +358,9 @@ private:
     /// `break` and `continue`, which jump to the innermost loop's exit and to where its next
     /// iteration starts.
     bool translateLoopJump(const slang::ast::Statement& statement, bool isBreak);
+
+    /// `disable` of a named block the statement is in, which jumps to just after the block.
+    bool translateDisable(const slang::ast::Statement& statement);
     bool translateTimed(const slang::ast::Statement& statement);
     bool translateReturn(const slang::ast::Statement& statement);
     bool translateImmediateAssertion(const slang::ast::Statement& statement);
@@ -643,6 +648,16 @@ private:
     };
 
     std::vector<LoopTargets> loopTargets;
+
+    /// A named block being translated, innermost last: where a `disable` of it goes, made when
+    /// the first asks for it, and how many subroutines were being inlined when it began.
+    struct NamedBlock {
+        const slang::ast::StatementBlockSymbol* symbol = nullptr;
+        std::optional<std::uint32_t> exitBlock;
+        std::size_t inlineDepth = 0;
+    };
+
+    std::vector<NamedBlock> namedBlocks;
     eir::Process process;
     std::uint32_t current = 0;
 

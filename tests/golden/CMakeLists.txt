@@ -134,6 +134,10 @@ enzan_add_golden_test(primitives)
 # Named events, triggered and waited on again.
 enzan_add_golden_test(named_events)
 
+# `disable` of a named block the statement is in, in a process, a function and a task: a loop's
+# body, which goes on with the next iteration, a block holding a loop, and the rest of a block.
+enzan_add_golden_test(disable)
+
 # A nonblocking event trigger, which Icarus Verilog does not support, so the case checks itself.
 enzan_add_golden_test(nonblocking_events NO_DIFFERENTIAL)
 

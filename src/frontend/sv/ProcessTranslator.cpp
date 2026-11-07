@@ -1324,6 +1324,7 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
     case ast::StatementKind::ForeachLoop: return translateForeachLoop(statement);
     case ast::StatementKind::Break: return translateLoopJump(statement, true);
     case ast::StatementKind::Continue: return translateLoopJump(statement, false);
+    case ast::StatementKind::Disable: return translateDisable(statement);
 
     // slang marks a statement invalid when anything in it is, a dead branch included. One in
     // a design that reached translation holds only errors dead code excused, so what it wraps
@@ -1422,7 +1423,23 @@ bool ProcessTranslator::translateBlock(const ast::Statement& statement) {
             failed = true;
             return false;
         }
-        return translateStatement(block.body);
+        if (block.blockSymbol == nullptr || block.blockSymbol->name.empty())
+            return translateStatement(block.body);
+
+        // A named block is one a `disable` in it can end, going on after it.
+        namedBlocks.push_back(
+            NamedBlock{.symbol = block.blockSymbol, .inlineDepth = inlineFrames.size()});
+        const bool translated = translateStatement(block.body);
+        const std::optional<std::uint32_t> exitBlock = namedBlocks.back().exitBlock;
+        namedBlocks.pop_back();
+        if (!translated) return false;
+        if (exitBlock.has_value()) {
+            const eir::Operand exit = eir::Operand::block(*exitBlock);
+            if (!currentBlockTerminated())
+                emit(eir::Instruction::make(eir::Opcode::Jump, {}, exit));
+            selectBlock(*exitBlock);
+        }
+        return true;
     }
 
     for (const ast::Statement* child : statement.as<ast::StatementList>().list) {
@@ -1996,6 +2013,34 @@ bool ProcessTranslator::translateLoopJump(const ast::Statement& statement, bool 
     // Anything after it is unreachable but still has to be emitted somewhere.
     selectBlock(newBlock(isBreak ? "after-break" : "after-continue"));
     return true;
+}
+
+bool ProcessTranslator::translateDisable(const ast::Statement& statement) {
+    // The block ends and what follows it runs: the next iteration where the block is a loop's
+    // body, past the loop where it holds one (IEEE 1800 section 9.6.2). Any other target, a
+    // block of another process, of the caller of the subroutine the statement is in, or a task,
+    // ends whatever is running it at the time, which the translation of one body cannot see.
+    const ast::Expression& target = statement.as<ast::DisableStatement>().target;
+    const ast::Symbol* symbol = nullptr;
+    if (target.kind == ast::ExpressionKind::ArbitrarySymbol)
+        symbol = target.as<ast::ArbitrarySymbolExpression>().symbol.get();
+    for (std::size_t index = namedBlocks.size(); index-- > 0;) {
+        NamedBlock& block = namedBlocks[index];
+        if (block.symbol != symbol) continue;
+        if (block.inlineDepth != inlineFrames.size()) break;
+        if (!block.exitBlock.has_value()) block.exitBlock = newBlock("after-disabled");
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(*block.exitBlock)));
+
+        // Anything after it is unreachable but still has to be emitted somewhere.
+        selectBlock(newBlock("after-disable"));
+        return true;
+    }
+    module->reportUnsupported(
+        statement.sourceRange.start(),
+        std::format("a `disable` of '{}', which is not a block of the code it is in",
+                    symbol != nullptr ? std::string_view(symbol->name) : std::string_view("?")));
+    failed = true;
+    return false;
 }
 
 bool ProcessTranslator::translateTimed(const ast::Statement& statement) {
