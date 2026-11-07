@@ -821,6 +821,29 @@ bool ProcessTranslator::translateGate(const ast::PrimitiveInstanceSymbol& gate) 
     } else if (name == "pullup" || name == "pulldown") {
         outputs = terminals;
         driven = constantRegister(name == "pullup" ? eir::Logic::One : eir::Logic::Zero);
+    } else if (name == "nmos" || name == "pmos" || name == "cmos") {
+        // A switch passes its input, `z` included, while its control holds it on, and drives
+        // `z` while it holds it off. An unknown control merges the two, which is `z` for a `z`
+        // input and `x` for any other: the standard's `L` and `H` are no values four states hold.
+        // `cmos` is on while either half is, its n-control 1 or its p-control 0.
+        outputs = {terminals[0]};
+        const std::optional<Value> data = input(terminals[1]);
+        if (!data.has_value()) return false;
+        const std::optional<Value> control = input(terminals[2]);
+        if (!control.has_value()) return false;
+        std::uint32_t on = control->reg;
+        if (name == "cmos") {
+            const std::optional<Value> pControl = input(terminals[3]);
+            if (!pControl.has_value()) return false;
+            on = apply(eir::Opcode::Or, on, apply(eir::Opcode::Not, pControl->reg, std::nullopt));
+        }
+        const std::uint32_t released = constantRegister(eir::Logic::HighZ);
+        const bool onOne = name != "pmos";
+        driven = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(driven),
+                                    eir::Operand::reg(on),
+                                    eir::Operand::reg(onOne ? data->reg : released),
+                                    eir::Operand::reg(onOne ? released : data->reg)));
     } else {
         module->reportUnsupported(gate.location, std::format("the switch '{}'", name));
         return false;

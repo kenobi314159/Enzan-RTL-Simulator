@@ -1180,6 +1180,62 @@ TEST_F(FrontendTest, SaysNothingOfAnUncalledSubroutinesStaticOfATypeItCannotHold
     EXPECT_FALSE(reportedCode(DiagCode::UnsupportedConstruct));
 }
 
+TEST_F(FrontendTest, ASwitchPassesTheStrengthOfItsInputsDrivers) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic v, c;
+            wire weak_in, out;
+            assign (pull0, pull1) weak_in = v;
+            nmos (out, weak_in, c);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+    const auto found = std::ranges::find_if(
+        module->processes, [](const auto& process) { return process.name.starts_with("nmos@"); });
+    ASSERT_NE(found, module->processes.end());
+    EXPECT_EQ(found->strength.zero, enzan::eir::Strength::Pull);
+    EXPECT_EQ(found->strength.one, enzan::eir::Strength::Pull);
+}
+
+TEST_F(FrontendTest, RefusesASwitchWhoseInputsStrengthTheModuleDoesNotFix) {
+    // A port's drivers are outside, an instance's strength is its own, and drivers of different
+    // strengths pass on whichever wins at the time.
+    EXPECT_EQ(analyse(R"(
+        module m(input i, input c, output o);
+            nmos (o, i, c);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("since its data input is a port"));
+
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a, b, c;
+            wire mixed, o;
+            assign mixed = a;
+            assign (weak0, weak1) mixed = b;
+            pmos (o, mixed, c);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("has drivers of different strengths"));
+}
+
+TEST_F(FrontendTest, StillRefusesAResistiveSwitch) {
+    // It lowers the strength it passes, by levels two classes do not hold.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic d, c;
+            wire o;
+            rnmos (o, d, c);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("the switch 'rnmos'"));
+}
+
 TEST_F(FrontendTest, ReportsADelayOnANet) {
     EXPECT_EQ(analyse(R"(
         module m;

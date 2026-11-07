@@ -451,6 +451,11 @@ private:
         std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
         slang::SourceLocation location);
 
+    /// The strengths a MOS switch passes from its data input: those every driver of the input
+    /// in this module has, supply reduced to strong (IEEE 1800 section 28.13). Nothing, having
+    /// reported, where this module does not fix them.
+    std::optional<eir::DriveStrength> switchStrength(const ast::PrimitiveInstanceSymbol& gate);
+
     /// Collects the elements of an instance array, and of the arrays nested in it.
     void collectInstanceArray(const ast::InstanceArraySymbol& array, const std::string& prefix) {
         for (const ast::Symbol* element : array.elements) {
@@ -1576,14 +1581,17 @@ bool ModuleBuilder::translateProcesses() {
     }
 
     for (const ast::PrimitiveInstanceSymbol* gate : gates) {
-        // `pullup` and `pulldown` drive at pull strength unless they say otherwise.
-        const bool pull =
-            gate->primitiveType.name == "pullup" || gate->primitiveType.name == "pulldown";
+        // `pullup` and `pulldown` drive at pull strength unless they say otherwise, and a MOS
+        // switch at its input's.
+        const std::string_view kind = gate->primitiveType.name;
+        const bool pull = kind == "pullup" || kind == "pulldown";
         auto declared = gate->getDriveStrength();
         if (pull && !declared.first && !declared.second)
             declared = {ast::DriveStrength::Pull, ast::DriveStrength::Pull};
         const std::optional<eir::DriveStrength> strength =
-            driveStrengthOf(declared, gate->location);
+            kind == "nmos" || kind == "pmos" || kind == "cmos"
+                ? switchStrength(*gate)
+                : driveStrengthOf(declared, gate->location);
         if (!strength) continue;
 
         ProcessTranslator translator(
@@ -1805,6 +1813,157 @@ std::optional<eir::DriveStrength> ModuleBuilder::driveStrengthOf(
         return std::nullopt;
     }
     return result;
+}
+
+namespace {
+
+/// The variables and nets `target` writes: the one a select or a member access is of, and each
+/// a concatenation's operands write.
+void writtenSymbols(const ast::Expression& target, std::vector<const ast::Symbol*>& into) {
+    switch (target.kind) {
+    case ast::ExpressionKind::NamedValue:
+        into.push_back(&target.as<ast::NamedValueExpression>().symbol);
+        break;
+    case ast::ExpressionKind::ElementSelect:
+        writtenSymbols(target.as<ast::ElementSelectExpression>().value(), into);
+        break;
+    case ast::ExpressionKind::RangeSelect:
+        writtenSymbols(target.as<ast::RangeSelectExpression>().value(), into);
+        break;
+    case ast::ExpressionKind::MemberAccess:
+        writtenSymbols(target.as<ast::MemberAccessExpression>().value(), into);
+        break;
+    case ast::ExpressionKind::Concatenation:
+        for (const ast::Expression* operand : target.as<ast::ConcatenationExpression>().operands())
+            writtenSymbols(*operand, into);
+        break;
+    case ast::ExpressionKind::Conversion:
+        writtenSymbols(target.as<ast::ConversionExpression>().operand(), into);
+        break;
+    case ast::ExpressionKind::Assignment:
+        writtenSymbols(target.as<ast::AssignmentExpression>().left(), into);
+        break;
+    default: break;
+    }
+}
+
+/// True when `target` writes `symbol`.
+bool writes(const ast::Expression* target, const ast::Symbol& symbol) {
+    if (target == nullptr) return false;
+    std::vector<const ast::Symbol*> written;
+    writtenSymbols(*target, written);
+    return std::ranges::find(written, &symbol) != written.end();
+}
+
+/// The terminals a built-in gate drives: every one but the last of `buf` and `not`, every one of
+/// `pullup` and `pulldown`, and the first of the rest.
+std::span<const ast::Expression* const> gateOutputs(const ast::PrimitiveInstanceSymbol& gate) {
+    const std::span<const ast::Expression* const> terminals = gate.getPortConnections();
+    const std::string_view name = gate.primitiveType.name;
+    if (terminals.empty()) return terminals;
+    if (name == "buf" || name == "not") return terminals.first(terminals.size() - 1);
+    if (name == "pullup" || name == "pulldown") return terminals;
+    return terminals.first(1);
+}
+
+} // namespace
+
+std::optional<eir::DriveStrength>
+ModuleBuilder::switchStrength(const ast::PrimitiveInstanceSymbol& gate) {
+    const std::string_view name = gate.primitiveType.name;
+    const std::span<const ast::Expression* const> terminals = gate.getPortConnections();
+    const auto refuse = [&](std::string_view why) -> std::optional<eir::DriveStrength> {
+        reportUnsupported(gate.location,
+                          std::format("the switch '{}', since its data input {}", name, why));
+        return std::nullopt;
+    };
+
+    // The input slang has converted to one bit, of a variable or a net, or a constant, which
+    // drives as a continuous assignment of it would.
+    const ast::Expression* data = terminals.size() > 1 ? terminals[1] : nullptr;
+    while (data != nullptr && data->kind == ast::ExpressionKind::Conversion)
+        data = &data->as<ast::ConversionExpression>().operand();
+    while (data != nullptr
+           && (data->kind == ast::ExpressionKind::ElementSelect
+               || data->kind == ast::ExpressionKind::RangeSelect)) {
+        data = data->kind == ast::ExpressionKind::ElementSelect
+                   ? &data->as<ast::ElementSelectExpression>().value()
+                   : &data->as<ast::RangeSelectExpression>().value();
+    }
+    if (data == nullptr || data->getConstant() != nullptr) return eir::DriveStrength{};
+    if (data->kind != ast::ExpressionKind::NamedValue)
+        return refuse("is no signal of this module, whose drivers it could know");
+    const ast::ValueSymbol& input = data->as<ast::NamedValueExpression>().symbol;
+    if (input.kind != slang::ast::SymbolKind::Net) return eir::DriveStrength{};
+
+    for (const ast::Symbol* portSymbol : body->getPortList()) {
+        if (portSymbol->kind == slang::ast::SymbolKind::Port
+            && portSymbol->as<ast::PortSymbol>().internalSymbol == &input
+            && portSymbol->as<ast::PortSymbol>().direction != ast::ArgumentDirection::Out)
+            return refuse("is a port, which drivers outside the module may drive");
+    }
+
+    // Each driver's strengths, with supply read as strong; a highz one is reported where it is.
+    using Declared =
+        std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>>;
+    const auto level = [](std::optional<ast::DriveStrength> value) {
+        switch (value.value_or(ast::DriveStrength::Strong)) {
+        case ast::DriveStrength::Pull: return eir::Strength::Pull;
+        case ast::DriveStrength::Weak: return eir::Strength::Weak;
+        case ast::DriveStrength::Supply:
+        case ast::DriveStrength::Strong:
+        case ast::DriveStrength::HighZ: return eir::Strength::Strong;
+        }
+        return eir::Strength::Strong;
+    };
+    std::vector<eir::DriveStrength> found;
+    const auto add = [&](const Declared& declared) {
+        found.push_back(
+            eir::DriveStrength{.zero = level(declared.first), .one = level(declared.second)});
+    };
+    const auto& net = input.as<ast::NetSymbol>();
+    if (net.getInitializer() != nullptr) add(net.getDriveStrength());
+    const ast::NetType::NetKind kind = net.netType.netKind;
+    if (kind == ast::NetType::Tri0 || kind == ast::NetType::Tri1)
+        add({ast::DriveStrength::Pull, ast::DriveStrength::Pull});
+    for (const ast::ContinuousAssignSymbol* assignment : continuousAssignments) {
+        if (writes(&assignment->getAssignment(), input)) add(assignment->getDriveStrength());
+    }
+    for (const ast::PrimitiveInstanceSymbol* other : gates) {
+        if (other == &gate) continue;
+        if (!std::ranges::any_of(gateOutputs(*other), [&input](const ast::Expression* output) {
+                return writes(output, input);
+            }))
+            continue;
+        const std::string_view otherName = other->primitiveType.name;
+        if (otherName.ends_with("mos") || otherName.starts_with("tran")
+            || otherName.starts_with("rtran"))
+            return refuse("is driven by another switch, which passes on a strength of its own");
+        const bool pull = otherName == "pullup" || otherName == "pulldown";
+        auto declared = other->getDriveStrength();
+        if (pull && !declared.first && !declared.second)
+            declared = {ast::DriveStrength::Pull, ast::DriveStrength::Pull};
+        add(declared);
+    }
+    for (const ast::PrimitiveInstanceSymbol* primitive : primitives) {
+        const std::span<const ast::Expression* const> outputs = primitive->getPortConnections();
+        if (!outputs.empty() && writes(outputs.front(), input)) add(primitive->getDriveStrength());
+    }
+    for (const CollectedInstance& instance : instances) {
+        for (const ast::PortConnection* connection : instance.symbol->getPortConnections()) {
+            if (connection->port.kind == slang::ast::SymbolKind::Port
+                && connection->port.as<ast::PortSymbol>().direction != ast::ArgumentDirection::In
+                && writes(connection->getExpression(), input))
+                return refuse("is driven by an instance, whose strength this module cannot see");
+        }
+    }
+
+    if (found.empty()) return eir::DriveStrength{};
+    if (!std::ranges::all_of(found, [&found](const eir::DriveStrength& strength) {
+            return strength == found.front();
+        }))
+        return refuse("has drivers of different strengths");
+    return found.front();
 }
 
 ModuleBuilder::SensitivityForm

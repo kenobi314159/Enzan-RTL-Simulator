@@ -386,9 +386,9 @@ its value in the arena. A bit resolves among the drivers of the strongest class 
 it, by its net kind's table. **What the classes cannot tell apart is refused, not guessed**:
 drivers whose strengths the standard orders and one class holds, pull against weak or supply
 against strong, would resolve to `x` where the standard has a winner, and are an elaboration error.
-A `highz` strength, switches and `trireg` are refused, and so is `vpiStrengthVal`, rather than
-reporting a strength Enzan does not hold. The eight-level model was rejected because nothing in the
-vendors' libraries Enzan reads needs it.
+A `highz` strength, the resistive and bidirectional switches and `trireg` are refused, and so is
+`vpiStrengthVal`, rather than reporting a strength Enzan does not hold. The eight-level model was
+rejected because nothing in the vendors' libraries Enzan reads needs it.
 
 **An override outranks what drives a signal, and is not a driver of it.** A procedural `assign`
 or a `force` holds its target until `deassign` or `release`, every other write of it discarded
@@ -620,9 +620,12 @@ floor.
 - **A gate is a continuous assignment of its outputs**, at the strength its instance declares
   (3.7) and with its delay as a continuous assignment's, so EIR holds no primitive. Where the
   standard gives `L` or `H`, as a tristate buffer with an unknown control does, it drives `x`,
-  which four states cannot avoid. **A user-defined primitive is one too**, by its table, which the
-  frontend encodes as a constant and the runtime matches by the layout `eir/Udp.h` gives both.
-  Inputs changing together are a race the standard leaves open, and Enzan takes them in port order.
+  which four states cannot avoid. **A MOS switch is one too**, at the strength of its input where
+  the input's module fixes it, every driver of it of one class; any other input is refused, since
+  what the switch passed would be whichever driver decides the input at the time. **A user-defined
+  primitive is one too**, by its table, which the frontend encodes as a constant and the runtime
+  matches by the layout `eir/Udp.h` gives both. Inputs changing together are a race the standard
+  leaves open, and Enzan takes them in port order.
 - **A real is a double**, `shortreal` without its reduced precision.
 - **A named event is a bit its trigger toggles**, so that what waits on it sees it change.
 - **A specify block is read for what a functional simulation needs of it.** A timing check is not
@@ -1864,8 +1867,8 @@ mistranslated:
 
 - SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
   exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
-  `fork`, `highz` strengths, switches, the module paths 5.1 refuses, net aliases, and a procedural
-  `assign` or `force` of part of an object.
+  `fork`, `highz` strengths, resistive and bidirectional switches, the module paths 5.1 refuses, net
+  aliases, and a procedural `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from

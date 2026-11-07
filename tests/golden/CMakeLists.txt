@@ -127,6 +127,10 @@ enzan_add_golden_test(strengths)
 # Built-in gates over the four values, tristate buffers, an array, a delay and a pad with a pull-up.
 enzan_add_golden_test(gates)
 
+# MOS switches over every input and control, and the strength they pass from their input, as
+# Altera's I/O buffers drive their outputs.
+enzan_add_golden_test(switches)
+
 # User-defined primitives of each kind: combinational over every input, a level-sensitive latch
 # and an edge-sensitive flip-flop with an asynchronous clear and an initial state.
 enzan_add_golden_test(primitives)
