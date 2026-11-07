@@ -14,6 +14,7 @@
 #include <QPixmap>
 #include <QPoint>
 #include <QString>
+#include <QStyledItemDelegate>
 #include <QVector>
 #include <QWidget>
 
@@ -42,6 +43,29 @@ struct WaveCursor {
     /// than computed twice: the label's width depends on the font and on the time in it, and
     /// two answers to where it is would eventually disagree.
     QRect labelRect;
+};
+
+/// Delegate object to modify padding of text inside waveform bus rows.
+///
+/// Makes sure a value written inside the waveform is actually readable and doesn't collide with
+/// the wave lines. It must be applied to the QTreeView object that represents the waveform
+/// window.
+class WaveBusRowItemDelegate : public QStyledItemDelegate {
+    Q_OBJECT
+
+public:
+    /// Vertical pixel padding of text inside a waveform bus row.
+    static constexpr std::int32_t VerticalPaddingPixels = 8;
+
+    explicit WaveBusRowItemDelegate(QObject* parent = nullptr) : QStyledItemDelegate(parent) {}
+
+    // Overriding sizeHint allows you to add custom padding around the font
+    [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem& option,
+                                 const QModelIndex& index) const override {
+        const QSize baseSize = QStyledItemDelegate::sizeHint(option, index);
+
+        return {baseSize.width(), baseSize.height() + VerticalPaddingPixels};
+    }
 };
 
 /// The waveform canvas.

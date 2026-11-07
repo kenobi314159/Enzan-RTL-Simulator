@@ -104,9 +104,6 @@ struct ConfiguredTheme {
 /// its files alone.
 class ConfigurationDirectory {
 public:
-    /// The theme `config` names when the window makes it, relative to the directory.
-    static constexpr const char* DefaultTheme = "themes/dark.tcl";
-
     /// `$XDG_CONFIG_HOME/enzan`, or `~/.config/enzan` when that is unset; empty when there is no
     /// home directory to put it in.
     [[nodiscard]] static QString standardPath();
@@ -125,11 +122,12 @@ public:
     /// own beside `config` and in Qt's format: deleting it opens the window as it first opened.
     [[nodiscard]] QString layoutFile() const;
 
-    /// Makes what the window starts from, when `config` does not exist: `config`, naming
-    /// `DefaultTheme`, and the shipped theme at `DefaultTheme` unless a file is there already.
+    /// Makes what the window starts from, when `config` does not exist: the directory, and a
+    /// `config` that explains itself and names no theme, which is the default built-in one.
     ///
+    /// No theme file is written; a reader who wants one to edit asks for it with `writeTheme`.
     /// Nothing that exists is replaced. Returns false having filled `error` when the directory
-    /// or a file in it could not be made.
+    /// or `config` could not be made.
     bool createDefaults(QString& error) const;
 
     /// Reads `config`. A directory with no `config` names no theme, which is no mistake.

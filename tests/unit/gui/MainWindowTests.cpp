@@ -28,6 +28,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDockWidget>
 #include <QElapsedTimer>
 #include <QFile>
@@ -59,7 +60,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
+#include <string>
 #include <thread>
 
 namespace {
@@ -548,6 +551,101 @@ TEST_F(MainWindowTest, AThemeThatSetsNoSizesGivesTheDesktopsBack) {
     EXPECT_EQ(QApplication::font().pointSizeF(), desktopWindow);
 }
 
+/// The widgets of `window` whose text is not `points` in size, named in one line, leaving out
+/// those the window gives a size of their own — the signal list, the traces and the transcript —
+/// and what is inside them. Empty when there are none.
+std::string widgetsNotAt(const QWidget& window, double points) {
+    QStringList wrong;
+    if (window.font().pointSizeF() != points) wrong << QStringLiteral("the window itself");
+    for (const QWidget* widget : window.findChildren<QWidget*>()) {
+        bool sizedApart = false;
+        for (const QWidget* outer = widget; outer != nullptr && outer != &window;
+             outer = outer->parentWidget()) {
+            sizedApart = sizedApart || outer->testAttribute(Qt::WA_SetFont);
+        }
+        if (!sizedApart && widget->font().pointSizeF() != points) {
+            wrong << QStringLiteral("%1 '%2' at %3")
+                         .arg(QString::fromLatin1(widget->metaObject()->className()),
+                              widget->objectName(), QString::number(widget->font().pointSizeF()));
+        }
+    }
+    return wrong.join(QStringLiteral(", ")).toStdString();
+}
+
+TEST_F(MainWindowTest, TheWindowsSizeReachesEveryPaneOfAWindowOpenedWithIt) {
+    // As the application starts: the window's style sheet is the first, and the window's widgets
+    // are made before its theme is applied. The Structure and Objects windows, the menus and the
+    // toolbar kept the desktop's size.
+    window.reset();
+    qApp->setStyleSheet(QString());
+
+    MainWindow large(*session, themeWith("font window 20\nfont wave 24\n"));
+    EXPECT_EQ(widgetsNotAt(large, 20.0), "");
+
+    large.show();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(widgetsNotAt(large, 20.0), "");
+}
+
+/// How many rows of `dock`'s title bar its title covers, read from the dock as drawn: the rows of
+/// the bar's left half, away from its buttons, with a pixel far from the bar's `background`.
+int titleTextHeight(QDockWidget& dock, const QColor& background) {
+    const QImage image = dock.grab().toImage();
+    const int bar = dock.widget()->geometry().top();
+    int rows = 0;
+    for (int y = 0; y < bar; ++y) {
+        for (int x = 0; x < image.width() / 2; ++x) {
+            if (std::abs(image.pixelColor(x, y).lightness() - background.lightness()) > 40) {
+                ++rows;
+                break;
+            }
+        }
+    }
+    return rows;
+}
+
+TEST_F(MainWindowTest, ADocksTitleIsTheWindowsSize) {
+    // Qt drew a title in the font the application had when the dock was made, in a bar as tall
+    // as the theme's size, so a theme made the bars taller and left the titles as they were.
+    auto* dock = window->findChild<QDockWidget*>(QStringLiteral("structure"));
+    ASSERT_NE(dock, nullptr);
+    window->show();
+
+    const Theme small = themeWith("font window 10\n");
+    window->setTheme(small);
+    QCoreApplication::processEvents();
+    const int smallTitle =
+        titleTextHeight(*dock, small.color(enzan::gui::ThemeColor::HeaderBackground));
+
+    const Theme large = themeWith("font window 24\n");
+    window->setTheme(large);
+    QCoreApplication::processEvents();
+    const int largeTitle =
+        titleTextHeight(*dock, large.color(enzan::gui::ThemeColor::HeaderBackground));
+
+    ASSERT_GT(smallTitle, 0) << "no title was found to measure";
+    EXPECT_GT(largeTitle, smallTitle * 3 / 2)
+        << "a title of " << smallTitle << " rows at 10 " << "points was " << largeTitle << " at 24";
+}
+
+TEST_F(MainWindowTest, TheWindowsSizeReachesEveryPaneWhenTheThemeChanges) {
+    // Each pane the theme does not size apart was a theme behind: going from a theme with large
+    // sizes to one with none made those panes large just as the signal list went back.
+    const double desktop = QApplication::font().pointSizeF();
+    window->show();
+    QCoreApplication::processEvents();
+
+    window->setTheme(themeWith("font window 20\nfont wave 24\nfont transcript 22\n"));
+    EXPECT_EQ(widgetsNotAt(*window, 20.0), "");
+    QCoreApplication::processEvents();
+    EXPECT_EQ(widgetsNotAt(*window, 20.0), "");
+
+    window->setTheme(themeWith(""));
+    EXPECT_EQ(widgetsNotAt(*window, desktop), "");
+    QCoreApplication::processEvents();
+    EXPECT_EQ(widgetsNotAt(*window, desktop), "");
+}
+
 TEST_F(MainWindowTest, ANewThemeRecoloursTheLinesAlreadyInTheTranscript) {
     // Each line remembers which of the theme's colours it is in, so a note written under the old
     // theme takes the new theme's colour for notes, and every line of a note that had several.
@@ -617,6 +715,7 @@ protected:
     }
 
     void writeTheme(const QString& name, const QByteArray& script) const {
+        QDir().mkpath(QFileInfo(directory.resolve(name)).path());
         QFile file(directory.resolve(name));
         ASSERT_TRUE(file.open(QIODevice::WriteOnly)) << name.toStdString();
         file.write(script);
@@ -669,11 +768,11 @@ TEST_F(ThemeMenuTest, OffersTheBuiltInThemeAndEveryFileInThemes) {
     }
     EXPECT_EQ(texts,
               (QStringList{QStringLiteral("Dark (built-in)"), QStringLiteral("Light (built-in)"),
-                           QStringLiteral("dark"), QStringLiteral("pale"), QStringLiteral("-"),
+                           QStringLiteral("pale"), QStringLiteral("-"),
                            QStringLiteral("Reload Theme"), QStringLiteral("New Theme…")}));
 
-    ASSERT_NE(entry(QStringLiteral("dark")), nullptr);
-    EXPECT_TRUE(entry(QStringLiteral("dark"))->isChecked()) << "config names dark.tcl";
+    EXPECT_TRUE(entry(QStringLiteral("Dark (built-in)"))->isChecked())
+        << "config names no theme, which is the built-in dark one";
 }
 
 TEST_F(ThemeMenuTest, AThemeDroppedInIsOfferedWhenTheMenuOpens) {
@@ -727,8 +826,8 @@ TEST_F(ThemeMenuTest, AThemeThatDoesNotLoadChangesNothing) {
     entry(QStringLiteral("broken"))->trigger();
 
     EXPECT_EQ(QApplication::palette().color(QPalette::Window), before);
-    EXPECT_EQ(configured().file, QStringLiteral("themes/dark.tcl"));
-    EXPECT_TRUE(entry(QStringLiteral("dark"))->isChecked());
+    EXPECT_TRUE(configured().isDefault());
+    EXPECT_TRUE(entry(QStringLiteral("Dark (built-in)"))->isChecked());
     EXPECT_TRUE(transcript().contains(QStringLiteral("broken.tcl:1: ")))
         << transcript().toStdString();
 }

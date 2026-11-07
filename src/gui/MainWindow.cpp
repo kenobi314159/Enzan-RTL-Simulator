@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDockWidget>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -27,11 +28,15 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPaintEvent>
 #include <QPixmap>
 #include <QSaveFile>
 #include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStyle>
+#include <QStyleOptionDockWidget>
+#include <QStylePainter>
 #include <QTabWidget>
 #include <QTableView>
 #include <QToolBar>
@@ -113,6 +118,29 @@ protected:
             return;
         }
         QLineEdit::keyPressEvent(event);
+    }
+};
+
+/// A dock whose title, while it is docked, is drawn in the dock's own font.
+///
+/// Qt sizes a dock's title bar from the dock's font, but whenever that font is the application's,
+/// as it is under any theme, it draws the title in the font the application had when the dock was
+/// made. A theme's size made the bar taller and left the title at the desktop's size. A floating
+/// dock is left to Qt, since its window may draw the title itself.
+class Dock final : public QDockWidget {
+public:
+    using QDockWidget::QDockWidget;
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        if (isFloating() || titleBarWidget() != nullptr) {
+            QDockWidget::paintEvent(event);
+            return;
+        }
+        QStylePainter painter(this);
+        QStyleOptionDockWidget title;
+        initStyleOption(&title);
+        painter.drawControl(QStyle::CE_DockWidgetTitle, title);
     }
 };
 
@@ -294,7 +322,7 @@ void MainWindow::buildDocks() {
         scopeTo(action, structureView);
     }
 
-    auto* structureDock = new QDockWidget(tr("Structure"), this);
+    auto* structureDock = new Dock(tr("Structure"), this);
     structureDock->setObjectName(QStringLiteral("structure"));
     structureDock->setWidget(structureView);
     addDockWidget(Qt::LeftDockWidgetArea, structureDock);
@@ -338,7 +366,7 @@ void MainWindow::buildDocks() {
     connect(releaseAction, &QAction::triggered, this, &MainWindow::releaseSelectedObjects);
     objectsView->addAction(releaseAction);
 
-    auto* objectsDock = new QDockWidget(tr("Objects"), this);
+    auto* objectsDock = new Dock(tr("Objects"), this);
     objectsDock->setObjectName(QStringLiteral("objects"));
     objectsDock->setWidget(objectsView);
     addDockWidget(Qt::LeftDockWidgetArea, objectsDock);
@@ -364,6 +392,10 @@ void MainWindow::buildDocks() {
     // thing it dropped; the shallow indent buys back most of the same width.
     waveRowsView->setIndentation(12);
     waveRowsView->setColumnWidth(WaveformModel::NameColumn, 220);
+
+    // Set custom item delegate to increase vertical padding of text for individual lines.
+    auto* delegate = new WaveBusRowItemDelegate(waveRowsView);
+    waveRowsView->setItemDelegate(delegate);
 
     // Rows are reordered by dragging them, including into and out of groups. The order is the
     // reader's and nothing re-sorts it behind them.
@@ -464,7 +496,7 @@ void MainWindow::buildDocks() {
 
     transcriptView = new TranscriptView(theme, this);
 
-    auto* transcriptDock = new QDockWidget(tr("Transcript"), this);
+    auto* transcriptDock = new Dock(tr("Transcript"), this);
     transcriptDock->setObjectName(QStringLiteral("transcript"));
     transcriptDock->setWidget(transcriptView);
     addDockWidget(Qt::BottomDockWidgetArea, transcriptDock);
@@ -485,6 +517,16 @@ void MainWindow::applyTheme() {
 
     const QFont& desktop = desktopFont();
     QApplication::setFont(theme.font(ThemeFont::Window, desktop));
+
+    // Each widget is told of the new size itself. Qt hands an application font to a window, for
+    // it to pass down, and under an application style sheet the window passes it to none of its
+    // widgets: each keeps the size it was made with, or the one the application had when the
+    // style sheet was last applied. The Structure and Objects windows, the menus and the toolbar
+    // were a theme behind the rest of the window.
+    QEvent fontChange(QEvent::ApplicationFontChange);
+    QCoreApplication::sendEvent(this, &fontChange);
+    for (QWidget* widget : findChildren<QWidget*>())
+        QCoreApplication::sendEvent(widget, &fontChange);
 
     // One font for the names and the traces. The tree's sets how tall a row is, and the canvas
     // measures its labels against its own, so a size given to only one of them would put each
