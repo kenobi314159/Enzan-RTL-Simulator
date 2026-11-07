@@ -1864,7 +1864,7 @@ mistranslated:
 
 - SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
   exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
-  `highz` strengths, switches, the module paths 5.1 refuses, net aliases, and a procedural
+  `fork`, `highz` strengths, switches, the module paths 5.1 refuses, net aliases, and a procedural
   `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type

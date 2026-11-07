@@ -1413,8 +1413,17 @@ bool ProcessTranslator::translateReturn(const ast::Statement& statement) {
 }
 
 bool ProcessTranslator::translateBlock(const ast::Statement& statement) {
-    if (statement.kind == ast::StatementKind::Block)
-        return translateStatement(statement.as<ast::BlockStatement>().body);
+    if (statement.kind == ast::StatementKind::Block) {
+        // A fork runs its statements at once, each a process of its own, which one process
+        // running them in turn would not.
+        const auto& block = statement.as<ast::BlockStatement>();
+        if (block.blockKind != ast::StatementBlockKind::Sequential) {
+            module->reportUnsupported(statement.sourceRange.start(), "a `fork` block");
+            failed = true;
+            return false;
+        }
+        return translateStatement(block.body);
+    }
 
     for (const ast::Statement* child : statement.as<ast::StatementList>().list) {
         if (!translateStatement(*child)) return false;

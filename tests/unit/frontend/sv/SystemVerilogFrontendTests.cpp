@@ -1062,6 +1062,23 @@ TEST_F(FrontendTest, ReportsAnUnsupportedConstructRatherThanMistranslatingIt) {
     EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
 }
 
+TEST_F(FrontendTest, ReportsAForkRatherThanRunningItsStatementsInTurn) {
+    // In turn, `b` would print at 15 rather than 5, and the join come at 15 rather than 10.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            initial begin
+                fork
+                    #10 $display("a");
+                    #5 $display("b");
+                join
+                $display("joined");
+            end
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a `fork` block"));
+}
+
 TEST_F(FrontendTest, ReportsADelayOnANet) {
     EXPECT_EQ(analyse(R"(
         module m;
