@@ -28,6 +28,12 @@
 # being no part of a netlist, and the same CPU trace and UART logs, as netlist/compare-logs.py
 # compares them. That needs GHDL, GHDL or the one on the path.
 #
+# vhdl/*.vhd are testbenches in VHDL of the same models, each the Verilog testbench of its name
+# moved across the language boundary: it reaches the Verilog models through the component
+# libraries unisim and xpm, and AMD's VHDL unimacro, analysed into unimacro against unisim, and
+# prints what that testbench prints. Its transcript is held to that testbench's reference, which
+# is run first when this run has not. They are named vhdl/<name>.
+#
 # All the testbenches run unless some are named.
 
 set -uo pipefail
@@ -61,6 +67,31 @@ readonly verilator="${VERILATOR:-$(command -v verilator)}"
 readonly netlists="${XILINX_NETLISTS:-}"
 readonly ghdl="${GHDL:-$(command -v ghdl)}"
 source "$here/../neorv32/window.sh"
+readonly unisim_components="$XILINX_VIVADO/data/vhdl/src/unisims/unisim_retarget_VCOMP.vhd"
+readonly xpm_models=("$interfaces" "$models/glbl.v" "$xpm/xpm_cdc/hdl/xpm_cdc.sv"
+                     "$xpm/xpm_memory/hdl/xpm_memory.sv" "$xpm/xpm_fifo/hdl/xpm_fifo.sv")
+
+# The VHDL libraries this run has made, and the Verilog testbenches whose references it has.
+declare -A made=()
+declare -A referenced=()
+
+# Makes the VHDL library <name> in the work directory, once a run, by analysing <sources> against
+# the libraries made before it: false, having said why, when it cannot.
+make_library() {
+    local name="$1"
+    shift
+    [[ -n "${made[$name]:-}" ]] && return 0
+    local against=()
+    for library in "${!made[@]}"; do against+=(--in-lib "$work/$library"); done
+    rm -rf "$work/$name"
+    if ! { "$enzan" lib create --name "$name" "$work/$name" \
+        && "$enzan" analyse --out-lib "$work/$name" "${against[@]}" "$@"; } \
+        >"$work/$name.log" 2>&1; then
+        printf 'FAIL: the library %s was not made (%s)\n' "$name" "$work/$name.log"
+        return 1
+    fi
+    made[$name]=yes
+}
 
 readonly tested="$(grep -v '^#' "$here/release.txt" | head -1)"
 if [[ "$XILINX_VIVADO" != *"$tested"* ]]; then
@@ -72,6 +103,7 @@ testbenches=("$@")
 if [[ ${#testbenches[@]} -eq 0 ]]; then
     for file in "$here"/tb/*.sv "$here"/xpm/*.sv; do testbenches+=("$(basename "$file" .sv)"); done
     testbenches+=(tb_neorv32_netlist neorv32_tb_netlist)
+    for file in "$here"/vhdl/tb_*.vhd; do testbenches+=("vhdl/$(basename "$file" .vhd)"); done
 fi
 
 # What a testbench's models read, an INIT_FILE among them, is beside it, and they name it as a file
@@ -81,7 +113,7 @@ cp "$here"/tb/*.mem "$work"/ 2>/dev/null
 status=0
 skipped=0
 for testbench in "${testbenches[@]}"; do
-    if [[ $testbench == tb_neorv32_netlist || $testbench == neorv32_tb_netlist ]]; then
+    if [[ $testbench == *neorv32*netlist ]]; then
         if [[ ! -f "$netlists/neorv32_funcsim.v" ]]; then
             printf 'NOT RUN %s: XILINX_NETLISTS names no netlists, which netlist/make.sh makes\n' \
                 "$testbench"
@@ -159,6 +191,53 @@ for testbench in "${testbenches[@]}"; do
         continue
     fi
 
+    if [[ $testbench == vhdl/* ]]; then
+        name="${testbench#vhdl/}"
+        stem="vhdl.$name"
+        source="$here/vhdl/$name.vhd"
+        if [[ -z "${referenced[$name]:-}" ]]; then
+            "$here/run.sh" "$enzan" "$iverilog" "$work" "$name" >"$work/$stem.counterpart.txt"
+            counterpart_status=$?
+            if [[ $counterpart_status -eq 77 ]]; then
+                printf 'NOT RUN %s: its Verilog counterpart did not run (%s)\n' "$testbench" \
+                    "$work/$stem.counterpart.txt"
+                skipped=1
+                continue
+            elif [[ $counterpart_status -ne 0 ]]; then
+                printf 'FAIL %s: its Verilog counterpart failed (%s)\n' "$testbench" \
+                    "$work/$stem.counterpart.txt"
+                status=1
+                continue
+            fi
+        fi
+        if ! make_library unisim "$unisim_components"; then
+            status=1
+            continue
+        fi
+        libraries=(--in-lib "$work/unisim")
+        verilog=(-f "$work/$stem.f")
+        printf '%s\n' "-y $models/unisims" "+libext+.v" "$models/glbl.v" >"$work/$stem.f"
+        if grep -qi '^library xpm;' "$source"; then
+            make_library xpm "$xpm/xpm_VCOMP.vhd" || { status=1; continue; }
+            libraries+=(--in-lib "$work/xpm")
+            verilog=("${xpm_models[@]}")
+        fi
+        if grep -qi '^library unimacro;' "$source"; then
+            macros="$XILINX_VIVADO/data/vhdl/src/unimacro"
+            mapfile -t order < <(tr -d '\r' <"$macros/vhdl_analyze_order" | grep .)
+            make_library unimacro "${order[@]/#/$macros/}" || { status=1; continue; }
+            libraries+=(--in-lib "$work/unimacro")
+        fi
+        (cd "$work" && "$enzan" "${libraries[@]}" --top "$name" --top glbl \
+            "$here/vhdl/verilog_format.vhd" "$source" "${verilog[@]}") \
+            >"$work/$stem.enzan.txt" 2>"$work/$stem.enzan.log"
+        enzan_status=$?
+        cp "$work/$name.reference.txt" "$work/$stem.reference.txt"
+        judge "$stem" "the Verilog testbench" "$enzan_status" 0 "$work/$stem.counterpart.txt" \
+            "$name"
+        continue
+    fi
+
     if [[ -f "$here/xpm/$testbench.sv" ]]; then
         source="$here/xpm/$testbench.sv"
         if [[ -z "$verilator" ]]; then
@@ -166,8 +245,7 @@ for testbench in "${testbenches[@]}"; do
             skipped=1
             continue
         fi
-        sources=("$interfaces" "$models/glbl.v" "$xpm/xpm_cdc/hdl/xpm_cdc.sv"
-                 "$xpm/xpm_memory/hdl/xpm_memory.sv" "$xpm/xpm_fifo/hdl/xpm_fifo.sv" "$source")
+        sources=("${xpm_models[@]}" "$source")
         (cd "$work" && "$enzan" --top "$testbench" --top glbl "${sources[@]}") \
             >"$work/$testbench.enzan.txt" 2>"$work/$testbench.enzan.log"
         enzan_status=$?
@@ -184,20 +262,23 @@ for testbench in "${testbenches[@]}"; do
         reference_status=${PIPESTATUS[0]}
         judge "$testbench" Verilator "$enzan_status" "$reference_status" \
             "$work/$testbench.verilator.log"
+        referenced[$testbench]=yes
         continue
     fi
 
     source="$here/tb/$testbench.sv"
-    printf '%s\n' "-y $models/unisims" "+libext+.v" "$models/glbl.v" "$source" \
-        >"$work/$testbench.f"
+    printf '%s\n' "-y $models/unisims" "-y $models/unimacro" "+libext+.v" "$models/glbl.v" \
+        "$source" >"$work/$testbench.f"
     (cd "$work" && "$enzan" --top "$testbench" --top glbl -f "$work/$testbench.f") \
         >"$work/$testbench.enzan.txt" 2>"$work/$testbench.enzan.log"
     enzan_status=$?
 
-    run_icarus "$testbench" "$source" -y "$models/unisims" -s glbl "$models/glbl.v"
+    run_icarus "$testbench" "$source" -y "$models/unisims" -y "$models/unimacro" -s glbl \
+        "$models/glbl.v"
     reference_status=$?
     judge "$testbench" "Icarus Verilog" "$enzan_status" "$reference_status" \
         "$work/$testbench.iverilog.log"
+    referenced[$testbench]=yes
 done
 if [[ $status -eq 0 && $skipped -ne 0 ]]; then exit 77; fi
 exit "$status"

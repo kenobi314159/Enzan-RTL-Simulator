@@ -35,6 +35,24 @@ enzan --top tb --top glbl -f xilinx.f tb.sv design.sv
   not see a value a testbench gave a variable where it declared it, and shows `x` until an input
   first changes, as IEEE 1800 says. Assign the inputs in an `initial` block instead.
 
+### From VHDL
+
+A VHDL design reaches the same Verilog models through AMD's component packages, analysed once into
+libraries of their names: `unisim` from `unisim_retarget_VCOMP.vhd`, `xpm` from `xpm_VCOMP.vhd`,
+and AMD's VHDL `unimacro`, in the order its `vhdl_analyze_order` gives, against `unisim`:
+
+```
+enzan lib create --name unisim libs/unisim
+enzan analyse --out-lib libs/unisim ${XILINX_VIVADO}/data/vhdl/src/unisims/unisim_retarget_VCOMP.vhd
+enzan lib create --name xpm libs/xpm
+enzan analyse --out-lib libs/xpm ${XILINX_VIVADO}/data/ip/xpm/xpm_VCOMP.vhd
+enzan --in-lib libs/unisim --in-lib libs/xpm --top tb --top glbl tb.vhd design.vhd -f xilinx.f
+```
+
+A component is bound to the Verilog model of its name, which `-y` in the file list finds, and its
+generics set the model's parameters. A value a model drives weakly, a `PULLUP`'s, reaches the VHDL
+signal as `L` or `H`, so that it yields to the pad's other drivers.
+
 ### Functional-simulation netlists
 
 Vivado's netlists in Verilog, `write_verilog -mode funcsim`, run as any other design over the
@@ -44,7 +62,7 @@ instruction has written yet, the netlist holds what AMD's RAM primitives start w
 
 ### Not yet
 
-- The models from VHDL, through AMD's component packages, and Vivado's netlists in VHDL.
+- Vivado's netlists in VHDL.
 
 ### Not supported
 
@@ -53,9 +71,10 @@ The `secureip` models, which are encrypted, and SDF back-annotation.
 ### What is tested
 
 `tests/designs/vendor-xilinx/run.sh` holds Enzan's testbenches of the commonest primitives to Icarus
-Verilog and XPM's to Verilator when `XILINX_VIVADO` is set, and NEORV32's netlist, which
-`netlist/make.sh` makes with Vivado, to Icarus Verilog and to its RTL when `XILINX_NETLISTS` names
-where it is. `release.txt` beside it names the Vivado release it last passed with.
+Verilog, XPM's to Verilator and the same testbenches in VHDL to their Verilog counterparts when
+`XILINX_VIVADO` is set, and NEORV32's netlist, which `netlist/make.sh` makes with Vivado, to Icarus
+Verilog and to its RTL when `XILINX_NETLISTS` names where it is. `release.txt` beside it names the
+Vivado release it last passed with.
 
 ```
 XILINX_VIVADO=/opt/Xilinx/Vivado/2026.1 tests/designs/vendor-xilinx/run.sh enzan iverilog work/

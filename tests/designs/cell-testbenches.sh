@@ -35,9 +35,11 @@ run_icarus() {
 }
 
 # Judges <testbench> by the two transcripts, <work>/<testbench>.enzan.txt and .reference.txt, and
-# by the exit statuses of Enzan and of <reference>, whose own log is <log>.
+# by the exit statuses of Enzan and of <reference>, whose own log is <log>. A testbench passes as
+# <passes-as>, its name unless that is given.
 judge() {
     local testbench="$1" reference="$2" enzan_status="$3" reference_status="$4" log="$5"
+    local passes="${6:-$1}"
     if [[ $enzan_status -ne 0 ]]; then
         printf 'FAIL %s: Enzan exited with %d (%s)\n' "$testbench" "$enzan_status" \
             "$work/$testbench.enzan.log"
@@ -45,11 +47,11 @@ judge() {
     elif [[ $reference_status -ne 0 ]]; then
         printf 'FAIL %s: %s did not run it (%s)\n' "$testbench" "$reference" "$log"
         status=1
-    elif ! grep -q "^PASS $testbench\$" "$work/$testbench.reference.txt"; then
+    elif ! grep -q "^PASS $passes\$" "$work/$testbench.reference.txt"; then
         printf 'FAIL %s: the testbench does not pass under %s (%s)\n' "$testbench" "$reference" \
             "$work/$testbench.reference.txt"
         status=1
-    elif ! grep -q "^PASS $testbench\$" "$work/$testbench.enzan.txt"; then
+    elif ! grep -q "^PASS $passes\$" "$work/$testbench.enzan.txt"; then
         printf 'FAIL %s: the testbench did not report success (%s)\n' "$testbench" \
             "$work/$testbench.enzan.txt"
         status=1
