@@ -47,6 +47,7 @@ bool isSystemFunction(SysTaskKind kind) noexcept {
     case SysTaskKind::URandom:
     case SysTaskKind::URandomRange:
     case SysTaskKind::FileOpen:
+    case SysTaskKind::FileGetCharacter:
     case SysTaskKind::LineWrite:
     case SysTaskKind::LineWriteLine:
     case SysTaskKind::LineReadLine:
@@ -80,6 +81,7 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::ReadMemBinary: return "$readmemb";
     case SysTaskKind::Report: return "report";
     case SysTaskKind::FileOpen: return "$fopen";
+    case SysTaskKind::FileGetCharacter: return "$fgetc";
     case SysTaskKind::LineDeallocate: return "deallocate";
     // VHDL names each by the subprogram the design calls, which several share.
     case SysTaskKind::LineWrite:

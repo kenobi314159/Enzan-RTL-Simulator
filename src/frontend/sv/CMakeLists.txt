@@ -2,9 +2,9 @@
 
 enzan_add_component(
   frontend_sv
-  SOURCES DeadCode.cpp NonStandardPaths.cpp ProcessTranslator.cpp SvIntConversion.cpp
-          SystemVerilogFrontend.cpp
-  HEADERS DeadCode.h NonStandardPaths.h ProcessTranslator.h SvIntConversion.h
-          SystemVerilogFrontend.h
+  SOURCES DeadCode.cpp FileNameArguments.cpp NonStandardPaths.cpp ProcessTranslator.cpp
+          SvIntConversion.cpp SystemVerilogFrontend.cpp
+  HEADERS DeadCode.h FileNameArguments.h NonStandardPaths.h ProcessTranslator.h
+          SvIntConversion.h SystemVerilogFrontend.h
   DEPENDS enzan::common enzan::eir
   PRIVATE_DEPENDS slang::slang)

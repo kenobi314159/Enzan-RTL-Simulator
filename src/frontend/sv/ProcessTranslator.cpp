@@ -3464,6 +3464,28 @@ ProcessTranslator::translateFileOpen(const ast::CallExpression& call,
 }
 
 std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateFileGetCharacter(const ast::CallExpression& call,
+                                             const ast::Expression& expression) {
+    // slang has checked that there is one argument, the descriptor.
+    eir::SysTaskCall descriptor;
+    descriptor.kind = eir::SysTaskKind::FileGetCharacter;
+    descriptor.location = module->convertLocation(expression.sourceRange.start());
+    const std::optional<Value> file = translateExpression(*call.arguments()[0]);
+    if (!file.has_value()) return std::nullopt;
+    descriptor.arguments.push_back(
+        eir::SysTaskArgument{.value = eir::Operand::reg(file->reg), .type = file->type});
+
+    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
+    if (!resultType.has_value()) return std::nullopt;
+    const std::uint32_t index = addSysCall(std::move(descriptor));
+    const eir::Type word = eir::Type::bits(32, true, false);
+    const std::uint32_t result = newRegister(word);
+    emit(eir::Instruction::make(eir::Opcode::SysFunction, eir::Operand::reg(result),
+                                eir::Operand::sysCall(index)));
+    return coerce(Value{.reg = result, .type = word}, *resultType);
+}
+
+std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateRandom(std::string_view name, const ast::CallExpression& call,
                                    const ast::Expression& expression) {
     eir::SysTaskCall descriptor;
@@ -3627,6 +3649,7 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
         if (name == "$random" || name == "$urandom" || name == "$urandom_range")
             return translateRandom(name, call, expression);
         if (name == "$fopen") return translateFileOpen(call, expression);
+        if (name == "$fgetc") return translateFileGetCharacter(call, expression);
 
         // `$clog2` of a variable, such as a loop index; slang has folded every constant one.
         if (name == "$clog2" && call.arguments().size() == 1) {

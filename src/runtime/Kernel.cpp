@@ -1648,6 +1648,7 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::URandom:
     case eir::SysTaskKind::URandomRange:
     case eir::SysTaskKind::FileOpen:
+    case eir::SysTaskKind::FileGetCharacter:
     case eir::SysTaskKind::LineWrite:
     case eir::SysTaskKind::LineWriteLine:
     case eir::SysTaskKind::LineReadLine:
@@ -1771,6 +1772,17 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
             line->erase(0, 1);
         }
         break;
+
+    // A byte, or EOF, -1 in the 32 bits of an `int`.
+    case eir::SysTaskKind::FileGetCharacter: {
+        OpenFile* file = fileFor(static_cast<std::uint32_t>(argument(0)));
+        const std::char_traits<char>::int_type next =
+            file != nullptr && file->input ? file->input->get() : std::char_traits<char>::eof();
+        value = next == std::char_traits<char>::eof()
+                    ? 0xFFFF'FFFFU
+                    : static_cast<unsigned char>(std::char_traits<char>::to_char_type(next));
+        break;
+    }
 
     case eir::SysTaskKind::FileEnd: {
         OpenFile* file = fileFor(static_cast<std::uint32_t>(argument(0)));
@@ -1904,8 +1916,7 @@ void Kernel::readMemory(std::span<const std::uint32_t> objectSignals,
 
 std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,
                                SourceLocation location) {
-    // Writing, or reading for VHDL's textio, which is what reads a file; SystemVerilog's
-    // reading tasks are not there yet, and a file they opened would read as nothing.
+    // Writing, or reading, for `$fgetc` and for VHDL's textio.
     const bool channel = mode.empty();
     if (mode.starts_with('r')) {
         auto input = std::make_unique<std::ifstream>(name);

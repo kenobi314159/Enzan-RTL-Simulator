@@ -77,6 +77,9 @@ enum class SysTaskKind : std::uint8_t {
     /// `$fopen(name, mode)`: a file descriptor, or with no mode a channel of a multichannel
     /// descriptor; 0 when the file cannot be opened.
     FileOpen,
+    /// `$fgetc(fd)`: the next byte of the file the descriptor names, or -1 at its end and when
+    /// the descriptor names no file open for reading (IEEE 1800 section 21.3.4.1).
+    FileGetCharacter,
 
     // std.textio, run natively over the kernel's heap, whose lines are handles: 0 for `null`, and
     // otherwise numbered as they are allocated, freed ones reused last first, so that a run

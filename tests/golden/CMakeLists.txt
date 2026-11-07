@@ -274,10 +274,11 @@ enzan_add_golden_test(inout)
 # A complex design with many module instances and many levels of hierarchy.
 enzan_add_golden_test(large_design_00 DIR_WITH_MAKE NO_DIFFERENTIAL)
 
-# File output, and memories loaded from files the design writes first: compared file by file
-# with what Icarus Verilog does, each in an empty directory, so they need it.
+# File output, memories loaded from files the design writes first, and a file read a byte at a
+# time: compared file by file with what Icarus Verilog does, each in an empty directory, so they
+# need it.
 if(ENZAN_REFERENCE_SIMULATOR)
-  foreach(name files readmem)
+  foreach(name files readmem file_reading)
     add_test(NAME golden.${name}
              COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/run-isolated.sh" $<TARGET_FILE:enzan>
                      "${ENZAN_REFERENCE_SIMULATOR}" "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}.sv"

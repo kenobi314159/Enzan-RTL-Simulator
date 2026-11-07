@@ -423,6 +423,10 @@ private:
     std::optional<Value> translateFileOpen(const slang::ast::CallExpression& call,
                                            const slang::ast::Expression& expression);
 
+    /// `$fgetc`, a byte of a file the runtime reads.
+    std::optional<Value> translateFileGetCharacter(const slang::ast::CallExpression& call,
+                                                   const slang::ast::Expression& expression);
+
     /// `$random`, `$urandom` and `$urandom_range`, which the runtime draws.
     std::optional<Value> translateRandom(std::string_view name,
                                          const slang::ast::CallExpression& call,

@@ -8,6 +8,7 @@
 #include "eir/Module.h"
 #include "eir/Verifier.h"
 #include "frontend/sv/DeadCode.h"
+#include "frontend/sv/FileNameArguments.h"
 #include "frontend/sv/NonStandardPaths.h"
 #include "frontend/sv/ProcessTranslator.h"
 #include "frontend/sv/SvIntConversion.h"
@@ -2874,6 +2875,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     const DeadCode deadCode(compilation.getRoot());
     const NonStandardPaths nonStandardPaths(
         trees, std::span(slangDiagnostics.data(), slangDiagnostics.size()));
+    const FileNameArguments fileNameArguments(trees);
 
     // slang skips an encrypted envelope with a warning and reads on, so a module whose body is
     // encrypted would be translated without it and simulate. Such a file is refused, by one
@@ -2938,6 +2940,11 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
                 continue;
             }
         }
+
+        // A file name held in a vector, which the standard allows `$fopen` and slang refuses
+        // (see FileNameArguments); the translation reads its characters.
+        if (severity == slang::DiagnosticSeverity::Error && fileNameArguments.excuses(diagnostic))
+            continue;
 
         switch (severity) {
         case slang::DiagnosticSeverity::Note:

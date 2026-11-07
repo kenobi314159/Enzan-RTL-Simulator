@@ -1111,6 +1111,36 @@ TEST_F(FrontendTest, ReportsADisableOfTheBlockAFunctionIsCalledFrom) {
     EXPECT_TRUE(reported("a `disable` of 'outer'"));
 }
 
+TEST_F(FrontendTest, OpensAFileNamedByAVector) {
+    // IEEE 1800 section 21.3.1 allows an integral name and mode, which slang refuses.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            reg [8*16:1] name = "words.mif";
+            reg [8*2:1] mode = "r";
+            integer file;
+            initial file = $fopen(name, mode);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(reportedCode(DiagCode::SystemVerilogError));
+}
+
+TEST_F(FrontendTest, StillRefusesAVectorWhereAStringIsDeclared) {
+    // Only `$fopen`'s arguments are excused: elsewhere the conversion needs its cast.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            reg [8*16:1] name = "words.mif";
+            function automatic int length(string text);
+                return text.len();
+            endfunction
+            int n;
+            initial n = length(name);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("no implicit conversion"));
+}
+
 TEST_F(FrontendTest, ReportsADelayOnANet) {
     EXPECT_EQ(analyse(R"(
         module m;
