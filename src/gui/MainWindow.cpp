@@ -28,11 +28,15 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPaintEvent>
 #include <QPixmap>
 #include <QSaveFile>
 #include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStyle>
+#include <QStyleOptionDockWidget>
+#include <QStylePainter>
 #include <QTabWidget>
 #include <QTableView>
 #include <QToolBar>
@@ -114,6 +118,29 @@ protected:
             return;
         }
         QLineEdit::keyPressEvent(event);
+    }
+};
+
+/// A dock whose title, while it is docked, is drawn in the dock's own font.
+///
+/// Qt sizes a dock's title bar from the dock's font, but whenever that font is the application's,
+/// as it is under any theme, it draws the title in the font the application had when the dock was
+/// made. A theme's size made the bar taller and left the title at the desktop's size. A floating
+/// dock is left to Qt, since its window may draw the title itself.
+class Dock final : public QDockWidget {
+public:
+    using QDockWidget::QDockWidget;
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        if (isFloating() || titleBarWidget() != nullptr) {
+            QDockWidget::paintEvent(event);
+            return;
+        }
+        QStylePainter painter(this);
+        QStyleOptionDockWidget title;
+        initStyleOption(&title);
+        painter.drawControl(QStyle::CE_DockWidgetTitle, title);
     }
 };
 
@@ -295,7 +322,7 @@ void MainWindow::buildDocks() {
         scopeTo(action, structureView);
     }
 
-    auto* structureDock = new QDockWidget(tr("Structure"), this);
+    auto* structureDock = new Dock(tr("Structure"), this);
     structureDock->setObjectName(QStringLiteral("structure"));
     structureDock->setWidget(structureView);
     addDockWidget(Qt::LeftDockWidgetArea, structureDock);
@@ -339,7 +366,7 @@ void MainWindow::buildDocks() {
     connect(releaseAction, &QAction::triggered, this, &MainWindow::releaseSelectedObjects);
     objectsView->addAction(releaseAction);
 
-    auto* objectsDock = new QDockWidget(tr("Objects"), this);
+    auto* objectsDock = new Dock(tr("Objects"), this);
     objectsDock->setObjectName(QStringLiteral("objects"));
     objectsDock->setWidget(objectsView);
     addDockWidget(Qt::LeftDockWidgetArea, objectsDock);
@@ -465,7 +492,7 @@ void MainWindow::buildDocks() {
 
     transcriptView = new TranscriptView(theme, this);
 
-    auto* transcriptDock = new QDockWidget(tr("Transcript"), this);
+    auto* transcriptDock = new Dock(tr("Transcript"), this);
     transcriptDock->setObjectName(QStringLiteral("transcript"));
     transcriptDock->setWidget(transcriptView);
     addDockWidget(Qt::BottomDockWidgetArea, transcriptDock);

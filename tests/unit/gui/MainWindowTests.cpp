@@ -59,6 +59,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <thread>
@@ -583,6 +584,47 @@ TEST_F(MainWindowTest, TheWindowsSizeReachesEveryPaneOfAWindowOpenedWithIt) {
     large.show();
     QCoreApplication::processEvents();
     EXPECT_EQ(widgetsNotAt(large, 20.0), "");
+}
+
+/// How many rows of `dock`'s title bar its title covers, read from the dock as drawn: the rows of
+/// the bar's left half, away from its buttons, with a pixel far from the bar's `background`.
+int titleTextHeight(QDockWidget& dock, const QColor& background) {
+    const QImage image = dock.grab().toImage();
+    const int bar = dock.widget()->geometry().top();
+    int rows = 0;
+    for (int y = 0; y < bar; ++y) {
+        for (int x = 0; x < image.width() / 2; ++x) {
+            if (std::abs(image.pixelColor(x, y).lightness() - background.lightness()) > 40) {
+                ++rows;
+                break;
+            }
+        }
+    }
+    return rows;
+}
+
+TEST_F(MainWindowTest, ADocksTitleIsTheWindowsSize) {
+    // Qt drew a title in the font the application had when the dock was made, in a bar as tall
+    // as the theme's size, so a theme made the bars taller and left the titles as they were.
+    auto* dock = window->findChild<QDockWidget*>(QStringLiteral("structure"));
+    ASSERT_NE(dock, nullptr);
+    window->show();
+
+    const Theme small = themeWith("font window 10\n");
+    window->setTheme(small);
+    QCoreApplication::processEvents();
+    const int smallTitle =
+        titleTextHeight(*dock, small.color(enzan::gui::ThemeColor::HeaderBackground));
+
+    const Theme large = themeWith("font window 24\n");
+    window->setTheme(large);
+    QCoreApplication::processEvents();
+    const int largeTitle =
+        titleTextHeight(*dock, large.color(enzan::gui::ThemeColor::HeaderBackground));
+
+    ASSERT_GT(smallTitle, 0) << "no title was found to measure";
+    EXPECT_GT(largeTitle, smallTitle * 3 / 2)
+        << "a title of " << smallTitle << " rows at 10 " << "points was " << largeTitle << " at 24";
 }
 
 TEST_F(MainWindowTest, TheWindowsSizeReachesEveryPaneWhenTheThemeChanges) {
