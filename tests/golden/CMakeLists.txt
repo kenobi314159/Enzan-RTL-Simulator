@@ -203,6 +203,10 @@ enzan_add_golden_test(subroutines)
 # The static variables of functions and tasks, which every call shares.
 enzan_add_golden_test(static_locals)
 
+# Calls to the functions of another instance, whose static variables are that instance's, as
+# Altera's models ask the device-family module they instantiate.
+enzan_add_golden_test(instance_functions)
+
 # Callers sharing a static function's scratch variable. Icarus Verilog makes the always_comb
 # callers wait on it, and they wake one another without end.
 enzan_add_golden_test(static_function_callers NO_DIFFERENTIAL)

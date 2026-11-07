@@ -1141,6 +1141,45 @@ TEST_F(FrontendTest, StillRefusesAVectorWhereAStringIsDeclared) {
     EXPECT_TRUE(reported("no implicit conversion"));
 }
 
+TEST_F(FrontendTest, DeclaresTheStaticsOfASubroutineItsModuleNeverCalls) {
+    // Another instance's call reaches them by reference, so they are storage of this module.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module families;
+            function is_cyclone(input [8*20:1] device);
+                reg found;
+                begin
+                    found = device == "Cyclone 10 LP";
+                    is_cyclone = found;
+                end
+            endfunction
+        endmodule
+        module m;
+            families dev ();
+            logic yes;
+            initial yes = dev.is_cyclone("Cyclone 10 LP");
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* families = design->findModule("families");
+    ASSERT_NE(families, nullptr);
+    EXPECT_TRUE(families->findObject("is_cyclone.found").has_value());
+}
+
+TEST_F(FrontendTest, SaysNothingOfAnUncalledSubroutinesStaticOfATypeItCannotHold) {
+    // As with the rest of what an unused subroutine holds, it is reported where it is used.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            function int length(input int n);
+                string text;
+                return n;
+            endfunction
+            logic a;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(reportedCode(DiagCode::UnsupportedConstruct));
+}
+
 TEST_F(FrontendTest, ReportsADelayOnANet) {
     EXPECT_EQ(analyse(R"(
         module m;

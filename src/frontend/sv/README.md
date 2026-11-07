@@ -80,7 +80,9 @@ suspend the caller as its own statements would and the caller's read and write s
 what the call touches. A static variable of a subroutine, as each of one declared
 without `automatic`, is one variable every call shares: storage of the module, or of the
 package, that declares the subroutine, named behind it as `f.count`, and initialised once at
-time zero. It is marked `subroutineStatic` in the EIR, so that a call inlined into a continuous
+time zero. The module declares it whether or not its own code calls the subroutine, since a call
+from another instance, `dev.f(x)`, reaches it by reference as it reaches the module's other
+variables; one of a type Enzan cannot hold is reported only where it is used. It is marked `subroutineStatic` in the EIR, so that a call inlined into a continuous
 assignment is not its continuous driver and no inferred sensitivity list watches it; callers
 watching what one another write there would wake each other for ever.
 

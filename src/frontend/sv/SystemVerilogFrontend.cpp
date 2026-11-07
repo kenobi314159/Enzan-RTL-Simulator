@@ -412,6 +412,9 @@ private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
 
+    /// Declares the static variables of a subroutine, in `scope` and the blocks within it.
+    void declareStatics(const ast::Scope& scope);
+
     /// Reads what a functional simulation needs of a specify block: its module paths, its pulse
     /// limits, and where its first timing check is.
     void collectSpecifyBlock(const ast::SpecifyBlockSymbol& block);
@@ -1061,6 +1064,13 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             if (!collectScope(member.as<ast::StatementBlockSymbol>(), prefix)) return false;
             break;
 
+        case slang::ast::SymbolKind::Subroutine:
+            // A subroutine's static variables are storage of this module, which a call from
+            // another instance, `dev.is_family(name)`, reaches by reference, as it reaches the
+            // module's own: declared here, whether or not this module's own code calls it.
+            declareStatics(member.as<ast::SubroutineSymbol>());
+            break;
+
         default:
             // Type aliases, genvars, modports and the rest carry no state.
             // A construct that does carry state and is not handled — a task, a class —
@@ -1071,6 +1081,23 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
     }
 
     return true;
+}
+
+void ModuleBuilder::declareStatics(const ast::Scope& scope) {
+    for (const ast::Symbol& member : scope.members()) {
+        if (member.kind == slang::ast::SymbolKind::StatementBlock) {
+            declareStatics(member.as<ast::StatementBlockSymbol>());
+            continue;
+        }
+        if (member.kind != slang::ast::SymbolKind::Variable) continue;
+        const auto& variable = member.as<ast::VariableSymbol>();
+
+        // One of a type Enzan cannot hold is reported only where it is used, as the rest of what
+        // an unused subroutine holds is.
+        if (staticSubroutineOf(variable) == nullptr || !convertType(variable.getType()).has_value())
+            continue;
+        objectFor(variable);
+    }
 }
 
 void ModuleBuilder::collectSpecifyBlock(const ast::SpecifyBlockSymbol& block) {
