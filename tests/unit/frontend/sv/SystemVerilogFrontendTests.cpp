@@ -1236,6 +1236,45 @@ TEST_F(FrontendTest, StillRefusesAResistiveSwitch) {
     EXPECT_TRUE(reported("the switch 'rnmos'"));
 }
 
+TEST_F(FrontendTest, ADefparamOnAnInstanceTypesItsParameterByTheValue) {
+    // As an override on the instance does: the string keeps all its characters.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf;
+            parameter mode = "short";
+            logic [$bits(mode)-1:0] held = mode;
+        endmodule
+        module m;
+            leaf inner ();
+            defparam inner.mode = "a_longer_mode";
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const auto found = std::ranges::find_if(design->modules(), [](const ModuleDefinition& module) {
+        return module.name.starts_with("leaf");
+    });
+    ASSERT_NE(found, design->modules().end());
+    const std::uint32_t held = require(found->findObject("held"));
+    EXPECT_EQ(found->objects[held].type.bitWidth(), 104U);
+}
+
+TEST_F(FrontendTest, RefusesADefparamSlangWouldReadAtItsDefaultsWidth) {
+    // Two levels down it is not moved onto an instance, and slang would cut it to five characters.
+    EXPECT_EQ(analyse(R"(
+        module leaf;
+            parameter mode = "short";
+        endmodule
+        module pair;
+            leaf inner ();
+        endmodule
+        module m;
+            pair outer ();
+            defparam outer.inner.mode = "a_longer_mode";
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("a defparam setting the untyped parameter 'mode' to 104 bits"));
+}
+
 TEST_F(FrontendTest, ReportsADelayOnANet) {
     EXPECT_EQ(analyse(R"(
         module m;

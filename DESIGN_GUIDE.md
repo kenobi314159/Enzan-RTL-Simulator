@@ -641,6 +641,11 @@ floor.
   simulators rely on them and what they mean is plain: a parameter in a path's condition (IEEE
   1800 section 30.4.4), as Icarus Verilog takes it, and a parallel path from one bit to a vector
   (section 30.4.5), which can only join the bit to every bit of the output.
+- **A `defparam` on an instance of the same module becomes that instance's parameter value
+  assignment** before slang elaborates. An untyped parameter takes the type of its final value
+  (IEEE 1800 section 6.20.2), which slang gives an override on the instance but not a `defparam`,
+  so a longer string would be cut to the default's width. Any other `defparam` whose value would
+  be cut so is refused.
 
 ### 5.2 VHDL via NVC
 

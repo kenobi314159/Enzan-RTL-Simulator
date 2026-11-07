@@ -8,6 +8,7 @@
 #include "eir/Module.h"
 #include "eir/Verifier.h"
 #include "frontend/sv/DeadCode.h"
+#include "frontend/sv/DefParams.h"
 #include "frontend/sv/FileNameArguments.h"
 #include "frontend/sv/NonStandardPaths.h"
 #include "frontend/sv/ProcessTranslator.h"
@@ -3027,8 +3028,13 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     slang::ast::Compilation compilation(bag);
     std::vector<std::shared_ptr<slang::syntax::SyntaxTree>> trees;
     trees.reserve(slangBuffers.size() + 1);
-    for (const slang::SourceBuffer& buffer : slangBuffers)
-        trees.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+    // A tree whose defparams are moved onto their instances shares syntax with the one parsed,
+    // which has to outlive it (see moveDefParams).
+    std::vector<std::shared_ptr<slang::syntax::SyntaxTree>> parsed;
+    for (const slang::SourceBuffer& buffer : slangBuffers) {
+        parsed.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+        trees.push_back(moveDefParams(parsed.back()));
+    }
     mapIncludedBuffers(slangSources, sources, buffers);
 
     slang::BufferID requestBuffer;
@@ -3063,6 +3069,25 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         trees, std::span(slangDiagnostics.data(), slangDiagnostics.size()));
     const FileNameArguments fileNameArguments(trees);
 
+    // Where slang's location is in the sources, or nowhere for a buffer they do not hold.
+    const auto locationOf = [&](slang::SourceLocation where) {
+        if (!where) return SourceLocation();
+        const auto found = buffers.find(where.buffer());
+        if (found == buffers.end()) return SourceLocation();
+        const SourceLocation start = sources.lineStart(
+            found->second, static_cast<std::uint32_t>(slangSources.getLineNumber(where)));
+        if (!start.valid()) return SourceLocation();
+        const std::size_t column = slangSources.getColumnNumber(where);
+        return start.advanced(static_cast<std::uint32_t>(column > 0 ? column - 1 : 0));
+    };
+
+    // A defparam slang would read at another width than its value's is refused, by name.
+    for (const MistypedDefParam& defparam : mistypedDefParams(compilation.getRoot())) {
+        diagnostics.report(DiagCode::UnsupportedConstruct, locationOf(defparam.location),
+                           defparam.description);
+        hasError = true;
+    }
+
     // slang skips an encrypted envelope with a warning and reads on, so a module whose body is
     // encrypted would be translated without it and simulate. Such a file is refused, by one
     // error naming it: what slang says about the rest of it follows from the missing text, such
@@ -3086,17 +3111,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             continue;
 
         const std::string message = slangEngine.formatMessage(diagnostic);
-        const SourceLocation location = [&] {
-            if (!diagnostic.location) return SourceLocation();
-            const auto found = buffers.find(diagnostic.location.buffer());
-            if (found == buffers.end()) return SourceLocation();
-            const SourceLocation start = sources.lineStart(
-                found->second,
-                static_cast<std::uint32_t>(slangSources.getLineNumber(diagnostic.location)));
-            if (!start.valid()) return SourceLocation();
-            const std::size_t column = slangSources.getColumnNumber(diagnostic.location);
-            return start.advanced(static_cast<std::uint32_t>(column > 0 ? column - 1 : 0));
-        }();
+        const SourceLocation location = locationOf(diagnostic.location);
 
         if (diagnostic.location && encrypted.contains(diagnostic.location.buffer())) {
             const slang::BufferID buffer = diagnostic.location.buffer();

@@ -259,6 +259,10 @@ enzan_add_golden_test(short_circuit)
 # A type parameter handed down a second level. Icarus Verilog does not parse type parameters.
 enzan_add_golden_test(type_parameters NO_DIFFERENTIAL)
 
+# Defparams as Quartus's netlists set parameters: a string longer than the default, which takes
+# the type of its value as an override on the instance does, numbers, and one two levels down.
+enzan_add_golden_test(defparams)
+
 # Packages, and package variables shared by every module that uses them.
 enzan_add_golden_test(packages)
 
