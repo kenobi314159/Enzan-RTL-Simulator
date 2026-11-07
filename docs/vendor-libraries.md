@@ -55,14 +55,12 @@ signal as `L` or `H`, so that it yields to the pad's other drivers.
 
 ### Functional-simulation netlists
 
-Vivado's netlists in Verilog, `write_verilog -mode funcsim`, run as any other design over the
-models, with `glbl` as a second top. Expect a netlist to be slow: NEORV32's, 41,000 cells, runs
-about 60 of its clock cycles a second, in 3.5 GB. Where the RTL holds a value unknown, a register no
-instruction has written yet, the netlist holds what AMD's RAM primitives start with, 0.
-
-### Not yet
-
-- Vivado's netlists in VHDL.
+Vivado's netlists, `write_verilog -mode funcsim` or `write_vhdl -mode funcsim`, run as any other
+design over the models, with `glbl` as a second top; one in VHDL reaches them through `unisim`.
+Expect a netlist to be slow: NEORV32's, 41,000 cells, runs about 60 of its clock cycles a second, in
+3.5 GB, and a third as fast in VHDL, where every cell crosses the language boundary. Where the RTL
+holds a value unknown, a register no instruction has written yet, the netlist holds what AMD's RAM
+primitives start with, 0.
 
 ### Not supported
 
@@ -72,9 +70,9 @@ The `secureip` models, which are encrypted, and SDF back-annotation.
 
 `tests/designs/vendor-xilinx/run.sh` holds Enzan's testbenches of the commonest primitives to Icarus
 Verilog, XPM's to Verilator and the same testbenches in VHDL to their Verilog counterparts when
-`XILINX_VIVADO` is set, and NEORV32's netlist, which `netlist/make.sh` makes with Vivado, to Icarus
-Verilog and to its RTL when `XILINX_NETLISTS` names where it is. `release.txt` beside it names the
-Vivado release it last passed with.
+`XILINX_VIVADO` is set, and NEORV32's netlists in Verilog and in VHDL, which `netlist/make.sh` makes
+with Vivado, to its RTL when `XILINX_NETLISTS` names where they are. `release.txt` beside it names
+the Vivado release it last passed with.
 
 ```
 XILINX_VIVADO=/opt/Xilinx/Vivado/2026.1 tests/designs/vendor-xilinx/run.sh enzan iverilog work/

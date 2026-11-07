@@ -26,7 +26,9 @@
 # through the entity netlist/wrap.py writes, and is held to GHDL's run of that testbench around the
 # processor's RTL, which ../neorv32/run.sh makes: the testbench's same reports, the design's own
 # being no part of a netlist, and the same CPU trace and UART logs, as netlist/compare-logs.py
-# compares them. That needs GHDL, GHDL or the one on the path.
+# compares them. That needs GHDL, GHDL or the one on the path. neorv32_tb_vhdl_netlist is the same
+# around the netlist in VHDL, which reaches the models through the component library unisim,
+# analysed from the installation's unisim_retarget_VCOMP.vhd.
 #
 # vhdl/*.vhd are testbenches in VHDL of the same models, each the Verilog testbench of its name
 # moved across the language boundary: it reaches the Verilog models through the component
@@ -102,7 +104,7 @@ fi
 testbenches=("$@")
 if [[ ${#testbenches[@]} -eq 0 ]]; then
     for file in "$here"/tb/*.sv "$here"/xpm/*.sv; do testbenches+=("$(basename "$file" .sv)"); done
-    testbenches+=(tb_neorv32_netlist neorv32_tb_netlist)
+    testbenches+=(tb_neorv32_netlist neorv32_tb_netlist neorv32_tb_vhdl_netlist)
     for file in "$here"/vhdl/tb_*.vhd; do testbenches+=("vhdl/$(basename "$file" .vhd)"); done
 fi
 
@@ -121,7 +123,10 @@ for testbench in "${testbenches[@]}"; do
             continue
         fi
         printf '%s\n' "-y $models/unisims" "+libext+.v" "+incdir+$netlists/wrappers" \
-            "$models/glbl.v" "$netlists/neorv32_funcsim.v" >"$work/$testbench.f"
+            "$models/glbl.v" >"$work/$testbench.f"
+        if [[ $testbench != neorv32_tb_vhdl_netlist ]]; then
+            printf '%s\n' "$netlists/neorv32_funcsim.v" >>"$work/$testbench.f"
+        fi
     fi
 
     if [[ $testbench == tb_neorv32_netlist ]]; then
@@ -137,18 +142,29 @@ for testbench in "${testbenches[@]}"; do
         continue
     fi
 
-    if [[ $testbench == neorv32_tb_netlist ]]; then
+    if [[ $testbench == neorv32_tb_netlist || $testbench == neorv32_tb_vhdl_netlist ]]; then
         if [[ -z "$ghdl" ]]; then
             printf 'NOT RUN %s: no GHDL, which runs the RTL it is held to\n' "$testbench"
             skipped=1
             continue
         fi
-        if ! "$here/../neorv32/run.sh" "$enzan" "$ghdl" "$work/neorv32" >"$work/neorv32.txt" 2>&1
-        then
+        if [[ -z "${rtl_status:-}" ]]; then
+            "$here/../neorv32/run.sh" "$enzan" "$ghdl" "$work/neorv32" >"$work/neorv32.txt" 2>&1
+            rtl_status=$?
+        fi
+        if [[ $rtl_status -ne 0 ]]; then
             printf 'FAIL %s: the RTL run it is held to failed (%s)\n' "$testbench" \
                 "$work/neorv32.txt"
             status=1
             continue
+        fi
+        netlist=(-f "$work/$testbench.f")
+        if [[ $testbench == neorv32_tb_vhdl_netlist ]]; then
+            if ! make_library unisim "$unisim_components"; then
+                status=1
+                continue
+            fi
+            netlist=(--in-lib "$work/unisim" "$netlists/neorv32_funcsim.vhd" "${netlist[@]}")
         fi
         rtl="$work/neorv32/neorv32-$(grep -v '^#' "$here/../neorv32/revision.txt" | head -1)"
         mkdir -p "$work/$testbench"
@@ -157,7 +173,7 @@ for testbench in "${testbenches[@]}"; do
             NEORV32_HOME="$rtl" "$enzan" --work neorv32 --top neorv32_tb --top glbl \
                 "$rtl"/rtl/core/{neorv32_package,neorv32_prim,neorv32_cpu_trace}.vhd \
                 "$netlists"/wrappers/{neorv32_netlist_pkg,neorv32_top}.vhd \
-                "${sim_models[@]/#/$rtl/sim/}" "$rtl/sim/neorv32_tb.vhd" -f "$work/$testbench.f" \
+                "${sim_models[@]/#/$rtl/sim/}" "$rtl/sim/neorv32_tb.vhd" "${netlist[@]}" \
                 --ieee-asserts disable --assert-level error --run "${stop_us}us"
         ) >"$work/$testbench/output.txt" 2>"$work/$testbench/transcript.txt"
         enzan_status=$?
