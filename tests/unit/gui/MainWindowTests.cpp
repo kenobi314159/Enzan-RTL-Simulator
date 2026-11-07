@@ -60,6 +60,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <thread>
 
 namespace {
@@ -546,6 +547,60 @@ TEST_F(MainWindowTest, AThemeThatSetsNoSizesGivesTheDesktopsBack) {
     window->setTheme(themeWith(""));
     EXPECT_EQ(rows->font().pointSizeF(), desktop);
     EXPECT_EQ(QApplication::font().pointSizeF(), desktopWindow);
+}
+
+/// The widgets of `window` whose text is not `points` in size, named in one line, leaving out
+/// those the window gives a size of their own — the signal list, the traces and the transcript —
+/// and what is inside them. Empty when there are none.
+std::string widgetsNotAt(const QWidget& window, double points) {
+    QStringList wrong;
+    if (window.font().pointSizeF() != points) wrong << QStringLiteral("the window itself");
+    for (const QWidget* widget : window.findChildren<QWidget*>()) {
+        bool sizedApart = false;
+        for (const QWidget* outer = widget; outer != nullptr && outer != &window;
+             outer = outer->parentWidget()) {
+            sizedApart = sizedApart || outer->testAttribute(Qt::WA_SetFont);
+        }
+        if (!sizedApart && widget->font().pointSizeF() != points) {
+            wrong << QStringLiteral("%1 '%2' at %3")
+                         .arg(QString::fromLatin1(widget->metaObject()->className()),
+                              widget->objectName(), QString::number(widget->font().pointSizeF()));
+        }
+    }
+    return wrong.join(QStringLiteral(", ")).toStdString();
+}
+
+TEST_F(MainWindowTest, TheWindowsSizeReachesEveryPaneOfAWindowOpenedWithIt) {
+    // As the application starts: the window's style sheet is the first, and the window's widgets
+    // are made before its theme is applied. The Structure and Objects windows, the menus and the
+    // toolbar kept the desktop's size.
+    window.reset();
+    qApp->setStyleSheet(QString());
+
+    MainWindow large(*session, themeWith("font window 20\nfont wave 24\n"));
+    EXPECT_EQ(widgetsNotAt(large, 20.0), "");
+
+    large.show();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(widgetsNotAt(large, 20.0), "");
+}
+
+TEST_F(MainWindowTest, TheWindowsSizeReachesEveryPaneWhenTheThemeChanges) {
+    // Each pane the theme does not size apart was a theme behind: going from a theme with large
+    // sizes to one with none made those panes large just as the signal list went back.
+    const double desktop = QApplication::font().pointSizeF();
+    window->show();
+    QCoreApplication::processEvents();
+
+    window->setTheme(themeWith("font window 20\nfont wave 24\nfont transcript 22\n"));
+    EXPECT_EQ(widgetsNotAt(*window, 20.0), "");
+    QCoreApplication::processEvents();
+    EXPECT_EQ(widgetsNotAt(*window, 20.0), "");
+
+    window->setTheme(themeWith(""));
+    EXPECT_EQ(widgetsNotAt(*window, desktop), "");
+    QCoreApplication::processEvents();
+    EXPECT_EQ(widgetsNotAt(*window, desktop), "");
 }
 
 TEST_F(MainWindowTest, ANewThemeRecoloursTheLinesAlreadyInTheTranscript) {

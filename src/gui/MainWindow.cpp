@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDockWidget>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -485,6 +486,16 @@ void MainWindow::applyTheme() {
 
     const QFont& desktop = desktopFont();
     QApplication::setFont(theme.font(ThemeFont::Window, desktop));
+
+    // Each widget is told of the new size itself. Qt hands an application font to a window, for
+    // it to pass down, and under an application style sheet the window passes it to none of its
+    // widgets: each keeps the size it was made with, or the one the application had when the
+    // style sheet was last applied. The Structure and Objects windows, the menus and the toolbar
+    // were a theme behind the rest of the window.
+    QEvent fontChange(QEvent::ApplicationFontChange);
+    QCoreApplication::sendEvent(this, &fontChange);
+    for (QWidget* widget : findChildren<QWidget*>())
+        QCoreApplication::sendEvent(widget, &fontChange);
 
     // One font for the names and the traces. The tree's sets how tall a row is, and the canvas
     // measures its labels against its own, so a size given to only one of them would put each
