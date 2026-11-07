@@ -119,6 +119,8 @@ most. Section 17 of the design guide has the rest of the working agreements.
   frontend uses NVC, and how to upgrade it.
 - [`docs/development/vendor_libraries_spike.md`](docs/development/vendor_libraries_spike.md) —
   what Enzan did with AMD Xilinx's simulation models when the work to read them began.
+- [`docs/development/vendor_libraries_altera_spike.md`](docs/development/vendor_libraries_altera_spike.md)
+  — the same for Altera's.
 - [`docs/development/releasing.md`](docs/development/releasing.md) — making a release.
 - [`packaging/README.md`](packaging/README.md) — each distribution's recipe and how packages are
   built.
