@@ -483,6 +483,15 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
                 writeBuiltString(written, *line, *justified, *field, native.location);
             return appended && assignWhole((*actuals)[0], *appended);
         }
+        // One whose length only the run knows is shown from the kernel holding it.
+        if (const Value* string = runTimeString(written)) {
+            native.kind = eir::SysTaskKind::LineWrite;
+            native.formatIndex = addString("%s");
+            native.arguments = {argument(*line), argument(*justified), argument(*field),
+                                eir::SysTaskArgument{.value = eir::Operand::reg(string->reg),
+                                                     .type = eir::Type::string()}};
+            return assignWhole((*actuals)[0], systemFunction(std::move(native), handle));
+        }
         const std::optional<Value> shown = value(1);
         if (!shown) return false;
         native.kind = eir::SysTaskKind::LineWrite;
@@ -532,6 +541,18 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
     // where the line has them. A null one takes none and is always read.
     if (procedure == "READ" && (actuals->size() == 2 || actuals->size() == 3)
         && type_is_array(tree_type((*actuals)[1])) && isCharacters(tree_type((*actuals)[1]))) {
+        const Value failing = constant(1, eir::Type::bits(1, false, false), nullptr);
+        // Into a string whose length only the run knows, which the kernel holds.
+        if (const Value* string = runTimeString((*actuals)[1])) {
+            const std::optional<Value> line = value(0);
+            if (!line) return false;
+            native.kind = eir::SysTaskKind::StringRead;
+            native.arguments = {argument(*string), argument(*line)};
+            if (actuals->size() == 2) native.arguments.push_back(argument(failing));
+            const Value read = systemFunction(std::move(native), eir::Type::bits(1, false, false));
+            if (actuals->size() == 2) return true;
+            return assignWhole((*actuals)[2], booleanOf(read.reg, tree_type((*actuals)[2])));
+        }
         const std::optional<Place> target = place((*actuals)[1]);
         if (!target) return false;
         if (!target->isVariable) return fail((*actuals)[1], "a read into something not a variable");
@@ -543,9 +564,7 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
             const std::uint32_t width = target->layout.storage.bitWidth();
             native.kind = eir::SysTaskKind::LineReadString;
             native.arguments = {argument(*line), argument(before)};
-            if (actuals->size() == 2)
-                native.arguments.push_back(
-                    argument(constant(1, eir::Type::bits(1, false, false), nullptr)));
+            if (actuals->size() == 2) native.arguments.push_back(argument(failing));
             const Value taken =
                 systemFunction(std::move(native), eir::Type::bits(width + 1, false, false));
             assignVariable(*target, bitsOf(taken, 0, width));

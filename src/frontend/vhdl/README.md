@@ -50,6 +50,8 @@ analysed against reach NVC by name (`UnitOptions::libraries`).
 - `BodyTranslator.h/.cpp` — a process's or a subprogram's statements and expressions, as EIR-B,
   and calls: callable, or inlined.
 - `Folder.h/.cpp` — static evaluation: generics, constants, bounds and delays.
+- `Textio.cpp` — std.textio and VHDL's files, run natively by the runtime.
+- `Strings.cpp` — strings whose lengths only the run knows, held in the runtime's scratch.
 - `Types.h/.cpp` — how a VHDL type is held in EIR.
 
 ## What is translated
@@ -74,7 +76,9 @@ concatenation, the predefined operators on scalars and arrays, `'event`, `'activ
 types; functions and procedures of packages and architectures, std_logic_1164's and numeric_std's
 among them. std.textio's `write` of strings, characters and integers to a line, `writeline`,
 `readline` and `read` of characters and strings from a line, the predefined `write` and `read` of
-files of text and of other types, and `endfile`, run natively by the runtime. Anything else is
+files of text and of other types, and `endfile`, run natively by the runtime. A subprogram's
+strings whose lengths only the run knows are held in the runtime's scratch: their bounds, elements
+and static slices, comparisons, and textio's `read` into them and `write` of them. Anything else is
 refused with ENZ2005 naming it, never left out.
 
 ## Rules

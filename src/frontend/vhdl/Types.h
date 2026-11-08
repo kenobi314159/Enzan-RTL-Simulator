@@ -65,6 +65,11 @@ struct Layout {
     std::vector<Layout> fields;
     std::vector<std::uint32_t> fieldOffsets;
 
+    /// True for a string whose length only the run knows, held in the kernel's scratch
+    /// (DESIGN_GUIDE.md section 4.1): `storage` is its handle and `index.ascending` its direction,
+    /// the one thing of its bounds known here. It is no array to anything that reads its bits.
+    bool runTimeString = false;
+
     [[nodiscard]] bool isArray() const noexcept { return array; }
 
     [[nodiscard]] bool isRecord() const noexcept { return recordType != nullptr; }
@@ -121,6 +126,13 @@ arrayLayout(const Folder::Range& index, type_t elementType, const Folder& folder
 
 /// The storage of a scalar `type`, which needs no folding; nothing for anything else.
 [[nodiscard]] std::optional<eir::Type> scalarStorage(type_t type);
+
+/// The layout of a string of `type` whose length only the run knows, ascending or not.
+[[nodiscard]] Layout runTimeStringLayout(type_t type, bool ascending);
+
+/// True when `type` is an array of one dimension of `character`, a string, which a value whose
+/// length only the run knows can be.
+[[nodiscard]] bool isStringType(type_t type);
 
 /// True when `name` dereferences a line, an access to a string as std.textio's `line` is: `l.all`,
 /// as NVC writes `l` indexed, sliced or given an attribute.

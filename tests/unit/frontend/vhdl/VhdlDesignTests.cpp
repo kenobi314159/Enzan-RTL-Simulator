@@ -1287,6 +1287,138 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "a read of 4 characters from a line holding 3");
 }
 
+TEST_F(VhdlDesignTest, ASubprogramsStringOfRunTimeLengthIsHeldInScratch) {
+    // As Altera's SHRINK_LINE cuts a line, a string as long as a parameter the run gives, read
+    // into; and one of each direction measured, written, compared, sliced and walked.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure shrink (l : inout line; pos : in integer) is
+    subtype nstring is string(1 to pos);
+    variable str : nstring;
+  begin
+    if pos >= 1 then
+      read(l, str);
+    end if;
+  end procedure;
+
+  procedure describe (n : in integer) is
+    variable s : string(1 to n) := (others => '*');
+    variable r : string(n downto 1);
+    variable l : line;
+    variable stars : integer := 0;
+  begin
+    s(1) := 'a';
+    s(n) := 'z';
+    s(2 to 3) := "xy";
+    assert s'length = n and s'left = 1 and s'right = n and s'low = 1 and s'high = n
+      report "s's bounds" severity failure;
+    assert r'left = n and r'right = 1 and r'low = 1 and r'high = n and not r'ascending
+      report "r's bounds" severity failure;
+    assert s(1 to 2) = "ax" and s /= "a" and s > "a" and s < "b" report "compared" severity failure;
+    for i in s'range loop
+      if s(i) = '*' then
+        stars := stars + 1;
+      end if;
+    end loop;
+    report s & " has " & integer'image(stars) & " stars";
+    write(l, s);
+    write(l, ' ');
+    write(l, s, right, n + 2);
+    writeline(output, l);
+  end procedure;
+begin
+  process
+    variable l : line;
+    variable i : integer := 3;
+  begin
+    write(l, string'("abc:def"));
+    shrink(l, i);
+    assert l'length = 4 and l(l'low) = ':' report "shrunk" severity failure;
+    i := 0;
+    shrink(l, i);
+    assert l'length = 4 report "shrunk by nothing" severity failure;
+    describe(5);
+    i := 6;
+    describe(i);
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(),
+              (std::vector<std::string>{"axy*z has 1 stars", "axy**z has 2 stars", "PASS"}));
+    EXPECT_EQ(simulation.transcript(), "axy*z   axy*z\naxy**z   axy**z\n");
+}
+
+TEST_F(VhdlDesignTest, AnIndexOutsideAStringOfRunTimeLengthEndsTheRun) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure poke (n : in integer) is
+    variable s : string(1 to n);
+  begin
+    s(n + 1) := 'x';
+  end procedure;
+begin
+  process
+    variable n : integer := 4;
+  begin
+    poke(n);
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_EQ(simulation.messages().front(), "index 5 is outside the bounds 1 to 4");
+}
+
+TEST_F(VhdlDesignTest, ASubprogramHoldingAStringOfRunTimeLengthCannotWait) {
+    // Suspending releases the kernel's scratch, which holds the string.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure hold (n : in integer) is
+    variable s : string(1 to n);
+  begin
+    wait for 1 ns;
+  end procedure;
+begin
+  process
+    variable n : integer := 4;
+  begin
+    hold(n);
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    EXPECT_NE(transcript().find("a wait in a subprogram holding a string of run-time length"),
+              std::string::npos)
+        << transcript();
+}
+
 TEST_F(VhdlDesignTest, AGenericsDefaultThatCannotBeComputedSaysWhereItsCallStopped) {
     // As OFM's splitter wrapper initialises its address bases: a default computed by a function
     // that calls a procedure for random numbers.

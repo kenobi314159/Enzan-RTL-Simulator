@@ -227,6 +227,10 @@ private:
         /// For a function whose string result has a length only the run shows, the register of
         /// the line its `return`s write into instead.
         std::optional<std::uint32_t> lineSink;
+
+        /// The mark of the kernel's scratch taken before the first string of run-time length the
+        /// subprogram declares, released to as it returns.
+        std::optional<Value> scratchMark;
     };
 
     /// A loop that `exit` and `next` can name.
@@ -365,6 +369,60 @@ private:
     /// shifts by a count have, `r(l downto n) := a(l - n downto 0)`: its value shifted into place
     /// and merged under a mask of the slice's bits.
     bool movingSliceAssignment(tree_t statement);
+
+    // --- strings of run-time length, held in the kernel's scratch (Strings.cpp) -----------------
+
+    /// The string of run-time length `name` designates, a variable or a parameter holding one;
+    /// null for any other name.
+    [[nodiscard]] const Value* runTimeString(tree_t name) const;
+
+    /// The string of run-time length whose `'range` or `'reverse_range` `range` is; null for any
+    /// other range.
+    [[nodiscard]] const Value* runTimeStringRange(tree_t range) const;
+
+    /// `declaration`, a subprogram's variable or constant of a string subtype whose bounds only
+    /// the run knows, declared as a string in scratch. Nothing when it is not one of those.
+    std::optional<bool> declareRunTimeString(tree_t declaration);
+
+    /// A register holding a mark of the kernel's scratch, which what is made after it is
+    /// released to.
+    Value scratchMark();
+    void releaseScratch(const Value& mark);
+
+    /// The bounds of `string`, a string of run-time length: signed 64-bit registers.
+    struct StringBounds {
+        Value left;
+        Value right;
+        Value length;
+    };
+
+    StringBounds stringBounds(const Value& string, tree_t where);
+
+    /// `attribute` of `string`, a string of run-time length: one of its bounds or its length.
+    std::optional<Value> runTimeStringAttribute(tree_t attribute, const Value& string);
+
+    /// An element of `string`, a string of run-time length, or a slice of it over bounds that
+    /// fold: `expression`, of `type`.
+    std::optional<Value> runTimeStringPart(tree_t expression, const Value& string, type_t type);
+
+    /// `name := value`, of an element of a string of run-time length or a slice of it over bounds
+    /// that fold.
+    bool runTimeStringAssignment(tree_t name, const Value& string, tree_t value);
+
+    /// A comparison `expression` of two strings, one of them or both of run-time length.
+    std::optional<Value> runTimeStringComparison(tree_t expression, subprogram_kind_t kind);
+
+    /// The handle of a string in scratch holding the value of `expression`: a string of run-time
+    /// length's own, or one made for it from a string of a length known here. A string made is
+    /// released to the mark the caller took.
+    std::optional<Value> inScratch(tree_t expression);
+
+    /// A new string in scratch holding `value`, a string of a length known here.
+    Value copyToScratch(const Value& value, tree_t where);
+
+    /// `left` and `right`, strings in scratch, compared as `kind` does: equality or an ordering.
+    Value stringComparison(const Value& left, const Value& right, subprogram_kind_t kind,
+                           tree_t expression);
 
     // --- std.textio and files, run natively (Textio.cpp) -----------------------------------------
 
@@ -642,6 +700,14 @@ private:
     /// The line the next inlined function's `return`s write into, which its frame takes.
     std::optional<std::uint32_t> nextLineSink;
     std::vector<Inlined> inlined;
+
+    /// The mark of the kernel's scratch a subprogram's own body takes before the first string of
+    /// run-time length it declares, released to at each of its returns.
+    std::optional<Value> ownScratchMark;
+
+    /// How many marks of the scratch are taken and not yet released to where translation is, an
+    /// inlined subprogram's or a statement's: a `wait` there would release what they hold.
+    std::uint32_t scratchHeld = 0;
 
     std::uint32_t current = 0;
     SourceLocation statementLocation;

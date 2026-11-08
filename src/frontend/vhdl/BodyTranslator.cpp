@@ -638,6 +638,7 @@ std::optional<BodyTranslator::Translated> BodyTranslator::translateSubprogram() 
                                         eir::Operand::sysCall(addSysCall(std::move(report)))));
         }
         closeDeclaredFiles(source);
+        if (ownScratchMark) releaseScratch(*ownScratchMark);
         emit(eir::Instruction::make(eir::Opcode::Return));
     }
     if (tree_kind(source) == T_FUNC_BODY && !resultLayout) {
@@ -667,6 +668,8 @@ bool BodyTranslator::declare(tree_t declaration) {
                     constantArray(eir::BitVector::filled(1, eir::Logic::Zero), *null, type);
                 return true;
             }
+            // A subprogram's string whose bounds only the run knows is held in scratch.
+            if (const std::optional<bool> made = declareRunTimeString(declaration)) return *made;
             return fail(declaration, std::string("a variable of type ") + type_pp(type));
         }
         const eir::Type storage = layout->storage;
@@ -1034,6 +1037,10 @@ BodyTranslator::Value BodyTranslator::bitsOf(const Value& value, std::uint32_t o
 
 bool BodyTranslator::variableAssignment(tree_t statement) {
     tree_t name = tree_target(statement);
+    if (tree_kind(name) == T_ARRAY_REF || tree_kind(name) == T_ARRAY_SLICE) {
+        if (const Value* string = runTimeString(tree_value(name)))
+            return runTimeStringAssignment(name, *string, tree_value(statement));
+    }
     if (tree_kind(name) == T_AGGREGATE) {
         // Every part is taken from the value before any is assigned, so `(a, b) := (b, a)` swaps.
         const std::optional<AggregateTarget> target = aggregateTarget(name);
@@ -1358,6 +1365,14 @@ bool BodyTranslator::forLoop(tree_t statement) {
     if (tree_subkind(range) == RANGE_TO || tree_subkind(range) == RANGE_DOWNTO) {
         left = expression(tree_left(range));
         right = expression(tree_right(range));
+    } else if (const Value* string = runTimeStringRange(range)) {
+        // `s'range` or `s'reverse_range` of a string of run-time length, whose bounds the kernel
+        // holds.
+        const bool reversed = tree_subkind(tree_value(range)) == ATTR_REVERSE_RANGE;
+        const StringBounds bounds = stringBounds(*string, range);
+        ascending = string->layout.index.ascending != reversed;
+        left = reversed ? bounds.right : bounds.left;
+        right = reversed ? bounds.left : bounds.right;
     } else {
         const std::optional<Folder::Range> folded = folder().range(range);
         if (!folded) return fail(range, "a loop over a range that is not static");
@@ -1631,6 +1646,9 @@ bool BodyTranslator::loopJump(tree_t statement, bool isExit) {
 
 bool BodyTranslator::waitStatement(tree_t statement) {
     if (!isProcess) return fail(statement, "a wait in a function");
+    // Suspending releases the kernel's scratch, and with it the strings a subprogram holds.
+    if (scratchHeld > 0)
+        return fail(statement, "a wait in a subprogram holding a string of run-time length");
     const bool hasDelay = tree_has_delay(statement);
     const bool hasCondition = tree_has_value(statement);
     const unsigned triggerCount = tree_triggers(statement);
@@ -2001,6 +2019,14 @@ bool BodyTranslator::enumerationImage(tree_t operand, std::string& format,
 
 bool BodyTranslator::messageParts(tree_t message, std::string& format,
                                   std::vector<eir::SysTaskArgument>& arguments) {
+    // A string of run-time length is its characters, which the kernel holding it shows.
+    if (const Value* string = runTimeString(message)) {
+        format += "%s";
+        arguments.push_back(eir::SysTaskArgument{.value = eir::Operand::reg(string->reg),
+                                                 .type = eir::Type::string()});
+        return true;
+    }
+
     // A message that is static, a design's banner of its configuration say, is its text, whatever
     // functions of generics built it.
     type_t messageType = tree_type(message);
@@ -2195,6 +2221,7 @@ bool BodyTranslator::returnStatement(tree_t statement) {
                                     eir::Operand::reg(resize(*value, value->type.bitWidth()).reg)));
     }
     closeDeclaredFiles(source);
+    if (ownScratchMark) releaseScratch(*ownScratchMark);
     emit(eir::Instruction::make(eir::Opcode::Return));
     return true;
 }
@@ -2465,10 +2492,12 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
     const Inlined frame = inlined.back();
     inlined.pop_back();
     folders.pop_back();
+    if (frame.scratchMark) --scratchHeld;
     if (!translated) return std::nullopt;
     jump(frame.exitBlock);
     selectBlock(frame.exitBlock);
     closeDeclaredFiles(calleeBody);
+    if (frame.scratchMark) releaseScratch(*frame.scratchMark);
 
     // What an `out` or `inout` parameter holds at the end goes back to its actual.
     for (const auto& [parameter, target] : copyBack) {
@@ -2643,6 +2672,8 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
         // A part of a signal or a variable is read without reading the rest of it.
         tree_t prefix = tree_value(expression);
         if (isDereferencedLine(prefix)) return linePart(expression, type);
+        if (const Value* string = runTimeString(prefix))
+            return runTimeStringPart(expression, *string, type);
         if (designatesStorage(expression)) {
             const std::optional<Place> part = place(expression);
             if (!part) return std::nullopt;
@@ -2704,7 +2735,13 @@ std::optional<BodyTranslator::Value> BodyTranslator::reference(tree_t expression
     tree_t declaration = tree_ref(expression);
     type_t type = tree_type(expression);
 
-    if (const auto local = locals.find(declaration); local != locals.end()) return local->second;
+    if (const auto local = locals.find(declaration); local != locals.end()) {
+        if (local->second.layout.runTimeString) {
+            fail(expression, "a string of run-time length used whole here");
+            return std::nullopt;
+        }
+        return local->second;
+    }
     if (const auto alias = aliases.find(declaration); alias != aliases.end())
         return read(alias->second, type);
 
@@ -2836,6 +2873,10 @@ std::optional<BodyTranslator::Value> BodyTranslator::attribute(tree_t expression
     if (isDereferencedLine(tree_name(expression))
         && (kind == ATTR_LENGTH || kind == ATTR_HIGH || kind == ATTR_RIGHT))
         return lineLength(expression);
+
+    // And where a string of run-time length starts and ends, the kernel holding it.
+    if (const Value* string = runTimeString(tree_name(expression)))
+        return runTimeStringAttribute(expression, *string);
 
     switch (kind) {
     // Of a whole signal, which the kernel keeps them of (DESIGN_GUIDE.md section 3.4).
@@ -3309,6 +3350,10 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
         if (tree_kind(declaration) == T_ALIAS) return aliasPlace(declaration);
         if (const auto local = locals.find(declaration); local != locals.end()) {
             const Value& variable = local->second;
+            if (variable.layout.runTimeString) {
+                fail(name, "a string of run-time length used whole here");
+                return std::nullopt;
+            }
             return Place{.isVariable = true,
                          .variable = variable,
                          .layout = variable.layout.isComposite() ? variable.layout
@@ -3963,6 +4008,12 @@ std::optional<BodyTranslator::Value> BodyTranslator::concatenation(tree_t expres
 std::optional<BodyTranslator::Value> BodyTranslator::arrayOperator(tree_t expression,
                                                                    subprogram_kind_t kind) {
     type_t resultType = tree_type(expression);
+    const bool ordering = kind == S_ARRAY_EQ || kind == S_ARRAY_NEQ || kind == S_ARRAY_LT
+                          || kind == S_ARRAY_LE || kind == S_ARRAY_GT || kind == S_ARRAY_GE;
+    for (unsigned index = 0; ordering && index < tree_params(expression); ++index) {
+        if (runTimeString(tree_value(tree_param(expression, index))) != nullptr)
+            return runTimeStringComparison(expression, kind);
+    }
     std::vector<Value> operands;
     for (unsigned index = 0; index < tree_params(expression); ++index) {
         const std::optional<Value> operand =
@@ -3998,6 +4049,16 @@ std::optional<BodyTranslator::Value> BodyTranslator::arrayOperator(tree_t expres
     case S_ARRAY_LE:
     case S_ARRAY_GT:
     case S_ARRAY_GE: {
+        // Strings of different lengths are ordered as the kernel orders them in its scratch.
+        if (binary && !sameLength && operands[0].layout.elementBits == 8
+            && isStringType(tree_type(tree_value(tree_param(expression, 0))))) {
+            const Value mark = scratchMark();
+            const Value left = copyToScratch(operands[0], expression);
+            const Value right = copyToScratch(operands[1], expression);
+            Value result = stringComparison(left, right, kind, expression);
+            releaseScratch(mark);
+            return result;
+        }
         if (!sameLength || !type_is_enum(operands[0].layout.elementType)) break;
         const bool swapped = kind == S_ARRAY_GT || kind == S_ARRAY_GE;
         const eir::Opcode opcode = kind == S_ARRAY_LT || kind == S_ARRAY_GT
