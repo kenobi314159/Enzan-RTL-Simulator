@@ -1999,6 +1999,62 @@ TEST_F(FrontendTest, ReportsAForceOfPartOfAnObject) {
     EXPECT_TRUE(reported("`force` of anything but a whole variable or net"));
 }
 
+TEST_F(FrontendTest, AnEventControlOnAnExpressionWaitsOnAnObjectKeptAtItsValue) {
+    // As Altera's multiply-accumulate models wait on an element chosen by a variable: the module
+    // keeps an object at the element's value by a continuous assignment, and the process waits
+    // on that object beside the variable.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic [7:0] pipe [0:3];
+            logic [1:0] head;
+            int wakes;
+            always @(pipe[head] or head) wakes++;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+    const auto held = std::ranges::find_if(module->objects, [](const enzan::eir::Object& object) {
+        return object.name.starts_with("event$");
+    });
+    ASSERT_NE(held, module->objects.end());
+    const auto index = static_cast<std::uint32_t>(held - module->objects.begin());
+    EXPECT_EQ(held->type.bitWidth(), 8U);
+
+    ASSERT_EQ(module->processes.size(), 2U);
+    const enzan::eir::Process& keeper = module->processes[0];
+    EXPECT_EQ(keeper.kind, enzan::eir::ProcessKind::ContinuousAssign);
+    EXPECT_TRUE(std::ranges::any_of(keeper.writeSet, [index](const enzan::eir::WriteExtent& write) {
+        return write.objectIndex == index;
+    }));
+    // The process waits on both, in its sensitivity or in a list a wait in its body names.
+    const enzan::eir::Process& waiter = module->processes[1];
+    std::vector<enzan::eir::SensitivityEntry> waited = waiter.sensitivity;
+    for (const std::vector<enzan::eir::SensitivityEntry>& list : waiter.eventLists)
+        waited.insert(waited.end(), list.begin(), list.end());
+    EXPECT_EQ(waited.size(), 2U);
+    EXPECT_TRUE(std::ranges::any_of(waited, [index](const enzan::eir::SensitivityEntry& entry) {
+        return entry.objectIndex == index && entry.edge == enzan::eir::EdgeKind::AnyChange;
+    }));
+}
+
+TEST_F(FrontendTest, RefusesAnEventControlOnAnExpressionOfAVariableOfTheProcesssOwn) {
+    // An argument of a task inlined into the process is held by the process alone, and the
+    // continuous assignment is the module's, which cannot read it.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic a;
+            task automatic wait_for(input logic b);
+                @(a & b);
+            endtask
+            initial wait_for(1'b1);
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("an event control on an expression that reads a variable of the "
+                         "process's own"));
+}
+
 TEST_F(FrontendTest, ANamedEventIsABitItsTriggerToggles) {
     const std::unique_ptr<Design> design = analyse(R"(
         module m;

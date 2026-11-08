@@ -560,6 +560,29 @@ ProcessTranslator::eventEntry(const ast::Expression& expression, ast::EdgeKind e
     }
 }
 
+std::optional<eir::SensitivityEntry>
+ProcessTranslator::eventValueEntry(const ast::Expression& expression, ast::EdgeKind edge) {
+    // An event on an expression is a change of its value, or an edge of it (IEEE 1800 section
+    // 9.4.2), so it is an event on an object a continuous assignment keeps at that value, which
+    // changes exactly when the value does. The assignment is the module's, so it cannot read the
+    // process's own variables, and evaluating it again must change nothing.
+    const std::optional<eir::EdgeKind> kind = toEdgeKind(edge);
+    if (!kind.has_value() || hasSideEffects(expression)) return std::nullopt;
+    bool readsLocal = false;
+    expression.visit(ast::makeVisitor([&](auto&, const ast::NamedValueExpression& named) {
+        if (localFor(named.symbol) != nullptr) readsLocal = true;
+    }));
+    if (readsLocal) return std::nullopt;
+
+    const std::optional<std::uint32_t> held = module->addEventValue(expression);
+    if (!held.has_value()) {
+        failed = true;
+        return std::nullopt;
+    }
+    noteRead(*held);
+    return eir::SensitivityEntry{.objectIndex = *held, .edge = *kind};
+}
+
 eir::Process ProcessTranslator::take() {
     std::ranges::sort(reads);
     reads.erase(std::ranges::unique(reads).begin(), reads.end());
@@ -2103,12 +2126,13 @@ bool ProcessTranslator::translateTimingControl(const ast::TimingControl& timing)
                 module->reportUnsupported(one.sourceRange.start(), "`iff` on an event control");
                 return false;
             }
-            const std::optional<eir::SensitivityEntry> entry = eventEntry(event.expr, event.edge);
+            std::optional<eir::SensitivityEntry> entry = eventEntry(event.expr, event.edge);
+            if (!entry.has_value() && !failed) entry = eventValueEntry(event.expr, event.edge);
             if (!entry.has_value()) {
                 if (!failed) {
                     module->reportUnsupported(one.sourceRange.start(),
-                                              "an event control on an expression rather than a "
-                                              "signal or a constant select of one");
+                                              "an event control on an expression that reads a "
+                                              "variable of the process's own or changes something");
                 }
                 return false;
             }

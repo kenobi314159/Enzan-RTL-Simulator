@@ -166,6 +166,12 @@ public:
                                                             const slang::ast::Expression& value,
                                                             bool force,
                                                             slang::SourceLocation location) = 0;
+
+    /// Adds an object holding the value of `expression`, which an event control waits on, and
+    /// the continuous assignment that keeps it at that value, and returns the object's index;
+    /// nothing, having reported why, when `expression` cannot be translated.
+    virtual std::optional<std::uint32_t>
+    addEventValue(const slang::ast::Expression& expression) = 0;
 };
 
 /// Translates one procedural block or continuous assignment into an EIR process.
@@ -254,10 +260,16 @@ public:
 
     /// The sensitivity entry an event control on `expression` is: the whole of an object, or a
     /// constant window of one, such as `posedge clk[2]` (IEEE 1800 section 9.4.2). Nothing for
-    /// any other expression, which would need a temporary the scheduler could watch; the
-    /// caller reports it.
+    /// any other expression, for which `eventValueEntry` is.
     std::optional<eir::SensitivityEntry> eventEntry(const slang::ast::Expression& expression,
                                                     slang::ast::EdgeKind edge);
+
+    /// The sensitivity entry an event control on any other `expression` is, `@(pipe[head])`: the
+    /// whole of an object the module keeps at the expression's value. Nothing when the
+    /// expression reads a variable of the process's own or changes something, which the
+    /// caller reports, or when it cannot be translated, having reported why.
+    std::optional<eir::SensitivityEntry> eventValueEntry(const slang::ast::Expression& expression,
+                                                         slang::ast::EdgeKind edge);
 
     /// Hands over the finished process. The translator must not be used afterwards.
     eir::Process take();

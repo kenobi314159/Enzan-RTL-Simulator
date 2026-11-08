@@ -628,6 +628,11 @@ floor.
   leaves open, and Enzan takes them in port order.
 - **A real is a double**, `shortreal` without its reduced precision.
 - **A named event is a bit its trigger toggles**, so that what waits on it sees it change.
+- **An event control on an expression waits on an object a continuous assignment keeps at the
+  expression's value**, so it resumes when the value changes or makes its edge (IEEE 1800 section
+  9.4.2), as `@(w)` with `assign w = expr` would: a value held only between two writes of one run
+  of a process is no event. Icarus Verilog resumes on any change of an operand instead, so it is no
+  reference for these. An expression of a subroutine's own variable is refused.
 - **A specify block is read for what a functional simulation needs of it.** A timing check is not
   run (1.3), and a run instantiating one says so once.
 - **A module path delays its output as Icarus Verilog's `-gspecify` does**, by the standard's rule

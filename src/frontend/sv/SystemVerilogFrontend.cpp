@@ -409,6 +409,8 @@ public:
                                                     const ast::Expression& value, bool force,
                                                     slang::SourceLocation location) override;
 
+    std::optional<std::uint32_t> addEventValue(const ast::Expression& expression) override;
+
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
@@ -796,6 +798,33 @@ std::optional<std::uint32_t> ModuleBuilder::addOverrideProcess(std::uint32_t obj
     const auto index = static_cast<std::uint32_t>(definitionValue.processes.size());
     definitionValue.processes.push_back(translator.take());
     return index;
+}
+
+std::optional<std::uint32_t> ModuleBuilder::addEventValue(const ast::Expression& expression) {
+    const slang::SourceLocation location = expression.sourceRange.start();
+    const std::optional<eir::Type> type = convertType(*expression.type);
+    if (!type.has_value()) {
+        reportUnsupported(location, "an event control on an expression of this type");
+        return std::nullopt;
+    }
+    eir::Object object;
+    object.name = uniqueObjectName("event$value");
+    object.type = *type;
+    object.kind = eir::ObjectKind::Variable;
+    object.location = convertLocation(location);
+    const std::uint32_t objectIndex = definitionValue.addObject(std::move(object));
+
+    ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
+                                 std::format("event@{}:{}",
+                                             shared->slangSources.getFileName(location),
+                                             shared->slangSources.getLineNumber(location)),
+                                 convertLocation(location));
+    if (!translator.translateExpressionInto(objectIndex, expression)) return std::nullopt;
+
+    // Appended while the waiting process is still being translated, as an override's is, so
+    // it comes before that process and has the value before the process first waits on it.
+    definitionValue.processes.push_back(translator.take());
+    return objectIndex;
 }
 
 const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {

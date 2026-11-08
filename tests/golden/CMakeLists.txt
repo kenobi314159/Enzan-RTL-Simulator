@@ -286,6 +286,10 @@ enzan_add_golden_test(port_widths)
 # A bus shared through inout ports of the signal's own width, connected as the signal itself.
 enzan_add_golden_test(inout)
 
+# Event controls on expressions rather than signals. Icarus Verilog resumes on a change of an
+# operand that leaves the value as it was, so the case checks itself.
+enzan_add_golden_test(event_expressions NO_DIFFERENTIAL)
+
 # A complex design with many module instances and many levels of hierarchy.
 enzan_add_golden_test(large_design_00 DIR_WITH_MAKE NO_DIFFERENTIAL)
 
