@@ -34,7 +34,7 @@ struct FormatContext {
     /// The unit a `%t` argument counts, the calling scope's, or nothing when it counts the run's.
     std::optional<TimeExponent> argumentUnit;
 
-    /// The hierarchical path `%m` expands to.
+    /// The hierarchical name `%m` expands to, dot-separated: `tb.u_dut`.
     std::string_view scopeName;
 };
 

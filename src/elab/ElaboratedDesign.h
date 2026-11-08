@@ -105,6 +105,10 @@ struct SlotRange {
     friend bool operator==(SlotRange, SlotRange) noexcept = default;
 };
 
+/// `path` as SystemVerilog names a scope, `tb.u_dut` for `/tb/u_dut`: what `%m` prints and VPI
+/// calls a full name (IEEE 1800 sections 21.2.1.7 and 23.6).
+[[nodiscard]] std::string dottedPath(std::string_view path);
+
 /// One instantiated module.
 struct Instance {
     /// Full hierarchical path, with `/` separators and no trailing slash: `/tb/u_dut`.

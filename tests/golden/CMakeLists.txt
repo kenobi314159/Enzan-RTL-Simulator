@@ -218,6 +218,9 @@ enzan_add_golden_test(static_function_callers NO_DIFFERENTIAL)
 # Hierarchical references, down, up and across, from a definition two instances share.
 enzan_add_golden_test(hierarchical)
 
+# `%m`, the hierarchical name of the instance it is in, as the standard writes it.
+enzan_add_golden_test(scope_names)
+
 # Instances of one parameterisation whose hierarchical references lead to different places.
 enzan_add_golden_test(upward_references)
 

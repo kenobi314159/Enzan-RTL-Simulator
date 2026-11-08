@@ -152,9 +152,9 @@ TEST(Format, TimeWithNoArgumentIsShownRatherThanInventingOne) {
     EXPECT_EQ(enzan::runtime::formatSystemTask("at %t", {}, context), "at %t");
 }
 
-TEST(Format, ScopeNameExpandsToTheHierarchicalPath) {
-    const FormatContext context{.time = 0, .timeScale = TimeScale(), .scopeName = "/tb/u_dut"};
-    EXPECT_EQ(enzan::runtime::formatSystemTask("in %m", {}, context), "in /tb/u_dut");
+TEST(Format, ScopeNameExpandsToTheHierarchicalName) {
+    const FormatContext context{.time = 0, .timeScale = TimeScale(), .scopeName = "tb.u_dut"};
+    EXPECT_EQ(enzan::runtime::formatSystemTask("in %m", {}, context), "in tb.u_dut");
 }
 
 TEST(Format, StringConversionRendersAscii) {

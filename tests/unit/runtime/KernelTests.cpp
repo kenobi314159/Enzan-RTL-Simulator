@@ -663,7 +663,7 @@ TEST(Kernel, DisplayWritesToTheTranscript) {
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
 
     simulation.run();
-    EXPECT_EQ(simulation.transcript(), "value = 42 at 0ps in /tb\n");
+    EXPECT_EQ(simulation.transcript(), "value = 42 at 0ps in tb\n");
 }
 
 /// `write(l, 42, left, 5); write(l, -7); writeline(output, l)`, and the handle writeline leaves in

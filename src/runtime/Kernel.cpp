@@ -1516,10 +1516,11 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
 
     const elab::Instance& instance =
         designImage->elaboratedDesign().instances()[state.instanceIndex];
+    const std::string scope = elab::dottedPath(instance.path);
     const FormatContext context{.time = currentTime,
                                 .timeScale = options.timeScale,
                                 .argumentUnit = argumentUnit(descriptor),
-                                .scopeName = instance.path};
+                                .scopeName = scope};
 
     const std::string text =
         descriptor.hasFormat()
@@ -1714,10 +1715,11 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
         }
         const elab::Instance& instance =
             designImage->elaboratedDesign().instances()[state.instanceIndex];
+        const std::string scope = elab::dottedPath(instance.path);
         const FormatContext context{.time = currentTime,
                                     .timeScale = options.timeScale,
                                     .argumentUnit = argumentUnit(descriptor),
-                                    .scopeName = instance.path};
+                                    .scopeName = scope};
         std::string text;
         if (descriptor.kind == eir::SysTaskKind::LineAppend) {
             if (const std::string* source = lineAt(argument(3))) text = *source;
