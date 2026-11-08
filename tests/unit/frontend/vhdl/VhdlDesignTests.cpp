@@ -1211,6 +1211,82 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 1 to 3 of the line");
 }
 
+TEST_F(VhdlDesignTest, AStringIsReadFromALineWhereTheLineHoldsIt) {
+    // As Altera's memories read an Intel HEX record: strings of two and four characters, a
+    // descending one among them, and a slice; a read past the line's end leaves the string and
+    // the line as they were, as GHDL's does.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable byte : string(2 downto 1);
+    variable address : string(1 to 4);
+    variable rest : string(1 to 8) := "........";
+    variable empty : string(1 to 0);
+    variable good : boolean;
+  begin
+    write(l, string'("1F0400rest"));
+    read(l, byte, good);
+    assert good and byte = "1F" report "byte " & byte severity failure;
+    read(l, address);
+    assert address = "0400" report "address " & address severity failure;
+    read(l, empty, good);
+    assert good report "a null string" severity failure;
+    read(l, rest, good);
+    assert not good and rest = "........" report "past the end" severity failure;
+    read(l, rest(3 to 6), good);
+    assert good and rest = "..rest.." report "slice " & rest severity failure;
+    assert l'length = 0 report "left " & integer'image(l'length) severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AStringReadPastTheLinesEndWithNoGoodEndsTheRun) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable word : string(1 to 4);
+  begin
+    write(l, string'("abc"));
+    read(l, word);
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages().front(), "a read of 4 characters from a line holding 3");
+}
+
 TEST_F(VhdlDesignTest, AGenericsDefaultThatCannotBeComputedSaysWhereItsCallStopped) {
     // As OFM's splitter wrapper initialises its address bases: a default computed by a function
     // that calls a procedure for random numbers.

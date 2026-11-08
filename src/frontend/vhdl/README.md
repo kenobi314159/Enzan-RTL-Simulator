@@ -73,9 +73,9 @@ concatenation, the predefined operators on scalars and arrays, `'event`, `'activ
 `'last_value` of whole signals; aliases of objects and of their parts, of constants, subprograms and
 types; functions and procedures of packages and architectures, std_logic_1164's and numeric_std's
 among them. std.textio's `write` of strings, characters and integers to a line, `writeline`,
-`readline` and `read` of characters from a line, the predefined `write` and `read` of files of text
-and of other types, and `endfile`, run natively by the runtime. Anything else is refused with
-ENZ2005 naming it, never left out.
+`readline` and `read` of characters and strings from a line, the predefined `write` and `read` of
+files of text and of other types, and `endfile`, run natively by the runtime. Anything else is
+refused with ENZ2005 naming it, never left out.
 
 ## Rules
 

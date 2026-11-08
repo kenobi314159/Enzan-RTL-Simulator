@@ -998,6 +998,7 @@ billowitch/compliant/tc3199.vhd
 billowitch/compliant/tc32.vhd
 billowitch/compliant/tc320.vhd
 billowitch/compliant/tc3200.vhd
+billowitch/compliant/tc3201.vhd
 billowitch/compliant/tc3206.vhd
 billowitch/compliant/tc322.vhd
 billowitch/compliant/tc323.vhd

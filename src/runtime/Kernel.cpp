@@ -1641,6 +1641,7 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::LineWriteLine:
     case eir::SysTaskKind::LineReadLine:
     case eir::SysTaskKind::LineReadCharacter:
+    case eir::SysTaskKind::LineReadString:
     case eir::SysTaskKind::LineLength:
     case eir::SysTaskKind::LineElement:
     case eir::SysTaskKind::LineSlice:
@@ -1764,6 +1765,37 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
             line->erase(0, 1);
         }
         break;
+
+    case eir::SysTaskKind::LineReadString: {
+        const codegen::SysTaskDescriptor::Argument& into = descriptor.arguments[1];
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        bitops::assignPartAt(
+            result,
+            into.isConstant ? body.constant(into.location)
+                            : frameAt(activation.frameOffset + into.location, into.bitWidth),
+            0);
+        const std::uint32_t count = (result.width() - 1) / 8;
+        std::string* line = lineAt(argument(0));
+        const std::size_t held = line != nullptr ? line->size() : 0;
+        if (held < count) {
+            if (descriptor.arguments.size() > 2 && argument(2) != 0) {
+                report(eir::SeverityFailure, descriptor.location,
+                       std::format("a read of {} characters from a line holding {}", count, held));
+            }
+            return;
+        }
+        if (line != nullptr) {
+            for (std::uint32_t at = 0; at < count; ++at) {
+                const auto character = static_cast<unsigned char>((*line)[at]);
+                bitops::assignPartAt(result, eir::BitVector::fromUInt64(character, 8).ref(),
+                                     std::uint64_t{count - 1 - at} * 8);
+            }
+            line->erase(0, count);
+        }
+        result.set(result.width() - 1, eir::Logic::One);
+        return;
+    }
 
     case eir::SysTaskKind::LineLength:
         if (const std::string* line = lineAt(argument(0))) {

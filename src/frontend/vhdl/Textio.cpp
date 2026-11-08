@@ -528,6 +528,33 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
         return true;
     }
 
+    // `read(l, value)` and `read(l, value, good)` of a string: as many characters as it holds,
+    // where the line has them. A null one takes none and is always read.
+    if (procedure == "READ" && (actuals->size() == 2 || actuals->size() == 3)
+        && type_is_array(tree_type((*actuals)[1])) && isCharacters(tree_type((*actuals)[1]))) {
+        const std::optional<Place> target = place((*actuals)[1]);
+        if (!target) return false;
+        if (!target->isVariable) return fail((*actuals)[1], "a read into something not a variable");
+        Value good = constant(1, eir::Type::bits(1, false, false), nullptr);
+        if (!target->empty) {
+            const std::optional<Value> line = value(0);
+            if (!line) return false;
+            const Value before = read(*target, tree_type((*actuals)[1]));
+            const std::uint32_t width = target->layout.storage.bitWidth();
+            native.kind = eir::SysTaskKind::LineReadString;
+            native.arguments = {argument(*line), argument(before)};
+            if (actuals->size() == 2)
+                native.arguments.push_back(
+                    argument(constant(1, eir::Type::bits(1, false, false), nullptr)));
+            const Value taken =
+                systemFunction(std::move(native), eir::Type::bits(width + 1, false, false));
+            assignVariable(*target, bitsOf(taken, 0, width));
+            good = bitsOf(taken, width, 1);
+        }
+        if (actuals->size() == 2) return true;
+        return assignWhole((*actuals)[2], booleanOf(good.reg, tree_type((*actuals)[2])));
+    }
+
     return fail(call, std::string("std.textio's ") + simpleName(tree_ident(declaration))
                           + " of these parameters");
 }

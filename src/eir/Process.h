@@ -100,6 +100,12 @@ enum class SysTaskKind : std::uint8_t {
     /// The result is the character's code in its low byte, and above it a bit saying whether
     /// there was one.
     LineReadCharacter,
+    /// `read` of a string: the string the second argument holds with its characters replaced by
+    /// as many taken off the line the first argument designates, the leftmost in the highest
+    /// bits, and above them a bit saying whether the line held that many. A line holding fewer
+    /// keeps them and gives the string back as it was, as GHDL's textio does; with a third
+    /// argument that is not 0, a `read` with no `good` to tell, it ends the run with a failure.
+    LineReadString,
     /// The length of the line the argument designates, its 'LENGTH, 'HIGH and 'RIGHT: a line
     /// the runtime holds is indexed from 1, as NVC's textio makes every one. A null line ends the
     /// run with a failure.
