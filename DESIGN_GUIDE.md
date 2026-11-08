@@ -494,7 +494,8 @@ names it by that definition and its name. Nothing in it is particular to VHDL.
 
 - **A subprogram is specialised by the lengths of its unconstrained parameters**, and by the scalar
   values its own widths are computed from, so that every width in EIR stays fixed: `numeric_std."+"`
-  on 8-bit and on 32-bit operands is two bodies.
+  on 8-bit and on 32-bit operands is two bodies. A string whose length only the run knows is passed
+  in scratch, to one body for every such length.
 - **A call's frame lives on one stack the kernel owns.** A subprogram never suspends — one that
   waits, or takes a signal parameter, is inlined into its caller instead — so every frame is popped
   before its process suspends, and one stack serves the single-threaded kernel. It is sized at

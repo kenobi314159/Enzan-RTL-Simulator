@@ -37,6 +37,10 @@ struct Shape {
 
     /// For a parameter whose type's element is an unconstrained array, its elements' bounds.
     std::vector<std::optional<Folder::Range>> elementBounds;
+
+    /// For a string parameter whose actual's length only the run knows, the direction it runs:
+    /// the body is made for any length, and takes a string in the kernel's scratch.
+    std::vector<std::optional<bool>> runTimeStrings;
 };
 
 /// A subprogram specialised for one shape: where a call finds it, and what its parameters and its
@@ -420,6 +424,28 @@ private:
     /// A new string in scratch holding `value`, a string of a length known here.
     Value copyToScratch(const Value& value, tree_t where);
 
+    /// Releases what the message just shown copied into scratch, if anything.
+    void releaseMessageScratch();
+
+    /// True when `expression` is a slice of a string of a length known here whose bounds and
+    /// length only the run knows, `m_string(1 to i)`, which a call takes as a string in scratch.
+    [[nodiscard]] bool isRunTimeSlice(tree_t expression) const;
+
+    /// True when `actual`, of a parameter of `formalType`, is a string whose length only the run
+    /// knows, or a slice of one that `isRunTimeSlice` is, which the call passes in scratch.
+    [[nodiscard]] bool passesInScratch(tree_t actual, type_t formalType) const;
+
+    /// The slice `expression` is, as `isRunTimeSlice` says, copied into a new string in scratch.
+    std::optional<Value> sliceToScratch(tree_t expression);
+
+    /// Writes `string` back into the slice `expression` is, an `out` or `inout` actual's.
+    bool sliceFromScratch(tree_t expression, const Value& string);
+
+    /// What a call passes for `actual`, which `passesInScratch`: a string of run-time length's
+    /// own handle, or a slice's copy, made once `mark` holds a mark of the scratch, taken here if
+    /// it holds none.
+    std::optional<Value> scratchActual(tree_t actual, std::optional<Value>& mark);
+
     /// `left` and `right`, strings in scratch, compared as `kind` does: equality or an ordering.
     Value stringComparison(const Value& left, const Value& right, subprogram_kind_t kind,
                            tree_t expression);
@@ -708,6 +734,10 @@ private:
     /// How many marks of the scratch are taken and not yet released to where translation is, an
     /// inlined subprogram's or a statement's: a `wait` there would release what they hold.
     std::uint32_t scratchHeld = 0;
+
+    /// The mark taken before the first slice of run-time length a message being built shows is
+    /// copied into scratch, which what shows the message releases once it has.
+    std::optional<Value> messageScratch;
 
     std::uint32_t current = 0;
     SourceLocation statementLocation;

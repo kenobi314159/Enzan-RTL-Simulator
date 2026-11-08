@@ -78,8 +78,9 @@ among them. std.textio's `write` of strings, characters and integers to a line, 
 `readline` and `read` of characters and strings from a line, the predefined `write` and `read` of
 files of text and of other types, and `endfile`, run natively by the runtime. A subprogram's
 strings whose lengths only the run knows are held in the runtime's scratch: their bounds, elements
-and static slices, comparisons, and textio's `read` into them and `write` of them. Anything else is
-refused with ENZ2005 naming it, never left out.
+and static slices, comparisons, textio's `read` into them and `write` of them, and passing them to
+subprograms, as slices of run-time length of other strings are. Anything else is refused with
+ENZ2005 naming it, never left out.
 
 ## Rules
 

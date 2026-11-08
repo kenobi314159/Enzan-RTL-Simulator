@@ -1798,6 +1798,7 @@ bool BodyTranslator::emitReport(tree_t where, const Value& severity, tree_t mess
     call.formatIndex = addString(std::move(format));
     emit(eir::Instruction::make(eir::Opcode::SysTask, {},
                                 eir::Operand::sysCall(addSysCall(std::move(call)))));
+    releaseMessageScratch();
     return true;
 }
 
@@ -2019,8 +2020,11 @@ bool BodyTranslator::enumerationImage(tree_t operand, std::string& format,
 
 bool BodyTranslator::messageParts(tree_t message, std::string& format,
                                   std::vector<eir::SysTaskArgument>& arguments) {
-    // A string of run-time length is its characters, which the kernel holding it shows.
-    if (const Value* string = runTimeString(message)) {
+    // A string of run-time length is its characters, which the kernel holding it shows; a slice
+    // of one known here whose length the run gives is copied there until it has.
+    if (runTimeString(message) != nullptr || isRunTimeSlice(message)) {
+        const std::optional<Value> string = scratchActual(message, messageScratch);
+        if (!string) return false;
         format += "%s";
         arguments.push_back(eir::SysTaskArgument{.value = eir::Operand::reg(string->reg),
                                                  .type = eir::Type::string()});
@@ -2317,12 +2321,26 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     }
     if (inlineIt) return inlineCall(call, declaration, calleeBody, *actuals);
 
-    // Every parameter of a function is `in`, so each actual is a value.
+    // Every parameter of a function is `in`, so each actual is a value. A string whose length only
+    // the run knows is passed in scratch, a slice's copy made for the call and released after it,
+    // to a body made for any length.
     Shape shape;
     std::vector<Value> values;
+    std::optional<Value> mark;
     for (unsigned index = 0; index < actuals->size(); ++index) {
         tree_t formal = tree_port(declaration, index);
         type_t formalType = tree_type(formal);
+        if (passesInScratch((*actuals)[index], formalType)) {
+            const std::optional<Value> string = scratchActual((*actuals)[index], mark);
+            if (!string) return std::nullopt;
+            shape.bounds.emplace_back();
+            shape.elementBounds.emplace_back();
+            shape.values.emplace_back();
+            shape.runTimeStrings.emplace_back(string->layout.index.ascending);
+            values.push_back(*string);
+            continue;
+        }
+        shape.runTimeStrings.emplace_back();
         const std::optional<Layout> constrained = layoutFor(formalType);
         std::optional<Value> value =
             expression((*actuals)[index], constrained ? &*constrained : nullptr);
@@ -2374,6 +2392,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     const auto index = static_cast<std::uint32_t>(body().calls.size());
     body().calls.push_back(std::move(site));
     emit(eir::Instruction::make(eir::Opcode::Call, {}, eir::Operand::call(index)));
+    if (mark) releaseScratch(*mark);
     return result;
 }
 
@@ -2393,6 +2412,11 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
         tree_kind(calleeBody) == T_FUNC_BODY && (tree_flags(calleeBody) & TREE_F_IMPURE) == 0;
     Folder bindings = folder();
     std::vector<std::pair<Value, Place>> copyBack;
+    // A string whose length only the run knows is the parameter, in scratch: its own, or a slice's
+    // copy, which an `out` or `inout` parameter writes back as the subprogram returns. A wait in
+    // the subprogram would release the copies.
+    std::optional<Value> mark;
+    std::vector<std::pair<Value, tree_t>> slicesBack;
     // Bound once every actual is evaluated, since an actual may call the same subprogram, inlined
     // too, which binds the same formals while it is.
     std::vector<std::pair<tree_t, Value>> parameters;
@@ -2416,6 +2440,17 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
         }
 
         const eir::ParameterMode mode = modeOf(formal);
+        if (passesInScratch(actual, formalType)) {
+            if (!mark && runTimeString(actual) == nullptr) ++scratchHeld;
+            const std::optional<Value> string = scratchActual(actual, mark);
+            if (!string) return std::nullopt;
+            Value parameter = *string;
+            parameter.vhdlType = formalType;
+            parameters.emplace_back(formal, parameter);
+            if (runTimeString(actual) == nullptr && mode != eir::ParameterMode::In)
+                slicesBack.emplace_back(parameter, actual);
+            continue;
+        }
         if (mode == eir::ParameterMode::In) {
             const std::optional<Folder::Range> bounds = folder().boundsOf(actual);
             if (bounds && bounds->length() == 0 && type_is_array(formalType)) {
@@ -2493,6 +2528,7 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
     inlined.pop_back();
     folders.pop_back();
     if (frame.scratchMark) --scratchHeld;
+    if (mark) --scratchHeld;
     if (!translated) return std::nullopt;
     jump(frame.exitBlock);
     selectBlock(frame.exitBlock);
@@ -2516,6 +2552,10 @@ BodyTranslator::inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
         fail(call, "an out parameter whose actual is a signal");
         return std::nullopt;
     }
+    for (const auto& [string, actual] : slicesBack) {
+        if (!sliceFromScratch(actual, string)) return std::nullopt;
+    }
+    if (mark) releaseScratch(*mark);
 
     if (const std::optional<std::uint32_t> sink = frame.lineSink) {
         const eir::Type handle = eir::Type::bits(64, false, false);
@@ -4011,7 +4051,8 @@ std::optional<BodyTranslator::Value> BodyTranslator::arrayOperator(tree_t expres
     const bool ordering = kind == S_ARRAY_EQ || kind == S_ARRAY_NEQ || kind == S_ARRAY_LT
                           || kind == S_ARRAY_LE || kind == S_ARRAY_GT || kind == S_ARRAY_GE;
     for (unsigned index = 0; ordering && index < tree_params(expression); ++index) {
-        if (runTimeString(tree_value(tree_param(expression, index))) != nullptr)
+        tree_t operand = tree_value(tree_param(expression, index));
+        if (runTimeString(operand) != nullptr || isRunTimeSlice(operand))
             return runTimeStringComparison(expression, kind);
     }
     std::vector<Value> operands;

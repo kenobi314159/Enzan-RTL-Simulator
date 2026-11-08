@@ -1391,6 +1391,109 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "index 5 is outside the bounds 1 to 4");
 }
 
+TEST_F(VhdlDesignTest, ASliceOfRunTimeLengthIsPassedInScratch) {
+    // As Altera's memories read a MIF's header: a slice as long as what a loop counted, read into
+    // and given to a function that takes any string, called and inlined, and to a procedure that
+    // fills it; a descending one indexes as its bounds say.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  function digits (str : in string) return integer is
+    variable len : integer := str'length;
+    variable result : integer := 0;
+  begin
+    for i in 1 to len loop
+      result := result * 10 + character'pos(str(i)) - character'pos('0');
+    end loop;
+    return result;
+  end function;
+
+  function first (s : string) return character is
+  begin
+    return s(s'left);
+  end function;
+
+  procedure fill (s : out string; c : in character) is
+  begin
+    for i in s'range loop
+      s(i) := c;
+    end loop;
+  end procedure;
+begin
+  process
+    variable l : line;
+    variable m : string(1 to 15) := (others => '.');
+    variable r : string(8 downto 1) := "abcd1234";
+    variable c : character;
+    variable i : integer := 0;
+  begin
+    write(l, string'("WIDTH=1234;"));
+    while l(l'low + i) /= '=' loop
+      i := i + 1;
+    end loop;
+    read(l, m(1 to i));
+    assert m(1 to 6) = "WIDTH." report "read " & m severity failure;
+    read(l, c);
+    i := 0;
+    while l(l'low + i) /= ';' loop
+      i := i + 1;
+    end loop;
+    read(l, m(1 to i));
+    assert digits(m(1 to i)) = 1234 report "digits" severity failure;
+    assert digits(r(i downto 1)) = 4321 report "descending" severity failure;
+    assert first(m(2 to i)) = '2' report "first" severity failure;
+    fill(m(i + 1 to 15), '-');
+    report m;
+    write(l, m(1 to i));
+    writeline(output, l);
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), (std::vector<std::string>{"1234-----------", "PASS"}));
+    EXPECT_EQ(simulation.transcript(), ";1234\n");
+}
+
+TEST_F(VhdlDesignTest, ASliceOfRunTimeLengthOutsideItsArrayEndsTheRun) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  function count (str : in string) return integer is
+  begin
+    return str'length;
+  end function;
+begin
+  process
+    variable m : string(1 to 15);
+    variable i : integer := 20;
+  begin
+    report integer'image(count(m(10 to i)));
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_EQ(simulation.messages().front(), "10 to 20 is outside the bounds 1 to 15");
+}
+
 TEST_F(VhdlDesignTest, ASubprogramHoldingAStringOfRunTimeLengthCannotWait) {
     // Suspending releases the kernel's scratch, which holds the string.
     const std::unique_ptr<enzan::eir::Design> design = translate(R"(

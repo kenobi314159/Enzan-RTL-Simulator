@@ -276,6 +276,7 @@ bool BodyTranslator::runTimeStringAssignment(tree_t name, const Value& string, t
 
 std::optional<BodyTranslator::Value> BodyTranslator::inScratch(tree_t expression) {
     if (const Value* string = runTimeString(expression)) return *string;
+    if (isRunTimeSlice(expression)) return sliceToScratch(expression);
     const std::optional<Value> value = this->expression(expression);
     if (!value) return std::nullopt;
     const Layout& layout = value->layout;
@@ -309,6 +310,92 @@ BodyTranslator::Value BodyTranslator::copyToScratch(const Value& value, tree_t w
                       argumentOf(right.reg, Index),      argumentOf(left.reg, Index),
                       argumentOf(right.reg, Index),      argumentOf(up.reg, up.type)};
     return systemFunction(std::move(call), Handle);
+}
+
+void BodyTranslator::releaseMessageScratch() {
+    if (!messageScratch) return;
+    releaseScratch(*messageScratch);
+    messageScratch.reset();
+}
+
+bool BodyTranslator::isRunTimeSlice(tree_t expression) const {
+    if (tree_kind(expression) != T_ARRAY_SLICE || !isStringType(tree_type(expression)))
+        return false;
+    tree_t range = tree_range(expression, 0);
+    if (folder().range(range)) return false;
+    // One whose bounds move together, `d(i to i + 3)`, has a length known here.
+    const auto kind = static_cast<range_kind_t>(tree_subkind(range));
+    if (kind != RANGE_TO && kind != RANGE_DOWNTO) return true;
+    return kind == RANGE_TO ? !folder().difference(tree_right(range), tree_left(range))
+                            : !folder().difference(tree_left(range), tree_right(range));
+}
+
+bool BodyTranslator::passesInScratch(tree_t actual, type_t formalType) const {
+    return isStringType(formalType) && !layoutFor(formalType)
+           && (runTimeString(actual) != nullptr || isRunTimeSlice(actual));
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::sliceToScratch(tree_t expression) {
+    tree_t range = tree_range(expression, 0);
+    const std::optional<Value> array = this->expression(tree_value(expression));
+    if (!array) return std::nullopt;
+    const Layout& layout = array->layout;
+    if (!layout.isArray() || !layout.inner.empty() || layout.elementBits != 8) {
+        fail(expression, "a slice of run-time length of a string whose bounds are not known here");
+        return std::nullopt;
+    }
+    const auto kind = static_cast<range_kind_t>(tree_subkind(range));
+    if ((kind != RANGE_TO && kind != RANGE_DOWNTO)
+        || (kind == RANGE_TO) != layout.index.ascending) {
+        fail(range, "a slice whose bounds are not static and run the other way than its array's");
+        return std::nullopt;
+    }
+    const std::optional<Value> left = this->expression(tree_left(range));
+    const std::optional<Value> right = this->expression(tree_right(range));
+    if (!left || !right) return std::nullopt;
+
+    eir::SysTaskCall call;
+    call.kind = eir::SysTaskKind::StringFromArray;
+    call.location = owner.locate(expression);
+    const Value up =
+        constant(layout.index.ascending ? 1 : 0, eir::Type::bits(1, false, false), nullptr);
+    call.arguments = {argumentOf(array->reg, array->type),
+                      argumentOf(constant(layout.index.left, Index, nullptr).reg, Index),
+                      argumentOf(constant(layout.index.right, Index, nullptr).reg, Index),
+                      argumentOf(resize(*left, 64).reg, Index),
+                      argumentOf(resize(*right, 64).reg, Index),
+                      argumentOf(up.reg, up.type)};
+    const Value made = systemFunction(std::move(call), Handle);
+    type_t type = tree_type(expression);
+    return Value{.reg = made.reg,
+                 .type = Handle,
+                 .vhdlType = type,
+                 .layout = runTimeStringLayout(type, layout.index.ascending)};
+}
+
+bool BodyTranslator::sliceFromScratch(tree_t expression, const Value& string) {
+    tree_t prefix = tree_value(expression);
+    const std::optional<Place> target = place(prefix);
+    if (!target) return false;
+    if (!target->isVariable) return fail(expression, "an out parameter whose actual is a signal");
+    const Layout& layout = target->layout;
+    const Value before = read(*target, tree_type(prefix));
+    eir::SysTaskCall call;
+    call.kind = eir::SysTaskKind::StringIntoArray;
+    call.location = owner.locate(expression);
+    call.arguments = {argumentOf(before.reg, before.type),
+                      argumentOf(constant(layout.index.left, Index, nullptr).reg, Index),
+                      argumentOf(constant(layout.index.right, Index, nullptr).reg, Index),
+                      argumentOf(string.reg, Handle)};
+    assignVariable(*target, systemFunction(std::move(call), layout.storage));
+    return true;
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::scratchActual(tree_t actual,
+                                                                   std::optional<Value>& mark) {
+    if (const Value* string = runTimeString(actual)) return *string;
+    if (!mark) mark = scratchMark();
+    return sliceToScratch(actual);
 }
 
 BodyTranslator::Value BodyTranslator::stringComparison(const Value& left, const Value& right,

@@ -633,7 +633,8 @@ public:
                                   inPackage ? std::string() : architecture->definition().name,
                               .bounds = {},
                               .elementBounds = {},
-                              .values = {}};
+                              .values = {},
+                              .runTimeStrings = {}};
         const auto asKey = [](const std::optional<Folder::Range>& range) {
             return range ? std::optional(std::tuple(range->left, range->right, range->ascending))
                          : std::nullopt;
@@ -643,6 +644,8 @@ public:
                 asKey(index < shape.bounds.size() ? shape.bounds[index] : std::nullopt));
             key.elementBounds.push_back(asKey(
                 index < shape.elementBounds.size() ? shape.elementBounds[index] : std::nullopt));
+            key.runTimeStrings.push_back(
+                index < shape.runTimeStrings.size() ? shape.runTimeStrings[index] : std::nullopt);
             const std::optional<std::int64_t> value =
                 index < shape.values.size() ? shape.values[index] : std::nullopt;
             if (shaped.required[index] && !value) {
@@ -677,6 +680,9 @@ public:
             tree_t parameter = tree_port(body, index);
             type_t type = tree_type(parameter);
             std::optional<Layout> layout = layoutOf(type, bindings.folder);
+            // A string whose length only the run knows arrives as its handle into scratch.
+            if (const std::optional<bool>& runTime = key.runTimeStrings[index]; !layout && runTime)
+                layout = runTimeStringLayout(type, *runTime);
             const auto& given = key.bounds[index];
             if (!layout && given) {
                 const auto& [left, right, ascending] = *given;
@@ -1595,14 +1601,16 @@ private:
         std::vector<std::optional<std::tuple<std::int64_t, std::int64_t, bool>>> bounds;
         std::vector<std::optional<std::tuple<std::int64_t, std::int64_t, bool>>> elementBounds;
         std::vector<std::optional<std::int64_t>> values;
+        std::vector<std::optional<bool>> runTimeStrings;
 
         friend auto operator<=>(const SpecialisationKey&, const SpecialisationKey&) = default;
     };
 
     /// The name of `body` specialised for `key`: its own name and signature, as NVC mangles the
     /// signature to tell overloads apart, then each parameter's bounds, its elements' after them
-    /// where the actual gives those too, or value, `_` for one the shape leaves free:
-    /// `resolved(Y)U$0to1`, `ser(...)$0to2(3downto0)`. Made of what the specialisation is, so that
+    /// where the actual gives those too, or value, `*to*` or `*downto*` for a string of any length,
+    /// `_` for one the shape leaves free: `resolved(Y)U$0to1`, `ser(...)$0to2(3downto0)`,
+    /// `int_str_to_int(S)I$*to*`. Made of what the specialisation is, so that
     /// two translations of one name one subprogram, as the second that elaboration asks for
     /// resolution functions does.
     [[nodiscard]] static std::string specialisationName(tree_t body, const SpecialisationKey& key) {
@@ -1620,6 +1628,8 @@ private:
                     const auto& [low, high, up] = *element;
                     name += std::format("({}{}{})", low, up ? "to" : "downto", high);
                 }
+            } else if (const std::optional<bool>& runTime = key.runTimeStrings[index]) {
+                name += *runTime ? "*to*" : "*downto*";
             } else if (const std::optional<std::int64_t>& value = key.values[index]) {
                 name += std::format("={}", *value);
             } else {
