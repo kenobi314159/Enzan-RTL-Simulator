@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -568,6 +569,10 @@ private:
     std::vector<std::filesystem::path> searchFiles;
     std::vector<std::filesystem::path> searchDirectories;
     std::vector<std::string> searchExtensions;
+
+    /// The files `-v` and `-y` supplied, among `files`, which the frontend reads as library
+    /// units.
+    std::set<std::filesystem::path> suppliedFiles;
 
     /// What the current analysis has read, by path, for `readOnce`.
     std::map<std::filesystem::path, BufferId> buffersRead;

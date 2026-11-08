@@ -96,10 +96,10 @@ and `$VAR` and `${VAR}` from the environment.
   instantiate a module that no source and no library you resolve against defines, Enzan looks for
   it in the `-v` files and then as `<module>.v` in the `-y` directories, in the order the lists give
   them; `+libext+.v+.sv` sets the extensions tried, in order. A file found is analysed like a
-  source, every module in it whether the design uses it or not, stored in `--out-lib` and named in
-  the dependency file, and what it instantiates is looked for in turn. Only files holding a module
-  the design needs are read. A VHDL component with no entity of its name binds to a module found
-  this way.
+  source, stored in `--out-lib` and named in the dependency file, and what it instantiates is
+  looked for in turn, but a module in it that nothing instantiates is never a top level and is not
+  translated. Only files holding a module the design needs are read. A VHDL component with no
+  entity of its name binds to a module found this way.
 
 `--dry-run` prints the list as expanded, in order, and exits.
 

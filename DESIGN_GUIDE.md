@@ -971,9 +971,9 @@ and `$VAR` and `${VAR}` from the environment.
 - **An unset variable is an error**, not an empty expansion that turns `$RTL_ROOT/cpu.sv` into
   `/cpu.sv`.
 - **`-v` and `-y` supply only what nothing else defines**, read once the sources are analysed and
-  only where a file holds a module wanted, so a directory of a vendor's five hundred models costs
-  the three a design uses. What they supply is analysed, stored and named in `--depfile` as a source
-  is.
+  only where a file holds a module wanted, whose other modules are no top levels: a vendor's five
+  hundred models cost a design the three it uses. What they supply is analysed, stored and named
+  in `--depfile` as a source is.
 - **`--dry-run`** prints the expanded list, in order, and exits.
 - **`--depfile <file>` writes a `make` dependency file naming every file the analysis read** — the
   sources a list expanded to, the headers they included, and the context files — so that a Makefile

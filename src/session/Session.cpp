@@ -348,6 +348,8 @@ bool Session::analyse(const AnalysisRequest& request) {
     options.filesRead = &lastFilesRead;
     options.files = ordered;
     options.buffers = buffers;
+    for (std::size_t index = 0; index < ordered.size(); ++index)
+        if (suppliedFiles.contains(ordered[index])) options.libraryUnits.push_back(buffers[index]);
     options.defines = defines;
     options.includeDirectories = includeDirectories;
     options.timeUnitExponent = defaultScale.precisionExponent();
@@ -603,6 +605,7 @@ bool Session::addSearched(std::vector<std::string> wanted, std::vector<std::stri
         if (!namesIn(std::span(&*file, 1), fileDeclares, fileNeeds)) return false;
         files.push_back(*file);
         added.push_back(*file);
+        suppliedFiles.insert(*file);
         for (std::string& one : fileDeclares) declared.push_back(std::move(one));
         for (std::string& one : fileNeeds) wanted.push_back(std::move(one));
     }
@@ -694,6 +697,7 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
         } else {
             svOptions.files.push_back(file);
             svOptions.buffers.push_back(buffer);
+            if (suppliedFiles.contains(file)) svOptions.libraryUnits.push_back(buffer);
         }
     }
 
@@ -798,6 +802,7 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
             if (!buffer) return false;
             svOptions.files.push_back(file);
             svOptions.buffers.push_back(*buffer);
+            svOptions.libraryUnits.push_back(*buffer);
         }
 
         // Under a VHDL top that instantiates no module, there is no SystemVerilog to analyse.

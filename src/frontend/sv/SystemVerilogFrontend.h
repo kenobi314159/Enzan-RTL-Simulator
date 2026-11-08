@@ -44,6 +44,11 @@ struct Options {
     /// An entry may be invalid, which makes the frontend read that file itself.
     std::vector<BufferId> buffers;
 
+    /// The buffers of `buffers` that hold library files, which `-v` and `-y` supply: a module of
+    /// one is part of the design only where something instantiates it, never a top level of its
+    /// own, so a vendor's file of a hundred models costs the design only those it uses.
+    std::vector<BufferId> libraryUnits;
+
     /// Macro definitions, each either `NAME` or `NAME=VALUE`.
     std::vector<std::string> defines;
 

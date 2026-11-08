@@ -3034,6 +3034,12 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     for (const slang::SourceBuffer& buffer : slangBuffers) {
         parsed.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
         trees.push_back(moveDefParams(parsed.back()));
+        // slang makes no module of a library unit a top level, nor checks one nothing
+        // instantiates.
+        const auto held = buffers.find(buffer.id);
+        trees.back()->isLibraryUnit =
+            held != buffers.end()
+            && std::ranges::find(options.libraryUnits, held->second) != options.libraryUnits.end();
     }
     mapIncludedBuffers(slangSources, sources, buffers);
 

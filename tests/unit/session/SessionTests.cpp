@@ -267,6 +267,29 @@ TEST_F(SessionTest, ALibraryFileIsReadOnlyWhenItDeclaresWhatIsWanted) {
     EXPECT_FALSE(readFile(session, "/broken.v")) << "read to see what it declares, not analysed";
 }
 
+TEST_F(SessionTest, AModuleOfALibraryFileNothingInstantiatesIsNoTopLevel) {
+    // A vendor's file holds every model of a library, some of which Enzan refuses; a design that
+    // uses another is not stopped by them, from `-v` or from `-y`.
+    const std::string cells = "module used (output o);\n  assign o = 1'b1;\nendmodule\n"
+                              "module unused;\n  initial fork #1; #2; join\nendmodule\n";
+    workspace.write("cells.v", cells);
+    workspace.write("dir/used.v", cells);
+    workspace.write("tb.sv", "module tb;\n  wire o;\n  used u (.o(o));\nendmodule\n");
+
+    Session::AnalysisRequest fromFile;
+    fromFile.files = {workspace / "tb.sv"};
+    fromFile.searchFiles = {workspace / "cells.v"};
+    ASSERT_TRUE(session.analyse(fromFile)) << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+
+    Session fresh(sources, engine);
+    Session::AnalysisRequest fromDirectory;
+    fromDirectory.files = {workspace / "tb.sv"};
+    fromDirectory.searchDirectories = {workspace / "dir"};
+    ASSERT_TRUE(fresh.analyse(fromDirectory)) << firstMessage();
+    ASSERT_TRUE(fresh.elaborate("tb")) << firstMessage();
+}
+
 TEST_F(SessionTest, LibraryExtensionsAreTriedInTheirOrder) {
     // `.v` alone when none is given, so the `.sv` is not found then.
     workspace.write("cells/leaf.sv", "module leaf (output o);\n  assign o = 1'b1;\nendmodule\n");
